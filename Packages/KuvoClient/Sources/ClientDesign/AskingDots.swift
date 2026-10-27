@@ -132,8 +132,7 @@ final class AskingDotsLayer: CALayer {
                 animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 animation.isRemovedOnCompletion = false
                 // On the shared clock, each a little after the one before.
-                let now = CACurrentMediaTime()
-                animation.beginTime = part.convertTime(now, from: nil) - now.truncatingRemainder(dividingBy: Self.period) + Double(index) * 0.15
+                animation.beginTime = part.sharedClockStart(period: Self.period) + Double(index) * 0.15
                 part.add(animation, forKey: animation.keyPath)
             }
         }

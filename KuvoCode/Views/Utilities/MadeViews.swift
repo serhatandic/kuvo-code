@@ -298,7 +298,7 @@ struct MadePopover: View {
     // MARK: Content
 
     private var content: some View {
-        // One over the other, so the placeholder fades as the list shows.
+        // One over the other, so the placeholder and the list cross-fade.
         ZStack {
             switch showsTimeline ? things.timelineState : things.state {
             case .loading:
@@ -308,28 +308,32 @@ struct MadePopover: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             case .failed(let why):
                 MadeNotice(symbol: "exclamationmark.triangle", title: "Can’t Show What Was Made", detail: why)
+                    .transition(.replacingPlaceholder)
             case .loaded:
-                if showsTimeline {
-                    if things.entries.isEmpty {
-                        empty
-                    } else {
-                        TimelineList(things: things, colored: place.isGroup, open: open)
-                    }
-                } else if shown.isEmpty {
-                    empty
-                } else if place.isSession {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(shown) { artifact in
-                                MadeRow(things: things, header: artifact.header, version: artifact.latest, versions: artifact.versions) { open(artifact.header) }
-                            }
+                Group {
+                    if showsTimeline {
+                        if things.entries.isEmpty {
+                            empty
+                        } else {
+                            TimelineList(things: things, colored: place.isGroup, open: open)
                         }
-                        .padding(.vertical, 4)
-                        .padding(.bottom, 8)
+                    } else if shown.isEmpty {
+                        empty
+                    } else if place.isSession {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                ForEach(shown) { artifact in
+                                    MadeRow(things: things, header: artifact.header, version: artifact.latest, versions: artifact.versions) { open(artifact.header) }
+                                }
+                            }
+                            .padding(.vertical, 4)
+                            .padding(.bottom, 8)
+                        }
+                    } else {
+                        ShelfList(things: things, open: open)
                     }
-                } else {
-                    ShelfList(things: things, open: open)
                 }
+                .transition(.replacingPlaceholder)
             }
         }
     }
@@ -1238,7 +1242,7 @@ private struct VersionBody: View {
     }
 
     var body: some View {
-        // One over the other, so the placeholder fades as the version shows.
+        // One over the other, so the placeholder and the version cross-fade.
         ZStack {
             if version.status == .deleted {
                 notice("Deleted", symbol: "trash", ArtifactWords.deleted(version, in: artifact.versions))
@@ -1247,46 +1251,50 @@ private struct VersionBody: View {
                        version.reason?.words ?? (version.before == true ? "What it was before couldn’t be read." : ArtifactVersion.NoCopy.cleared.words))
             } else if let failure {
                 notice("Can’t Show It", symbol: "exclamationmark.triangle", failure)
-            } else {
-                switch loaded {
-                case nil where artifact.kind == .image || artifact.type.hasPrefix("image/"):
-                    // Where the picture will sit, fitted in the middle.
-                    Placeholder(.image, label: "Loading \(artifact.name)")
-                        .frame(maxWidth: 360, maxHeight: 270)
-                        .padding(12)
-                case nil:
-                    Placeholder(.lines(count: 10), label: "Loading \(artifact.name)")
-                        .padding(16)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                case .changes(.words(let lines, _, _)):
-                    ScrollView { ChangedWords(lines: lines).transcriptFont().lineSpacing(3).padding(16) }
-                case .changes(.lines(let patch, _, _)):
-                    ScrollView([.vertical, .horizontal]) { PatchText(patch: patch).padding(.vertical, 8) }
-                case .changes:
-                    notice("Can’t Compare", symbol: "doc", "Its changes can’t be shown for this kind of file.")
-                case .text(let text, let cut):
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 10) {
-                            if let note { Text(note).font(.system(size: 11.5)).foregroundStyle(.secondary) }
-                            Text(text)
-                                .font(artifact.kind == .code ? .system(size: 12, design: .monospaced) : nil)
-                                .lineSpacing(3)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            if cut { Text("The rest is in the file.").font(.system(size: 11.5)).foregroundStyle(.secondary) }
+                    .transition(.replacingPlaceholder)
+            } else if let loaded {
+                Group {
+                    switch loaded {
+                    case .changes(.words(let lines, _, _)):
+                        ScrollView { ChangedWords(lines: lines).transcriptFont().lineSpacing(3).padding(16) }
+                    case .changes(.lines(let patch, _, _)):
+                        ScrollView([.vertical, .horizontal]) { PatchText(patch: patch).padding(.vertical, 8) }
+                    case .changes:
+                        notice("Can’t Compare", symbol: "doc", "Its changes can’t be shown for this kind of file.")
+                    case .text(let text, let cut):
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 10) {
+                                if let note { Text(note).font(.system(size: 11.5)).foregroundStyle(.secondary) }
+                                Text(text)
+                                    .font(artifact.kind == .code ? .system(size: 12, design: .monospaced) : nil)
+                                    .lineSpacing(3)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                if cut { Text("The rest is in the file.").font(.system(size: 11.5)).foregroundStyle(.secondary) }
+                            }
+                            .transcriptFont()
+                            .padding(16)
                         }
-                        .transcriptFont()
-                        .padding(16)
+                    case .image(let image, let before):
+                        pair(before.map { AnyView(Image(nsImage: $0).resizable().scaledToFit()) }, AnyView(Image(nsImage: image).resizable().scaledToFit()))
+                    case .pdf(let document, let before):
+                        pair(before.map { AnyView(PDFPreview(document: $0)) }, AnyView(PDFPreview(document: document)))
+                    case .quickLook(let url):
+                        QuickLookPreview(url: url)
+                    case .other:
+                        notice(artifact.name, symbol: ArtifactWords.symbol(kind: artifact.kind, type: artifact.type), ByteCountFormatter.string(fromByteCount: Int64(version.size), countStyle: .file))
                     }
-                case .image(let image, let before):
-                    pair(before.map { AnyView(Image(nsImage: $0).resizable().scaledToFit()) }, AnyView(Image(nsImage: image).resizable().scaledToFit()))
-                case .pdf(let document, let before):
-                    pair(before.map { AnyView(PDFPreview(document: $0)) }, AnyView(PDFPreview(document: document)))
-                case .quickLook(let url):
-                    QuickLookPreview(url: url)
-                case .other:
-                    notice(artifact.name, symbol: ArtifactWords.symbol(kind: artifact.kind, type: artifact.type), ByteCountFormatter.string(fromByteCount: Int64(version.size), countStyle: .file))
                 }
+                .transition(.replacingPlaceholder)
+            } else if artifact.kind == .image || artifact.type.hasPrefix("image/") {
+                // Where the picture will sit, fitted in the middle.
+                Placeholder(.image, label: "Loading \(artifact.name)")
+                    .frame(maxWidth: 360, maxHeight: 270)
+                    .padding(12)
+            } else {
+                Placeholder(.lines(count: 10), label: "Loading \(artifact.name)")
+                    .padding(16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

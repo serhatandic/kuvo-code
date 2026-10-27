@@ -371,46 +371,51 @@ private struct FileViewer: View {
         VStack(spacing: 0) {
             header
             Divider()
-            // One over the other, so the placeholder fades as the file shows.
+            // One over the other, so the placeholder and the file cross-fade.
             ZStack {
-                switch content {
-                case .text(let text) where isMarkdown && !showsSource:
-                    ScrollView {
-                        // Drawn as replies are (TextKit), so a long file opens at once. Its own
-                        // pictures, beside it; none from the web (a README's badges and tracking
-                        // pixels would reach their hosts as you open it).
-                        ReplyView(markdown: text, parser: MathMarkdownParser(), images: url.deletingLastPathComponent(), diagrams: true) { link in
-                            // Another file of the project's, here; web links in the browser.
-                            let file = link.isFileURL ? link : link.scheme == nil && !link.path.isEmpty
-                                ? URL(filePath: link.path(percentEncoded: false), relativeTo: url.deletingLastPathComponent()).standardizedFileURL : nil
-                            guard let file else { return false }
-                            app.utilities.show(file)
-                            return true
+                if let content {
+                    Group {
+                        switch content {
+                        case .text(let text) where isMarkdown && !showsSource:
+                            ScrollView {
+                                // Drawn as replies are (TextKit), so a long file opens at once. Its own
+                                // pictures, beside it; none from the web (a README's badges and tracking
+                                // pixels would reach their hosts as you open it).
+                                ReplyView(markdown: text, parser: MathMarkdownParser(), images: url.deletingLastPathComponent(), diagrams: true) { link in
+                                    // Another file of the project's, here; web links in the browser.
+                                    let file = link.isFileURL ? link : link.scheme == nil && !link.path.isEmpty
+                                        ? URL(filePath: link.path(percentEncoded: false), relativeTo: url.deletingLastPathComponent()).standardizedFileURL : nil
+                                    guard let file else { return false }
+                                    app.utilities.show(file)
+                                    return true
+                                }
+                                .transcriptFont()
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(20)
+                            }
+                        case .text(let text):
+                            CodeTextView(text: text, language: CodeHighlighter.language(for: url.path)) { lines in
+                                let range = lines.count == 1 ? "\(lines.lowerBound)" : "\(lines.lowerBound)-\(lines.upperBound)"
+                                app.utilities.addToMessage?("@\(mention):\(range)")
+                            }
+                        case .image(let image):
+                            ScrollView([.horizontal, .vertical]) {
+                                Image(nsImage: image)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(maxWidth: image.size.width, maxHeight: image.size.height)
+                                    .padding(20)
+                            }
+                        case .unavailable(let why):
+                            ContentUnavailableView("No Preview", systemImage: "doc", description: Text(why))
+                        case .preview where !url.isFileURL:
+                            ContentUnavailableView("No Preview", systemImage: "doc", description: Text("This file can’t be shown here."))
+                        case .preview:
+                            QuickLookView(url: url)
                         }
-                        .transcriptFont()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(20)
                     }
-                case .text(let text):
-                    CodeTextView(text: text, language: CodeHighlighter.language(for: url.path)) { lines in
-                        let range = lines.count == 1 ? "\(lines.lowerBound)" : "\(lines.lowerBound)-\(lines.upperBound)"
-                        app.utilities.addToMessage?("@\(mention):\(range)")
-                    }
-                case .image(let image):
-                    ScrollView([.horizontal, .vertical]) {
-                        Image(nsImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: image.size.width, maxHeight: image.size.height)
-                            .padding(20)
-                    }
-                case .unavailable(let why):
-                    ContentUnavailableView("No Preview", systemImage: "doc", description: Text(why))
-                case .preview where !url.isFileURL:
-                    ContentUnavailableView("No Preview", systemImage: "doc", description: Text("This file can’t be shown here."))
-                case .preview:
-                    QuickLookView(url: url)
-                case nil:
+                    .transition(.replacingPlaceholder)
+                } else {
                     Placeholder(.lines(count: 14), label: "Loading \(url.lastPathComponent)")
                         .padding(20)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

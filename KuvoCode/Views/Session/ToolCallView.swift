@@ -104,8 +104,9 @@ struct ToolCallView: View {
             Text(summary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            if isWorking, let since = call.time?.created?.date {
-                StepActivity.Elapsed(since: since)
+            if let since = call.time?.created?.date {
+                // Counting while it runs; once done, how long it took.
+                StepActivity.Elapsed(since: since, running: isWorking, until: call.time?.completed?.date)
             }
             if let stat = diffStat {
                 DiffStat(additions: stat.additions, deletions: stat.deletions)
@@ -137,9 +138,14 @@ struct ToolCallView: View {
         case .failed:
             Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
         default:
-            // One view running and done, so its ring closes as the step ends.
-            StepActivity(symbol: symbol, running: isWorking, size: Self.iconWidth)
-                .help(isAtWork ? "Working in the background" : "")
+            // One view running and done, so its ring closes as the step ends. Only a subagent's
+            // step can be at work in the background, and only it says so.
+            if call.name == "subagent" {
+                StepActivity(symbol: symbol, running: isWorking, size: Self.iconWidth)
+                    .help(isAtWork ? "Working in the background" : "")
+            } else {
+                StepActivity(symbol: symbol, running: isWorking, size: Self.iconWidth)
+            }
         }
     }
 

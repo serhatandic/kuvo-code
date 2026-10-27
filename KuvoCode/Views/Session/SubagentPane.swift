@@ -158,13 +158,15 @@ struct SubagentPane: View {
     @State private var isMissing = false
 
     var body: some View {
-        // One over the other, so the placeholder fades as the conversation shows.
+        // One over the other, so the placeholder and the conversation cross-fade.
         ZStack {
             if let model {
                 SubagentConversation(model: model, parent: parent, open: open)
+                    .transition(.replacingPlaceholder)
             } else if isMissing {
                 ContentUnavailableView("Subagent Not Found", systemImage: "person.2", description: Text("Its session is gone, or its machine can't be reached. Close this tab."))
                     .frame(maxHeight: .infinity)
+                    .transition(.replacingPlaceholder)
             } else {
                 Placeholder(.lines(count: 8), label: "Loading subagent")
                     .padding(20)

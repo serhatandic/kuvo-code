@@ -103,8 +103,9 @@ struct SubagentRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            if isWorking, let since = call.time?.created?.date {
-                StepActivity.Elapsed(since: since)
+            if let since = call.time?.created?.date {
+                // Counting while it works; once done, how long it took.
+                StepActivity.Elapsed(since: since, running: isWorking, until: call.time?.completed?.date)
             }
             if session != nil {
                 Image(systemName: "chevron.right")

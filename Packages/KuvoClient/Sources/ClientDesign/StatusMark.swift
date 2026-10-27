@@ -203,6 +203,16 @@ final class StatusMarkView: UIView {
 }
 #endif
 
+extension CALayer {
+    /// When a loop of `period` starts on this layer so that it's at the same point as every other
+    /// loop of that period on screen, however late it was added: all count from the media clock's
+    /// zero. The marks, step rings, placeholders and lines that move together use it.
+    func sharedClockStart(period: CFTimeInterval) -> CFTimeInterval {
+        let now = CACurrentMediaTime()
+        return convertTime(now, from: nil) - now.truncatingRemainder(dividingBy: period)
+    }
+}
+
 /// The mark's layers, drawn in a 16-point square scaled to its size, and its motion as keyframes.
 final class StatusMarkLayer: CALayer {
     private var shown: (kind: StatusMark.Kind?, size: CGFloat, still: Bool, ink: StatusMarkInk)?
@@ -341,8 +351,7 @@ final class StatusMarkLayer: CALayer {
         animation.duration = period
         animation.repeatCount = .infinity
         animation.isRemovedOnCompletion = false
-        let now = CACurrentMediaTime()
-        animation.beginTime = layer.convertTime(now, from: nil) - now.truncatingRemainder(dividingBy: period)
+        animation.beginTime = layer.sharedClockStart(period: period)
         layer.add(animation, forKey: keyPath)
     }
 

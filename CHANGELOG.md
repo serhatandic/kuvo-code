@@ -16,7 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
-- Waits look like what they wait for: a step at work shows its icon in a sweeping ring and how long it has run; a download has one bar that says how much and how long is left; a file, list or preview on its way shows faint lines in its shape; a sign-in in your browser shows a dot handed over to it; a computer starting shows a line from this Mac to it that turns solid when it answers. Short waits in a button are a small turning ring.
+- Waits look like what they wait for: a step at work shows its icon in a sweeping ring and how long it has run, and keeps how long it took; a download has one bar that says how much and how long is left; a file, list or preview on its way shows faint lines in its shape; a sign-in in your browser shows a dot handed over to it; a computer starting shows a line from this Mac to it that turns solid when it answers. Short waits in a button are a small turning ring.
 - The sidebar's marks are one quiet family: a turning ring while a session works, an orange dot that ripples when it needs you, and an accent dot that settles when it's done, plus still marks for a failed run, a wake-up, a watch and a machine that isn't connected. Your tabs show the same marks. The open session is a soft grey fill that starts at its title, so the lines of its subagents stay in view, and section headings stand out more.
 - Codex in Kuvo Code no longer uses ChatGPT's Computer Use, even where your Codex settings turn it on, so it can't click around your Mac without asking.
 - A screenshot copied to the clipboard (⌃⇧⌘4) pastes into the composer with ⌘V, as a picture you attach.

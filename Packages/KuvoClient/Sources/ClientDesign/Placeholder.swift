@@ -11,8 +11,9 @@ import UIKit
 /// sheen crosses the whole of it now and then, played by Core Animation on one clock, so every
 /// placeholder on screen sweeps together and costs nothing frame to frame; with Reduce Motion it
 /// stands still. It shows only after a moment, fading in, so a quick load shows nothing at all,
-/// and fades as the content takes its place (where nothing else shares its spot; see `fadesOut`).
-/// VoiceOver hears one element: "Loading", or what's loading.
+/// and cross-fades with the content that takes its place, where nothing else shares its spot (see
+/// `fadesOut`): the two sit one over the other in a ZStack, and the content comes in with
+/// `.transition(.replacingPlaceholder)`. VoiceOver hears one element: "Loading", or what's loading.
 public struct Placeholder: View {
     public enum Kind: Hashable, Sendable {
         /// Lines of text or code: bars of varying widths, some indented.
@@ -34,8 +35,9 @@ public struct Placeholder: View {
     static let delay: Double = 0.3
 
     /// `label` is what VoiceOver says ("Loading skills"). `fadesOut` cross-fades it with the
-    /// content that replaces it; off where it sits among other rows of a stack, which would keep
-    /// its room while it fades and then close up.
+    /// content that replaces it, which comes in with `.transition(.replacingPlaceholder)`; off
+    /// where it sits among other rows of a stack, which would keep its room while it fades and
+    /// then close up.
     public init(_ kind: Kind, label: String = "Loading", fadesOut: Bool = true) {
         self.kind = kind
         self.label = label
@@ -50,12 +52,19 @@ public struct Placeholder: View {
             .accessibilityElement()
             .accessibilityLabel(label)
             .accessibilityHidden(!shown)
-            .transition(fadesOut ? AnyTransition.opacity.animation(.easeOut(duration: 0.2)) : .identity)
+            .transition(fadesOut ? .replacingPlaceholder : .identity)
             .task {
                 guard (try? await Task.sleep(for: .seconds(Self.delay))) != nil else { return }
                 withAnimation(.easeOut(duration: 0.25)) { shown = true }
             }
     }
+}
+
+extension AnyTransition {
+    /// Content taking a placeholder's place, and the placeholder leaving it: each fades as the
+    /// other does, so the two cross-fade rather than the content showing at once over bars that
+    /// fade under it.
+    public static var replacingPlaceholder: AnyTransition { .opacity.animation(.easeOut(duration: 0.2)) }
 }
 
 extension Placeholder.Kind {
@@ -134,7 +143,6 @@ private struct PlaceholderHost: UIViewRepresentable {
     func makeUIView(context: Context) -> PlaceholderView { PlaceholderView() }
 
     func updateUIView(_ view: PlaceholderView, context: Context) {
-        view.shape.scale = view.traitCollection.displayScale
         view.shape.show(kind, still: still, ink: ink)
     }
 }
@@ -146,6 +154,13 @@ final class PlaceholderView: UIView {
         super.init(frame: .zero)
         isUserInteractionEnabled = false
         layer.addSublayer(shape)
+        registerForTraitChanges([UITraitDisplayScale.self]) { (view: PlaceholderView, _) in view.shape.scale = view.traitCollection.displayScale }
+    }
+
+    // Its screen's scale is known once it's in a window.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        shape.scale = window?.screen.scale ?? traitCollection.displayScale
     }
 
     @available(*, unavailable)
@@ -250,8 +265,7 @@ final class PlaceholderLayer: CALayer {
         animation.repeatCount = .infinity
         animation.isRemovedOnCompletion = false
         // In step with every other one on screen.
-        let now = CACurrentMediaTime()
-        animation.beginTime = sheen.convertTime(now, from: nil) - now.truncatingRemainder(dividingBy: Self.period)
+        animation.beginTime = sheen.sharedClockStart(period: Self.period)
         sheen.add(animation, forKey: "sheen")
     }
 

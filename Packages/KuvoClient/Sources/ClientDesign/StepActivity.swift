@@ -25,7 +25,7 @@ public struct StepActivity: View {
     /// How small the icon sits inside the ring.
     static let inset: CGFloat = 0.6
     /// The closing motion, from the end of the step to the icon alone.
-    static let closing: CFTimeInterval = 0.35
+    nonisolated static let closing: CFTimeInterval = 0.35
 
     /// `size` is the icon's column: the ring fills it, and the icon keeps the width it has there.
     public init(symbol: String?, running: Bool, size: CGFloat = 16) {
@@ -77,30 +77,45 @@ public struct StepActivity: View {
 
 extension StepActivity {
     /// How long a step has run, for beside its title: "14s", "1m 12s", in tertiary with digits
-    /// that don't jostle, a second at a time while it's on screen. It shows from its second
-    /// second, so a quick step doesn't flash a count; VoiceOver hears "14 seconds" after the
-    /// step's Running.
+    /// that don't jostle, a second at a time while it's on screen, and how long it took once it's
+    /// done, as it stays. It shows from its second second, so a quick step doesn't flash a count
+    /// (and a quick step done shows none). Its room is kept from the start, as wide as the largest
+    /// count of its kind ("00s", then "00m 00s"), so the step's line moves only when it passes a
+    /// minute or an hour, and not as it ends. VoiceOver hears "14 seconds" after the step's Running.
     public struct Elapsed: View {
         let since: Date
+        /// Its end once it's done, nil while it runs.
+        let until: Date?
+        let running: Bool
         @State private var now = Date()
 
-        /// Counted from `since`; a computer whose clock runs ahead never shows less than nothing.
-        public init(since: Date) {
+        /// Counted from `since` while it's `running`, and to `until` once it's done: a step's
+        /// end, as its engine recorded it. A step done whose end isn't known shows no count, the
+        /// same whether it was seen running or opened from history. A computer whose clock runs
+        /// ahead never shows less than nothing.
+        public init(since: Date, running: Bool = true, until: Date? = nil) {
             self.since = since
+            self.running = running
+            self.until = running ? nil : until
         }
 
         public var body: some View {
-            let seconds = max(0, Int(now.timeIntervalSince(since)))
-            // Its place is kept from the start: the step's own words change as it ends anyway.
-            Text(Self.text(seconds))
+            let seconds = Self.seconds(since, until ?? now)
+            if running || (until != nil && seconds >= 2) {
+                ZStack(alignment: .leading) {
+                    Text(Self.room(seconds)).hidden()
+                    Text(Self.text(seconds))
+                }
                 .monospacedDigit()
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
                 .fixedSize()
                 .opacity(seconds >= 2 ? 1 : 0)
+                .accessibilityElement(children: .ignore)
                 .accessibilityLabel(Self.spoken(seconds))
                 .accessibilityHidden(seconds < 2)
-                .task(id: since) {
+                .task(id: running ? since : nil) {
+                    guard running else { return }
                     while !Task.isCancelled {
                         now = Date()
                         // On to its next whole second.
@@ -108,6 +123,18 @@ extension StepActivity {
                         guard (try? await Task.sleep(for: .seconds(1 - into))) != nil else { return }
                     }
                 }
+            }
+        }
+
+        static func seconds(_ since: Date, _ until: Date) -> Int {
+            max(0, Int(until.timeIntervalSince(since)))
+        }
+
+        /// The room a count of `seconds` keeps: the widest of its kind.
+        static func room(_ seconds: Int) -> String {
+            if seconds < 60 { return "00s" }
+            if seconds < 3600 { return "00m 00s" }
+            return "00h 00m"
         }
 
         /// "14s", "1m 12s", "2h 5m".
@@ -178,7 +205,6 @@ private struct StepRingHost: UIViewRepresentable {
     func makeUIView(context: Context) -> StepRingView { StepRingView() }
 
     func updateUIView(_ view: StepRingView, context: Context) {
-        view.ring.scale = view.traitCollection.displayScale
         view.ring.show(running: running, size: size, around: around, still: still, ink: ink)
     }
 }
@@ -190,6 +216,13 @@ final class StepRingView: UIView {
         super.init(frame: .zero)
         isUserInteractionEnabled = false
         layer.addSublayer(ring)
+        registerForTraitChanges([UITraitDisplayScale.self]) { (view: StepRingView, _) in view.ring.scale = view.traitCollection.displayScale }
+    }
+
+    // Its screen's scale is known once it's in a window.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        ring.scale = window?.screen.scale ?? traitCollection.displayScale
     }
 
     @available(*, unavailable)
@@ -273,8 +306,7 @@ final class StepRingLayer: CALayer {
         animation.duration = Self.period
         animation.repeatCount = .infinity
         animation.isRemovedOnCompletion = false
-        let now = CACurrentMediaTime()
-        animation.beginTime = arc.convertTime(now, from: nil) - now.truncatingRemainder(dividingBy: Self.period)
+        animation.beginTime = arc.sharedClockStart(period: Self.period)
         arc.add(animation, forKey: "sweep")
     }
 

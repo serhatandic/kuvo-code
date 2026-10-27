@@ -361,8 +361,7 @@ final class ProgressGlideLayer: CALayer {
         animation.duration = Self.period
         animation.repeatCount = .infinity
         animation.isRemovedOnCompletion = false
-        let now = CACurrentMediaTime()
-        animation.beginTime = segment.convertTime(now, from: nil) - now.truncatingRemainder(dividingBy: Self.period)
+        animation.beginTime = segment.sharedClockStart(period: Self.period)
         segment.add(animation, forKey: "glide")
     }
 }

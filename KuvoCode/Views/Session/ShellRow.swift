@@ -73,9 +73,8 @@ struct ShellRow: View {
             Text(AttributedString((shell.isRunning ? "Running " : "You ran ") + "`") + FindText.marked(AttributedString(shell.command), marks?[0]) + AttributedString("`"))
                 .lineLimit(1)
                 .truncationMode(.middle)
-            if shell.isRunning {
-                StepActivity.Elapsed(since: shell.time.created.date)
-            }
+            // Counting while it runs; once done, how long it took.
+            StepActivity.Elapsed(since: shell.time.created.date, running: shell.isRunning, until: shell.time.completed?.date)
             if let exit = shell.exit, exit != 0 {
                 Text("exit \(exit)")
                     .foregroundStyle(.red)
