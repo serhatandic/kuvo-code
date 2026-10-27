@@ -1,4 +1,6 @@
+import ClientSessions
 import Foundation
+import KuvoLink
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -74,13 +76,48 @@ import Testing
         // A machine that isn't connected: its conversations aren't searched, and that's said.
         workspace.machines = ["lokum"]
         #expect(await found("email") == ["ses_login", "ses_logs"])
-        #expect(workspace.unsearched == ["lokum": "isn’t connected"])
+        #expect(workspace.unsearched == ["lokum": .notConnected])
         let snippet = try #require(await workspace.searchConversations("forgets").first?.snippet)
         #expect(snippet.contains("forgets the email"), "the words around it: \(snippet)")
     }
 
     /// Words only the app adds when it writes a conversation out (who's speaking, its title) find
     /// nothing: no one said them.
+    /// Each computer's finds show as it answers: one that's slow (a machine reading its
+    /// conversations for the first time) holds none of the others up.
+    @Test func eachComputersFindsComeAsItAnswers() async throws {
+        let box = try await searching()
+        let gate = Gate()
+        defer {
+            gate.open()
+            box.stop()
+            engine.stop()
+        }
+        await start()
+        let slow = BoxClient(box: "lokum", transport: LocalBox { _ in
+            AsyncThrowingStream { continuation in
+                Task.detached {
+                    gate.wait()
+                    continuation.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(Data(#"{"results": []}"#.utf8)))
+                    continuation.finish()
+                }
+            }
+        })
+        let mac = box.client(engine: engine.url)
+        workspace.searchedBoxes = { [BoxClient.mac, "lokum"] }
+        workspace.boxes = { $0 == BoxClient.mac ? mac : slow }
+        final class Answers { var byBox: [String: [String]] = [:] }
+        let answers = Answers()
+        let search = Task { await workspace.searchConversations("email") { box, finds in answers.byBox[box] = finds.map(\.session.id) } }
+        try await until { answers.byBox[BoxClient.mac] != nil }
+        #expect(answers.byBox[BoxClient.mac] == ["ses_login", "ses_logs"], "this Mac's, while the machine still searches")
+        #expect(answers.byBox["lokum"] == nil)
+        gate.open()
+        #expect(await search.value.map(\.session.id) == ["ses_login", "ses_logs"])
+        #expect(answers.byBox["lokum"] == [])
+    }
+
     @Test func theAppsOwnLabelsFindNothing() async throws {
         let box = try await searching()
         defer {

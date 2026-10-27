@@ -252,4 +252,21 @@ extension ComposerFieldTests {
         #expect(model.draftText == "see https://example.com/a")
         #expect(model.draftFiles.isEmpty)
     }
+
+    /// A screenshot copied to the clipboard (⌃⇧⌘4) is only a picture, one item of `public.png`:
+    /// ⌘V is offered for it, as macOS offers Paste only for what the field reads, and attaches it.
+    @Test func aScreenshotOnTheClipboardIsAttached() async throws {
+        defer { done() }
+        try await until { editing == "composer" }
+        let field = try #require(field)
+        let image = NSImage(size: NSSize(width: 8, height: 8))
+        image.lockFocus(); NSColor.systemBlue.drawSwatch(in: NSRect(x: 0, y: 0, width: 8, height: 8)); image.unlockFocus()
+        let png = try #require(image.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) })
+        let board = NSPasteboard(name: .init("kuvo-tests-\(UUID().uuidString)"))
+        board.declareTypes([.png], owner: nil)
+        board.setData(png, forType: .png)
+        #expect(field.preferredPasteboardType(from: board.types ?? [], restrictedToTypesFrom: nil) != nil, "⌘V isn't offered for a picture alone")
+        #expect(field.readSelection(from: board))
+        #expect(model.draftFiles.count == 1)
+    }
 }

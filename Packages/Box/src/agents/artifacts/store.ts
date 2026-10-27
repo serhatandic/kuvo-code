@@ -614,7 +614,9 @@ export class ArtifactStore {
 
   private add(artifact: Artifact, change: Pick<Version, "status" | "hash" | "size" | "kept" | "reason" | "patch">, made: Made, now: Date, bytes?: Buffer): Artifact {
     const latest = artifact.versions.at(-1)
-    const replacing = latest && this.sameTurn(latest, made, now) ? latest : undefined
+    // A deletion is a version of its own: one folded into its turn's would lose what the file was
+    // (a picture a command made and removed in one turn, its copy kept).
+    const replacing = latest && change.status !== "deleted" && this.sameTurn(latest, made, now) ? latest : undefined
     const previous = replacing ? artifact.versions.at(-2) : latest
     const version: Version = {
       n: replacing ? replacing.n : (latest?.n ?? 0) + 1,

@@ -238,8 +238,8 @@ struct ConversationScroll<Rows: View>: View {
             anchor.viewMoved(offset: new.offset, height: new.height)
             if let nearTop, !scroller.followsEnd, new.offset < new.height * 2 { nearTop() }
         }
-        // Messages scroll on under the card's header and the composer, blurring away there
-        // instead of being cut at an edge.
+        // Messages scroll on under the card's header, blurring away there instead of being cut at
+        // an edge. (Under the composer they fade out in the card's color: `conversationBar`.)
         .scrollEdgeEffectStyle(Self.edgeStyle, for: .all)
         .overlay(alignment: .bottom) {
             // Scrolled up: a way back to the newest, which also follows it again.

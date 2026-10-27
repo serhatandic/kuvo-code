@@ -17,8 +17,6 @@ struct SessionView: View {
     /// the window lays out only the one in view.
     @State private var hiddenSizes: [String: CGSize] = [:]
     @State private var size: CGSize = .zero
-    /// A list open over the composer (see `ComposerListShown`).
-    @State private var listShown = false
 
     var body: some View {
         ZStack {
@@ -40,7 +38,6 @@ struct SessionView: View {
                     .environment(\.isOffline, Self.offlineMachine(of: each, in: app) != nil)
             }
         }
-        .scrollEdgeEffectHidden(listShown, for: .bottom)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
         .onChange(of: model.id, initial: true) { old, new in
             kept = Array(([model] + kept.filter { $0.id != new }).prefix(Self.keptCount))
@@ -48,14 +45,11 @@ struct SessionView: View {
             hiddenSizes[new] = nil
             hiddenSizes = hiddenSizes.filter { id, _ in kept.contains { $0.id == id } }
         }
-        // A bar, not just an inset: the conversation scrolls on under the composer, softly
-        // blurred there by the scroll view's edge effect.
-        .safeAreaBar(edge: .bottom, spacing: 0) {
+        .conversationBar {
             BottomStack(model: model, lastModel: $lastModel)
                 // Room for the composer, the cards' own buttons and a little conversation.
                 .environment(\.cardRoom, max(160, height - 440))
         }
-        .onPreferenceChange(ComposerListShown.self) { shown in listShown = shown }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         // Its machine out of reach: the conversation to read, without what needs the engine.
         .environment(\.isOffline, Self.offlineMachine(of: model, in: app) != nil)

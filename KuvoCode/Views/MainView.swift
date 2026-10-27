@@ -1,6 +1,7 @@
 import ClientDesign
 import ClientNews
 import OpenCodeKit
+import KuvoVoice
 import SwiftUI
 
 /// The workspace, laid out like Rex: open sessions as tabs in the title bar, and
@@ -390,6 +391,8 @@ struct MainView: View {
 
     var body: some View {
         followingSessions
+        // Behind the voice field, out of VoiceOver's reach while it listens (as under a sheet).
+        .accessibilityHidden(app.dictation.voice != nil && app.dictation.style == .field)
         // Voice input in the voice field: over all of it.
         .overlay { VoiceFieldCover() }
         .animation(.ui, value: app.dictation.voice == nil)

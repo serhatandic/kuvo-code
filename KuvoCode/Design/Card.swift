@@ -29,6 +29,8 @@ struct Card<Icon: View, Actions: View, Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     @Environment(\.colorScheme) private var scheme
+    /// Its content is covered (`CardContentCovered`): the header doesn't fade it.
+    @State private var isCovered = false
     @Environment(\.windowControlsInset) private var windowControlsInset
     @Environment(\.windowControlsTrailingInset) private var windowControlsTrailingInset
 
@@ -69,8 +71,9 @@ struct Card<Icon: View, Actions: View, Content: View>: View {
                 .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
                 .safeAreaPadding(.top, Metrics.cardHeaderHeight)
                 .overlay(alignment: .top) {
-                    header.background(alignment: .top) { headerFade }
+                    header.background(alignment: .top) { headerFade.opacity(isCovered ? 0 : 1).animation(.ui, value: isCovered) }
                 }
+                .onPreferenceChange(CardContentCovered.self) { isCovered = $0 }
         } else {
             content()
                 .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
@@ -188,15 +191,27 @@ struct CardActionStyle: ButtonStyle {
     @State private var isHovering = false
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .labelStyle(.iconOnly)
-            .font(.system(size: 13, weight: .regular))
-            .foregroundStyle(isHovering ? .primary : .secondary)
-            .frame(width: 26, height: 24)
-            .background(configuration.isPressed ? Pressable.pressedFill : isHovering ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 6))
-            .contentShape(.rect)
-            .onHover { isHovering = $0 }
-            .clickablePointer()
+        ActionLabel(configuration: configuration, isHovering: $isHovering)
+    }
+
+    /// Dimmed, with no hover or pointer, when it can't be clicked (a version arrow at the end).
+    private struct ActionLabel: View {
+        let configuration: Configuration
+        @Binding var isHovering: Bool
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            let hovering = isHovering && isEnabled
+            configuration.label
+                .labelStyle(.iconOnly)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(!isEnabled ? .tertiary : hovering ? .primary : .secondary)
+                .frame(width: 26, height: 24)
+                .background(configuration.isPressed && isEnabled ? Pressable.pressedFill : hovering ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 6))
+                .contentShape(.rect)
+                .onHover { isHovering = $0 }
+                .clickablePointer()
+        }
     }
 }
 
@@ -341,4 +356,11 @@ private struct CardClicks: NSViewRepresentable {
             }
         }
     }
+}
+
+/// Something shows over all of a card's content (a widget opened larger): nothing scrolls under
+/// the header then, so it doesn't fade what's under it, the covering view's own top included.
+struct CardContentCovered: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
 }

@@ -12,10 +12,12 @@ let package = Package(
         .library(name: "ClientAccounts", targets: ["ClientAccounts"]),
         .library(name: "ClientDesign", targets: ["ClientDesign"]),
         .library(name: "ClientNews", targets: ["ClientNews"]),
+        .library(name: "ClientSessions", targets: ["ClientSessions"]),
     ],
     // Textual draws the replies' code blocks in both apps; ClientDesign gives it their colors.
     dependencies: [
         .package(path: "../Textual"),
+        .package(path: "../OpenCodeKit"),
         .package(url: "https://github.com/gonzalezreal/swiftui-math", from: "0.1.0"),
     ],
     targets: [
@@ -30,5 +32,7 @@ let package = Package(
         .testTarget(name: "ClientDesignTests", dependencies: ["ClientDesign"]),
         .target(name: "ClientNews"),
         .testTarget(name: "ClientNewsTests", dependencies: ["ClientNews"]),
+        .target(name: "ClientSessions", dependencies: [.product(name: "OpenCodeKit", package: "OpenCodeKit")]),
+        .testTarget(name: "ClientSessionsTests", dependencies: ["ClientSessions"]),
     ]
 )

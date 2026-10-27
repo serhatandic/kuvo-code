@@ -194,11 +194,9 @@ public final class VoiceInput {
             self.analyzer = analyzer
             inputs = continuation
             results = Task { [weak self] in await self?.read(transcriber, run: run) }
-            let converter = natural == format ? nil : AVAudioConverter(from: natural, to: format)
-            let tap = Tap(format: format, converter: converter, continuation: continuation) { [weak self] rms, time in
+            Self.tap(input, natural: natural, format: format, continuation: continuation) { [weak self] rms, time in
                 Task { @MainActor in self?.heard(rms: rms, at: time, run: run) }
             }
-            input.installTap(onBus: 0, bufferSize: 1024, format: natural) { buffer, when in tap.take(buffer, at: when) }
             engine.prepare()
             try engine.start()
             phase = .listening
@@ -266,6 +264,15 @@ public final class VoiceInput {
         listening = nil
         results = nil
         listeningSince = nil
+    }
+
+    /// Taps `node` for what it hears: on the audio engine's own queue, each buffer goes to the
+    /// analyzer (converted to `format`), and how loud it is to `level`. Done here, off the main
+    /// actor: a tap installed from `listen` would be the main actor's, and Swift traps when the
+    /// audio queue calls it.
+    nonisolated static func tap(_ node: AVAudioNode, natural: AVAudioFormat, format: AVAudioFormat, continuation: AsyncStream<AnalyzerInput>.Continuation, level: @escaping @Sendable (Float, Double) -> Void) {
+        let tap = Tap(format: format, converter: natural == format ? nil : AVAudioConverter(from: natural, to: format), continuation: continuation, level: level)
+        node.installTap(onBus: 0, bufferSize: 1024, format: natural) { buffer, when in tap.take(buffer, at: when) }
     }
 
     // MARK: Permission

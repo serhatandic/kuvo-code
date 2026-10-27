@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientSessions
 import Foundation
 import KuvoLink
 import OpenCodeKit
@@ -264,7 +265,7 @@ final class Workspace {
     }
 
     private func isHidden(_ session: Session) -> Bool {
-        seats.contains(session.id) || Self.isSeat(session) || Self.isEngineRun(session)
+        seats.contains(session.id) || HiddenSessions.isHidden(session)
     }
 
     /// The engine's session for a model of the engine's run in a session with the agents (Auto's,
@@ -482,31 +483,58 @@ final class Workspace {
     /// Sessions whose conversation has `query` (archived ones too), the latest first, with the
     /// words around its first mention: each box searches its own (`kuvo/search`), this Mac's and
     /// each machine that's connected, and only what's listed here is shown.
-    func searchConversations(_ query: String, limit: Int = 20) async -> [(session: Session, snippet: String)] {
-        nonisolated struct Found: Decodable, Sendable { var results: [Result]; struct Result: Decodable, Sendable { var session: String; var snippet: String } }
+    /// `answered`: each box's finds as it answers (by its id, `BoxClient.mac` or a machine's), for
+    /// a sidebar that shows them as they come.
+    func searchConversations(_ query: String, limit: Int = 20, answered: ((String, [(session: Session, snippet: String)]) -> Void)? = nil) async -> [(session: Session, snippet: String)] {
+        nonisolated struct Found: Decodable, Sendable {
+            var results: [Hit]
+            struct Hit: Decodable, Sendable { var session: String; var snippet: String }
+            /// Its answer: what it found, or why it couldn't search.
+            static func asked(_ client: BoxClient, _ path: String) async -> Result<[Hit], UnsearchedFailure> {
+                guard let (status, body) = try? await client.send("GET", path) else { return .failure(.init(reason: .didntAnswer)) }
+                // A box from before it could search: it doesn't have the route.
+                if status == 404 { return .failure(.init(reason: .needsUpdate)) }
+                guard status == 200, let found = try? JSONDecoder().decode(Found.self, from: body) else { return .failure(.init(reason: .didntAnswer)) }
+                return .success(found.results)
+            }
+        }
         let path = "kuvo/search?q=\(Self.queryValue(query))&limit=\(limit)"
-        let boxes = [BoxClient.mac] + connectedMachines.sorted()
+        let boxes = searchedBoxes?() ?? [BoxClient.mac] + connectedMachines.sorted()
         let clients = boxes.compactMap { box in self.boxes?(box).map { (box, $0) } }
-        let answers = await withTaskGroup(of: (String, [Found.Result]?).self) { group in
-            for (box, client) in clients { group.addTask { (box, (try? await client.value(Found.self, "GET", path))?.results) } }
-            var answers: [String: [Found.Result]?] = [:]
-            for await answer in group { answers[answer.0] = answer.1 }
+        let answers = await withTaskGroup(of: (String, Result<[Found.Hit], UnsearchedFailure>).self) { group in
+            for (box, client) in clients { group.addTask { (box, await Found.asked(client, path)) } }
+            var answers: [String: Result<[Found.Hit], UnsearchedFailure>] = [:]
+            for await answer in group {
+                answers[answer.0] = answer.1
+                let found = (try? answer.1.get()) ?? []
+                answered?(answer.0, found.compactMap { result in session(result.session).map { (session: $0, snippet: result.snippet) } })
+            }
             return answers
         }
-        // Who couldn't search, said: machines that aren't connected, and boxes that didn't answer.
-        var unsearched: [String: String] = [:]
-        for machine in machines.subtracting(connectedMachines).subtracting(removedMachines) { unsearched[machine] = "isn’t connected" }
-        for (box, results) in answers where results == nil { unsearched[box == BoxClient.mac ? "This Mac" : box] = "didn’t answer" }
+        // Who couldn't search, said: machines that aren't connected, and boxes that didn't answer
+        // or can't search yet.
+        var unsearched: [String: UnsearchedReason] = [:]
+        for machine in machines.subtracting(connectedMachines).subtracting(removedMachines) { unsearched[machine] = .notConnected }
+        for (box, answer) in answers {
+            if case .failure(let failure) = answer { unsearched[box == BoxClient.mac ? "This Mac" : box] = failure.reason }
+        }
         if unsearched != self.unsearched { self.unsearched = unsearched }
-        return answers.values.compactMap(\.self).flatMap(\.self)
+        return answers.values.compactMap { try? $0.get() }.flatMap(\.self)
             .compactMap { result in session(result.session).map { (session: $0, snippet: result.snippet) } }
             .sorted { $0.session.time.updated > $1.session.time.updated }
             .prefix(limit).map { $0 }
     }
 
-    /// The computers the last search of conversations couldn't search, each with why ("isn’t
-    /// connected", "didn’t answer"), by name.
-    private(set) var unsearched: [String: String] = [:]
+    /// The computers the last search of conversations couldn't search, each with why, by name.
+    private(set) var unsearched: [String: UnsearchedReason] = [:]
+    /// Why a box couldn't search, as an error to carry in a `Result`.
+    struct UnsearchedFailure: Error {
+        var reason: UnsearchedReason
+    }
+
+    /// The boxes a search of conversations asks: this Mac's and each machine that's connected; a
+    /// test's stand-in.
+    @ObservationIgnored var searchedBoxes: (() -> [String])?
 
     /// A session's conversation as Markdown, to share.
     func markdown(of id: String) async throws -> String? {
@@ -2421,26 +2449,13 @@ final class Workspace {
 
     func markViewed(_ id: String) {
         clearNews(of: id)
-        var read: [(id: String, idle: Milliseconds)] = []
-        if let index = sessions.firstIndex(where: { $0.id == id }), sessions[index].isUnread, let idle = sessions[index].time.idle {
-            sessions[index].time.viewed = idle
-            read.append((id, idle))
-        } else if let (parent, index) = subSessionIndex(id), let child = subSessions[parent]?[index], child.isUnread, let idle = child.time.idle {
-            subSessions[parent]?[index].time.viewed = idle
-            read.append((id, idle))
-        }
-        // What its sub-sessions found, once they're done, shows in its conversation (and theirs
-        // in theirs): read too.
-        func readSubSessions(of id: String) {
-            for (index, child) in (subSessions[id] ?? []).enumerated() {
-                if child.isUnread, let idle = child.time.idle {
-                    subSessions[id]?[index].time.viewed = idle
-                    read.append((child.id, idle))
-                }
-                readSubSessions(of: child.id)
-            }
-        }
-        readSubSessions(of: id)
+        // Itself, and what its sub-sessions found, once they're done (ClientSessions' rule, the
+        // phone's too). Worked on as copies: most looks read nothing, and change nothing.
+        var listed = sessions, subs = subSessions
+        let read = ReadState.read(id, sessions: &listed, subSessions: &subs) { parents[$0] }
+        guard !read.isEmpty else { return }
+        sessions = listed
+        subSessions = subs
         for (id, idle) in read {
             // Its engine away (a machine out of reach): told once it's back (see `refresh`).
             guard let api = api(forSession: id) else {
@@ -2454,12 +2469,11 @@ final class Workspace {
     /// Read elsewhere, as its box says: the same as `markViewed`, without telling the box again.
     private func sawViewed(_ id: String, idle: Milliseconds) {
         readElsewhere[id] = max(idle, readElsewhere[id] ?? 0)
-        if let (parent, index) = subSessionIndex(id), idle > (subSessions[parent]?[index].time.viewed ?? 0) {
-            subSessions[parent]?[index].time.viewed = idle
-        }
-        guard let index = sessions.firstIndex(where: { $0.id == id }), idle > (sessions[index].time.viewed ?? 0) else { return }
-        sessions[index].time.viewed = idle
-        if !sessions[index].isUnread { clearNews(of: id) }
+        var listed = sessions, subs = subSessions
+        guard ReadState.sawRead(id, upTo: idle, sessions: &listed, subSessions: &subs, parent: { parents[$0] }) else { return }
+        sessions = listed
+        subSessions = subs
+        if session(id)?.isUnread == false { clearNews(of: id) }
     }
 
     /// Read: its notification goes, and its next news is read afresh.
@@ -2564,19 +2578,12 @@ final class Workspace {
     /// chain, which shows what it found (one from before sub-sessions were marked read has
     /// that only).
     func isNew(_ sub: Session) -> Bool {
-        guard sub.isUnread, let idle = sub.time.idle else { return false }
-        return (session(root(of: sub.id))?.time.viewed ?? 0) < idle
+        ReadState.isNew(sub, rootViewed: session(root(of: sub.id))?.time.viewed)
     }
 
     /// One of its sub-sessions, or theirs, is new.
     func hasNewSubSessions(_ id: String) -> Bool {
-        (subSessions[id] ?? []).contains { isNew($0) || hasNewSubSessions($0.id) }
-    }
-
-    /// Where a sub-session is in its session's list.
-    private func subSessionIndex(_ id: String) -> (parent: String, index: Int)? {
-        guard let parent = parents[id], let index = subSessions[parent]?.firstIndex(where: { $0.id == id }) else { return nil }
-        return (parent, index)
+        ReadState.hasNew(under: id, in: subSessions) { session(root(of: $0.id))?.time.viewed }
     }
 
     /// Sessions found at work without a row (a subagent, maybe one sent off in the background,

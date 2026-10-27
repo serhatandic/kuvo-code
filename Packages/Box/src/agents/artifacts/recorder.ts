@@ -258,7 +258,7 @@ export class Recorder {
     for (const file of files) {
       if (typeof file?.file !== "string") continue
       const path = absolute(file.file)
-      if (!this.store.at(path) && file.status !== "added" && typeof file.patch === "string") await this.seedBefore(path, file.patch)
+      if (!this.store.at(path) && file.status !== "added" && typeof file.patch === "string") await this.seedBefore(path, file.patch, file.status === "deleted")
       await this.store.change(path, { ...made(name), ...(typeof file.patch === "string" ? { patch: file.patch } : {}) })
     }
     // A write's file, when it didn't say so in its metadata.
@@ -286,14 +286,15 @@ export class Recorder {
   }
 
   /**
-   * What a file was before a change the record first sees, from the change's patch, as version 0:
+   * What a file was before a change the record first sees (a deletion too), from the change's patch, as version 0:
    * only when the patch fits the file as it is now exactly (it hasn't changed again since), never
    * a state made up from a later one.
    */
-  private async seedBefore(path: string, patch: string) {
+  private async seedBefore(path: string, patch: string, deleted = false) {
     let now: string
     try {
-      now = readFileSync(path, "utf8")
+      // A deleted one is nothing now: its patch takes it back to all it was.
+      now = deleted ? "" : readFileSync(path, "utf8")
     } catch {
       return
     }

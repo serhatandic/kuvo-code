@@ -386,6 +386,13 @@ public enum ArtifactWords {
         return sentence.prefix(1).uppercased() + sentence.dropFirst()
     }
 
+    /// What a deletion's version says in place of the file: to step back where an earlier version's
+    /// copy is kept, and plainly that none was where it isn't (one made and removed before a copy).
+    public static func deleted(_ version: ArtifactVersion, in versions: [ArtifactVersion]) -> String {
+        let earlier = versions.contains { $0.n < version.n && $0.kept && $0.status != .deleted }
+        return earlier ? "It was deleted in this version. Step back to see what it was." : "It was deleted in this version. No earlier copy of it was kept."
+    }
+
     /// "Today, 9:00", "Yesterday, 18:40", "12 Oct, 9:00".
     public static func when(_ seconds: Double) -> String {
         day(Date(timeIntervalSince1970: seconds)) + ", " + time(seconds)

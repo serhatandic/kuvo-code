@@ -147,25 +147,19 @@ struct Composer: View {
         VStack(alignment: .leading, spacing: 10) {
             if let commandMatches {
                 SlashList(items: commandMatches, selected: min(commandIndex, commandMatches.count - 1), project: folders.first.flatMap { Workspace.isChat($0) ? nil : workspace.projectName($0) }) { pick($0) }
-                    .preference(key: ComposerListShown.self, value: true)
             } else if customLoop, typedKeyword?.keyword == .loop {
                 CustomLoopRow(use: { pickLoop(.preset($0)) }, cancel: {
                     customLoop = false
                     focusAtEnd()
                 })
-                .preference(key: ComposerListShown.self, value: true)
             } else if let loopChoices {
                 LoopList(choices: loopChoices, selected: min(loopIndex, loopChoices.count - 1)) { pickLoop($0) }
-                    .preference(key: ComposerListShown.self, value: true)
             } else if let reviewerChoices {
                 ReviewerList(choices: reviewerChoices, selected: min(reviewerIndex, reviewerChoices.count - 1)) { pickReviewer($0) }
-                    .preference(key: ComposerListShown.self, value: true)
             } else if let mention {
                 MentionList(files: mention.matches, selected: min(mentionIndex, max(mention.matches.count - 1, 0))) { insertMention($0) }
-                    .preference(key: ComposerListShown.self, value: true)
             } else if let named = agents.matches(in: text, excluding: session) {
                 AgentReferenceList(agents: named, selected: min(agents.selected, named.count - 1)) { agents.insert($0, into: $text) }
-                    .preference(key: ComposerListShown.self, value: true)
             }
             if commentCount > 0 {
                 Menu {
@@ -981,6 +975,41 @@ struct ComposerSurface: ViewModifier {
     }
 }
 
+extension View {
+    /// What's over a conversation's end (the composer and the cards over it): the conversation
+    /// scrolls on under it, fading out there in the card's own color, as it does under the card's
+    /// header. An inset rather than a bar: a bar gets AppKit's scroll edge effect, which replays the
+    /// window's background, not the card's, and drew a lighter band with a line across the card.
+    func conversationBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
+        scrollEdgeEffectHidden(true, for: .bottom)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                bar()
+                    .frame(maxWidth: .infinity)
+                    // From just above it, below the scroll-to-end button (`ConversationScroll`).
+                    .background { ConversationBarFade().padding(.top, -12) }
+            }
+    }
+}
+
+private struct ConversationBarFade: View {
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.cardIsFocused) private var cardIsFocused
+
+    var body: some View {
+        Surface.cardFill(scheme, focused: cardIsFocused)
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 12)
+                    Color.black
+                }
+            }
+            .animation(.ui, value: cardIsFocused)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
 /// The round send (or stop) button.
 struct ActionButtonStyle: ButtonStyle {
     var isAccent = true
@@ -1021,13 +1050,6 @@ struct ActionButtonStyle: ButtonStyle {
 
 /// The files an "@" matches, above the message field: the chosen one highlighted, any
 /// one a click away.
-/// A list open over a composer ("/", "@" or "&"): the conversation's edge under the composer
-/// isn't blurred meanwhile, as, made as tall as the list, it showed as a block across the card.
-struct ComposerListShown: PreferenceKey {
-    static let defaultValue = false
-    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
-}
-
 private struct MentionList: View {
     let files: [ProjectFiles.File]
     let selected: Int

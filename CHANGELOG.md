@@ -16,6 +16,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Codex in Kuvo Code no longer uses ChatGPT's Computer Use, even where your Codex settings turn it on, so it can't click around your Mac without asking.
+- A screenshot copied to the clipboard (⌃⇧⌘4) pastes into the composer with ⌘V, as a picture you attach.
 - Searching what was said in your conversations is done by each computer itself, so a machine's conversations come up as quickly as your Mac's, and your phone finds them too.
 - A machine another Mac runs says which in **Settings › Machines** ("runs from Studio"), with **Make This Mac Its Home…** to run it from this Mac instead: its engine starts again with this Mac's accounts, and its sessions, bots and settings stay. Your phone can do the same from the machine's settings.
 - A session's subagents show under it in the sidebar, folded until you click the count beside it: on a line under the session, each with its status, opening its own conversation with the way back. A subagent you open no longer takes a tab in the side panel.
@@ -116,6 +118,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Each machine keeps Kuvo Code up to date by itself: at night, while nothing runs there, a few days after a release, going back to what it had if the new version doesn't start.
 - With a coding agent, Send Now on a message the agent is just being handed starts it next if the agent doesn't take it, rather than leaving it waiting for another nudge.
 - Stop also stops a coding agent that carries on by itself (a command it left running ended) just as its turn ends, rather than letting that go on once the turn's over.
+- No more lighter band across a conversation behind the composer, as when you hovered a bar's button or opened the / list: the conversation fades out under the composer in the card's own color.
+- A widget opened larger shows its title clearly, rather than faded out like the conversation under a card's header.
 
 ## 0.7.2
 
