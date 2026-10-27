@@ -989,6 +989,7 @@ struct ArtifactDetail: View {
                     .buttonStyle(CardActionStyle())
                     .disabled(saving)
                     .help(saving ? "Saving a copy…" : label)
+                    .accessibilityLabel(saving ? "Saving a copy…" : label)
                 }
             }
         }
@@ -1295,7 +1296,7 @@ private struct VersionBody: View {
 
     /// The version as a file of its own in the app's temporary folder, for Quick Look; gone once shown.
     private static func previewFile(_ data: Data, name: String, id: String, version: Int) throws -> URL {
-        let folder = FileManager.default.temporaryDirectory.appending(path: "Made previews").appending(path: "\(id)-\(version)")
+        let folder = FileManager.default.temporaryDirectory.appending(path: AppInfo.bundleID).appending(path: "Made previews").appending(path: "\(id)-\(version)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let file = folder.appending(path: name)
         try data.write(to: file)
