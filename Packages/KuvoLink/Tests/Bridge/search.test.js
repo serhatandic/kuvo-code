@@ -50,7 +50,10 @@ async function engine(t, sessions, conversations) {
       const data = all.slice(from, from + limit);
       return { data, cursor: from + limit < all.length ? { next: String(from + limit) } : null };
     };
-    if (url.pathname === "/api/session") return reply(paged(sessions.list.filter(each => !each.parentID), 100));
+    if (url.pathname === "/api/session") {
+      if (sessions.down) return response.writeHead(500).end("{}");
+      return reply(paged(sessions.list.filter(each => !each.parentID), 100));
+    }
     const messages = /^\/api\/session\/([^/]+)\/message$/.exec(url.pathname);
     // Newest first, as the engine pages them.
     if (messages) return reply(paged([...(conversations[decodeURIComponent(messages[1])] ?? [])].reverse(), 200));
@@ -139,5 +142,23 @@ test("every session is searched and every page of a long conversation, and each 
   assert.ok(fs.readdirSync(folder).some(file => file.includes("ses_many129")));
   await box.search("walrus");
   assert.equal(box.asked.filter(url => url.includes("ses_many129/message")).length, 3, "read once, page by page");
+});
+
+test("an engine that doesn't answer says so rather than finding nothing, and what was kept stays", async t => {
+  const sessions = { list: [session("ses_kept", "Kept", 30)] };
+  const box = await engine(t, sessions, { ses_kept: conversation("kept", "The deploy script", "Done.") });
+  assert.deepEqual((await box.search("deploy")).found, ["ses_kept"]);
+  sessions.down = true;
+  assert.equal((await box.search("deploy")).status, 503);
+  sessions.down = false;
+  await box.search("deploy");
+  assert.equal(box.asked.filter(url => url.includes("ses_kept/message")).length, 1, "kept while the engine was away");
+});
+
+test("in any language, without case or accents, and a long conversation's latest words too", async t => {
+  const long = [{ id: "msg_old", type: "user", text: "x".repeat(450_000) }, { id: "msg_new", type: "user", text: "Deploy to İstanbul, then 한국어 검색 and the café ☕" }];
+  const box = await engine(t, { list: [session("ses_words", "Words", 30)] }, { ses_words: long });
+  for (const words of ["istanbul", "검색", "CAFE", "☕"]) assert.deepEqual((await box.search(words)).found, ["ses_words"], words);
+  assert.ok((await box.search("검색")).body.results[0].snippet.includes("한국어 검색"));
 });
 

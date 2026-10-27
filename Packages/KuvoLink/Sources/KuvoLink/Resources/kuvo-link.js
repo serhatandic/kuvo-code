@@ -8291,20 +8291,25 @@ async function* searchRoute(context) {
   })();
   if (agents)
     places.push({ name: "agents", target: agents });
-  const listed = (await Promise.all(places.map((place) => rootSessions(place.target).then((sessions) => sessions.map((session) => ({ session, place })), () => [])))).flat().filter(({ session }) => !isHiddenRun(session)).sort((one, other) => other.session.time.updated - one.session.time.updated);
+  const lists = await Promise.all(places.map((place) => rootSessions(place.target).then((sessions) => ({ place, sessions }), () => ({ place, sessions: null }))));
+  if (!lists[0].sessions)
+    return yield* json(503, { message: "This computer's engine didn't answer. Search again in a moment." });
+  const listed = lists.flatMap(({ place, sessions }) => (sessions ?? []).map((session) => ({ session, place }))).filter(({ session }) => !isHiddenRun(session)).sort((one, other) => other.session.time.updated - one.session.time.updated);
   const wanted = fold(words);
   const results = [];
   for (let start = 0;start < listed.length && results.length < limit; start += 4) {
     const kept = await Promise.all(listed.slice(start, start + 4).map(({ session, place }) => textOf2(place.name, place.target, session)));
-    for (const [index, text] of kept.entries()) {
-      const at = text ? text.folded.indexOf(wanted) : -1;
-      if (!text || at < 0 || results.length >= limit)
+    for (const [index, found] of kept.entries()) {
+      const at = found ? found.folded.indexOf(wanted) : -1;
+      if (!found || at < 0 || results.length >= limit)
         continue;
-      const { session } = listed[start + index];
-      results.push({ session: session.id, snippet: snippet(text.text, at, wanted.length), info: session });
+      const { session, place } = listed[start + index];
+      const text = "text" in found ? found.text : fromDisk(key(place.name, session.id))?.text;
+      if (text !== undefined)
+        results.push({ session: session.id, snippet: snippet(text, at, wanted.length), info: session });
     }
   }
-  forgetGone(new Set(listed.map(({ session, place }) => key(place.name, session.id))));
+  forgetGone(new Set(listed.map(({ session, place }) => key(place.name, session.id))), lists.filter((list) => list.sessions).map((list) => list.place.name));
   return yield* json(200, { results });
 }
 var key = (place, id) => `${place}.${id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
@@ -8319,9 +8324,9 @@ function textOf2(place, target, session) {
     return already;
   const read = conversationOf2(target, session.id).then((messages) => {
     const cut = session.revert?.messageID ? messages.findIndex((message) => message.id === session.revert.messageID) : -1;
-    const text = searchText(cut >= 0 ? messages.slice(0, cut) : messages, session.location?.directory ?? session.directory ?? "").slice(0, MOST_TEXT);
+    const text = searchText(cut >= 0 ? messages.slice(0, cut) : messages, session.location?.directory ?? session.directory ?? "").slice(-MOST_TEXT);
     const kept = { updated, text, folded: fold(text) };
-    texts.set(name, kept);
+    texts.set(name, { updated, folded: kept.folded });
     toDisk(name, kept);
     return kept;
   }, () => null).finally(() => reading.delete(name));
@@ -8333,25 +8338,33 @@ function fromDisk(name) {
     const kept = JSON.parse(fs40.readFileSync(path40.join(SEARCH, name + ".json"), "utf8"));
     if (typeof kept.updated !== "number" || typeof kept.text !== "string" || typeof kept.folded !== "string")
       return null;
-    texts.set(name, kept);
+    texts.set(name, { updated: kept.updated, folded: kept.folded });
     return kept;
   } catch {
     return null;
   }
 }
 function toDisk(name, kept) {
+  const file = path40.join(SEARCH, name + ".json");
+  const writing = `${file}.${process.pid}.writing`;
   try {
     fs40.mkdirSync(SEARCH, { recursive: true });
-    fs40.writeFileSync(path40.join(SEARCH, name + ".json"), JSON.stringify(kept));
-  } catch {}
+    fs40.writeFileSync(writing, JSON.stringify(kept));
+    fs40.renameSync(writing, file);
+  } catch {
+    fs40.rmSync(writing, { force: true });
+  }
 }
-function forgetGone(known) {
+function forgetGone(known, places) {
+  const listed = (name) => places.some((place) => name.startsWith(place + "."));
   for (const name of texts.keys())
-    if (!known.has(name))
+    if (listed(name) && !known.has(name))
       texts.delete(name);
   try {
     for (const file of fs40.readdirSync(SEARCH)) {
-      if (file.endsWith(".json") && !known.has(file.slice(0, -5)))
+      const name = file.slice(0, -5);
+      const gone = file.endsWith(".json") ? listed(name) && !known.has(name) : file.endsWith(".writing") && Date.now() - fs40.statSync(path40.join(SEARCH, file)).mtimeMs > 60000;
+      if (gone)
         fs40.rmSync(path40.join(SEARCH, file), { force: true });
     }
   } catch {}
@@ -8423,7 +8436,11 @@ function ownWords(written) {
 `);
 }
 function fold(text) {
-  return Array.from(text, (letter) => letter.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().slice(0, 1) || "\x00").join("");
+  return Array.from(text, (letter) => {
+    const plain = Array.from(letter.toLowerCase().normalize("NFD").replace(/\p{M}/gu, "").normalize("NFC"));
+    const point = (plain.length === 1 ? plain[0] : letter).codePointAt(0) ?? 0;
+    return point <= 65535 ? String.fromCharCode(point) : String.fromCharCode(57344 + point % 6400);
+  }).join("");
 }
 function snippet(text, at, length) {
   const letters = Array.from(text);
@@ -8708,7 +8725,7 @@ import fs43 from "node:fs";
 import path43 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.87";
+var BRIDGE_VERSION = "0.9.88";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
