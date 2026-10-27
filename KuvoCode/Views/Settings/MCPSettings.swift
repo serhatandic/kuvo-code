@@ -1,3 +1,4 @@
+import AppKit
 import OpenCodeKit
 import SwiftUI
 
@@ -123,7 +124,7 @@ struct MCPSettings: View {
         }
         #endif
         .settingsDetail(item: $editing, title: { $0.name ?? "Add Server" }, onDismiss: removePending) { edit in
-            ServerEditor(name: edit.name, taken: Set(live.map(\.name))) { editing = nil } remove: { path in
+            ServerEditor(name: edit.name, taken: Set(live.map(\.name)), live: live, refresh: refresh) { editing = nil } remove: { path in
                 removal = path
                 editing = nil
             }
@@ -249,6 +250,9 @@ private struct ServerEditor: View {
     @State var name: String?
     /// The servers the engine has, from anywhere: a new one can't take their names.
     let taken: Set<String>
+    /// How the engine's servers stand now, and reading them again.
+    let live: [MCPServer]
+    let refresh: () async -> Void
     let done: () -> Void
     /// Removes this entry, once it's closed.
     let remove: ([String]) -> Void
@@ -271,6 +275,14 @@ private struct ServerEditor: View {
     /// What you typed isn't an address: said under it, and what was saved stays.
     @State private var addressProblem = false
     @FocusState private var addressFocused: Bool
+    /// A server's setup pasted into its name before it was named: written once it is.
+    @State private var pasted: MCPSnippet?
+    /// The setup you pasted was taken in: said under the field it went into.
+    @State private var tookPaste = false
+    /// Where its box runs the command's program from; nil while that's asked, "" for nowhere.
+    @State private var program: (name: String, path: String?)?
+    /// Choosing a machine's folder to run it in.
+    @State private var choosingFolder = false
 
     /// Where it runs: here (a command), on the web, or on the web once you give it a URL.
     private enum Kind { case local, waitingForURL, web }
@@ -317,6 +329,14 @@ private struct ServerEditor: View {
                                   done: { if let name { close(MCPSettings.path + [name]) } else { done() } })
         }
         .settingsDetailTitle(name ?? "Add Server")
+        .settingsDetail(isPresented: $choosingFolder, title: "Choose Its Working Folder") {
+            BoxFolderBrowser(box: box.machine ?? BoxClient.mac, start: config.value(at: MCPSettings.path + [name ?? "", "cwd"])?.string, primary: "Choose") { folder, home in
+                if let name { config.set(.string(BoxPaths.setting(folder, home: home)), at: MCPSettings.path + [name, "cwd"]) }
+                choosingFolder = false
+            } cancel: {
+                choosingFolder = false
+            }
+        }
         .confirmationDialog("Remove \(name ?? "")?", isPresented: $confirmsRemoval) {
             Button("Remove", role: .destructive) {
                 if let name { remove(MCPSettings.path + [name]) }
@@ -331,11 +351,14 @@ private struct ServerEditor: View {
     private var naming: some View {
         Section {
             SettingsTextRow(title: "Name") {
-                TextField("Name", text: $newName, prompt: Text(verbatim: "files"))
+                TextField("Name", text: $newName, prompt: Text("files, or paste its setup from the README"))
                     .onSubmit(add)
+                    .onChange(of: newName) { takeNamePaste() }
             }
         } footer: {
-            if let problem {
+            if pasted != nil, newID.isEmpty {
+                Text("Name it to add it with the setup you pasted.").foregroundStyle(.secondary)
+            } else if let problem {
                 Text(problem).foregroundStyle(.red)
             } else if !newID.isEmpty, newID != newName.trimmingCharacters(in: .whitespaces) {
                 Text(verbatim: "It'll be called \(newID).").foregroundStyle(.secondary)
@@ -347,7 +370,33 @@ private struct ServerEditor: View {
 
     @ViewBuilder private func editor(_ path: [String]) -> some View {
         let kind: Kind = pendingRemote ? .waitingForURL : config.value(at: path + ["type"])?.string == "remote" ? .web : .local
+        let isOn = config.value(at: path + ["disabled"])?.bool != true
+        let server = live.first { $0.name == path.last }
         Group {
+            if kind != .waitingForURL, server != nil || !isOn {
+                Section {
+                    LabeledContent("Status") {
+                        HStack(spacing: 10) {
+                            StatusLabel(status: server?.status, isOn: isOn)
+                            if isOn, server?.status.status == "failed" {
+                                Button("Try Again") {
+                                    Task {
+                                        if let api = app.api(for: box), let name = path.last { await app.reconnect(name, api: api, machine: box.machine) }
+                                        await refresh()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if isOn, let error = server?.status.error, !error.isEmpty {
+                        Text(error)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
             Section {
                 Picker("Runs", selection: Binding(
                     get: { kind == .local ? "local" : "remote" },
@@ -401,8 +450,17 @@ private struct ServerEditor: View {
                             .lineLimit(1...8)
                             .onSubmit { saveCommand(path) }
                             .onDisappear { saveCommand(path) }
+                            .onChange(of: command) { takeCommandPaste(path) }
+                        if tookPaste {
+                            Label("Filled in from the setup you pasted.", systemImage: "checkmark")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        } else if let program {
+                            ProgramNote(name: program.name, path: program.path, computer: computer)
+                        }
                     }
-                    ConfigTextField(title: "Working folder", path: path + ["cwd"], prompt: "The project's folder")
+                    .task(id: "\(box.machine ?? BoxClient.mac) \(Self.words(command).first ?? "")") { await findProgram() }
+                    WorkingFolderRow(path: path + ["cwd"], choosing: $choosingFolder)
                 }
                 Toggle(isOn: config.bool(path + ["codemode"], default: true)) {
                     Text("Let the agent call its tools from code")
@@ -457,6 +515,11 @@ private struct ServerEditor: View {
         guard !newID.isEmpty, problem == nil else { return }
         // Off until it has a command or URL, so the engine doesn't try to start an empty one.
         config.set(.object(["type": .string("local"), "command": .array([]), "disabled": .bool(true), "codemode": .bool(false)]), at: MCPSettings.path + [newID])
+        if let pasted {
+            apply(pasted, at: MCPSettings.path + [newID])
+            self.pasted = nil
+            tookPaste = true
+        }
         Analytics.shared.track("mcp_server_added")
         name = newID
     }
@@ -514,6 +577,64 @@ private struct ServerEditor: View {
         // The field shows the command that came back, or none, as saved.
         command = Self.commandLine(settings["command"])
         shownCommand = command
+    }
+
+    /// "this Mac", or the machine's name.
+    private var computer: String { box.machine == nil ? "this Mac" : app.name(of: box) }
+
+    /// A server's setup pasted into its name: its name taken, and the rest kept to write once
+    /// it's added (at once, when the name it gives can be used).
+    private func takeNamePaste() {
+        guard let snippet = MCPSnippet.parse(newName) else { return }
+        pasted = snippet
+        newName = snippet.name ?? ""
+        if !newID.isEmpty, problem == nil { add() }
+    }
+
+    /// A server's setup pasted into its command: what it runs or reaches, and its keys' names,
+    /// in their places.
+    private func takeCommandPaste(_ path: [String]) {
+        // As shown (what a paste just filled in): nothing new.
+        guard command != shownCommand else { return }
+        tookPaste = false
+        guard let snippet = MCPSnippet.parse(command) else { return }
+        apply(snippet, at: path)
+        tookPaste = true
+    }
+
+    /// `snippet` as this server's settings: running its command, or reaching its URL, turned on.
+    private func apply(_ snippet: MCPSnippet, at path: [String]) {
+        var settings = config.value(at: path)?.object ?? [:]
+        for key in MCPSettings.kindFields + ["disabled"] { settings[key] = nil }
+        if let url = snippet.url {
+            settings["type"] = .string("remote")
+            settings["url"] = .string(url)
+            if !snippet.headers.isEmpty { settings["headers"] = .object(snippet.headers.mapValues(JSONValue.string)) }
+        } else {
+            settings["type"] = .string("local")
+            settings["command"] = .array(snippet.command.map(JSONValue.string))
+            if !snippet.environment.isEmpty { settings["environment"] = .object(snippet.environment.mapValues(JSONValue.string)) }
+        }
+        putAside = [:]
+        pendingRemote = false
+        config.set(.object(settings), at: path)
+        command = Self.commandLine(settings["command"])
+        shownCommand = command
+        showAddress(path)
+    }
+
+    /// Whether this computer has the command's program, as its box finds it.
+    private func findProgram() async {
+        guard let word = Self.words(command).first else {
+            program = nil
+            return
+        }
+        struct Found: Decodable { var name: String; var path: String? }
+        // A moment after the last key, so each one isn't asked.
+        try? await Task.sleep(for: .milliseconds(400))
+        guard !Task.isCancelled, let found = try? await app.box(box.machine ?? BoxClient.mac).value(Found.self, "GET", "kuvo/programs?name=\(Workspace.queryValue(word))"),
+              !Task.isCancelled else { return }
+        program = (found.name, found.path)
     }
 
     /// The command as its words (quotes keep spaces in one); a server with a command is
@@ -586,47 +707,88 @@ extension MCPSettings {
     }
 }
 
-/// A command line, as the MCP server editor reads and writes it.
-nonisolated enum CommandWords {
-    /// A command line's words, as a shell splits them: quotes keep spaces in one word, and a
-    /// backslash takes the next character as it is (not inside single quotes; inside double ones,
-    /// only before ", \, $ or `, as in "a\.b", a pattern pasted from a README).
-    static func split(_ line: String) -> [String] {
-        var words: [String] = []
-        var current = ""
-        var quote: Character?
-        var hasWord = false
-        var escaped = false
-        for character in line {
-            if escaped {
-                if quote == "\"", !"\"\\$`".contains(character) { current.append("\\") }
-                current.append(character)
-                escaped = false
-            } else if character == "\\", quote != "'" {
-                escaped = true
-                hasWord = true
-            } else if let open = quote {
-                if character == open { quote = nil } else { current.append(character) }
-            } else if character == "\"" || character == "'" {
-                quote = character
-                hasWord = true
-            } else if character.isWhitespace {
-                if hasWord { words.append(current) }
-                current = ""
-                hasWord = false
-            } else {
-                current.append(character)
-                hasWord = true
-            }
+/// Whether the computer has the program a server's command runs, and where it comes from when it
+/// hasn't.
+private struct ProgramNote: View {
+    let name: String
+    let path: String?
+    let computer: String
+
+    /// What a program that isn't there comes with, for the ones servers' READMEs use most.
+    static func source(of program: String) -> String? {
+        switch (program as NSString).lastPathComponent {
+        case "npx", "npm", "node": "Node.js"
+        case "uvx", "uv": "uv"
+        case "docker": "Docker"
+        case "python", "python3", "pip", "pip3": "Python"
+        case "bun", "bunx": "Bun"
+        case "deno": "Deno"
+        default: nil
         }
-        if hasWord { words.append(current) }
-        return words
     }
 
-    /// A word as it can be typed back: in double quotes, with quotes and backslashes escaped,
-    /// when it has spaces, quotes or backslashes.
-    static func quoted(_ word: String) -> String {
-        guard word.isEmpty || word.contains(where: { $0.isWhitespace || $0 == "\"" || $0 == "'" || $0 == "\\" }) else { return word }
-        return "\"" + word.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+    var body: some View {
+        if path != nil {
+            Label("\(name) is on \(computer).", systemImage: "checkmark")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .help(path ?? "")
+        } else {
+            Label {
+                Text("\(name) isn’t on \(computer)" + (Self.source(of: name).map { ". It comes with \($0): install that there first." } ?? ". Install it there first, or use a command it has."))
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// The folder a server runs in: the project's, or one you choose, as a folder panel chooses it (a
+/// machine's own folders on its page).
+private struct WorkingFolderRow: View {
+    let path: [String]
+    @Binding var choosing: Bool
+    @Environment(AppModel.self) private var app
+    @Environment(\.settingsBox) private var box
+
+    var body: some View {
+        let config = app.config(for: box)
+        let folder = config.value(at: path)?.string.flatMap { $0.isEmpty ? nil : $0 }
+        LabeledContent("Working folder") {
+            HStack(spacing: 8) {
+                Text(folder.map { BoxPaths.display($0, home: box.machine == nil ? NSHomeDirectory() : nil) } ?? "The project’s folder")
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(folder ?? "")
+                Button("Choose…") {
+                    guard box.machine == nil else {
+                        choosing = true
+                        return
+                    }
+                    let panel = NSOpenPanel()
+                    panel.canChooseDirectories = true
+                    panel.canChooseFiles = false
+                    panel.canCreateDirectories = true
+                    panel.prompt = "Choose"
+                    panel.message = "Choose the folder the server runs in."
+                    guard panel.runModal() == .OK, let url = panel.url else { return }
+                    config.set(.string(BoxPaths.setting(url.path, home: NSHomeDirectory())), at: path)
+                }
+                if folder != nil {
+                    Button {
+                        config.set(nil, at: path)
+                    } label: {
+                        Image(systemName: "minus.circle.fill")
+                    }
+                    .buttonStyle(RemoveButtonStyle())
+                    .help("Run it in the project’s folder")
+                    .accessibilityLabel("Run it in the project’s folder")
+                }
+            }
+        }
     }
 }

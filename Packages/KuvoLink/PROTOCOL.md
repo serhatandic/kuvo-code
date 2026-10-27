@@ -1048,6 +1048,16 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `POST kuvo/folders {"path"}` makes a new folder in one that's there, as a folder panel's New
   Folder does → `{"path"}`; `409 {"message"}` for something there already, `404` when the folder
   it's in isn't there, `403` when one can't be made there, `400` for a path that isn't a full one.
+- `GET kuvo/programs?name=<program>` (`programs`): whether the box has a program an MCP server's
+  command names, found on its PATH as its engine finds it (a name like `npx`, or a path, `~/`
+  from the home folder) → `{"name", "path"}`, `path` null when it hasn't; `400` without a name.
+- `POST kuvo/providers/models {"url", "api"?, "headers"?}` (`providers.models`): the models a provider
+  of your own lists at its address (`<url>/models`), asked from the box, so `localhost` is that
+  computer, as the engine reaches it → `{"reached": true, "models": [id…]}`; `{"reached": true,
+  "needsKey": true}` when it asks for its key first; `{"reached": false, "message"}` when nothing
+  answers or what answers isn't a list of models. `api` `anthropic` asks as Anthropic's API does;
+  `headers` are sent as given, except ones naming an environment variable or a file. `400` for an
+  address that isn't http or https.
 - `GET kuvo/plugins/search?q=<text>` (`plugins.search`): npm's packages Settings › Engine offers as
   plugins, found from the box itself (its network) → `{"packages": [{name, version, description?,
   weekly?}], "missing"?}`: with no `q`, the most used opencode plugins; otherwise opencode's
@@ -1458,6 +1468,8 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `phones` | `kuvo/phones` and `POST kuvo/phones/remove` |
 | `phones.pair` | `kuvo/phones/pair` |
 | `plugins.search` | `kuvo/plugins/search` |
+| `programs` | `kuvo/programs` |
+| `providers.models` | `POST kuvo/providers/models` |
 | `sessions.agents` | `POST kuvo/sessions/<id>/agents` |
 | `shell.stop` | `POST kuvo/shell/<id>/stop` |
 | `sign-in.return` | `POST kuvo/sign-in/return` |

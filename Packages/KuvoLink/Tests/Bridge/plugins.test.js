@@ -77,3 +77,40 @@ test("npm not answering is an error to show, not a missing package", async () =>
   await assert.rejects(link.searchPlugins("opencode-wakatime"));
   down = false;
 });
+
+// A provider of your own: a local server that lists its models, one that wants its key first,
+// and one that answers with something else.
+test("a provider of your own's models, as its service lists them to this box", async () => {
+  const seen = [];
+  const service = http.createServer((request, response) => {
+    seen.push(request.headers);
+    const send = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+    if (request.url === "/v1/models") return send({ object: "list", data: [{ id: "qwen3:8b" }, { id: "llama3.2" }, { id: "qwen3:8b" }] });
+    if (request.url === "/keyed/models") return send({ error: "no key" }, 401);
+    if (request.url === "/ollama/models") return send({ models: [{ name: "gemma3" }] });
+    send("<html>", 200);
+  });
+  await new Promise(resolve => service.listen(0, "127.0.0.1", resolve));
+  const at = `http://127.0.0.1:${service.address().port}`;
+  try {
+    assert.deepEqual((await link.providerModels({ url: `${at}/v1/`, headers: { "X-Team": "a", Authorization: "Bearer {env:KEY}" } })).value, { reached: true, models: ["llama3.2", "qwen3:8b"] });
+    // Headers written out go along; one naming an environment variable doesn't.
+    assert.equal(seen.at(-1)["x-team"], "a");
+    assert.equal(seen.at(-1).authorization, undefined);
+    assert.deepEqual((await link.providerModels({ url: `${at}/keyed`, api: "anthropic" })).value, { reached: true, needsKey: true });
+    assert.equal(seen.at(-1)["anthropic-version"], "2023-06-01");
+    assert.deepEqual((await link.providerModels({ url: `${at}/ollama` })).value.models, ["gemma3"]);
+    const other = (await link.providerModels({ url: `${at}/page` })).value;
+    assert.equal(other.reached, false);
+    assert.match(other.message, /\/v1/);
+  } finally {
+    service.close();
+  }
+  // Nothing there.
+  const closed = http.createServer();
+  await new Promise(resolve => closed.listen(0, "127.0.0.1", resolve));
+  const port = closed.address().port;
+  await new Promise(resolve => closed.close(resolve));
+  assert.deepEqual((await link.providerModels({ url: `http://127.0.0.1:${port}/v1` })).value, { reached: false, message: "Nothing answers at this address." });
+  assert.equal((await link.providerModels({ url: "ftp://x" })).status, 400);
+});

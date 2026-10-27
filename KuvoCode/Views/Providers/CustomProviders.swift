@@ -93,6 +93,24 @@ struct CustomProviderEditor: View {
     @State private var newModel = ""
     @State private var problem: String?
     @State private var confirmsRemoval = false
+    /// What its address answers, as its computer asked it.
+    @State private var check: AddressCheck?
+
+    /// What a provider's address answered: its models, that it wants its key first, or nothing.
+    struct AddressCheck: Decodable, Equatable {
+        var reached: Bool
+        var models: [String]?
+        var needsKey: Bool?
+        var message: String?
+    }
+
+    /// Servers that run models on a computer, at the address each listens on by default.
+    static let localServers: [(title: String, value: String)] = [
+        ("Ollama", "http://localhost:11434/v1"),
+        ("LM Studio", "http://localhost:1234/v1"),
+        ("llama.cpp", "http://localhost:8080/v1"),
+        ("vLLM", "http://localhost:8000/v1"),
+    ]
 
     private var config: EngineConfig { app.config(for: box) }
 
@@ -148,11 +166,15 @@ struct CustomProviderEditor: View {
                 )) {
                     ForEach(Self.kinds, id: \.package) { Text($0.title).tag($0.package) }
                 }
-                ConfigTextField(title: "Address", path: path + ["settings", "baseURL"], prompt: "https://api.example.com/v1")
+                ConfigTextField(title: "Address", path: path + ["settings", "baseURL"], prompt: "https://api.example.com/v1", choices: Self.localServers)
+                if let check {
+                    AddressCheckRow(check: check, computer: box.machine == nil ? "this Mac" : app.name(of: box))
+                }
             } footer: {
                 Text("Add its API key in Accounts once it's set up; it's kept with your other credentials, not in the settings file.")
                     .foregroundStyle(.secondary)
             }
+            .task(id: checkKey(path)) { await checkAddress(path) }
             Section {
                 let models = (config.value(at: path + ["models"])?.object?.keys).map { $0.sorted() } ?? []
                 // Column titles, since a filled-in number no longer shows its prompt. Laid out
@@ -199,10 +221,29 @@ struct CustomProviderEditor: View {
                         .help("Remove Model")
                     }
                 }
+                let offered = (check?.models ?? []).filter { !models.contains($0) }
                 HStack {
-                    TextField("Model ID", text: $newModel, prompt: Text("A model ID, as the service names it"))
+                    TextField("Model ID", text: $newModel, prompt: Text(offered.isEmpty ? "A model ID, as the service names it" : "A model ID, or pick one it lists"))
                         .labelsHidden()
                         .onSubmit(addModel)
+                    if !offered.isEmpty {
+                        Menu {
+                            ForEach(offered.prefix(200), id: \.self) { model in
+                                Button(model) { add(model) }
+                            }
+                            if offered.count > 1 {
+                                Divider()
+                                Button("Add All \(offered.count)") { offered.forEach(add) }
+                            }
+                        } label: {
+                            Image(systemName: "chevron.down")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .help("The models it lists")
+                        .accessibilityLabel("Pick a model it lists")
+                    }
                     Button("Add", action: addModel)
                         .disabled(newModel.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
@@ -249,10 +290,73 @@ struct CustomProviderEditor: View {
     }
 
     private func addModel() {
-        guard let id else { return }
         let model = newModel.trimmingCharacters(in: .whitespaces)
         guard !model.isEmpty else { return }
-        config.set(.object(["name": .string(model)]), at: CustomProvidersSection.path + [id, "models", model])
+        add(model)
         newModel = ""
+    }
+
+    private func add(_ model: String) {
+        guard let id else { return }
+        config.set(.object(["name": .string(model)]), at: CustomProvidersSection.path + [id, "models", model])
+    }
+
+    /// What its check depends on: the address, the API, the headers, and the computer.
+    private func checkKey(_ path: [String]) -> String {
+        [box.machine ?? BoxClient.mac, config.value(at: path + ["settings", "baseURL"])?.string ?? "", config.value(at: path + ["package"])?.string ?? "",
+         "\(config.value(at: path + ["headers"]) ?? .null)"].joined(separator: "\u{1}")
+    }
+
+    /// Asks the address for its models, from the computer the engine runs on (`localhost` is
+    /// that computer), a moment after it's changed.
+    private func checkAddress(_ path: [String]) async {
+        guard let address = config.value(at: path + ["settings", "baseURL"])?.string, !address.isEmpty else {
+            check = nil
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(400))
+        guard !Task.isCancelled else { return }
+        var body: [String: Any] = ["url": address]
+        if config.value(at: path + ["package"])?.string?.contains("anthropic") == true { body["api"] = "anthropic" }
+        if let headers = config.value(at: path + ["headers"])?.object?.compactMapValues(\.string) { body["headers"] = headers }
+        do {
+            let data = try JSONSerialization.data(withJSONObject: body)
+            let (status, answer) = try await app.box(box.machine ?? BoxClient.mac).send("POST", "kuvo/providers/models", body: data)
+            guard !Task.isCancelled else { return }
+            if (200..<300).contains(status), let read = try? JSONDecoder().decode(AddressCheck.self, from: answer) {
+                check = read
+            } else {
+                check = AddressCheck(reached: false, message: BoxRefusal(status: status, data: answer).message)
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            check = nil
+        }
+    }
+}
+
+/// What a provider's address answered, under it: how many models it lists, that it wants its key
+/// first, or why nothing came back.
+private struct AddressCheckRow: View {
+    let check: CustomProviderEditor.AddressCheck
+    let computer: String
+
+    var body: some View {
+        Group {
+            if check.needsKey == true {
+                Label("It answers. Add its key in Accounts to see its models.", systemImage: "key")
+            } else if check.reached, let models = check.models {
+                Label(models.isEmpty ? "It answers, with no models listed." : "It answers from \(computer), with \(models.count.counting("model")).", systemImage: "checkmark")
+            } else {
+                Label {
+                    Text(check.message ?? "Nothing answers at this address.")
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                }
+            }
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }

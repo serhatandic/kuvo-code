@@ -40,6 +40,8 @@ struct ConfigTextField: View {
     /// For a few sentences (a description): its name above it, and the field as tall as what's
     /// written in it, so all of it shows.
     var multiline = false
+    /// What it's often set to, in a menu beside it (a title, and the value it sets).
+    var choices: [(title: String, value: String)] = []
     @Environment(AppModel.self) private var app
     @Environment(\.settingsBox) private var box
     @Environment(\.editedConfig) private var edited
@@ -56,8 +58,32 @@ struct ConfigTextField: View {
                     .labelsHidden()
                     .lineLimit(1...10)
             }
-        } else {
+        } else if choices.isEmpty {
             SettingsTextRow(title: title) { text }
+        } else {
+            SettingsTextRow(title: title) {
+                HStack(spacing: 4) {
+                    text
+                    Menu {
+                        ForEach(choices, id: \.value) { choice in
+                            Button {
+                                field.load(choice.value)
+                                config.set(.string(choice.value), at: path)
+                            } label: {
+                                Text(choice.title)
+                                Text(choice.value)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Common choices")
+                    .accessibilityLabel("Choose \(title)")
+                }
+            }
         }
     }
 
