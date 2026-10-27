@@ -19,15 +19,18 @@ const types: Record<string, string> = {
   js: "text/javascript", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation", zip: "application/zip",
+  doc: "application/msword", xls: "application/vnd.ms-excel", rtf: "application/rtf", pages: "application/vnd.apple.pages",
+  numbers: "application/vnd.apple.numbers", key: "application/vnd.apple.keynote", odt: "application/vnd.oasis.opendocument.text",
+  ods: "application/vnd.oasis.opendocument.spreadsheet",
 }
 
 const extension = (path: string) => extname(path).slice(1).toLowerCase()
 
-/** Its media type, by its name. */
-export function typeOf(path: string): string {
+/** Its media type, by its name, and by its kind where the name doesn't tell (bytes that aren't text make a "file"). */
+export function typeOf(path: string, kind?: Kind): string {
   const ext = extension(path)
   if (types[ext]) return types[ext]
-  return binaries.has(ext) ? "application/octet-stream" : "text/plain"
+  return binaries.has(ext) || kind === "file" ? "application/octet-stream" : "text/plain"
 }
 
 /** Whether its changes read as words (prose) rather than lines (code). */
@@ -36,9 +39,8 @@ export function isProse(path: string): boolean {
   return ext === "md" || ext === "markdown" || ext === "txt" || basename(path) === "job.json"
 }
 
-/** Whether it's text, as far as its name tells. */
-export function isText(path: string): boolean {
-  const type = typeOf(path)
+/** Whether a media type is text. */
+export function isText(type: string): boolean {
   return type.startsWith("text/") || type === "application/json" || type === "image/svg+xml"
 }
 

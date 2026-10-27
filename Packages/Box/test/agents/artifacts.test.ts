@@ -614,6 +614,20 @@ describe("what the record keeps a copy of", () => {
     expect(copies).toBe("")
   })
 
+  test("a file its name doesn't tell the kind of is served as text only when it is; a Pages document is served as one", async () => {
+    session("ses_code", project)
+    const weights = join(project, "model.pt"), notes = join(project, "notes.rst"), pages = join(project, "Plan.pages")
+    writeFileSync(weights, Buffer.from([0x80, 0x02, 0x00, 0x7d, 0x00, 0xff]))
+    writeFileSync(notes, "Title\n=====\n")
+    writeFileSync(pages, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00]))
+    await hear(turn("ses_code", "m1", [...tool("ses_code", "c1", "write", { filePath: weights }), ...tool("ses_code", "c2", "write", { filePath: notes }), ...tool("ses_code", "c3", "write", { filePath: pages })]))
+    const read = async (path: string) => (await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(path)}`)).value
+    expect([(await read(weights)).type, (await read(notes)).type, (await read(pages)).type]).toEqual(["application/octet-stream", "text/plain", "application/vnd.apple.pages"])
+    // Its bytes aren't shown as lines of text.
+    expect((await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(weights)}/versions/1/changes`)).value.style).toBe("none")
+    expect((await read(weights)).versions[0].lines).toBeUndefined()
+  })
+
   test("in a git project, code keeps only its change (git has the rest); a document there gets copies; what git ignores gets none", async () => {
     spawnSync("git", ["init", "-q", project])
     writeFileSync(join(project, ".gitignore"), "build/\n")

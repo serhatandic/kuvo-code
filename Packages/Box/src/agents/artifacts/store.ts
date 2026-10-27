@@ -308,7 +308,7 @@ export class ArtifactStore {
     }
     if (!artifact) {
       const kind = this.refine(kindOf(path, { bots: this.options.bots, download: made.download }), read.bytes)
-      artifact = { id: ArtifactStore.idOf(path), path, name: basename(path), kind, type: typeOf(path), where: { bots: [], sessions: [], groups: [] }, pinned: null, gone: null, updated: stamp(now), versions: [], ...(this.policy.inGit(path) ? { git: true as const } : {}) }
+      artifact = { id: ArtifactStore.idOf(path), path, name: basename(path), kind, type: typeOf(path, kind), where: { bots: [], sessions: [], groups: [] }, pinned: null, gone: null, updated: stamp(now), versions: [], ...(this.policy.inGit(path) ? { git: true as const } : {}) }
       this.artifacts.set(artifact.id, artifact)
     }
     const latest = artifact.versions.at(-1)
@@ -366,7 +366,7 @@ export class ArtifactStore {
     const hash = "sha256:" + createHash("sha256").update(bytes).digest("hex")
     const artifact: Artifact = {
       id: ArtifactStore.idOf(path), path, name: basename(path),
-      kind, type: typeOf(path),
+      kind, type: typeOf(path, kind),
       where: { bots: where.bot ? [where.bot] : [], sessions: [], groups: [] }, pinned: null, gone: null, updated: stamp(at), versions: [],
     }
     const version: Version = { n: 0, at: stamp(at), by: { kind: "outside" }, via: [], status: "added", edits: 0, size: bytes.length, hash, kept: true, before: true }
@@ -635,7 +635,7 @@ export class ArtifactStore {
     if (replacing?.patch && change.patch) version.patch = (replacing.patch + "\n" + hunksOf(change.patch)).slice(0, patchLimit)
     const lines = version.patch
       ? fromPatch(artifact.path, version.patch)
-      : bytes && previous ? this.lines(artifact.path, previous, bytes) : bytes && isText(artifact.path) && !previous && bytes.length <= lineLimit ? unified("", bytes.toString("utf8")) : undefined
+      : bytes && previous ? this.lines(artifact.type, previous, bytes) : bytes && isText(artifact.type) && !previous && bytes.length <= lineLimit ? unified("", bytes.toString("utf8")) : undefined
     if (lines) version.lines = { added: lines.additions, removed: lines.deletions }
     // Another bot in the same chat made the one before: handed on.
     if (made.group && previous?.group?.id === made.group.id && previous.by.bot && made.by.bot && previous.by.bot !== made.by.bot) version.handoff = { from: previous.by.bot }
@@ -657,9 +657,9 @@ export class ArtifactStore {
   }
 
   /** Lines added and removed since `previous`, when both are text that was kept. */
-  private lines(path: string, previous: Version, bytes: Buffer) {
+  private lines(type: string, previous: Version, bytes: Buffer) {
     // Past a megabyte, not counted: the diff would hold up everything else here.
-    if (!isText(path) || !previous.kept || !previous.hash?.startsWith("sha256:") || bytes.length > lineLimit || previous.size > lineLimit) return undefined
+    if (!isText(type) || !previous.kept || !previous.hash?.startsWith("sha256:") || bytes.length > lineLimit || previous.size > lineLimit) return undefined
     try {
       return unified(readFileSync(this.copyPath(previous.hash)).toString("utf8"), bytes.toString("utf8"))
     } catch {
@@ -805,6 +805,8 @@ export class ArtifactStore {
     if (lines > 1000 && lines > versions * 2) this.compact(months)
     for (const artifact of this.artifacts.values()) {
       artifact.versions.sort((a, b) => a.n - b.n)
+      // Recorded before its kind told its type (bytes that aren't text, said to be text).
+      artifact.type = typeOf(artifact.path, artifact.kind)
       for (const version of artifact.versions) {
         if (!version.kept || !version.hash) continue
         // A copy that went missing (deleted by hand): no longer kept.
