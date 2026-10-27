@@ -212,6 +212,7 @@ const reviews = new Reviews(join(home, "reviews.json"), places)
 // What every conversation here makes, recorded as it's made: the engine's and this bridge's own.
 // One that fails to start leaves the rest of the bridge as it is.
 let artifacts: ArtifactStore | undefined
+let noted: ((session: string, path: string, via: string) => Promise<boolean>) | undefined
 if (artifactsFolder) {
   try {
     artifacts = new ArtifactStore(artifactsFolder, { bots: botsFolder })
@@ -243,6 +244,7 @@ if (artifactsFolder) {
       },
     }
     partGiven = (prompt, chat) => recorder.given(prompt, chat)
+    noted = (session, path, via) => recorder.noted([engineSource, bridgeSource], session, path, via)
     link.watch((event) => void recorder.heard(engineSource, event))
     subscribe((event) => void recorder.heard(bridgeSource, event))
   } catch (error) {
@@ -256,7 +258,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, reviews, artifacts }),
+    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, reviews, artifacts, noted }),
   })
 } catch (error: any) {
   console.error("couldn't listen:", error?.message ?? error)

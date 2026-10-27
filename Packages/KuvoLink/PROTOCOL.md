@@ -1321,11 +1321,12 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   folder is on that computer) and `computer`. Don't open a member's conversation from a chat that
   has `computer`: it's on that computer, not the one asked.
 - `kuvo/file?uri=<file:// URI>`: a file on that computer that an agent's reply or tool names
-  (a picture it made, a file it shows you), by its `file://` address, percent-encoded as a query
-  value: `200` with its bytes and `content-type` (from its extension; `application/octet-stream`
-  when unknown), `404 {"message"}` for one that isn't there or isn't a file, `403 {"message"}` for
-  one it can't read, `413 {"message"}` over 25 MB, `400 {"message"}` for an address that isn't
-  `file://`. Each box answers for its own files, a machine's with the Mac closed too.
+  (a picture it made, a file it shows you, a download), by its `file://` address, percent-encoded
+  as a query value. Any file there its user can read, wherever it is: only your own clients reach
+  it (never a peer), and they have that computer's terminals anyway. It answers `200` with its
+  bytes and `content-type` (from its extension; `application/octet-stream` when unknown), `404
+  {"message"}` for one that isn't there or isn't a file, `403 {"message"}` for one it can't read,
+  `413 {"message"}` over 25 MB, `400 {"message"}` for an address that isn't `file://`. Each box answers for its own files, a machine's with the Mac closed too.
 - On a Mac, `kuvo/usage`: the menu bar's usage panel as its Bars view lists it (each provider's
   name, plan, brand color, mark as a PNG to tint, notice, whether it's outdated, and its lines as
   UsageKit writes them), whether a refresh is under way and when the last one ended;
@@ -1762,7 +1763,11 @@ the bridge as it answers (`503 {"message"}` while it isn't running).
   `kuvo.bot` metadata or the bots' folders; a group chat seat's bot and chat from its `kuvo.seat`;
   a chat's part, given to a bot's own conversation, is the chat's too (`trigger: "group"`); a
   wake-up's turn is `trigger: "wake"`; a subagent's work counts as its parent's turn. The engine's
-  conversations run for the bridge's (`kuvo.engineFor`) aren't recorded twice.
+  conversations run for the bridge's (`kuvo.engineFor`) aren't recorded twice. What the agent's
+  browser downloads is that conversation's too (`kind: "download"`, `via: ["download"]`): the box's
+  own browser, or this Mac's app for the browser in its panel, tells the bridge (`POST
+  /api/kuvo/artifacts/noted {path, session, via: "download"}`, with the bridge's password; not a
+  client's route). A download in a page you'd taken over is yours, and isn't recorded.
 - **Versions**: one per turn (more edits in that turn make it `edits` more); changes with no turn
   running, within 5 minutes of each other, are one version. A file the record first sees changed
   has a version 0 (`before: true`), what it was, worked out from the change when it fits the file

@@ -1800,6 +1800,23 @@ class Recorder {
     });
     return done;
   }
+  async noted(sources, id, path, via) {
+    for (const source of sources) {
+      let found;
+      try {
+        found = await source.session(id);
+      } catch {}
+      if (!found)
+        continue;
+      const live = this.live.get(source.name + "\x00" + id) ?? { calls: new Map, queue: Promise.resolve() };
+      await live.queue.catch(() => {});
+      const context = await this.context(source, id, live);
+      if (context)
+        await this.store.change(path, { ...context.made(via), ...via === "download" ? { download: true } : {} });
+      return true;
+    }
+    return false;
+  }
   given(prompt, chat) {
     remember(this.parts, prompt, chat);
   }
@@ -13647,6 +13664,20 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
   }
   return message(404, "No such route.");
 }
+async function notedRoute(noted, method, body) {
+  if (!noted)
+    return message(503, "This computer's record of what its agents made isn't running. Try again in a moment.");
+  if (method !== "POST")
+    return message(405, "Tell it with POST.");
+  const { path, session, via } = await body() ?? {};
+  if (typeof path !== "string" || !path.startsWith("/"))
+    return message(400, "Say the file's whole path (path).");
+  if (typeof session !== "string" || !session)
+    return message(400, "Say whose it is (session).");
+  if (via !== "download")
+    return message(400, "Say how it came (via: download).");
+  return await noted(session, path, via) ? json5({ ok: true }) : message(404, "There's no such conversation on this computer.");
+}
 function notKept(version2) {
   if (version2.status === "deleted")
     return "It was deleted then.";
@@ -18174,6 +18205,8 @@ function handler(context) {
         return await groupRoutes(context.groups?.runner, context.groups?.store, method, parts2.slice(3), body);
       if (area === "kuvo" && a === "link" && b === "groups")
         return await linkRoutes(context.groups?.runner, context.groups?.store, method, parts2.slice(4), body, request.signal);
+      if (area === "kuvo" && a === "artifacts" && b === "noted" && !c)
+        return await notedRoute(context.noted, method, body);
       if (area === "kuvo" && a === "link" && b === "artifacts")
         return await artifactRoutes(context.artifacts, method, parts2.slice(4), url.searchParams, body, request.signal);
       if (area === "kuvo" && a === "peers")
@@ -18462,6 +18495,7 @@ var sideQuestions = new SideQuestions(join24(home2, "side-questions.json"), plac
 var handoffs = new Handoffs(places4);
 var reviews = new Reviews(join24(home2, "reviews.json"), places4);
 var artifacts;
+var noted;
 if (artifactsFolder) {
   try {
     artifacts = new ArtifactStore(artifactsFolder, { bots: botsFolder });
@@ -18493,6 +18527,7 @@ if (artifactsFolder) {
       }
     };
     partGiven = (prompt, chat2) => recorder.given(prompt, chat2);
+    noted = (session, path, via) => recorder.noted([engineSource, bridgeSource], session, path, via);
     link2.watch((event) => void recorder.heard(engineSource, event));
     subscribe((event) => void recorder.heard(bridgeSource, event));
   } catch (error3) {
@@ -18505,7 +18540,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link: link2, password, version: version3, groups, goals, sideQuestions, handoffs, reviews, artifacts })
+    fetch: handler({ roster, sessions, auto, link: link2, password, version: version3, groups, goals, sideQuestions, handoffs, reviews, artifacts, noted })
   });
 } catch (error3) {
   console.error("couldn't listen:", error3?.message ?? error3);
@@ -18566,4 +18601,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents a97cd311292a39f583068b629c8cb4bfcbabce6dc5ae3c13752b5b46dd2b45be
+// Built from Packages/Box/src/agents 2cc28813031ca2ca44af2c1f27029a0d5e3640fcba79c02b2bb281c4af47be73

@@ -17,7 +17,7 @@ import { refreshLoginPath } from "./proc"
 import { setToolServer } from "./kuvotools"
 import { newID } from "./ids"
 import { BadRequest, NotFound, Sessions } from "./sessions"
-import { artifactRoutes } from "./artifacts/routes"
+import { artifactRoutes, notedRoute } from "./artifacts/routes"
 import type { ArtifactStore } from "./artifacts/store"
 import { linkRoutes } from "./groups/link"
 import { peerRoutes, type PeerParts } from "./groups/post"
@@ -40,6 +40,8 @@ export interface Context {
   goals?: Goals
   /** The record of what this computer's agents made (artifacts/store.ts); none where it couldn't start. */
   artifacts?: ArtifactStore
+  /** A file a conversation got without a tool call naming it (artifacts/recorder.ts, `noted`). */
+  noted?: (session: string, path: string, via: string) => Promise<boolean>
   /** The box's other keywords: side questions, handoffs and reviews (btw.ts, handoff.ts, reviews.ts). */
   sideQuestions?: SideQuestions
   handoffs?: Handoffs
@@ -464,6 +466,7 @@ export function handler(context: Context) {
       // The same, as a client reads and changes them (`kuvo/groups`, which the box's link passes on).
       if (area === "kuvo" && a === "link" && b === "groups") return await linkRoutes(context.groups?.runner, context.groups?.store, method, parts.slice(4), body, request.signal)
       // What this computer's agents made (`kuvo/artifacts`, which the box's link passes on).
+      if (area === "kuvo" && a === "artifacts" && b === "noted" && !c) return await notedRoute(context.noted, method, body)
       if (area === "kuvo" && a === "link" && b === "artifacts") return await artifactRoutes(context.artifacts, method, parts.slice(4), url.searchParams, body, request.signal)
       // Group chats across your computers, as the box's link carries their mail (groups/post.ts).
       if (area === "kuvo" && a === "peers") return await peerRoutes(context.groups?.peers, method, parts.slice(3), body, request.signal)

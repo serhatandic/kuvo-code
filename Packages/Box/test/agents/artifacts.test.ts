@@ -8,7 +8,7 @@ import { unified } from "../../src/agents/diff"
 import { EngineLink } from "../../src/agents/engine"
 import { record } from "../../src/agents/artifacts/record"
 import { Recorder, type Event, type Source } from "../../src/agents/artifacts/recorder"
-import { artifactRoutes } from "../../src/agents/artifacts/routes"
+import { artifactRoutes, notedRoute } from "../../src/agents/artifacts/routes"
 import { ArtifactStore } from "../../src/agents/artifacts/store"
 
 // The box's record of what its agents made, as a client reads it (`kuvo/artifacts`): a bot's memory
@@ -304,6 +304,38 @@ describe("files a command made", () => {
     await hear([{ type: "session.execution.succeeded", data: { sessionID: "ses_repo" } }])
     const names = (await route("GET", "kuvo/artifacts?session=ses_repo")).value.artifacts.map((artifact: any) => artifact.name)
     expect(names).toEqual(["summary.md"])
+  })
+})
+
+describe("what the agent's browser downloads", () => {
+  /** As the box's browser tells the record, once a download is done. */
+  async function note(body: unknown) {
+    const response = await notedRoute((session, path, via) => recorder.noted([source], session, path, via), "POST", async () => body)
+    return { status: response.status, value: await response.json() }
+  }
+
+  test("is the bot's, in the turn it was downloaded in, as a download on its shelf", async () => {
+    bot("bot_ada", "m\n")
+    const downloads = join(root, "browser", "downloads")
+    mkdirSync(downloads, { recursive: true })
+    const invoice = join(downloads, "invoice.pdf")
+    writeFileSync(invoice, "%PDF-1.4 invoice")
+    await hear([{ type: "session.execution.started", data: { sessionID: "ses_bot_ada" } }, { type: "session.inbox.delivered", data: { sessionID: "ses_bot_ada", inboxID: "msg_1" } }])
+    expect((await note({ path: invoice, session: "ses_bot_ada", via: "download" })).status).toBe(200)
+    await hear([{ type: "session.execution.succeeded", data: { sessionID: "ses_bot_ada" } }])
+    const { value } = await route("GET", "kuvo/artifacts?bot=bot_ada&kind=download")
+    expect(value.artifacts).toHaveLength(1)
+    expect(value.artifacts[0]).toMatchObject({ name: "invoice.pdf", kind: "download", where: { bots: ["bot_ada"], sessions: ["ses_bot_ada"] } })
+    expect(value.artifacts[0].latest).toMatchObject({ via: ["download"], turn: { session: "ses_bot_ada", message: "msg_1" }, by: { kind: "agent", bot: "bot_ada" } })
+    expect((await route("GET", `kuvo/artifacts/${value.artifacts[0].id}/versions/1`)).value).toBe("%PDF-1.4 invoice")
+  })
+
+  test("for a conversation this computer doesn't have, says so and records nothing", async () => {
+    const file = join(root, "stray.zip")
+    writeFileSync(file, "zip")
+    const answer = await note({ path: file, session: "ses_nobody", via: "download" })
+    expect(answer.status).toBe(404)
+    expect(store.at(file)).toBeUndefined()
   })
 })
 

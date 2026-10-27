@@ -56,7 +56,7 @@ const TAB_IDLE = Number(process.env.KUVO_BROWSER_TAB_IDLE || 3600) * 1000;
 
 // Goes up with every change to the keeper (host mode): a newer one replaces one that's running
 // (its pages close, its sign-ins stay), and an older one never replaces a newer.
-const KEEPER = 35;
+const KEEPER = 36;
 // Passkeys: none yet, as in the panel's browser on the Mac (Passkeys.swift, the same script).
 const NO_PASSKEYS = "(() => {\n  try {\n    const none = () => Promise.reject(new DOMException(\"Passkeys can't be used in this browser.\", \"NotAllowedError\"));\n    const Container = window.CredentialsContainer;\n    if (Container && Container.prototype) {\n      const prototype = Container.prototype, get = prototype.get, create = prototype.create;\n      if (get) prototype.get = function (options) { return options && options.publicKey ? none() : get.call(this, options); };\n      if (create) prototype.create = function (options) { return options && options.publicKey ? none() : create.call(this, options); };\n    }\n    const Credential = window.PublicKeyCredential;\n    if (Credential) {\n      Credential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);\n      if (Credential.isConditionalMediationAvailable) Credential.isConditionalMediationAvailable = () => Promise.resolve(false);\n    }\n  } catch {}\n})();";
 
@@ -681,16 +681,21 @@ async function host() {
     }
     if (message.method === "Target.detachedFromTarget" && (ownFrames.delete(message.params.sessionId) || [...own.values()].includes(message.params.sessionId))) return;
     if (message.method === "Browser.downloadWillBegin" && !downloads.has(message.params.guid)) {
-      downloads.set(message.params.guid, message.params.suggestedFilename || "download");
-      broadcast({ method: "Kuvo.downloading", params: { name: downloads.get(message.params.guid) } });
+      // Whose it is: the conversation using the page it started in (its main frame's ID is the
+      // page's), else the page in use.
+      const session = (claims.get(message.params.frameId) ?? claims.get(active))?.session;
+      downloads.set(message.params.guid, { name: message.params.suggestedFilename || "download", session });
+      broadcast({ method: "Kuvo.downloading", params: { name: downloads.get(message.params.guid).name } });
     }
     if (message.method === "Browser.downloadProgress" && message.params.state !== "inProgress") {
-      const name = downloads.get(message.params.guid);
+      const { name, session } = downloads.get(message.params.guid) ?? {};
       downloads.delete(message.params.guid);
       if (message.params.state === "completed" && name) {
         const file = finishDownload(message.params.guid, name);
         if (file) broadcast({ method: "Kuvo.downloaded", params: { name: path.basename(file), path: file, size: message.params.totalBytes } });
         else broadcast({ method: "Kuvo.downloadFailed", params: { name } });
+        // Kept in the record of what agents made, as that conversation's (none running: not kept).
+        if (file && session) engine("POST", "api/kuvo/artifacts/noted", { path: file, session, via: "download" }, "bridge").catch(() => {});
       } else if (name) {
         broadcast({ method: "Kuvo.downloadFailed", params: { name } });
       }

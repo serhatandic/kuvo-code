@@ -113,6 +113,27 @@ export class Recorder {
     return done
   }
 
+  /**
+   * A file conversation `id` got without a tool call naming it (a download in the agent's
+   * browser), recorded as that conversation's, in the turn it's in, after what it's told so far.
+   * Whether one of `sources` has that conversation.
+   */
+  async noted(sources: Source[], id: string, path: string, via: string): Promise<boolean> {
+    for (const source of sources) {
+      let found
+      try {
+        found = await source.session(id)
+      } catch {}
+      if (!found) continue
+      const live = this.live.get(source.name + "\0" + id) ?? { calls: new Map(), queue: Promise.resolve() }
+      await live.queue.catch(() => {})
+      const context = await this.context(source, id, live)
+      if (context) await this.store.change(path, { ...context.made(via), ...(via === "download" ? { download: true } : {}) })
+      return true
+    }
+    return false
+  }
+
   /** A chat's part given to a bot's conversation: the turn `prompt` starts is the chat's. */
   given(prompt: string, chat: string) {
     remember(this.parts, prompt, chat)

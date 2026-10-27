@@ -159,6 +159,21 @@ export async function artifactRoutes(store: ArtifactStore | undefined, method: s
 }
 
 /** Why a version can't be read, in words. */
+/**
+ * `POST /api/kuvo/artifacts/noted {path, session, via}`: a file a conversation got without a tool
+ * call naming it, as this box's own programs tell it (its agent browser's downloads). Not one a
+ * client reaches: the box's link passes on only `kuvo/artifacts`' own routes.
+ */
+export async function notedRoute(noted: ((session: string, path: string, via: string) => Promise<boolean>) | undefined, method: string, body: () => Promise<any>): Promise<Response> {
+  if (!noted) return message(503, "This computer's record of what its agents made isn't running. Try again in a moment.")
+  if (method !== "POST") return message(405, "Tell it with POST.")
+  const { path, session, via } = (await body()) ?? {}
+  if (typeof path !== "string" || !path.startsWith("/")) return message(400, "Say the file's whole path (path).")
+  if (typeof session !== "string" || !session) return message(400, "Say whose it is (session).")
+  if (via !== "download") return message(400, "Say how it came (via: download).")
+  return (await noted(session, path, via)) ? json({ ok: true }) : message(404, "There's no such conversation on this computer.")
+}
+
 function notKept(version: Version): string {
   if (version.status === "deleted") return "It was deleted then."
   switch (version.reason) {
