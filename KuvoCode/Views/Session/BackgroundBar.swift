@@ -266,6 +266,7 @@ private struct BackgroundJobRow: View {
                 .help("What it has printed so far")
                 .popover(isPresented: $showsOutput, arrowEdge: .top) {
                     ShellOutputView(job: job, api: api, directory: directory)
+                        .popoverContent()
                 }
             Button("Stop", systemImage: "stop.circle") { stop() }
                 .buttonStyle(TextButtonStyle())

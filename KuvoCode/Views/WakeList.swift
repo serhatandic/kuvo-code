@@ -19,6 +19,7 @@ struct WakeList: View {
     /// so a second click doesn't have the bot do its job twice.
     @State private var wokenNow: Set<String> = []
     @FocusState private var noteFocused: Bool
+    @Environment(\.isInPopover) private var isInPopover
 
     private struct Draft {
         var due = Draft.nextHour
@@ -75,10 +76,12 @@ struct WakeList: View {
                 Toggle(isOn: Binding(get: { wakeUps.paused.contains(owner.key) }, set: { pause in attempt { try await wakeUps.setPaused(pause, owner) } })) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Pause Wake-Ups")
-                        Text("They wait until you turn this off; the ones that came due meanwhile go then.")
+                        Text("Missed ones go when you resume.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
+                    // The switch at the row's end.
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .toggleStyle(.switch)
                 .accessibilityLabel("Pause Wake-Ups")
@@ -142,7 +145,7 @@ struct WakeList: View {
                         }
                         .buttonStyle(TextButtonStyle())
                         .disabled(tried[watch.letters] == .some(nil))
-                        .help("Run its check now and see what it prints; it doesn’t count as a run, nor wake \(name)")
+                        .help("Run its check now, without waking \(name)")
                         Button("Stop Watching", systemImage: "minus.circle.fill") {
                             attempt { try await wakeUps.cancel(watch, of: owner) }
                         }
@@ -182,7 +185,7 @@ struct WakeList: View {
                         }
                         .buttonStyle(TextButtonStyle())
                         .disabled(wokenNow.contains(wake.id))
-                        .help(wake.every == nil ? "Send this wake-up now, to see the job run" : "Send this wake-up now, to see the job run; it still comes back at its time")
+                        .help(wake.every == nil ? "Send it now" : "Send it now; it still comes back at its time")
                         Button("Cancel Wake-Up", systemImage: "minus.circle.fill") {
                             attempt { try await wakeUps.cancel(wake, of: owner) }
                         }
@@ -203,10 +206,9 @@ struct WakeList: View {
                         Label("Add Wake-Up…", systemImage: "plus")
                     }
                     .buttonStyle(TextButtonStyle(outset: true))
-                    .help("Schedule a wake-up yourself: what \(name) does, and when")
                     Spacer()
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, isInPopover ? 0 : 12)
                 .padding(.vertical, 8)
             }
         }
@@ -224,6 +226,7 @@ struct WakeList: View {
     /// When, how often, and what the bot does then.
     private var form: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // A field: its well stays, in a popover too.
             WellGroup(isActive: noteFocused) {
                 WellRow {
                     Image(systemName: "clock")
@@ -239,6 +242,7 @@ struct WakeList: View {
                     .focused($noteFocused)
                     .padding(12)
             }
+            .environment(\.isInPopover, false)
             HStack {
                 if let failure {
                     Text(failure)
@@ -319,12 +323,13 @@ struct WakeBar: View {
         Button("All") { showsAll = true }
             .buttonStyle(TextButtonStyle())
             .font(.system(size: 13))
-            .help("All its wake-ups and watches: add one, wake it now, or pause them")
+            .help("All wake-ups and watches")
             .popover(isPresented: $showsAll, arrowEdge: .top) {
                 ScrollView {
                     WakeList(owner: owner, name: "the agent")
                         .padding(16)
                 }
+                .popoverContent()
                 .frame(width: 440)
                 .frame(maxHeight: 520)
             }
@@ -384,7 +389,7 @@ struct WakeBar: View {
                 Button("Now", systemImage: "arrow.up") { attempt { try await app.wakeUps.wakeNow(wake, of: owner) } }
                     .buttonStyle(TextButtonStyle())
                     .font(.system(size: 13))
-                    .help(wake.every == nil ? "Wake it up now with this note, rather than at its time" : "Wake it up now with this note; it still comes back at its time")
+                    .help(wake.every == nil ? "Wake it up now" : "Wake it up now; it still comes back at its time")
                 Button("Cancel", systemImage: "xmark.circle") { cancel(item, saying: "Wake-up canceled") { try await app.wakeUps.cancel(wake, of: owner) } }
                     .buttonStyle(TextButtonStyle())
                     .font(.system(size: 13))

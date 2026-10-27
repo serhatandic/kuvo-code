@@ -743,9 +743,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     installed, signedIn, label?}`, `label` who it's signed in as). `opencode`: an opencode used
     apart from Kuvo Code (its `auth.json`), each `{id, integrationID, name, kind, connected}`: a
     `key` can come over, a `signIn` is done again here (both apps renewing one refresh token would
-    sign each other out), and `connected` says the engine has one for it already. `shell`: keys in
+    sign each other out), and `connected` says the engine has a working one for it already (a key in the shell aside). `shell`: keys in
     the shell the engine uses (`{integrationID, name, variable}`). `connected` (from bridge 0.9.91):
-    the engine's providers signed in to already, by integration, a key in the shell aside. Names
+    the engine's providers signed in and working, by integration (an expired sign-in or a key in the
+    shell aside). Names
     only, never a key. `POST
     kuvo/accounts/found/use {id}` copies an opencode key in as the plan's sign-in in use (`200 {}`;
     `404` for one that isn't there, `409` for a sign-in, `503` with the engine down, `502` when it

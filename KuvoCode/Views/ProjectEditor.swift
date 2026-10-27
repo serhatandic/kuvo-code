@@ -414,18 +414,24 @@ private struct FolderRow: View {
 }
 
 /// A group of rows drawn into the sheet like one field: sunken, with an edge of its own and no
-/// outline, a touch deeper while you type in it.
+/// outline, a touch deeper while you type in it. In a popover, the rows sit on the popover itself
+/// (`popoverContent`).
 struct WellGroup<Content: View>: View {
     var isActive = false
     @ViewBuilder var content: Content
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.isInPopover) private var isInPopover
 
     var body: some View {
-        VStack(spacing: 0) { content }
-            .background((scheme == .dark ? Color.black : Surface.slate).opacity(isActive ? 0.05 : 0), in: .rect(cornerRadius: 10))
-            .clipShape(.rect(cornerRadius: 10))
-            .recessedWell(RoundedRectangle(cornerRadius: 10))
-            .animation(.easeOut(duration: 0.15), value: isActive)
+        if isInPopover {
+            VStack(spacing: 0) { content }
+        } else {
+            VStack(spacing: 0) { content }
+                .background((scheme == .dark ? Color.black : Surface.slate).opacity(isActive ? 0.05 : 0), in: .rect(cornerRadius: 10))
+                .clipShape(.rect(cornerRadius: 10))
+                .recessedWell(RoundedRectangle(cornerRadius: 10))
+                .animation(.easeOut(duration: 0.15), value: isActive)
+        }
     }
 }
 
@@ -437,31 +443,42 @@ struct WellRow<Icon: View, Content: View>: View {
     @ViewBuilder var icon: Icon
     @ViewBuilder var content: Content
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.isInPopover) private var isInPopover
 
     var body: some View {
         HStack(spacing: 0) {
             icon
                 .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                .frame(width: 42)
-            Rectangle()
-                .fill(Surface.wellBorder(scheme))
-                .frame(width: 1)
+                .frame(width: isInPopover ? WellRow.popoverIcon : 42)
+            // In a popover, the icon and the words with nothing between, as in the system's.
+            if !isInPopover {
+                Rectangle()
+                    .fill(Surface.wellBorder(scheme))
+                    .frame(width: 1)
+            }
             content
-                .padding(.horizontal, 12)
+                .padding(.horizontal, isInPopover ? 0 : 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(minHeight: height)
     }
 }
 
-/// The hairline between a well's rows.
+extension WellRow {
+    /// An icon's column in a popover's row; its hairlines start after it, under the words.
+    static var popoverIcon: CGFloat { 30 }
+}
+
+/// The hairline between a well's rows; in a popover, from under the rows' words.
 struct WellDivider: View {
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.isInPopover) private var isInPopover
 
     var body: some View {
         Rectangle()
             .fill(Surface.wellBorder(scheme))
             .frame(height: 1)
+            .padding(.leading, isInPopover ? WellRow<EmptyView, EmptyView>.popoverIcon : 0)
     }
 }
 
