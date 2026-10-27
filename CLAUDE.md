@@ -9,7 +9,7 @@ Kuvo Code is a small distributed system. Build every feature for that system, ne
 - **Every computer is an equal box, the Mac included.** This Mac and each machine run the same things: the engine with its sessions, bots, coding agents, group chats, wake-ups and the agent's browser. Each box keeps its own settings and keys, and keeps working with no client connected. A machine has its keeper for that, and this Mac's box runs in the background with Open at Login. The Mac is no different from a machine.
 - **Boxes talk peer to peer**, end to end encrypted through the relay (`Packages/KuvoLink/PROTOCOL.md`, "Peers"). Agents on one box write to agents on another, and no box needs another one to do its own work.
 - **Clients connect to boxes.** The Mac app and the iPhone app are both clients of every box, the Mac app's own box included. They show what a box has and change it, and hold none of its state.
-- **So every feature lives on the box**: in the engine, the bridges and `kuvo-link.js`. It works on every box, including a machine with the Mac closed, and every client can reach it.
+- **So every feature lives on the box**: in the engine and the box's own code, `Packages/Box` (the link in `src/link`, the coding agents' bridge in `src/agents`, what they share in `src/shared`). `scripts/build-box.sh` builds the link into `kuvo-link.js`; never edit that built file (CI fails if it differs). It works on every box, including a machine with the Mac closed, and every client can reach it.
   - Never build a feature only into the Mac app, or only for this Mac's box, or so it works only through the Mac's SSH connection.
   - Where a box can't do something yet, say so plainly in the UI and in your report, rather than quietly making the Mac a hub.
   - **Box code runs on both macOS and Linux.** This Mac's box and each Linux machine's run the same code, so anything on the box side works on both. Prefer code that's the same on both (Node and Bun APIs that behave alike); where they differ (file watching, processes and `/proc`, paths, the keeper, the shell, the Keychain versus files), handle both explicitly, in one place, and test each. Check a box change on a Linux machine too (a test folder of your own on lokum) before calling it done.
@@ -122,7 +122,7 @@ All paths on the right are in `../kuvo-web`.
 | `KuvoCode/Views/Providers/*`, `Stores/Catalog.swift` (accounts, sign-in, models) | `src/content/docs/code/accounts.md`, `sessions.md` (Model and effort) |
 | `KuvoCode/Views/SettingsView.swift`, `Views/Settings/GeneralSettings.swift`, `AppearanceSettings.swift`, `StorageSettings.swift`, `GitSettings.swift`, `ArchivedSessionsSettings.swift`, `ShortcutsSettings.swift`, `KuvoCode/Design/Look.swift` (Settings' sidebar and pages, appearance, storage, git, worktrees, archived sessions) | `src/content/docs/code/settings.md`, and the page that covers a page: `accounts.md`, `customize.md` (Agents, Permissions, MCP Servers, Skills, Commands, Engine), `panel.md` (Panel, Browser, Passwords), `machines.md`, `usage.md`, `troubleshooting.md` (Engine), `shortcuts.md` |
 | `KuvoCode/Views/Settings/BrowserSettings.swift`, `PasswordsSettings.swift`, `KuvoCode/Stores/Passwords.swift` (the panel browser's settings, website data and saved passwords) | `src/content/docs/code/panel.md`, `settings.md`, `privacy.md`, `uninstall.md` |
-| `KuvoCode/Views/Settings/*`, `KuvoCode/Stores/EngineConfig.swift`, `BoxSkills.swift` and kuvo-link.js's Skills (the engine's settings file, skills from GitHub) | `src/content/docs/code/customize.md`, `privacy.md` (the settings file and skills folder, GitHub connections), `uninstall.md` |
+| `KuvoCode/Views/Settings/*`, `KuvoCode/Stores/EngineConfig.swift`, `BoxSkills.swift` and the box's Skills in `Packages/Box/src/link` (the engine's settings file, skills from GitHub) | `src/content/docs/code/customize.md`, `privacy.md` (the settings file and skills folder, GitHub connections), `uninstall.md` |
 | `Packages/UsageKit/*`, `KuvoCode/Stores/UsageAccounts.swift` (the menu bar usage panel) | `src/content/docs/code/usage.md`, `privacy.md` (the usage item, the `Usage` folder), `uninstall.md`; also `Packages/UsageKit/README.md` (What's different from upstream) |
 | `KuvoCode/Stores/Updates.swift`, the update feed in `scripts/build-app.sh` | `src/content/docs/code/installation.md`, `privacy.md` (connections) |
 | `Config/App.xcconfig`, `KuvoCode.entitlements`, the Xcode project's packages, `scripts/*` | `src/content/docs/code/installation.md` (requirements, Build from source), `architecture.md` (third-party pieces); this repo's `CONTRIBUTING.md`; rerun `./scripts/third-party-licenses.sh` when packages or copied code change |
@@ -145,8 +145,9 @@ done until the phone has it.
 When you add or change something people use:
 
 - **The box's side**: what a client reads or does is a route. It goes in
-  `KuvoCode/Stores/PhoneLink.swift` for this Mac's box, and in the machines' bridge
-  (`Packages/KuvoLink`) so it works on a machine with the Mac closed. Write it up in
+  the box's link, `Packages/Box/src/link` (routes in `server/router.ts`, their answers' shapes in
+  `src/shared/routes`), so it works on every box, and where this Mac's box answers it differently,
+  in `KuvoCode/Stores/PhoneLink.swift`. Write it up in
   `Packages/KuvoLink/PROTOCOL.md`. Never build a feature that only the Mac app's own code path
   can reach.
 - **Tell the phone session, in the same task.** Usually a session is working on the phone app
