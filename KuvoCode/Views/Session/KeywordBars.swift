@@ -73,20 +73,20 @@ struct KeywordBars: View {
             case .here:
                 // All of them asked for here: the review's done with.
                 if findings == nil { model.dismissReview() }
-                model.send(text, files: [], for: nil, queue: false)
+                model.sendReviewFix(text)
             case .newSession:
                 do {
                     // As this conversation: its model and permissions, in its project's folder.
                     let session = try await workspace.createSession(in: workspace.projectDirectory(of: model.session), model: model.session.model, agent: nil,
                                                                     approval: ToolApproval(rules: model.session.permissions))
                     app.open(.session(session.id))
-                    workspace.model(for: session.id)?.send(text, files: [], for: nil, queue: false)
+                    workspace.model(for: session.id)?.sendReviewFix(text)
                 } catch {
                     model.failure = "A new session couldn’t be started: \(error.localizedDescription)"
                 }
             case .session(let id):
                 // There, and open, so you see it go.
-                workspace.model(for: id)?.send(text, files: [], for: nil, queue: false)
+                workspace.model(for: id)?.sendReviewFix(text)
                 app.open(.session(id))
             case .copy:
                 Clipboard.copy(text)

@@ -138,10 +138,23 @@ private struct BottomStack: View {
     @Environment(AppModel.self) private var app
     @AppStorage(ToolApproval.key) private var defaultApproval = ToolApproval.approveAll
     @Environment(\.takesCardKeys) private var takesCardKeys
-    /// Which bar is open once the card is full (`BarFolds`).
-    @State private var folds = BarFolds<ComposerBar>()
+    /// Which bar is open once the card is full (`BarFolds`), each conversation's own: this stack
+    /// stays as you switch conversations.
+    @State private var foldsOf: [String: BarFolds<ComposerBar>] = [:]
     /// The waiting messages, open under their line once there are more than two.
     @State private var queueOpen = false
+
+    private var folds: BarFolds<ComposerBar> {
+        get { foldsOf[model.id] ?? BarFolds() }
+        nonmutating set { foldsOf[model.id] = newValue }
+    }
+
+    /// What changed in the card, and in which conversation: another conversation's bars, news or
+    /// side question aren't a change in this one's.
+    private struct Seen<Value: Equatable>: Equatable {
+        var conversation: String
+        var value: Value
+    }
 
     /// The bars showing in the card, in its order.
     private var bars: [ComposerBar] {
@@ -356,23 +369,26 @@ private struct BottomStack: View {
             .animation(.ui, value: isAsking)
             .animation(.ui, value: model.waiting.count > 2)
             // The newest change opens, where the card is full; shown again, what has something to see.
-            .onChange(of: bars, initial: true) { old, new in
+            .onChange(of: Seen(conversation: model.id, value: bars), initial: true) { was, now in
+                let (old, new) = (was.value, now.value)
+                if old == new || was.conversation != now.conversation {
+                    // Shown again, or another conversation shown: its own folds, as it left them.
+                    if was.conversation != now.conversation { queueOpen = false }
+                    return folds.start(new) { news[$0] == true }
+                }
                 // No longer full: each keeps what the card showed, rather than springing open.
                 if old.count >= BarFolds<ComposerBar>.full, new.count < BarFolds<ComposerBar>.full {
                     for bar in new { own(bar).wrappedValue = folds.isHidden(bar, among: old, asking: isAsking, own: own(bar).wrappedValue) }
                 }
-                if old == new {
-                    folds.start(new) { news[$0] == true }
-                } else {
-                    folds.bars(from: old, to: new) { $0 != .handoff && news[$0] != false }
-                }
+                folds.bars(from: old, to: new) { $0 != .handoff && news[$0] != false }
             }
-            .onChange(of: news) { old, new in
-                if let now = new.first(where: { $0.value && old[$0.key] != true })?.key { folds.changed(now) }
+            .onChange(of: Seen(conversation: model.id, value: news)) { old, new in
+                guard old.conversation == new.conversation else { return }
+                if let now = new.value.first(where: { $0.value && old.value[$0.key] != true })?.key { folds.changed(now) }
             }
             // Another side question shown (picked in the sidebar, or just asked): its bar opens, unless a card asks.
-            .onChange(of: model.shownSideQuestion) { _, shown in
-                if shown != nil, bars.count >= BarFolds<ComposerBar>.full { folds.changed(.sideQuestion) }
+            .onChange(of: Seen(conversation: model.id, value: model.shownSideQuestion)) { old, shown in
+                if old.conversation == shown.conversation, shown.value != nil, bars.count >= BarFolds<ComposerBar>.full { folds.changed(.sideQuestion) }
             }
             .onChange(of: isAsking) { _, asking in
                 if !asking { folds.askingEnded() }
@@ -381,12 +397,13 @@ private struct BottomStack: View {
             .onChange(of: model.waiting.count > 2) { _, folds in
                 if !folds { queueOpen = false }
             }
-            // A question came: the keyboard goes to it, after the composer takes it as it shows.
+            // A question came: the keyboard goes to it, after the composer takes it as it shows,
+            // unless you're speaking into the composer (Return and Escape are voice's till you're done).
             .onChange(of: forms.first?.id, initial: true) { _, id in
                 guard id != nil else { return }
                 Task {
                     try? await Task.sleep(for: .milliseconds(150))
-                    model.yieldComposer()
+                    if !app.dictation.isListening(for: model.id) { model.yieldComposer() }
                 }
             }
             .animation(.ui, value: model.waiting.isEmpty)

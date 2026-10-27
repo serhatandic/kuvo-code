@@ -346,8 +346,11 @@ struct Composer: View {
         // A quote just added: its answer takes the keyboard.
         .onChange(of: quoteFocus) { _, focus in answerFocus = focus.map { (id: $0.id, request: MessageField.FocusRequest()) } }
         .onChange(of: session) { old, _ in
-            // Listening for the session it showed: that stops, rather than going on unseen.
-            if app.dictation.isListening(for: old ?? "new:" + (folders.first ?? "")) { app.dictation.cancel() }
+            // Listening for the session it showed: that stops, rather than going on unseen, and
+            // what was said so far goes into that session's draft.
+            if app.dictation.isListening(for: old ?? "new:" + (folders.first ?? "")) {
+                if app.dictation.voice?.phase == .listening { app.dictation.finish() } else { app.dictation.cancel() }
+            }
             historyIndex = nil
             mentionFiles = []
             mentionFilesRead = nil
