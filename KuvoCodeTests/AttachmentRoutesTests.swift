@@ -85,10 +85,11 @@ import Testing
         #expect(prepared.paths.isEmpty && prepared.unsent.isEmpty && prepared.included.isEmpty)
     }
 
-    /// One bigger than a model takes stays on this Mac, and the message says so.
+    /// One bigger than a machine takes stays on this Mac, and the message says so (one a model
+    /// can't take whole goes, for the agent to open there).
     @Test func onAMachineAHugeFileStaysHere() throws {
         let huge = url("huge.log")
-        try Data(count: Attachments.maxBytes + 1).write(to: huge)
+        try Data(count: Attachments.maxMachineBytes + 1).write(to: huge)
         defer { try? FileManager.default.removeItem(at: huge) }
         let prepared = Attachments.prepareForMachine([url("notes.txt"), huge])
         #expect(prepared.files.map(\.name) == ["notes.txt"])

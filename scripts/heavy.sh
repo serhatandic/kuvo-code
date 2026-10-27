@@ -17,9 +17,8 @@
 #
 # A job inside one that holds its kind's lock already (a test run its caller started with this
 # helper) runs at once. So does one under the single lock every heavy job took before
-# (kuvo-code-heavy-<uid>.lock). Until 2026-10-28 (KUVO_HEAVY_OLD_UNTIL), while other checkouts still
-# start jobs that way, a job also takes that lock as it runs: none of theirs starts beside it, and
-# kinds take turns as they did. From the 29th, kinds run side by side.
+# (kuvo-code-heavy-<uid>.lock). Its day is over (KUVO_HEAVY_OLD_UNTIL, the last day a job took it
+# as it ran, so one in an older checkout couldn't start beside it): kinds run side by side.
 #
 #   scripts/heavy.sh --holds <kind>   whether this runs inside such a job already (exit 0), for
 #                                     a script that takes its turn itself (scripts/test-app.sh)
@@ -74,10 +73,9 @@ fi
 if [ "${KUVO_HEAVY_HOLDING:-}" = "$LOCK" ] && held "$LOCK"; then
     # Its turn, just taken (below).
     unset KUVO_HEAVY_HOLDING
-    # Until the 28th, jobs started the old way, under one lock for every kind, still run (other
-    # checkouts' test-app.sh): this one waits for them, and holds that lock too while it runs, so
-    # none starts beside it.
-    if [ "$(date +%Y%m%d)" -le "${KUVO_HEAVY_OLD_UNTIL:-20261028}" ]; then
+    # While jobs were still started the old way, under one lock for every kind (older checkouts'
+    # test-app.sh), one of these waited for them, and held that lock too as it ran.
+    if [ "$(date +%Y%m%d)" -le "${KUVO_HEAVY_OLD_UNTIL:-20261026}" ]; then
         if ! lockf -ks -t 0 "$OLD" true; then
             [ "$WAITS" = 0 ] && cannot_wait "A heavy job started the old way is running."
             echo "Waiting for a heavy job started the old way to finish…" >&2
