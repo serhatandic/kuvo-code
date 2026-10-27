@@ -139,4 +139,19 @@ import Testing
         field().update(view, coordinator: coordinator)
         #expect(view.string == "y", "the message brought back shows")
     }
+
+    /// A field nothing attaches pictures to (a group chat's): ⌘V of a screenshot leaves it empty,
+    /// rather than putting in a blank character that would let an empty-looking message send.
+    @Test func aPictureOnlyPasteWhereNothingAttachesLeavesTheFieldEmpty() throws {
+        let image = NSImage(size: NSSize(width: 8, height: 8))
+        image.lockFocus(); NSColor.systemBlue.drawSwatch(in: NSRect(x: 0, y: 0, width: 8, height: 8)); image.unlockFocus()
+        let png = try #require(image.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) })
+        let board = NSPasteboard(name: .init("kuvo-tests-\(UUID().uuidString)"))
+        board.declareTypes([.png], owner: nil)
+        board.setData(png, forType: .png)
+        let view = MessageTextView()
+        #expect(!view.readSelection(from: board))
+        #expect(!view.readSelection(from: board, type: .png))
+        #expect(view.string.isEmpty)
+    }
 }

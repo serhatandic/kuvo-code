@@ -350,13 +350,24 @@ final class MessageTextView: NSTextView {
     override func insertBacktab(_ sender: Any?) { window?.selectPreviousKeyView(self) }
 
     // A paste (⌘V, Paste and Match Style, a service): files and pictures are the owner's to
-    // attach, words come in plain.
+    // attach, words come in plain. A picture alone (a screenshot copied to the clipboard is only
+    // `public.png`) is among what it reads, as macOS offers Paste only for that.
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        super.readablePasteboardTypes + Self.pictureTypes
+    }
+
+    private static let pictureTypes = NSImage.imageTypes.map { NSPasteboard.PasteboardType(rawValue: $0) }
+
+    // A picture nothing here attaches (a group chat's field) isn't pasted at all: as text it would
+    // be a blank character.
     override func readSelection(from pboard: NSPasteboard) -> Bool {
-        attached(from: pboard) || super.readSelection(from: pboard)
+        if attached(from: pboard) { return true }
+        guard let type = preferredPasteboardType(from: pboard.types ?? [], restrictedToTypesFrom: nil), !Self.pictureTypes.contains(type) else { return false }
+        return super.readSelection(from: pboard)
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
-        attached(from: pboard) || super.readSelection(from: pboard, type: type)
+        attached(from: pboard) || (!Self.pictureTypes.contains(type) && super.readSelection(from: pboard, type: type))
     }
 
     private func attached(from pboard: NSPasteboard) -> Bool {
