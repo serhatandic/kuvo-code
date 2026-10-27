@@ -1,4 +1,5 @@
 import Foundation
+import KuvoLink
 import Testing
 import UsageKit
 @testable import KuvoCode
@@ -24,6 +25,49 @@ import UsageKit
     final class Permissions {
         var allowed: Set<ScreenAccess.Permission> = []
         lazy var source = ScreenAccess.Source { [self] in allowed.contains($0) }
+    }
+
+    // MARK: Bring your subscriptions
+
+    /// Whether this Mac's box is still starting up.
+    nonisolated final class StartingUp: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = true
+        var isOn: Bool {
+            get { lock.withLock { value } }
+            set { lock.withLock { value = newValue } }
+        }
+    }
+
+    /// This Mac's box answering `kuvo/accounts/found`: not yet while it starts, then nothing found.
+    private func foundBox(_ starting: StartingUp) -> BoxClient {
+        BoxClient(box: BoxClient.mac, transport: LocalBox { _ in
+            let now = starting.isOn
+            return AsyncThrowingStream { continuation in
+                if now {
+                    continuation.yield(.head(status: 503, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(Data(#"{"message":"Kuvo Code’s background service on this Mac isn’t answering. Try again in a moment."}"#.utf8)))
+                } else {
+                    continuation.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(Data(#"{"agents":[],"opencode":[],"shell":[],"connected":[]}"#.utf8)))
+                }
+                continuation.finish()
+            }
+        })
+    }
+
+    /// The first look comes a moment before this Mac's box answers: the step goes on looking, as
+    /// it does once the box is up, rather than saying it couldn't.
+    @Test func aBoxStillStartingIsStillLooking() async {
+        let onboarding = Onboarding(defaults: defaults, launchedBefore: false, screen: ScreenAccess(source: Permissions().source))
+        let starting = StartingUp()
+        let box = foundBox(starting)
+        await onboarding.look(in: box)
+        #expect(onboarding.lookFailure == nil, "not a failure: it's starting")
+        #expect(onboarding.found == nil)
+        starting.isOn = false
+        await onboarding.look(in: box)
+        #expect(onboarding.found != nil)
     }
 
     // MARK: Moving on once a permission is granted

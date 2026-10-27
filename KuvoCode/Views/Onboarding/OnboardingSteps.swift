@@ -75,6 +75,15 @@ struct SubscriptionsStep: View {
         // the engine does, and can start a moment after it.
         // And once the coding agents' bridge is up: it lists them.
         .task(id: [app.box.endpoint != nil, app.engine == .ready, app.agents.api != nil]) { await onboarding.look(in: box) }
+        #if DEBUG
+        // KUVO_DEMO_ADD_ANOTHER=plans|keys: Add Another open on that tab, for a look at it.
+        .task {
+            guard let tab = ProcessInfo.processInfo.environment["KUVO_DEMO_ADD_ANOTHER"] else { return }
+            adding = Adding(tab: tab == "keys" ? .keys : .plans)
+        }
+        // KUVO_DEMO_SHOW_KEYS: the API keys found, open in place.
+        .onAppear { if ProcessInfo.processInfo.environment["KUVO_DEMO_SHOW_KEYS"] != nil { showsKeys = true } }
+        #endif
         .sheet(item: $signingIn) { signIn in
             ConnectView(integrationID: signIn.id, onDone: { finishedSigningIn() }, onCancel: { signingIn = nil })
                 .frame(width: 480)

@@ -107,8 +107,9 @@ final class Onboarding {
             found = answer
             lookFailure = nil
         } catch {
-            // Given up for a newer look (the box came up meanwhile): not a failure.
-            guard look == looks, !Task.isCancelled else { return }
+            // Given up for a newer look (the box came up meanwhile), or the box still starting (it's
+            // looked for again once it's up): not a failure.
+            guard look == looks, !Task.isCancelled, (error as? BoxRefusal)?.status != 503 else { return }
             if found == nil { lookFailure = error.localizedDescription }
         }
     }
