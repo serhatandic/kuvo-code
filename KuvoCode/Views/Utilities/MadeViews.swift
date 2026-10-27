@@ -650,13 +650,8 @@ struct MadeRow: View {
                             .font(.system(size: 13, weight: .medium))
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        if header.pinned != nil, timeOnly {
-                            Text("Final")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(.tint)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 1)
-                                .background(.tint.opacity(0.14), in: .capsule)
+                        if let pin = header.pinned, timeOnly || pin.by == "bot" {
+                            MarkBadge(text: ArtifactWords.mark(pin))
                         }
                     }
                     Text(subtitle)
@@ -865,6 +860,15 @@ struct ArtifactDetail: View {
             if let artifact, let version {
                 versionBar(artifact, version)
                     .padding(.bottom, 6)
+                // What its bot said as it marked it final.
+                if let note = artifact.pinned?.note, artifact.pinned?.by == "bot", !note.isEmpty {
+                    Label(note, systemImage: "checkmark.seal")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                }
                 if let restoring { confirm(artifact, restoring) }
                 if let problem {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -935,20 +939,48 @@ struct ArtifactDetail: View {
                 .help(version.before == true ? "Put it back as it was before" : "Put this version back in the file")
             }
             if let artifact {
-                Button {
-                    Task {
-                        do {
-                            try await things.pin(artifact.id, artifact.pinned == nil)
-                            await load()
-                        } catch {
-                            problem = error.localizedDescription
+                if let pin = artifact.pinned, pin.by == "bot" {
+                    // Its bot's mark, with its note below: not a button to undo by a stray click, but
+                    // a menu, so it can still go.
+                    Menu {
+                        Button("Stop Keeping", systemImage: "bookmark.slash") {
+                            Task {
+                                do {
+                                    try await things.pin(artifact.id, false)
+                                    await load()
+                                } catch {
+                                    problem = error.localizedDescription
+                                }
+                            }
+                        }
+                    } label: {
+                        MarkBadge(text: ArtifactWords.mark(pin))
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .fixedSize()
+                    .help("Its bot marked it final")
+                } else {
+                    let words = artifact.pinned == nil ? ArtifactWords.keep : ArtifactWords.kept
+                    Button {
+                        Task {
+                            do {
+                                try await things.pin(artifact.id, artifact.pinned == nil)
+                                await load()
+                            } catch {
+                                problem = error.localizedDescription
+                            }
+                        }
+                    } label: {
+                        if artifact.pinned == nil {
+                            Label(words.title, systemImage: words.symbol)
+                        } else {
+                            Label(words.title, systemImage: words.symbol).foregroundStyle(.tint)
                         }
                     }
-                } label: {
-                    Label(artifact.pinned == nil ? "Pin" : "Unpin", systemImage: artifact.pinned == nil ? "pin" : "pin.slash")
+                    .buttonStyle(CardActionStyle())
+                    .help(words.help)
                 }
-                .buttonStyle(CardActionStyle())
-                .help(artifact.pinned == nil ? "Pin it to the top" : artifact.pinned?.by == "bot" ? "Unpin (its bot marked it final)" : "Unpin")
                 // The file: in the panel's Files (a machine's from its box), this Mac's in Finder, a
                 // machine's saved to this Mac. One that's gone opens as the record keeps it.
                 let onMac = things.box.box == BoxClient.mac
@@ -1380,5 +1412,19 @@ private struct QuickLookPreview: NSViewRepresentable {
 
     func updateNSView(_ view: QLPreviewView, context: Context) {
         if (view.previewItem as? NSURL) as URL? != url { view.previewItem = url as NSURL }
+    }
+}
+
+/// What's kept at the top, as a small tinted capsule: "Final" (its bot's mark) or "Kept" (yours).
+private struct MarkBadge: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.tint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(.tint.opacity(0.14), in: .capsule)
     }
 }

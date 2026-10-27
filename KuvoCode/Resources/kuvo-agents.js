@@ -14028,7 +14028,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     if (typeof pinned !== "boolean")
       return message(400, "Say whether it's pinned (pinned).");
     const changed = await store.pin(artifact.id, pinned ? { by: "you", ...typeof note === "string" && note.trim() ? { note: note.trim() } : {} } : null);
-    return changed ? json5(clientArtifact(changed, store)) : message(409, "It couldn't be pinned now. Try again in a moment.");
+    return changed ? json5(clientArtifact(changed, store)) : message(409, "It couldn't be kept now. Try again in a moment.");
   }
   if (second === "restore") {
     if (method !== "POST")
@@ -19009,4 +19009,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 597dc62d05d50173901e8c12f082093d734e9af80c184e93ef3120ded01a716f
+// Built from Packages/Box/src/agents 03c1e0656f70e887aeb5ddfb88fbcb6e31697e13d9304c52ffe6224c83c211f2

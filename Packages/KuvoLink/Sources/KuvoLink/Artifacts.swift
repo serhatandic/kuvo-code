@@ -409,11 +409,22 @@ public enum ArtifactWords {
         return date.formatted(.dateTime.day().month(.abbreviated))
     }
 
-    /// A Shelf's sections, in order: what was marked final first, then memory, pages (and
-    /// documents wake-ups keep rewriting), documents, images, skills, downloads, and the rest last.
+    /// A Shelf's sections, in order: what's kept first (what you keep, and what its bot marked
+    /// final), then memory, pages (and documents wake-ups keep rewriting), documents, images,
+    /// skills, downloads, and the rest last.
     public enum Section: String, CaseIterable, Sendable {
-        case pinned = "Final", memory = "Memory", pages = "Pages", documents = "Documents", images = "Images", skills = "Skills", downloads = "Downloads", other = "Other Files"
+        case pinned = "Kept", memory = "Memory", pages = "Pages", documents = "Documents", images = "Images", skills = "Skills", downloads = "Downloads", other = "Other Files"
     }
+
+    /// What's kept reads as: "Final" for what its bot marked final (with its note), "Kept" for yours.
+    public static func mark(_ pin: Artifact.Pin) -> String {
+        pin.by == "bot" ? "Final" : "Kept"
+    }
+
+    /// Keeping something (`kuvo/artifacts/<id>/pin`): the button's words, its symbol and its help,
+    /// before and after.
+    public static let keep = (title: "Keep", symbol: "bookmark", help: "Keep this and all its versions, at the top")
+    public static let kept = (title: "Kept", symbol: "bookmark.fill", help: "Stop Keeping")
 
     public static func section(of artifact: ArtifactSummary) -> Section {
         if artifact.pinned != nil { return .pinned }

@@ -2441,7 +2441,7 @@ async function tool(name, args) {
       return text(`There's no file at ${full}.`, true);
     }
     if (!stat.isFile()) return text(`There's no file at ${full}.`, true);
-    return text(`Marked final: ${full}. It's pinned at the top of what you made, for the user.`);
+    return text(`Marked final: ${full}. It's kept at the top of what you made, for the user.`);
   }
 
   if (name === "browser_upload") {
