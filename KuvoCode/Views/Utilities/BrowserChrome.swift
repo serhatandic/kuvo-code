@@ -74,15 +74,8 @@ struct BrowserAddressField: View {
         .frame(height: 34)
         .background(Color.primary.opacity(0.06), in: .capsule)
         .overlay(alignment: .bottom) {
-            if isLoading {
-                GeometryReader { proxy in
-                    Capsule().fill(.tint)
-                        .frame(width: proxy.size.width * (progress ?? 1), height: 2)
-                        .opacity(progress == nil ? 0.6 : 1)
-                }
-                .frame(height: 2)
+            LoadingEdge(isLoading: isLoading, progress: progress)
                 .padding(.horizontal, 16)
-            }
         }
         .contentShape(.capsule)
         .onTapGesture { editing.wrappedValue = true }
@@ -251,5 +244,44 @@ struct BrowserDownloadBar<Detail: View, Actions: View>: View {
                 .help("Hide")
             }
         }
+    }
+}
+
+/// A page loading, along the address field's lower edge: the line rushes to where the page says it
+/// is, slows as it gets near, never goes back, and when the page is in it finishes and fades.
+/// Without a figure from the page it eases most of the way and waits there.
+private struct LoadingEdge: View {
+    let isLoading: Bool
+    let progress: Double?
+    @State private var shown = 0.0
+    @State private var isVisible = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        GeometryReader { proxy in
+            Capsule().fill(.tint)
+                .frame(width: proxy.size.width * shown, height: 2)
+        }
+        .frame(height: 2)
+        .opacity(isVisible ? 1 : 0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .onChange(of: isLoading, initial: true) { _, loading in
+            if loading {
+                shown = 0
+                isVisible = true
+                advance()
+            } else if isVisible {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { shown = 1 }
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.3).delay(0.25)) { isVisible = false }
+            }
+        }
+        .onChange(of: progress) { advance() }
+    }
+
+    private func advance() {
+        guard isLoading else { return }
+        let target = max(shown, progress.map { min(0.92, max($0, 0.15)) } ?? 0.7)
+        withAnimation(reduceMotion ? nil : .easeOut(duration: progress == nil ? 3 : 0.4)) { shown = target }
     }
 }
