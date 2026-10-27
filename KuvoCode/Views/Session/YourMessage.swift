@@ -22,8 +22,8 @@ struct YourMessage: View {
     var comments: [ReviewComment] = []
     /// The title of the widget it was sent from (`WidgetAnswer`).
     var widget: String?
-    /// How many of its first characters are the keyword it was sent with (`SentWithKeyword`).
-    var keyword: Int?
+    /// The keyword it was sent with, as typed (`SentWithKeyword`), drawn in front of its words.
+    var keyword: String?
     let sent: Date
     /// Sent from your iPhone.
     var fromPhone = false
@@ -54,7 +54,7 @@ struct YourMessage: View {
     private var spoken: String {
         let parts = (widget.map { ["From \(WidgetAnswer.name($0))"] } ?? [])
             + comments.map { "Comment on \($0.location): \($0.text)" }
-            + [text].filter { !$0.isEmpty }
+            + [keyword.map { $0 + " " + text } ?? text].filter { !$0.isEmpty }
             + (attachments.isEmpty ? [] : [attachments.count == 1 ? "1 attachment" : "\(attachments.count) attachments"])
         return "You: " + parts.joined(separator: ". ")
     }

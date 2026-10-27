@@ -797,10 +797,10 @@ struct UserBubble: View {
     var comments: [ReviewComment] = []
     /// The title of the widget it was sent from (`WidgetAnswer`), which shows over it.
     var widget: String?
-    /// How many of its first characters are the keyword it was sent with (`SentWithKeyword`),
-    /// drawn as the composer drew it: its mark for the "/", the rest in bold, in the accent
-    /// (Plan's orange).
-    var keyword: Int?
+    /// The keyword it was sent with, as typed (`SentWithKeyword`), drawn in front of its words (of
+    /// its answer, after what it quotes) as the composer drew it: its mark for the "/", the rest
+    /// in bold, in the accent (Plan's orange).
+    var keyword: String?
     var status: String?
     @Environment(\.findHighlight) private var highlight
     @Environment(AppModel.self) private var app
@@ -866,9 +866,9 @@ struct UserBubble: View {
                         QuoteBlock(text: parts[index].text)
                             .frame(maxWidth: 420, alignment: .trailing)
                             .padding(.top, index == 0 ? 0 : 6)
-                    } else if index == 0, let keyword, keyword <= parts[index].text.count {
+                    } else if let keyword, index == parts.firstIndex(where: { !$0.isQuote }) {
                         let part = parts[index].text
-                        MessageText(text: part, styled: MessageMentions.keyword(keyword, in: styled(part, agents: agents) ?? AttributedString(part)))
+                        MessageText(text: keyword + " " + part, styled: MessageMentions.keyword(keyword, before: styled(part, agents: agents) ?? AttributedString(part)))
                     } else {
                         MessageText(text: parts[index].text, styled: styled(parts[index].text, agents: agents))
                     }
