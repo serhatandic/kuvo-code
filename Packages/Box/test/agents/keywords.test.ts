@@ -524,7 +524,7 @@ describe("a review with fresh eyes", () => {
     // How much it would read, before it's asked for (the branch: its two files and the new lock file).
     engine.directory = folder
     const reviews = new Reviews(join(root, "reviews.json"), places())
-    const measure = async (scope: any) => (await (await reviewRoutes(reviews, "POST", ["ses_work", "measure"], async () => ({ scope }))).json()).data
+    const measure = async (scope: any) => (await (await reviewRoutes(reviews, "POST", ["ses_work", "measure"], async () => ({ scope }))).json() as any).data
     expect(await measure({ kind: "project" })).toEqual({ files: 3, parts: 1, leftOut: 0 })
     expect(await measure({ kind: "branch" })).toEqual({ files: 3, parts: 1, leftOut: 0 })
     reviews.stopAll()
