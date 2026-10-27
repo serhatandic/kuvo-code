@@ -17,8 +17,10 @@ interface PromptFile { uri?: unknown; name?: unknown }
 
 // `body` with its inline files kept on the box and only what the model reads left as files;
 // anything else as it is. A note the message ends with already joins this one only when it's the
-// Mac's own (`joinsNote`), never words a phone's message ends with.
-export async function attachedIn(body: Buffer | undefined, session: string, modelInput: ModelInput, joinsNote = false): Promise<Buffer | undefined> {
+// Mac's own (`joinsNote`), never words a phone's message ends with. When the model's input can't
+// be found out, a PDF or a picture goes to it anyway (`guesses`), except for the coding agents,
+// who open files from where they're kept.
+export async function attachedIn(body: Buffer | undefined, session: string, modelInput: ModelInput, joinsNote = false, guesses = true): Promise<Buffer | undefined> {
   let prompt: { text?: unknown; files?: unknown } | null;
   try { prompt = JSON.parse(Buffer.from(body ?? "").toString()); } catch { return body; }
   if (!prompt || !Array.isArray(prompt.files)) return body;
@@ -35,8 +37,10 @@ export async function attachedIn(body: Buffer | undefined, session: string, mode
       continue;
     }
     const saved = save(attachments, data.bytes, typeof file.name === "string" ? file.name : "");
-    if (reads(data.mime, data.bytes.length, input)) {
-      sent.push(file);
+    if (reads(data.mime, data.bytes.length, input, guesses)) {
+      // Text the engine reads as words only when it's `text/plain`; any other type goes to the
+      // model as a file it can't open (Markdown, JSON).
+      sent.push(isText(data.mime) && data.mime !== "text/plain" ? { ...file, uri: `data:text/plain;base64,${data.bytes.toString("base64")}` } : file);
       if (saved) included.push(saved);
     } else if (saved) {
       paths.push(saved);
@@ -62,12 +66,16 @@ const MODEL_BYTES = 20 * 1024 * 1024;
 // Kinds of text that aren't `text/…` by their type.
 const TEXT_TYPES = new Set(["application/json", "application/javascript", "application/xml", "application/x-yaml", "application/yaml", "application/toml", "application/x-sh", "application/sql"]);
 
-// Whether a model with `input` reads a file of type `mime`, `size` bytes, as it is.
-function reads(mime: string, size: number, input: string[] | null): boolean {
+// Whether a file of type `mime` is words.
+const isText = (mime: string): boolean => mime.startsWith("text/") || TEXT_TYPES.has(mime);
+
+// Whether a model with `input` reads a file of type `mime`, `size` bytes, as it is; one whose
+// input isn't known, as `guess` says.
+function reads(mime: string, size: number, input: string[] | null, guess: boolean): boolean {
   if (size > MODEL_BYTES) return false;
-  if (mime.startsWith("text/") || TEXT_TYPES.has(mime)) return true;
-  if (mime === "application/pdf") return input?.includes("pdf") ?? true;
-  if (mime.startsWith("image/")) return input?.includes("image") ?? true;
+  if (isText(mime)) return true;
+  if (mime === "application/pdf") return input?.includes("pdf") ?? guess;
+  if (mime.startsWith("image/")) return input?.includes("image") ?? guess;
   return false;
 }
 
