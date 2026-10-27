@@ -12,7 +12,7 @@ import type { AnswerPiece, LinkRequest, RouteContext } from "../server/context";
 // rule of what can be: passed on as it answers.
 export const GROUP_ROUTE = /^kuvo\/groups(?:\/(events|joinable|grp_[a-z0-9]+(?:\/(?:events|stop|keep-going|viewed|undo|start))?))?$/;
 
-// What the bridge's own group chat API (`/api/kuvo/groups…`, Agents/src/groups/routes.ts) answers
+// What the bridge's own group chat API (`/api/kuvo/groups…`, src/agents/groups/routes.ts) answers
 // is the asker's to say (`Value`), with its status as it came; anything that isn't JSON comes as {}.
 export async function askGroups<Value = unknown>(target: Target, method: string, route: string, body: unknown, signal: AbortSignal | undefined): Promise<{ status: number; value: Value }> {
   const response = await fetch(`http://127.0.0.1:${target.port}/api/kuvo/groups${route}`, {

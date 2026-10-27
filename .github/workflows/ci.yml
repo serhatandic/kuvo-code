@@ -56,7 +56,7 @@ jobs:
         with:
           bun-version: 1.4.2
 
-      - name: Test the box's code, and check its link and its routes' shapes are built from it
+      - name: Test the box's code (its link and the coding agents' bridge), and check its link and its routes' shapes are built from it
         working-directory: Packages/Box
         env:
           BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0"
@@ -72,15 +72,6 @@ jobs:
         run: |
           swift test
           node --test Tests/Bridge/*.test.js
-
-      - name: Test the coding agents' bridge
-        working-directory: Agents
-        env:
-          BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0"
-        run: |
-          bun install --frozen-lockfile
-          bun run check
-          bun test
 
       - name: Check the bridge the app ships is built from its sources
         run: ./scripts/build-agents.sh --check

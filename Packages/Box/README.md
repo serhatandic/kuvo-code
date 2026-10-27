@@ -6,8 +6,8 @@ It's two programs of ours, built from this one TypeScript package:
 - **the link** (`src/link`), built to `Packages/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js`,
   which the Mac app puts on each machine and runs as this Mac's own box (`kuvo-link.js serve`): the
   relay, phones and peers, signed documents, mail, notices, updates, and the box's own routes;
-- **the agents bridge** (`Agents/src` for now, moving to `src/agents`), built to
-  `KuvoCode/Resources/kuvo-agents.js`: the coding agents, group chats and goals.
+- **the agents bridge** (`src/agents`), built to `KuvoCode/Resources/kuvo-agents.js`, which the
+  app ships and each box runs with the engine's Bun: the coding agents, group chats and goals.
 
 They stay two processes. The link has to stay up while the engine or the agents bridge is down. It
 runs the box's self-update, which replaces the agents bridge's files. And an older Mac starts the
@@ -18,18 +18,22 @@ The protocol is `Packages/KuvoLink/PROTOCOL.md`. Code that's there only for rele
 
 ## Building
 
-After changing anything in `src`, run `scripts/build-box.sh` and commit `kuvo-link.js` with it. It
-builds with the Bun CI has (1.4.2), so every computer builds the same file, and CI fails when the
-file isn't what the sources build, byte for byte (`build-box.sh --check`).
+After changing anything in `src/link` or `src/shared`, run `scripts/build-box.sh` and commit
+`kuvo-link.js` with it. It builds with the Bun CI has (1.4.2), so every computer builds the same
+file, and CI fails when the file isn't what the sources build, byte for byte (`build-box.sh
+--check`). After changing `src/agents` (or `src/shared`), run `scripts/build-agents.sh` and commit
+`kuvo-agents.js`; its last line names what it was built from, which CI checks (`build-agents.sh
+--check`). `bun run build` runs both.
 
-`bun install --frozen-lockfile` here, then `bun run check` type-checks what's typed (Node's types:
-it must run on Node too), and `bun test` runs its own tests. The lockfile is Bun 1.4.2's too, which
+`bun install --frozen-lockfile` here, then `bun run check` type-checks the link with Node's types
+(it must run on Node too) and the agents bridge with Bun's (`tsconfig.agents.json`: it runs only on
+Bun), and `bun test` runs the tests of both (`test/agents` for the agents bridge's). The lockfile is Bun 1.4.2's too, which
 an older Bun refuses (`lockfile had changes`): install with that Bun, or with the engine of a demo,
 perf or e2e copy, which is that Bun (`BUN_BE_BUN=1 <the copy's engine/<version>/opencode> install
 --frozen-lockfile`), never the real Kuvo Code's.
 
-In a debug build of the app, `KUVO_BOX_SCRIPT` can name `src/link/main.ts` itself, which the
-engine's Bun runs as it is.
+In a debug build of the app, `KUVO_BOX_SCRIPT` can name `src/link/main.ts` itself, and
+`KUVO_AGENTS_SCRIPT` `src/agents/main.ts`, which the engine's Bun runs as they are.
 
 The bundle targets Node as well as Bun: the bridge's tests (`Packages/KuvoLink/Tests/Bridge`, `node
 --test`) import it, and machines run it with the engine's Bun. So it uses Node's modules, never
@@ -67,4 +71,11 @@ src/link/
                  groups, config, accounts, asks, artifacts, folders, plugins…
   notices/ updates/ host-interface.ts keeper.ts
   compat/        what's only for released Macs, where it's a whole thing
+src/agents/
+  main.ts server.ts   the bridge: the engine's own API for the app, over HTTP
+  sessions.ts store.ts turn.ts …   its sessions, kept, and a turn's run
+  agents/        each coding agent: Claude Code, Codex, Cursor, Grok and Antigravity (the last
+                 two through acp.ts, the Agent Client Protocol)
+  groups/        group chats: their rules, store, runner, and peers on other boxes
+  artifacts/     what agents made, for the Artifacts view
 ```

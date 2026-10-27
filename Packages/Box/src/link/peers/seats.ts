@@ -1,6 +1,6 @@
 // Group chats across your computers (PROTOCOL.md, "Peers": `seat`)
 // The coding agents' bridge here runs this box's group chats, and its bots' turns in chats on your
-// other computers (Agents/src/groups/peer.ts). This link carries what goes between them: what the
+// other computers (src/agents/groups/peer.ts). This link carries what goes between them: what the
 // bridge sends, now (a turn, how it goes) or until it's there (a part of the work, its report, what
 // a bot remembers, a seat gone: as letters go, resent each minute until `delivered`); in parts
 // when it's big, as documents go; and what comes, to the bridge. Who your other computers are and
@@ -28,7 +28,7 @@ import type { LinkState } from "../state";
 import type { MailSender, Peer } from "./known";
 
 // What the coding agents' bridge sends and takes, as this link handles it. The bridge defines them
-// (Agents/src/groups/peer.ts and post.ts); these follow its shapes as far as the link reads them.
+// (src/agents/groups/peer.ts and post.ts); these follow its shapes as far as the link reads them.
 
 /** The kinds of mail between two computers' bridges for their group chats (the bridge's `SeatMail`). */
 export type SeatMailKind = "turn" | "state" | "result" | "steer" | "stop" | "drop" | "work" | "report" | "memory";

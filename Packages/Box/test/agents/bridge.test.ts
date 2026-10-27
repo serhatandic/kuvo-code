@@ -2,24 +2,24 @@ import { describe, expect, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { subscribe } from "../src/events"
-import { Store } from "../src/store"
-import { Turn } from "../src/turn"
-import { noTokens, type ServerEvent } from "../src/wire"
-import { unwrapShell } from "../src/agents/codex"
-import { fileDiff, fromPatch, unified } from "../src/diff"
-import { messageID, newID } from "../src/ids"
-import { compareVersions, homebrewKeg, install, npmGlobalPrefix, versionIn } from "../src/maintenance"
-import { evaluate, matches } from "../src/rules"
-import { handover } from "../src/handover"
-import { EngineAgent, EngineLink } from "../src/engine"
-import { generatedImages } from "../src/agents/antigravity"
-import { kuvoToolName, loadKuvoTools, setToolServer } from "../src/kuvotools"
-import { pictureData, pictureFile, withPictures } from "../src/pictures"
-import { expandCommand } from "../src/server"
-import { commandParts, parseCommands, withTextFiles } from "../src/sessions"
-import { refreshLoginPath, which } from "../src/proc"
-import { commandSignIn } from "../src/signin"
+import { subscribe } from "../../src/agents/events"
+import { Store } from "../../src/agents/store"
+import { Turn } from "../../src/agents/turn"
+import { noTokens, type ServerEvent } from "../../src/agents/wire"
+import { unwrapShell } from "../../src/agents/agents/codex"
+import { fileDiff, fromPatch, unified } from "../../src/agents/diff"
+import { messageID, newID } from "../../src/agents/ids"
+import { compareVersions, homebrewKeg, install, npmGlobalPrefix, versionIn } from "../../src/agents/maintenance"
+import { evaluate, matches } from "../../src/agents/rules"
+import { handover } from "../../src/agents/handover"
+import { EngineAgent, EngineLink } from "../../src/agents/engine"
+import { generatedImages } from "../../src/agents/agents/antigravity"
+import { kuvoToolName, loadKuvoTools, setToolServer } from "../../src/agents/kuvotools"
+import { pictureData, pictureFile, withPictures } from "../../src/agents/pictures"
+import { expandCommand } from "../../src/agents/server"
+import { commandParts, parseCommands, withTextFiles } from "../../src/agents/sessions"
+import { refreshLoginPath, which } from "../../src/agents/proc"
+import { commandSignIn } from "../../src/agents/signin"
 
 describe("diffs", () => {
   test("a changed line, with the lines around it", () => {
@@ -612,7 +612,7 @@ describe("pictures", () => {
 
 describe("Cursor's results", () => {
   test("a running command's output, as its SDK sends it, and results it used to drop", async () => {
-    const { cursorToolResult, shellChunk } = await import("../src/agents/cursor")
+    const { cursorToolResult, shellChunk } = await import("../../src/agents/agents/cursor")
     expect(shellChunk({ case: "stdout", value: { data: "building…\n" } })).toBe("building…\n")
     expect(shellChunk({ case: "exit", value: { code: 0 } })).toBe("")
     expect(cursorToolResult({ type: "grep", args: {} }, { workspaceResults: { "/p": { type: "content", output: { matches: [{ file: "a.ts", lineNumber: 3, content: "let x" }] } } } }).output).toBe("a.ts: 3: let x")

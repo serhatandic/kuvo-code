@@ -4,12 +4,12 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:tes
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { CodexAgent } from "../src/agents/codex"
-import { Auto } from "../src/auto"
-import type { Roster } from "../src/roster"
-import { Sessions } from "../src/sessions"
-import { Store } from "../src/store"
-import type { Message, PermissionRule } from "../src/wire"
+import { CodexAgent } from "../../src/agents/agents/codex"
+import { Auto } from "../../src/agents/auto"
+import type { Roster } from "../../src/agents/roster"
+import { Sessions } from "../../src/agents/sessions"
+import { Store } from "../../src/agents/store"
+import type { Message, PermissionRule } from "../../src/agents/wire"
 
 const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-codex-test-"))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
@@ -202,7 +202,7 @@ describe("Codex's reply and its steps", () => {
     // (Codex gives a new file's whole text, and an edit's unified diff.)
     const changes = [
       { path: sum, kind: { type: "update", move_path: null }, diff: "@@ -1,3 +1,3 @@\n export function sum(a: number, b: number) {\n-  return a - b\n+  return a + b\n }\n" },
-      { path: added, kind: { type: "add" }, diff: 'import { sum } from "../src/sum"\n\nexpect(sum(1, 2)).toBe(3)\n' },
+      { path: added, kind: { type: "add" }, diff: 'import { sum } from "../../src/agents/sum"\n\nexpect(sum(1, 2)).toBe(3)\n' },
     ]
     const id = await run([
       ["item/reasoning/summaryTextDelta", { itemId: "r1", delta: "Checking the tests first." }],

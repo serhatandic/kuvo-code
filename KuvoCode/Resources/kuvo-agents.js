@@ -1,14 +1,14 @@
 // @bun
-// Agents/src/main.ts
+// Packages/Box/src/agents/main.ts
 import { mkdirSync as mkdirSync16, readdirSync as readdirSync12, readFileSync as readFileSync26, renameSync as renameSync12, rmSync as rmSync13, writeFileSync as writeFileSync18 } from "fs";
 import { join as join24 } from "path";
 
-// Agents/src/accounts.ts
+// Packages/Box/src/agents/accounts.ts
 import { randomBytes } from "crypto";
 import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "fs";
 import { join as join2 } from "path";
 
-// Agents/src/machine.ts
+// Packages/Box/src/agents/machine.ts
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 var onMachine = process.env.KUVO_AGENTS_REMOTE === "1";
@@ -105,7 +105,7 @@ function dropCarriedSignIns(home) {
   visit(home, 0);
 }
 
-// Agents/src/accounts.ts
+// Packages/Box/src/agents/accounts.ts
 var kinds = ["claude", "codex", "cursor", "grok", "antigravity"];
 var baseProvider = {
   claude: "claude-code",
@@ -182,19 +182,19 @@ class Accounts {
   }
 }
 
-// Agents/src/artifacts/record.ts
+// Packages/Box/src/agents/artifacts/record.ts
 import { sep as sep7 } from "path";
 
-// Agents/src/artifacts/folders.ts
+// Packages/Box/src/agents/artifacts/folders.ts
 import { readdirSync as readdirSync4, readFileSync as readFileSync4, statSync as statSync4, watch } from "fs";
 import { join as join5, relative as relative2, sep as sep5 } from "path";
 
-// Agents/src/artifacts/store.ts
+// Packages/Box/src/agents/artifacts/store.ts
 import { createHash, createHmac, randomBytes as randomBytes2 } from "crypto";
 import { appendFileSync, chmodSync, existsSync as existsSync2, mkdirSync as mkdirSync3, readdirSync as readdirSync2, readFileSync as readFileSync3, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync2, writeFileSync as writeFileSync3 } from "fs";
 import { basename as basename3, join as join3, sep as sep3 } from "path";
 
-// Agents/src/diff.ts
+// Packages/Box/src/agents/diff.ts
 var searchLimit = 2000;
 function edits(a, b) {
   let start = 0;
@@ -368,7 +368,7 @@ function fromPatch(path, patch, status) {
   return { file: path, patch: headed, additions, deletions, status: status ?? "modified" };
 }
 
-// Agents/src/artifacts/kinds.ts
+// Packages/Box/src/agents/artifacts/kinds.ts
 import { basename, extname, sep } from "path";
 var images = new Set(["png", "jpg", "jpeg", "gif", "webp", "heic", "svg", "bmp", "tiff"]);
 var documents = new Set(["md", "markdown", "txt", "pdf", "docx", "doc", "rtf", "pages", "csv", "tsv", "xlsx", "xls", "numbers", "pptx", "key", "odt", "ods"]);
@@ -443,7 +443,7 @@ function kindOf(path, { bots, download = false } = {}) {
   return binaries.has(ext) ? "file" : "code";
 }
 
-// Agents/src/artifacts/policy.ts
+// Packages/Box/src/agents/artifacts/policy.ts
 import { spawnSync } from "child_process";
 import { existsSync, statfsSync } from "fs";
 import { basename as basename2, dirname, relative, sep as sep2 } from "path";
@@ -521,7 +521,7 @@ function freeSpace(folder) {
   }
 }
 
-// Agents/src/artifacts/store.ts
+// Packages/Box/src/agents/artifacts/store.ts
 var copyLimit = 25 * 1024 * 1024;
 var defaultBudget = 1024 * 1024 * 1024;
 var lineLimit = 1024 * 1024;
@@ -1095,7 +1095,7 @@ function summary(artifact) {
   return { ...header2, versions: versions.filter((version) => !version.before).length, latest: versions.at(-1) };
 }
 
-// Agents/src/artifacts/turnfiles.ts
+// Packages/Box/src/agents/artifacts/turnfiles.ts
 import { spawnSync as spawnSync2 } from "child_process";
 import { existsSync as existsSync3, readdirSync as readdirSync3, statSync as statSync3 } from "fs";
 import { dirname as dirname2, join as join4, sep as sep4 } from "path";
@@ -1185,7 +1185,7 @@ function walk(folder) {
   return files;
 }
 
-// Agents/src/artifacts/folders.ts
+// Packages/Box/src/agents/artifacts/folders.ts
 function recordable(path) {
   const parts = path.split(sep5);
   if (!parts[0]?.startsWith("bot_") || parts.length < 2)
@@ -1391,12 +1391,12 @@ function walk2(folder, limit) {
   return found;
 }
 
-// Agents/src/artifacts/recorder.ts
+// Packages/Box/src/agents/artifacts/recorder.ts
 import { readdirSync as readdirSync5, readFileSync as readFileSync5 } from "fs";
 import { isAbsolute, join as join6, relative as relative3, resolve, sep as sep6 } from "path";
 import { fileURLToPath } from "url";
 
-// Agents/src/artifacts/changes.ts
+// Packages/Box/src/agents/artifacts/changes.ts
 var around = 3;
 var rewritten = 0.6;
 function changes(before, after, prose) {
@@ -1574,7 +1574,7 @@ function parse(patch) {
   return hunks;
 }
 
-// Agents/src/artifacts/recorder.ts
+// Packages/Box/src/agents/artifacts/recorder.ts
 var writes = new Set(["write", "Write", "create", "write_file"]);
 var makers = new Set(["generate_image", "browser_screenshot"]);
 var wakeMarker = "[Wake-up] ";
@@ -1853,7 +1853,7 @@ function toolName(name) {
   return name;
 }
 
-// Agents/src/artifacts/record.ts
+// Packages/Box/src/agents/artifacts/record.ts
 function record(store, { bots, watch: watch2 = true, settle = 1000 } = {}) {
   let folders;
   const recorder = new Recorder(store, {
@@ -1874,11 +1874,11 @@ function record(store, { bots, watch: watch2 = true, settle = 1000 } = {}) {
   return { recorder, folders };
 }
 
-// Agents/src/auto.ts
+// Packages/Box/src/agents/auto.ts
 import { mkdirSync as mkdirSync4, readFileSync as readFileSync6, renameSync as renameSync3, writeFileSync as writeFileSync4 } from "fs";
 import { join as join7 } from "path";
 
-// Agents/src/ids.ts
+// Packages/Box/src/agents/ids.ts
 var alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 var last = { timestamp: 0, counter: 0 };
 function ascending() {
@@ -1897,7 +1897,7 @@ function ascending() {
 var newID = (prefix) => `${prefix}_${ascending()}`;
 var messageID = (eventID) => "msg_" + eventID.slice("evt_".length);
 
-// Agents/src/events.ts
+// Packages/Box/src/agents/events.ts
 var listeners = new Set;
 function emit(type, data, directory) {
   const event = { id: newID("evt"), type, created: Date.now(), data };
@@ -1951,7 +1951,7 @@ function feed() {
   });
 }
 
-// Agents/src/auto.ts
+// Packages/Box/src/agents/auto.ts
 var autoProvider = "auto";
 var firstList = "auto";
 var unknownReset = 30 * 60000;
@@ -2096,7 +2096,7 @@ function resetTime(at) {
   return `${date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone })}, ${time}`;
 }
 
-// Agents/src/deps.ts
+// Packages/Box/src/agents/deps.ts
 import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync7, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "fs";
 import { join as join8 } from "path";
 var installing = new Map;
@@ -2169,11 +2169,11 @@ function installedVersion(folder, name) {
   }
 }
 
-// Agents/src/engine.ts
+// Packages/Box/src/agents/engine.ts
 import { readFileSync as readFileSync8 } from "fs";
 import { join as join9 } from "path";
 
-// Agents/src/agent.ts
+// Packages/Box/src/agents/agent.ts
 class ContextWindows {
   sizes = new Map;
   get(model) {
@@ -2211,7 +2211,7 @@ function failure(error, type = "agent") {
   return { type, message: message || "The agent stopped with an error." };
 }
 
-// Agents/src/engine.ts
+// Packages/Box/src/agents/engine.ts
 class EngineLink {
   url;
   authorization;
@@ -2847,10 +2847,10 @@ function limitOf(error) {
   return;
 }
 
-// Agents/src/goals.ts
+// Packages/Box/src/agents/goals.ts
 import { readFileSync as readFileSync9, renameSync as renameSync4, writeFileSync as writeFileSync6 } from "fs";
 
-// Agents/src/oneoff.ts
+// Packages/Box/src/agents/oneoff.ts
 var at = (session) => "/api/session/" + encodeURIComponent(session);
 async function sessionInfo(api, session) {
   const data = (await api.request("GET", at(session)))?.data ?? {};
@@ -2913,7 +2913,7 @@ function line(text2, limit = 140) {
   return first.length > limit ? first.slice(0, limit - 1).trimEnd() + "\u2026" : first;
 }
 
-// Agents/src/goals.ts
+// Packages/Box/src/agents/goals.ts
 var conditionLimit = 4000;
 var quietLimit = 3;
 var turnLimit = 100;
@@ -3418,7 +3418,7 @@ async function goalRoutes(goals, method, parts, body) {
   }
 }
 
-// Agents/src/btw.ts
+// Packages/Box/src/agents/btw.ts
 import { readFileSync as readFileSync10, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "fs";
 var questionLimit = 4000;
 var keptLimit = 100;
@@ -3604,7 +3604,7 @@ async function sideQuestionRoutes(questions, method, parts, body) {
   }
 }
 
-// Agents/src/handoff.ts
+// Packages/Box/src/agents/handoff.ts
 var handoffMarker = "[Handoff] ";
 
 class HandoffError extends Error {
@@ -3752,11 +3752,11 @@ async function handoffRoutes(handoffs, method, parts, body) {
   }
 }
 
-// Agents/src/reviews.ts
+// Packages/Box/src/agents/reviews.ts
 import { lstatSync, readFileSync as readFileSync11, renameSync as renameSync6, writeFileSync as writeFileSync8 } from "fs";
 import { join as join11 } from "path";
 
-// Agents/src/proc.ts
+// Packages/Box/src/agents/proc.ts
 import { spawn } from "child_process";
 import { accessSync, constants } from "fs";
 import { delimiter, join as join10 } from "path";
@@ -3871,7 +3871,7 @@ function plain(text2) {
   return text2.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, "");
 }
 
-// Agents/src/reviews.ts
+// Packages/Box/src/agents/reviews.ts
 var diffLimit = 80000;
 var newFileLimit = 256000;
 
@@ -4114,7 +4114,7 @@ async function reviewRoutes(reviews, method, parts, body) {
   }
 }
 
-// Agents/src/kuvotools.ts
+// Packages/Box/src/agents/kuvotools.ts
 import { spawn as spawn2 } from "child_process";
 var server;
 var program;
@@ -4224,7 +4224,7 @@ function kuvoToolName(name, args) {
   return Object.keys(args).every((key) => known.has(key)) ? `${toolServerName}_${name}` : undefined;
 }
 
-// Agents/src/snapshots.ts
+// Packages/Box/src/agents/snapshots.ts
 import { createHash as createHash2 } from "crypto";
 import { existsSync as existsSync5, lstatSync as lstatSync2, mkdirSync as mkdirSync6, readdirSync as readdirSync6, readFileSync as readFileSync12, realpathSync, rmdirSync, rmSync as rmSync5, writeFileSync as writeFileSync9 } from "fs";
 import { dirname as dirname3, join as join12, relative as relative4, resolve as resolve2, sep as sep8 } from "path";
@@ -4482,17 +4482,17 @@ function ancestors(path) {
   return parts.map((_, index) => parts.slice(0, index + 1).join("/"));
 }
 
-// Agents/src/agents/antigravity.ts
+// Packages/Box/src/agents/agents/antigravity.ts
 import { createHash as createHash4 } from "crypto";
 import { chmodSync as chmodSync3, existsSync as existsSync9, mkdirSync as mkdirSync10, readdirSync as readdirSync8, readFileSync as readFileSync16, renameSync as renameSync8, rmSync as rmSync8, statSync as statSync6, writeFileSync as writeFileSync13 } from "fs";
 import { join as join15 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
 
-// Agents/src/acp.ts
+// Packages/Box/src/agents/acp.ts
 import { existsSync as existsSync6, mkdirSync as mkdirSync7, readFileSync as readFileSync13, writeFileSync as writeFileSync10 } from "fs";
 import { dirname as dirname4, resolve as resolve3 } from "path";
 
-// Agents/src/rpc.ts
+// Packages/Box/src/agents/rpc.ts
 class RPCError extends Error {
   code;
   data;
@@ -4637,7 +4637,7 @@ class RPC {
   }
 }
 
-// Agents/src/pictures.ts
+// Packages/Box/src/agents/pictures.ts
 import { extname as extname2 } from "path";
 import { pathToFileURL } from "url";
 var types2 = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".heic": "image/heic" };
@@ -4659,7 +4659,7 @@ function withPictures(text2, pictures) {
   return files.length ? [{ type: "text", text: text2 }, ...files] : text2;
 }
 
-// Agents/src/forms.ts
+// Packages/Box/src/agents/forms.ts
 function elicitationField(key, field, required) {
   const title = field?.title ?? key;
   const description = field?.description ?? undefined;
@@ -4674,7 +4674,7 @@ function elicitationField(key, field, required) {
   return { key, title, description, required, type: "string", options, custom: !options, ...field?.format === "password" ? { format: "password" } : {} };
 }
 
-// Agents/src/acp.ts
+// Packages/Box/src/agents/acp.ts
 var outputLimit2 = 30000;
 var limitWords = /RESOURCE_EXHAUSTED|usage limit (?:reached|exceeded)|quota exceeded|exceeded your (?:current )?quota|rate limit exceeded|too many requests/i;
 var acpTiming = { ownQuiet: 20000, signInGrace: 60000 };
@@ -5633,7 +5633,7 @@ function questionFields(questions) {
   }));
 }
 
-// Agents/src/signin.ts
+// Packages/Box/src/agents/signin.ts
 import { chmodSync as chmodSync2, existsSync as existsSync7, mkdirSync as mkdirSync8, readFileSync as readFileSync14, rmSync as rmSync6, writeFileSync as writeFileSync11 } from "fs";
 import { join as join13 } from "path";
 function catcher(temporary) {
@@ -5763,7 +5763,7 @@ function lastLines(text2) {
 `).trim();
 }
 
-// Agents/src/skills.ts
+// Packages/Box/src/agents/skills.ts
 import { createHash as createHash3 } from "crypto";
 import { cpSync, existsSync as existsSync8, mkdirSync as mkdirSync9, readdirSync as readdirSync7, readFileSync as readFileSync15, renameSync as renameSync7, rmSync as rmSync7, statSync as statSync5, symlinkSync, utimesSync, writeFileSync as writeFileSync12 } from "fs";
 import { dirname as dirname5, join as join14, resolve as resolve4, sep as sep9 } from "path";
@@ -5967,7 +5967,7 @@ function copySkillsInto(folder, skills) {
   return list.length ? createHash3("sha256").update(JSON.stringify(after)).digest("hex").slice(0, 16) : undefined;
 }
 
-// Agents/src/agents/antigravity.ts
+// Packages/Box/src/agents/agents/antigravity.ts
 var version = "1.3.0";
 var releases = {
   "darwin-arm64": {
@@ -6603,14 +6603,14 @@ function unzipper() {
   };
 }
 
-// Agents/src/agents/claude.ts
+// Packages/Box/src/agents/agents/claude.ts
 import { randomUUID } from "crypto";
 import { existsSync as existsSync11, readFileSync as readFileSync17, statSync as statSync7 } from "fs";
 import { homedir } from "os";
 import { join as join17 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
 
-// Agents/src/maintenance.ts
+// Packages/Box/src/agents/maintenance.ts
 import { existsSync as existsSync10, realpathSync as realpathSync2 } from "fs";
 import { basename as basename4, join as join16 } from "path";
 var checked = new Map;
@@ -6804,7 +6804,7 @@ function homebrewLatest(json5, cask) {
   }
 }
 
-// Agents/src/queue.ts
+// Packages/Box/src/agents/queue.ts
 class Queue {
   items = [];
   waiting;
@@ -6842,7 +6842,7 @@ class Queue {
   }
 }
 
-// Agents/src/shells.ts
+// Packages/Box/src/agents/shells.ts
 var kept = new Map;
 var keptAfter = 10 * 60000;
 function addShell(sessionID, directory, command, output, stop) {
@@ -6891,7 +6891,7 @@ async function stopShell(id) {
   return true;
 }
 
-// Agents/src/agents/claude.ts
+// Packages/Box/src/agents/agents/claude.ts
 var SDK = [{ name: "@anthropic-ai/claude-agent-sdk", version: "0.3.303" }];
 var places = [join17(homedir(), ".local/bin"), join17(homedir(), ".claude/local"), "/opt/homebrew/bin", "/usr/local/bin"];
 var outputLimit3 = 30000;
@@ -8311,7 +8311,7 @@ function safeBase642(path) {
   }
 }
 
-// Agents/src/agents/codex.ts
+// Packages/Box/src/agents/agents/codex.ts
 import { existsSync as existsSync12, lstatSync as lstatSync3, mkdirSync as mkdirSync11, readdirSync as readdirSync9, readFileSync as readFileSync18, readlinkSync, rmSync as rmSync9, symlinkSync as symlinkSync2 } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join18 } from "path";
@@ -9816,7 +9816,7 @@ function firstLine2(text2) {
   return line3.length > 80 ? line3.slice(0, 79) + "\u2026" : line3;
 }
 
-// Agents/src/agents/cursor.ts
+// Packages/Box/src/agents/agents/cursor.ts
 import { existsSync as existsSync13, mkdirSync as mkdirSync12, readFileSync as readFileSync19, rmSync as rmSync10 } from "fs";
 import { homedir as homedir3 } from "os";
 import { join as join19 } from "path";
@@ -10482,7 +10482,7 @@ function withTimeout2(promise, milliseconds) {
   return Promise.race([promise, Bun.sleep(milliseconds).then(() => Promise.reject(new Error("Cursor didn't answer in time.")))]);
 }
 
-// Agents/src/agents/grok.ts
+// Packages/Box/src/agents/agents/grok.ts
 import { homedir as homedir4 } from "os";
 import { mkdirSync as mkdirSync13, readFileSync as readFileSync20, writeFileSync as writeFileSync14 } from "fs";
 import { dirname as dirname6, join as join20 } from "path";
@@ -10700,7 +10700,7 @@ class GrokAgent {
   }
 }
 
-// Agents/src/roster.ts
+// Packages/Box/src/agents/roster.ts
 class Roster {
   accounts;
   context;
@@ -10752,7 +10752,7 @@ class Roster {
   }
 }
 
-// Agents/src/sessions.ts
+// Packages/Box/src/agents/sessions.ts
 import { createHash as createHash5 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
 import { readFileSync as readFileSync21, statSync as statSync8 } from "fs";
@@ -10760,7 +10760,7 @@ import { homedir as homedir5 } from "os";
 import { dirname as dirname7, join as join21, resolve as resolve5 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 
-// Agents/src/handover.ts
+// Packages/Box/src/agents/handover.ts
 var budget = 16000;
 var outputLimit6 = 2000;
 function items(messages2, names, partway = false) {
@@ -10882,7 +10882,7 @@ User message:
 ${text2}` : text2;
 }
 
-// Agents/src/rules.ts
+// Packages/Box/src/agents/rules.ts
 function matches(pattern, value) {
   if (pattern === "*" || pattern === value)
     return true;
@@ -10906,10 +10906,10 @@ function asksFirst(rules) {
   return (rules ?? []).some((rule) => rule.effect === "ask" && ["edit", "shell", "write", "patch", "*"].includes(rule.action));
 }
 
-// Agents/src/wire.ts
+// Packages/Box/src/agents/wire.ts
 var noTokens = () => ({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } });
 
-// Agents/src/turn.ts
+// Packages/Box/src/agents/turn.ts
 class Turn {
   store;
   sessionID;
@@ -11242,7 +11242,7 @@ function safeJSON(text2) {
   }
 }
 
-// Agents/src/sessions.ts
+// Packages/Box/src/agents/sessions.ts
 function isBusy(doing) {
   return doing.kind !== "idle" && doing.kind !== "deleting";
 }
@@ -13384,7 +13384,7 @@ function ownWords(message) {
   }
 }
 
-// Agents/src/artifacts/routes.ts
+// Packages/Box/src/agents/artifacts/routes.ts
 var json5 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 var message = (status, text2) => json5({ message: text2 }, status);
 var kinds2 = new Set(["memory", "skill", "image", "page", "document", "download", "code", "file"]);
@@ -13608,7 +13608,7 @@ function followed(store, read, signal) {
   return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "no-cache" } });
 }
 
-// Agents/src/groups/rules.ts
+// Packages/Box/src/agents/groups/rules.ts
 var stamp3 = (date = new Date) => date.toISOString().replace(/\.\d{3}Z$/, "Z");
 function length(text2) {
   let count = 0;
@@ -14163,7 +14163,7 @@ function seatRules(folder, askFirst, denies) {
   return [...rules, ...denies];
 }
 
-// Agents/src/groups/store.ts
+// Packages/Box/src/agents/groups/store.ts
 import { existsSync as existsSync14, mkdirSync as mkdirSync14, readdirSync as readdirSync10, readFileSync as readFileSync22, renameSync as renameSync9, rmSync as rmSync11, writeFileSync as writeFileSync15 } from "fs";
 import { join as join22 } from "path";
 var version2 = 1;
@@ -14414,7 +14414,7 @@ class GroupStore {
   }
 }
 
-// Agents/src/groups/named.ts
+// Packages/Box/src/agents/groups/named.ts
 import { readFileSync as readFileSync23 } from "fs";
 var start = "<named-agents>";
 var end = "</named-agents>";
@@ -14481,7 +14481,7 @@ function namedBlock(text3, directory, excluding = new Set) {
 `);
 }
 
-// Agents/src/groups/time.ts
+// Packages/Box/src/agents/groups/time.ts
 function parseRepeat(text3) {
   if (text3 === "weekdays")
     return { kind: "weekdays" };
@@ -14619,7 +14619,7 @@ function planMeeting(plan, before, zone2, now = Date.now()) {
   };
 }
 
-// Agents/src/groups/routes.ts
+// Packages/Box/src/agents/groups/routes.ts
 var json6 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 var error = (status, message2) => json6({ message: message2 }, status);
 async function groupRoutes(runner, store, method, parts2, body) {
@@ -14736,7 +14736,7 @@ async function groupRoutes(runner, store, method, parts2, body) {
   return error(404, "Not found");
 }
 
-// Agents/src/groups/link.ts
+// Packages/Box/src/agents/groups/link.ts
 var json7 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 var message2 = (status, text3) => json7({ message: text3 }, status);
 var seconds2 = (text3) => {
@@ -15010,10 +15010,10 @@ async function make(runner, store, given, here) {
   return json7({ group: list2(runner, store).groups.find((each) => each.id === id) ?? null }, 201);
 }
 
-// Agents/src/groups/post.ts
+// Packages/Box/src/agents/groups/post.ts
 import { existsSync as existsSync15, readFileSync as readFileSync24, renameSync as renameSync10, writeFileSync as writeFileSync16 } from "fs";
 
-// Agents/src/groups/api.ts
+// Packages/Box/src/agents/groups/api.ts
 function server2(url, password) {
   const authorization = "Basic " + Buffer.from(`opencode:${password}`).toString("base64");
   return {
@@ -15152,7 +15152,7 @@ class SeatAPI {
   }
 }
 
-// Agents/src/groups/seat.ts
+// Packages/Box/src/agents/groups/seat.ts
 var seatKey = "kuvo.seat";
 var turnLimit2 = 600000;
 
@@ -15727,7 +15727,7 @@ class Seats {
   }
 }
 
-// Agents/src/groups/runner.ts
+// Packages/Box/src/agents/groups/runner.ts
 var memoryKey = "kuvo.groups.machine";
 var recapMailBytes = 24000;
 var transcriptMailBytes = 200000;
@@ -16987,7 +16987,7 @@ var weekdayOf2 = (time, zone2) => {
   return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(name) + 1;
 };
 
-// Agents/src/groups/peer.ts
+// Packages/Box/src/agents/groups/peer.ts
 var seatMailBytes = 512 * 1024;
 var mailSize = (mail) => new TextEncoder().encode(JSON.stringify(mail)).length;
 var reportBytes = 64000;
@@ -17455,7 +17455,7 @@ class SeatServer {
   }
 }
 
-// Agents/src/groups/post.ts
+// Packages/Box/src/agents/groups/post.ts
 var kinds4 = new Set(["turn", "state", "result", "steer", "stop", "drop", "work", "report", "memory"]);
 var isSeatMail = (value) => value !== null && typeof value === "object" && kinds4.has(value.kind);
 var sameMemory = (one, other) => one.kind === "memory" && other.kind === "memory" && one.memory.bot === other.memory.bot && one.memory.chat === other.memory.chat;
@@ -17648,7 +17648,7 @@ class LinkDirectory {
   }
 }
 
-// Agents/src/server.ts
+// Packages/Box/src/agents/server.ts
 var attempts = new Map;
 function cancelSignIns() {
   for (const pending of attempts.values())
@@ -18136,7 +18136,7 @@ function expandCommand(template, written) {
 ${all}`;
 }
 
-// Agents/src/store.ts
+// Packages/Box/src/agents/store.ts
 import { mkdirSync as mkdirSync15, readdirSync as readdirSync11, readFileSync as readFileSync25, renameSync as renameSync11, rmSync as rmSync12, statSync as statSync9, writeFileSync as writeFileSync17 } from "fs";
 import { join as join23 } from "path";
 
@@ -18220,7 +18220,7 @@ class Store {
   }
 }
 
-// Agents/src/main.ts
+// Packages/Box/src/agents/main.ts
 var version3 = "1";
 var home2 = process.env.KUVO_AGENTS_HOME;
 var password = onMachine ? process.env.KUVO_AGENTS_PASSWORD : process.env.OPENCODE_PASSWORD;
@@ -18448,4 +18448,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src c6536f625ff57509428b5c63aba130689c5c7569a9b2fb20a18025b1287c1866
+// Built from Packages/Box/src/agents 551e2379604e14cdf182a864a0776c7cfae2ba9f0150c1f7bf320f6b4d843d38

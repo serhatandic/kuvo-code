@@ -19,6 +19,7 @@
     "verbatimModuleSyntax": true
   },
   "include": [
-    "src"
+    "src/link",
+    "src/shared"
   ]
 }

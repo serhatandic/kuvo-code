@@ -82,7 +82,7 @@ cd Packages/OpenCodeKit && swift test
 cd Packages/UsageKit && swift test
 cd Packages/KuvoClient && swift test
 cd Packages/KuvoLink && swift test && node --test Tests/Bridge/*.test.js
-cd Agents && bun install && bun test && bunx tsc --noEmit
+cd Packages/Box && bun install && bun run check && bun test
 ```
 
 `./scripts/test-app.sh` runs one at a time: a run started while another is going
@@ -187,8 +187,7 @@ README says how.
 | `Packages/UsageKit/` | The usage tracker in the menu bar, a fork of [OpenUsage](https://github.com/robinebers/openusage) |
 | `Packages/KuvoClient/` | What the Mac app and the iPhone app share as code: `ClientText`, the rules for what a message says (its `README.md`) |
 | `Packages/KuvoLink/` | The phone link: its protocol (`PROTOCOL.md`), the Swift side, and the box's link as built (`kuvo-link.js`) |
-| `Packages/Box/` | The box (TypeScript): its link's sources, built to `kuvo-link.js` (its `README.md`) |
-| `Agents/` | The agents bridge (TypeScript): Claude Code, Codex, Cursor, Grok and Antigravity in the engine's API |
+| `Packages/Box/` | The box (TypeScript): its link, built to `kuvo-link.js`, and the agents bridge (Claude Code, Codex, Cursor, Grok and Antigravity in the engine's API), built to `kuvo-agents.js` (its `README.md`) |
 | `Config/App.xcconfig` | The app's name and bundle ID, and signing defaults |
 | `Licenses/` | License texts for code copied into this repository |
 
@@ -223,11 +222,11 @@ with `./scripts/build-box.sh`, which you run and commit after changing them) run
 runtime in `~/.kuvo-code/bin`, set up by the Mac with the phones you've paired. The Swift and
 JavaScript sides check against the same vectors in `Packages/KuvoLink/Vectors`.
 
-Group chats run in each computer's agents bridge (`Agents/src/groups`), this Mac's as a
+Group chats run in each computer's agents bridge (`Packages/Box/src/agents/groups`), this Mac's as a
 machine's: the app shows them and sends what you do in them (`BoxGroups`), and holds none of
-their rules. Their own tests are the bridge's (`cd Agents && bun test`). What the app still reads
+their rules. Their own tests are the bridge's (`bun test` in `Packages/Box`). What the app still reads
 the same way as a box (a bot's job from its memory, when a repeat comes back, what a message
-quotes) is held to `Agents/test/box-vectors.json`: after changing one on either side, run
+quotes) is held to `Packages/Box/test/agents/box-vectors.json`: after changing one on either side, run
 `./scripts/box-vectors.sh` (it writes the file from the Swift side), then the bridges' tests.
 This Mac's box carries its group chats' mail to your machines on its own relay connection, as a
 machine's bridge does (`kuvo-link.js`: `watchSeats`, `carrySeat`).
@@ -265,7 +264,7 @@ when you're there to answer.
 | --- | --- |
 | `KUVO_OPENCODE_BINARY` | Use this opencode binary instead of the pinned download |
 | `KUVO_BOX_SCRIPT` | Run this Mac's box from this script (a checkout's `Packages/Box/src/link/main.ts`, or a built `kuvo-link.js`) instead of the app's |
-| `KUVO_AGENTS_SCRIPT` | Run the agents bridge from this script (a checkout's `Agents/src/main.ts`) instead of the app's bundle |
+| `KUVO_AGENTS_SCRIPT` | Run the agents bridge from this script (a checkout's `Packages/Box/src/agents/main.ts`) instead of the app's bundle |
 | `KUVO_DEMO_FOLDER`, `KUVO_DEMO_PROMPT`, `KUVO_DEMO_MODEL` | Open a project and start a session with a prompt (`provider/model`) |
 | `KUVO_DEMO_WORKTREE` | Start that session in a worktree of its own |
 | `KUVO_DEMO_DRAFT` | With `KUVO_DEMO_FOLDER` and no prompt: a message typed, not sent, in the new session's composer |
@@ -422,7 +421,7 @@ and `--web` it also writes the iPhone app's copy and the website's `icon.png`,
 
 Claude Code, Codex, Cursor, Grok and Antigravity run beside the engine, the way
 [T3 Code](https://github.com/pingdotgg/t3code) runs them: each as its maker built it, signed in
-as you. `Agents/src` is a small server, the agents bridge, that `OutsideAgents` starts with the
+as you. `Packages/Box/src/agents` is a small server, the agents bridge, that `OutsideAgents` starts with the
 engine's Bun as it starts the engine (it prints `{"url": …}`, takes the password in
 `OPENCODE_PASSWORD` and stops when its stdin closes). It answers the app in the engine's own API
 (sessions, messages, events, permissions, questions, models, sign-in), so their sessions use
@@ -436,10 +435,10 @@ the app's usual views; `Workspace` sends a session to it when its metadata names
   downloaded from Google, checked against its pinned SHA-256, into `agents/antigravity`.
 
 The SDKs are installed from npm the first time each is needed (`runtime/<agent>`), at the
-versions in the agents' files, and aren't part of the app. After changing `Agents/src`, run
+versions in the agents' files, and aren't part of the app. After changing `Packages/Box/src/agents`, run
 `./scripts/build-agents.sh` and commit `KuvoCode/Resources/kuvo-agents.js`, the bundle the app
 ships; CI fails when it isn't built from the sources as they are (`build-agents.sh --check`). In a
-debug build, `KUVO_AGENTS_SCRIPT=<checkout>/Agents/src/main.ts` runs the source
+debug build, `KUVO_AGENTS_SCRIPT=<checkout>/Packages/Box/src/agents/main.ts` runs the source
 instead.
 
 ### Dependencies

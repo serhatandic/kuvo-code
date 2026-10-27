@@ -287,7 +287,7 @@ connection.
   document's parts, but `d` is the base64url of the mail's JSON in UTF-8, so each part fits whatever
   the words are; `s` the `seatID`, or empty). One that would take more parts than a document may
   isn't sent at all, and the link's log says so. The coding agents' bridge on each box writes and
-  reads the mail (`Agents/src/groups/peer.ts`), and the box's link carries it. The bridge sends no
+  reads the mail (`Packages/Box/src/agents/groups/peer.ts`), and the box's link carries it. The bridge sends no
   mail over 512 KB (its JSON in UTF-8): a turn that big goes without `fresh`, then with what the bot
   hasn't heard cut to its latest messages within 160 KB (the last always), and only one that still
   doesn't fit fails, the chat saying the chat is too big to send to that computer; a part that big

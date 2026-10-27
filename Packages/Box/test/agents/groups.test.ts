@@ -24,8 +24,8 @@ import {
   type GroupMessage,
   type GroupTask,
   type SeatBot,
-} from "../src/groups/rules"
-import { next, parseRepeat, planMeeting } from "../src/groups/time"
+} from "../../src/agents/groups/rules"
+import { next, parseRepeat, planMeeting } from "../../src/agents/groups/time"
 
 // The rules every computer's group chats go by (`groups-rules.json`: once what the Mac's own
 // runner said, kept here since this Mac's chats run in its bridge too), and how a repeat is read,
@@ -38,7 +38,7 @@ const vectors = {
 
 describe("what the app reads as a box does", () => {
   test("box-vectors.json is what the app's own test wrote (scripts/box-vectors.sh), not edited by hand", () => {
-    const swift = readFileSync(join(import.meta.dir, "../../KuvoCodeTests/BoxVectorsTests.swift"), "utf8")
+    const swift = readFileSync(join(import.meta.dir, "../../../../KuvoCodeTests/BoxVectorsTests.swift"), "utf8")
     const recorded = swift.match(/static let recorded = "([0-9a-f]+)"/)?.[1]
     const hash = new Bun.CryptoHasher("sha256").update(readFileSync(join(import.meta.dir, "box-vectors.json"))).digest("hex")
     expect(hash).toBe(recorded!)

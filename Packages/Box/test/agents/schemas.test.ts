@@ -6,8 +6,8 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { claudeMessages, claudeSystem } from "../src/agents/claude"
-import { codexItems, codexNotifications, codexRequests } from "../src/agents/codex"
+import { claudeMessages, claudeSystem } from "../../src/agents/agents/claude"
+import { codexItems, codexNotifications, codexRequests } from "../../src/agents/agents/codex"
 
 const codex = Bun.which("codex")
 
@@ -31,7 +31,7 @@ describe("Codex", () => {
 
 describe("Claude Code", () => {
   test("every kind of message the Agent SDK's typings list is known", () => {
-    const typings = readFileSync(join(import.meta.dir, "..", "node_modules", "@anthropic-ai", "claude-agent-sdk", "sdk.d.ts"), "utf8")
+    const typings = readFileSync(join(import.meta.dir, "..", "..", "node_modules", "@anthropic-ai", "claude-agent-sdk", "sdk.d.ts"), "utf8")
     const union = /export declare type SDKMessage = ([^;]+);/.exec(typings)?.[1] ?? ""
     const names = union.split("|").map((name) => name.trim()).flatMap((name) => {
       const alias = new RegExp(`declare type ${name} = ([A-Za-z| ]+);`).exec(typings)?.[1]
@@ -64,7 +64,7 @@ function cursorSDK(): string | undefined {
 describe("Cursor", () => {
   const sdk = cursorSDK()
   test.skipIf(!sdk)("every update and tool its SDK tells is known", async () => {
-    const { cursorTools, cursorUpdates } = await import("../src/agents/cursor")
+    const { cursorTools, cursorUpdates } = await import("../../src/agents/agents/cursor")
     const module: any = await import(sdk!)
     const updates: string[] = module.InteractionUpdateSchema.options.map((option: any) => option.shape.type.value)
     const tools: string[] = module.ToolCallStartedUpdateSchema.shape.toolCall.options.map((option: any) => option.shape.type.value)

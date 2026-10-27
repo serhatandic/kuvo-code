@@ -4,14 +4,14 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:tes
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
-import { ClaudeAgent } from "../src/agents/claude"
-import { Auto } from "../src/auto"
-import { Queue } from "../src/queue"
-import type { Roster } from "../src/roster"
-import { Sessions } from "../src/sessions"
-import { shellOutput, shells } from "../src/shells"
-import { Store } from "../src/store"
-import type { Message, PermissionRule } from "../src/wire"
+import { ClaudeAgent } from "../../src/agents/agents/claude"
+import { Auto } from "../../src/agents/auto"
+import { Queue } from "../../src/agents/queue"
+import type { Roster } from "../../src/agents/roster"
+import { Sessions } from "../../src/agents/sessions"
+import { shellOutput, shells } from "../../src/agents/shells"
+import { Store } from "../../src/agents/store"
+import type { Message, PermissionRule } from "../../src/agents/wire"
 
 /** A Claude Code that answers as the test says: what it was sent, and what it says. */
 class FakeClaude {

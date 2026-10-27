@@ -2,7 +2,7 @@
 // and live event feed, a turn for each note to the agent as `turns` script them, and one-off
 // answers in turn (a goal's check's verdicts, others' answers).
 
-import { emit } from "../../src/events"
+import { emit } from "../../../src/agents/events"
 
 export type Turn = { text?: string; tool?: boolean; outcome?: "succeeded" | "failed" | "interrupted"; error?: string }
 

@@ -29,7 +29,7 @@ for Linux's tools).
 | B12 Queue while it works, Stop, Resume; a message removed or edited on its way | ComposerReturnsTests, QueueTests, MessagesOnTheirWayTests | |
 | B13 Two sessions at once, each with its own asks | AgentAsksTests | |
 | B14 Switch model mid-conversation, or elsewhere, to a coding agent too | SessionsTests, MoveToAgentsTests | |
-| The coding agents (Claude Code, Codex, Cursor, Grok, Antigravity): a turn's replies and steps, Stop, permissions in each mode (Ask First, Approve All, Plan, your Blocks), its usage and how full its context is | Agents/test: claude, codex, cursor and acp tests, each with a stand-in for the agent's program | the agents' own programs and accounts (the end-to-end runs) |
+| The coding agents (Claude Code, Codex, Cursor, Grok, Antigravity): a turn's replies and steps, Stop, permissions in each mode (Ask First, Approve All, Plan, your Blocks), its usage and how full its context is | Packages/Box/test/agents: claude, codex, cursor and acp tests, each with a stand-in for the agent's program | the agents' own programs and accounts (the end-to-end runs) |
 | B16 Find in a long conversation | ConversationFindTests | |
 | Scroll to the End, also while a flick of the trackpad still glides | | all of it: a trackpad's scrolling (its phases, a glide) can't be given to a window the tests make, so it's tried by hand |
 | B19 A subagent at work, in the background too | SubagentsAtWorkTests, AgentAsksTests (one moved to the background still asks) | |
@@ -43,7 +43,7 @@ for Linux's tools).
 | Every key you type stays, also while the app is busy; sending still clears the field | ComposerTypingTests | |
 | The card you work in looks it: a click anywhere in it (a reply's words too), the keyboard moving into it, a tab picked in the tab bar, a session picked in the sidebar; not clicks in Settings over it | WindowFocusTests, WindowTabsTests | the click on a sidebar row or a tab itself (SwiftUI buttons take no queued clicks in the tests' window, which is never key): the tests make the store call the button does |
 | C5, C6 Files in the panel; the agent shows one; agents' tabs tidied | FileLinksTests, PanelTabsTests, ProjectFilesTests, BrowserHistoryTests, AgentTabsTests | |
-| D3 A reply with a widget shows as one | | how a reply's steps become rows is the transcript view's own (no seam outside it); the bridge naming coding agents' show_widget is in Agents/test |
+| D3 A reply with a widget shows as one | | how a reply's steps become rows is the transcript view's own (no seam outside it); the bridge naming coding agents' show_widget is in Packages/Box/test/agents |
 | Math in a reply: formulas drawn in a line or on their own; prices, the shell's `$$`, code and links kept as written; lists, quotes and tables keep their shape | ReplyMathTests | how a formula looks (a look before and after) |
 | D4 A chat moved into a project | SessionLifecycleTests | |
 | E, B15, L36 The agent's browser; a screenshot you ask to see, in the conversation | BrowserToolServerTests | |
@@ -95,7 +95,7 @@ for Linux's tools).
 | K5 Storage: what takes room | StorageReportTests | |
 | L50 Quit mid-job, open again | InterruptedRunTests | |
 | The panel's terminal | TerminalColorsTests | |
-| The context ring: how full, of what the model takes | ContextRingTests | the coding agents' windows, as each says (Agents/test) |
+| The context ring: how full, of what the model takes | ContextRingTests | the coding agents' windows, as each says (Packages/Box/test/agents) |
 | Export a conversation | ConversationExportTests | |
 | Your things after an update: backed up first, then brought up to date once (bots' descriptions in their folders); a list that won't read set aside | CalibrationTests | the window's Updating screen (UI); a machine's bots' descriptions (written over SSH as it connects) |
 | Updates: only a release build updates itself | UpdatesTests; the release bundle's feed in CI ("Check the app bundle") | Sparkle's own window and install |

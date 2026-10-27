@@ -1,7 +1,7 @@
 // What a box's agents made (PROTOCOL.md, `kuvo/artifacts`): a place's list and Timeline, one thing
 // with its versions, a version's bytes and what it changed, pinning, putting a version back, and
 // what the copies take. The coding agents' bridge keeps the record and answers
-// (Agents/src/artifacts/routes.ts), and the box passes its answers on as they are: these are the
+// (src/agents/artifacts/routes.ts), and the box passes its answers on as they are: these are the
 // shapes it answers in. Times are seconds since 1970.
 
 import { bool, BYTES, list, nullable, number, object, oneOf, type RouteShape, string, words } from "../shape";

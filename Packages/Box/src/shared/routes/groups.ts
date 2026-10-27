@@ -1,6 +1,6 @@
 // Group chats (PROTOCOL.md, `kuvo/groups`): those that live on the box asked, one chat's messages,
 // who can be in one, and what a client does to them. The coding agents' bridge there runs them and
-// answers (Agents/src/groups/link.ts), and the box passes its answers on as they are: these are
+// answers (src/agents/groups/link.ts), and the box passes its answers on as they are: these are
 // the shapes it answers in.
 
 import { any, bool, type Infer, list, literal, NOTHING, nullable, number, object, oneOf, type RouteShape, string, words } from "../shape";

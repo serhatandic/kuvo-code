@@ -4,12 +4,12 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, u
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
-import { unified } from "../src/diff"
-import { EngineLink } from "../src/engine"
-import { record } from "../src/artifacts/record"
-import { Recorder, type Event, type Source } from "../src/artifacts/recorder"
-import { artifactRoutes } from "../src/artifacts/routes"
-import { ArtifactStore } from "../src/artifacts/store"
+import { unified } from "../../src/agents/diff"
+import { EngineLink } from "../../src/agents/engine"
+import { record } from "../../src/agents/artifacts/record"
+import { Recorder, type Event, type Source } from "../../src/agents/artifacts/recorder"
+import { artifactRoutes } from "../../src/agents/artifacts/routes"
+import { ArtifactStore } from "../../src/agents/artifacts/store"
 
 // The box's record of what its agents made, as a client reads it (`kuvo/artifacts`): a bot's memory
 // with what changed in it, a coding session's documents, a group chat's files by bot, versions kept

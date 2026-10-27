@@ -11,5 +11,5 @@
     "allowImportingTsExtensions": false,
     "esModuleInterop": true
   },
-  "include": ["src", "test"]
+  "include": ["src/agents", "test/agents"]
 }

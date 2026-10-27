@@ -6,6 +6,5 @@ build/
 .swiftpm/
 *.xcuserstate
 Config/Signing.local.xcconfig
-Agents/node_modules/
 Packages/Box/node_modules/
 Packages/Box/src/**/.unresolved-*.ts

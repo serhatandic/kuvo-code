@@ -107,7 +107,7 @@ export function givenJob(given: unknown): GivenJob {
 }
 
 // A bot's job as its memory kept it before bots kept it in a record (Bots.job(inMemory:), held to
-// `Agents/test/box-vectors.json`), for taking it from there once (`jobOf`): its line, what shows
+// `test/agents/box-vectors.json`), for taking it from there once (`jobOf`): its line, what shows
 // under its name, and its section, all of it; null for a memory without one.
 const spaces = (text: string) => text.replace(/^[\p{Zs}\t]+|[\p{Zs}\t]+$/gu, "");
 const trimmed = (text: string) => text.replace(/^[\p{Z}\t\n\v\f\r\u0085]+|[\p{Z}\t\n\v\f\r\u0085]+$/gu, "");

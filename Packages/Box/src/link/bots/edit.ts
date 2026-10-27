@@ -36,7 +36,7 @@ export type ChangedAnswer = JSONAnswer<ChangedBot | { message: string }>;
 export type DeletedAnswer = JSONAnswer<Record<string, never> | { message: string }>;
 
 /** The group chats here as the coding agents' bridge lists them (`GET /api/kuvo/groups`,
- * Agents/src/groups/routes.ts), as far as a bot deleted reads them: each chat's id and its bots. */
+ * src/agents/groups/routes.ts), as far as a bot deleted reads them: each chat's id and its bots. */
 interface BridgeGroups {
   version?: number;
   data: { group: { id: string; members: string[]; [more: string]: unknown }; [more: string]: unknown }[];
