@@ -206,7 +206,8 @@ extension AppModel {
     func news(on box: SidebarBox) -> BoxNews? {
         let sessions = workspace.sessions.filter { SidebarBox(directory: $0.location.directory) == box && !Workspace.isArchived($0) }
         if sessions.contains(where: { workspace.needsAttention($0.id) }) { return .needsYou }
-        if sessions.contains(where: \.isUnread) || chats.list.contains(where: { SidebarBox(machine: chats.machine(of: $0.id)) == box && chats.isUnread($0) }) { return .new }
+        // A session's sub-session finished since you read it is news too, as its folded row says.
+        if sessions.contains(where: { $0.isUnread || workspace.hasNewSubSessions($0.id) }) || chats.list.contains(where: { SidebarBox(machine: chats.machine(of: $0.id)) == box && chats.isUnread($0) }) { return .new }
         return nil
     }
 }
