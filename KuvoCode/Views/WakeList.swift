@@ -330,6 +330,13 @@ struct WakeBar: View {
             }
     }
 
+    /// In a few words, for the card's line once its bars are tucked away: when it wakes next.
+    static func headline(paused: Bool, wakes: [Wakes.Pending], watches: [Wakes.Watch], now: Date) -> String {
+        if paused { return "Wake-ups paused" }
+        guard !wakes.isEmpty else { return "Watching" }
+        return wakes.first { $0.due > now }.map { "Wakes " + $0.due.formatted(Date.RelativeFormatStyle(presentation: .named, unitsStyle: .wide)) } ?? "Waking up…"
+    }
+
     private func title(wakes: [Wakes.Pending], watches: [Wakes.Watch], now: Date) -> String {
         if app.wakeUps.paused.contains(owner.key) { return "Wake-ups paused" }
         let watching = watches.isEmpty ? "" : watches.count == 1 ? "watching 1 thing" : "watching \(watches.count) things"

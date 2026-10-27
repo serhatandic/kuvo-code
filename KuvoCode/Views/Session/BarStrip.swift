@@ -1,0 +1,111 @@
+import ClientDesign
+import SwiftUI
+
+/// A bar of the card over the composer, as one item of its line once the bars are tucked away:
+/// its mark (a spinner for work under way) and a few words.
+struct BarStripItem: Identifiable, Equatable {
+    let bar: ComposerBar
+    /// Nil: at work, a spinner.
+    let symbol: String?
+    var isDone = false
+    let words: String
+
+    var id: ComposerBar { bar }
+}
+
+/// The bars tucked away, in one line: what each is, and a dot on what changed since. A click
+/// anywhere on it brings them back.
+struct BarStrip: View {
+    let items: [BarStripItem]
+    let marked: Set<ComposerBar>
+    let show: () -> Void
+
+    var body: some View {
+        Button(action: show) {
+            HStack(spacing: 0) {
+                // Each in its words while they fit; past that, their marks alone.
+                ViewThatFits(in: .horizontal) {
+                    line(words: true)
+                    line(words: false)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.up")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+            }
+            .padding(.leading, 14)
+            .padding(.trailing, 8)
+            .frame(height: 34)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .clickablePointer()
+        .help("Show them")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(items.map(\.words).joined(separator: ", "))
+        .accessibilityValue(marked.isEmpty ? "" : "New: " + items.filter { marked.contains($0.bar) }.map(\.words).joined(separator: ", "))
+        .accessibilityHint("Shows them")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private func line(words: Bool) -> some View {
+        HStack(spacing: words ? 14 : 10) {
+            ForEach(items) { item in
+                let isNew = marked.contains(item.bar)
+                HStack(spacing: 5) {
+                    Group {
+                        if let symbol = item.symbol {
+                            Image(systemName: symbol)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(item.isDone ? AnyShapeStyle(.green) : AnyShapeStyle(.tint))
+                        } else {
+                            Spinner(size: 11)
+                        }
+                    }
+                    .frame(width: 14)
+                    if words {
+                        Text(item.words)
+                            .font(.system(size: 12.5, weight: isNew ? .semibold : .regular))
+                            .foregroundStyle(isNew ? .primary : .secondary)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                    if isNew {
+                        Circle()
+                            .fill(.tint)
+                            .frame(width: 6, height: 6)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Over the card's top edge, at its end: tucks all its bars away into one line.
+struct HideBarsTab: View {
+    let hide: () -> Void
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Button(action: hide) {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                Text("Hide")
+                    .font(.system(size: 11.5, weight: .medium))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 9)
+            .frame(height: 22)
+            .background(Capsule().fill(Surface.cardFill(scheme, focused: false)))
+            .overlay(Capsule().strokeBorder(scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.12), lineWidth: 1))
+            .shadow(color: .black.opacity(scheme == .dark ? 0.25 : 0.06), radius: 3, y: 1)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .clickablePointer()
+        .help("Tuck the bars into one line")
+        .accessibilityLabel("Hide the bars")
+    }
+}

@@ -83,3 +83,32 @@ import Testing
         #expect(open(folds, bars, asking: true) == [.sideQuestion])
     }
 }
+
+// The bars tucked into one line: they stay tucked as you left them, whatever comes; what came or
+// changed meanwhile is marked; bringing them back clears the marks; once none are left, the next
+// ones show.
+@Test func tuckedBarsStayTuckedMarkingWhatChanged() {
+    var tuck = BarTuck<String>()
+    #expect(!tuck.isOn(among: ["goal", "wakes"]))
+    tuck.hide()
+    #expect(tuck.isOn(among: ["goal", "wakes"]))
+    // A side question asked, the goal met: still tucked, both marked.
+    tuck.bars(from: ["goal", "wakes"], to: ["goal", "sideQuestion", "wakes"])
+    tuck.changed("goal")
+    #expect(tuck.isOn(among: ["goal", "sideQuestion", "wakes"]))
+    #expect(tuck.marked == ["sideQuestion", "goal"])
+    // Brought back: shown, nothing marked; tucked again, nothing marked yet.
+    tuck.show()
+    #expect(!tuck.isOn(among: ["goal", "sideQuestion", "wakes"]))
+    tuck.hide()
+    #expect(tuck.marked.isEmpty)
+    // A change while shown isn't marked for later.
+    tuck.show()
+    tuck.changed("wakes")
+    tuck.hide()
+    #expect(tuck.marked.isEmpty)
+    // All gone: the next bar shows, rather than coming tucked.
+    tuck.bars(from: ["goal", "sideQuestion", "wakes"], to: [])
+    tuck.bars(from: [], to: ["review"])
+    #expect(!tuck.isOn(among: ["review"]))
+}
