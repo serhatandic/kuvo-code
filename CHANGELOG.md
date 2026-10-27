@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- The sidebar's marks are one quiet family: a turning ring while a session works, an orange dot that ripples when it needs you, and an accent dot that settles when it's done, plus still marks for a failed run, a wake-up, a watch and a machine that isn't connected. Your tabs show the same marks. The open session is a soft grey fill that starts at its title, so the lines of its subagents stay in view, and section headings stand out more.
 - Codex in Kuvo Code no longer uses ChatGPT's Computer Use, even where your Codex settings turn it on, so it can't click around your Mac without asking.
 - A screenshot copied to the clipboard (⌃⇧⌘4) pastes into the composer with ⌘V, as a picture you attach.
 - Searching what was said in your conversations is done by each computer itself, so a machine's conversations come up as quickly as your Mac's, and your phone finds them too.

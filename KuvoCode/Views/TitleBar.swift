@@ -369,47 +369,29 @@ struct TabIcon: View {
     }
 }
 
-/// How the session is doing, in the tile's corner: the sidebar's marks, each on a glossy
-/// disc of its own color (the accent while it works or has news, orange while it waits,
-/// red when it failed) inside a white ring.
+/// How the session is doing, in the tile's corner: the sidebar's own mark for it, on a small
+/// disc that lifts it off the tile, so a tab and its row always say the same.
 private struct StatusBadge: View {
     let status: TabItem.Status
     @Environment(\.colorScheme) private var scheme
-    @Environment(\.accent) private var accent
+
+    private var kind: StatusMark.Kind? {
+        switch status {
+        case .working: .working
+        case .waiting: .needsYou
+        case .failed: .failed
+        case .unread: .new
+        case .idle: nil
+        }
+    }
 
     var body: some View {
-        ZStack {
-            Circle().fill(scheme == .dark ? Color(white: 0.2) : .white)
-            switch status {
-            case .working:
-                disc(accent)
-                Spinner(size: 8)
-                    .foregroundStyle(.white, .white)
-            case .waiting:
-                disc(.orange).overlay { mark("hand.raised.fill") }
-            case .failed:
-                disc(.red).overlay { mark("exclamationmark") }
-            case .unread:
-                disc(accent).padding(1.5)
-            case .idle:
-                EmptyView()
-            }
+        if let kind {
+            StatusMark(kind, size: 11)
+                .padding(1.5)
+                .background(Circle().fill(scheme == .dark ? Color(white: 0.2) : .white))
+                .shadow(color: .black.opacity(scheme == .dark ? 0.45 : 0.2), radius: 1, y: 0.5)
         }
-        .frame(width: 14, height: 14)
-        .shadow(color: .black.opacity(scheme == .dark ? 0.45 : 0.2), radius: 1, y: 0.5)
-    }
-
-    /// Lighter at the top, like the system's own badges, so the color reads rich, not flat.
-    private func disc(_ color: Color) -> some View {
-        Circle()
-            .fill(LinearGradient(colors: [color.mix(with: .white, by: 0.3), color], startPoint: .top, endPoint: .bottom))
-            .padding(1.5)
-    }
-
-    private func mark(_ symbol: String) -> some View {
-        Image(systemName: symbol)
-            .font(.system(size: 6.5, weight: .bold))
-            .foregroundStyle(.white)
     }
 }
 

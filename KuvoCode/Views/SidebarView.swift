@@ -881,7 +881,7 @@ struct SidebarView: View {
             } else {
                 HStack(spacing: 6) {
                     if let destination = app.moves.underWay[session.id] {
-                        Spinner(size: 12)
+                        StatusMark(.working)
                             .help("Moving to \(destination ?? "this Mac")…")
                     } else if !search.isEmpty, Workspace.isChat(session.location.directory), let machine = RemoteFolder.machine(of: session.location.directory) {
                         Image(systemName: "server.rack")
@@ -1145,18 +1145,24 @@ enum SidebarMetrics {
     static let iconWidth: CGFloat = 18
 }
 
-/// A row's highlight: accent glass under the open session, so it stands apart from the
-/// chrome around it, and a soft neutral fill under the pointer on the others. Neither
-/// moves or resizes the row.
+/// A row's highlight: a neutral fill under the open one, and a lighter one under the pointer, the
+/// same in the sidebar, Settings and the pickers. It starts where the row's own content does
+/// (`leading`), so the lines sub-sessions hang from stay in view beside it. The accent is left
+/// for what's new and what you set. Neither moves or resizes the row.
 struct RowHighlight: ViewModifier {
     let isSelected: Bool
+    var leading: CGFloat = 0
     @State private var isHovering = false
+    @Environment(\.colorScheme) private var scheme
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: 8)
+        let fill = isSelected ? (scheme == .dark ? 0.1 : 0.075) : isHovering ? (scheme == .dark ? 0.06 : 0.045) : 0
         content
-            .background(isHovering && !isSelected ? Color.primary.opacity(0.06) : .clear, in: shape)
-            .accentGlass(shape, isOn: isSelected)
+            .background(alignment: .leading) {
+                shape.fill(Color.primary.opacity(fill))
+                    .padding(.leading, leading)
+            }
             .contentShape(shape)
             .onHover { isHovering = $0 }
             .animation(.easeOut(duration: 0.12), value: isHovering)
@@ -1204,7 +1210,8 @@ private struct SidebarRow<Icon: View, Title: View, Accessory: View>: View {
         }
         .padding(.horizontal, 10)
         .frame(height: SidebarMetrics.rowHeight)
-        .modifier(RowHighlight(isSelected: isSelected))
+        // An indented row's fill starts at its title, beside the project's line of sessions.
+        .modifier(RowHighlight(isSelected: isSelected, leading: indented && Icon.self == EmptyView.self ? 10 + SidebarMetrics.iconWidth : 0))
     }
 }
 
@@ -1363,7 +1370,7 @@ private struct GroupRow: View {
                         .help("Lives on \(app.machines.engine(machine)?.machine.name ?? machine)")
                 }
                 if isUnread {
-                    Circle().fill(.tint).frame(width: 7, height: 7)
+                    StatusMark(.new)
                         .help("New messages")
                 }
             }
@@ -1558,7 +1565,7 @@ private struct SectionHeader<Trailing: View>: View {
         .frame(height: 22)
         .padding(.leading, 10)
         .padding(.trailing, 4)
-        .padding(.top, 16)
+        .padding(.top, 20)
         .padding(.bottom, 4)
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.12), value: isHovering)
@@ -1566,7 +1573,7 @@ private struct SectionHeader<Trailing: View>: View {
 
     private var label: some View {
         Text(title)
-            .font(.system(size: 13, weight: .medium))
+            .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(.secondary)
     }
 }
@@ -1723,34 +1730,43 @@ private struct SessionStatus: View {
     /// seen through the session above it; a folded session has a sub-session's news).
     var isUnread: Bool?
 
+    /// The machine it lives on, while that machine isn't connected.
+    private var awayMachine: String? {
+        guard let machine = RemoteFolder.machine(of: session.location.directory), app.machines.engine(machine)?.isReady != true else { return nil }
+        return app.machines.engine(machine)?.machine.name ?? machine
+    }
+
+    private var kind: StatusMark.Kind? {
+        let working = workspace.isWorking(session.id)
+        return ConversationState.kind(
+            needsYou: workspace.needsAttention(session.id),
+            working: working,
+            subagentsOnly: working && !workspace.running.contains(session.id) && workspace.helpersAtWork(in: session.id) > 0,
+            failed: session.outcome == .failed,
+            isNew: isUnread ?? session.isUnread,
+            offline: awayMachine != nil,
+            wakes: app.wakeUps.wakes[session.id]?.isEmpty == false,
+            watching: app.wakeUps.watches[session.id]?.isEmpty == false)
+    }
+
     var body: some View {
-        if workspace.needsAttention(session.id) {
-            Image(systemName: "hand.raised.fill")
-                .font(.system(size: 12))
-                .foregroundStyle(.orange)
-                .help("Waiting for you")
-        } else if workspace.isWorking(session.id) {
-            Spinner(size: 12)
-                .help("Working")
-        } else if session.outcome == .failed {
-            Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 12))
-                .foregroundStyle(.red)
-                .help("The last run failed")
-        } else if isUnread ?? session.isUnread {
-            Circle().fill(.tint).frame(width: 7, height: 7)
-                .help("Finished")
-        } else if let next = app.wakeUps.wakes[session.id]?.first {
-            // It wakes itself up later (a bot's row says so in words).
-            Image(systemName: "alarm")
-                .font(.system(size: 11))
-                .foregroundStyle(.tint)
-                .help("Wakes up " + next.due.formatted(Date.RelativeFormatStyle(presentation: .named, unitsStyle: .wide)))
-        } else if app.wakeUps.watches[session.id]?.isEmpty == false {
-            Image(systemName: "eye")
-                .font(.system(size: 11))
-                .foregroundStyle(.tint)
-                .help("Watching for a change")
+        if let kind {
+            StatusMark(kind)
+                .help(help(kind))
+        }
+    }
+
+    private func help(_ kind: StatusMark.Kind) -> String {
+        switch kind {
+        case .needsYou: "Waiting for you"
+        case .subagents: workspace.helpersAtWork(in: session.id).counting("subagent") + " at work"
+        case .failed: "The last run failed"
+        case .new: "Finished"
+        case .offline: "\(awayMachine ?? "Its machine") isn’t connected"
+        case .wake:
+            app.wakeUps.wakes[session.id]?.first.map { "Wakes up " + $0.due.formatted(Date.RelativeFormatStyle(presentation: .named, unitsStyle: .wide)) } ?? kind.words
+        case .watching: "Watching for a change"
+        default: kind.words
         }
     }
 }
@@ -1874,7 +1890,8 @@ private struct SubSessionRow: View {
             .padding(.leading, inset)
             .padding(.trailing, 10)
             .frame(height: SidebarMetrics.rowHeight)
-            .modifier(RowHighlight(isSelected: isSelected))
+            // From just before its title: the line and its elbow stay in view.
+            .modifier(RowHighlight(isSelected: isSelected, leading: inset - 8))
         }
         .buttonStyle(.plain)
         .clickablePointer()
@@ -1892,15 +1909,13 @@ private struct SubSessionToggle: View {
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: 3) {
-                Image(systemName: "arrow.turn.down.right")
-                    .font(.system(size: 9, weight: .semibold))
                 Text("\(count)")
                     .monospacedDigit()
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(.system(size: 9, weight: .semibold))
                     .rotationEffect(.degrees(isUnfolded ? 0 : -90))
             }
-            .font(.system(size: 11))
+            .font(.system(size: 12, weight: .medium))
         }
         .buttonStyle(TextButtonStyle())
         .help(isUnfolded ? "Hide its subagents" : "Show its \(count.counting("subagent"))")
