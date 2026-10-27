@@ -10,7 +10,7 @@ import type { AnswerPiece } from "../src/link/server/context";
 // "ş" and all.
 
 type Vectors = { addresses: { name: string; encoded: string }[] };
-const vectors: Vectors = JSON.parse(readFileSync(join(import.meta.dir, "../../KuvoLink/Vectors/routes/file-addresses.json"), "utf8"));
+const vectors: Vectors = JSON.parse(readFileSync(join(import.meta.dir, "../../KuvoLink/Vectors/file-addresses/addresses.json"), "utf8"));
 
 let root = "";
 beforeEach(() => {

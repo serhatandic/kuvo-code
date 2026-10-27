@@ -24,15 +24,17 @@ const MOST = 50;
 const MOST_TEXT = 400_000;
 const MOST_OUTPUT = 2_000;
 
-/** A conversation's text as kept: as said, and as compared (no case, no accents), letter for letter. */
+/** A conversation's text as kept in the folder: as said, and as compared (no case, no accents),
+ * letter for letter. */
 interface Kept {
   updated: number;
   text: string;
   folded: string;
 }
 
-/** Each conversation's text, read here since the box started, by `key`; and those being read. */
-const texts = new Map<string, Kept>();
+/** What's kept in memory of each, by `key`: only what's compared (what was said is read from its
+ * file for the few found). And those being read. */
+const texts = new Map<string, Pick<Kept, "updated" | "folded">>();
 const reading = new Map<string, Promise<Kept | null>>();
 
 export async function* searchRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
@@ -51,8 +53,11 @@ export async function* searchRoute(context: RouteContext): AsyncGenerator<Answer
   }
   const agents = (() => { try { return bridge(); } catch { return null; } })();
   if (agents) places.push({ name: "agents", target: agents });
-  const listed = (await Promise.all(places.map(place => rootSessions(place.target).then(sessions => sessions.map(session => ({ session, place })), () => []))))
-    .flat()
+  const lists = await Promise.all(places.map(place => rootSessions(place.target).then(sessions => ({ place, sessions }), () => ({ place, sessions: null }))));
+  // Its engine's list it must have: without it, nothing found would say what isn't so. (The coding
+  // agents' bridge may be starting: its sessions are left out until it answers.)
+  if (!lists[0]!.sessions) return yield* json(503, { message: "This computer's engine didn't answer. Search again in a moment." });
+  const listed = lists.flatMap(({ place, sessions }) => (sessions ?? []).map(session => ({ session, place })))
     // Not one a group chat or the coding agents run for a seat or a turn: they show where they run.
     .filter(({ session }) => !isHiddenRun(session))
     .sort((one, other) => other.session.time.updated - one.session.time.updated);
@@ -61,14 +66,16 @@ export async function* searchRoute(context: RouteContext): AsyncGenerator<Answer
   // The latest first, a few at a time, reading only what changed since; done once there are enough.
   for (let start = 0; start < listed.length && results.length < limit; start += 4) {
     const kept = await Promise.all(listed.slice(start, start + 4).map(({ session, place }) => textOf(place.name, place.target, session)));
-    for (const [index, text] of kept.entries()) {
-      const at = text ? text.folded.indexOf(wanted) : -1;
-      if (!text || at < 0 || results.length >= limit) continue;
-      const { session } = listed[start + index]!;
-      results.push({ session: session.id, snippet: snippet(text.text, at, wanted.length), info: session });
+    for (const [index, found] of kept.entries()) {
+      const at = found ? found.folded.indexOf(wanted) : -1;
+      if (!found || at < 0 || results.length >= limit) continue;
+      const { session, place } = listed[start + index]!;
+      const text = "text" in found ? found.text : fromDisk(key(place.name, session.id))?.text;
+      if (text !== undefined) results.push({ session: session.id, snippet: snippet(text, at, wanted.length), info: session });
     }
   }
-  forgetGone(new Set(listed.map(({ session, place }) => key(place.name, session.id))));
+  // Only where the list was read: one that couldn't be keeps what it had.
+  forgetGone(new Set(listed.map(({ session, place }) => key(place.name, session.id))), lists.filter(list => list.sessions).map(list => list.place.name));
   return yield* json(200, { results } satisfies SearchFound);
 }
 
@@ -77,7 +84,7 @@ const key = (place: string, id: string) => `${place}.${id.replace(/[^A-Za-z0-9_-
 
 /** A session's conversation's text: as kept, while its session hasn't changed; else read again,
  * once however many searches ask meanwhile. Null when it can't be read. */
-function textOf(place: string, target: Target, session: EngineSession): Promise<Kept | null> {
+function textOf(place: string, target: Target, session: EngineSession): Promise<Pick<Kept, "updated" | "folded"> | Kept | null> {
   const name = key(place, session.id);
   const updated = session.time.updated;
   const known = texts.get(name) ?? fromDisk(name);
@@ -87,9 +94,10 @@ function textOf(place: string, target: Target, session: EngineSession): Promise<
   const read = conversationOf(target, session.id).then(messages => {
     // Without what an undo took back.
     const cut = session.revert?.messageID ? messages.findIndex(message => message.id === session.revert!.messageID) : -1;
-    const text = searchText(cut >= 0 ? messages.slice(0, cut) : messages, session.location?.directory ?? session.directory ?? "").slice(0, MOST_TEXT);
+    // Its latest part, when it's long: what was said last is what's looked for most.
+    const text = searchText(cut >= 0 ? messages.slice(0, cut) : messages, session.location?.directory ?? session.directory ?? "").slice(-MOST_TEXT);
     const kept = { updated, text, folded: fold(text) };
-    texts.set(name, kept);
+    texts.set(name, { updated, folded: kept.folded });
     toDisk(name, kept);
     return kept;
   }, () => null).finally(() => reading.delete(name));
@@ -101,26 +109,37 @@ function fromDisk(name: string): Kept | null {
   try {
     const kept = JSON.parse(fs.readFileSync(path.join(SEARCH, name + ".json"), "utf8")) as Kept;
     if (typeof kept.updated !== "number" || typeof kept.text !== "string" || typeof kept.folded !== "string") return null;
-    texts.set(name, kept);
+    texts.set(name, { updated: kept.updated, folded: kept.folded });
     return kept;
   } catch {
     return null;
   }
 }
 
+/** Written whole or not at all: another search (a `box route` of its own) may read it meanwhile. */
 function toDisk(name: string, kept: Kept) {
+  const file = path.join(SEARCH, name + ".json");
+  const writing = `${file}.${process.pid}.writing`;
   try {
     fs.mkdirSync(SEARCH, { recursive: true });
-    fs.writeFileSync(path.join(SEARCH, name + ".json"), JSON.stringify(kept));
-  } catch {}
+    fs.writeFileSync(writing, JSON.stringify(kept));
+    fs.renameSync(writing, file);
+  } catch {
+    fs.rmSync(writing, { force: true });
+  }
 }
 
-/** Sessions gone since (deleted, moved away) aren't kept, here or in the folder. */
-function forgetGone(known: Set<string>) {
-  for (const name of texts.keys()) if (!known.has(name)) texts.delete(name);
+/** Sessions gone since (deleted, moved away) aren't kept, here or in the folder: of the places
+ * (`engine`, `agents`) whose lists were read. A file left half written by a search that ended
+ * goes too. */
+function forgetGone(known: Set<string>, places: string[]) {
+  const listed = (name: string) => places.some(place => name.startsWith(place + "."));
+  for (const name of texts.keys()) if (listed(name) && !known.has(name)) texts.delete(name);
   try {
     for (const file of fs.readdirSync(SEARCH)) {
-      if (file.endsWith(".json") && !known.has(file.slice(0, -5))) fs.rmSync(path.join(SEARCH, file), { force: true });
+      const name = file.slice(0, -5);
+      const gone = file.endsWith(".json") ? listed(name) && !known.has(name) : file.endsWith(".writing") && Date.now() - fs.statSync(path.join(SEARCH, file)).mtimeMs > 60_000;
+      if (gone) fs.rmSync(path.join(SEARCH, file), { force: true });
     }
   } catch {}
 }
@@ -183,9 +202,14 @@ function ownWords(written: string): string {
 }
 
 /** Text as it's compared: no case, no accents, letter for letter (one unit for each letter, so a
- * place in it is the same place in what it came from, counted in letters). */
+ * place in it is the same place in what it came from, counted in letters). A letter beyond one
+ * unit (an emoji) stands for itself in one of the units kept for private use. */
 function fold(text: string): string {
-  return Array.from(text, letter => letter.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().slice(0, 1) || "\u0000").join("");
+  return Array.from(text, letter => {
+    const plain = Array.from(letter.toLowerCase().normalize("NFD").replace(/\p{M}/gu, "").normalize("NFC"));
+    const point = (plain.length === 1 ? plain[0]! : letter).codePointAt(0) ?? 0;
+    return point <= 0xFFFF ? String.fromCharCode(point) : String.fromCharCode(0xE000 + (point % 0x1900));
+  }).join("");
 }
 
 /** A line's worth of `text` from just before the match at `at` (in letters, `length` long),
