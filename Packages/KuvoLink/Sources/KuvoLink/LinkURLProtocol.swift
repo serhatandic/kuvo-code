@@ -21,6 +21,14 @@ public final class LinkURLProtocol: URLProtocol, @unchecked Sendable {
         return configuration
     }
 
+    /// Lets go of the client a configuration from `configuration(client:hosts:)` sends through,
+    /// once no session made with it sends any more: a short-lived session (the share extension's)
+    /// leaves nothing behind.
+    public static func unregister(_ configuration: URLSessionConfiguration) {
+        guard let id = configuration.httpAdditionalHeaders?[Route.header] as? String else { return }
+        Route.unregister(id)
+    }
+
     private var loading: Task<Void, Never>?
 
     public override class func canInit(with request: URLRequest) -> Bool {
@@ -130,6 +138,10 @@ public final class LinkURLProtocol: URLProtocol, @unchecked Sendable {
             let id = UUID().uuidString
             lock.withLock { routes[id] = Route(client: client, hosts: hosts) }
             return id
+        }
+
+        static func unregister(_ id: String) {
+            lock.withLock { routes[id] = nil }
         }
 
         static func find(_ id: String) -> Route? {
