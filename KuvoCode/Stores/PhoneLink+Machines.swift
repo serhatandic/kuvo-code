@@ -97,8 +97,8 @@ extension PhoneLink {
         ]
         if let failure = engine.failure { entry["failure"] = failure }
         if let offer = engine.offer { entry["action"] = offer.rawValue }
-        // Another Mac runs it: that Mac (its name where its start noted one).
-        if engine.isAnotherMacsEngine { entry["anotherMac"] = engine.homeName.map { ["name": $0] } ?? [:] }
+        // Another Mac runs it: that Mac (its name where its start noted one), as `kuvo/info`'s `home`.
+        if let other = engine.otherMac { entry["home"] = other.name.map { ["name": $0] } ?? [:] }
         return entry
     }
 

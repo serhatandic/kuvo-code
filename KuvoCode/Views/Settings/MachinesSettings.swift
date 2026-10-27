@@ -11,10 +11,6 @@ struct MachinesSettings: View {
     @State private var notSame: (String, String)?
     /// A machine another Mac runs, to make this Mac its home once you say so.
     @State private var takingHome: MachineEngine?
-    /// The machines being moved to this Mac now, with the Mac each is moving from.
-    @State private var movingHome: [String: String] = [:]
-    /// Why one couldn't be moved here.
-    @State private var homeFailure: String?
 
     /// What keeps a machine from being reached, in a line, and why below it, read as one by
     /// VoiceOver. `again`: it can be set up again now (it's connected), with Set Up Again, its own
@@ -101,13 +97,13 @@ struct MachinesSettings: View {
         .confirmationDialog("Make This Mac \(takingHome?.machine.name ?? "")’s Home?", isPresented: Binding(get: { takingHome != nil }, set: { if !$0 { takingHome = nil } }), presenting: takingHome) { engine in
             Button("Make This Mac Its Home") { makeHome(engine) }
         } message: { engine in
-            let home = Self.anotherMac(engine) ?? "Another Mac"
-            Text("\(home == "Another Mac" ? "The Mac that runs it" : home) stops running \(engine.machine.name) and this Mac runs it from now on, with this Mac’s accounts. Its sessions, bots and settings stay on \(engine.machine.name), and \(home == "Another Mac" ? "that Mac" : home) still shows them.")
+            let home = Self.otherMac(engine)?.name
+            Text("\(home ?? "The Mac that runs it") stops running \(engine.machine.name) and this Mac runs it from now on, with this Mac’s accounts: models signed in only on \(home ?? "that Mac") won’t be there. Its sessions, bots and settings stay on \(engine.machine.name), and \(home ?? "that Mac") still shows them.")
         }
-        .alert("\(homeFailure == nil ? "" : "Couldn’t Make This Mac Its Home")", isPresented: Binding(get: { homeFailure != nil }, set: { if !$0 { homeFailure = nil } })) {
-            Button("OK") { homeFailure = nil }
+        .alert("Couldn’t Make This Mac Its Home", isPresented: Binding(get: { failedHome != nil }, set: { if !$0 { failedHome?.homeFailure = nil } })) {
+            Button("OK") { failedHome?.homeFailure = nil }
         } message: {
-            Text(homeFailure ?? "")
+            Text(failedHome?.homeFailure ?? "")
         }
         .confirmationDialog("Remove \(removing?.name ?? "")?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { machine in
             Button("Remove", role: .destructive) { app.removeMachine(machine.id) }
@@ -117,37 +113,44 @@ struct MachinesSettings: View {
         }
     }
 
-    /// The Mac that runs it, by its name ("Another Mac" when its start didn't say), when it's not
-    /// this one; nil when this Mac runs it.
-    static func anotherMac(_ engine: MachineEngine) -> String? {
+    /// The Mac that runs it, when it's not this one.
+    static func otherMac(_ engine: MachineEngine) -> MachineEngine.OtherMac? {
         #if DEBUG
         // KUVO_DEMO_MACHINE_HOME=<machine>|<Mac>: shown as that Mac's, for a look at the page.
         if let demo = ProcessInfo.processInfo.environment["KUVO_DEMO_MACHINE_HOME"]?.split(separator: "|").map(String.init), demo.first == engine.machine.id {
-            return demo.count > 1 ? demo[1] : "Another Mac"
+            return .init(name: demo.count > 1 ? demo[1] : nil)
         }
         #endif
-        return engine.isAnotherMacsEngine ? engine.homeName ?? "Another Mac" : nil
+        return engine.otherMac
+    }
+
+    /// A machine whose move here, asked for in Settings, didn't work: to say why.
+    private var failedHome: MachineEngine? {
+        app.machines.list.lazy.compactMap { app.machines.engine($0.id) }.first { $0.homeFailure != nil }
     }
 
     /// Another Mac runs it: what that means here, and the way to run it from this Mac instead.
-    private func anotherMacRuns(_ engine: MachineEngine, home: String) -> some View {
+    private func anotherMacRuns(_ engine: MachineEngine, home: MachineEngine.OtherMac) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: "exclamationmark.triangle")
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(home) runs it: its agents are reached from there.")
+                    Text("\(home.name ?? "Another Mac") runs it: its agents are reached from there.")
                     Text("Agents on this Mac’s computers can’t write to them, and this Mac’s group chats can’t name them.")
                         .font(.caption)
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityElement(children: .combine)
-                if movingHome[engine.machine.id] != nil {
+                if engine.movingHomeFrom != nil {
                     HStack(spacing: 6) {
                         Spinner(size: 12)
                         Text("Starting it from this Mac…")
                     }
                     .accessibilityElement(children: .combine)
+                } else if engine.boxIsNewer || engine.engineIsNewer {
+                    Text("A newer Kuvo Code runs it. Update Kuvo Code on this Mac to run it from here.")
+                        .fixedSize(horizontal: false, vertical: true)
                 } else {
                     Button("Make This Mac Its Home…") { takingHome = engine }
                         .buttonStyle(TextButtonStyle(outset: true))
@@ -161,14 +164,10 @@ struct MachinesSettings: View {
         .foregroundStyle(.secondary)
     }
 
+    /// Moves it here, and keeps why not on the machine: it's said once Settings shows again.
     private func makeHome(_ engine: MachineEngine) {
-        let id = engine.machine.id
-        movingHome[id] = Self.anotherMac(engine) ?? "Another Mac"
-        Task {
-            let why = await app.makeHome(engine)
-            movingHome[id] = nil
-            homeFailure = why
-        }
+        engine.homeFailure = nil
+        Task { engine.homeFailure = await app.makeHome(engine) }
     }
 
     private func row(_ engine: MachineEngine) -> some View {
@@ -190,7 +189,7 @@ struct MachinesSettings: View {
                     // (connecting sets it up too).
                     if let why = app.phoneLink.setupFailed[engine.machine.id] {
                         problem("Your phones and other computers can’t reach it yet.", why: why, again: engine)
-                    } else if let home = movingHome[engine.machine.id] ?? (engine.isReady ? Self.anotherMac(engine) : nil) {
+                    } else if let home = engine.movingHomeFrom ?? (engine.isReady ? Self.otherMac(engine) : nil) {
                         anotherMacRuns(engine, home: home)
                     } else if let (line, why) = app.phoneLink.peerProblem(of: engine.machine.id) {
                         problem(line, why: why, again: app.phoneLink.machineIsAnotherMacs(engine.machine.id) ? nil : engine)

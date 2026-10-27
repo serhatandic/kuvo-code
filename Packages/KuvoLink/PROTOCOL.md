@@ -996,8 +996,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     sessions, bots, sign-ins and keys, and still in `kuvo/hosts`: `200 {}`. `POST
     kuvo/machines/<id>/uninstall` does as Uninstall from <machine> does: also stops its engine
     there and deletes the sign-ins and keys it keeps, and it leaves `kuvo/hosts`: `200 {}`.
-  - A machine another Mac runs has `anotherMac` (`{"name"?}`, that Mac's name where its start noted
-    one). `POST kuvo/machines/<id>/home` makes this Mac its home, as Make This Mac Its Home does:
+  - A machine another Mac runs has `home` (`{"name"?}`, that Mac's name where its start noted
+    one, as `kuvo/info`'s `home` says it); one this Mac runs has none. `POST kuvo/machines/<id>/home` makes this Mac its home, as Make This Mac Its Home does:
     the engine starts again there as this Mac's, with this Mac's accounts; its sessions, bots and
     settings stay. `200 {"machine"}`, or `409 {"message"}` when this Mac runs it already, its
     agents are at work, or its box was set up by a newer Kuvo Code.

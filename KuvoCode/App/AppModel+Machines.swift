@@ -314,12 +314,17 @@ extension AppModel {
         let name = engine.machine.name
         guard engine.isReady else { return "\(name) isn’t connected. Connect it first." }
         guard engine.isAnotherMacsEngine else { return nil }
+        guard engine.movingHomeFrom == nil else { return "\(name) is moving to this Mac already." }
         if engine.boxIsNewer || engine.engineIsNewer { return "A newer Kuvo Code runs \(name). Update Kuvo Code on this Mac first." }
         let atWork = { [self] () async -> Bool in
             if workspace.isRunning(on: engine.machine.id) { return true }
             return (try? await engine.api?.activeSessions())?.isEmpty == false
         }
         if await atWork() { return "\(name)’s agents are at work. Try again once they’re done." }
+        // Asked twice meanwhile (here and from a phone): the first goes on.
+        guard engine.movingHomeFrom == nil else { return "\(name) is moving to this Mac already." }
+        engine.movingHomeFrom = engine.otherMac ?? .init()
+        defer { engine.movingHomeFrom = nil }
         engine.disconnect()
         workspace.forget(engine.machine.id)
         engine.takingHome = true

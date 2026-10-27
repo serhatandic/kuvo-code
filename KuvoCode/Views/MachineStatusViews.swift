@@ -12,7 +12,7 @@ struct MachineStatus: View {
         HStack(spacing: 5) {
             MachineIndicator(connection: engine.connection, size: 7)
             // Another Mac runs it: which one, where its start said.
-            Text((namesHome ? MachinesSettings.anotherMac(engine) : nil).map { engine.statusText + " · runs from " + ($0 == "Another Mac" ? "another Mac" : $0) } ?? engine.statusText)
+            Text((namesHome ? MachinesSettings.otherMac(engine) : nil).map { engine.statusText + " · runs from " + ($0.name ?? "another Mac") } ?? engine.statusText)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
