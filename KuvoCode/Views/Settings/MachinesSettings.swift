@@ -9,6 +9,12 @@ struct MachinesSettings: View {
     @State private var removing: Machine?
     /// Two machines you said were one computer, which said they're two.
     @State private var notSame: (String, String)?
+    /// A machine another Mac runs, to make this Mac its home once you say so.
+    @State private var takingHome: MachineEngine?
+    /// The machines being moved to this Mac now.
+    @State private var movingHome: Set<String> = []
+    /// Why one couldn't be moved here.
+    @State private var homeFailure: String?
 
     /// What keeps a machine from being reached, in a line, and why below it, read as one by
     /// VoiceOver. `again`: it can be set up again now (it's connected), with Set Up Again, its own
@@ -86,11 +92,61 @@ struct MachinesSettings: View {
         } message: {
             Text("Each told Kuvo Code its own name when it connected, and they differ, so they stay two machines.")
         }
+        .confirmationDialog("Make This Mac \(takingHome?.machine.name ?? "")’s Home?", isPresented: Binding(get: { takingHome != nil }, set: { if !$0 { takingHome = nil } }), presenting: takingHome) { engine in
+            Button("Make This Mac Its Home") { makeHome(engine) }
+        } message: { engine in
+            Text("\(engine.homeName ?? "The Mac that runs it") stops running \(engine.machine.name) and this Mac runs it from now on, with this Mac’s accounts. Its sessions, bots and settings stay on \(engine.machine.name), and \(engine.homeName ?? "that Mac") still shows them.")
+        }
+        .alert("\(homeFailure == nil ? "" : "Couldn’t Make This Mac Its Home")", isPresented: Binding(get: { homeFailure != nil }, set: { if !$0 { homeFailure = nil } })) {
+            Button("OK") { homeFailure = nil }
+        } message: {
+            Text(homeFailure ?? "")
+        }
         .confirmationDialog("Remove \(removing?.name ?? "")?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { machine in
             Button("Remove", role: .destructive) { app.removeMachine(machine.id) }
             Button("Uninstall from \(machine.name)", role: .destructive) { app.removeMachine(machine.id, uninstall: true) }
         } message: { machine in
             Text("Remove takes it off this Mac; it keeps running, with its sessions, bots, sign-ins and keys\(PhoneLink.isEnabled ? ", and your phones keep it" : ""). Uninstall also stops it there and deletes its sign-ins and keys.")
+        }
+    }
+
+    /// Another Mac runs it: what that means here, and the way to run it from this Mac instead.
+    private func anotherMacRuns(_ engine: MachineEngine) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle")
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(engine.homeName ?? "Another Mac") runs it: its agents are reached from there.")
+                    Text("Agents on this Mac’s computers can’t write to them, and this Mac’s group chats can’t name them.")
+                        .font(.caption)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityElement(children: .combine)
+                if movingHome.contains(engine.machine.id) {
+                    HStack(spacing: 6) {
+                        Spinner(size: 12)
+                        Text("Starting it from this Mac…")
+                    }
+                    .accessibilityElement(children: .combine)
+                } else {
+                    Button("Make This Mac Its Home…") { takingHome = engine }
+                        .buttonStyle(TextButtonStyle(outset: true))
+                        .fixedSize()
+                }
+            }
+        }
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+    }
+
+    private func makeHome(_ engine: MachineEngine) {
+        let id = engine.machine.id
+        movingHome.insert(id)
+        Task {
+            let why = await app.makeHome(engine)
+            movingHome.remove(id)
+            homeFailure = why
         }
     }
 
@@ -113,6 +169,8 @@ struct MachinesSettings: View {
                     // (connecting sets it up too).
                     if let why = app.phoneLink.setupFailed[engine.machine.id] {
                         problem("Your phones and other computers can’t reach it yet.", why: why, again: engine)
+                    } else if engine.isAnotherMacsEngine, engine.isReady {
+                        anotherMacRuns(engine)
                     } else if let (line, why) = app.phoneLink.peerProblem(of: engine.machine.id) {
                         problem(line, why: why, again: app.phoneLink.machineIsAnotherMacs(engine.machine.id) ? nil : engine)
                     }

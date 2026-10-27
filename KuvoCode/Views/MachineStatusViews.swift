@@ -9,7 +9,8 @@ struct MachineStatus: View {
     var body: some View {
         HStack(spacing: 5) {
             MachineIndicator(connection: engine.connection, size: 7)
-            Text(engine.statusText)
+            // Another Mac runs it: which one, where its start said.
+            Text(engine.isAnotherMacsEngine ? engine.statusText + " · runs from " + (engine.homeName ?? "another Mac") : engine.statusText)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
