@@ -89,6 +89,8 @@ struct Composer: View {
     @State private var answerFocus: (id: UUID, request: MessageField.FocusRequest)?
     /// Writes a picture's name where the caret is.
     @State private var field = MessageField.Handle()
+    /// How tall what you're saying is, in the field's place while you speak into it.
+    @State private var voiceHeight: CGFloat = 0
 
     /// The models its picker offers, by where the conversation lives (see `ModelScope.at`): the
     /// same for a session, a chat and a bot's conversation.
@@ -254,18 +256,20 @@ struct Composer: View {
                 .opacity(listening == nil ? 1 : 0)
                 .accessibilityHidden(listening != nil)
                 if let voice = listening {
-                    // A long draft shows its end, where the words come; long, they scroll, the
-                    // newest in view, no taller than the field gets.
-                    let words = VoiceWords(transcript: voice.transcript, font: Font(messageFont.field), placeholder: text.isEmpty && voice.phase == .listening ? "Listening…" : "",
-                                           before: text.count > 300 ? "…" + text.suffix(300) : text)
-                        .frame(maxWidth: .infinity, minHeight: 22, alignment: .topLeading)
-                    ViewThatFits(in: .vertical) {
-                        words.fixedSize(horizontal: false, vertical: true)
-                        ScrollView { words }
-                            .defaultScrollAnchor(.bottom, for: .initialOffset)
-                            .defaultScrollAnchor(.bottom, for: .sizeChanges)
+                    // A long draft shows its end, where the words come. As tall as the words, as
+                    // the field is as you type: a line at least, then scrolling, the newest in
+                    // view, past the field's own limit.
+                    let line = NSLayoutManager().defaultLineHeight(for: messageFont.field)
+                    ScrollView {
+                        VoiceWords(transcript: voice.transcript, font: Font(messageFont.field), placeholder: text.isEmpty && voice.phase == .listening ? "Listening…" : "",
+                                   before: text.count > 300 ? "…" + text.suffix(300) : text)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { voiceHeight = $0 }
                     }
-                    .frame(maxHeight: 220)
+                    .scrollBounceBehavior(.basedOnSize)
+                    .defaultScrollAnchor(.bottom, for: .sizeChanges)
+                    .frame(height: ceil(min(max(voiceHeight, line), line * 12)))
                 }
             }
             if keywordHint != nil {
