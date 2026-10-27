@@ -23,6 +23,8 @@ final class Onboarding {
     private(set) var found: Found?
     /// Counts the looks: only the latest one's answer counts.
     @ObservationIgnored private var looks = 0
+    /// The list came while the coding agents' bridge was up: an empty one is all there is.
+    private(set) var lookedWithAgents = false
     /// Why the list couldn't be read, in words.
     private(set) var lookFailure: String?
     /// opencode keys brought over just now, by id, and ones on their way.
@@ -98,13 +100,14 @@ final class Onboarding {
     // MARK: Subscriptions
 
     /// Reads the list from this computer's box. Again after a sign-in or an install changes it.
-    func look(in box: BoxClient) async {
+    func look(in box: BoxClient, agentsUp: Bool = false) async {
         looks += 1
         let look = looks
         do {
             let answer = try await box.value(Found.self, "GET", "kuvo/accounts/found")
             guard look == looks else { return }
             found = answer
+            lookedWithAgents = agentsUp
             lookFailure = nil
         } catch {
             // Given up for a newer look (the box came up meanwhile), or the box still starting (it's
@@ -150,6 +153,21 @@ final class Onboarding {
             return
         }
         usage = .on(following: result.following, failure: result.failure)
+    }
+
+    /// The coding agents, as the step looks for them.
+    enum AgentsLookup: Equatable {
+        case listed, looking
+        /// They can't be listed, and why.
+        case failed(String)
+    }
+
+    /// Whether the coding agents are listed, still being looked for, or can't be: their bridge
+    /// didn't start (`failure`), or was up and listed none.
+    func agents(failure: String?) -> AgentsLookup {
+        guard offers.agentsPending else { return .listed }
+        if let failure { return .failed(failure) }
+        return lookedWithAgents ? .failed("The coding agents didn’t answer.") : .looking
     }
 
     /// What the screen offers, from what was found.

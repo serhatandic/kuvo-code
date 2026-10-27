@@ -70,6 +70,23 @@ import UsageKit
         #expect(onboarding.found != nil)
     }
 
+    /// The coding agents' bridge never lists them (it didn't start, or answered with none): the
+    /// step stops looking for them and says so, rather than spinning on.
+    @Test func codingAgentsNeverListedSayItAndTryAgain() async {
+        let onboarding = Onboarding(defaults: defaults, launchedBefore: false, screen: ScreenAccess(source: Permissions().source))
+        let starting = StartingUp()
+        starting.isOn = false
+        let box = foundBox(starting)
+        // The bridge is still starting: looking.
+        await onboarding.look(in: box, agentsUp: false)
+        #expect(onboarding.agents(failure: nil) == .looking)
+        // It couldn't start: why, to try again.
+        #expect(onboarding.agents(failure: "It stopped.") == .failed("It stopped."))
+        // Up, and the box still lists none: not looking for ever.
+        await onboarding.look(in: box, agentsUp: true)
+        guard case .failed = onboarding.agents(failure: nil) else { return Issue.record("still looking") }
+    }
+
     // MARK: Moving on once a permission is granted
 
     @Test func bothAllowedMovesOnByItself() {

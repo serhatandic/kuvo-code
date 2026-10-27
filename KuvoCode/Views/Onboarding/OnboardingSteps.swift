@@ -38,7 +38,7 @@ struct SubscriptionsStep: View {
                     Button("Not Now") { onboarding.advance() }
                         .buttonStyle(.glass)
                     if lookFailure != nil {
-                        Button("Try Again") { Task { await onboarding.look(in: box) } }
+                        Button("Try Again") { Task { await onboarding.look(in: box, agentsUp: app.agents.api != nil) } }
                             .buttonStyle(.glassProminent)
                             .keyboardShortcut(.defaultAction)
                     }
@@ -47,7 +47,11 @@ struct SubscriptionsStep: View {
                 OnboardingPage(title: "Bring your subscriptions", detail: "Use the plans you pay for. Everything else works with free models.") {
                     VStack(alignment: .leading, spacing: 6) {
                         heading("Plans")
-                        if offers.agentsPending { AgentsPendingRow() }
+                        switch onboarding.agents(failure: app.agents.failure) {
+                        case .listed: EmptyView()
+                        case .looking: AgentsPendingRow(failure: nil, again: lookAgain)
+                        case .failed(let why): AgentsPendingRow(failure: why, again: lookAgain)
+                        }
                         ForEach(offers.plans) { row(for: $0) }
                         heading("Free")
                         FreeModelsRow()
@@ -74,7 +78,7 @@ struct SubscriptionsStep: View {
         // Again once this Mac's box and its engine are up, or back: the box names what it finds as
         // the engine does, and can start a moment after it.
         // And once the coding agents' bridge is up: it lists them.
-        .task(id: [app.box.endpoint != nil, app.engine == .ready, app.agents.api != nil]) { await onboarding.look(in: box) }
+        .task(id: [app.box.endpoint != nil, app.engine == .ready, app.agents.api != nil]) { await onboarding.look(in: box, agentsUp: app.agents.api != nil) }
         #if DEBUG
         // KUVO_DEMO_ADD_ANOTHER=plans|keys: Add Another open on that tab, for a look at it.
         .task {
@@ -166,7 +170,7 @@ struct SubscriptionsStep: View {
         case .install(let id):
             app.agents.install(id) { installed in
                 await catalog.refreshAgents(fresh: true)
-                await onboarding.look(in: box)
+                await onboarding.look(in: box, agentsUp: app.agents.api != nil)
                 if installed { signIn(id) }
             }
         }
@@ -180,20 +184,29 @@ struct SubscriptionsStep: View {
     private func lookAgain() {
         Task {
             await catalog.refreshAgents(fresh: true)
-            await onboarding.look(in: box)
+            await onboarding.look(in: box, agentsUp: app.agents.api != nil)
         }
     }
 }
 
-/// The coding agents, while their bridge starts: looked for again once it's up.
+/// The coding agents, while their bridge starts (looked for again once it's up), or why they
+/// can't be listed, to try again.
 private struct AgentsPendingRow: View {
+    let failure: String?
+    let again: () -> Void
+
     var body: some View {
-        OnboardingRow(title: "Coding agents", detail: "Looking for Claude Code, Codex, Cursor and the others…") {
+        OnboardingRow(title: "Coding agents", detail: failure.map { "Couldn’t look for them: \($0)" } ?? "Looking for Claude Code, Codex, Cursor and the others…") {
             Image(systemName: "terminal")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(.secondary)
         } trailing: {
-            Spinner(size: 12)
+            if failure == nil {
+                Spinner(size: 12)
+            } else {
+                Button("Try Again", action: again)
+                    .buttonStyle(.glass)
+            }
         }
     }
 }
