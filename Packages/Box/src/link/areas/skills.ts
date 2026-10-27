@@ -2,13 +2,12 @@
 
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { parsed } from "../../shared/json";
 import type { EngineRecord } from "../../shared/records";
 import type { DeletedSkill, SkillAbout, SkillCollection, SkillRepository as LibraryRepository, SkillLibrary, SkillNamed, Skills, SkillText, SkillTrash } from "../../shared/routes/skills";
 import { listOf, textOf } from "../files";
-import { ENGINE_CONFIG, IN_TEST_FOLDER, K } from "../home";
+import { ENGINE_CONFIG, IN_TEST_FOLDER, K, homeFolder } from "../home";
 import type { AnswerPiece, JSONAnswer, OtherStatus, RouteContext } from "../server/context";
 
 /** A collection of skills on GitHub, as the library lists it, and the branch its skills are read
@@ -216,7 +215,7 @@ function skillPlace(file: string | undefined): string {
   if (typeof file !== "string" || !file) return "elsewhere";
   if (file.startsWith("/builtin/")) return "built in";
   const folder = path.dirname(path.dirname(file));
-  const home = os.homedir();
+  const home = homeFolder();
   return `in ${folder === home || folder.startsWith(home + path.sep) ? "~" + folder.slice(home.length) : folder}`;
 }
 

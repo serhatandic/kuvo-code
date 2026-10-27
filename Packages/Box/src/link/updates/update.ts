@@ -23,7 +23,7 @@ import { ASKS_FILE } from "../areas/asks";
 import { asked, fetched, readBridgeFile, readEngineFile } from "../engine/client";
 import type { UncheckedAnswer } from "../engine/client";
 import { listOf, textOf, writePrivate } from "../files";
-import { K, RUN, UPDATES } from "../home";
+import { K, RUN, UPDATES, homeFolder } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { readLink, type LinkState } from "../state";
 
@@ -154,7 +154,7 @@ export function noteLauncher(readEngine: () => EngineRecord = readEngineFile, no
 // started its engine lately would put back older versions (one that didn't say it leaves a newer
 // box as it is).
 export function updatesBlocked(link: LinkState | null = readLink(), now = Date.now(), root = K): string | null {
-  if (path.resolve(root) !== path.join(os.homedir(), ".kuvo-code")) return "Only a machine's own Kuvo Code folder updates itself.";
+  if (path.resolve(root) !== path.join(homeFolder(), ".kuvo-code")) return "Only a machine's own Kuvo Code folder updates itself.";
   let launchers: Record<string, number> = {};
   try { launchers = JSON.parse(fs.readFileSync(LAUNCHERS, "utf8")) ?? {}; } catch {}
   const behind = Object.entries(launchers).filter(([mac, at]) => now - at < MAC_MEMORY && link?.tolerantIDs?.[mac] !== true);

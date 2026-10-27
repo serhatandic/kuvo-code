@@ -2,10 +2,10 @@
 // names, for Settings › MCP Servers to say so before the engine fails to start it.
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { ProgramFound } from "../../shared/routes/misc";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
+import { homeFolder } from "../home";
 
 /** `kuvo/programs?name=`: where this box runs a program from, as an MCP server's command names it
  * (`npx`, `uvx`, `docker`, or a path), found the way its engine finds one, on its PATH:
@@ -26,7 +26,7 @@ export function findProgram(requestPath: string, PATH: string = process.env.PATH
   // home: not known from here.
   if (/^\.\.?\//.test(name) || name.includes("$") || /^~[^/]/.test(name)) return { status: 200, value: { name, path: null, unknown: true } };
   if (name.includes("/")) {
-    const file = name.startsWith("~/") ? path.join(os.homedir(), name.slice(2)) : name;
+    const file = name.startsWith("~/") ? path.join(homeFolder(), name.slice(2)) : name;
     return { status: 200, value: { name, path: path.isAbsolute(file) && runnable(file) ? file : null } };
   }
   const found = PATH.split(path.delimiter).filter(Boolean).map(folder => path.join(folder, name)).find(runnable);

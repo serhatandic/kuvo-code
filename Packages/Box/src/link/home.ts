@@ -4,7 +4,13 @@
 import os from "node:os";
 import path from "node:path";
 
-export const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
+/** The home folder, as its HOME names it (as the shell and the engine have it), read each time: a
+ * test's own HOME counts under Bun too, which otherwise keeps the one it started with. */
+export function homeFolder(): string {
+  return process.env.HOME || os.homedir();
+}
+
+export const K = process.env.KUVO_HOME || path.join(homeFolder(), ".kuvo-code");
 export const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
 export const ENGINE_FILE = path.join(RUN, "engine.json");
@@ -21,7 +27,7 @@ export const VERSION_FILE = path.join(RUN, "link.version");
 // changes. Before a Mac made them the machine's own (`adoptBox`), its Mac's.
 export const BOX = path.join(K, "box");
 // The box's folder as its settings name it: "~/.kuvo-code", as the Mac's start wrote key paths.
-const home = os.homedir();
+const home = homeFolder();
 export const shownRoot = K.startsWith(home + "/") ? "~" + K.slice(home.length) : K;
 
 // Its integrations' keys (KUVO_KEY_…), and its bots' own.
@@ -46,7 +52,7 @@ export const WAKE_COMMAND = process.env.KUVO_WAKE_COMMAND || path.join(K, "bin",
 export const APP_KEY_FILES = process.env.KUVO_KEYS ? process.env.KUVO_KEYS.replace(/\/+$/, "") : null;
 // A test's folder (not a machine's own `~/.kuvo-code`), where a test's stand-ins for npm and
 // GitHub are taken.
-export const IN_TEST_FOLDER = path.resolve(K) !== path.join(os.homedir(), ".kuvo-code");
+export const IN_TEST_FOLDER = path.resolve(K) !== path.join(homeFolder(), ".kuvo-code");
 // The engine's settings and keys change one at a time, whoever changes them.
 export const CONFIG_LOCK = path.join(RUN, ".config.lock");
 
