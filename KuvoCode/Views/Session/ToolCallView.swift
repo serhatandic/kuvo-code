@@ -526,7 +526,7 @@ struct SubagentSteps: View {
                         .foregroundStyle(.tertiary)
                 }
             } else {
-                Spinner(size: 11)
+                Placeholder(.rows(count: 2), label: "Loading steps", fadesOut: false)
             }
         }
         .task(id: id) {

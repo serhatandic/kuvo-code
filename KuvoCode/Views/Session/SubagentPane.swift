@@ -158,15 +158,17 @@ struct SubagentPane: View {
     @State private var isMissing = false
 
     var body: some View {
-        Group {
+        // One over the other, so the placeholder fades as the conversation shows.
+        ZStack {
             if let model {
                 SubagentConversation(model: model, parent: parent, open: open)
             } else if isMissing {
                 ContentUnavailableView("Subagent Not Found", systemImage: "person.2", description: Text("Its session is gone, or its machine can't be reached. Close this tab."))
                     .frame(maxHeight: .infinity)
             } else {
-                Spinner(size: 16)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Placeholder(.lines(count: 8), label: "Loading subagent")
+                    .padding(20)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
         .task(id: id) {

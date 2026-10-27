@@ -815,7 +815,8 @@ private struct ImageDiff: View {
                         .foregroundStyle(.secondary)
                 }
             } else {
-                Spinner(size: 16)
+                Placeholder(.image, label: "Loading pictures", fadesOut: false)
+                    .frame(width: 200, height: 150)
             }
             Spacer(minLength: 0)
         }

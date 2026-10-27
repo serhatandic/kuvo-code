@@ -297,35 +297,39 @@ struct MadePopover: View {
 
     // MARK: Content
 
-    @ViewBuilder private var content: some View {
-        switch showsTimeline ? things.timelineState : things.state {
-        case .loading:
-            Spinner(size: 16)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityLabel("Loading")
-        case .failed(let why):
-            MadeNotice(symbol: "exclamationmark.triangle", title: "Can’t Show What Was Made", detail: why)
-        case .loaded:
-            if showsTimeline {
-                if things.entries.isEmpty {
-                    empty
-                } else {
-                    TimelineList(things: things, colored: place.isGroup, open: open)
-                }
-            } else if shown.isEmpty {
-                empty
-            } else if place.isSession {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(shown) { artifact in
-                            MadeRow(things: things, header: artifact.header, version: artifact.latest, versions: artifact.versions) { open(artifact.header) }
-                        }
+    private var content: some View {
+        // One over the other, so the placeholder fades as the list shows.
+        ZStack {
+            switch showsTimeline ? things.timelineState : things.state {
+            case .loading:
+                Placeholder(.rows(count: 4))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            case .failed(let why):
+                MadeNotice(symbol: "exclamationmark.triangle", title: "Can’t Show What Was Made", detail: why)
+            case .loaded:
+                if showsTimeline {
+                    if things.entries.isEmpty {
+                        empty
+                    } else {
+                        TimelineList(things: things, colored: place.isGroup, open: open)
                     }
-                    .padding(.vertical, 4)
-                    .padding(.bottom, 8)
+                } else if shown.isEmpty {
+                    empty
+                } else if place.isSession {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(shown) { artifact in
+                                MadeRow(things: things, header: artifact.header, version: artifact.latest, versions: artifact.versions) { open(artifact.header) }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                        .padding(.bottom, 8)
+                    }
+                } else {
+                    ShelfList(things: things, open: open)
                 }
-            } else {
-                ShelfList(things: things, open: open)
             }
         }
     }
@@ -891,8 +895,9 @@ struct ArtifactDetail: View {
                 MadeNotice(symbol: "exclamationmark.triangle", title: "Can’t Show It", detail: failure)
             } else {
                 Divider()
-                Spinner(size: 16)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Placeholder(.lines(count: 10), label: "Loading \(header.name)", fadesOut: false)
+                    .padding(16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
         .task(id: header.id) { await load() }
@@ -1233,7 +1238,8 @@ private struct VersionBody: View {
     }
 
     var body: some View {
-        Group {
+        // One over the other, so the placeholder fades as the version shows.
+        ZStack {
             if version.status == .deleted {
                 notice("Deleted", symbol: "trash", ArtifactWords.deleted(version, in: artifact.versions))
             } else if !version.kept, version.patch == nil {
@@ -1243,8 +1249,15 @@ private struct VersionBody: View {
                 notice("Can’t Show It", symbol: "exclamationmark.triangle", failure)
             } else {
                 switch loaded {
+                case nil where artifact.kind == .image || artifact.type.hasPrefix("image/"):
+                    // Where the picture will sit, fitted in the middle.
+                    Placeholder(.image, label: "Loading \(artifact.name)")
+                        .frame(maxWidth: 360, maxHeight: 270)
+                        .padding(12)
                 case nil:
-                    Spinner(size: 16).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    Placeholder(.lines(count: 10), label: "Loading \(artifact.name)")
+                        .padding(16)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 case .changes(.words(let lines, _, _)):
                     ScrollView { ChangedWords(lines: lines).transcriptFont().lineSpacing(3).padding(16) }
                 case .changes(.lines(let patch, _, _)):

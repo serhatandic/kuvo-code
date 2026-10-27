@@ -37,12 +37,8 @@ struct BoxFolderBrowser: View {
                     }
                 }
                 if listing == nil, failure == nil {
-                    HStack {
-                        Spacer()
-                        Spinner(size: 20)
-                        Spacer()
-                    }
-                    .padding(.vertical, 16)
+                    Placeholder(.rows(count: 4), label: "Loading folders", fadesOut: false)
+                        .padding(.vertical, 6)
                 } else if let listing, listing.folders.isEmpty {
                     Text("No folders in \(listing.path == listing.home ? "your home folder" : (listing.path as NSString).lastPathComponent).")
                         .foregroundStyle(.secondary)

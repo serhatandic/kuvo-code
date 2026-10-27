@@ -53,8 +53,8 @@ struct SkillsSettings: View {
         ScrollingSettingsForm {
             Section {
                 if skills == nil {
-                    Spinner(size: 16)
-                        .frame(maxWidth: .infinity)
+                    Placeholder(.rows(count: 3), label: "Loading skills", fadesOut: false)
+                        .padding(.vertical, 6)
                 } else if skills?.isEmpty == true {
                     Text("None yet.")
                         .foregroundStyle(.secondary)
@@ -146,8 +146,8 @@ struct SkillsSettings: View {
                         }
                     }
                 } else if collections == nil {
-                    Spinner(size: 16)
-                        .frame(maxWidth: .infinity)
+                    Placeholder(.rows(count: 3), label: "Loading collections", fadesOut: false)
+                        .padding(.vertical, 6)
                 }
                 ForEach(collections ?? []) { repository in
                     Button {
@@ -398,12 +398,8 @@ private struct RecentlyDeletedPage: View {
                         }
                     }
                 } else if deleted.entries == nil {
-                    HStack {
-                        Spacer()
-                        Spinner(size: 20)
-                        Spacer()
-                    }
-                    .padding(.vertical, 16)
+                    Placeholder(.rows(count: 3), label: "Loading recently deleted skills", fadesOut: false)
+                        .padding(.vertical, 6)
                 } else if deleted.entries?.isEmpty == true {
                     Text("No skills were deleted in the last 30 days.")
                         .foregroundStyle(.secondary)
@@ -755,12 +751,8 @@ private struct RepositorySkills: View {
                         }
                     }
                 } else if skills == nil {
-                    HStack {
-                        Spacer()
-                        Spinner(size: 20)
-                        Spacer()
-                    }
-                    .padding(.vertical, 16)
+                    Placeholder(.rows(count: 4), label: "Loading skills", fadesOut: false)
+                        .padding(.vertical, 6)
                 } else {
                     SettingsSearchRow(text: $query, prompt: "Filter skills")
                     if let installedFailure {

@@ -234,7 +234,9 @@ private struct FileTreeView: View {
                             MatchRow(path: match.path, isSelected: match.url == selected) { open(match.url) }
                         }
                         if tree.allFiles == nil {
-                            Spinner(size: 16).padding()
+                            Placeholder(.rows(count: 3), label: "Loading files", fadesOut: false)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
                         } else if tree.matches.isEmpty {
                             Text("No matching files")
                                 .font(.callout)
@@ -369,7 +371,8 @@ private struct FileViewer: View {
         VStack(spacing: 0) {
             header
             Divider()
-            Group {
+            // One over the other, so the placeholder fades as the file shows.
+            ZStack {
                 switch content {
                 case .text(let text) where isMarkdown && !showsSource:
                     ScrollView {
@@ -408,7 +411,9 @@ private struct FileViewer: View {
                 case .preview:
                     QuickLookView(url: url)
                 case nil:
-                    Spinner(size: 24).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    Placeholder(.lines(count: 14), label: "Loading \(url.lastPathComponent)")
+                        .padding(20)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

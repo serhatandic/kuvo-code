@@ -122,7 +122,10 @@ private struct ImageLightbox: View {
                         }
                         .help("Pinch or double-click to zoom")
                 } else {
-                    Spinner(size: 16)
+                    let room = fit(CGSize(width: 480, height: 360), in: CGSize(width: proxy.size.width - 96, height: proxy.size.height - 150))
+                    Placeholder(.image, label: "Loading picture")
+                        .frame(width: room.width, height: room.height)
+                        .environment(\.colorScheme, .dark)
                 }
                 if request.items.count > 1 {
                     HStack {
