@@ -44,15 +44,17 @@ struct TabItem: Identifiable, Equatable {
     }
 
     enum Status {
-        case idle, working, waiting, failed, unread
+        case idle, working, subagents, waiting, failed, unread, offline
 
         var help: String? {
             switch self {
             case .idle: nil
             case .working: "Working"
-            case .waiting: "Waiting for you"
+            case .subagents: "Subagents at work"
+            case .waiting: "Needs you"
             case .failed: "The last run failed"
             case .unread: "Finished"
+            case .offline: "Its machine isn’t connected"
             }
         }
     }
@@ -378,6 +380,8 @@ private struct StatusBadge: View {
     private var kind: StatusMark.Kind? {
         switch status {
         case .working: .working
+        case .subagents: .subagents
+        case .offline: .offline
         case .waiting: .needsYou
         case .failed: .failed
         case .unread: .new

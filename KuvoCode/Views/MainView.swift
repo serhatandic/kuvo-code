@@ -574,12 +574,17 @@ struct MainView: View {
         return catalog(for: folder).model(ref)?.makerLogoID ?? ref.providerID
     }
 
+    /// The sidebar row's own mark (`statusMark`), but news in view isn't news.
     private func status(of session: Session) -> TabItem.Status {
-        if workspace.needsAttention(session.id) { return .waiting }
-        if workspace.isWorking(session.id) { return .working }
-        if session.outcome == .failed { return .failed }
-        if session.isUnread, !sessionsInView.contains(session.id) { return .unread }
-        return .idle
+        switch statusMark(of: session, isNew: session.isUnread && !sessionsInView.contains(session.id), workspace: workspace, app: app) {
+        case .needsYou: .waiting
+        case .working: .working
+        case .subagents: .subagents
+        case .failed: .failed
+        case .new: .unread
+        case .offline: .offline
+        default: .idle
+        }
     }
 
     // MARK: Cards

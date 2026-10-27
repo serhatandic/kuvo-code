@@ -50,13 +50,20 @@ public struct StatusMark: View {
         }
     }
 
-    let kind: Kind
+    let kind: Kind?
     let size: CGFloat
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
 
     public init(_ kind: Kind, size: CGFloat = 14) {
+        self.kind = kind
+        self.size = size
+    }
+
+    /// A place that shows a state when there is one, and nothing (keeping its room) when there
+    /// isn't: kept in place, a state that comes plays its arrival.
+    public init(showing kind: Kind?, size: CGFloat = 14) {
         self.kind = kind
         self.size = size
     }
@@ -68,7 +75,8 @@ public struct StatusMark: View {
             .alignmentGuide(.firstTextBaseline) { $0.height * 0.85 }
             .alignmentGuide(.lastTextBaseline) { $0.height * 0.85 }
             .accessibilityElement()
-            .accessibilityLabel(kind.words)
+            .accessibilityLabel(kind?.words ?? "")
+            .accessibilityHidden(kind == nil)
     }
 }
 
@@ -112,7 +120,7 @@ struct StatusMarkInk: Equatable {
 
 #if os(macOS)
 private struct StatusMarkHost: NSViewRepresentable {
-    let kind: StatusMark.Kind
+    let kind: StatusMark.Kind?
     let size: CGFloat
     let still: Bool
     let ink: StatusMarkInk
@@ -154,7 +162,7 @@ final class StatusMarkView: NSView {
 }
 #else
 private struct StatusMarkHost: UIViewRepresentable {
-    let kind: StatusMark.Kind
+    let kind: StatusMark.Kind?
     let size: CGFloat
     let still: Bool
     let ink: StatusMarkInk
@@ -162,7 +170,6 @@ private struct StatusMarkHost: UIViewRepresentable {
     func makeUIView(context: Context) -> StatusMarkView { StatusMarkView() }
 
     func updateUIView(_ view: StatusMarkView, context: Context) {
-        view.mark.scale = view.traitCollection.displayScale
         view.mark.show(kind, size: size, still: still, ink: ink)
     }
 }
@@ -174,6 +181,13 @@ final class StatusMarkView: UIView {
         super.init(frame: .zero)
         isUserInteractionEnabled = false
         layer.addSublayer(mark)
+        registerForTraitChanges([UITraitDisplayScale.self]) { (view: StatusMarkView, _) in view.mark.scale = view.traitCollection.displayScale }
+    }
+
+    // Its screen's scale is known once it's in a window.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        mark.scale = window?.screen.scale ?? traitCollection.displayScale
     }
 
     @available(*, unavailable)
@@ -191,12 +205,12 @@ final class StatusMarkView: UIView {
 
 /// The mark's layers, drawn in a 16-point square scaled to its size, and its motion as keyframes.
 final class StatusMarkLayer: CALayer {
-    private var shown: (kind: StatusMark.Kind, size: CGFloat, still: Bool, ink: StatusMarkInk)?
+    private var shown: (kind: StatusMark.Kind?, size: CGFloat, still: Bool, ink: StatusMarkInk)?
     var scale: CGFloat = 2 {
         didSet { if scale != oldValue { sublayers?.forEach { $0.contentsScale = scale } } }
     }
 
-    func show(_ kind: StatusMark.Kind, size: CGFloat, still: Bool, ink: StatusMarkInk) {
+    func show(_ kind: StatusMark.Kind?, size: CGFloat, still: Bool, ink: StatusMarkInk) {
         if let shown, shown.kind == kind, shown.size == size, shown.still == still, shown.ink == ink { return }
         // A change of state on screen arrives with its own small motion; one first drawn doesn't,
         // so rows scrolled into view stay calm.
@@ -207,12 +221,13 @@ final class StatusMarkLayer: CALayer {
 
     // MARK: Drawing
 
-    private func build(_ kind: StatusMark.Kind, size: CGFloat, still: Bool, ink: StatusMarkInk, arrives: Bool) {
+    private func build(_ kind: StatusMark.Kind?, size: CGFloat, still: Bool, ink: StatusMarkInk, arrives: Bool) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
         sublayers?.forEach { $0.removeFromSuperlayer() }
         removeAllAnimations()
+        guard let kind else { return }
         let k = size / 16
         let line = max(1.2, 1.5 * k)
         let box = CGRect(x: 0, y: 0, width: size, height: size)

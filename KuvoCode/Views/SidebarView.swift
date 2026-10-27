@@ -78,6 +78,9 @@ struct SidebarView: View {
         Array(conversationFinds.values.flatMap(\.self).sorted { $0.session.time.updated > $1.session.time.updated }.prefix(20))
     }
     @State private var isSearchingConversations = false
+    /// The computers asked for this search, and those that have answered: each says so in turn.
+    @State private var searchAsked: [String] = []
+    @State private var searchAnswered: Set<String> = []
 
     /// A project lists this many sessions until you ask for the rest.
     private static let sessionsPerProject = 5
@@ -231,11 +234,14 @@ struct SidebarView: View {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
             isSearchingConversations = true
+            searchAsked = [BoxClient.mac] + workspace.connectedMachines.sorted()
+            searchAnswered = []
             // Each box's as it answers: one that's slow or far holds none of the others up.
             var answered: Set<String> = []
             let found = await workspace.searchConversations(query) { box, finds in
                 guard !Task.isCancelled else { return }
                 answered.insert(box)
+                searchAnswered.insert(box)
                 conversationFinds[box] = finds
             }
             guard !Task.isCancelled else { return }
@@ -499,7 +505,14 @@ struct SidebarView: View {
         let unsearched = search.trimmingCharacters(in: .whitespaces).count >= 3 && !isSearchingConversations ? workspace.unsearched.sorted { $0.key < $1.key } : []
         if !inConversations.isEmpty || isSearchingConversations || !unsearched.isEmpty {
             SectionHeader(title: "In Conversations") {
-                if isSearchingConversations { Spinner(size: 11).padding(.trailing, 6) }
+                // One computer: its wait in the heading. More: each says so below as it answers.
+                if isSearchingConversations && searchAsked.count < 2 { Spinner(size: 11).padding(.trailing, 6) }
+            }
+            if isSearchingConversations && searchAsked.count > 1 {
+                ForEach(searchAsked, id: \.self) { box in
+                    SearchedComputer(name: box == BoxClient.mac ? "This Mac" : app.machines.engine(box)?.machine.name ?? box,
+                                     found: searchAnswered.contains(box) ? (conversationFinds[box]?.count ?? 0) : nil)
+                }
             }
             ForEach(inConversations, id: \.found.id) { result in
                 let show = {
@@ -880,10 +893,7 @@ struct SidebarView: View {
                     .foregroundStyle(.tertiary)
             } else {
                 HStack(spacing: 6) {
-                    if let destination = app.moves.underWay[session.id] {
-                        StatusMark(.working)
-                            .help("Moving to \(destination ?? "this Mac")…")
-                    } else if !search.isEmpty, Workspace.isChat(session.location.directory), let machine = RemoteFolder.machine(of: session.location.directory) {
+                    if !search.isEmpty, Workspace.isChat(session.location.directory), let machine = RemoteFolder.machine(of: session.location.directory) {
                         Image(systemName: "server.rack")
                             .font(.system(size: 10))
                             .foregroundStyle(.tertiary)
@@ -1157,7 +1167,7 @@ struct RowHighlight: ViewModifier {
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: 8)
-        let fill = isSelected ? (scheme == .dark ? 0.1 : 0.075) : isHovering ? (scheme == .dark ? 0.06 : 0.045) : 0
+        let fill = isSelected ? (scheme == .dark ? 0.1 : 0.08) : isHovering ? (scheme == .dark ? 0.06 : 0.045) : 0
         content
             .background(alignment: .leading) {
                 shape.fill(Color.primary.opacity(fill))
@@ -1578,6 +1588,38 @@ private struct SectionHeader<Trailing: View>: View {
     }
 }
 
+/// A computer asked for a search of its conversations: its name, and, once it has answered, a
+/// check and how many it found; dots while it's being asked.
+private struct SearchedComputer: View {
+    let name: String
+    /// What it found, once it has answered.
+    let found: Int?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(name)
+                .foregroundStyle(.secondary)
+            if let found {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.green)
+                Spacer(minLength: 6)
+                Text(found == 0 ? "None" : "\(found) found")
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+            } else {
+                AskingDots()
+                Spacer(minLength: 6)
+            }
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 10)
+        .frame(height: 24)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(found.map { "\(name), \($0 == 0 ? "nothing" : "\($0)") found" } ?? "\(name), searching")
+    }
+}
+
 /// "Move to Project ›": a chat's way into one of the projects on its computer.
 private struct MoveToProjectMenu: View {
     let session: Session
@@ -1721,7 +1763,33 @@ private struct MoveToComputerMenu: View {
     }
 }
 
-/// How a session is doing, at the end of its row.
+/// What a session's row and its tab show: one place decides, so the two always agree. A move to
+/// another computer is work; a machine that's getting there (connecting, installing) isn't away.
+@MainActor func statusMark(of session: Session, isNew: Bool, workspace: Workspace, app: AppModel) -> StatusMark.Kind? {
+    let id = session.id
+    let moving = app.moves.underWay[id] != nil
+    let working = workspace.isWorking(id) || moving
+    return ConversationState.kind(
+        needsYou: workspace.needsAttention(id),
+        working: working,
+        subagentsOnly: !moving && working && !workspace.running.contains(id) && workspace.helpersAtWork(in: id) > 0,
+        failed: session.outcome == .failed,
+        isNew: isNew,
+        offline: awayMachine(of: session, app: app) != nil,
+        wakes: app.wakeUps.wakes[id]?.isEmpty == false,
+        watching: app.wakeUps.watches[id]?.isEmpty == false)
+}
+
+/// The machine a session lives on, by name, while that machine isn't connected and isn't on its
+/// way to it.
+@MainActor func awayMachine(of session: Session, app: AppModel) -> String? {
+    guard let machine = RemoteFolder.machine(of: session.location.directory), let engine = app.machines.engine(machine),
+          !engine.isReady, !engine.connection.isUnderWay else { return nil }
+    return engine.machine.name
+}
+
+/// How a session is doing, at the end of its row. One mark stays in place while the state comes
+/// and goes, so a state arriving on screen plays its arrival.
 private struct SessionStatus: View {
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
@@ -1730,42 +1798,22 @@ private struct SessionStatus: View {
     /// seen through the session above it; a folded session has a sub-session's news).
     var isUnread: Bool?
 
-    /// The machine it lives on, while that machine isn't connected.
-    private var awayMachine: String? {
-        guard let machine = RemoteFolder.machine(of: session.location.directory), app.machines.engine(machine)?.isReady != true else { return nil }
-        return app.machines.engine(machine)?.machine.name ?? machine
-    }
-
-    private var kind: StatusMark.Kind? {
-        let working = workspace.isWorking(session.id)
-        return ConversationState.kind(
-            needsYou: workspace.needsAttention(session.id),
-            working: working,
-            subagentsOnly: working && !workspace.running.contains(session.id) && workspace.helpersAtWork(in: session.id) > 0,
-            failed: session.outcome == .failed,
-            isNew: isUnread ?? session.isUnread,
-            offline: awayMachine != nil,
-            wakes: app.wakeUps.wakes[session.id]?.isEmpty == false,
-            watching: app.wakeUps.watches[session.id]?.isEmpty == false)
-    }
-
     var body: some View {
-        if let kind {
-            StatusMark(kind)
-                .help(help(kind))
-        }
+        let kind = statusMark(of: session, isNew: isUnread ?? session.isUnread, workspace: workspace, app: app)
+        StatusMark(showing: kind)
+            .help(kind.map(help) ?? "")
     }
 
     private func help(_ kind: StatusMark.Kind) -> String {
         switch kind {
-        case .needsYou: "Waiting for you"
+        case .working:
+            app.moves.underWay[session.id].map { "Moving to \($0 ?? "this Mac")…" } ?? kind.words
         case .subagents: workspace.helpersAtWork(in: session.id).counting("subagent") + " at work"
         case .failed: "The last run failed"
         case .new: "Finished"
-        case .offline: "\(awayMachine ?? "Its machine") isn’t connected"
+        case .offline: "\(awayMachine(of: session, app: app) ?? "Its machine") isn’t connected"
         case .wake:
             app.wakeUps.wakes[session.id]?.first.map { "Wakes up " + $0.due.formatted(Date.RelativeFormatStyle(presentation: .named, unitsStyle: .wide)) } ?? kind.words
-        case .watching: "Watching for a change"
         default: kind.words
         }
     }
@@ -1891,7 +1939,7 @@ private struct SubSessionRow: View {
             .padding(.trailing, 10)
             .frame(height: SidebarMetrics.rowHeight)
             // From just before its title: the line and its elbow stay in view.
-            .modifier(RowHighlight(isSelected: isSelected, leading: inset - 8))
+            .modifier(RowHighlight(isSelected: isSelected, leading: inset - 5))
         }
         .buttonStyle(.plain)
         .clickablePointer()
