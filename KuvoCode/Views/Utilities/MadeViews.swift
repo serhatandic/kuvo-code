@@ -85,6 +85,7 @@ struct MadeButton: View {
                 .accessibilityValue(hasNew(things) ? "Something new" : "")
                 .popover(isPresented: $isOpen, arrowEdge: .bottom) {
                     MadePopover(things: things, place: place) { isOpen = false }
+                    .popoverContent()
                         // The conversation card's own surface, edge to edge: the popover's see-through
                         // material showed the window under one part and the desktop under another.
                         .presentationBackground(Surface.cardFill(scheme, focused: true))

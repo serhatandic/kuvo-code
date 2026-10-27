@@ -1434,6 +1434,7 @@ private struct TurnFiles: View {
             .font(.callout)
             .padding(8)
             .frame(width: 320)
+            .popoverContent()
         }
     }
 

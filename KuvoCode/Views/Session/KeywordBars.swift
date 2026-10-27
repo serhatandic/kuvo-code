@@ -297,6 +297,7 @@ struct ReviewBar: View {
                             } keep: {
                                 confirmsCancel = false
                             }
+                            .popoverContent()
                         }
                 }
             if !isHidden, review.state != .reviewing {
