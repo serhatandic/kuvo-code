@@ -1203,7 +1203,7 @@ private struct VersionBody: View {
     var body: some View {
         Group {
             if version.status == .deleted {
-                notice("Deleted", symbol: "trash", "It was deleted in this version. Step back to see what it was.")
+                notice("Deleted", symbol: "trash", ArtifactWords.deleted(version, in: artifact.versions))
             } else if !version.kept, version.patch == nil {
                 notice(version.reason == .secret || version.reason == .ignored ? "Not Kept" : "No Copy", symbol: version.reason == .secret ? "lock" : "clock.arrow.circlepath",
                        version.reason?.words ?? (version.before == true ? "What it was before couldn’t be read." : ArtifactVersion.NoCopy.cleared.words))

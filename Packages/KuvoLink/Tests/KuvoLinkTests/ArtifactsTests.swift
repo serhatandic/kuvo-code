@@ -72,6 +72,15 @@ import Testing
         #expect(ArtifactWords.name(memory[1].header, bot: "Ben") == "notes.md")
     }
 
+    @Test func aDeletionSaysWhetherThereIsAnythingToStepBackTo() throws {
+        let decode = { (json: String) in try JSONDecoder().decode(ArtifactVersion.self, from: Data(json.utf8)) }
+        let made = try decode(#"{"n": 1, "by": {"kind": "agent"}, "status": "added", "at": 1, "via": ["shell"], "edits": 1, "size": 9, "hash": "sha256:a", "kept": true}"#)
+        let gone = try decode(#"{"n": 2, "by": {"kind": "agent"}, "status": "deleted", "at": 2, "via": ["shell"], "edits": 1, "size": 0, "hash": null, "kept": false}"#)
+        let alone = try decode(#"{"n": 1, "by": {"kind": "agent"}, "status": "deleted", "at": 2, "via": ["shell"], "edits": 1, "size": 0, "hash": null, "kept": false}"#)
+        #expect(ArtifactWords.deleted(gone, in: [made, gone]).contains("Step back"))
+        #expect(ArtifactWords.deleted(alone, in: [alone]) == "It was deleted in this version. No earlier copy of it was kept.")
+    }
+
     @Test func eachVersionSaysWhatHappenedToIt() throws {
         let decode = { (json: String) in try JSONDecoder().decode(ArtifactVersion.self, from: Data(json.utf8)) }
         let base = #""at": 1, "via": ["write"], "edits": 1, "size": 1, "hash": null, "kept": true"#

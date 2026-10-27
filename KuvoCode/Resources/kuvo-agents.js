@@ -1096,7 +1096,7 @@ class ArtifactStore {
   }
   add(artifact, change, made, now, bytes) {
     const latest = artifact.versions.at(-1);
-    const replacing = latest && this.sameTurn(latest, made, now) ? latest : undefined;
+    const replacing = latest && change.status !== "deleted" && this.sameTurn(latest, made, now) ? latest : undefined;
     const previous = replacing ? artifact.versions.at(-2) : latest;
     const version = {
       n: replacing ? replacing.n : (latest?.n ?? 0) + 1,
@@ -1976,7 +1976,7 @@ class Recorder {
         continue;
       const path = absolute(file.file);
       if (!this.store.at(path) && file.status !== "added" && typeof file.patch === "string")
-        await this.seedBefore(path, file.patch);
+        await this.seedBefore(path, file.patch, file.status === "deleted");
       await this.store.change(path, { ...made(name), ...typeof file.patch === "string" ? { patch: file.patch } : {} });
     }
     const written = input.path ?? input.filePath ?? input.file_path;
@@ -2003,10 +2003,10 @@ class Recorder {
         await this.store.pin(artifact.id, { by: "bot", ...typeof input.note === "string" && input.note ? { note: input.note } : {} });
     }
   }
-  async seedBefore(path, patch) {
+  async seedBefore(path, patch, deleted = false) {
     let now;
     try {
-      now = readFileSync5(path, "utf8");
+      now = deleted ? "" : readFileSync5(path, "utf8");
     } catch {
       return;
     }
@@ -19009,4 +19009,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents c416aa40cbfefc43ad91fb670edb5d3a479b5209c53b78101b507573d2dd2e3b
+// Built from Packages/Box/src/agents f7d67953434844ddc53b6dbc026cb98bc1ff6d5d7318024032d7089332dcb1b6
