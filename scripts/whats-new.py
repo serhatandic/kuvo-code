@@ -61,7 +61,10 @@ def releases(changelog):
                     sys.exit(f"A highlight needs **its title**, a line, and <!-- symbol: … -->: {item}")
                 item = None
                 return
-            highlight = {"title": match["title"].rstrip(".:"), "line": match["line"].strip(), "symbol": found_notes["symbol"]}
+            # "**Title**: write …" reads as a sentence of its own under the title: "Write …".
+            line = match["line"].strip()
+            line = line[:1].upper() + line[1:]
+            highlight = {"title": match["title"].rstrip(".:"), "line": line, "symbol": found_notes["symbol"]}
             for key in ("open", "picture"):
                 if found_notes.get(key):
                     highlight[key] = found_notes[key]

@@ -41,7 +41,7 @@ class WhatsNewTests(unittest.TestCase):
         self.assertEqual([each["version"] for each in releases], ["Unreleased", "0.7.2"])
         self.assertEqual(releases[0]["highlights"], [{
             "title": "Goals that keep going",
-            "line": "write `/goal all tests pass`, and **it** keeps at it.",
+            "line": "Write `/goal all tests pass`, and **it** keeps at it.",
             "symbol": "target",
             "open": "settings/worktrees",
         }])
