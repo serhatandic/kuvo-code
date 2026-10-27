@@ -103,7 +103,8 @@ scripts/heavy.sh box sh -c 'cd Packages/Box && bun test'
 - `box`: the box's whole suites (`bun test`, `node --test`) and runs on a test machine.
 
 A job also waits while the Mac is busy (its load over the last minute above 40;
-`KUVO_HEAVY_LOAD` sets another). Both apps' `scripts/test-app.sh` take their turn
+`KUVO_HEAVY_LOAD` sets another). Until 2026-10-28, while other checkouts still take
+the old single lock, jobs also take it as they run, so kinds take turns as before. Both apps' `scripts/test-app.sh` take their turn
 this way themselves. `python3 -m unittest discover -s scripts -p test_heavy.py`
 tries the helper.
 

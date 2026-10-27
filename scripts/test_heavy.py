@@ -35,7 +35,8 @@ class Held:
 class HeavyTests(unittest.TestCase):
     def setUp(self):
         self.locks = tempfile.mkdtemp()
-        self.env = dict(os.environ, KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000")
+        # As from the 29th, when the old single lock is over (the day before, test_the_day_before).
+        self.env = dict(os.environ, KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_OLD_UNTIL="20000101")
 
     def run_heavy(self, kind, *command, **env):
         result = subprocess.run([HEAVY, kind, *command], env=dict(self.env, KUVO_HEAVY_WAIT="0", **env), capture_output=True, text=True, timeout=30)
@@ -64,25 +65,33 @@ class HeavyTests(unittest.TestCase):
         self.assertEqual(holds(HEAVY, "mac", HEAVY, "--holds", "mac"), 0)
         self.assertEqual(holds(HEAVY, "phone", HEAVY, "--holds", "mac"), 1)
 
-    def test_a_job_started_the_old_way_holds_up_every_kind(self):
+    def test_the_day_before_jobs_started_the_old_way_and_these_take_turns(self):
+        """Until the 28th, other checkouts start jobs under the old single lock: one of those holds
+        up every kind, and one of these holds that lock as it runs, so none starts beside it."""
+        transition = dict(self.env, KUVO_HEAVY_OLD_UNTIL="20991231")
         old = os.path.join(self.locks, f"kuvo-code-heavy-{os.getuid()}.lock")
-        job = Held(["lockf", "-k", old], self.env)
+        job = Held(["lockf", "-k", old], transition)
         try:
             for kind in ("mac", "phone", "box"):
-                code, said = self.run_heavy(kind, "true")
+                code, said = self.run_heavy(kind, "true", KUVO_HEAVY_OLD_UNTIL="20991231")
                 self.assertEqual(code, WAITS, kind)
                 self.assertIn("started the old way", said)
         finally:
             job.let_go()
-        # Once the old lock's day is over, it holds nothing up.
+        mac = Held([HEAVY, "mac"], transition)
+        try:
+            taken = subprocess.run(["lockf", "-ks", "-t", "0", old, "true"], timeout=30)
+            self.assertNotEqual(taken.returncode, 0, "an old-style job would start beside it")
+        finally:
+            mac.let_go()
+        # From the 29th, it holds nothing up.
         job = Held(["lockf", "-k", old], self.env)
         try:
-            self.assertEqual(self.run_heavy("mac", "true", KUVO_HEAVY_OLD_UNTIL="20000101")[0], 0)
+            self.assertEqual(self.run_heavy("mac", "true")[0], 0)
         finally:
             job.let_go()
-        # One run inside it (its test-app.sh) goes on at once.
-        inside = subprocess.run(["lockf", "-k", old, HEAVY, "mac", "true"], env=dict(self.env, KUVO_HEAVY_WAIT="0"), timeout=30)
-        self.assertEqual(inside.returncode, 0)
+        inside = subprocess.run(["lockf", "-k", old, HEAVY, "mac", "true"], env=dict(transition, KUVO_HEAVY_WAIT="0"), timeout=30)
+        self.assertEqual(inside.returncode, 0, "a job inside an old-style one runs at once")
 
     def test_a_busy_mac_holds_a_job_back(self):
         code, said = self.run_heavy("box", "true", KUVO_HEAVY_LOAD="-1")
