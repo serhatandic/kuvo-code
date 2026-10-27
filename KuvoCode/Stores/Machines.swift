@@ -1262,22 +1262,6 @@ nonisolated enum RemoteShell {
               result.succeeded else { return nil }
         return result.output
     }
-
-    /// Copies `file` into `folder` under the home folder of `machine` (inside Kuvo Code's own,
-    /// `~/.kuvo-code/...`): its full path there, or nil when it couldn't. The folder is made for
-    /// it, and isn't used if it's there already, so a file never takes another's place. Copies
-    /// there more than two weeks old go, so attachments don't pile up. As long as the copy takes.
-    static func upload(_ file: URL, into folder: String, on machine: String) -> String? {
-        let parent = "\"$HOME\"/" + SSHConnection.quoted((folder as NSString).deletingLastPathComponent)
-        let target = "\"$HOME\"/" + SSHConnection.quoted(folder)
-        let name = SSHConnection.quoted(file.lastPathComponent)
-        let script = "find \(parent) -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf {} + 2>/dev/null; umask 077; mkdir -p \(parent) && mkdir \(target) && cat > \(target)/\(name) && cd \(target) && printf '%s/%s' \"$(pwd -P)\" \(name)"
-        guard let result = try? ChildProcess.runBlocking("/usr/bin/ssh", SSHConnection(destination: machine).arguments(running: script),
-                                                         input: .file(file), errors: .discard),
-              result.succeeded else { return nil }
-        let path = result.outputText
-        return path.hasPrefix("/") ? path : nil
-    }
 }
 
 nonisolated extension RemoteFolder {

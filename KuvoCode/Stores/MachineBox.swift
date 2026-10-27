@@ -197,6 +197,35 @@ enum MachineBox {
         return (routed.status, routed.bodyBase64.flatMap { Data(base64Encoded: $0) } ?? Data((routed.body ?? "").utf8))
     }
 
+    /// A message with files for a session on a machine, through its box, as a phone's goes: the
+    /// box keeps the files there for the agent and gives the model as files what it reads, saying
+    /// where they are in a note at the message's end (the box's `attachedIn`).
+    static func prompt(session: String, id: String, text: String, files: [OpenCodeAPI.PromptFile], delivery: InboxItem.Delivery, on connection: SSHConnection) async throws {
+        try await send(session: session, kind: "prompt", body: ["id": id, "text": text, "files": files.map(described), "delivery": delivery.rawValue], on: connection)
+    }
+
+    /// A command with files, the same way.
+    static func command(session: String, name: String, text: String, files: [OpenCodeAPI.PromptFile], delivery: InboxItem.Delivery?, on connection: SSHConnection) async throws {
+        var body: [String: Any] = ["name": name, "text": text, "files": files.map(described)]
+        if let delivery { body["delivery"] = delivery.rawValue }
+        try await send(session: session, kind: "command", body: body, on: connection)
+    }
+
+    private static func described(_ file: OpenCodeAPI.PromptFile) -> [String: Any] {
+        var described: [String: Any] = ["uri": file.uri]
+        if let name = file.name { described["name"] = name }
+        return described
+    }
+
+    private static func send(session: String, kind: String, body: [String: Any], on connection: SSHConnection) async throws {
+        let escaped = session.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? session
+        let (status, data) = try await route("POST", "api/session/\(escaped)/\(kind)", body: body, on: connection)
+        guard (200..<300).contains(status) else {
+            struct Said: Decodable { var message: String? }
+            throw Failure.refused((try? JSONDecoder().decode(Said.self, from: data))?.message ?? "The machine didn't take it (\(status)).")
+        }
+    }
+
     /// What `kuvo-link.js box <arguments>` answered (its last line, JSON), or why not.
     private static func answer(_ arguments: String, input: Data?, on connection: SSHConnection) async throws -> Data {
         let output = try await lastLine(arguments, input: input, on: connection)

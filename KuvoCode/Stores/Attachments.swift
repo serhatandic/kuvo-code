@@ -118,35 +118,32 @@ nonisolated enum Attachments {
         return prepared
     }
 
-    /// The same, for an engine on `machine`, which can't read this Mac's files: what the model
-    /// takes goes inline, as data (a folder as its listing, as the engine lists one); anything
-    /// else is copied to the machine, into Kuvo Code's folder there, for the agent to open with
-    /// its tools, each in a folder of its own (two can have the same name). A file that can't be
-    /// read or copied goes in the note as on the user's Mac. Where the inline ones are on the Mac
-    /// isn't said: the agent there couldn't open them.
-    static func prepare(_ urls: [URL], for model: Model?, machine: String) -> Prepared {
-        let here = prepare(urls, for: model)
+    /// The same, for an engine on a machine, which can't read this Mac's files: each goes to the
+    /// machine's box with its contents, whatever it is (a folder as its listing, as the engine lists
+    /// one; a picture as the engine takes one), as a phone's do. The box keeps it there for the agent
+    /// and gives the model what it reads (`MachineBox.prompt`), and its note says where. One that
+    /// can't be read, or is too big to send, stays here, and the note says so.
+    static func prepareForMachine(_ urls: [URL]) -> Prepared {
         var prepared = Prepared()
-        // Each file sent with its contents, with where it was picked.
-        for (file, picked) in zip(here.files, here.included) {
-            if let url = URL(string: file.uri), url.isFileURL, let inline = inlined(url) {
-                prepared.files.append(.init(uri: inline, name: file.name))
-            } else {
-                prepared.unsent.append(picked)
+        for url in urls {
+            var file = target(of: url)
+            if kind(of: url) == .image {
+                let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                if let image = engineImage(from: file, named: url.lastPathComponent, size: size), let converted = URL(string: image.uri) { file = converted }
             }
-        }
-        for path in here.paths {
-            let folder = "\(RemoteEngineInstaller.root)/\(machineFolder)/\(UUID().uuidString.prefix(8).lowercased())"
-            if let copy = RemoteShell.upload(URL(filePath: path), into: folder, on: machine) {
-                prepared.paths.append(copy)
+            if let inline = inlined(file) {
+                prepared.files.append(.init(uri: inline, name: url.lastPathComponent))
             } else {
-                prepared.unsent.append(path)
+                prepared.unsent.append(url.path)
             }
         }
         return prepared
     }
 
-    /// Where on a machine, in Kuvo Code's folder there, the files sent to it are copied.
+    /// What a file sent to a machine can weigh: it goes over SSH with the message.
+    static let maxMachineBytes = 50 * 1024 * 1024
+
+    /// Where on a machine, in its box's folder there, the files sent to it are kept.
     private static let machineFolder = "attachments"
 
     /// A file as a data URI, or a folder as the engine lists one; nil when it can't be read.
@@ -160,7 +157,7 @@ nonisolated enum Attachments {
             .sorted { $0.isFolder != $1.isFolder ? $0.isFolder : $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             return "data:text/plain;base64," + Data(entries.map(\.name).joined(separator: "\n").utf8).base64EncodedString()
         }
-        guard let data = try? Data(contentsOf: url) else { return nil }
+        guard ((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0) <= maxMachineBytes, let data = try? Data(contentsOf: url) else { return nil }
         let type = UTType(filenameExtension: url.pathExtension)
         let mime = kind(of: url) == .text ? "text/plain" : (type?.preferredMIMEType ?? "application/octet-stream")
         return "data:\(mime);base64," + data.base64EncodedString()

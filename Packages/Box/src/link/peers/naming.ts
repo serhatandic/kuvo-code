@@ -88,11 +88,23 @@ function messageBlock(start: string, end: string, headings: string[]): MessageBl
 }
 
 const FROM_PHONE_BLOCK = messageBlock("<from-phone>", "</from-phone>", ["The user sent this from Kuvo Code on their iPhone."]);
-const ATTACHED_BLOCK = messageBlock("<attached-files>", "</attached-files>", [
+const ATTACHED_HEADINGS = [
   "The attached files are on disk here (what's in them is in this message already):",
   "Open these attached files with your tools if you need them:",
   "These attached files stayed on the user's Mac (they couldn't be read, or copied to this machine):",
-]);
+] as const;
+const ATTACHED_BLOCK = messageBlock("<attached-files>", "</attached-files>", [...ATTACHED_HEADINGS]);
+
+// A message's text with the note the Mac ends one that has files with (Attachments.swift): where
+// the files it sent with their contents are, and the ones the agent opens with its tools. One the
+// message ends with already (the files that stayed on a Mac) takes these lines after its own.
+export function withAttachedNote(text: string, included: string[], paths: string[]): string {
+  const lines = [...(included.length ? [ATTACHED_HEADINGS[0], ...included] : []), ...(paths.length ? [ATTACHED_HEADINGS[1], ...paths] : [])];
+  if (!lines.length) return text;
+  const found = ATTACHED_BLOCK.split(text);
+  const words = found ? found.before : ATTACHED_BLOCK.escaping(text);
+  return (words ? `${words}\n\n` : "") + ["<attached-files>", ...(found?.lines ?? []), ...lines, "</attached-files>"].join("\n");
+}
 const REVIEW_BLOCK = messageBlock("<review-comments>", "</review-comments>", ["Comments on lines of the current changes:"]);
 const NAMING_HEADING = "Agents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:";
 const NAMED_BLOCK = messageBlock("<named-agents>", "</named-agents>", [NAMING_HEADING,

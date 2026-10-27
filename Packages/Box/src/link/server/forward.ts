@@ -4,6 +4,8 @@
 
 import { engineDown, stopShell } from "../areas/engine";
 import { holdArchived } from "../areas/wakes";
+import { attachedIn } from "./attached";
+import type { ModelInput } from "./attached";
 import { namedIn, namingHere } from "./naming";
 import { agentsAllowed, allowed, canonicalPath, REQUEST_HEADERS, RESPONSE_HEADERS } from "./paths";
 import type { EngineRecord, Target } from "../../shared/records";
@@ -29,6 +31,25 @@ export function fromPhone(body: Buffer | undefined): Buffer | undefined {
   return Buffer.from(JSON.stringify({ ...prompt, text: `${prompt.text}\n\n${FROM_PHONE}` }));
 }
 
+// What the model of `session` takes as input, as the engine at `base` says (its own model, or the
+// engine's default): for the files a message carries (`attachedIn`).
+function modelInput(base: URL, headers: Record<string, string>, signal: AbortSignal | undefined): ModelInput {
+  const read = async (at: string): Promise<unknown> => {
+    const response = await fetch(new URL(at, base), { headers, signal });
+    return response.ok ? ((await response.json()) as { data?: unknown } | null)?.data ?? null : null;
+  };
+  type Listed = { id?: unknown; providerID?: unknown; capabilities?: { input?: unknown } } | null;
+  return async session => {
+    const own = ((await read(`/api/session/${encodeURIComponent(session)}`)) as { model?: Listed } | null)?.model;
+    const ref = own ?? ((await read("/api/model/default")) as Listed);
+    if (!ref) return null;
+    const model = Array.isArray(ref.capabilities?.input) ? ref
+      : (((await read("/api/model")) as Listed[] | null) ?? []).find(listed => listed?.id === ref.id && listed?.providerID === ref.providerID);
+    const input = model?.capabilities?.input;
+    return Array.isArray(input) ? input.filter((kind): kind is string => typeof kind === "string") : null;
+  };
+}
+
 // Passes `path` to the engine or the agents' bridge on this machine, with its password, and
 // streams back what it answers. What's sent is the path as `canonicalPath` writes it, which is
 // what `allows` checks.
@@ -45,9 +66,11 @@ export async function* forward(target: Target, path: string, request: LinkReques
   const given = Object.fromEntries(Object.entries(request.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
   // (These are single headers, never a list.)
   for (const name of REQUEST_HEADERS) if (given[name]) headers[name] = given[name] as string;
-  // A message the phone sends: who it names with "&" (`naming`), and that it's from the phone, go
-  // with it.
-  const prompt = method === "POST" && /^\/api\/session\/([^/]+)\/prompt$/.exec(url.pathname);
+  // A message or command with files: they're kept here, and the model gets as files what it reads
+  // (`attachedIn`), from a phone or a Mac alike. A phone's message also says who it names with "&"
+  // (`naming`), and that it's from the phone.
+  const sending = method === "POST" && /^\/api\/session\/([^/]+)\/(prompt|command)$/.exec(url.pathname);
+  const prompt = sending && sending[2] === "prompt" && !request.fromMac ? sending : null;
   // A session's metadata changed: whether it was archived before, as the engine has it (null when
   // it can't say). A phone sends all of it with any change (a pin, say), the flag as it was too.
   const changed = method === "PATCH" && /^\/api\/session\/([^/]+)$/.exec(url.pathname);
@@ -58,12 +81,19 @@ export async function* forward(target: Target, path: string, request: LinkReques
       if (before.ok) wasArchived = (await before.json() as { data?: EngineSession } | null)?.data?.metadata?.["kuvo.archived"] === true;
     } catch {}
   }
+  // What goes to the engine: a message as above, anything else as it came.
+  const outgoing = async (): Promise<Buffer | undefined> => {
+    if (!sending) return request.body;
+    const session = decodeURIComponent(sending[1]!);
+    const body = await attachedIn(request.body, session, modelInput(url, headers, signal));
+    return prompt ? fromPhone(await namedIn(body, session, naming)) : body;
+  };
   let response: Response;
   try {
     response = await fetch(url, {
       method,
       headers,
-      body: method === "GET" || method === "HEAD" ? undefined : prompt ? fromPhone(await namedIn(request.body, decodeURIComponent(prompt[1]!), naming)) : request.body,
+      body: method === "GET" || method === "HEAD" ? undefined : await outgoing(),
       signal,
     });
   } catch (error) {
