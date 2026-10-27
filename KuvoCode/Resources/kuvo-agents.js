@@ -15013,6 +15013,9 @@ async function make(runner, store, given, here) {
 // Packages/Box/src/agents/groups/post.ts
 import { existsSync as existsSync15, readFileSync as readFileSync24, renameSync as renameSync10, writeFileSync as writeFileSync16 } from "fs";
 
+// Packages/Box/src/shared/seats.ts
+var SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "report", "memory"];
+
 // Packages/Box/src/agents/groups/api.ts
 function server2(url, password) {
   const authorization = "Basic " + Buffer.from(`opencode:${password}`).toString("base64");
@@ -17456,7 +17459,7 @@ class SeatServer {
 }
 
 // Packages/Box/src/agents/groups/post.ts
-var kinds4 = new Set(["turn", "state", "result", "steer", "stop", "drop", "work", "report", "memory"]);
+var kinds4 = new Set(SEAT_MAIL_KINDS);
 var isSeatMail = (value) => value !== null && typeof value === "object" && kinds4.has(value.kind);
 var sameMemory = (one, other) => one.kind === "memory" && other.kind === "memory" && one.memory.bot === other.memory.bot && one.memory.chat === other.memory.chat;
 
@@ -18448,4 +18451,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 943e790ad43eec9b6a4ca27913e7d6e223afa98244bce10044ef6e26c3742c07
+// Built from Packages/Box/src/agents 61708fe19fe1ab12368619edfec86ff73a84f576fa34f3a849f40919bcdc0439

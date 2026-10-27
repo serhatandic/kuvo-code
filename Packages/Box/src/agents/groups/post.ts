@@ -6,21 +6,20 @@
 // other computers and their bots are (`PUT /api/kuvo/peers`).
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { SEAT_MAIL_KINDS, type SeatLine, type SeatMailKind } from "../../shared/seats"
 import { RemoteHome, type Clock, type PeerBot, type PeerDirectory, type PeerTransport, type SeatMail, type SeatServer, realClock } from "./peer"
 import type { GroupRunner } from "./runner"
 
-const kinds = new Set(["turn", "state", "result", "steer", "stop", "drop", "work", "report", "memory"])
+// The kinds of mail, as the link names them too: `SeatMail`'s, no more and no fewer.
+type Agree<Same extends true> = Same
+export type SeatKindsAgree = Agree<[SeatMail["kind"]] extends [SeatMailKind] ? ([SeatMailKind] extends [SeatMail["kind"]] ? true : false) : false>
+const kinds = new Set<string>(SEAT_MAIL_KINDS)
 export const isSeatMail = (value: any): value is SeatMail => value !== null && typeof value === "object" && kinds.has(value.kind)
 
 /** Two of what a bot remembers of a chat, for the same bot and chat. */
 const sameMemory = (one: SeatMail, other: SeatMail) => one.kind === "memory" && other.kind === "memory" && one.memory.bot === other.memory.bot && one.memory.chat === other.memory.chat
 
-interface Line {
-  id: string
-  to: string
-  mail: SeatMail
-  durable: boolean
-}
+type Line = SeatLine<SeatMail>
 
 /** What goes, as the link takes it. What mustn't be lost is kept (in `file`) until the link says it has it. */
 export class PeerPost implements PeerTransport {
@@ -179,7 +178,7 @@ export class LinkDirectory implements PeerDirectory {
     private readonly clock: Clock = realClock,
   ) {}
 
-  /** What the link says: `{boxes: [{key, name, seats}], bots: [{id, name, job, box, session?, look?}]}`. False for what isn't that. */
+  /** What the link says (`SeatPeers`, src/shared/seats.ts: `{boxes: [{key, name, seats}], bots: [{id, name, job, box, session, look?}]}`), checked as it's taken. False for what isn't that. */
   set(given: any): boolean {
     if (!given || typeof given !== "object" || !Array.isArray(given.boxes) || !Array.isArray(given.bots)) return false
     const boxes = new Map<string, { name: string; seats: boolean }>()
