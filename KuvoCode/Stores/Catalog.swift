@@ -532,3 +532,20 @@ enum ModelScope: Equatable {
         }
     }
 }
+
+extension Catalog {
+    /// The models a review can be read by ("/review with <name>"): the engine's you can use now,
+    /// as the review runs beside it; a coding agent's conversation is read by its own agent.
+    var reviewReaders: [ReviewCommand.Reader] {
+        offered.filter { !OutsideAgents.runsInBridge($0.providerID) }.map { ReviewCommand.Reader(name: $0.name, ref: $0.ref, provider: providerName($0.providerID)) }
+    }
+
+    /// The model picked last in "Who reads it", kept as `Model.key`.
+    static let lastReviewerKey = "reviewerModel"
+
+    /// The one picked last, as a reference.
+    static var lastReviewer: ModelRef? {
+        let parts = (UserDefaults.standard.string(forKey: lastReviewerKey) ?? "").split(separator: "/", maxSplits: 1).map(String.init)
+        return parts.count == 2 ? ModelRef(id: parts[1], providerID: parts[0]) : nil
+    }
+}

@@ -16,12 +16,14 @@ const TYPES: Record<string, string> = {
   html: "text/html", css: "text/css", js: "text/javascript",
 };
 
-// `kuvo/file?uri=<file:// URI>`: a file on this machine, as an agent's reply or tool names it:
-// its bytes with its type; 404 with a message for one that isn't there (or isn't a file), 413
-// over FILE_LIMIT.
+// `kuvo/file?uri=<file:// URI>[&max=<bytes>]`: a file on this machine, as an agent's reply or tool
+// names it: its bytes with its type; 404 with a message for one that isn't there (or isn't a
+// file), 413 over FILE_LIMIT, or over `max` (all a client would show of it).
 export async function* fileAt(requestPath: string, json: RouteContext["json"]): AsyncGenerator<AnswerPiece> {
   const query = requestPath.includes("?") ? requestPath.slice(requestPath.indexOf("?") + 1) : "";
-  const uri = new URLSearchParams(query).get("uri");
+  const asked = new URLSearchParams(query);
+  const uri = asked.get("uri");
+  const max = Number(asked.get("max") ?? FILE_LIMIT);
   let file;
   try {
     file = uri ? fileURLToPath(uri) : undefined;
@@ -33,6 +35,7 @@ export async function* fileAt(requestPath: string, json: RouteContext["json"]): 
   } catch {}
   if (!stat?.isFile()) return yield* json(404, { message: "That file isn’t there anymore." });
   if (stat.size > FILE_LIMIT) return yield* json(413, { message: "That file is too big to open here." });
+  if (Number.isFinite(max) && stat.size > max) return yield* json(413, { message: "That file is too big to show here." });
   const type = TYPES[path.extname(file).slice(1).toLowerCase()] ?? "application/octet-stream";
   // Opened before it's answered: one that can't be read says so, with no path in it.
   let handle;

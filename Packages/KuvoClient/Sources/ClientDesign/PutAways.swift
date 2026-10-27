@@ -98,4 +98,6 @@ public enum PutAway: Hashable, Sendable {
     case message
     /// A wake-up canceled, or a watch stopped, by its letters.
     case wake(String)
+    /// A finished review, by its id: one asked for since is another.
+    case review(String)
 }

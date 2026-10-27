@@ -334,6 +334,37 @@ describe("a review with fresh eyes", () => {
     second.stopAll()
   })
 
+  test("what to tell an agent to fix them: all of them, or the ones you pick", async () => {
+    const reviews = new Reviews(join(root, "reviews.json"), places(), changes("+x\n"))
+    reviews.onEnded = beat
+    engine.answers = [`{"summary": "Two.", "findings": [
+      {"title": "Pausing twice skips a second", "explanation": "Both handlers restart it.", "severity": "bug", "locations": [{"file": "src/timer.ts", "line": 88}]},
+      {"title": "No test covers pausing", "explanation": "", "severity": "risk", "locations": []}]}`]
+    await reviews.start("ses_work")
+    await until(() => reviews.get("ses_work")?.state === "done")
+    const [bug, risk] = reviews.get("ses_work")!.findings
+    const fix = async (body: any) => (await (await reviewRoutes(reviews, "POST", ["ses_work", "fix"], async () => body)).json()) as any
+
+    expect((await fix({})).data.text).toBe(reviews.get("ses_work")!.fix)
+    const one = (await fix({ findings: [risk.id] })).data.text
+    expect(one).toContain("- Risk: No test covers pausing.")
+    expect(one).not.toContain("Pausing twice")
+    expect((await reviewRoutes(reviews, "POST", ["ses_work", "fix"], async () => ({ findings: ["fnd_gone"] }))).status).toBe(404)
+    expect(bug.id).toBeTruthy()
+  })
+
+  test("read by the model you pick, looking where you say", async () => {
+    const reviews = new Reviews(join(root, "reviews.json"), places(), changes("+  setTimeout(tick, 1000)\n"))
+    reviews.onEnded = beat
+    engine.answers = [`{"summary": "Fine.", "findings": []}`]
+    const response = await reviewRoutes(reviews, "POST", ["ses_work"], async () => ({ model: { providerID: "deepseek", id: "v4.1-flash" }, focus: "  the pause handling\n" }))
+    expect(response.status).toBe(200)
+    await until(() => reviews.get("ses_work")?.state === "done")
+    expect(engine.checks[0].model).toEqual({ providerID: "deepseek", id: "v4.1-flash" })
+    expect(engine.checks[0].prompt).toContain("Look especially at what the user asked: the pause handling")
+    expect(reviews.get("ses_work")).toMatchObject({ model: { providerID: "deepseek", id: "v4.1-flash" }, focus: "the pause handling" })
+  })
+
   test("with nothing to review says so; one under way is waited for; put away, it's gone", async () => {
     const reviews = new Reviews(join(root, "reviews.json"), places(), changes(""))
     reviews.onEnded = beat

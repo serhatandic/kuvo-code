@@ -99,6 +99,8 @@ public struct LoopCommand: Equatable, Sendable {
     /// How much of what follows "/loop" says the schedule, in UTF-16, spaces before it included
     /// (0 without one): the composer draws it as part of the keyword.
     public var scheduleLength = 0
+    /// The schedule as written ("every hour"), empty without one.
+    public var scheduleText = ""
 
     /// What follows "/loop".
     public init(_ rest: String) {
@@ -116,6 +118,7 @@ public struct LoopCommand: Equatable, Sendable {
                     while index < rest.endIndex, !rest[index].isWhitespace { index = rest.index(after: index) }
                 }
                 scheduleLength = rest[..<index].utf16.count
+                scheduleText = rest[..<index].trimmingCharacters(in: .whitespacesAndNewlines)
                 message = rest[index...].trimmingCharacters(in: .whitespacesAndNewlines)
                 return
             }

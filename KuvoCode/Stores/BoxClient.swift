@@ -1,3 +1,4 @@
+import ClientText
 import Foundation
 import KuvoLink
 import OpenCodeKit
@@ -32,6 +33,16 @@ struct BoxClient: Sendable {
         let (status, data) = try await send(method, path, body: try body.map { try JSONEncoder().encode($0) })
         guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
         return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    /// A file on this box by its path (`kuvo/file`), as a phone reads one: its bytes, or what the
+    /// box said (`BoxRefusal`: not there, can't be read, too big).
+    /// `max`: refused (413) over it, for what's only shown up to a size.
+    func file(_ path: String, max: Int? = nil) async throws -> Data {
+        // Its path as written, byte for byte, as the phone names it too (`FileAddresses`).
+        let (status, data) = try await send("GET", FileAddresses.route(path, max: max))
+        guard status == 200 else { throw BoxRefusal(status: status, data: data) }
+        return data
     }
 
     /// A route that follows something (`kuvo/…/events`): each line it sends, as it comes. It ends
