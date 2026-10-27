@@ -85,6 +85,7 @@ struct MadeButton: View {
                 .accessibilityValue(hasNew(things) ? "Something new" : "")
                 .popover(isPresented: $isOpen, arrowEdge: .bottom) {
                     MadePopover(things: things, place: place) { isOpen = false }
+                    .popoverContent()
                         // The conversation card's own surface, edge to edge: the popover's see-through
                         // material showed the window under one part and the desktop under another.
                         .presentationBackground(Surface.cardFill(scheme, focused: true))
@@ -952,7 +953,7 @@ struct ArtifactDetail: View {
                     // Its bot's mark, with its note below: not a button to undo by a stray click, but
                     // a menu, so it can still go.
                     Menu {
-                        Button("Stop Keeping", systemImage: "bookmark.slash") {
+                        Button("Stop Keeping", systemImage: "star.slash") {
                             Task {
                                 do {
                                     try await things.pin(artifact.id, false)

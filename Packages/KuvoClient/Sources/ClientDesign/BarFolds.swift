@@ -70,3 +70,41 @@ public struct BarFolds<Bar: Hashable>: Equatable {
         changed(bar)
     }
 }
+
+/// The bars in the card over the composer tucked into one line (the Mac's and the phone's
+/// `BarStrip`), as you left them in a conversation: nothing brings them back by itself. What came
+/// or changed meanwhile is `marked`, until you bring them back. Once none are left, the next ones
+/// show.
+public struct BarTuck<Bar: Hashable>: Equatable {
+    public init() {}
+
+    private var hidden = false
+    /// What came, or changed in a way you'd want to see, since they were tucked.
+    public private(set) var marked: Set<Bar> = []
+
+    /// Whether they're tucked, among `bars` (none: nothing to tuck).
+    public func isOn(among bars: [Bar]) -> Bool { hidden && !bars.isEmpty }
+
+    public mutating func hide() {
+        hidden = true
+        marked = []
+    }
+
+    public mutating func show() {
+        hidden = false
+        marked = []
+    }
+
+    /// The bars went from `old` to `new`: while tucked, those that came are marked; none left,
+    /// it's over.
+    public mutating func bars(from old: [Bar], to new: [Bar]) {
+        if new.isEmpty { return show() }
+        guard hidden else { return }
+        marked.formUnion(new.filter { !old.contains($0) })
+    }
+
+    /// Something changed in `bar` that you'd want to see: marked, while tucked.
+    public mutating func changed(_ bar: Bar) {
+        if hidden { marked.insert(bar) }
+    }
+}

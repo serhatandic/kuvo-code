@@ -205,6 +205,7 @@ struct ChangesPanel: View {
                                    api: isAgents ? bridge ?? app.api : model.flatMap { workspace.api(forSession: $0.id) } ?? app.api,
                                    session: isAgents && bridge == nil ? nil : model?.id, model: isAgents ? nil : model?.session.model,
                                    fallback: isAgents ? app.api : nil) { isCommitting = false }
+                        .popoverContent()
                     }
             }
             Button {

@@ -36,7 +36,13 @@ struct WidgetCard: View {
         _height = State(initialValue: Self.heights[call.id] ?? 0)
     }
     @State private var isHovering = false
+    /// The pointer's on its pill, which is outside the page.
+    @State private var isOnPill = false
+    /// Its page didn't load, or stopped: one line in its place, and a way to try again.
+    @State private var failed = false
+    @State private var attempt = 0
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.cardIsFocused) private var cardIsFocused
     @Environment(\.showWidgetLarge) private var showLarge
 
     /// Over its conversation's card, as the panel grows over the window.
@@ -128,74 +134,100 @@ struct WidgetCard: View {
         return html
     }
 
-    /// The page alone, edged quietly, with its name in a caption under it. Open Larger and Copy
-    /// come at the caption's end while the pointer's over it, never over the page, where a page
-    /// keeps its own controls. `draft`: still being written, this many bytes so far.
+    /// The page itself, part of the reply: no frame, no caption. Open Larger and Copy come in a
+    /// small pill at its corner while the pointer's over it; while it's written, the pill shows
+    /// that instead. Its name is the larger view's title, and what VoiceOver calls it.
+    /// `draft`: still being written, this many bytes so far.
     private func card(html: String, title: String?, draft: Int? = nil) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            WidgetPage(html: html, accent: NSColor.controlAccentColor, height: $height, isDraft: draft != nil, send: answer(from: title))
+        page(html: html, title: title, draft: draft)
+            // Something new to show gets a try of its own.
+            .onChange(of: html) { failed = false }
+    }
+
+    @ViewBuilder private func page(html: String, title: String?, draft: Int?) -> some View {
+        if failed {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle")
+                Text("“\(WidgetAnswer.name(title))” couldn't show.")
+                Button("Try Again") {
+                    failed = false
+                    attempt += 1
+                }
+                .buttonStyle(TextButtonStyle())
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        } else {
+            WidgetPage(html: html, accent: NSColor.controlAccentColor, height: $height, isDraft: draft != nil,
+                       send: answer(from: title), failed: { failed = true })
+                .id(attempt)
                 .frame(height: max(height, 60))
                 .onChange(of: height) { if height > 0 { Self.heights[call.id] = height } }
                 .clipShape(Self.shape)
-                .overlay(Self.shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
-            caption(html: html, title: title, draft: draft)
+                .overlay(alignment: .topTrailing) { corner(html: html, title: title, draft: draft) }
+                .onHover { hovering in withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering } }
+                // The page is read in it; its name and its actions are the widget's.
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(WidgetAnswer.name(title))
+                .accessibilityValue(draft != nil ? "Being made" : "")
+                .accessibilityActions {
+                    if draft == nil {
+                        if showLarge != nil { Button("Open Larger") { openLarge(html: html, title: title) } }
+                        Button("Copy Its HTML") { Clipboard.copy(html) }
+                    }
+                }
+                #if DEBUG
+                // KUVO_DEMO_WIDGET_LARGE: the first widget shown opens larger.
+                .onAppear {
+                    guard ProcessInfo.processInfo.environment["KUVO_DEMO_WIDGET_LARGE"] != nil, !Self.openedLarge else { return }
+                    Self.openedLarge = true
+                    Task {
+                        try? await Task.sleep(for: .seconds(2))
+                        openLarge(html: html, title: title)
+                    }
+                }
+                #endif
         }
-        .onHover { hovering in withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering } }
-        #if DEBUG
-        // KUVO_DEMO_WIDGET_LARGE: the first widget shown opens larger.
-        .onAppear {
-            guard ProcessInfo.processInfo.environment["KUVO_DEMO_WIDGET_LARGE"] != nil, !Self.openedLarge else { return }
-            Self.openedLarge = true
-            Task {
-                try? await Task.sleep(for: .seconds(2))
-                openLarge(html: html, title: title)
-            }
-        }
-        #endif
     }
 
-    private func caption(html: String, title: String?, draft: Int?) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: "sparkles.rectangle.stack")
-            Text(WidgetAnswer.name(title))
-                .lineLimit(1)
-            Spacer(minLength: 8)
+    /// The pill just over the page's top corner, off the page, where a page keeps its own
+    /// controls: how much is written while it's made; then, on hover, Open Larger and Copy.
+    @ViewBuilder private func corner(html: String, title: String?, draft: Int?) -> some View {
+        let pill = Capsule()
+        Group {
             if let draft {
-                Spinner(size: 10)
-                if let size = Self.written(draft) {
-                    Text(size)
-                        .foregroundStyle(.tertiary)
-                        .monospacedDigit()
+                HStack(spacing: 5) {
+                    Spinner(size: 10)
+                    if let size = Self.written(draft) {
+                        Text(size)
+                            .foregroundStyle(.tertiary)
+                            .monospacedDigit()
+                    }
                 }
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .frame(minHeight: 24)
             } else {
-                HStack(spacing: 2) {
+                HStack(spacing: 0) {
                     // Only where there's a card for it to cover.
                     if showLarge != nil {
                         MessageActionButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Open Larger") { openLarge(html: html, title: title) }
                     }
                     CopyButton(text: html, help: "Copy Its HTML")
                 }
-                .opacity(isHovering ? 1 : 0)
-                // Out of reach while they're hidden, Tab's too; VoiceOver has them as the
-                // caption's actions.
-                .disabled(!isHovering)
+                .padding(.horizontal, 2)
             }
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .frame(minHeight: 24)
-        .padding(.leading, 4)
-        // One element for VoiceOver, whose buttons are there only on hover; the page itself is
-        // read on its own, before it.
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(WidgetAnswer.name(title))
-        .accessibilityValue(draft != nil ? "Being made" : "")
-        .accessibilityActions {
-            if draft == nil {
-                if showLarge != nil { Button("Open Larger") { openLarge(html: html, title: title) } }
-                Button("Copy Its HTML") { Clipboard.copy(html) }
-            }
-        }
+        .background(Surface.cardFill(scheme, focused: cardIsFocused), in: pill)
+        .overlay(pill.strokeBorder(Color.primary.opacity(0.1), lineWidth: 1))
+        .shadow(color: .black.opacity(scheme == .dark ? 0.3 : 0.08), radius: 4, y: 1)
+        .padding(.trailing, 6)
+        .alignmentGuide(.top) { $0[.bottom] + 4 }
+        .onHover { isOnPill = $0 }
+        .opacity(draft != nil || isHovering || isOnPill ? 1 : 0)
+        // Out of reach while they're hidden, Tab's too; VoiceOver has them as the widget's actions.
+        .disabled(draft == nil && !isHovering && !isOnPill)
+        .accessibilityHidden(true)
     }
 }
 
@@ -264,6 +296,8 @@ private struct LargeWidgetView: View {
     let widget: LargeWidget
     let close: () -> Void
     @Environment(\.colorScheme) private var scheme
+    @State private var failed = false
+    @State private var attempt = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -283,9 +317,23 @@ private struct LargeWidgetView: View {
             .padding(.trailing, 8)
             .frame(height: 36)
             Divider()
-            WidgetPage(html: widget.html, accent: NSColor.controlAccentColor, height: .constant(0), scrollsInside: true) { text in
-                close()
-                widget.send(text)
+            if failed {
+                VStack(spacing: 8) {
+                    Text("It couldn't show.")
+                        .foregroundStyle(.secondary)
+                    Button("Try Again") {
+                        failed = false
+                        attempt += 1
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                WidgetPage(html: widget.html, accent: NSColor.controlAccentColor, height: .constant(0), scrollsInside: true,
+                           send: { text in
+                               close()
+                               widget.send(text)
+                           }, failed: { failed = true })
+                    .id(attempt)
             }
         }
         .background(Surface.cardFill(scheme, focused: true))
@@ -332,6 +380,8 @@ private struct WidgetPage: NSViewRepresentable {
     /// Still being written: drawn without its scripts, a couple of times a second.
     var isDraft = false
     let send: (String) -> Void
+    /// It didn't load, or stopped and didn't come back.
+    var failed: () -> Void = {}
 
     /// Taller than this, it scrolls inside.
     static let tallest: CGFloat = 760
@@ -361,10 +411,11 @@ private struct WidgetPage: NSViewRepresentable {
         let coordinator = context.coordinator
         coordinator.height = $height
         coordinator.send = send
+        coordinator.failed = failed
         coordinator.view = view
         coordinator.scrollsInside = scrollsInside
         if scrollsInside { view.fits = false }
-        coordinator.show(Self.page(html, accent: accent), draft: isDraft)
+        coordinator.show(Self.page(html, accent: accent, inset: scrollsInside), draft: isDraft)
     }
 
     /// Libraries from the usual places, pictures from anywhere; nothing it can send to.
@@ -420,7 +471,9 @@ private struct WidgetPage: NSViewRepresentable {
 
     /// `html` as a page: a fragment in a page of its own, or a whole page as it is; either way
     /// with the policy above, and the window's look to start from.
-    static func page(_ html: String, accent: NSColor) -> String {
+    /// `inset`: in room of its own (larger), away from the edges; in the conversation, its words line
+    /// up with the reply's.
+    static func page(_ html: String, accent: NSColor, inset: Bool = false) -> String {
         let hex = accent.usingColorSpace(.sRGB).map { String(format: "#%02X%02X%02X", Int($0.redComponent * 255), Int($0.greenComponent * 255), Int($0.blueComponent * 255)) } ?? "#0A84FF"
         let head = """
         <meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="\(policy)">
@@ -428,7 +481,7 @@ private struct WidgetPage: NSViewRepresentable {
         <style>
         :root { --kuvo-accent: \(hex); }
         \(starter)
-        body { font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; color: CanvasText; padding: 12px; box-sizing: border-box; }
+        body { font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; color: CanvasText; padding: \(inset ? "12px" : "4px 2px"); box-sizing: border-box; }
         </style>
         """
         if let range = html.range(of: "<head>", options: .caseInsensitive) {
@@ -500,7 +553,10 @@ private struct WidgetPage: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var height: Binding<CGFloat>?
         var send: (String) -> Void = { _ in }
+        var failed: () -> Void = {}
         weak var view: WidgetWebView?
+        /// WebKit stopped its page and it hasn't drawn since (it does stop pages, to free memory): stopping again is a failure.
+        private var restarted = false
         var loaded: String?
         var scrollsInside = false
         /// What's shown is a draft: no scripts.
@@ -552,6 +608,8 @@ private struct WidgetPage: NSViewRepresentable {
             switch body["type"] as? String {
             case "height":
                 guard let value = body["value"] as? Double else { return }
+                // Drawn again: a later stop gets its own reload.
+                restarted = false
                 let fits = CGFloat(value) <= WidgetPage.tallest
                 view?.fits = fits && !scrollsInside
                 let new = min(CGFloat(value), WidgetPage.tallest)
@@ -603,6 +661,23 @@ private struct WidgetPage: NSViewRepresentable {
             }
             preferences.allowsContentJavaScript = !isDraft
             decisionHandler(.allow, preferences)
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { failed(error) }
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { failed(error) }
+
+        /// Not a page replaced by the next draft, nor a link sent to your browser instead.
+        private func failed(_ error: Error) {
+            let error = error as NSError
+            guard !(error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled), !(error.domain == "WebKitErrorDomain" && error.code == 102) else { return }
+            failed()
+        }
+
+        /// Its page stopped: loaded again once, then it's a failure.
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            guard !restarted, let loaded else { return failed() }
+            restarted = true
+            webView.loadHTMLString(loaded, baseURL: nil)
         }
 
         /// A link meant for a new window, too.

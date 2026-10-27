@@ -194,11 +194,17 @@ public struct Offers: Equatable, Sendable {
             }
         }
         let opencode = Dictionary(found.opencode.map { ($0.integrationID, $0) }, uniquingKeysWith: { first, _ in first })
+        // The plans the engine signs in to. Some sign in with a key (OpenCode Zen, Poe): one found
+        // is that plan's way in, on its row, never a second one.
         for id in Plans.engine {
             if found.connected.contains(id) {
                 plans.append(Row(id: id, integrationID: id, name: opencode[id]?.name ?? Self.names[id] ?? id, detail: "Signed in", action: .ready))
+            } else if let shell = found.shell.first(where: { $0.integrationID == id }) {
+                plans.append(Row(id: id, integrationID: id, name: shell.name, detail: "From \(shell.variable) in your shell", action: .ready))
             } else if let item = opencode[id] {
-                plans.append(opencodeRow(item))
+                var row = opencodeRow(item)
+                if item.kind == .key, !item.connected { row.detail = "Your key from opencode" }
+                plans.append(row)
             } else {
                 let row = Row(id: id, integrationID: id, name: Self.names[id] ?? id, detail: Plans.plan(id), action: .signIn(integrationID: id))
                 if id == "github-copilot" { plans.append(row) } else { more.append(row) }
@@ -208,11 +214,13 @@ public struct Offers: Equatable, Sendable {
         // to one plan: opencode's sign-in to a plan an agent signs in to (ChatGPT's, Codex's) is
         // that agent's row. A key is a key, even for a provider a plan covers.
         let covered = Set(Plans.providers.values)
-        for item in found.opencode where !Plans.engine.contains(item.integrationID) {
+        // A key the shell gives the engine already is that row, ready (below), not this one too.
+        let shelled = Set(found.shell.map(\.integrationID))
+        for item in found.opencode where !Plans.engine.contains(item.integrationID) && !(item.kind == .key && shelled.contains(item.integrationID)) {
             if item.kind == .key { keys.append(opencodeRow(item)) } else if !covered.contains(item.integrationID) { plans.append(opencodeRow(item)) }
         }
-        // A key in the shell the engine uses already, unless opencode has a key for it too.
-        for key in found.shell where !Plans.engine.contains(key.integrationID) && opencode[key.integrationID]?.kind != .key {
+        // A key in the shell the engine uses already.
+        for key in found.shell where !Plans.engine.contains(key.integrationID) {
             keys.append(Row(id: "shell:" + key.variable, integrationID: key.integrationID, name: key.name, detail: "From \(key.variable) in your shell", action: .ready))
         }
     }

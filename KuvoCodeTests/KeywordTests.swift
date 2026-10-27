@@ -97,6 +97,31 @@ import Testing
         #expect(model.failure == nil)
     }
 
+    /// Clicking a conversation's side questions in the sidebar: the latest one's answer over its
+    /// composer, though they were asked from the phone and the conversation wasn't open; one
+    /// picked from the row's menu shows instead, even after the bar was put away.
+    @Test func aConversationsSideQuestionsOpenFromItsRow() async throws {
+        defer { clean() }
+        serve(directory: "/tmp", answers: ["In `onBlur`.", "Every 25 minutes."])
+        let model = try session()
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+        let first = try #require(try await bridge.api?.askSideQuestion("Where does it pause?", about: id))
+        let latest = try #require(try await bridge.api?.askSideQuestion("How often does it ring?", about: id))
+        try await until { bridge.agents.sideQuestionCounts[id] == 2 }
+        #expect(model.shownSideQuestion == nil)
+
+        await model.showSideQuestion(nil)
+        #expect(model.shownSideQuestion == latest.id)
+        #expect(model.sideQuestions.map(\.question) == ["Where does it pause?", "How often does it ring?"])
+
+        model.shownSideQuestion = nil
+        model.hidesSideQuestion = true
+        await model.showSideQuestion(first.id)
+        #expect(model.shownSideQuestion == first.id)
+        #expect(!model.hidesSideQuestion)
+    }
+
     @Test func aReviewListsWhatItFoundAndTheAgentHearsOfItOnlyWhenAsked() async throws {
         defer { clean() }
         let repository = try TestRepository()

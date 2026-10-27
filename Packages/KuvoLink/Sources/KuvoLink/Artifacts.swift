@@ -423,8 +423,8 @@ public enum ArtifactWords {
 
     /// Keeping something (`kuvo/artifacts/<id>/pin`): the button's words, its symbol and its help,
     /// before and after.
-    public static let keep = (title: "Keep", symbol: "bookmark", help: "Keep this and all its versions, at the top")
-    public static let kept = (title: "Kept", symbol: "bookmark.fill", help: "Stop Keeping")
+    public static let keep = (title: "Keep", symbol: "star", help: "Keep this and all its versions, at the top")
+    public static let kept = (title: "Kept", symbol: "star.fill", help: "Stop Keeping")
 
     public static func section(of artifact: ArtifactSummary) -> Section {
         if artifact.pinned != nil { return .pinned }
