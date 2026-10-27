@@ -194,11 +194,17 @@ public struct Offers: Equatable, Sendable {
             }
         }
         let opencode = Dictionary(found.opencode.map { ($0.integrationID, $0) }, uniquingKeysWith: { first, _ in first })
+        // The plans the engine signs in to. Some sign in with a key (OpenCode Zen, Poe): one found
+        // is that plan's way in, on its row, never a second one.
         for id in Plans.engine {
             if found.connected.contains(id) {
                 plans.append(Row(id: id, integrationID: id, name: opencode[id]?.name ?? Self.names[id] ?? id, detail: "Signed in", action: .ready))
+            } else if let shell = found.shell.first(where: { $0.integrationID == id }), opencode[id]?.kind != .key {
+                plans.append(Row(id: id, integrationID: id, name: shell.name, detail: "From \(shell.variable) in your shell", action: .ready))
             } else if let item = opencode[id] {
-                plans.append(opencodeRow(item))
+                var row = opencodeRow(item)
+                if item.kind == .key, !item.connected, !used.contains(item.id) { row.detail = "Your key from opencode" }
+                plans.append(row)
             } else {
                 let row = Row(id: id, integrationID: id, name: Self.names[id] ?? id, detail: Plans.plan(id), action: .signIn(integrationID: id))
                 if id == "github-copilot" { plans.append(row) } else { more.append(row) }

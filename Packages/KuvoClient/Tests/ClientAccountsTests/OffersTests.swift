@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import ClientAccounts
 
@@ -118,6 +119,37 @@ import ClientAccounts
         #expect(!(starting.plans + starting.more).contains { Plans.agents.contains($0.integrationID) })
         #expect(starting.plans.map(\.name) == ["GitHub Copilot"])
         #expect(starting.keys.map(\.name) == ["Nvidia"])
+    }
+
+    @Test func aKeyForAPlanTheEngineSignsInToIsThatPlansWayIn() {
+        // OpenCode Zen and Poe sign in with a key: one found is the plan's row, never a second one.
+        let poe = Found.Opencode(id: "opencode:poe", integrationID: "poe", name: "Poe", kind: .key, connected: false)
+        let offers = Offers(found: found(agents: bridge, opencode: [poe], shell: [.init(integrationID: "opencode", name: "OpenCode", variable: "OPENCODE_API_KEY")]))
+        let poeRows = (offers.plans + offers.keys + offers.more).filter { $0.integrationID == "poe" }
+        #expect(poeRows.map(\.action) == [.use(poe)])
+        #expect(offers.plans.first { $0.integrationID == "poe" }?.detail == "Your key from opencode")
+        // A key in the shell the engine uses already: that plan's ready.
+        let zen = (offers.plans + offers.keys + offers.more).filter { $0.integrationID == "opencode" }
+        #expect(zen.map(\.action) == [.ready])
+        #expect(zen.first?.detail == "From OPENCODE_API_KEY in your shell")
+        #expect(offers.plans.contains { $0.integrationID == "opencode" })
+    }
+
+    @Test func everyPlanAnAgentSignsInToHasOnlyThatWayIn() {
+        // opencode signed in to Anthropic, xAI and Google too: each is its agent's row.
+        let offers = Offers(found: found(agents: bridge, opencode: ["anthropic", "xai", "google", "openai"].map {
+            Found.Opencode(id: "opencode:" + $0, integrationID: $0, name: $0, kind: .signIn, connected: false)
+        }))
+        let providers = Set(Plans.providers.values)
+        #expect(!(offers.plans + offers.keys + offers.more).contains { providers.contains($0.integrationID) })
+    }
+
+    @Test func aBoxFromBeforeConnectedStillReadsAndNothingIsReadyByIt() throws {
+        // A box before bridge 0.9.91 says nothing of what's signed in through the engine.
+        let json = #"{"agents":[],"opencode":[],"shell":[]}"#
+        let older = try JSONDecoder().decode(Found.self, from: Data(json.utf8))
+        #expect(older.connected.isEmpty)
+        #expect(Offers(found: older).plans.first { $0.integrationID == "github-copilot" }?.action == .signIn(integrationID: "github-copilot"))
     }
 
     @Test func notListedYetIsNotNothingFound() {

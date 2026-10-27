@@ -81,15 +81,18 @@ struct AddAnotherSheet: View {
     /// The plans to add: the ones it opened with, as they are now.
     private var morePlans: [Offers.Row] {
         let all = offers.more + offers.plans
+        // In the plans' own order, however late each was listed (the agents come with their bridge).
+        let order = Plans.agents + Plans.engine
         return (shown ?? offers.more.map(\.id)).compactMap { id in all.first { $0.id == id } }
+            .sorted { (order.firstIndex(of: $0.id) ?? .max) < (order.firstIndex(of: $1.id) ?? .max) }
     }
 
     @ViewBuilder private var plans: some View {
-        if offers.plans.isEmpty {
-            // Not listed yet.
+        if offers.plans.isEmpty || offers.agentsPending {
+            // Not listed yet, or the coding agents not yet.
             HStack(spacing: 8) {
                 Spinner(size: 12)
-                Text("Looking for what’s on your Mac…")
+                Text(offers.plans.isEmpty ? "Looking for what’s on your Mac…" : "Looking for your coding agents…")
             }
             .foregroundStyle(.secondary)
         } else if morePlans.isEmpty {
