@@ -65,7 +65,7 @@ struct MachineWaitingView: View {
             }
             switch engine.state {
             case .downloading(let progress) where progress > 0:
-                ProgressView(value: progress)
+                ProgressLine("Downloading the agent engine", fraction: progress)
                     .frame(width: 220)
             case .downloading, .starting:
                 Spinner(size: 16)

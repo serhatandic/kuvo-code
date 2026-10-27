@@ -94,8 +94,7 @@ struct EngineSetupView: View {
 
             switch app.engine {
             case .downloading(let progress):
-                ProgressView(value: progress)
-                    .progressViewStyle(.linear)
+                ProgressLine("Downloading the agent engine", fraction: progress)
                     .frame(width: 280)
             case .failed:
                 Button("Try Again") { Task { await app.restart() } }
@@ -126,8 +125,8 @@ struct EngineSetupView: View {
 
     private var detail: String {
         switch app.engine {
-        case .downloading(let progress):
-            "Downloading the agent engine (opencode \(OpenCodeEngine.version)). This happens once.\n\(Int(progress * 100))%"
+        case .downloading:
+            "Downloading the agent engine (opencode \(OpenCodeEngine.version)). This happens once."
         case .failed(let message):
             message
         default:

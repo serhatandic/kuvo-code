@@ -151,6 +151,9 @@ final class BrowserSession: NSObject {
         var file: URL?
         var state: State = .running
         var progress = 0.0
+        /// Bytes so far, and of how many when the server says.
+        var received: Int64 = 0
+        var expected: Int64?
 
         enum State: Equatable { case running, done, failed(String) }
     }
@@ -437,9 +440,18 @@ extension BrowserSession: WKDownloadDelegate {
     fileprivate func start(_ download: WKDownload) {
         download.delegate = self
         let entry = Download(name: download.originalRequest?.url?.lastPathComponent ?? "Download")
-        let progress = download.progress.observe(\.fractionCompleted) { [weak self] progress, _ in
-            let fraction = progress.fractionCompleted
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.update(entry.id) { $0.progress = fraction } } }
+        // By the bytes, which come in whether or not the server said how many there are.
+        let progress = download.progress.observe(\.completedUnitCount) { [weak self] progress, _ in
+            let (fraction, received, expected) = (progress.fractionCompleted, progress.completedUnitCount, progress.totalUnitCount)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.update(entry.id) {
+                        $0.progress = fraction
+                        $0.received = received
+                        $0.expected = expected > 0 ? expected : nil
+                    }
+                }
+            }
         }
         // The agent's when one is at work in the page, or was in the last two minutes (a link's
         // server can be slow to start sending), as a machine's browser decides it; not once you'd
@@ -720,17 +732,8 @@ private struct DownloadBar: View {
         BrowserDownloadBar(name: download.name, symbol: symbol, isRunning: download.state == .running, canHide: download.state != .running, hide: session.dismissDownloads) {
             switch download.state {
             case .running:
-                Capsule()
-                    .fill(Color.primary.opacity(0.1))
-                    .frame(height: 4)
-                    .overlay(alignment: .leading) {
-                        GeometryReader { proxy in
-                            Capsule()
-                                .fill(.tint)
-                                .frame(width: max(4, proxy.size.width * download.progress))
-                                .animation(.ui, value: download.progress)
-                        }
-                    }
+                // Beside the bar, so the row stays as tall as when it's done.
+                ProgressLine("Downloading", bytes: download.received, of: download.expected, layout: .inline)
             case .done:
                 Text(more > 0 ? "Downloaded, with \(more) more" : "Downloaded to Downloads")
             case .failed(let reason):

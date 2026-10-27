@@ -27,9 +27,18 @@ struct VoiceComposerRow: View {
         HStack(spacing: 10) {
             switch voice.phase {
             case .preparing(let progress):
-                Spinner(size: 13)
-                Text(progress.map { "Getting voice ready… \(Int(($0 * 100).rounded()))%" } ?? "Getting voice ready…")
-                    .foregroundStyle(.secondary)
+                // Downloading the speech model, when it says how far; asking for the microphone, not.
+                if let progress {
+                    Text("Getting voice ready…")
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                    ProgressLine("Downloading the speech model", fraction: progress, layout: .inline)
+                        .frame(maxWidth: 260)
+                } else {
+                    Spinner(size: 13)
+                    Text("Getting voice ready…")
+                        .foregroundStyle(.secondary)
+                }
                 Spacer(minLength: 8)
             case .failed(let failure):
                 Image(systemName: "mic.slash")

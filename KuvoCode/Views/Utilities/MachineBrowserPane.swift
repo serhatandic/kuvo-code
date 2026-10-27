@@ -170,12 +170,8 @@ private struct SetupCard: View {
                     .frame(maxWidth: 340)
             }
             if let progress {
-                ProgressView(value: progress)
+                ProgressLine("Downloading the browser", fraction: progress)
                     .frame(width: 200)
-                Text("Downloading… \(Int(progress * 100))%")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
             } else {
                 Text("Sending it to \(machine)…")
                     .font(.caption)
