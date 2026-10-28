@@ -108,8 +108,9 @@ export async function changesIn(directory: string, scope: Scope, base?: string):
   const limit = relative && !relative.startsWith("..") ? relative.split(path.sep).join("/") : ".";
   // Its own prefixes, whatever the git settings (diff.noprefix, diff.mnemonicPrefix): a client
   // reads the paths after them. The whole file as context, so a client folds what's unchanged.
-  // (An unchanged blank line written as " ", whatever your settings: clients count each line.)
-  const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
+  // (The file's own lines, whatever your settings: an unchanged blank line written as " ", none
+  // through a converter (textconv). Clients count each line, and review comments name them.)
+  const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
   if (scope === "uncommitted" || scope === "branch") args.push(against);
   if (scope === "staged") args.push("--cached", against);
   const patch = await text(root, [...args, "--", limit]);

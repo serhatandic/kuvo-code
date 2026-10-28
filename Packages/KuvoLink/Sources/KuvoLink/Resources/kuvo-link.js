@@ -9234,7 +9234,7 @@ async function changesIn(directory, scope, base) {
   }
   const relative = path43.relative(realOr2(root), realOr2(directory));
   const limit = relative && !relative.startsWith("..") ? relative.split(path43.sep).join("/") : ".";
-  const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
+  const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
   if (scope === "uncommitted" || scope === "branch")
     args.push(against);
   if (scope === "staged")
