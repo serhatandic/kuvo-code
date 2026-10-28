@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientText
 import OpenCodeKit
 import SwiftUI
 
@@ -310,7 +311,7 @@ struct WakeBar: View {
         // Kept current: "in 2 minutes", then, once it's due and on its way, "Waking up…".
         TimelineView(.periodic(from: .now, by: 15)) { context in
             WorkBar(items: watches.map(Item.watch) + wakes.map(Item.wake), title: title(wakes: wakes, watches: watches, now: context.date),
-                    detail: (wakes.first?.note ?? watches.first?.note).map { Text($0.replacingOccurrences(of: "\n", with: " ")) },
+                    detail: (wakes.first?.note ?? watches.first?.note).map { Text(WakeNote.shown($0).replacingOccurrences(of: "\n", with: " ")) },
                     symbol: wakes.isEmpty ? "eye" : "alarm", accessory: AnyView(all),
                     showHelp: "Show when it wakes up, and what it watches", hideHelp: "Hide them: this line stays while any wait", isHidden: $isHidden) { item in
                 row(item)
@@ -380,7 +381,7 @@ struct WakeBar: View {
                 Image(systemName: wake.every == nil ? "alarm" : "repeat")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-                Text("\(Text(wake.due, format: .dateTime.weekday(.abbreviated).hour().minute()).foregroundStyle(.secondary))\(wake.every.map { Text(", then \($0.words)").foregroundStyle(.secondary) } ?? Text(""))  \(wake.note.replacingOccurrences(of: "\n", with: " "))")
+                Text("\(Text(wake.due, format: .dateTime.weekday(.abbreviated).hour().minute()).foregroundStyle(.secondary))\(wake.every.map { Text(", then \($0.words)").foregroundStyle(.secondary) } ?? Text(""))  \(WakeNote.shown(wake.note).replacingOccurrences(of: "\n", with: " "))")
                     .font(.system(size: 12))
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -398,7 +399,7 @@ struct WakeBar: View {
                 Image(systemName: "eye")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-                Text("\(Text((Wakes.Repeat(watch.every)?.words ?? "every \(watch.every)").capitalizedFirst).foregroundStyle(.secondary))  \(watch.note.replacingOccurrences(of: "\n", with: " "))")
+                Text("\(Text((Wakes.Repeat(watch.every)?.words ?? "every \(watch.every)").capitalizedFirst).foregroundStyle(.secondary))  \(WakeNote.shown(watch.note).replacingOccurrences(of: "\n", with: " "))")
                     .font(.system(size: 12))
                     .lineLimit(1)
                     .truncationMode(.tail)
