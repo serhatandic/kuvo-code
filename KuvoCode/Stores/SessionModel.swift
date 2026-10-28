@@ -380,9 +380,17 @@ final class SessionModel {
         quoteFocus = Drafts.QuoteFocus(id)
         if draftQuotes.count > count { Analytics.shared.track("message_replied", ["how": how]) }
     }
-    /// Queued messages wait for Resume: after Stop, a failed run, or when the app finds them
-    /// waiting at launch.
+    /// Queued messages wait for Resume: after Stop, a failed run, or when its box found them
+    /// waiting as its engine started. The session's box carries the queue (PROTOCOL.md, "The
+    /// queue"), with or without this Mac: this is what it says, read again as the queue changes.
     private(set) var isQueuePaused = false
+    /// What Stop held for the agent's next step, in the order it goes, as its box says.
+    private var heldByBox: [String] = []
+    /// The session's box (this Mac's, or its machine's).
+    @ObservationIgnored var box: () -> BoxClient? = { nil }
+    @ObservationIgnored private var queueRead: Task<Void, Never>?
+    /// Changes asked of the box's queue so far (`queueRoute`).
+    @ObservationIgnored private var queueChanges = 0
     var failure: String?
 
     /// Its engine: a machine's changes with each connection to it.
@@ -391,14 +399,13 @@ final class SessionModel {
     /// Reads in a row that found nothing where the copy has a conversation.
     private var emptyReads = 0
     private var changesTask: Task<Void, Never>?
-    private var drainTask: Task<Void, Never>?
     /// The last message on its way out; each waits for the one before, so the engine gets
     /// (and queues) them in the order they were written.
     private var sending: Task<Void, Never>?
     /// Messages on their way to the agent, by ID: each sent from here, and one from elsewhere that
     /// Stop held or that you're taking back to edit. What the queue shows is made from these and
     /// the engine's inbox (see `waiting`). Their states change in `send` and `retry`, as the
-    /// engine's word comes (`apply`, `load`), in `holdWaiting`, `cancelPending` and `edit`.
+    /// engine's word comes (`apply`, `load`), in `holdOnTheirWay`, `cancelPending` and `edit`.
     private var outgoing: [String: Outgoing] = [:]
 
     private struct Outgoing {
@@ -427,8 +434,9 @@ final class SessionModel {
         /// Sent while nothing ran, until the agent has it: it starts a run, and the run begins a
         /// moment before the agent takes it, which isn't waiting.
         var startsRun = false
-        /// Meant for the agent's next step, and held in the queue by Stop: held ones wait ahead of
-        /// what was queued, the lowest first (the latest Stop's).
+        /// Meant for the agent's next step, and held in the queue by Stop while its request was
+        /// still on its way: it waits ahead of what the box holds, the lowest first (the latest
+        /// Stop's). Once it's there, the box holds it.
         var heldAt: Int?
     }
 
@@ -493,8 +501,12 @@ final class SessionModel {
         let pending = pending.filter { outgoing[$0.id]?.startsRun != true }
         // What Stop held back was meant for the work under way: it stays ahead of the queue, and
         // shows while it's still on its way there too.
-        let held = pending.filter { outgoing[$0.id]?.heldAt != nil }.sorted { (outgoing[$0.id]?.heldAt ?? 0) < (outgoing[$1.id]?.heldAt ?? 0) }
-        let others = pending.filter { outgoing[$0.id]?.heldAt == nil }
+        // Held on its way here (the latest Stop's, first), then as the box holds them.
+        let rank = { (item: Transcript.Pending) -> Int? in
+            self.outgoing[item.id]?.heldAt.map { $0 - 1_000_000 } ?? self.heldByBox.firstIndex(of: item.id)
+        }
+        let held = pending.filter { rank($0) != nil }.sorted { (rank($0) ?? 0) < (rank($1) ?? 0) }
+        let others = pending.filter { rank($0) == nil }
         return (isRunning ? others.filter { $0.delivery == .steer } : []) + held + others.filter { $0.delivery == .queue }
     }
 
@@ -685,19 +697,8 @@ final class SessionModel {
             }
             prepareCode(in: page.data)
             if transcript.isStale { scheduleReload() }
-            // A queue left waiting (the app quit mid-run, say) waits for Resume rather than
-            // starting on its own. Read again later (a reconnect), it carries on.
-            // One for the next step of a run that ended with the app is held too, ahead of the
-            // queue, as Stop holds one: it showed nowhere, and Resume went past it. Not one you've
-            // just sent from here (as the session was read), nor while it's unknown whether the
-            // engine runs it, mid-run on a machine say: the agent would miss it at its next step.
-            let leftForNextStep = running != nil && transcript.pending.contains { $0.delivery == .steer && !$0.isLocal && outgoing[$0.id]?.isOurs != true }
-            if !isLoaded, !isRunning, hasQueue || leftForNextStep {
-                isQueuePaused = true
-                if leftForNextStep { await holdWaiting() }
-            } else if isLoaded, !isRunning, hasQueue, !isQueuePaused {
-                scheduleDrain()
-            }
+            // Whether its queue waits for Resume, and what's held, as its box says.
+            readQueue()
             // A subagent's session is the engine's to set up; it only gets shown.
             if !isLoaded, !isSubagent { await syncFolders() }
             isLoaded = true
@@ -744,24 +745,17 @@ final class SessionModel {
             break
         }
         switch event.type {
-        case "session.execution.started":
-            drainTask?.cancel()
-        case "session.execution.succeeded", "session.execution.interrupted":
-            scheduleDrain()
+        case "session.execution.succeeded", "session.execution.interrupted", "session.execution.failed":
             keepCopy()
-        case "session.execution.failed":
-            // Don't run the rest of the queue into the same error; a message for its next step,
-            // which won't come, waits in the queue with them (it would wait unseen otherwise).
-            if hasQueue { isQueuePaused = true }
-            if transcript.pending.contains(where: { $0.delivery == .steer }) { Task { await holdWaiting() } }
-            keepCopy()
-        case "session.inbox.enqueued":
-            // Queued while nothing runs: the engine waits for a run to end, so nudge it.
-            if !transcript.isRunning, !isQueuePaused, hasQueue { scheduleDrain() }
+            // The box decides a moment after (whether it was a Stop, a failed run pausing it).
+            readQueue(after: .seconds(2))
+        case "session.inbox.enqueued", "session.inbox.delivery.changed":
+            readQueue(after: .milliseconds(300))
         case "session.inbox.cancelled", "session.inbox.delivered":
             if let id = try? event.payload(as: EventPayload.InboxChanged.self).inboxID {
                 move(id, to: event.type == "session.inbox.delivered" ? .delivered : .cancelled)
             }
+            readQueue(after: .milliseconds(300))
         case "session.revert.committed":
             // Final: there's nothing left to redo, and the conversation no longer ends at the undo.
             session.revert = nil
@@ -970,7 +964,8 @@ final class SessionModel {
     private func requestDone(_ message: String) async {
         guard let asked = outgoing[message]?.request else { return }
         let state = outgoing[message]?.state
-        if asked == .steer, outgoing[message]?.heldAt != nil, state != .delivered, state != .cancelled {
+        // Held as it went: the box holds it now (an older box, the queue here).
+        if asked == .steer, outgoing[message]?.heldAt != nil, state != .delivered, state != .cancelled, await !queueRoute("queue/hold") {
             try? await api.setDelivery(session: id, item: message, delivery: .queue)
         }
         if outgoing[message]?.state == .cancelled { try? await api.cancelInbox(session: id, item: message) }
@@ -1491,56 +1486,89 @@ final class SessionModel {
         }
     }
 
-    /// Stops the agent. Waiting messages stay, queued and paused until Resume.
+    /// Stops the agent. Waiting messages stay, queued and paused until Resume: its box holds them
+    /// and stops the run.
     func stop() {
         Task {
-            let inFlight = await holdWaiting()
-            // A held message whose request for the next step is already on its way: in the queue
-            // before the stop (ten seconds at most), so it can't land after it on an idle session
-            // and start the agent again. One not sent yet goes to the queue anyway (see `send`).
+            let inFlight = holdOnTheirWay()
+            // A held message whose request for the next step is already on its way: there before
+            // the stop (ten seconds at most), so the box holds it rather than it landing after the
+            // stop on an idle session and starting the agent again. One not sent yet goes to the
+            // queue anyway (see `send`).
             let deadline = ContinuousClock.now + .seconds(10)
             for message in inFlight {
                 await wait(for: message, until: deadline) { $0.request != nil }
             }
-            try? await api.interrupt(session: id)
+            // An older box (a machine's not updated yet): stopped here.
+            if await !queueRoute("stop") { try? await api.interrupt(session: id) }
         }
     }
 
     /// What's waiting, held where it is (paused) before the session is stopped from elsewhere: it
-    /// isn't started as the run ends (moving the session to a coding agent carries it over).
+    /// isn't started as the run ends (undo, or moving the session to a coding agent).
     func holdQueue() async {
-        await holdWaiting()
+        _ = holdOnTheirWay()
+        _ = await queueRoute("queue/hold")
     }
 
-    /// Before an interrupt: what's waiting stays where it is, paused, instead of being handed
-    /// over as the step ends or started by the nudge after it. What was for the agent's next step
-    /// goes to the queue, ahead of what was queued: moved there now if the engine has it, sent
-    /// there if it hasn't gone yet (see `send`). Those whose request for the next step is on its
-    /// way are moved as it ends (see `requestDone`): what it gives back.
-    @discardableResult
-    private func holdWaiting() async -> [String] {
-        drainTask?.cancel()
+    /// Before a Stop: messages for the agent's next step still on their way from here are held,
+    /// ahead of what the box holds, and sent to the queue (see `send`, `requestDone`); those whose
+    /// request is on its way: what it gives back. What the engine has, the box holds.
+    private func holdOnTheirWay() -> [String] {
         // Not one sent from here to start a run, still on its way: it goes as it is.
-        let held = transcript.pending.filter { $0.delivery == .steer && !($0.isLocal && outgoing[$0.id]?.startsRun == true) }
-        if hasQueue || !held.isEmpty { isQueuePaused = true }
+        let held = transcript.pending.filter { item in
+            guard item.delivery == .steer, let record = outgoing[item.id], !(item.isLocal && record.startsRun) else { return false }
+            return record.state == .sending || record.request == .steer
+        }
+        if hasQueue || !transcript.pending.filter({ $0.delivery == .steer }).isEmpty { isQueuePaused = true }
         // Ahead of those held before.
         let first = (outgoing.values.compactMap(\.heldAt).min() ?? 0) - held.count
-        var moved: [String] = [], inFlight: [String] = []
+        var inFlight: [String] = []
         for (index, item) in held.enumerated() {
-            var record = outgoing[item.id] ?? Outgoing(state: .waiting, isOurs: false)
+            guard var record = outgoing[item.id] else { continue }
             record.heldAt = first + index
             // It waits for Resume now, shown with the rest.
             record.startsRun = false
             outgoing[item.id] = record
-            switch (record.state, record.request) {
-            case (_, .steer?): inFlight.append(item.id)
-            // Not asked for yet (it's asked for as queued: see `send`), or asked for as queued.
-            case (.sending, _), (_, .queue?): break
-            default: moved.append(item.id)
-            }
+            if record.request == .steer { inFlight.append(item.id) }
         }
-        for message in moved { try? await api.setDelivery(session: id, item: message, delivery: .queue) }
         return inFlight
+    }
+
+    /// The session's queue as its box has it now.
+    private struct BoxQueue: Decodable {
+        var paused: Bool
+        var held: [String]
+    }
+
+    /// One of the queue's routes on the session's box (`kuvo/sessions/<id>/<action>`), and what it
+    /// says the queue is now; false when the box can't take it (an older one, or not there now).
+    @discardableResult
+    private func queueRoute(_ action: String, method: String = "POST") async -> Bool {
+        // A change asked for: a read from before it says nothing now.
+        if method != "GET" {
+            queueChanges += 1
+            queueRead?.cancel()
+        }
+        let asked = queueChanges
+        guard let box = box(), let state = try? await box.value(BoxQueue.self, method, "kuvo/sessions/\(id)/\(action)") else { return false }
+        // Another change asked for since: its answer is the one to show.
+        guard asked == queueChanges else { return true }
+        isQueuePaused = state.paused
+        heldByBox = state.held
+        // Held by the box now: in its order.
+        for message in state.held where outgoing[message]?.heldAt != nil { outgoing[message]?.heldAt = nil }
+        return true
+    }
+
+    /// The queue read again from the box, `after` a moment (what it does on an event comes then).
+    private func readQueue(after delay: Duration = .zero) {
+        queueRead?.cancel()
+        queueRead = Task {
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            await queueRoute("queue", method: "GET")
+        }
     }
 
     func cancelPending(_ item: Transcript.Pending) {
@@ -1587,6 +1615,8 @@ final class SessionModel {
         isQueuePaused = false
         let running = transcript.isRunning
         Task {
+            if await queueRoute("queue/\(item.id)/now") { return }
+            // An older box: here, as the box does it.
             do {
                 // Steering wakes an idle session; a running one gets it once the step stops.
                 if item.delivery == .queue { try await api.setDelivery(session: id, item: item.id, delivery: .steer) }
@@ -1726,7 +1756,7 @@ final class SessionModel {
         Task {
             do {
                 if isRunning {
-                    await holdWaiting()
+                    await holdQueue()
                     try await api.interrupt(session: id)
                     try await api.wait(session: id)
                 }
@@ -1865,28 +1895,11 @@ final class SessionModel {
         }
     }
 
-    /// Picks the queue up again after Stop or a failed run.
+    /// Picks the queue up again after Stop or a failed run: its box starts the next one.
     func resumeQueue() {
         guard canReach else { return }
         isQueuePaused = false
-        scheduleDrain(after: .zero)
-    }
-
-    /// The engine starts each queued message after a run that ends normally, but not after an
-    /// interrupt (Stop, or Send Now) or when its run is woken by steering. So once the agent has
-    /// been idle a moment, the next waiting message gets a nudge.
-    private func scheduleDrain(after delay: Duration = .seconds(1.5)) {
-        drainTask?.cancel()
-        drainTask = Task {
-            try? await Task.sleep(for: delay)
-            guard !Task.isCancelled, !isQueuePaused, !transcript.isRunning,
-                  let next = waiting.first(where: { !$0.isLocal }) ?? transcript.pending.first(where: { !$0.isLocal }) else { return }
-            if next.delivery == .queue {
-                try? await api.setDelivery(session: id, item: next.id, delivery: .steer)
-            } else {
-                try? await api.interrupt(session: id, resume: true)
-            }
-        }
+        Task { await queueRoute("queue/resume") }
     }
 
     func selectModel(_ model: ModelRef) {

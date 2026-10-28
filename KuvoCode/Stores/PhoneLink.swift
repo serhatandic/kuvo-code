@@ -701,12 +701,6 @@ final class PhoneLink {
                 "Its bridge is out of date, so this Mac’s group chats can’t name them either. Setting it up again updates it.")
     }
 
-    /// Whether `machine`'s bridge talks to your other computers itself, and this Mac meets it at
-    /// the relay now.
-    func reachesByMail(_ machine: String) -> Bool {
-        status == .connected && machineHosts[machine]?.peers == true && machineHosts[machine]?.anotherMac != true
-    }
-
     /// A machine you removed: phones stop being told about it, and this Mac's box tells it to let
     /// this Mac go (`peersChanged`).
     func forget(machine id: String) {
@@ -968,7 +962,7 @@ final class PhoneLink {
         "file", "folders", "git", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog",
         "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
         "personalities.events", "skills.trash", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
-        "agent-tools", "sessions.start", "letters-read",
+        "agent-tools", "sessions.start", "letters-read", "queue",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",
     ]
@@ -1252,8 +1246,9 @@ final class PhoneLink {
     /// Whether a route is answered by this Mac's box: an area that's moved there (`boxRoutes`).
     nonisolated static func movedToBox(_ route: String) -> Bool {
         boxRoutes.contains { route == $0 || route.hasPrefix($0 + "/") }
-            // A session started with a task (not a session's own routes, `kuvo/sessions/<id>/…`).
-            || route == "kuvo/sessions"
+            // A session started with a task, and a session's queue (not its other routes,
+            // `kuvo/sessions/<id>/agents`).
+            || route == "kuvo/sessions" || route.wholeMatch(of: /kuvo\/sessions\/(queues\/events|[^\/]+\/(stop|queue(\/.+)?))/) != nil
             // A plan signed out (`kuvo/accounts/<id>/forget`), and a command stopped
             // (`kuvo/shell/<id>/stop`): the box's too.
             || Self.oneOf(route, "kuvo/accounts/", "/forget") || Self.oneOf(route, "kuvo/shell/", "/stop")

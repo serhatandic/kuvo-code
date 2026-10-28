@@ -461,6 +461,7 @@ final class Workspace {
         if let model = models[id] { return model }
         let model = SessionModel(session: session, api: api)
         model.isReachable = reachable(folder)
+        model.box = { [weak self] in self?.boxes?(RemoteFolder.machine(of: session.location.directory) ?? BoxClient.mac) }
         followGoals(of: model)
         models[id] = model
         return model
@@ -568,6 +569,7 @@ final class Workspace {
             return self.extraFolders(self.session(id)?.location.directory ?? directory)
         }
         model.isReachable = reachable(directory)
+        model.box = { [weak self] in self?.boxes?(RemoteFolder.machine(of: directory) ?? BoxClient.mac) }
         followGoals(of: model)
         models[id] = model
         // This Mac's conversation as last seen, in its first frame, while the engine's is read
