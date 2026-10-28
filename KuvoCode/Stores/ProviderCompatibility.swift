@@ -6,7 +6,7 @@ import OpenCodeKit
 ///
 /// GitHub Copilot's Claude models reject the `thinking.block_binding` the engine adds to requests
 /// for Claude 5.1 and later ("thinking.adaptive.block_binding: Extra inputs are not permitted").
-/// opencode (2.0.32 still) leaves it out only for models named in its settings, one by one
+/// opencode (2.2.0 still) leaves it out only for models named in its settings, one by one
 /// (anomalyco/opencode#55160). A model named there that the provider doesn't have shows up in its
 /// list as a model of its own, so the names come from Copilot's list as the engine last gave it.
 enum ProviderCompatibility {

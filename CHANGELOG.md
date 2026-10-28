@@ -131,6 +131,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Popovers, like a session's wake-ups (All), list their rows on the popover itself, without a card inside it.
 - With VoiceOver, removing a message or putting a goal away takes you to its Undo line, which undoes it; stopping a goal says the messages waiting stay paused.
 - The servers behind Outlook and Microsoft 365, Todoist, CalDAV calendars, Apple Calendar and Reminders, and Chrome DevTools are updated to their latest versions, with their makers' fixes.
+- Kuvo Code runs opencode 2.2.0: long conversations load and compact better, a busy provider is tried again instead of being reported as a full conversation, and HEIC, AVIF and QuickTime attachments are recognized.
 
 ## 0.7.2
 
