@@ -1,3 +1,4 @@
+import ClientChanges
 import ClientDesign
 import Foundation
 import OpenCodeKit
@@ -7,7 +8,7 @@ import UniformTypeIdentifiers
 /// on each side. Git is asked for the whole file as context, so unchanged stretches can
 /// be folded and opened again without another call.
 nonisolated struct ChangedFile: Identifiable, Hashable, Sendable {
-    enum Status: Sendable { case added, deleted, modified, renamed }
+    typealias Status = PatchFile.Status
 
     /// Relative to the repository (or the project, without one).
     var path: String
@@ -42,14 +43,12 @@ nonisolated struct ChangedFile: Identifiable, Hashable, Sendable {
     var deletions: Int { lines.count { $0.kind == .removed } }
 }
 
-nonisolated struct DiffLine: Hashable, Sendable {
-    enum Kind: Sendable { case context, added, removed }
-    var kind: Kind
-    var oldNumber: Int?
-    var newNumber: Int?
-    var text: String
-    /// Unchanged lines git left out between two hunks (only with very long files).
-    var gapBefore = false
+extension ChangedFile {
+    /// A file from git's diff, in the repository at `root` (as this Mac names it).
+    nonisolated init(_ parsed: PatchFile, root: String) {
+        self.init(path: parsed.path, oldPath: parsed.oldPath, status: parsed.status, isBinary: parsed.isBinary, isTooBig: parsed.isTooBig,
+                  isFolder: parsed.isFolder, lines: parsed.lines, url: RemoteFolder.url(root).appending(path: parsed.path), unread: parsed.unread)
+    }
 }
 
 /// What's changed in a project, as Codex shows it: the working tree against git, new
@@ -308,37 +307,27 @@ nonisolated enum Git {
     /// as this Mac names it, `base` what the diff compared with, `hashes` git's of a machine's new
     /// files, by path.
     static func listed(patch: String, root: String, base: String, scope: ProjectChanges.Scope, untracked: [String], hashes: [String: String]) -> [ChangedFile] {
-        var files = DiffParser.files(from: patch, root: root).map { file in
-            // Where each side lives, for showing pictures.
-            var file = file
+        DiffParser.listed(patch: patch, untracked: untracked).map { parsed in
+            var file = ChangedFile(parsed, root: root)
             file.root = root
+            // A new file git doesn't know (a repository inside this one by its folder, "web/").
+            if parsed.unread || parsed.path.hasSuffix("/") {
+                // A machine's: git's hash of it, so it's read from its box only when it changes.
+                file.hash = hashes[file.path]
+                // This Mac's is read now; a machine's afterwards, from its box (`readNew`), as a
+                // phone reads it.
+                guard file.url.isFileURL else { return file }
+                file.unread = false
+                let size = (try? file.url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                file.isTooBig = size > 2_000_000
+                if !file.isTooBig { fill(&file, with: try? Data(contentsOf: file.url)) }
+                return file
+            }
+            // Where each side lives, for showing pictures.
             if file.status != .added { file.oldObject = (scope == .unstaged ? ":" : base + ":") + (file.oldPath ?? file.path) }
             if scope == .staged, file.status != .deleted { file.newObject = ":" + file.path }
             return file
         }
-        // A file that changed kind (a file now a link, or back) comes as two, gone and new: one
-        // here, changed, so Discard puts it back rather than throwing the new one away.
-        var seen: [String: Int] = [:]
-        var merged: [ChangedFile] = []
-        for file in files {
-            guard let i = seen[file.path] else { seen[file.path] = merged.count; merged.append(file); continue }
-            merged[i].status = .modified
-            merged[i].lines += file.lines
-            merged[i].isBinary = merged[i].isBinary || file.isBinary
-            merged[i].isFolder = merged[i].isFolder || file.isFolder
-            merged[i].isTooBig = merged[i].isTooBig || file.isTooBig
-            if merged[i].isTooBig { merged[i].lines = [] }
-            merged[i].oldObject = merged[i].oldObject ?? file.oldObject
-            merged[i].newObject = merged[i].newObject ?? file.newObject
-        }
-        files = merged
-        for path in untracked where !files.contains(where: { $0.path == path }) {
-            var file = newFile(path, root: root)
-            // A machine's: git's hash of it, so it's read from its box only when it changes.
-            file.hash = hashes[path]
-            files.append(file)
-        }
-        return files.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
     }
 
     static func perform(_ action: ProjectChanges.Action, on file: ChangedFile, root: String, scope: ProjectChanges.Scope) -> String? {
@@ -482,24 +471,6 @@ nonisolated enum Git {
         return text.isEmpty ? "git \(arguments.first ?? "") failed." : text
     }
 
-    /// An untracked file, as all-new lines. A machine's is read afterwards, from its box
-    /// (`readNew`), as a phone reads it.
-    private static func newFile(_ path: String, root: String) -> ChangedFile {
-        let url = RemoteFolder.url(root).appending(path: path)
-        var file = ChangedFile(path: path, status: .added, url: url)
-        file.root = root
-        // git names a repository inside this one by its folder: "web/".
-        file.isFolder = path.hasSuffix("/")
-        guard url.isFileURL else {
-            file.unread = !file.isFolder
-            return file
-        }
-        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-        file.isTooBig = size > 2_000_000
-        if !file.isTooBig { fill(&file, with: try? Data(contentsOf: url)) }
-        return file
-    }
-
     /// A machine's new files, read from its box (`box`, by the machine's id): their lines, or binary
     /// or too big, as this Mac's are. `known`: those read before (`kept`), used again while git's
     /// hash is the same.
@@ -533,19 +504,11 @@ nonisolated enum Git {
 
     /// A new file's lines from its bytes: binary when they aren't text, too big past what's read through.
     private static func fill(_ file: inout ChangedFile, with data: Data?) {
-        guard let data, !data.contains(0),
-              let text = String(data: data, encoding: .utf8) else {
-            file.isBinary = true
-            return
-        }
-        var lines = DiffParser.lines(of: text).map(String.init)
-        if lines.last == "" { lines.removeLast() }
-        // Too big to read through, as a changed one is.
-        if lines.count > DiffParser.maxLines || lines.contains(where: { $0.utf8.count > DiffParser.maxLineLength }) {
-            file.isTooBig = true
-            return
-        }
-        file.lines = lines.enumerated().map { DiffLine(kind: .added, newNumber: $0 + 1, text: $1) }
+        var parsed = PatchFile(path: file.path, status: file.status)
+        DiffParser.fill(&parsed, with: data)
+        file.lines = parsed.lines
+        file.isBinary = parsed.isBinary
+        file.isTooBig = parsed.isTooBig
     }
 
     static func relativePath(of directory: String, in root: String) -> String {
@@ -604,92 +567,9 @@ nonisolated enum Git {
 
 // MARK: - Parsing
 
-nonisolated enum DiffParser {
-    /// Every file in `git diff` output.
-    static func files(from patch: String, root: String) -> [ChangedFile] {
-        var files: [ChangedFile] = []
-        var current: ChangedFile?
-        var oldLine = 0, newLine = 0, sawHunk = false
-        // Set when git left unchanged lines out before the next line (between hunks).
-        var pendingGap = false
-
-        func finish() { if let current { files.append(current) } }
-
-        // How many sides a line's marks are for: two in a conflicted file's combined diff.
-        var sides = 1
-        for raw in lines(of: patch) {
-            let line = String(raw)
-            if line.hasPrefix("diff --git ") || line.hasPrefix("diff --cc ") {
-                finish()
-                let combined = line.hasPrefix("diff --cc ")
-                let path = combined ? self.path(line.dropFirst("diff --cc ".count)) : pathFromHeader(line)
-                current = ChangedFile(path: path, status: .modified, url: RemoteFolder.url(root).appending(path: path))
-                sides = combined ? 2 : 1
-                sawHunk = false
-                continue
-            }
-            guard var file = current else { continue }
-            defer { current = file }
-            if line.hasPrefix("@@") {
-                let numbers = sides > 1 ? combinedHunkStarts(line) : hunkStarts(line)
-                oldLine = numbers.old
-                newLine = numbers.new
-                pendingGap = sawHunk || (numbers.old > 1 && numbers.new > 1)
-                sawHunk = true
-                continue
-            }
-            if !sawHunk {
-                if line.hasPrefix("new file mode") { file.status = .added; file.isFolder = line.hasSuffix(" 160000") }
-                else if line.hasPrefix("deleted file mode") { file.status = .deleted }
-                else if line.hasPrefix("rename from ") { file.oldPath = path(line.dropFirst("rename from ".count)); file.status = .renamed }
-                else if line.hasPrefix("rename to ") {
-                    file.path = path(line.dropFirst("rename to ".count))
-                    file.url = RemoteFolder.url(root).appending(path: file.path)
-                }
-                else if line.hasPrefix("Binary files ") { file.isBinary = true }
-                continue
-            }
-            guard let first = line.first else { continue }
-            var parsed: DiffLine
-            if sides > 1 {
-                // "++", " +", "- " …: a mark for each side, the file as it is after them.
-                let marks = line.prefix(sides)
-                guard marks.count == sides, marks.allSatisfy({ "+- ".contains($0) }) else { continue }
-                let text = String(line.dropFirst(sides))
-                if marks.contains("-") { parsed = DiffLine(kind: .removed, oldNumber: oldLine, text: text); oldLine += 1 }
-                else if marks.contains("+") { parsed = DiffLine(kind: .added, newNumber: newLine, text: text); newLine += 1 }
-                else { parsed = DiffLine(kind: .context, oldNumber: oldLine, newNumber: newLine, text: text); oldLine += 1; newLine += 1 }
-            } else {
-                switch first {
-                case "+": parsed = DiffLine(kind: .added, newNumber: newLine, text: String(line.dropFirst())); newLine += 1
-                case "-": parsed = DiffLine(kind: .removed, oldNumber: oldLine, text: String(line.dropFirst())); oldLine += 1
-                case " ": parsed = DiffLine(kind: .context, oldNumber: oldLine, newNumber: newLine, text: String(line.dropFirst())); oldLine += 1; newLine += 1
-                default: continue  // "\ No newline at end of file"
-                }
-            }
-            if pendingGap { parsed.gapBefore = true; pendingGap = false }
-            file.lines.append(parsed)
-        }
-        finish()
-        // A file too big to read through (a huge or minified one): named, not shown.
-        for index in files.indices where files[index].lines.count > maxLines || files[index].lines.contains(where: { $0.text.utf8.count > maxLineLength }) {
-            files[index].lines = []
-            files[index].isTooBig = true
-        }
-        return files
-    }
-
-    static let maxLines = 20_000
-    static let maxLineLength = 20_000
-
-    /// Text's lines, ending at "\n" or "\r\n" (which Swift counts as one character, so a split
-    /// at "\n" alone left a file with Windows line endings in one piece).
-    static func lines(of text: String) -> [Substring] {
-        text.split(omittingEmptySubsequences: false) { $0 == "\n" || $0 == "\r\n" }
-    }
-
+extension DiffParser {
     /// The engine's diff of one file (patch text, a few lines of context).
-    static func file(from diff: FileDiff, directory: String) -> ChangedFile {
+    nonisolated static func file(from diff: FileDiff, directory: String) -> ChangedFile {
         // The engine names files by their paths where it runs: on a machine, plain paths there.
         let plain = RemoteFolder.parse(directory)?.path ?? directory
         let base = plain.hasSuffix("/") ? plain : plain + "/"
@@ -698,7 +578,7 @@ nonisolated enum DiffParser {
         // The engine's patches may come with git's header already; a second one would read as an
         // empty file before this one.
         let patch = diff.patch.hasPrefix("diff --git ") ? diff.patch : "diff --git a/\(path) b/\(path)\n" + diff.patch
-        let parsed = files(from: patch, root: directory).first
+        let parsed = parse(patch).first.map { ChangedFile($0, root: directory) }
         var file = parsed ?? ChangedFile(path: path, status: .modified, url: url)
         file.path = path
         file.url = url
@@ -708,91 +588,5 @@ nonisolated enum DiffParser {
         default: file.status
         }
         return file
-    }
-
-    /// "diff --git a/x b/x" → "x": the b side. A name git quotes ("a/say \"hi\".txt", one with a
-    /// tab or a backslash) is read as git wrote it; one with " b/" in it ("Plan b/notes.md") by
-    /// both sides being the same. (A rename's own lines name its paths.)
-    static func pathFromHeader(_ line: String) -> String {
-        let rest = line.dropFirst("diff --git ".count)
-        if rest.hasPrefix("\""), let (first, end) = unquoted(rest) {
-            let second = rest[end...].drop { $0 == " " }
-            let path = second.hasPrefix("\"") ? unquoted(second)?.text ?? String(second) : String(second)
-            return path.hasPrefix("b/") ? String(path.dropFirst(2)) : first.hasPrefix("a/") ? String(first.dropFirst(2)) : path
-        }
-        if rest.hasSuffix("\""), let range = rest.range(of: " \"b/", options: .backwards), let (path, _) = unquoted(rest[rest.index(after: range.lowerBound)...]) {
-            return String(path.dropFirst(2))
-        }
-        // "a/X b/X": X is half of what's left.
-        let half = (rest.count - 5) / 2
-        if rest.count % 2 == 1, half > 0, rest.hasPrefix("a/"), rest.dropFirst(2).prefix(half) == rest.suffix(half), rest.dropFirst(2 + half).hasPrefix(" b/") {
-            return String(rest.suffix(half))
-        }
-        if let range = rest.range(of: " b/", options: .backwards) {
-            return String(rest[range.upperBound...])
-        }
-        return String(rest)
-    }
-
-    /// A path from a line git may have quoted ("rename to", "diff --cc"): as it is, or unquoted.
-    static func path(_ text: some StringProtocol) -> String {
-        text.hasPrefix("\"") ? unquoted(text)?.text ?? String(text) : String(text)
-    }
-
-    /// The name in a C-style quoted string at the start of `text`, as git writes one ("\"", "\\",
-    /// "\t", "\303\251"), and where the string ends; nil when it isn't one.
-    private static func unquoted<S: StringProtocol>(_ text: S) -> (text: String, end: S.Index)? {
-        guard text.first == "\"" else { return nil }
-        var bytes: [UInt8] = []
-        var index = text.index(after: text.startIndex)
-        while index < text.endIndex {
-            let character = text[index]
-            if character == "\"" { return (String(decoding: bytes, as: UTF8.self), text.index(after: index)) }
-            guard character == "\\" else {
-                bytes += Array(String(character).utf8)
-                index = text.index(after: index)
-                continue
-            }
-            index = text.index(after: index)
-            guard index < text.endIndex else { return nil }
-            let escaped = text[index]
-            if let digit = escaped.wholeNumberValue, digit < 8 {
-                // Three octal digits: one byte of the name's UTF-8.
-                var value = 0
-                var digits = 0
-                while digits < 3, index < text.endIndex, let next = text[index].wholeNumberValue, next < 8 {
-                    value = value * 8 + next
-                    digits += 1
-                    index = text.index(after: index)
-                }
-                bytes.append(UInt8(truncatingIfNeeded: value))
-                continue
-            }
-            let known: [Character: UInt8] = ["a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, "\"": 34, "\\": 92]
-            bytes.append(known[escaped] ?? Array(String(escaped).utf8).first ?? 0)
-            index = text.index(after: index)
-        }
-        return nil
-    }
-
-    /// "@@@ -12,7 -12,8 +12,9 @@@" → (12, 12): the first side, and the file as it is.
-    private static func combinedHunkStarts(_ line: String) -> (old: Int, new: Int) {
-        let parts = line.split(separator: " ")
-        func start(_ part: Substring?) -> Int {
-            guard let part else { return 1 }
-            return max(part.dropFirst().split(separator: ",").first.flatMap { Int($0) } ?? 1, 1)
-        }
-        return (start(parts.first { $0.hasPrefix("-") }), start(parts.first { $0.hasPrefix("+") }))
-    }
-
-    /// "@@ -12,7 +12,9 @@" → (12, 12).
-    private static func hunkStarts(_ line: String) -> (old: Int, new: Int) {
-        let parts = line.split(separator: " ")
-        func start(_ part: Substring?) -> Int {
-            guard let part else { return 1 }
-            let number = part.dropFirst().split(separator: ",").first.flatMap { Int($0) } ?? 1
-            return max(number, 1)
-        }
-        return (start(parts.dropFirst().first), start(parts.dropFirst(2).first))
     }
 }

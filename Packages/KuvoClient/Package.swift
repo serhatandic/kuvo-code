@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "ClientDesign", targets: ["ClientDesign"]),
         .library(name: "ClientNews", targets: ["ClientNews"]),
         .library(name: "ClientSessions", targets: ["ClientSessions"]),
+        .library(name: "ClientChanges", targets: ["ClientChanges"]),
     ],
     // Textual draws the replies' code blocks in both apps; ClientDesign gives it their colors.
     dependencies: [
@@ -34,5 +35,7 @@ let package = Package(
         .testTarget(name: "ClientNewsTests", dependencies: ["ClientNews"]),
         .target(name: "ClientSessions", dependencies: [.product(name: "OpenCodeKit", package: "OpenCodeKit")]),
         .testTarget(name: "ClientSessionsTests", dependencies: ["ClientSessions"]),
+        .target(name: "ClientChanges"),
+        .testTarget(name: "ClientChangesTests", dependencies: ["ClientChanges"]),
     ]
 )

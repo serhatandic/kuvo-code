@@ -34,6 +34,16 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
   the way down), and a read elsewhere taken when it's later.
 - `UnsearchedReason`: why a computer's conversations weren't searched, in the words both apps show.
 
+## ClientChanges
+
+A project's changes as both apps' Changes show them, from git's diff (a box's `kuvo/git/changes`,
+the Mac's own git). Foundation only.
+
+- `DiffParser`: git's diff read into files (`PatchFile`) and their lines (`DiffLine`), with each
+  line's numbers, renames, names git quotes, a file that changed kind as one, and the new files git
+  doesn't know listed to be read.
+- `DiffFolding`: the long unchanged stretches folded around each change, opened one at a time.
+
 ## ClientDesign
 
 The look both apps draw with, the same on each: SwiftUI, no app state. It's taking the place of the
