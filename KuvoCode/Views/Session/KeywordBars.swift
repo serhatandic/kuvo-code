@@ -147,7 +147,7 @@ struct KeywordBars: View {
 }
 
 /// A side thread ("/btw") in the card over the composer: its questions and answers in place, the
-/// earlier ones quieter, the newest with Add to Chat and Copy, and a field to ask a follow-up,
+/// earlier ones quieter, the newest with Copy and Reply as a reply has them, and a field to ask a follow-up,
 /// answered with the thread so far. ⋯ goes to this conversation's other threads, starts a new one
 /// or takes this one away; ✕ puts it away (it stays with the conversation's side questions in the
 /// sidebar).
@@ -168,6 +168,7 @@ struct SideThreadBar: View {
     var leave: () -> Void = {}
     @State private var followUp = ""
     @FocusState private var followUpFocused: Bool
+    @State private var follows = FollowsEnd()
 
     private var latest: SideQuestion { thread.latest }
     private var isAnswering: Bool { latest.state == .answering }
@@ -201,7 +202,9 @@ struct SideThreadBar: View {
         }
     }
 
-    /// Each question and its answer, the newest at the bottom and in view.
+    /// Each question and its answer, the newest at the bottom: it opens at the end, and an answer
+    /// that comes is scrolled to (from its question: answers come whole, and a long one reads from
+    /// its start), as the conversation follows what comes, unless you scrolled up to read.
     private var turns: some View {
         ScrollViewReader { reader in
             ScrollView {
@@ -215,10 +218,26 @@ struct SideThreadBar: View {
             }
             .frame(maxHeight: 260)
             .fixedSize(horizontal: false, vertical: true)
-            // The newest from its question: a long answer reads from its start.
-            .onAppear { reader.scrollTo(latest.id, anchor: .top) }
-            .onChange(of: latest.id) { withAnimation(.ui) { reader.scrollTo(latest.id, anchor: .top) } }
-            .onChange(of: latest.state) { withAnimation(.ui) { reader.scrollTo(latest.id, anchor: .top) } }
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            // Where you stopped scrolling: only then, as its height settles in more than one pass.
+            .onScrollPhaseChange { _, phase, context in
+                guard phase == .idle else { return }
+                follows.scrolled(visibleBottom: context.geometry.visibleRect.maxY, contentHeight: context.geometry.contentSize.height)
+            }
+            .onAppear { follows = FollowsEnd() }
+            .onChange(of: thread.questions.count) {
+                follows.asked()
+                toLatest(reader)
+            }
+            .onChange(of: latest) { if follows.isFollowing { toLatest(reader) } }
+        }
+    }
+
+    /// The newest question and its answer, from the top, once it's laid out.
+    private func toLatest(_ reader: ScrollViewProxy) {
+        let id = latest.id
+        Task { @MainActor in
+            withAnimation(.ui) { reader.scrollTo(id, anchor: .top) }
         }
     }
 
@@ -239,14 +258,13 @@ struct SideThreadBar: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 if isLatest, let answer = question.answer {
-                    HStack(spacing: 14) {
-                        Button("Add to Chat") { addToChat(answer) }
-                            .help("Quote this answer over the composer, to answer under")
-                        Button("Copy") { Clipboard.copy(answer) }
+                    // A reply's own Copy and Reply, the same buttons and the same tick once copied.
+                    HStack(spacing: 6) {
+                        CopyButton(text: answer, help: "Copy the Answer")
+                        MessageActionButton(symbol: "arrowshape.turn.up.left", help: "Reply: quotes this answer in the composer") { addToChat(answer) }
                     }
-                    .buttonStyle(TextButtonStyle(outset: true))
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    // The copy glyph under the answer's first letter.
+                    .padding(.leading, -6)
                 }
             case .failed:
                 Label(question.error ?? "It couldn’t be answered.", systemImage: "exclamationmark.circle")
