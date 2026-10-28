@@ -546,6 +546,8 @@ interface Active extends Lane {
   stoppedForLimit?: boolean
   model: string
   problem?: string
+  /** In Plan: it looks and plans, and changes nothing. */
+  planning?: boolean
 }
 
 class CodexThread implements Thread {
@@ -847,7 +849,7 @@ class CodexThread implements Thread {
       collaborationMode: { mode: input.plan ? "plan" : "default", settings: { model: input.model.id, reasoning_effort: effort ?? null, developer_instructions: null } },
     }
     return new Promise<RunResult>((resolve) => {
-      const active: Active = { turn, hooks, resolve, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, subagents: new Map(), spawning: [], auto: input.auto, model: input.model.id }
+      const active: Active = { turn, hooks, resolve, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, subagents: new Map(), spawning: [], auto: input.auto, model: input.model.id, planning: input.plan }
       // As it ends, the agents it spawned that are still at work go on in their sessions (a turn
       // stopped or failed stops them: the session ends them with it).
       active.resolve = (result) => {
@@ -1547,7 +1549,8 @@ class CodexThread implements Thread {
       case "mcpServer/elicitation/request": {
         // Codex asking before an MCP tool runs: your permissions answer it, as any agent's tool
         // (Approve All, or Kuvo Code's own tools: no card; another server's under Ask First asks).
-        if (params._meta?.codex_approval_kind === "mcp_tool_call") {
+        // In Plan, another server's tool, which may change things, is still asked about below.
+        if (params._meta?.codex_approval_kind === "mcp_tool_call" && (!active?.planning || params.serverName === toolServerName)) {
           const server = String(params.serverName ?? "mcp")
           const tool = String(params._meta.tool_name ?? /tool "([^"]+)"/.exec(String(params.message ?? ""))?.[1] ?? "tool")
           const decision = await hooks.permission({ action: `${server}_${tool}`, resources: ["*"], message: params.message ?? undefined, unclassified: server !== toolServerName })

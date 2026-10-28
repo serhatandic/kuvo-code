@@ -10025,7 +10025,7 @@ ${others.map((path) => `- ${path}`).join(`
       collaborationMode: { mode: input.plan ? "plan" : "default", settings: { model: input.model.id, reasoning_effort: effort ?? null, developer_instructions: null } }
     };
     return new Promise((resolve5) => {
-      const active = { turn, hooks, resolve: resolve5, streamed: new Set, changes: new Map, output: new Map, toolsSinceText: false, subagents: new Map, spawning: [], auto: input.auto, model: input.model.id };
+      const active = { turn, hooks, resolve: resolve5, streamed: new Set, changes: new Map, output: new Map, toolsSinceText: false, subagents: new Map, spawning: [], auto: input.auto, model: input.model.id, planning: input.plan };
       active.resolve = (result) => {
         for (const [threadID, lane] of active.subagents) {
           if (lane.ended)
@@ -10732,7 +10732,7 @@ From memory: ${cited.join("; ")}`);
         return { answers };
       }
       case "mcpServer/elicitation/request": {
-        if (params._meta?.codex_approval_kind === "mcp_tool_call") {
+        if (params._meta?.codex_approval_kind === "mcp_tool_call" && (!active?.planning || params.serverName === toolServerName)) {
           const server2 = String(params.serverName ?? "mcp");
           const tool = String(params._meta.tool_name ?? /tool "([^"]+)"/.exec(String(params.message ?? ""))?.[1] ?? "tool");
           const decision = await hooks.permission({ action: `${server2}_${tool}`, resources: ["*"], message: params.message ?? undefined, unclassified: server2 !== toolServerName });
@@ -19857,4 +19857,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 06f383c681fd2c951f8f8af1daa2cde86271353531e37db6449f866d82761670
+// Built from Packages/Box/src/agents de240c59ab3b8fd29be68cf0511affb6de2ac10da913e0293b87a2776c8d560b

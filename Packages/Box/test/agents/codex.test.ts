@@ -451,6 +451,15 @@ describe("Codex in the session's modes", () => {
     expect(answers()).toEqual([{ action: "accept", content: null }, { action: "decline", content: null }])
   })
 
+  test("Plan: another server's MCP tool, which may change things, still waits for your yes", async () => {
+    const id = start([mcpAsk("kuvo-browser", "show_in_panel"), mcpAsk("probe", "erase_everything"), ...reply], { agent: "plan" })
+    await until(() => sessions.forms(id).length === 1)
+    expect(sessions.forms(id)[0].fields[0]).toMatchObject({ title: 'Allow the probe MCP server to run tool "erase_everything"?' })
+    sessions.replyForm(id, sessions.forms(id)[0].id, null)
+    await until(() => ended(id))
+    expect(answers()).toEqual([{ action: "accept", content: null }, { action: "decline" }])
+  })
+
   test("Ask First: it asks before commands and changes, and what it runs can write in the project and reach the network", async () => {
     await run(reply, { permissions: askFirst })
     expect(turnStart()).toMatchObject({ approvalPolicy: "untrusted", sandboxPolicy: { type: "workspaceWrite", networkAccess: true }, collaborationMode: { mode: "default" } })
