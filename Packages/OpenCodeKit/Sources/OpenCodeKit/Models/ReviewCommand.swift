@@ -192,7 +192,8 @@ public struct ReviewCommand: Equatable, Sendable {
         }
         if isWord("since", at: words) {
             let after = words.dropFirst(5)
-            guard after.first?.isWhitespace == true else { return nil }
+            // "since" alone, sent or still typed: the commit is still to come.
+            if after.allSatisfy(\.isWhitespace) { return (nil, words.endIndex, .commit("")) }
             let ref = after.drop { $0.isWhitespace }.prefix { !$0.isWhitespace }
             if ref.isEmpty { return (nil, words.endIndex, .commit("")) }
             guard isRef(ref) else { return nil }
@@ -200,7 +201,7 @@ public struct ReviewCommand: Equatable, Sendable {
         }
         if isWord("folder", at: words) {
             let after = words.dropFirst(6)
-            guard after.first?.isWhitespace == true else { return nil }
+            if after.allSatisfy(\.isWhitespace) { return (nil, words.endIndex, .folder("")) }
             let path = after.drop { $0.isWhitespace }
             if path.first == "\"" {
                 let inside = path.dropFirst()

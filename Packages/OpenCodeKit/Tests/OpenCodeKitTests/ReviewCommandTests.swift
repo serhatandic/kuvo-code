@@ -150,4 +150,8 @@ private let readers = [flash, claude, sonnet, copilotSonnet]
     // Coding agents: "with" is your words.
     let agent = ReviewCommand(" this branch with ", readers: [])
     #expect(agent.searching == nil)
+    // "since" or "folder" sent alone: still to be written, not words to look at.
+    #expect(ReviewCommand(" since", readers: readers).asking == .commit(""))
+    #expect(ReviewCommand(" for security folder", readers: readers).asking == .folder(""))
+    #expect(ReviewCommand(" for security folder", readers: readers).scope == nil)
 }
