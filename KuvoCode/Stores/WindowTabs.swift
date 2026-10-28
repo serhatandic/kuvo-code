@@ -672,6 +672,12 @@ final class WindowTabs {
         focusComposer(key)
     }
 
+    /// Puts the cursor in the composer of the conversation you work in (the session beside, if
+    /// you work there).
+    func focusComposer() {
+        if let key = messageTarget?.text { focusComposer(key) }
+    }
+
     private func focusComposer(_ key: String) {
         if TabKey(key).draftFolder != nil { draftFocus += 1 } else { workspace.model(for: key)?.focusComposer() }
         focus = worksBeside ? .split : .conversation
