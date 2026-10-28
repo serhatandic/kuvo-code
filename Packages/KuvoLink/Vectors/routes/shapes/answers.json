@@ -4199,7 +4199,8 @@
         "object": {
          "session": "string",
          "snippet": "string",
-         "info": "any"
+         "info": "any",
+         "subagent?": "any"
         }
        }
       }

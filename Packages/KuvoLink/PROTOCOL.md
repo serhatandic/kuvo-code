@@ -1051,7 +1051,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     checkout, not the project's folder in it; `~/` at the home folder. `canMake` (for one not there yet): it can be made; `inside`: it's in the repository's
     checkout, and `ignored` whether git ignores it there (if not, git lists each worktree as new
     files).
-- Changes (`git`, bridge 0.9.93): a project's changes as the Changes panel shows and works them,
+- Changes (`git`, bridge 0.9.94): a project's changes as the Changes panel shows and works them,
   by the box's own git in its own folders, so a machine's work with the Mac closed and from a
   phone. A client parses the diff itself. Scopes: `uncommitted` (the default), `unstaged`,
   `staged`, `branch`. `404 {"message"}` for a folder that isn't there, `400` for a scope or a
@@ -1558,7 +1558,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `engine.restart` | `POST kuvo/engine/restart` |
 | `file` | `kuvo/file` |
 | `folders` | `kuvo/folders` |
-| `git` | `kuvo/git/…`: Changes (bridge 0.9.93) |
+| `git` | `kuvo/git/…`: Changes (bridge 0.9.94) |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
 | `handoff` | `kuvo/agents/api/kuvo/handoff…`: handoffs |
