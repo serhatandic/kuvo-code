@@ -115,7 +115,7 @@ struct ConversationScroll<Rows: View>: View {
                 // which going to the end goes to (so it's made, wherever the lazy stack guessed
                 // the end was; a guess could leave the view past the rows, showing nothing).
                 Color.clear
-                    .frame(height: max(0, 32 - spacing))
+                    .frame(height: max(0, ConversationEndFade.height - spacing))
                     .id(ScrollAnchor.end)
             }
             .environment(\.scrollAnchor, anchor)
@@ -142,6 +142,9 @@ struct ConversationScroll<Rows: View>: View {
             }
             .animation(animation, value: change)
         }
+        // Fading out above the composer, under the selection's menu and the scroll-to-end button,
+        // and clear of the scroller, which would look cut off at its end.
+        .overlay(alignment: .bottom) { ConversationEndFade().padding(.trailing, Metrics.gutter - 4) }
         .modifier(SelectionMenu(addToChat: quote))
         // Only where it starts. An anchor for size changes fought the rubber band: the lazy
         // stack re-measures rows during a bounce, so the end kept moving and the bounce
@@ -241,8 +244,6 @@ struct ConversationScroll<Rows: View>: View {
         // Messages scroll on under the card's header, blurring away there instead of being cut at
         // an edge. (Under the composer they fade out in the card's color: `conversationBar`.)
         .scrollEdgeEffectStyle(Self.edgeStyle, for: .all)
-        // Fading out above the composer, under the scroll-to-end button.
-        .overlay(alignment: .bottom) { ConversationEndFade() }
         .overlay(alignment: .bottom) {
             // Scrolled up: a way back to the newest, which also follows it again.
             if !scroller.followsEnd {
