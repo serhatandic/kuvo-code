@@ -131,12 +131,15 @@ import Testing
     }
 
     /// The letters an earlier Kuvo Code delivered itself go to this Mac's box as the app starts,
-    /// before its link meets your other computers (a letter sent again isn't delivered twice):
-    /// wired as the app wires them, before its machines start.
+    /// before its link meets your other computers (a letter sent again isn't delivered twice), and
+    /// so do the messages it kept for a machine that was away: wired as the app wires them, before
+    /// its machines start.
     @Test func lettersAnEarlierVersionDeliveredGoToTheBoxBeforeItsLinkMeetsAnyone() async throws {
         let seen = AgentMail.seenFile
         try FileManager.default.createDirectory(at: seen.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: ["ltr_before1": (Date.now.timeIntervalSince1970 * 1000).rounded()]).write(to: seen)
+        let waiting = AgentMail.waitingFile
+        try JSONEncoder().encode([AgentMail.Waiting(from: "ses_here", name: "Here", to: "ses_there", machine: "gone.invalid", text: "Hi")]).write(to: waiting)
         let box = try await SettingsBox(port: 47_976)
         let app = AppModel()
         app.wirePhoneLink()
@@ -149,6 +152,7 @@ import Testing
             link.stop()
             box.stop()
             try? FileManager.default.removeItem(at: seen)
+            try? FileManager.default.removeItem(at: waiting)
             try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "phone-link.json"))
             _ = Keychain.delete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: PhoneLink.keychainService])
             for key in ["phoneLink", "phoneLink.relay"] { UserDefaults.standard.removeObject(forKey: key) }
@@ -157,5 +161,6 @@ import Testing
         // Its link up, trying the relay: what was kept went first.
         try await until { if case .failed(let reason) = link.status { reason.contains("relay") } else { false } }
         #expect(!FileManager.default.fileExists(atPath: seen.path), "handed to the box")
+        #expect(!FileManager.default.fileExists(atPath: waiting.path), "handed to the box too")
     }
 }

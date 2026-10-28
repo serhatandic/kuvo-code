@@ -308,6 +308,7 @@ final class AppModel {
         // Agents writing to each other, and what an earlier Kuvo Code kept of their letters, to
         // this Mac's box before its link meets your other computers (it starts before the machines).
         AgentMail.shared.app = self
+        AgentMail.shared.box = { [weak self] in self?.box(BoxClient.mac) }
         // COMPAT(beta.1 mac-letters): letters an earlier Kuvo Code kept, handed to the box. Goes 3 months after 0.8.0.
         phoneLink.handOver = { await AgentMail.shared.handOver(to: $0) }
         // This Mac's link is its box's: the app tells it what's wanted, and answers what it asks.

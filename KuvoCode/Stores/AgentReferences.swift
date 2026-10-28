@@ -33,6 +33,7 @@ nonisolated enum AgentReferences {
     /// conversation it's written in (nor its group chat's seats, which aren't listed).
     @MainActor static func candidates(excluding session: String?) -> [AgentMail.Agent] {
         let workspace = AgentMail.shared.app?.workspace
+        AgentMail.shared.refreshSoon()
         return AgentMail.shared.directory().filter { agent in
             agent.session != session && (agent.kind == "bot" || workspace?.session(agent.session)?.title?.isEmpty == false)
         }

@@ -32,6 +32,8 @@ extension AppModel {
         var environment = shell
         environment["KUVO_WAKE_COMMAND"] = WakeUps.command.path
         environment["KUVO_KEYS_ON_HOST"] = "1"
+        // This Mac's chats, where a session a bot starts from its own folder goes.
+        environment["KUVO_CHATS"] = Workspace.chatsFolder
         // Where it answers is in the box's folder, never its environment.
         environment["KUVO_HOST_URL"] = nil
         environment["KUVO_HOST_PASSWORD"] = nil

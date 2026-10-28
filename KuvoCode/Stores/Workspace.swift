@@ -1967,10 +1967,6 @@ final class Workspace {
     /// An agent showed you a file or folder (its show_in_panel tool), at a path on its machine
     /// (nil: this Mac): the window opens it in the panel.
     @ObservationIgnored var onShowInPanel: ((_ session: String, _ machine: String?, _ path: String, _ isFolder: Bool) -> Void)?
-    /// An agent on `machine` wrote to one elsewhere (see `AgentMail`): its message waits there.
-    @ObservationIgnored var onAgentMessage: ((_ machine: String) -> Void)?
-    /// send_message's calls under way on machines, by ID.
-    @ObservationIgnored private var mailCalls: Set<String> = []
     /// Those calls under way, by ID, with their paths once they're known.
     @ObservationIgnored private var panelCalls: [String: String] = [:]
 
@@ -1983,17 +1979,11 @@ final class Workspace {
             if let started = try? event.payload(as: EventPayload.ToolInputStarted.self), started.name == "kuvo-browser_" + BrowserTools.showInPanel {
                 panelCalls[started.id] = ""
             }
-            if machine != nil, let started = try? event.payload(as: EventPayload.ToolInputStarted.self), started.name == "kuvo-browser_send_message" {
-                mailCalls.insert(started.id)
-            }
         case "session.tool.called":
             if let called = try? event.payload(as: EventPayload.ToolCalled.self), panelCalls[called.id] != nil {
                 panelCalls[called.id] = called.input["path"]?.string ?? ""
             }
         case "session.tool.success":
-            if let machine, let done = try? event.payload(as: EventPayload.ToolSucceeded.self), mailCalls.remove(done.id) != nil {
-                onAgentMessage?(machine)
-            }
             guard let done = try? event.payload(as: EventPayload.ToolSucceeded.self), let path = panelCalls.removeValue(forKey: done.id), !path.isEmpty else { return }
             let said = done.content.compactMap { if case .text(let text) = $0 { text } else { nil } }.joined()
             guard let isFolder = BrowserTools.shownFolder(in: said) else { return }
@@ -2001,7 +1991,6 @@ final class Workspace {
         case "session.tool.failed":
             if let failed = try? event.payload(as: EventPayload.ToolFailed.self) {
                 panelCalls[failed.id] = nil
-                mailCalls.remove(failed.id)
             }
         default:
             break
