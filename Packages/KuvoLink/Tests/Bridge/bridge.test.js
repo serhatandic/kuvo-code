@@ -1110,6 +1110,30 @@ test("a Mac's phones document, by mail, counts from the Macs that set the machin
   assert.equal(later.removed.some(entry => entry.key === k(others)), false);
   fs.rmSync(path.join(home, "run", "link.json"));
 });
+test("while the box updates (its engine stopped on purpose, its files being swapped), Start and Restart say so and start nothing", async t => {
+  const bin = path.join(home, "bin");
+  fs.mkdirSync(bin, { recursive: true });
+  fs.mkdirSync(path.join(home, "run", ".updating"), { recursive: true });
+  const said = path.join(home, "run", "box-said");
+  fs.writeFileSync(path.join(bin, "kuvo-start"), `#!/bin/sh\necho "\${1:-box}" >>"${said}"\nexit 0\n`);
+  fs.writeFileSync(path.join(bin, "kuvo-launch"), "#!/bin/sh\n");
+  fs.writeFileSync(path.join(home, "run", "launch.env"), "PATH=/usr/bin\n");
+  // An update run as a process of its own (`box update-now`, from a Mac).
+  fs.writeFileSync(path.join(home, "run", ".updating", "pid"), String(await runningAs("kuvo-link", t)));
+  fs.writeFileSync(path.join(home, "run", "stopped"), "");
+  try {
+    const handle = link.engineHandler(() => { throw new Error("none"); });
+    for (const command of ["start", "restart"]) {
+      const answered = await answer(handle, "POST", `kuvo/engine/${command}`);
+      assert.equal(answered.status, 409, command);
+      assert.match(answered.json.message, /updating/);
+    }
+    await link.toolRun();
+    assert.equal(fs.existsSync(said), false, "nothing started");
+  } finally {
+    for (const name of ["bin/kuvo-start", "bin/kuvo-launch", "run/launch.env", "run/box-said", "run/stopped", "run/.updating"]) fs.rmSync(path.join(home, name), { recursive: true, force: true });
+  }
+});
 test("Start goes through the box's tool, for an engine an older Mac stopped, the bridge staying up; there's no Stop; kuvo/info says whether it runs and whether it's stopped, and names its chats folder", async () => {
   const bin = path.join(home, "bin");
   fs.mkdirSync(bin, { recursive: true });

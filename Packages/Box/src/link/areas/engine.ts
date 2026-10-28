@@ -15,6 +15,7 @@ import { canonicalPath, signInReturn, socketAllowed } from "../server/paths";
 import { IS_MAC, K, RUN } from "../home";
 import { phoneHere } from "../compat/leave-running";
 import { readEngineFile } from "../engine/client";
+import { isUpdating } from "../updates/update";
 import type { SessionPhone, SocketEvents, SocketHandle } from "../relay/host";
 import type { AnswerPiece, LinkRequest, RouteContext } from "../server/context";
 
@@ -54,6 +55,8 @@ export async function engineControl(command: "start" | "restart"): Promise<Engin
   if (![path.join(K, "bin", "kuvo-launch"), path.join(RUN, "launch.env")].every(file => fs.existsSync(file))) {
     return { status: 409, message: "Start it once from Kuvo Code on your Mac." };
   }
+  // An update stops the engine on purpose while it swaps its files, and starts it once that's done.
+  if (isUpdating()) return { status: 409, message: "This machine is updating. Its engine starts again once that's done." };
   // Not with what runs this bridge (the engine's runtime as Bun), which would make `opencode
   // serve` a script to look for.
   const environment = { ...process.env };
