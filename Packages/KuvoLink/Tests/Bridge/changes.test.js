@@ -188,3 +188,36 @@ test("a commit hook that leaves something running doesn't hold up the commit", a
     try { process.kill(Number(read(".git/left.pid"))); } catch {}
   }
 });
+
+test("Branch: what the branch changed since it left its base, committed and not, and whether anything isn't committed yet", async () => {
+  git("checkout", "-q", "-b", "feature");
+  write("src/app.js", "let a = 2\n");
+  git("commit", "-q", "-am", "Two");
+  // main moves on meanwhile: not the branch's.
+  git("checkout", "-q", "main");
+  write("CHANGELOG.md", "On main\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "Main's");
+  git("checkout", "-q", "feature");
+  write("README.md", "Hello\nWorld\n");
+
+  const { json } = await route("POST", "kuvo/git/changes", { directory: repo, scope: "branch", base: "main" });
+  assert.equal(json.against, git("merge-base", "HEAD", "main").trim());
+  assert.match(json.patch, /\+let a = 2/);
+  assert.match(json.patch, /\+World/);
+  assert.doesNotMatch(json.patch, /CHANGELOG/);
+  assert.equal(json.uncommitted, true);
+  git("commit", "-q", "-am", "World");
+  assert.equal((await route("POST", "kuvo/git/changes", { directory: repo, scope: "branch", base: "main" })).json.uncommitted, false);
+});
+
+test("Commit and Push: the commit reaches the remote, a new branch pushed and tracked", async () => {
+  const remote = fs.mkdtempSync(path.join(root, "remote-"));
+  execFileSync("git", ["init", "-q", "--bare", remote]);
+  git("remote", "add", "origin", remote);
+  git("checkout", "-q", "-b", "feature");
+  write("README.md", "Hello\nPushed\n");
+  assert.equal((await route("POST", "kuvo/git/commit", { directory: repo, message: "Pushed", push: true })).status, 200);
+  assert.equal(execFileSync("git", ["--git-dir", remote, "log", "-1", "--format=%s", "feature"], { encoding: "utf8" }).trim(), "Pushed");
+  assert.equal(git("rev-parse", "--abbrev-ref", "feature@{upstream}").trim(), "origin/feature");
+});

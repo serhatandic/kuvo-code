@@ -122,6 +122,32 @@ import Testing
         #expect(!model.hidesSideQuestion)
     }
 
+    /// The sidebar's count of a conversation's side questions: there when Kuvo Code opens again,
+    /// for ones asked before, and down as they're removed on another client (the phone).
+    @Test func aConversationsSideQuestionCountIsThereAtLaunchAndFollowsRemovals() async throws {
+        defer { clean() }
+        serve(directory: "/tmp", answers: ["One.", "Two.", "Three."])
+        let model = try session()
+        let first = try await start(model)
+        var asked: [SideQuestion] = []
+        for question in ["Where?", "When?", "Why?"] { asked.append(try #require(try await first.api?.askSideQuestion(question, about: id))) }
+        await first.agents.loadSideQuestions(of: id)
+        try await until { first.agents.sideQuestions[id]?.count == 3 && first.agents.sideQuestions[id]?.allSatisfy { $0.state == .answered } == true }
+        first.stop()
+
+        // Opened again: counted from what the box kept.
+        let again = try await start(model)
+        defer { again.stop() }
+        try await until { again.agents.sideQuestionCounts[id] == 3 }
+
+        try await again.api?.removeSideQuestion(asked[0].id, of: id)
+        try await until { again.agents.sideQuestionCounts[id] == 2 }
+        #expect(model.sideQuestions.map(\.question) == ["When?", "Why?"])
+        try await again.api?.removeSideQuestion(nil, of: id)
+        try await until { again.agents.sideQuestionCounts[id] == nil }
+        #expect(model.sideQuestions.isEmpty)
+    }
+
     @Test func aReviewListsWhatItFoundAndTheAgentHearsOfItOnlyWhenAsked() async throws {
         defer { clean() }
         let repository = try TestRepository()
