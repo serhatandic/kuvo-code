@@ -54,7 +54,7 @@ struct MicButton: View {
         .accessibilityValue(words ?? "")
         .accessibilityHint(model.canListen ? "Talk instead of typing" : model.state == .absent ? "Downloads the voice model first" : "Says how far the voice model has come")
         // Pressed while the voice model comes (or by the shortcut): how far it's come.
-        .popover(isPresented: Binding { shown } set: { if !$0 { app.dictation.stopWaiting(for: owner) } }, arrowEdge: .top) {
+        .popover(isPresented: Binding { shown } set: { if !$0 { app.dictation.stopWaiting(for: owner) } }, arrowEdge: .bottom) {
             VoiceModelPopover(model: model) { app.dictation.stopWaiting(for: owner) }
                 .popoverContent()
         }
