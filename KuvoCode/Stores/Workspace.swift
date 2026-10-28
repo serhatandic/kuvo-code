@@ -315,12 +315,13 @@ final class Workspace {
         if Moves.isFrozen(id) { throw Moves.Failure.moving }
         guard let api = api(forFolder: directory) else { return }
         try await api.moveSession(id, to: directory)
-        let extra = settings[directory]?.folders ?? []
+        // As its engine knows them: a machine's folders are plain paths there.
+        let extra = (settings[directory]?.folders ?? []).map(api.enginePath)
         try? await api.setPermissions(session: id, rules: ProjectFolders.permissions(session.permissions ?? [], folders: extra))
         if extra.isEmpty {
             try? await api.removeInstruction(session: id, key: ProjectFolders.instructionKey)
         } else {
-            try? await api.setInstruction(session: id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: directory, folders: extra))
+            try? await api.setInstruction(session: id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: api.enginePath(directory), folders: extra))
         }
         // Its open conversation stays as it is, now in its new place.
         await reload(id)
@@ -803,7 +804,8 @@ final class Workspace {
         guard let api = isAgents ? bridge?.api : api(forFolder: directory) else { throw CancellationError() }
         let directory = addFolder(directory)
         let folder = worktree ? try await makeWorktree(of: directory) : directory
-        let extra = settings[directory]?.folders ?? []
+        // As its engine knows them: a machine's folders are plain paths there.
+        let extra = (settings[directory]?.folders ?? []).map(api.enginePath)
         let rules = ProjectFolders.permissions(approval.rules(settings: EngineConfig.rules(on: RemoteFolder.machine(of: directory))), folders: extra)
         let session: Session
         do {
@@ -814,7 +816,7 @@ final class Workspace {
             throw error
         }
         if !extra.isEmpty {
-            try? await api.setInstruction(session: session.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: folder, folders: extra))
+            try? await api.setInstruction(session: session.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: api.enginePath(folder), folders: extra))
         }
         if let tree = worktrees[folder] {
             toldWorktree.insert(session.id)
@@ -1171,7 +1173,9 @@ final class Workspace {
         for folder in unsentProjects.filter({ Self.box(of: $0) == box }).sorted() {
             let body = Self.boxBody(settings[folder] ?? ProjectSettings(), removed: !folders.contains(folder))
             guard let (status, _) = try? await client.send("PUT", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(folder)), body: body) else { continue }
-            if (200..<300).contains(status) || status == 400 { unsentProjects.remove(folder) }
+            // Changed again while it went: still to send, as it is now (its own turn does).
+            let now = Self.boxBody(settings[folder] ?? ProjectSettings(), removed: !folders.contains(folder))
+            if (200..<300).contains(status) || status == 400, now == body { unsentProjects.remove(folder) }
         }
     }
 
@@ -1387,9 +1391,10 @@ final class Workspace {
                                                    permissions: current.permissions, messages: messages, waiting: carried)
         moving = false
         for item in waiting { try? await engine.cancelInbox(session: id, item: item.id) }
-        let extra = extraFolders(session.location.directory)
+        // As its bridge knows them: a machine's folders are plain paths there.
+        let extra = extraFolders(session.location.directory).map(bridge.enginePath)
         if !extra.isEmpty {
-            try? await bridge.setInstruction(session: moved.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: session.location.directory, folders: extra))
+            try? await bridge.setInstruction(session: moved.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: bridge.enginePath(session.location.directory), folders: extra))
         }
         if let tree = worktrees[session.location.directory] {
             try? await bridge.setInstruction(session: moved.id, key: Self.worktreeInstructionKey, text: Self.instructions(for: tree))
@@ -1514,7 +1519,8 @@ final class Workspace {
                 Task { try? await api.markViewed(id, idle: idle) }
             }
             for (id, model) in models where isMacs(model.session) {
-                guard let session = listed.first(where: { $0.id == id }) else {
+                // A subagent's isn't one of the conversations listed: among all of the bridge's.
+                guard let session = (model.isSubagent ? everything : listed).first(where: { $0.id == id }) else {
                     models[id] = nil
                     continue
                 }
@@ -1946,8 +1952,12 @@ final class Workspace {
                 asking[request] = session
                 continue
             }
-            // On a machine not connected now: read again when it is.
-            guard sessionMachines[session].map(connectedMachines.contains) ?? true else { continue }
+            // On a machine not connected now: as it was, read again when it is (and not told
+            // again then as news).
+            guard sessionMachines[session].map(connectedMachines.contains) ?? true else {
+                asking[request] = session
+                continue
+            }
             // A closed session's: still asked (or not known), it stays; its notification goes otherwise.
             if sharedForms[request] == nil, let api = api(forSession: session) {
                 guard let asked = await Self.stillAsked(in: session, api: api), !asked.contains(request) else {

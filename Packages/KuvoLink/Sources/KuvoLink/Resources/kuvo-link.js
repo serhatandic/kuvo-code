@@ -3864,7 +3864,8 @@ async function freshenBots(target) {
   }
 }
 var ASK_FIRST = ["edit", "write", "patch", "shell", "webfetch", "external_directory", "kuvo-browser_browser_save_pdf", "kuvo-browser_browser_upload", "kuvo-browser_watch_for_change"];
-var isRule = (rule) => isObject(rule) && typeof rule.action === "string" && typeof rule.resource === "string" && ["allow", "deny", "ask"].includes(rule.effect);
+var isRule = (rule) => isObject(rule) && typeof rule.action === "string" && typeof rule.resource === "string" && typeof rule.effect === "string" && rule.effect !== "";
+var holdsBack = (rule) => rule.effect !== "allow" && rule.effect !== "ask";
 var isParticular = (rule) => rule.action === "external_directory" && rule.effect === "allow" && rule.resource !== "*";
 function permissionsHere() {
   if (!ownsSettings())
@@ -3877,13 +3878,13 @@ function permissionsHere() {
 }
 function refreshedRules(current, settings) {
   const asks = current.some((rule) => rule.action === "shell" && rule.effect === "ask");
-  const denied = settings.filter((rule) => rule.effect === "deny");
+  const denied = settings.filter(holdsBack);
   let made;
   if (asks) {
     const everywhere = settings.findLast((rule) => rule.action === "external_directory" && rule.resource === "*")?.effect === "allow";
     made = [
       ...ASK_FIRST.filter((action) => everywhere || action !== "external_directory").map((action) => ({ action, resource: "*", effect: "ask" })),
-      ...settings.filter((rule) => rule.effect !== "deny" && rule.resource !== "*" && rule.action !== "external_directory"),
+      ...settings.filter((rule) => !holdsBack(rule) && rule.resource !== "*" && rule.action !== "external_directory"),
       ...denied
     ];
   } else {

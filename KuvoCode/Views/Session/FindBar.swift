@@ -32,6 +32,8 @@ final class ConversationFind {
     }
 
     var isOn = false
+    /// Its conversation is the one in view (one kept for going back to isn't): only then is it Esc's.
+    @ObservationIgnored var isShown = true
     var query = ""
     private(set) var places: [Place] = []
     private(set) var index = 0
@@ -48,11 +50,11 @@ final class ConversationFind {
 
     init() { Self.all.add(self) }
 
-    static var hasOpen: Bool { all.allObjects.contains(where: \.isOn) }
+    static var hasOpen: Bool { all.allObjects.contains { $0.isOn && $0.isShown } }
 
-    /// Closes the open Find bars; whether there was one.
+    /// Closes the open Find bars in view; whether there was one.
     static func closeOpen() -> Bool {
-        let open = all.allObjects.filter(\.isOn)
+        let open = all.allObjects.filter { $0.isOn && $0.isShown }
         for find in open { find.isOn = false }
         return !open.isEmpty
     }

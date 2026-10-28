@@ -56,6 +56,28 @@ import Testing
         return try await #require(workspace.boxes?(BoxClient.mac)).value(Listed.self, "GET", "kuvo/projects").projects
     }
 
+    /// A project changed again while its last change is still on its way to its box: the box ends
+    /// up with the latest, which a list read later doesn't undo.
+    @Test func aChangeMadeWhileTheLastOneGoesReachesTheBox() async throws {
+        defer { done() }
+        let workspace = workspace()
+        let held = HoldsFirstProjectChange(to: box.client(engine: engine.url).transport)
+        workspace.boxes = { id in id == BoxClient.mac ? BoxClient(box: BoxClient.mac, transport: held) : nil }
+        await workspace.refresh()
+        await workspace.loadProjects(on: BoxClient.mac)
+        workspace.addFolder(shop)
+        await workspace.projectsWritten()
+        held.holds = true
+        workspace.saveProject(shop, settings: .init(name: "Shop"))
+        await held.arrived()
+        workspace.saveProject(shop, settings: .init(name: "Storefront"))
+        held.open()
+        await workspace.projectsWritten()
+        #expect(try await onBox(workspace).first { $0.directory == shop }?.name == "Storefront")
+        await workspace.loadProjects(on: BoxClient.mac)
+        #expect(workspace.projects.first { $0.directory == shop }?.name == "Storefront")
+    }
+
     @Test func projectsKeptHereBeforeGoToTheBoxAndChangesReachIt() async throws {
         defer { done() }
         // As an older Kuvo Code kept them.
@@ -186,5 +208,54 @@ import Testing
         #expect(workspace.projects.contains { $0.directory == blog }, "another project stays")
         // Kept on the box with its name, for when one of its sessions comes back.
         #expect(try await onBox(workspace).first { $0.directory == shop } == .init(directory: shop, name: "Shop", folders: [], removed: true))
+    }
+}
+
+/// A box whose next project change (once `holds`) waits on its way there until it's `open`ed.
+@MainActor
+private final class HoldsFirstProjectChange: BoxTransport, @unchecked Sendable {
+    nonisolated let inner: any BoxTransport
+    var holds = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var came: [CheckedContinuation<Void, Never>] = []
+    private var isOpen = false
+    private var hasArrived = false
+
+    nonisolated init(to inner: any BoxTransport) { self.inner = inner }
+
+    func send(_ request: LinkRequest) -> AsyncThrowingStream<LinkResponsePart, Error> {
+        guard request.method == "PUT", request.path.hasPrefix("kuvo/projects") else { return inner.send(request) }
+        let inner = inner
+        return AsyncThrowingStream { continuation in
+            Task { @MainActor in
+                await self.pass()
+                do {
+                    for try await part in inner.send(request) { continuation.yield(part) }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func pass() async {
+        guard holds, !isOpen else { return }
+        holds = false
+        hasArrived = true
+        for each in came { each.resume() }
+        came = []
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func arrived() async {
+        if hasArrived { return }
+        await withCheckedContinuation { came.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        for each in waiting { each.resume() }
+        waiting = []
     }
 }

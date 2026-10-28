@@ -391,6 +391,21 @@ describe("permissions", () => {
     expect(seen).toEqual([false, "reject", "once"])
   })
 
+  test("Approve All with a rule of a kind a newer engine set (one this app doesn't know) holds back what it matches, as Don't Allow does", async () => {
+    const seen: (boolean | string)[] = []
+    a.script = async (_input, _turn, hooks) => {
+      seen.push(hooks.approvesAll())
+      seen.push(await hooks.permission({ action: "shell", resources: ["rm -rf /"] }))
+      seen.push(await hooks.permission({ action: "shell", resources: ["ls"] }))
+      return { outcome: "succeeded" }
+    }
+    const id = create()
+    sessions.update(id, { permissions: [{ action: "shell", resource: "rm *", effect: "deny-forever" as any }] })
+    send(id, "go")
+    await settled(id, 1)
+    expect(seen).toEqual([false, "reject", "once"])
+  })
+
   test("plan mode refuses changes and doesn't approve all", async () => {
     const seen: (boolean | string)[] = []
     a.script = async (_input, _turn, hooks) => {

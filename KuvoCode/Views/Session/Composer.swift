@@ -727,8 +727,10 @@ struct Composer: View {
             readers.first { key($0) == starred && starred != own && starred != lastReviewer }
         }
         let others = readers.filter { reader in key(reader) != own && reader != last && !starred.contains(reader) }
-        return ((last.map { [ReviewerChoice.reader($0, note: "picked last time")] } ?? []) + starred.map { .reader($0, note: $0.provider) } + others.map { .reader($0, note: $0.provider) })
+        let choices = ((last.map { [ReviewerChoice.reader($0, note: "picked last time")] } ?? []) + starred.map { .reader($0, note: $0.provider) } + others.map { .reader($0, note: $0.provider) })
             .prefix(6).map { $0 }
+        // (Only the conversation's own on offer: nothing to list.)
+        return choices.isEmpty ? nil : choices
     }
 
     /// "/review "'s What to review, a commit or a folder for it, or Look for, as what's typed asks.
@@ -803,6 +805,7 @@ struct Composer: View {
 
     /// The models' keys while they're listed: ↑ ↓ choose, Return and Tab pick, Escape closes it.
     private func reviewerKey(_ key: MessageField.Key, _ choices: [ReviewerChoice]) -> Bool {
+        guard !choices.isEmpty else { return false }
         switch key.name {
         case .return, .tab:
             guard key.modifiers.isEmpty else { return false }

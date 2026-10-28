@@ -820,6 +820,27 @@ test("a bot brought here from your Mac is made this machine's: its folder there,
   }
 });
 
+test("a rule a newer engine set in this machine's Settings › Permissions (one this box doesn't know) is kept, and keeps every Don't Allow in a bot's rules", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify({ ...kit, zoneinfo: Buffer.from("TZif Istanbul").toString("base64") }));
+  write(path.join(home, "box", "opencode.json"), JSON.stringify({ permissions: [{ action: "shell", resource: "rm *", effect: "deny-forever" }, { action: "edit", resource: "secrets/*", effect: "deny" }] }));
+  const folder = bot("bot_moved00001");
+  write(path.join(folder, "directory"), `${macFolder}/workspace`);
+  const engine = await makingEngine(["opencode"], { ses_bot_moved00001: [...askFirst, { action: "external_directory", resource: `${macFolder}/*`, effect: "allow" }] });
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+    assert.equal((await ask(handle, "POST", "kuvo/bots/bot_moved00001/arrived", { timeZone: "Europe/Istanbul" })).status, 200);
+    assert.deepEqual(engine.asked.filter(each => each.method === "PATCH" && each.body?.permissions).at(-1)?.body.permissions, [
+      ...askFirst,
+      { action: "shell", resource: "rm *", effect: "deny-forever" },
+      { action: "edit", resource: "secrets/*", effect: "deny" },
+      { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" },
+    ]);
+  } finally {
+    engine.close();
+    fs.rmSync(path.join(home, "box", "opencode.json"), { force: true });
+  }
+});
+
 test("a bot brought here before this machine's settings are its own keeps the rules it runs with, its folder made this machine's", async () => {
   write(path.join(bots, "kit.json"), JSON.stringify(kit));
   fs.rmSync(path.join(home, "box", "opencode.json"), { force: true });

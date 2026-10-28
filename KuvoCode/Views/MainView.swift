@@ -824,7 +824,8 @@ struct MainView: View {
                 } content: {
                     DraftSessionView(directory: directory, focusRequest: tabs.draftFocus) { session, text, files in
                         tabs.draftSent(.draft(directory), as: session.id)
-                        workspace.model(for: session.id)?.submit(text, files: files, for: catalog.model(session.model), queue: false, commands: catalog.commands(in: directory))
+                        // (Kept by the new-session composer until it's gone.)
+                        workspace.model(for: session.id)?.submit(text, files: files, for: catalog.model(session.model), queue: false, commands: catalog.commands(in: directory), keptElsewhere: true)
                     }
                 }
                 .environment(catalog)

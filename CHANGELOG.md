@@ -155,6 +155,11 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Removing an account while one of its sessions works ends that turn as stopped, instead of leaving it working until you press Stop.
 - A link to a web page whose icon declares a nonsense size no longer crashes Kuvo Code each time the link shows, on the Mac and the iPhone.
 - **Changes** keep every line in its place, and the line numbers your review comments use right: an unchanged blank line when your git settings hide blank lines, and a line that starts with an accent or a joining mark.
+- A computer running a newer engine than your copy of Kuvo Code knows still lists its sessions and opens their conversations, on the Mac and the iPhone, instead of showing none when one of them said something new.
+- If your shell prints something as it starts (a greeting, a system summary), the agent's commands still get your whole PATH.
+- A message you send just before quitting Kuvo Code (while the session's tools still start, say) is back in the composer when you open it again, instead of lost.
+- A chat moved into a project on a machine works in the project's other folders there, and a coding agent's subagent you have open keeps following its work after your Mac wakes.
+- A machine's session waiting on you keeps its mark while the machine reconnects after your Mac wakes, rather than notifying you a second time.
 
 ## 0.7.2
 

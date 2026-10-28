@@ -912,6 +912,9 @@ final class SessionModel {
         })
     }
 
+    /// What `submit` sends now is kept on disk elsewhere until it's gone (`submit`'s `keptElsewhere`).
+    private var sendsKeptElsewhere = false
+
     /// Sends `text` as it is, with `files` attached: what's shown waiting at once, and what goes
     /// back to the composer if it can't go. Says how it was sent. `holds`: queued, whatever the
     /// agent is doing, to wait for Resume.
@@ -923,8 +926,15 @@ final class SessionModel {
         if delivery == .steer { isQueuePaused = false }
         outgoing[id] = Outgoing(state: .sending, isOurs: true, startsRun: delivery == .steer && !isBusy)
         editTranscript { $0.addLocal(id: id, text: text, delivery: delivery, files: files) }
+        // Kept on disk until the engine has it, it's back in the composer, or it's taken away: a
+        // quit meanwhile (its tools starting, a slow engine) puts it back in the composer.
+        let (quotes, words) = Quoting.draft(of: WidgetAnswer.split(written).text)
+        var kept = Drafts.Draft(text: words, files: files, quotes: quotes)
+        kept.comments = comments
+        let onItsWay = sendsKeptElsewhere ? nil : Drafts.shared.onItsWay(kept, to: self.id)
         let previous = sending
         sending = Task {
+            defer { if let onItsWay { Drafts.shared.sent(onItsWay) } }
             await previous?.value
             do {
                 // Converting a photo takes a moment; keep it off the main thread. A machine's engine
@@ -1008,7 +1018,11 @@ final class SessionModel {
 
     /// Sends what's in the composer: a message, or a command for "/name arguments". What can't
     /// be sent goes back there.
-    func submit(_ text: String, files: [URL], for model: Model?, queue: Bool, commands: [Command]) {
+    /// `keptElsewhere`: what's sent is kept on disk until it's gone already (a new session's first
+    /// message, kept by its new-session composer), so it isn't kept twice.
+    func submit(_ text: String, files: [URL], for model: Model?, queue: Bool, commands: [Command], keptElsewhere: Bool = false) {
+        sendsKeptElsewhere = keptElsewhere
+        defer { sendsKeptElsewhere = false }
         sent += 1
         if let goal = GoalCommand(text) {
             // For its computer's box, not the agent.

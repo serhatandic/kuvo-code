@@ -224,7 +224,9 @@ struct ToolCallView: View {
     /// The panel browser's tools (served as "kuvo-browser_browser_…"), in words.
     private var browserSummary: String? {
         guard call.name.hasPrefix("kuvo-browser_") else { return nil }
-        let index = input?["index"]?.number.map { "[\(Int($0))]" } ?? "an element"
+        // (A model's numbers as written: one no element or tab could have reads as none given.)
+        let whole = { (key: String) in input?[key]?.number.flatMap { Int(exactly: $0.rounded()) } }
+        let index = whole("index").map { "[\($0)]" } ?? "an element"
         switch call.name.dropFirst("kuvo-browser_".count) {
         case "browser_navigate": return (isActive ? "Opening " : "Opened ") + (string("url") ?? "a page")
         case "browser_new_tab": return "Opened a new tab" + (string("url").map { " at \($0)" } ?? "")
@@ -241,7 +243,7 @@ struct ToolCallView: View {
         case "browser_wait": return string("text").map { (isActive ? "Waiting for “" : "Waited for “") + $0 + "”" } ?? "Waited for the page"
         case "browser_hover": return (isActive ? "Hovering over " : "Hovered over ") + index
         case "browser_tabs":
-            let tab = input?["tab"]?.number.map { " [\(Int($0))]" } ?? ""
+            let tab = whole("tab").map { " [\($0)]" } ?? ""
             switch string("action") {
             case "switch": return (isActive ? "Switching to tab" : "Switched to tab") + tab
             case "close": return (isActive ? "Closing tab" : "Closed tab") + tab

@@ -23,7 +23,7 @@ import { handover, withHandover } from "./handover"
 import { onMachine, ownEnvironment } from "./machine"
 import { messageID, newID } from "./ids"
 import type { Roster } from "./roster"
-import { asksFirst, matches, ruled } from "./rules"
+import { asksFirst, holdsBack, matches, ruled } from "./rules"
 import { skillFolders, within } from "./skills"
 import type { Record_, Store } from "./store"
 import { Turn, type Outcome } from "./turn"
@@ -676,7 +676,7 @@ function dequote(word: string): string {
  * blocked (`echo 'rm x' | sh`), so you're asked rather than it running unseen.
  */
 function hidesFromBlocks(blocks: PermissionRule[] | undefined, ask: PermissionAsk): boolean {
-  if (!isShell(ask.action) || !blocks?.some((rule) => rule.effect === "deny" && isShell(rule.action))) return false
+  if (!isShell(ask.action) || !blocks?.some((rule) => holdsBack(rule.effect) && isShell(rule.action))) return false
   return ask.resources.some((line) => !parseCommands(line.trim()).sure)
 }
 
@@ -2234,11 +2234,11 @@ export class Sessions {
       // don't hold it back.
       approvesAll: (canAsk = true) => {
         if (plan) return false
-        if ((record.session.permissions ?? []).some((rule) => rule.effect === "ask" || rule.effect === "deny")) return false
+        if ((record.session.permissions ?? []).some((rule) => rule.effect !== "allow")) return false
         const isDefault = (rule: PermissionRule) => engineDefaults.some((other) => other.action === rule.action && other.resource === rule.resource && other.effect === rule.effect)
         if ((live.agentRules ?? []).some((rule) => rule.effect !== "allow" && agentActions.has(rule.action) && !isDefault(rule))) return false
         if (live.blocks === undefined) return !canAsk
-        return !live.blocks.some((rule) => rule.effect === "deny")
+        return !live.blocks.some((rule) => holdsBack(rule.effect))
       },
       check: (ask, ownPlan) => this.checkPermission(live, record.session, ask, plan && !ownPlan),
       permission: (ask) => this.askPermission(id, live, turn, ask, plan),

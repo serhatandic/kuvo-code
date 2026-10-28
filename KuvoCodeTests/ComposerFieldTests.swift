@@ -1,5 +1,6 @@
 import AppKit
 import ClientText
+import OpenCodeKit
 import SwiftUI
 import Testing
 @testable import KuvoCode
@@ -31,7 +32,7 @@ import Testing
                     }
                 }
                 Composer(session: model.id, text: $model.draftText, files: $model.draftFiles, quotes: $model.draftQuotes, quoteFocus: model.quoteFocus,
-                         agent: "build", approval: .approveAll, model: nil, isRunning: false,
+                         agent: "build", approval: .approveAll, model: nil, isRunning: false, keywords: [.review],
                          onSelectAgent: { _ in }, onSelectApproval: { _ in }, onSelectModel: { _ in }, onSend: {}, onStop: {})
             }
         }
@@ -41,6 +42,8 @@ import Testing
     /// Who "&" named before: put back after.
     private let mail = AgentMail.shared.app
     let app = AppModel()
+    /// The composer's models: none until a test reads them from the engine.
+    let catalog = Catalog(isMac: true)
     let model: SessionModel
     let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 720, height: 620), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
     /// Tells `until` each time the keyboard moves in the window.
@@ -61,7 +64,7 @@ import Testing
         let view = Window(model: model, items: items)
             .environment(app)
             .environment(app.workspace)
-            .environment(Catalog())
+            .environment(catalog)
             .frame(width: 720, height: 620)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: view)
@@ -238,6 +241,35 @@ extension ComposerFieldTests {
         try await until { field.string == "Ask &Lighthouse " }
         type("to look", in: field)
         #expect(model.draftText == "Ask &Lighthouse to look")
+    }
+
+    /// "/review with " in a conversation whose own model is the only one on offer: there's no other
+    /// model to list, so Return and ↓ do what they would without a list, rather than pick from none.
+    @Test func reviewWithNoOtherModelOnOfferListsNone() async throws {
+        defer { done() }
+        let location = ["directory": "/"]
+        let own: [String: Any] = ["id": "v4.1-flash", "modelID": "v4.1-flash", "providerID": "deepseek", "name": "DeepSeek V4.1 Flash",
+                                  "capabilities": ["tools": true, "input": ["text"], "output": ["text"]], "variants": [], "time": ["released": 1],
+                                  "cost": [["input": 1, "output": 1]], "status": "active", "enabled": true, "limit": ["context": 100_000, "output": 8_000]]
+        engine.on("GET", "/api/integration", json: ["location": location, "data": [["id": "deepseek", "name": "DeepSeek", "methods": [["type": "key"]],
+                                                                                  "connections": [["type": "credential", "credentialID": "cred_deepseek", "method": "key"]]]]])
+        engine.on("GET", "/api/model", json: ["location": location, "data": [own]])
+        engine.on("GET", "/api/model/default", json: ["location": location, "data": own])
+        engine.on("GET", "/api/agent", json: ["location": location, "data": []])
+        engine.on("GET", "/api/command", json: ["location": location, "data": []])
+        catalog.api = engine.api
+        await catalog.refresh()
+        #expect(catalog.reviewReaders.count == 1)
+        try await until { editing == "composer" }
+        let field = try #require(field)
+        type("/review with ", in: field)
+        let key = { (characters: String, code: UInt16) in
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: self.window.windowNumber,
+                             context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)
+        }
+        field.keyDown(with: try #require(key(String(UnicodeScalar(NSDownArrowFunctionKey)!), 125)))
+        field.keyDown(with: try #require(key("\r", 36)))
+        #expect(field.string.hasPrefix("/review with"))
     }
 
     /// Words pasted come in as words, plain.

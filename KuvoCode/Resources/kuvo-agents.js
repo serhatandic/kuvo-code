@@ -2506,6 +2506,31 @@ function failure(error, type = "agent") {
   return { type, message: message || "The agent stopped with an error." };
 }
 
+// Packages/Box/src/agents/rules.ts
+function matches(pattern, value) {
+  if (pattern === "*" || pattern === value)
+    return true;
+  if (pattern.endsWith(" *") && value === pattern.slice(0, -2))
+    return true;
+  const expression = "^" + pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$";
+  return new RegExp(expression, "s").test(value);
+}
+var holdsBack = (effect) => effect !== "allow" && effect !== "ask";
+function ruled(rules, action, resources) {
+  let effect;
+  for (const rule of rules ?? []) {
+    if (!matches(rule.action, action))
+      continue;
+    const targets = resources.length ? resources : ["*"];
+    if (targets.every((resource) => matches(rule.resource, resource)))
+      effect = holdsBack(rule.effect) ? "deny" : rule.effect;
+  }
+  return effect;
+}
+function asksFirst(rules) {
+  return (rules ?? []).some((rule) => rule.effect === "ask" && ["edit", "shell", "write", "patch", "*"].includes(rule.action));
+}
+
 // Packages/Box/src/agents/engine.ts
 class EngineLink {
   url;
@@ -2641,10 +2666,10 @@ ${directory}`;
     for (const policy of policies) {
       if (policy?.action !== "tool.use" || typeof policy.resource !== "string")
         continue;
-      if (policy.effect !== "deny" && policy.effect !== "allow")
+      if (typeof policy.effect !== "string")
         continue;
       const at = policy.resource.indexOf(":");
-      rules.push({ action: at < 0 ? policy.resource : policy.resource.slice(0, at), resource: at < 0 ? "*" : policy.resource.slice(at + 1) || "*", effect: policy.effect });
+      rules.push({ action: at < 0 ? policy.resource : policy.resource.slice(0, at), resource: at < 0 ? "*" : policy.resource.slice(at + 1) || "*", effect: holdsBack(policy.effect) ? "deny" : policy.effect });
     }
     return rules;
   }
@@ -12468,30 +12493,6 @@ User message:
 ${text2}` : text2;
 }
 
-// Packages/Box/src/agents/rules.ts
-function matches(pattern, value) {
-  if (pattern === "*" || pattern === value)
-    return true;
-  if (pattern.endsWith(" *") && value === pattern.slice(0, -2))
-    return true;
-  const expression = "^" + pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$";
-  return new RegExp(expression, "s").test(value);
-}
-function ruled(rules, action, resources2) {
-  let effect;
-  for (const rule of rules ?? []) {
-    if (!matches(rule.action, action))
-      continue;
-    const targets = resources2.length ? resources2 : ["*"];
-    if (targets.every((resource) => matches(rule.resource, resource)))
-      effect = rule.effect;
-  }
-  return effect;
-}
-function asksFirst(rules) {
-  return (rules ?? []).some((rule) => rule.effect === "ask" && ["edit", "shell", "write", "patch", "*"].includes(rule.action));
-}
-
 // Packages/Box/src/agents/wire.ts
 var noTokens = () => ({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } });
 
@@ -13323,7 +13324,7 @@ function dequote(word) {
   return out;
 }
 function hidesFromBlocks(blocks, ask) {
-  if (!isShell(ask.action) || !blocks?.some((rule) => rule.effect === "deny" && isShell(rule.action)))
+  if (!isShell(ask.action) || !blocks?.some((rule) => holdsBack(rule.effect) && isShell(rule.action)))
     return false;
   return ask.resources.some((line3) => !parseCommands(line3.trim()).sure);
 }
@@ -14760,14 +14761,14 @@ ${live.agentPrompt}` : ""
       approvesAll: (canAsk = true) => {
         if (plan)
           return false;
-        if ((record2.session.permissions ?? []).some((rule) => rule.effect === "ask" || rule.effect === "deny"))
+        if ((record2.session.permissions ?? []).some((rule) => rule.effect !== "allow"))
           return false;
         const isDefault = (rule) => engineDefaults.some((other) => other.action === rule.action && other.resource === rule.resource && other.effect === rule.effect);
         if ((live.agentRules ?? []).some((rule) => rule.effect !== "allow" && agentActions.has(rule.action) && !isDefault(rule)))
           return false;
         if (live.blocks === undefined)
           return !canAsk;
-        return !live.blocks.some((rule) => rule.effect === "deny");
+        return !live.blocks.some((rule) => holdsBack(rule.effect));
       },
       check: (ask, ownPlan) => this.checkPermission(live, record2.session, ask, plan && !ownPlan),
       permission: (ask) => this.askPermission(id, live, turn, ask, plan),
@@ -16137,7 +16138,7 @@ class GroupStore {
       personalities: value.personalities && typeof value.personalities === "object" ? value.personalities : {},
       identityNote: typeof value.identityNote === "string" ? value.identityNote : "",
       askFirst: value.askFirst === true,
-      denies: Array.isArray(value.denies) ? value.denies.filter((rule) => rule?.effect === "deny" && typeof rule.action === "string") : [],
+      denies: Array.isArray(value.denies) ? value.denies.filter((rule) => typeof rule?.effect === "string" && holdsBack(rule.effect) && typeof rule.action === "string") : [],
       timeZone: typeof value.timeZone === "string" ? value.timeZone : undefined,
       locale: typeof value.locale === "string" ? value.locale : undefined
     };
@@ -20339,4 +20340,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 8f51b62ae543eb75f2ae167ec6e59c205845074d9cf8f992f79bafa190407f51
+// Built from Packages/Box/src/agents 5c0cc36c7035c3776bcfc50396a2c1f6c49f2d86f83c724a91aad21254e24d15

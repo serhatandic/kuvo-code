@@ -42,7 +42,8 @@ export type BotPlace = Record<"place" | "clock" | "browser", string>;
 export interface KitRule {
   action: string;
   resource: string;
-  effect: "allow" | "deny" | "ask";
+  /** Or one a newer engine has that this box doesn't know: held back, as "deny" is, and kept as it is. */
+  effect: "allow" | "deny" | "ask" | (string & {});
 }
 
 /** Kuvo Code's words for bots (`bin/bot-words.json`, KuvoLink's `Resources/bot-words.json`). */

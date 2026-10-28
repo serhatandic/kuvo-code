@@ -41,26 +41,54 @@ public enum Launcher {
           folder="$XDG_CACHE_HOME/kuvo-npx/$(printf '%s' "$spec" | tr '/' '+')"
           if [ ! -s "$folder/.main" ]; then
             mkdir -p "$XDG_CACHE_HOME/kuvo-npx"
-            # One install at a time: another start waits for it (one left by a crash, for 5 minutes).
-            i=0
-            until mkdir "$folder.lock" 2>/dev/null; do
+            # One install at a time, by the start that holds the lock (its process in it): another
+            # waits for it, however long it takes, and takes over one whose start is gone (it
+            # crashed), one at a time and only once it's sure. One that stops waiting without the
+            # lock leaves the other's install alone, and npx runs it.
+            waits=$KUVO_NPX_WAITS
+            case $waits in '' | *[!0-9]*) waits=600 ;; esac
+            i=0; locked=
+            while :; do
+              if mkdir "$folder.lock" 2>/dev/null; then
+                echo $$ >"$folder.lock/pid"; locked=1; break
+              fi
               [ -s "$folder/.main" ] && break
-              [ -n "$(find "$folder.lock" -maxdepth 0 -mmin +5 2>/dev/null)" ] && rmdir "$folder.lock" 2>/dev/null
-              [ $i -ge 600 ] && break
+              # Its start is gone: its process doesn't run, or it named none (an older kuvo-npx's,
+              # or one that crashed as it took it) minutes ago. A taking over that crashed half way
+              # is let go of after a minute.
+              holder=$(cat "$folder.lock/pid" 2>/dev/null); gone=
+              if [ -n "$holder" ]; then
+                kill -0 "$holder" 2>/dev/null || gone=1
+              elif [ -n "$(find "$folder.lock" -maxdepth 0 -mmin +2 2>/dev/null)" ]; then
+                gone=1
+              fi
+              # (Renamed away first, so one start alone lets it go.)
+              if [ -n "$(find "$folder.lock.breaking" -maxdepth 0 -mmin +1 2>/dev/null)" ] && mv "$folder.lock.breaking" "$folder.lock.breaking.$$" 2>/dev/null; then
+                rm -rf "$folder.lock.breaking.$$"
+              fi
+              if [ -n "$gone" ] && mkdir "$folder.lock.breaking" 2>/dev/null; then
+                echo $$ >"$folder.lock.breaking/pid"
+                [ "$(cat "$folder.lock/pid" 2>/dev/null)" = "$holder" ] && rm -rf "$folder.lock"
+                # Only its own: one let go of meanwhile as stale, and taken by another, isn't.
+                [ "$(cat "$folder.lock.breaking/pid" 2>/dev/null)" = $$ ] && rm -rf "$folder.lock.breaking"
+                continue
+              fi
+              [ $i -ge "$waits" ] && break
               sleep 0.5; i=$((i + 1))
             done
-            if [ ! -s "$folder/.main" ]; then
+            if [ -n "$locked" ] && [ ! -s "$folder/.main" ]; then
               rm -rf "$folder"
               # Its output to stderr: stdout is the server's, to the engine.
               npm install --prefix "$folder" --no-save --no-package-lock --no-audit --no-fund --loglevel=error "$spec" >&2 &&
                 node -e 'const [dir, short] = process.argv.slice(1); const bin = JSON.parse(require("fs").readFileSync(dir + "/package.json", "utf8")).bin; const main = typeof bin === "string" ? bin : bin && (bin[short] || Object.values(bin)[0]); if (main) console.log(main)' "$folder/node_modules/$name" "${name##*/}" >"$folder/.main"
               if [ -s "$folder/.main" ] && [ "$name" != "$spec" ]; then
                 for other in "${folder%@*}"@*; do
-                  case $other in "$folder" | *.lock) ;; *) rm -rf "$other" ;; esac
+                  case $other in "$folder" | *.lock | *.lock.breaking*) ;; *) rm -rf "$other" ;; esac
                 done
               fi
             fi
-            rmdir "$folder.lock" 2>/dev/null
+            # (Only its own: a start that took over from it has its own there.)
+            [ -n "$locked" ] && [ "$(cat "$folder.lock/pid" 2>/dev/null)" = $$ ] && rm -rf "$folder.lock"
           fi
           if [ -s "$folder/.main" ]; then
             [ -n "$here" ] && cd "$here" 2>/dev/null

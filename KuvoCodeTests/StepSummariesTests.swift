@@ -61,6 +61,9 @@ import Testing
     @Test func theBrowser() throws {
         #expect(try words("kuvo-browser_browser_navigate", ["url": "https://example.com"]) == "Opened https://example.com")
         #expect(try words("kuvo-browser_browser_click", ["index": 4]) == "Clicked [4]")
+        // A number no element could have (a model's slip) reads as none given.
+        #expect(try words("kuvo-browser_browser_click", ["index": 1e20]) == "Clicked an element")
+        #expect(try words("kuvo-browser_browser_tabs", ["action": "switch", "tab": -1e300]) == "Switched to tab")
     }
 
     /// A wake-up the agent schedules (through kuvo-wake) reads as one, not as a command.
