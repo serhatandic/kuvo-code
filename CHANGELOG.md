@@ -24,6 +24,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Click the side questions count on a conversation in the sidebar to open the latest one, on the Mac and the iPhone.
 - Codex in Kuvo Code no longer uses ChatGPT's Computer Use, even where your Codex settings turn it on, so it can't click around your Mac without asking.
 - When Codex asks you something, its question card shows above the composer and Codex waits for your answer, as other agents do, instead of saying it asked and stopping. Typing your answer works too.
+- With Approve All, Codex runs commands its own rules would stop to ask about, like `rm -f`, instead of refusing them. With Ask First, an MCP tool Codex wants to use asks with the usual permission card (Kuvo Code's own tools don't ask).
 - A screenshot copied to the clipboard (⌃⇧⌘4) pastes into the composer with ⌘V, as a picture you attach.
 - Searching what was said in your conversations is done by each computer itself, so a machine's conversations come up as quickly as your Mac's, and your phone finds them too.
 - Searching what was said finds what a subagent said too: its conversation comes up, with the words found, and opens on that subagent (on the Mac with Find showing them), on the Mac and the iPhone.

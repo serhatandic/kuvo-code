@@ -616,7 +616,9 @@ class CodexThread implements Thread {
 
   private policy(hooks: TurnHooks, plan: boolean) {
     if (plan) return { approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly", networkAccess: true } }
-    if (hooks.approvesAll()) return { approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" } }
+    // Approve All: what Codex's own rules ask about (rm -f) is asked too, and your rules let it
+    // through without a card; with "never", Codex refuses it itself.
+    if (hooks.approvesAll()) return { approvalPolicy: "on-request", sandboxPolicy: { type: "dangerFullAccess" } }
     // Ask First: it asks before any command but a look and before every edit ("untrusted"), and
     // what it runs can write in the project and where Kuvo Code keeps wake-ups (kuvo-wake, whose
     // scheduling your rules allow), as the engine's commands can.
@@ -694,9 +696,9 @@ class CodexThread implements Thread {
 
   /** Your message, into the turn under way (Codex's turn/steer). */
   async steer(input: MessageInput): Promise<boolean> {
-    // Codex's question waits for your answer: this is it.
+    // Codex's question waits for your answer: this is it (a note of the app's isn't).
     const waiting = this.waiting
-    if (waiting && !waiting.typed) {
+    if (waiting && !waiting.typed && !input.synthetic) {
       waiting.typed = input
       waiting.abort.abort()
       return true
@@ -891,9 +893,12 @@ class CodexThread implements Thread {
     // Another turn's (one stopped before, ending late).
     const turnID = params?.turnId ?? params?.turn?.id
     if (active.turnID && turnID && turnID !== active.turnID) return
-    // A question for you at its end, its words shown as they are: asked once the turn's done.
+    // A question for you at its end, its words shown as they are: asked once the turn's done. One
+    // it went on from (a step after it, more words) isn't asked.
     if (method === "item/completed" && params?.item?.type === "agentMessage" && Array.isArray(params.item.questions) && params.item.questions.length) {
       this.asked = params.item.questions.filter((question: any) => typeof question?.title === "string" && question.title)
+    } else if ((method === "item/started" && params?.item?.type !== "agentMessage") || (method === "item/completed" && params?.item?.type === "agentMessage" && params.item.text)) {
+      this.asked = undefined
     }
     switch (method) {
       case "turn/started":
@@ -1540,6 +1545,14 @@ class CodexThread implements Thread {
         return { answers }
       }
       case "mcpServer/elicitation/request": {
+        // Codex asking before an MCP tool runs: your permissions answer it, as any agent's tool
+        // (Approve All, or Kuvo Code's own tools: no card; another server's under Ask First asks).
+        if (params._meta?.codex_approval_kind === "mcp_tool_call") {
+          const server = String(params.serverName ?? "mcp")
+          const tool = String(params._meta.tool_name ?? /tool "([^"]+)"/.exec(String(params.message ?? ""))?.[1] ?? "tool")
+          const decision = await hooks.permission({ action: `${server}_${tool}`, resources: ["*"], message: params.message ?? undefined, unclassified: server !== toolServerName })
+          return decision === "reject" ? { action: "decline", content: null } : { action: "accept", content: null }
+        }
         // An MCP server asks you something (a form), or to open a page (a sign-in).
         const title = `${params.serverName ?? "A tool"} asks`
         if (params.mode === "url") {

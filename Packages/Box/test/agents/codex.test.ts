@@ -41,7 +41,7 @@ async function turn() {
   send({ method: "turn/started", params: { threadId: "t1", turn: { id: "u1" } } })
   for (const [method, params] of events) {
     if (method === ${JSON.stringify(untilStopped[0])}) return new Promise((resolve) => (stopped = resolve))
-    if (!/requestApproval$/.test(method)) {
+    if (!/requestApproval$|elicitation\\/request$/.test(method)) {
       send({ method, params: inTurn(params) })
       continue
     }
@@ -380,6 +380,25 @@ describe("A question Codex asks as it ends its turn (request_user_input_async)",
     expect(starts()).toEqual(["go", "english please"])
   })
 
+  test("a question it went on from, with a step after it, isn't asked", async () => {
+    const id = await run([...asking, ["item/started", { item: command("c1", "ls") }], ["item/completed", { item: command("c1", "ls", { status: "completed", exitCode: 0 }) }]])
+    expect(sessions.forms(id)).toEqual([])
+    expect(starts()).toEqual(["go"])
+  })
+
+  test("a note of the app's that comes meanwhile (a message relayed from another conversation) doesn't answer it", async () => {
+    const id = start(asking, {}, answered)
+    await until(() => sessions.forms(id).length === 1)
+    sessions.prompt(id, { id: "msg_codex_test_003", text: "A note from the app.", files: [], delivery: "steer", synthetic: { description: "A relayed message" } })
+    // Not taken into the turn: it waits for it to end.
+    await until(() => sessions.inbox(id).some((item) => item.delivery === "queue"))
+    const [form] = sessions.forms(id)
+    expect(form).toBeDefined()
+    sessions.replyForm(id, form.id, { [form.fields[0].key]: "English" })
+    await until(() => starts().length >= 2)
+    expect(starts()[1]).toBe("English")
+  })
+
   test("dismissing the card ends the turn there, with nothing sent to Codex", async () => {
     const id = start(asking, {}, answered)
     await until(() => sessions.forms(id).length === 1)
@@ -394,7 +413,42 @@ describe("Codex in the session's modes", () => {
 
   test("Approve All: it runs what it needs without asking, outside its sandbox", async () => {
     await run(reply)
-    expect(turnStart()).toMatchObject({ approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" }, collaborationMode: { mode: "default" } })
+    expect(turnStart()).toMatchObject({ sandboxPolicy: { type: "dangerFullAccess" }, collaborationMode: { mode: "default" } })
+  })
+
+  test("Approve All: a command Codex's own rules ask about (rm -f) runs, answered for you with no card", async () => {
+    // With "never", Codex refuses what its rules would ask about ("rm -f style commands are not
+    // permitted"); asked instead, your Approve All lets it through.
+    const id = await run([
+      ["item/started", { item: command("c1", "rm -f nothing-here.txt") }],
+      ["item/commandExecution/requestApproval", { itemId: "c1", command: "/bin/zsh -lc 'rm -f nothing-here.txt'", cwd: root }],
+      ["item/completed", { item: command("c1", "rm -f nothing-here.txt", { status: "completed", exitCode: 0 }) }],
+    ])
+    expect(turnStart().approvalPolicy).toBe("on-request")
+    expect(answers()).toEqual([{ decision: "accept" }])
+    expect(sessions.permissions(id)).toEqual([])
+    expect(tools(id)[0].state).toMatchObject({ status: "completed" })
+  })
+
+  // Codex asks before any MCP tool runs (outside "never"), as an elicitation of its own.
+  const mcpAsk = (server: string, tool: string): [string, any] => ["mcpServer/elicitation/request", { serverName: server, mode: "form", _meta: { codex_approval_kind: "mcp_tool_call", tool_params: {} }, message: `Allow the ${server} MCP server to run tool "${tool}"?`, requestedSchema: { type: "object", properties: {} } }]
+
+  test("Approve All: an MCP tool Codex asks about runs, answered for you with no card", async () => {
+    const id = await run([mcpAsk("probe", "plain_note"), ...reply])
+    expect(answers()).toEqual([{ action: "accept", content: null }])
+    expect(sessions.forms(id)).toEqual([])
+    expect(sessions.permissions(id)).toEqual([])
+  })
+
+  test("Ask First: another server's MCP tool asks as a permission card (No declines it); Kuvo Code's own tools don't ask", async () => {
+    const id = start([mcpAsk("kuvo-browser", "show_in_panel"), mcpAsk("probe", "erase_everything"), ...reply], { permissions: askFirst })
+    await until(() => sessions.permissions(id).length === 1)
+    const [ask] = sessions.permissions(id)
+    expect(ask).toMatchObject({ action: "probe_erase_everything" })
+    expect(sessions.forms(id)).toEqual([])
+    sessions.replyPermission(id, ask.id, "reject")
+    await until(() => ended(id))
+    expect(answers()).toEqual([{ action: "accept", content: null }, { action: "decline", content: null }])
   })
 
   test("Ask First: it asks before commands and changes, and what it runs can write in the project and reach the network", async () => {

@@ -170,6 +170,8 @@ export interface MessageInput {
   id: string
   text: string
   files: PromptFile[]
+  /** A note of the app's (a message relayed from another conversation, say), not words you wrote. */
+  synthetic?: boolean
 }
 
 export interface SubagentRun {

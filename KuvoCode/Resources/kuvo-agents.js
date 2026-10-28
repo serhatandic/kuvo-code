@@ -9816,7 +9816,7 @@ class CodexThread {
     if (plan)
       return { approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly", networkAccess: true } };
     if (hooks.approvesAll())
-      return { approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" } };
+      return { approvalPolicy: "on-request", sandboxPolicy: { type: "dangerFullAccess" } };
     const writableRoots = [process.env.KUVO_WAKES, process.env.KUVO_BOTS].filter((root) => Boolean(root));
     return { approvalPolicy: "untrusted", sandboxPolicy: { type: "workspaceWrite", writableRoots, networkAccess: true } };
   }
@@ -9879,7 +9879,7 @@ class CodexThread {
   }
   async steer(input) {
     const waiting = this.waiting;
-    if (waiting && !waiting.typed) {
+    if (waiting && !waiting.typed && !input.synthetic) {
       waiting.typed = input;
       waiting.abort.abort();
       return true;
@@ -10068,6 +10068,8 @@ ${others.map((path) => `- ${path}`).join(`
       return;
     if (method === "item/completed" && params?.item?.type === "agentMessage" && Array.isArray(params.item.questions) && params.item.questions.length) {
       this.asked = params.item.questions.filter((question) => typeof question?.title === "string" && question.title);
+    } else if (method === "item/started" && params?.item?.type !== "agentMessage" || method === "item/completed" && params?.item?.type === "agentMessage" && params.item.text) {
+      this.asked = undefined;
     }
     switch (method) {
       case "turn/started":
@@ -10730,6 +10732,12 @@ From memory: ${cited.join("; ")}`);
         return { answers };
       }
       case "mcpServer/elicitation/request": {
+        if (params._meta?.codex_approval_kind === "mcp_tool_call") {
+          const server2 = String(params.serverName ?? "mcp");
+          const tool = String(params._meta.tool_name ?? /tool "([^"]+)"/.exec(String(params.message ?? ""))?.[1] ?? "tool");
+          const decision = await hooks.permission({ action: `${server2}_${tool}`, resources: ["*"], message: params.message ?? undefined, unclassified: server2 !== toolServerName });
+          return decision === "reject" ? { action: "decline", content: null } : { action: "accept", content: null };
+        }
         const title = `${params.serverName ?? "A tool"} asks`;
         if (params.mode === "url") {
           const answer2 = await hooks.question({ title, fields: [{ key: "open", title: params.message ?? "Open this page to go on.", type: "external", url: params.url }] });
@@ -13703,7 +13711,7 @@ ${others.join(`
       }
       const attached = withTextFiles(input.text, input.files.map(promptFile));
       if (live.doing.kind === "running" && live.doing.run === run2 && run2.agent === agent && !handing.cancelled) {
-        taken = await agent.thread.steer({ id: input.id, text: attached.text, files: attached.files }).catch(() => false);
+        taken = await agent.thread.steer({ id: input.id, text: attached.text, files: attached.files, synthetic: Boolean(input.synthetic) }).catch(() => false);
       }
     } finally {
       live.steering.delete(input.id);
@@ -19849,4 +19857,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 5b23e1d79b70648584b8276b8b9f6fe895189050ab9303f882b6b1ddb393b026
+// Built from Packages/Box/src/agents 06f383c681fd2c951f8f8af1daa2cde86271353531e37db6449f866d82761670
