@@ -26,6 +26,9 @@ export const DRAIN_AFTER = 1500;
 export interface QueueState {
   paused: boolean;
   held: string[];
+  /** When Resume or Send Now last went on with it (ms): a Stop's look at an interrupt from before
+   * that leaves it going. Kept a minute, never in a route's answer. */
+  resumed?: number;
 }
 
 /** A message in a session's inbox, as far as the queue reads it. */
@@ -37,7 +40,12 @@ interface InboxEntry {
 const keptState = (value: unknown): QueueState => ({
   paused: isObject(value) && value.paused === true,
   held: isObject(value) && Array.isArray(value.held) ? value.held.filter((id): id is string => typeof id === "string") : [],
+  ...(isObject(value) && typeof value.resumed === "number" ? { resumed: value.resumed } : {}),
 });
+
+/** A queue as a client reads it. */
+export const shownQueue = ({ paused, held }: QueueState): QueueState => ({ paused, held });
+const RESUMED_FOR = 60_000;
 
 /** Every session's queue the box keeps (one that's neither paused nor holds anything isn't kept). */
 export function readQueues(file = QUEUES_FILE): Record<string, QueueState> {
@@ -61,7 +69,7 @@ export function changeQueue(session: string, change: (state: QueueState) => Queu
     made.held = [...new Set(made.held)];
     changed = JSON.stringify(made) !== JSON.stringify(before);
     if (!changed) return made;
-    if (made.paused || made.held.length) all[session] = made;
+    if (made.paused || made.held.length || (made.resumed && Date.now() - made.resumed < RESUMED_FOR)) all[session] = made;
     else delete all[session];
     try { writePrivate(file, JSON.stringify(all)); } catch {}
     return made;
@@ -111,12 +119,16 @@ export async function drain(target: Target, session: string): Promise<void> {
 /** What waits for `session`'s next step held in its queue, ahead of what was queued (the latest
  * first), and the queue paused when anything waits: what Stop does before it stops the run, and a
  * failed run's. */
-export async function holdQueue(target: Target, session: string): Promise<QueueState> {
+// `since`: for an interrupt then (ms), unless Resume or Send Now went on with it after.
+export async function holdQueue(target: Target, session: string, since?: number): Promise<QueueState> {
+  const resumedSince = () => since !== undefined && (queueOf(session).resumed ?? 0) >= since;
   const inbox = await inboxOf(target, session);
+  if (resumedSince()) return queueOf(session);
   const held = queueOf(session).held;
   const steering = inbox.filter(item => item.delivery === "steer" && !held.includes(item.id)).map(item => item.id);
   for (const id of steering) await setDelivery(target, session, id, "queue").catch(() => {});
-  return changeQueue(session, state => ({ paused: state.paused || inbox.length > 0, held: [...steering, ...state.held] }));
+  return changeQueue(session, state => (since !== undefined && (state.resumed ?? 0) >= since ? state
+    : { ...state, paused: state.paused || inbox.length > 0, held: [...steering, ...state.held] }));
 }
 
 /** Stop: what waits held and paused, then the run stopped. */
@@ -128,7 +140,7 @@ export async function stopSession(target: Target, session: string): Promise<Queu
 
 /** Resume: the queue goes on, its next message now. */
 export async function resumeQueue(target: Target, session: string): Promise<QueueState> {
-  changeQueue(session, current => ({ ...current, paused: false }));
+  changeQueue(session, current => ({ ...current, paused: false, resumed: Date.now() }));
   await drain(target, session);
   return queueOf(session);
 }
@@ -138,7 +150,7 @@ export async function resumeQueue(target: Target, session: string): Promise<Queu
 export async function sendNow(target: Target, session: string, item: string): Promise<boolean> {
   const entry = (await inboxOf(target, session)).find(each => each.id === item);
   if (!entry) return false;
-  changeQueue(session, state => ({ paused: false, held: state.held.filter(id => id !== item) }));
+  changeQueue(session, state => ({ paused: false, held: state.held.filter(id => id !== item), resumed: Date.now() }));
   const running = await isRunning(target, session);
   // Steering wakes an idle session; a running one gets it once the step stops.
   if (entry.delivery === "queue") await setDelivery(target, session, item, "steer");
@@ -191,12 +203,18 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
       case "session.execution.succeeded":
         later(drains, session, () => drain(target, session));
         break;
-      case "session.execution.interrupted":
-        if (event.data?.reason === "superseded" || event.data?.reason === "inactivity") later(drains, session, () => drain(target, session));
-        else later(stops, session, async () => {
-          if (!(await isRunning(target, session))) await holdQueue(target, session);
+      case "session.execution.interrupted": {
+        if (event.data?.reason === "superseded" || event.data?.reason === "inactivity") {
+          later(drains, session, () => drain(target, session));
+          break;
+        }
+        // (Not when it was resumed since: Resume or Send Now goes on.)
+        const at = Date.now();
+        later(stops, session, async () => {
+          if (!(await isRunning(target, session))) await holdQueue(target, session, at);
         });
         break;
+      }
       case "session.execution.failed":
         holdQueue(target, session).catch(() => {});
         break;

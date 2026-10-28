@@ -4,7 +4,7 @@
 import { followed } from "../follow";
 import { placeOfSession } from "../letters/letter";
 import { targetsOf } from "../letters/tools";
-import { holdQueue, queueFollowers, queueOf, readQueues, resumeQueue, sendNow, stopSession } from "../engine/queue";
+import { holdQueue, queueFollowers, queueOf, readQueues, resumeQueue, sendNow, shownQueue, stopSession } from "../engine/queue";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
 export const QUEUE_ROUTE = /^kuvo\/sessions\/(?:queues\/events|([^/]+)\/(stop|queue(?:\/(hold|resume))?|queue\/([^/]+)\/now))$/;
@@ -20,23 +20,23 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
   if (!rawSession) {
     if (method !== "GET") return yield* json(405, {});
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-    return yield* followed(() => ({ queues: readQueues() }), queueFollowers, signal);
+    return yield* followed(() => ({ queues: Object.fromEntries(Object.entries(readQueues()).filter(([, state]) => state.paused || state.held.length).map(([session, state]) => [session, shownQueue(state)])) }), queueFollowers, signal);
   }
   const session = decodeURIComponent(rawSession);
   if (action === "queue" && !step && !item) {
     if (method !== "GET") return yield* json(405, {});
-    return yield* json(200, queueOf(session));
+    return yield* json(200, shownQueue(queueOf(session)));
   }
   if (method !== "POST") return yield* json(405, {});
   const place = await placeOfSession(session, targetsOf({ readEngine, bridge })).catch(() => undefined);
   if (place === undefined) return yield* json(503, { message: "The engine isn't running." });
   if (!place) return yield* json(404, { message: "There's no such conversation here." });
   try {
-    if (action === "stop") return yield* json(200, await stopSession(place.target, session));
-    if (step === "hold") return yield* json(200, await holdQueue(place.target, session));
-    if (step === "resume") return yield* json(200, await resumeQueue(place.target, session));
+    if (action === "stop") return yield* json(200, shownQueue(await stopSession(place.target, session)));
+    if (step === "hold") return yield* json(200, shownQueue(await holdQueue(place.target, session)));
+    if (step === "resume") return yield* json(200, shownQueue(await resumeQueue(place.target, session)));
     if (!(await sendNow(place.target, session, decodeURIComponent(item)))) return yield* json(404, { message: "That message isn't waiting any more." });
-    return yield* json(200, queueOf(session));
+    return yield* json(200, shownQueue(queueOf(session)));
   } catch (error) {
     return yield* json(502, { message: String((error as Error | null)?.message ?? error) });
   }

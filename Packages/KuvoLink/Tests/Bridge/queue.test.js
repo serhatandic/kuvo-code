@@ -19,7 +19,7 @@ const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // The engine: each session's inbox and whether it runs; what was asked of it, each time a test
 // waits on it looking again.
-let inboxes, running, asked, waiting = [];
+let inboxes, running, asked, unsure = false, waiting = [];
 const heard = () => new Promise(resolve => waiting.push(resolve));
 const engine = http.createServer((request, response) => {
   let body = "";
@@ -30,7 +30,7 @@ const engine = http.createServer((request, response) => {
     const [, session, rest] = url.pathname.match(/^\/api\/session\/([^/]+)(\/.*)?$/) ?? [];
     let answer = null;
     if (url.pathname === "/api/session") answer = { data: Object.keys(inboxes).map(id => ({ id, time: { updated: Date.now() } })) };
-    else if (url.pathname === "/api/session/active") answer = { data: Object.fromEntries([...running].map(id => [id, {}])) };
+    else if (url.pathname === "/api/session/active") answer = unsure ? null : { data: Object.fromEntries([...running].map(id => [id, {}])) };
     else if (session && !rest && request.method === "GET") answer = inboxes[session] ? { data: { id: session } } : null;
     else if (rest === "/inbox") answer = { data: inboxes[session] ?? [] };
     else if (rest?.startsWith("/inbox/") && request.method === "PATCH") {
@@ -58,6 +58,7 @@ beforeEach(() => {
   inboxes = {};
   running = new Set();
   asked = [];
+  unsure = false;
   fs.rmSync(path.join(home, "run", "queues.json"), { force: true });
 });
 
@@ -228,4 +229,25 @@ test("every client follows the queues: a line now, one each time they change", a
   await ask("POST", "kuvo/sessions/ses_1/queue/hold");
   await following;
   assert.deepEqual(lines[1], { queues: { ses_1: { paused: true, held: [] } } });
+});
+
+test("when its engine can't say whether a session runs, a message for its next step stays where it is", async () => {
+  inboxes.ses_1 = [{ id: "msg_s1", delivery: "steer" }];
+  unsure = true;
+  await link.scanQueues({ ...target, pid: 20 });
+  assert.deepEqual(asked, [], "not moved to the queue: the agent may be at work and take it");
+  assert.deepEqual(link.queueOf("ses_1"), { paused: false, held: [] });
+});
+
+test("Resume pressed in the moment after a Stop keeps the queue going: the box's look at that Stop leaves it", async () => {
+  inboxes.ses_1 = [{ id: "msg_q1", delivery: "queue" }, { id: "msg_q2", delivery: "queue" }];
+  const b = box();
+  b.hear("session.execution.interrupted", { reason: "user" });
+  const resumed = await ask("POST", "kuvo/sessions/ses_1/queue/resume");
+  assert.deepEqual(resumed.json, { paused: false, held: [] });
+  b.wait(1500);
+  // (Its look goes no further: nothing asked of the engine, nothing held.)
+  for (let turn = 0; turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(link.queueOf("ses_1").paused, false);
+  assert.ok(!asked.some(each => each.endsWith(" queue")), "nothing held");
 });

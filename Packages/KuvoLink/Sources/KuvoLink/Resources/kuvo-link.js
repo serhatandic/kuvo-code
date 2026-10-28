@@ -6521,8 +6521,11 @@ var QUEUES_LOCK = path34.join(RUN, ".queues.lock");
 var DRAIN_AFTER = 1500;
 var keptState = (value) => ({
   paused: isObject(value) && value.paused === true,
-  held: isObject(value) && Array.isArray(value.held) ? value.held.filter((id) => typeof id === "string") : []
+  held: isObject(value) && Array.isArray(value.held) ? value.held.filter((id) => typeof id === "string") : [],
+  ...isObject(value) && typeof value.resumed === "number" ? { resumed: value.resumed } : {}
 });
+var shownQueue = ({ paused, held }) => ({ paused, held });
+var RESUMED_FOR = 60000;
 function readQueues(file = QUEUES_FILE) {
   let all = {};
   try {
@@ -6542,7 +6545,7 @@ function changeQueue(session, change, file = QUEUES_FILE) {
     changed = JSON.stringify(made) !== JSON.stringify(before);
     if (!changed)
       return made;
-    if (made.paused || made.held.length)
+    if (made.paused || made.held.length || made.resumed && Date.now() - made.resumed < RESUMED_FOR)
       all[session] = made;
     else
       delete all[session];
@@ -6587,13 +6590,16 @@ async function drain(target, session) {
     await interrupt(target, session, true);
   changeQueue(session, (state) => ({ ...state, held: state.held.filter((id) => id !== next.id) }));
 }
-async function holdQueue(target, session) {
+async function holdQueue(target, session, since) {
+  const resumedSince = () => since !== undefined && (queueOf(session).resumed ?? 0) >= since;
   const inbox = await inboxOf(target, session);
+  if (resumedSince())
+    return queueOf(session);
   const held = queueOf(session).held;
   const steering = inbox.filter((item) => item.delivery === "steer" && !held.includes(item.id)).map((item) => item.id);
   for (const id of steering)
     await setDelivery(target, session, id, "queue").catch(() => {});
-  return changeQueue(session, (state) => ({ paused: state.paused || inbox.length > 0, held: [...steering, ...state.held] }));
+  return changeQueue(session, (state) => since !== undefined && (state.resumed ?? 0) >= since ? state : { ...state, paused: state.paused || inbox.length > 0, held: [...steering, ...state.held] });
 }
 async function stopSession(target, session) {
   const state = await holdQueue(target, session);
@@ -6601,7 +6607,7 @@ async function stopSession(target, session) {
   return state;
 }
 async function resumeQueue(target, session) {
-  changeQueue(session, (current) => ({ ...current, paused: false }));
+  changeQueue(session, (current) => ({ ...current, paused: false, resumed: Date.now() }));
   await drain(target, session);
   return queueOf(session);
 }
@@ -6609,7 +6615,7 @@ async function sendNow(target, session, item) {
   const entry = (await inboxOf(target, session)).find((each) => each.id === item);
   if (!entry)
     return false;
-  changeQueue(session, (state) => ({ paused: false, held: state.held.filter((id) => id !== item) }));
+  changeQueue(session, (state) => ({ paused: false, held: state.held.filter((id) => id !== item), resumed: Date.now() }));
   const running = await isRunning(target, session);
   if (entry.delivery === "queue")
     await setDelivery(target, session, item, "steer");
@@ -6645,15 +6651,18 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
       case "session.execution.succeeded":
         later(drains, session, () => drain(target, session));
         break;
-      case "session.execution.interrupted":
-        if (event.data?.reason === "superseded" || event.data?.reason === "inactivity")
+      case "session.execution.interrupted": {
+        if (event.data?.reason === "superseded" || event.data?.reason === "inactivity") {
           later(drains, session, () => drain(target, session));
-        else
-          later(stops, session, async () => {
-            if (!await isRunning(target, session))
-              await holdQueue(target, session);
-          });
+          break;
+        }
+        const at = Date.now();
+        later(stops, session, async () => {
+          if (!await isRunning(target, session))
+            await holdQueue(target, session, at);
+        });
         break;
+      }
       case "session.execution.failed":
         holdQueue(target, session).catch(() => {});
         break;
@@ -10089,13 +10098,13 @@ async function* queueRoute(context, match) {
     if (method !== "GET")
       return yield* json(405, {});
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-    return yield* followed(() => ({ queues: readQueues() }), queueFollowers, signal);
+    return yield* followed(() => ({ queues: Object.fromEntries(Object.entries(readQueues()).filter(([, state]) => state.paused || state.held.length).map(([session, state]) => [session, shownQueue(state)])) }), queueFollowers, signal);
   }
   const session = decodeURIComponent(rawSession);
   if (action === "queue" && !step && !item) {
     if (method !== "GET")
       return yield* json(405, {});
-    return yield* json(200, queueOf(session));
+    return yield* json(200, shownQueue(queueOf(session)));
   }
   if (method !== "POST")
     return yield* json(405, {});
@@ -10108,14 +10117,14 @@ async function* queueRoute(context, match) {
     return yield* json(404, { message: "There's no such conversation here." });
   try {
     if (action === "stop")
-      return yield* json(200, await stopSession(place.target, session));
+      return yield* json(200, shownQueue(await stopSession(place.target, session)));
     if (step === "hold")
-      return yield* json(200, await holdQueue(place.target, session));
+      return yield* json(200, shownQueue(await holdQueue(place.target, session)));
     if (step === "resume")
-      return yield* json(200, await resumeQueue(place.target, session));
+      return yield* json(200, shownQueue(await resumeQueue(place.target, session)));
     if (!await sendNow(place.target, session, decodeURIComponent(item)))
       return yield* json(404, { message: "That message isn't waiting any more." });
-    return yield* json(200, queueOf(session));
+    return yield* json(200, shownQueue(queueOf(session)));
   } catch (error) {
     return yield* json(502, { message: String(error?.message ?? error) });
   }
