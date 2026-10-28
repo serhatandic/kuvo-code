@@ -800,7 +800,7 @@ struct UserBubble: View {
     var widget: String?
     /// The keyword it was sent with, as typed (`SentWithKeyword`), drawn in front of its words (of
     /// its answer, after what it quotes) as the composer drew it: its mark for the "/", the rest
-    /// in bold, in the accent (Plan's orange).
+    /// in bold, in the accent.
     var keyword: String?
     var status: String?
     @Environment(\.findHighlight) private var highlight

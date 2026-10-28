@@ -33,6 +33,8 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
   at the top of their chain), what reading a session reads with it (its finished sub-sessions, all
   the way down), and a read elsewhere taken when it's later.
 - `UnsearchedReason`: why a computer's conversations weren't searched, in the words both apps show.
+- `ReviewList`: "/review"'s lists over the message field (What to review, a commit or a folder for
+  it, Look for), their rows and sizes from what the box measured, and loading those.
 
 ## ClientChanges
 

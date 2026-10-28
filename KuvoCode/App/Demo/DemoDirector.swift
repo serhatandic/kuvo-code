@@ -544,11 +544,78 @@ enum DemoDirector {
                 model.draftText = draft
             }
         }
+        // KUVO_DEMO_REVIEW: `running`, `done` or `stopped`, a sample security review of the whole
+        // project in parts over the composer, once the first turn ended (no model reads it).
+        if let kind = environment["KUVO_DEMO_REVIEW"], let model = workspace.model(for: session.id) {
+            await DemoWait.until("its turn to end (KUVO_DEMO_REVIEW)", limit: .seconds(180)) { !model.isRunning }
+            if let review = Self.sampleReview(kind, session: session.id, model: session.model) { model.goalBridge()?.took(review) }
+        }
+        // KUVO_DEMO_SIDE_THREAD: a sample side thread over the composer (three questions, the last
+        // `answering` when it says so) and another thread before it, once the first turn ended.
+        if let kind = environment["KUVO_DEMO_SIDE_THREAD"], let model = workspace.model(for: session.id), let bridge = model.goalBridge() {
+            await DemoWait.until("its turn to end (KUVO_DEMO_SIDE_THREAD)", limit: .seconds(180)) { !model.isRunning }
+            await bridge.loadSideQuestions(of: session.id)
+            for question in Self.sampleSideThread(session: session.id, answering: kind == "answering") { bridge.took(question) }
+            model.shownSideQuestion = "btw_demo_3"
+        }
         // KUVO_DEMO_QUEUE: messages separated by "|", queued once the agent is working.
         guard let queue = environment["KUVO_DEMO_QUEUE"], let running = workspace.model(for: session.id) else { return }
         await DemoWait.until("the agent to start (KUVO_DEMO_QUEUE)", limit: .seconds(10)) { running.isRunning }
         for message in queue.split(separator: "|") {
             running.submit(String(message), files: [], for: catalog.model(session.model), queue: true, commands: catalog.commands(in: folder))
+        }
+    }
+}
+extension DemoDirector {
+    /// A security review of the whole project in parts: under way at part 4 of 9, stopped there,
+    /// or done, with what it found.
+    static func sampleReview(_ kind: String, session: String, model: ModelRef?) -> Review? {
+        let found: [[String: Any]] = [
+            ["id": "fnd_s1", "title": "The session token is written to the log", "explanation": "Anyone who can read the logs can sign in as the user. Log that a session started, not its token.", "severity": "bug", "locations": [["file": "src/auth/login.ts", "line": 6]]],
+            ["id": "fnd_s2", "title": "The redirect URL isn't checked", "explanation": "A link can send people to any site after they sign in. Allow only this app's own paths.", "severity": "bug", "locations": [["file": "src/auth/callback.ts", "line": 2]]],
+            ["id": "fnd_s3", "title": "The user's name goes into the query as it is", "explanation": "", "severity": "risk", "locations": [["file": "src/auth/login.ts", "line": 3]]],
+            ["id": "fnd_s4", "title": "Passwords are compared with ===", "explanation": "", "severity": "risk", "locations": [["file": "src/auth/login.ts", "line": 4]]],
+            ["id": "fnd_s5", "title": "Errors print the stack", "explanation": "", "severity": "nit", "locations": [["file": "src/server/log.ts", "line": 1]]],
+        ]
+        var review: [String: Any] = ["id": "rev_demo_\(kind)", "session": session, "scope": ["kind": "project"], "focus": "security", "started": Date.now.timeIntervalSince1970 * 1000 - 240_000]
+        if let model { review["model"] = ["providerID": model.providerID, "id": model.id] }
+        switch kind {
+        case "running":
+            review["state"] = "reviewing"
+            review["progress"] = ["read": 3, "of": 9]
+            review["findings"] = Array(found.prefix(3))
+        case "stopped":
+            review["state"] = "done"
+            review["stopped"] = ["read": 3, "of": 9]
+            review["findings"] = Array(found.prefix(3))
+            review["summary"] = "Stopped after 3 of 9 parts. It found 3 things to fix."
+            review["fix"] = "Fix these."
+        default:
+            review["state"] = "done"
+            review["findings"] = found
+            review["summary"] = "It read 312 files. It found 5 things to fix."
+            review["fix"] = "Fix these."
+        }
+        return (try? JSONSerialization.data(withJSONObject: review)).flatMap { try? JSONDecoder().decode(Review.self, from: $0) }
+    }
+}
+extension DemoDirector {
+    /// A side thread of three about the timer, and an older one-question thread.
+    static func sampleSideThread(session: String, answering: Bool) -> [SideQuestion] {
+        let now = Date.now.timeIntervalSince1970 * 1000
+        let asked: [[String: Any]] = [
+            ["id": "btw_demo_0", "thread": "btw_demo_0", "question": "What does the regex in parseDuration match?", "answer": "A number and a unit, like `25m` or `1h`.", "asked": now - 1_200_000],
+            ["id": "btw_demo_1", "thread": "btw_demo_1", "question": "Why does the long break come every fourth round?", "answer": "Because `next()` checks `round % 4 === 0` when focus ends; `round` counts finished focus periods.", "asked": now - 300_000],
+            ["id": "btw_demo_2", "thread": "btw_demo_1", "question": "Where is round reset?", "answer": "Only in `resetCycle()`, which Settings calls when you change the cycle length. `reset()` leaves it alone.", "asked": now - 200_000],
+            ["id": "btw_demo_3", "thread": "btw_demo_1", "question": "So reopening the app starts at round 1?", "answer": "Yes: `round` isn't saved with the rest of the timer's state, so it starts at 0 on launch.", "asked": now - 60_000],
+        ]
+        return asked.compactMap { fields in
+            var question = fields
+            question["session"] = session
+            let last = fields["id"] as? String == "btw_demo_3"
+            question["state"] = last && answering ? "answering" : "answered"
+            if last && answering { question["answer"] = nil } else { question["answered"] = (fields["asked"] as! Double) + 4000 }
+            return (try? JSONSerialization.data(withJSONObject: question)).flatMap { try? JSONDecoder().decode(SideQuestion.self, from: $0) }
         }
     }
 }

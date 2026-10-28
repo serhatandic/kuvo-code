@@ -105,12 +105,12 @@ nonisolated enum MessageMentions {
     }
 
     /// `text` with `typed`, the keyword it was sent with, in front, drawn as the composer draws it:
-    /// its mark for the "/", the rest in bold, in the accent (Plan's orange).
+    /// its mark for the "/", the rest in bold, in the accent.
     static func keyword(_ typed: String, before text: AttributedString) -> AttributedString {
         guard typed.count > 1, let keyword = Keyword.parse(typed)?.keyword else { return text }
         var token = AttributedString(typed)
         token.inlinePresentationIntent = .stronglyEmphasized
-        token.swiftUI.foregroundColor = keyword.isPlan ? .orange : .accentColor
+        token.swiftUI.foregroundColor = .accentColor
         token[token.startIndex..<token.characters.index(after: token.startIndex)][KeywordTokenMark.self] = keyword.symbol
         return text.characters.isEmpty ? token : token + AttributedString(" ") + text
     }

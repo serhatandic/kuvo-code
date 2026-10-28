@@ -1,5 +1,6 @@
-import ClientNews
 import ClientDesign
+import ClientNews
+import ClientSessions
 import ClientText
 import KuvoVoice
 import OpenCodeKit
@@ -130,8 +131,10 @@ struct Composer: View {
     @State private var reviewerIndex = 0
     /// The field has the keyboard: the shortcut's voice input would go here.
     @State private var fieldHasKeyboard = false
-    /// "/review"'s "Who reads it" was closed with Escape, or answered with the conversation's own.
-    @State private var dismissedReviewer = false
+    /// The "/review" list closed with Escape (its title, or "models"): another one still opens.
+    @State private var dismissedReviewList: String?
+    /// What the box said of this folder for "/review"'s lists: what it offers, and how much each reads.
+    @State private var reviewKnown = ReviewList.Known()
     /// The model picked last there (`Model.key`), offered first next time.
     @AppStorage(Catalog.lastReviewerKey) private var lastReviewer = ""
     /// Your starred models (the model picker's), offered there after it.
@@ -163,6 +166,8 @@ struct Composer: View {
                 LoopList(choices: loopChoices, selected: min(loopIndex, loopChoices.count - 1)) { pickLoop($0) }
             } else if let reviewerChoices {
                 ReviewerList(choices: reviewerChoices, selected: min(reviewerIndex, reviewerChoices.count - 1)) { pickReviewer($0) }
+            } else if let reviewList {
+                ReviewChoiceList(list: reviewList, selected: min(reviewerIndex, reviewList.rows.count - 1)) { pickReview($0) }
             } else if let mention {
                 MentionList(files: mention.matches, selected: min(mentionIndex, max(mention.matches.count - 1, 0))) { insertMention($0) }
             } else if let named = agents.matches(in: text, excluding: session) {
@@ -249,10 +254,10 @@ struct Composer: View {
                         commandIndex = 0
                         if new.isEmpty { dismissedCommands = false }
                     }
-                    // Not /review any more, or "with" written after it: "Who reads it" can open again.
-                    if !new.hasPrefix(Keyword.review.typed) || new.lowercased().hasPrefix(Keyword.review.typed + " with") {
+                    // Not /review any more: its lists can open again.
+                    if !new.hasPrefix(Keyword.review.typed) {
                         reviewerIndex = 0
-                        dismissedReviewer = false
+                        dismissedReviewList = nil
                     }
                     if !new.hasPrefix(Keyword.loop.typed) {
                         loopIndex = 0
@@ -264,6 +269,10 @@ struct Composer: View {
                     }
                 }
                 .onChange(of: session) { agents.reset() }
+                // Each time "/review" is written: what its lists offer here, and how much each reads.
+                .task(id: reviewListSession) { await loadReviewKnown() }
+                // Another of its lists: from its first row again.
+                .onChange(of: reviewList?.title) { reviewerIndex = 0 }
                 // Listening ("In the Composer"): what's written, then what you're saying, as it comes,
                 // in the field's place (it stays, unseen, as it was).
                 .opacity(listening == nil ? 1 : 0)
@@ -394,7 +403,7 @@ struct Composer: View {
             dismissedLoop = false
             customLoop = false
             reviewerIndex = 0
-            dismissedReviewer = false
+            dismissedReviewList = nil
             isTargeted = false
             // The keyboard goes to this session's message, not a quote it was answering before.
             answerFocus = nil
@@ -466,6 +475,7 @@ struct Composer: View {
         if agents.key(key, text: $text, excluding: session) { return true }
         if let loopChoices, loopKey(key, loopChoices) { return true }
         if let reviewerChoices, reviewerKey(key, reviewerChoices) { return true }
+        if let reviewList, reviewListKey(key, reviewList) { return true }
         switch key.name {
         case .return:
             if let commandMatches, key.modifiers.isEmpty {
@@ -667,7 +677,7 @@ struct Composer: View {
     private var token: MessageField.Token? {
         guard let (keyword, rest) = typedKeyword else { return nil }
         let schedule = keyword == .loop ? LoopCommand(rest).scheduleLength : keyword == .review ? reviewCommand(rest).readerLength : 0
-        return MessageField.Token(length: keyword.typed.utf16.count + schedule, symbol: keyword.symbol, orange: keyword.isPlan)
+        return MessageField.Token(length: keyword.typed.utf16.count + schedule, symbol: keyword.symbol)
     }
 
     /// In grey after the keyword until something follows it: what to write ("/loop"'s once it
@@ -680,7 +690,10 @@ struct Composer: View {
         }
         if keyword == .review {
             let command = reviewCommand(rest)
-            return command.reader != nil && command.focus.isEmpty ? "what to look at (or nothing)" : nil
+            guard command.asking == nil, command.searching == nil, command.focus.isEmpty else { return nil }
+            // After Something else…'s "for ": your words; after the rest, anything more.
+            if rest.lowercased().hasSuffix("for ") { return "what to look at" }
+            return command.readerLength > 0 ? "anything else to look at (or nothing)" : nil
         }
         return rest.allSatisfy(\.isWhitespace) ? keyword.argument : nil
     }
@@ -702,14 +715,13 @@ struct Composer: View {
             let attached = files.isEmpty ? "" : schedule.keepsTimeOfDay ? " · attachments stay here" : " · attachments go with the first one only"
             return ("\(schedule.title) · \(schedule.firstPhrase(now: .now))\(place)\(attached)", false)
         case .review:
-            if reviewerChoices != nil { return ("Pick who reads the changes, then add what to look at if you like.", false) }
             let command = reviewCommand(rest)
             if let searching = command.searching {
                 return (searching.isEmpty ? "Write a model’s name after “with”." : "Finish the model’s name, or pick it from the list.", false)
             }
             let reader = command.reader?.name ?? currentModel?.name ?? "The conversation’s model"
-            let looking = command.focus.isEmpty ? "" : ", looking especially at what you wrote"
-            return ("\(reader) reads the changes not committed yet with fresh eyes, without this conversation\(looking), and lists what it finds.", false)
+            if let hint = ReviewList.hint(command, listed: reviewList != nil, reader: reader, isAgent: isAgentConversation) { return (hint, false) }
+            return (ReviewList.summary(command, reader: reader), false)
         default:
             return (keyword.hint, false)
         }
@@ -726,11 +738,10 @@ struct Composer: View {
         return currentModel.map { OutsideAgents.runsInBridge($0.providerID) } ?? false
     }
 
-    /// "/review "'s "Who reads it": before anything follows it, the conversation's own model, the
-    /// one picked last, your starred ones and Other Model…; after "with ", the models whose names
-    /// have what's typed.
+    /// The models "with" can name: after "with ", the one picked last, your starred ones, then the
+    /// others; then those whose names have what's typed (and longer ones a name starts).
     private var reviewerChoices: [ReviewerChoice]? {
-        guard !dismissedReviewer, !isAgentConversation, historyIndex == nil, let (keyword, rest) = typedKeyword, keyword == .review,
+        guard dismissedReviewList != "models", !isAgentConversation, historyIndex == nil, let (keyword, rest) = typedKeyword, keyword == .review,
               rest.first?.isWhitespace == true else { return nil }
         let readers = catalog.reviewReaders
         let command = reviewCommand(rest)
@@ -739,46 +750,95 @@ struct Composer: View {
             let longer = command.focus.isEmpty ? ReviewCommand.longer(than: rest, readers: readers) : []
             return longer.isEmpty ? nil : ([reader] + longer.filter { $0 != reader }).prefix(6).map { .reader($0, note: $0.provider) }
         }
-        if let searching = command.searching {
+        guard let searching = command.searching else { return nil }
+        guard searching.isEmpty else {
             let matches = ReviewCommand.search(searching, in: readers).prefix(6)
             return matches.isEmpty ? nil : matches.map { .reader($0, note: $0.provider) }
         }
-        guard rest.allSatisfy(\.isWhitespace) else { return nil }
+        // Nothing typed after "with" yet: the one picked last, your starred ones, then the others.
         let own = currentModel?.key
-        let last = readers.first { $0.ref.providerID + "/" + $0.ref.id == lastReviewer && $0.ref.providerID + "/" + $0.ref.id != own }
-        let starred = starredModels.split(separator: ",").map(String.init).compactMap { key in
-            readers.first { $0.ref.providerID + "/" + $0.ref.id == key && key != own && key != lastReviewer }
+        let key = { (reader: ReviewCommand.Reader) in reader.ref.providerID + "/" + reader.ref.id }
+        let last = readers.first { key($0) == lastReviewer && key($0) != own }
+        let starred = starredModels.split(separator: ",").map(String.init).compactMap { starred in
+            readers.first { key($0) == starred && starred != own && starred != lastReviewer }
         }
-        return [.same(currentModel?.name)] + (last.map { [.reader($0, note: "picked last time")] } ?? [])
-            + starred.prefix(last == nil ? 3 : 2).map { .reader($0, note: $0.provider) } + [.other]
+        let others = readers.filter { reader in key(reader) != own && reader != last && !starred.contains(reader) }
+        return ((last.map { [ReviewerChoice.reader($0, note: "picked last time")] } ?? []) + starred.map { .reader($0, note: $0.provider) } + others.map { .reader($0, note: $0.provider) })
+            .prefix(6).map { $0 }
     }
 
-    /// Picked from "Who reads it": its name written after "/review with ", or "with " to look
-    /// for one; the conversation's own model starts it, as Return did before there was a list.
+    /// "/review "'s What to review, a commit or a folder for it, or Look for, as what's typed asks.
+    private var reviewList: ReviewList? {
+        guard historyIndex == nil, let (keyword, rest) = typedKeyword, keyword == .review,
+              rest.first?.isWhitespace == true, let asking = reviewCommand(rest).asking,
+              let list = ReviewList.make(asking, known: reviewKnown), list.title != dismissedReviewList else { return nil }
+        return list
+    }
+
+    /// The conversation's whose lists are asked about, while "/review" is typed.
+    private var reviewListSession: String? {
+        guard typedKeyword?.keyword == .review else { return nil }
+        return session
+    }
+
+    /// Asks the conversation's box what its lists offer, and how much each reads, each time
+    /// "/review" is written.
+    private func loadReviewKnown() async {
+        reviewKnown = ReviewList.Known()
+        guard let session = reviewListSession, let directory = workspace.session(session)?.location.directory,
+              let api = workspace.agents(forFolder: directory)?.api else { return }
+        await ReviewList.Known.load(session: session, api: api) { reviewKnown = $0 }
+    }
+
+    /// Picked from a "/review" list: its words written after what's there, for the next one; or,
+    /// from Look for, the review starts (Tab only writes them).
+    private func pickReview(_ row: ReviewList.Row, starts: Bool = true) {
+        reviewerIndex = 0
+        guard let (_, rest) = typedKeyword else { return }
+        let head = Keyword.review.typed + reviewCommand(rest).head
+        switch row.pick {
+        case .write(let words):
+            text = head + words
+            focusAtEnd()
+        case .start(let words) where !starts:
+            text = head + words + (words.isEmpty ? "" : " ")
+            dismissedReviewList = "Look for"
+            focusAtEnd()
+        case .start(let words):
+            text = (head + words).trimmingCharacters(in: .whitespaces)
+            send()
+        }
+    }
+
+    /// A "/review" list's keys while it's open: ↑ ↓ choose, Return and Tab pick, Escape closes it.
+    private func reviewListKey(_ key: MessageField.Key, _ list: ReviewList) -> Bool {
+        switch key.name {
+        case .return, .tab:
+            guard key.modifiers.isEmpty else { return false }
+            pickReview(list.rows[min(reviewerIndex, list.rows.count - 1)], starts: key.name == .return)
+        case .escape: dismissedReviewList = list.title
+        case .up: reviewerIndex = max(0, min(reviewerIndex, list.rows.count - 1) - 1)
+        case .down: reviewerIndex = min(list.rows.count - 1, reviewerIndex + 1)
+        }
+        return true
+    }
+
+    /// Picked from the models after "with": its name written there, the lists going on after it.
     private func pickReviewer(_ choice: ReviewerChoice) {
         reviewerIndex = 0
-        switch choice {
-        case .same:
-            dismissedReviewer = true
-            text = Keyword.review.typed
-            onSend()
-            return
-        case .reader(let reader, _):
-            lastReviewer = reader.ref.providerID + "/" + reader.ref.id
-            text = Keyword.review.typed + " " + ReviewCommand.phrase(reader) + " "
-        case .other:
-            text = Keyword.review.typed + " with "
-        }
+        guard case .reader(let reader, _) = choice, let (_, rest) = typedKeyword else { return }
+        lastReviewer = reader.ref.providerID + "/" + reader.ref.id
+        text = Keyword.review.typed + reviewCommand(rest).head + ReviewCommand.phrase(reader) + " "
         focusAtEnd()
     }
 
-    /// "Who reads it"'s keys while it's open: ↑ ↓ choose, Return and Tab pick, Escape closes it.
+    /// The models' keys while they're listed: ↑ ↓ choose, Return and Tab pick, Escape closes it.
     private func reviewerKey(_ key: MessageField.Key, _ choices: [ReviewerChoice]) -> Bool {
         switch key.name {
         case .return, .tab:
             guard key.modifiers.isEmpty else { return false }
             pickReviewer(choices[min(reviewerIndex, choices.count - 1)])
-        case .escape: dismissedReviewer = true
+        case .escape: dismissedReviewList = "models"
         case .up: reviewerIndex = max(0, min(reviewerIndex, choices.count - 1) - 1)
         case .down: reviewerIndex = min(choices.count - 1, reviewerIndex + 1)
         }

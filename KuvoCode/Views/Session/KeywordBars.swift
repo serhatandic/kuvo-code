@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 
@@ -14,12 +15,6 @@ struct KeywordBars: View {
     let hidden: (ComposerBar, Binding<Bool>) -> Binding<Bool>
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
-
-    /// The side question whose answer shows over the composer.
-    private var shownSideQuestion: SideQuestion? {
-        guard let id = model.shownSideQuestion else { return nil }
-        return model.sideQuestions.first { $0.id == id }
-    }
 
     /// The handoff to show: under way, failed, or done, until it's put away.
     private var shownHandoff: Handoff? {
@@ -112,10 +107,13 @@ struct KeywordBars: View {
                 .modifier(CardRow())
                 .transition(.fold)
         } else if let review = model.shownReview {
-            ReviewBar(review: review, isHidden: hidden(.review, $model.hidesReview), sendTargets: sendTargets) { findings, target in
+            ReviewBar(review: review, isHidden: hidden(.review, $model.hidesReview), sendTargets: sendTargets,
+                      readerName: review.model.flatMap { model.reviewCatalogNow?.model($0)?.name }) { findings, target in
                 fix(findings, target)
             } putAway: {
                 model.putAwayReview()
+            } stop: {
+                model.stopReview()
             } cancel: {
                 model.dismissReview()
             } open: { place in
@@ -124,65 +122,69 @@ struct KeywordBars: View {
             .modifier(CardRow())
             .transition(.fold)
         }
-        if let question = shownSideQuestion {
-            SideQuestionBar(question: question, all: model.sideQuestions, show: { model.shownSideQuestion = $0.id }, isHidden: hidden(.sideQuestion, $model.hidesSideQuestion)) {
+        if let thread = model.shownSideThread {
+            SideThreadBar(thread: thread, threads: model.sideThreads, isHidden: hidden(.sideQuestion, $model.hidesSideQuestion), unsent: $model.unsentFollowUp) { show in
+                model.shownSideQuestion = show.latest.id
+            } ask: { question in
+                model.askFollowUp(question)
+            } addToChat: { answer in
+                model.addQuote(answer, how: "side thread")
+            } newThread: {
                 model.askAnotherSideQuestion()
             } remove: {
-                model.removeSideQuestion(question.id)
+                model.removeSideThread(thread)
             } done: {
                 model.shownSideQuestion = nil
+            } leave: {
+                model.focusComposer()
             }
+            // Its own per conversation and thread: a follow-up half written for one never shows in another.
+            .id(model.id + "/" + thread.id)
             .modifier(CardRow())
             .transition(.fold)
         }
     }
 }
 
-/// A side question and its answer, which nothing adds to the conversation. Ask Another starts the
-/// next; Done puts the bar away (the question stays with the others, under the conversation in
-/// the sidebar).
-struct SideQuestionBar: View {
-    let question: SideQuestion
-    /// This conversation's, oldest first, this one too: the others a menu away.
-    let all: [SideQuestion]
-    let show: (SideQuestion) -> Void
+/// A side thread ("/btw") in the card over the composer: its questions and answers in place, the
+/// earlier ones quieter, the newest with Add to Chat and Copy, and a field to ask a follow-up,
+/// answered with the thread so far. ⋯ goes to this conversation's other threads, starts a new one
+/// or takes this one away; ✕ puts it away (it stays with the conversation's side questions in the
+/// sidebar).
+struct SideThreadBar: View {
+    let thread: SideThread
+    /// This conversation's, in the order they were started, this one too.
+    let threads: [SideThread]
     @Binding var isHidden: Bool
-    let askAnother: () -> Void
+    /// A follow-up that couldn't be asked: back in the field.
+    @Binding var unsent: String?
+    let show: (SideThread) -> Void
+    let ask: (String) -> Void
+    let addToChat: (String) -> Void
+    let newThread: () -> Void
     let remove: () -> Void
     let done: () -> Void
+    /// The keyboard back to the message field.
+    var leave: () -> Void = {}
+    @State private var followUp = ""
+    @FocusState private var followUpFocused: Bool
+
+    private var latest: SideQuestion { thread.latest }
+    private var isAnswering: Bool { latest.state == .answering }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            BarLine(mark: AnyView(mark), title: question.state == .answering ? "Answering on the side…" : "Side question",
-                    progress: all.count > 1 ? "\(all.count) asked" : nil, detail: Text(question.question),
-                    accessory: AnyView(actions), showHelp: "Show the question and its answer", hideHelp: "Hide them: this line stays", isHidden: $isHidden,
+            BarLine(mark: AnyView(mark), title: isAnswering ? "Answering on the side…" : thread.questions.count > 1 ? "Side thread" : "Side question",
+                    progress: thread.questions.count > 1 ? "\(thread.questions.count) asked" : nil, detail: Text(thread.first.question),
+                    accessory: AnyView(menu), showHelp: "Show the thread", hideHelp: "Hide it: this line stays", isHidden: $isHidden,
                     close: done, closeHelp: "Put this away: it stays with this conversation’s side questions in the sidebar")
             if !isHidden {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(question.question)
-                        .font(.system(size: 13, weight: .medium))
-                        .lineLimit(4)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    switch question.state {
-                    case .answering:
-                        Text("Asked of the conversation’s model, without adding to it.")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                    case .answered:
-                        ScrollView {
-                            Text(Self.markdown(question.answer ?? ""))
-                                .font(.system(size: 13))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .frame(maxHeight: 220)
-                        .fixedSize(horizontal: false, vertical: true)
-                    case .failed:
-                        Label(question.error ?? "It couldn’t be answered.", systemImage: "exclamationmark.circle")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                    }
+                VStack(alignment: .leading, spacing: 10) {
+                    turns
+                    field
+                    Label("Asks only, changes nothing", systemImage: "eye")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.tertiary)
                 }
                 .padding(.leading, 42)
                 .padding(.trailing, 16)
@@ -190,46 +192,147 @@ struct SideQuestionBar: View {
                 .transition(.fold)
             }
         }
-        .animation(.ui, value: question.state)
+        .animation(.ui, value: latest.state)
+        .animation(.ui, value: thread.questions.count)
+        .onChange(of: unsent) {
+            guard let unsent else { return }
+            followUp = unsent
+            self.unsent = nil
+        }
+    }
+
+    /// Each question and its answer, the newest at the bottom and in view.
+    private var turns: some View {
+        ScrollViewReader { reader in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(thread.questions) { question in
+                        turn(question, isLatest: question.id == latest.id)
+                            .id(question.id)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 260)
+            .fixedSize(horizontal: false, vertical: true)
+            // The newest from its question: a long answer reads from its start.
+            .onAppear { reader.scrollTo(latest.id, anchor: .top) }
+            .onChange(of: latest.id) { withAnimation(.ui) { reader.scrollTo(latest.id, anchor: .top) } }
+            .onChange(of: latest.state) { withAnimation(.ui) { reader.scrollTo(latest.id, anchor: .top) } }
+        }
+    }
+
+    private func turn(_ question: SideQuestion, isLatest: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(question.question)
+                .font(.system(size: 13, weight: isLatest ? .semibold : .medium))
+                .foregroundStyle(isLatest ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                .textSelection(.enabled)
+            switch question.state {
+            case .answering:
+                ShimmerText(text: "Answering from the conversation…")
+                    .font(.system(size: 13))
+            case .answered:
+                Text(Self.markdown(question.answer ?? ""))
+                    .font(.system(size: 13))
+                    .foregroundStyle(isLatest ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                if isLatest, let answer = question.answer {
+                    HStack(spacing: 14) {
+                        Button("Add to Chat") { addToChat(answer) }
+                            .help("Quote this answer over the composer, to answer under")
+                        Button("Copy") { Clipboard.copy(answer) }
+                    }
+                    .buttonStyle(TextButtonStyle(outset: true))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                }
+            case .failed:
+                Label(question.error ?? "It couldn’t be answered.", systemImage: "exclamationmark.circle")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    /// "Ask a follow-up…", answered with the thread so far; Return sends it.
+    private var field: some View {
+        HStack(spacing: 6) {
+            TextField("Ask a follow-up…", text: $followUp, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .lineLimit(1...4)
+                .focused($followUpFocused)
+                .onSubmit(send)
+                // Escape: back to the message field.
+                .onExitCommand {
+                    followUpFocused = false
+                    leave()
+                }
+            Button(action: send) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .buttonStyle(IconButtonStyle(width: 22, height: 22))
+            .foregroundStyle(canSend ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+            .disabled(!canSend)
+            .help(isAnswering ? "Wait for the answer" : "Ask it")
+            .accessibilityLabel("Ask Follow-up")
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 5)
+        .padding(.vertical, 5)
+        .background(.quaternary.opacity(0.6), in: .rect(cornerRadius: 9))
+    }
+
+    private var canSend: Bool { !isAnswering && !followUp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    private func send() {
+        guard canSend else { return }
+        ask(followUp)
+        followUp = ""
+        followUpFocused = true
     }
 
     @ViewBuilder private var mark: some View {
-        if question.state == .answering {
+        if isAnswering {
             Spinner(size: 14)
         } else {
-            Image(systemName: question.state == .failed ? "exclamationmark.circle" : Keyword.btw.symbol)
+            Image(systemName: latest.state == .failed ? "exclamationmark.circle" : Keyword.btw.symbol)
                 .font(.system(size: 13))
-                .foregroundStyle(question.state == .failed ? AnyShapeStyle(.orange) : AnyShapeStyle(.tint))
+                .foregroundStyle(latest.state == .failed ? AnyShapeStyle(.orange) : AnyShapeStyle(.tint))
         }
     }
 
-    private var actions: some View {
-        HStack(spacing: 2) {
-            Button("Ask Another", systemImage: "plus.bubble", action: askAnother)
-                .help("Write another side question")
-            Menu {
-                if all.count > 1 {
-                    Section("Asked Here") {
-                        ForEach(all.reversed()) { each in
-                            Button { show(each) } label: {
-                                if each.id == question.id { Label(String(each.question.prefix(60)), systemImage: "checkmark") } else { Text(String(each.question.prefix(60))) }
-                            }
+    /// ⋯: this conversation's side threads, New Side Thread, and taking this one away.
+    private var menu: some View {
+        Menu {
+            if threads.count > 1 {
+                Section("Side Threads Here") {
+                    ForEach(threads.reversed()) { each in
+                        Button { show(each) } label: {
+                            if each.id == thread.id { Image(systemName: "checkmark") }
+                            Text(String(each.first.question.prefix(60)))
+                            Text("\(each.questions.count) asked · \(each.latest.askedDate.formatted(.relative(presentation: .named)))")
                         }
                     }
                 }
-                Button("Remove This Question", role: .destructive, action: remove)
-            } label: {
-                Image(systemName: "ellipsis")
-                    .frame(width: 22, height: 22)
             }
-            .menuStyle(.button)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .accessibilityLabel("More")
+            Button("New Side Thread", systemImage: "plus.bubble", action: newThread)
+            Divider()
+            Button(thread.questions.count > 1 ? "Remove This Thread" : "Remove This Question", role: .destructive, action: remove)
+        } label: {
+            Image(systemName: "ellipsis")
+                .frame(width: 22, height: 22)
         }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
         .buttonStyle(TextButtonStyle())
-        .font(.system(size: 13))
-        .labelStyle(.titleOnly)
+        .fixedSize()
+        .help("Side threads")
+        .accessibilityLabel("Side Threads")
     }
 
     /// An answer's Markdown, inline (bold, code, links), its lines kept.
@@ -263,35 +366,45 @@ enum ReviewLayout: String {
 
 /// A review with fresh eyes, in the card over the composer: under way, then what it found, bugs
 /// first. Its line counts them by how bad they are, with Fix… for them all; under it, each with
-/// what's wrong, why, and every place it's in, and its own Fix…. ✕ asks before it stops one
-/// under way; a finished one goes at once, with Undo for a few seconds.
+/// what's wrong, why, and every place it's in, and its own Fix…. One read in parts says how far
+/// along it is, with a thin bar, and shows what it found so far, the newest marked; Stop ends it
+/// there, keeping them. ✕ asks before it throws one under way away; a finished one goes at once,
+/// with Undo for a few seconds.
 struct ReviewBar: View {
     let review: Review
     @Binding var isHidden: Bool
     let sendTargets: [ReviewSendTarget]
+    /// Who read it, for the line under what it found.
+    var readerName: String?
     /// `findings`: their ids, nil for all of them.
     let fix: (_ findings: [String]?, _ target: ReviewFixTarget) -> Void
     let putAway: () -> Void
+    let stop: () -> Void
     let cancel: () -> Void
     let open: (Review.Place) -> Void
     @AppStorage(ReviewLayout.key) private var layout = ReviewLayout.list.rawValue
     @State private var confirmsCancel = false
+    /// What the part read last found, while there were findings before it.
+    @State private var newest: Set<String> = []
+
+    /// What it found shows while it's still reading, too.
+    private var showsFindings: Bool { review.state != .reviewing || !review.findings.isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             BarLine(mark: AnyView(mark), title: title, progress: count, detail: review.summary.map { Text($0) },
-                    accessory: review.state == .done && !review.findings.isEmpty ? AnyView(fixMenu(nil, label: "Fix…")) : nil,
+                    accessory: accessory,
                     showHelp: "Show what the review found", hideHelp: "Hide it: this line stays", isHidden: $isHidden,
-                    opens: review.state != .reviewing,
+                    opens: showsFindings,
                     close: review.state == .reviewing ? { confirmsCancel = true } : putAway,
-                    closeHelp: review.state == .reviewing ? "Stop the review" : "Put the review away")
-                // Stopping one under way can't be undone: it asks first, by the ✕.
+                    closeHelp: review.state == .reviewing ? (review.progress != nil ? "Throw the review away" : "Stop the review") : "Put the review away")
+                // Throwing one under way away can't be undone: it asks first, by the ✕.
                 .overlay(alignment: .trailing) {
                     Color.clear
                         .frame(width: 24, height: 24)
                         .padding(.trailing, 8)
                         .popover(isPresented: $confirmsCancel, arrowEdge: .bottom) {
-                            StopReviewConfirmation {
+                            StopReviewConfirmation(inParts: review.progress != nil) {
                                 confirmsCancel = false
                                 cancel()
                             } keep: {
@@ -300,7 +413,14 @@ struct ReviewBar: View {
                             .popoverContent()
                         }
                 }
-            if !isHidden, review.state != .reviewing {
+            if let progress = review.progress, review.state == .reviewing {
+                ProgressLine("Reviewing", fraction: Double(progress.read) / Double(max(progress.of, 1)), layout: .bar)
+                    .padding(.leading, 42)
+                    .padding(.trailing, 16)
+                    .padding(.bottom, showsFindings && !isHidden ? 4 : 10)
+                    .transition(.opacity)
+            }
+            if !isHidden, showsFindings {
                 details
                     .padding(.leading, 42)
                     .padding(.trailing, 16)
@@ -309,8 +429,33 @@ struct ReviewBar: View {
             }
         }
         .animation(.ui, value: review.state)
+        .animation(.ui, value: review.findings.count)
         // Done or gone meanwhile: nothing left to stop.
-        .onChange(of: review.state) { if review.state != .reviewing { confirmsCancel = false } }
+        .onChange(of: review.state) {
+            // Done or gone meanwhile: nothing left to stop, and nothing newer than the rest.
+            if review.state != .reviewing {
+                confirmsCancel = false
+                newest = []
+            }
+        }
+        .onChange(of: review.findings.map(\.id)) { old, new in
+            // A part read after others: what it found is the newest.
+            newest = old.isEmpty ? [] : Set(new).subtracting(old)
+        }
+        .onChange(of: review.id) { newest = [] }
+    }
+
+    /// While it reads in parts, Stop (and Fix… for what it found so far); once done, Fix….
+    private var accessory: AnyView? {
+        let fixes = !review.findings.isEmpty && review.state != .failed
+        guard review.state == .reviewing, review.progress != nil else { return fixes ? AnyView(fixMenu(nil, label: "Fix…")) : nil }
+        return AnyView(HStack(spacing: 2) {
+            if fixes { fixMenu(nil, label: "Fix…") }
+            Button("Stop", action: stop)
+                .buttonStyle(TextButtonStyle())
+                .font(.system(size: 13))
+                .help("Stop reading: what it found so far stays")
+        })
     }
 
     @ViewBuilder private var mark: some View {
@@ -330,22 +475,32 @@ struct ReviewBar: View {
 
     private var title: String {
         switch review.state {
-        case .reviewing: "Review"
+        case .reviewing: review.scope.map { "Reviewing " + $0.said } ?? "Review"
         case .failed: "Review couldn’t be done"
         case .done: review.findings.isEmpty ? "Review found nothing to fix" : "Review"
         }
     }
 
-    /// "1 bug · 2 risks · 1 nit"; while it reads, who's reading.
+    /// "1 bug · 2 risks · 1 nit"; while it reads in parts, how far along it is ("part 4 of 9"),
+    /// and where Stop ended it.
     private var count: String? {
-        if review.state == .reviewing { return "Reading the changes…" }
-        guard review.state == .done, !review.findings.isEmpty else { return nil }
         let names: [(Review.Severity, String)] = [(.bug, "bug"), (.risk, "risk"), (.nit, "nit")]
-        return names.compactMap { severity, name in
+        let found = names.compactMap { severity, name in
             let n = review.findings.filter { $0.severity == severity }.count
             return n == 0 ? nil : n.counting(name)
-        }.joined(separator: " · ")
+        }
+        if review.state == .reviewing {
+            guard let progress = review.progress else { return review.scope?.readsFiles == true ? "Reading the files…" : "Reading the changes…" }
+            // What it found so far is counted in the list under it: the line has room for how far along.
+            return "part \(min(progress.read + 1, progress.of)) of \(progress.of)"
+        }
+        guard review.state == .done else { return nil }
+        // Stopped: its summary under the line says where.
+        return found.isEmpty ? nil : found.joined(separator: " · ")
     }
+
+    /// What it covered and who read it, under what it found.
+    private var footnote: String? { ReviewList.footnote(review, readerName: readerName) }
 
     /// Fix… for `findings` (nil: all of them); `outset` lines its words up with the text above.
     private func fixMenu(_ findings: [String]?, label: String, outset: Bool = false) -> some View {
@@ -376,7 +531,12 @@ struct ReviewBar: View {
     @ViewBuilder private var details: some View {
         switch review.state {
         case .reviewing:
-            EmptyView()
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Found so far:")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                findingList
+            }
         case .failed:
             Text(review.error ?? "It couldn’t be done. Try again.")
                 .font(.system(size: 13))
@@ -400,21 +560,32 @@ struct ReviewBar: View {
                     if layout == ReviewLayout.single.rawValue {
                         SingleFinding(findings: review.findings, fixMenu: { fixMenu([$0.id], label: "Fix This…", outset: true) }, open: open)
                     } else {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 0) {
-                                ForEach(review.findings) { finding in
-                                    FindingRow(finding: finding, fixMenu: { fixMenu([finding.id], label: "Fix…") }, fix: { fix([finding.id], $0) }, open: open)
-                                }
-                            }
-                        }
-                        // About five, then it scrolls.
-                        .frame(maxHeight: 176)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, -8)
+                        findingList
                     }
+                }
+                if let footnote {
+                    Text(footnote)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
                 }
             }
         }
+    }
+
+    private var findingList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(review.findings) { finding in
+                    FindingRow(finding: finding, isNew: newest.contains(finding.id), fixMenu: { fixMenu([finding.id], label: "Fix…") }, fix: { fix([finding.id], $0) }, open: open)
+                }
+            }
+        }
+        // About five, then it scrolls.
+        .frame(maxHeight: 176)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, -8)
     }
 
     /// The list, or one at a time: kept for the next review too.
@@ -460,6 +631,8 @@ private extension Review.Severity {
 /// for it, so nothing moves.
 private struct FindingRow: View {
     let finding: Review.Finding
+    /// Found by the part read last.
+    var isNew = false
     let fixMenu: () -> AnyView
     /// Its Fix…'s choices, for VoiceOver, which can't hover.
     let fix: (ReviewFixTarget) -> Void
@@ -467,8 +640,9 @@ private struct FindingRow: View {
     @State private var isOpen = false
     @State private var hovering = false
 
-    init(finding: Review.Finding, fixMenu: @escaping () -> some View, fix: @escaping (ReviewFixTarget) -> Void, open: @escaping (Review.Place) -> Void) {
+    init(finding: Review.Finding, isNew: Bool = false, fixMenu: @escaping () -> some View, fix: @escaping (ReviewFixTarget) -> Void, open: @escaping (Review.Place) -> Void) {
         self.finding = finding
+        self.isNew = isNew
         self.fixMenu = { AnyView(fixMenu()) }
         self.fix = fix
         self.open = open
@@ -479,11 +653,19 @@ private struct FindingRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 SeverityDot(severity: finding.severity)
                     .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-                Text(finding.title)
-                    .font(.system(size: 13, weight: isOpen ? .semibold : .regular))
-                    .lineLimit(isOpen ? nil : 1)
-                    .fixedSize(horizontal: false, vertical: isOpen)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(finding.title)
+                        .font(.system(size: 13, weight: isOpen ? .semibold : .regular))
+                        .lineLimit(isOpen ? nil : 1)
+                        .fixedSize(horizontal: false, vertical: isOpen)
+                    if isNew {
+                        Text("new")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.tint)
+                            .fixedSize()
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 if !isOpen { firstPlace }
                 fixMenu()
                     .opacity(hovering ? 1 : 0)
@@ -513,7 +695,7 @@ private struct FindingRow: View {
         .onHover { hovering = $0 }
         .clickablePointer()
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(finding.severity.name): \(finding.title)")
+        .accessibilityLabel("\(finding.severity.name): \(finding.title)\(isNew ? ", new" : "")")
         .accessibilityValue(isOpen ? finding.explanation : "")
         .accessibilityHint(isOpen ? "Hides why" : "Shows why and where")
         .accessibilityAddTraits(.isButton)
@@ -690,22 +872,24 @@ private struct SingleFinding: View {
     }
 }
 
-/// Asked by a running review's ✕: stopping can't be undone (asked again, it reads from the start).
+/// Asked by a running review's ✕: throwing it away can't be undone (asked again, it reads from
+/// the start). One read in parts has Stop, which keeps what it found, beside it.
 private struct StopReviewConfirmation: View {
+    var inParts = false
     let stop: () -> Void
     let keep: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Stop the review?")
+            Text(inParts ? "Throw the review away?" : "Stop the review?")
                 .font(.system(size: 13, weight: .semibold))
-            Text("What it has read so far isn’t kept. Asked again, it reads from the start.")
+            Text(inParts ? "What it found so far goes too; Stop in its line keeps that. Asked again, it reads from the start." : "What it has read so far isn’t kept. Asked again, it reads from the start.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
-                Button("Stop the Review", role: .destructive, action: stop)
+                Button(inParts ? "Throw Away" : "Stop the Review", role: .destructive, action: stop)
                 Button("Keep Reading", action: keep)
                     .keyboardShortcut(.defaultAction)
             }

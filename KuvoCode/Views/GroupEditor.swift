@@ -320,6 +320,7 @@ struct GroupEditor: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.glassProminent)
+                .markInk(.onFill)
                 .disabled(!canSave)
             }
         }

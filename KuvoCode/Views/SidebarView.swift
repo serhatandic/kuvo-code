@@ -961,7 +961,7 @@ struct SidebarView: View {
         .modifier(SideQuestionsAction(count: workspace.agents(forFolder: session.location.directory)?.sideQuestionCounts[session.id] ?? 0) { showSideQuestion(nil, of: session, in: place) })
     }
 
-    /// A conversation's side questions ("/btw"), each opening it with its answer over the composer.
+    /// A conversation's side threads ("/btw"), each opening it with the thread over the composer.
     @ViewBuilder private func sideQuestionsMenu(for session: Session, in place: Place?) -> some View {
         let bridge = workspace.agents(forFolder: session.location.directory)
         if let count = bridge?.sideQuestionCounts[session.id], count > 0 {
@@ -970,8 +970,11 @@ struct SidebarView: View {
                 if questions.isEmpty {
                     Button("Open the Latest") { showSideQuestion(nil, of: session, in: place) }
                 }
-                ForEach(questions.reversed()) { question in
-                    Button(String(question.question.prefix(60))) { showSideQuestion(question.id, of: session, in: place) }
+                ForEach(SideThread.threads(questions).reversed()) { thread in
+                    Button { showSideQuestion(thread.latest.id, of: session, in: place) } label: {
+                        Text(String(thread.first.question.prefix(60)))
+                        if thread.questions.count > 1 { Text("\(thread.questions.count) asked") }
+                    }
                 }
             }
         }

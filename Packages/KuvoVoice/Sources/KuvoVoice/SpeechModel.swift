@@ -230,6 +230,9 @@ public final class SpeechModel {
         do {
             // Each file into `partial`, then, once its hash is checked, into the model's folder.
             for file in files where Self.size(of: done.appending(path: file.path)) != file.size {
+                // Paused, removed or started again before this run got going: it touches no
+                // file (making one that's there anew would empty the one a newer run writes).
+                guard self.fetch === fetch, !Task.isCancelled else { return }
                 let target = partial.appending(path: file.path)
                 try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
                 let before = presentBytes - min(Self.size(of: target) ?? 0, file.size)
@@ -549,10 +552,10 @@ extension SpeechModel {
     public func note(usesWhisper: Bool, device: String) -> String? {
         if usesWhisper { return isNewlyReady ? "Whisper, on this \(device)" : nil }
         switch state {
-        case .downloading: return "Better model · \(Int(fraction * 100))%"
-        case .waiting(.wifi), .askingCellular: return "Better model · waiting for Wi-Fi"
-        case .waiting(.network): return "Better model · waiting for the network"
-        case .preparing: return "Better model · almost ready"
+        case .downloading: return "Whisper · \(Int(fraction * 100))%"
+        case .waiting(.wifi), .askingCellular: return "Whisper · waiting for Wi-Fi"
+        case .waiting(.network): return "Whisper · waiting for the network"
+        case .preparing: return "Whisper · getting ready"
         default: return nil
         }
     }
@@ -568,7 +571,7 @@ extension SpeechModel {
         case .paused: return "Paused\(of)"
         case .lowSpace(let free): return "Needs \(Self.megabytes(size - received)) MB · \(Self.megabytes(free)) MB free"
         case .failed(let words): return words
-        case .preparing: return "Getting ready for this \(device)…"
+        case .preparing: return "Getting ready for this \(device)… This takes a few minutes, once."
         case .ready: return "Downloaded · \(Self.megabytes(size)) MB · in use"
         case .unsupported: return "Needs a newer \(device). Apple’s dictation writes what you say."
         }

@@ -2111,6 +2111,9 @@
             "literal": "btw"
            },
            {
+            "literal": "btw.threads"
+           },
+           {
             "literal": "config"
            },
            {
@@ -2193,6 +2196,9 @@
            },
            {
             "literal": "reviews"
+           },
+           {
+            "literal": "reviews.scopes"
            },
            {
             "literal": "search"
@@ -2329,6 +2335,9 @@
             "literal": "btw"
            },
            {
+            "literal": "btw.threads"
+           },
+           {
             "literal": "config"
            },
            {
@@ -2411,6 +2420,9 @@
            },
            {
             "literal": "reviews"
+           },
+           {
+            "literal": "reviews.scopes"
            },
            {
             "literal": "search"

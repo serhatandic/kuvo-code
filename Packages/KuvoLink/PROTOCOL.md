@@ -1456,19 +1456,26 @@ conversation, or nothing of it), `409` and `503` with `{message}` to show. Times
 A conversation deleted takes its side questions and its review with it (`kuvo.btw.removed`
 `{sessionID}`, `kuvo.review.updated` with `review: null`), also one deleted while the box was stopped.
 
-- **Side questions** (`btw`, "/btw <question>"): a question about a conversation, answered from
-  what it knows (on the engine, from inside its context; with the coding agents, the conversation
-  goes with the question), and kept out of it: the conversation is told nothing. Each conversation
-  keeps its own list (the newest 100), which a client shows apart from the conversation (the
-  Mac's sidebar has them under it).
-  - `POST …/kuvo/btw/<session>` with `{"question"}` (at most 4,000 characters) → `{data:
-    question}`, `state` `answering`; it's answered in a moment. A question: `{id, session, question,
-    state: "answering" | "answered" | "failed", answer?, error?, asked, answered?}`.
+- **Side questions** (`btw`, "/btw <question>"; threads `btw.threads`): a question about a
+  conversation, answered from what it knows (on the engine, from inside its context; with the
+  coding agents, the conversation goes with the question), and kept out of it: the conversation
+  is told nothing. A question can be followed up, in a side thread: each follow-up is answered
+  with its thread so far (the latest dozen answers), and a new "/btw" starts a thread of its own,
+  afresh. Each conversation keeps its own list (the newest 100), which a client shows apart from
+  the conversation (the Mac's sidebar has them under it).
+  - `POST …/kuvo/btw/<session>` with `{"question", "thread"?}` (at most 4,000 characters) →
+    `{data: question}`, `state` `answering`; it's answered in a moment. `thread` asks it as a
+    follow-up in that thread (`404` when there's no such thread); without it, it starts one. A
+    question: `{id, session, thread?, question, state: "answering" | "answered" | "failed",
+    answer?, error?, asked, answered?}`; `thread` is the id of the question that started its
+    thread (its own for the first; one from before threads has none: a thread of its own).
   - `GET …/kuvo/btw/<session>` → `{data: [question]}`, oldest first; `GET …/kuvo/btw` → `{data:
-    [{session, count, latest}]}`, every conversation that has some.
-  - `DELETE …/kuvo/btw/<session>/<id>` takes one away, `DELETE …/kuvo/btw/<session>` all of them.
+    [{session, count, threads, latest}]}`, every conversation that has some (`threads`: how
+    many side threads its `count` questions are in).
+  - `DELETE …/kuvo/btw/<session>/<id>` takes one away, `DELETE …/kuvo/btw/<session>/threads/<thread>`
+    a side thread, all of it, and `DELETE …/kuvo/btw/<session>` all of them.
   - Events: `kuvo.btw.updated` `{sessionID, question}` as one is asked and answered;
-    `kuvo.btw.removed` `{sessionID, id?}`.
+    `kuvo.btw.removed` `{sessionID, id?}` (a thread's, one for each of its questions).
 - **Handoffs** (`handoff`, "/handoff [what to do next]"): a conversation carried on in a fresh one.
   Its model writes a handoff note from inside it, and a new conversation in the same folder, on
   the same model, effort, agent and permissions, titled "<title> (continued)", starts on that note
@@ -1494,7 +1501,7 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   - `POST …/kuvo/branch/<session>` with `{"before"}`, the message's id → `{data: session}`, the new
     conversation, marked. `400` with no `before`, `404` for a message not in it, `409` for a
     subagent's.
-- **Reviews** (`reviews`, "/review"): what `scope` names in the conversation's folder, read by a
+- **Reviews** (`reviews`, "/review"; scopes `reviews.scopes`): what `scope` names in the conversation's folder, read by a
   model with none of the conversation's context: on the engine, its own model afresh, or `model`
   when given; with the coding agents, its own agent (another one you're signed in to when it
   can't), `model` left out. A scope:
@@ -1505,7 +1512,8 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
     main or master, yours or origin's, whichever is newer, or origin's HEAD), with those not
     committed yet;
   - `{"kind": "commits", "from", "to"?}`: what the commits after `from`, up to `to` (HEAD when
-    left out), changed, git's `from..to`;
+    left out), changed, git's `from..to`; `from` as `<commit>^` starts with that commit, the
+    first one too ("/review since <commit>");
   - `{"kind": "folder", "path"}` and `{"kind": "project"}`: the files themselves, of a folder in
     the project (a path inside it, never `..` or absolute: `400`) or all of it, numbered line by
     line: those git keeps or would (all but hidden ones and `node_modules` out of a repository),
@@ -1518,16 +1526,23 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
     makes no sense. `focus` is what to look at especially, as the user wrote it ("/review with
     <model> <focus>"), or `security`, `performance` or `accessibility`, which the box spells out
     for the reviewer. A review: `{id, session, state: "reviewing" | "done" | "failed", model?,
-    scope?, focus?, progress?: {read, of}, summary?, findings: [finding], error?, fix?, started,
-    ended?}`, its findings bugs first; `scope` is left out for the changes not committed yet, and
-    `progress` is there while one read in parts is under way (`read` of `of` parts), its findings
-    so far in `findings`. A finding: `{id, title, explanation, severity: "bug" | "risk" | "nit",
+    scope?, focus?, progress?: {read, of}, stopped?: {read, of}, summary?, findings: [finding],
+    error?, fix?, started, ended?}`, its findings bugs first; `scope` is left out for the changes
+    not committed yet, `progress` is there while one read in parts is under way (`read` of `of`
+    parts), its findings so far in `findings`, and `stopped` says where Stop ended one. A finding: `{id, title, explanation, severity: "bug" | "risk" | "nit",
     locations: [{file, line?, endLine?}]}`: what's wrong in a line, why and how to fix it (`""`
     when the title says it all), and every place it's in, none when it's about the change as a
     whole (a missing test). `fix` is what to send the agent, as your message, to fix them all.
-  - `POST …/kuvo/reviews/<session>/measure` with `{"scope"?}` → `{data: {files, parts, leftOut}}`:
-    how much a review of it would read, to show before asking for a big one; `422` with what's
-    wrong when it can't be read (not a repository, no such commit or folder).
+  - `POST …/kuvo/reviews/<session>/measure` with `{"scope"?}` → `{data: {files, parts, leftOut,
+    commits?}}`: how much a review of it would read, to show before asking for a big one
+    (`commits` for a branch or a range of them); `422` with what's wrong when it can't be read
+    (not a repository, no such commit or folder).
+  - `GET …/kuvo/reviews/<session>/choices` → `{data: {repository, branch?: {name, base, commits},
+    commits: [{id, short, title, time}], folders: [{path, files}]}}`: what "What to review"
+    offers in the conversation's folder: the branch it's on with its base and how many commits
+    of its own (left out on the base itself), its 30 latest commits (`time` in ms), and its
+    folders by path, with how many files each has at any depth (500 at most, shallowest first).
+    Out of a repository, `repository` is `false` and only the folders come.
   - `POST …/kuvo/reviews/<session>/stop` → `{data: review}`: one under way ends where it is,
     `done`, keeping what it found so far (its summary says how far it got); `409` once it's over.
   - `POST …/kuvo/reviews/<session>/fix` with `{"findings"?: [id]}` → `{data: {text}}`: what to send
@@ -1581,9 +1596,11 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `git` | `kuvo/git/…`: Changes (bridge 0.9.94) |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
+| `btw.threads` | a side question's `thread`, follow-ups and a thread's removal (bridge 0.9.98) |
 | `handoff` | `kuvo/agents/api/kuvo/handoff…`: handoffs |
 | `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
 | `reviews` | `kuvo/agents/api/kuvo/reviews…`: reviews with fresh eyes |
+| `reviews.scopes` | a review's `scope`, `measure`, `choices` and `stop` (bridge 0.9.97); without it a box reads the changes not committed yet whatever the scope |
 | `groups` | `kuvo/groups`, `…/events`, one chat's events, and writing, stopping, keep going, viewed, undo and start |
 | `groups.make` | `POST kuvo/groups` |
 | `groups.edit` | `PATCH kuvo/groups/<id>` |

@@ -1,5 +1,6 @@
-import ClientNews
 import ClientDesign
+import ClientNews
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 
@@ -93,7 +94,8 @@ struct SlashList: View {
     }
 }
 
-/// A keyword's mark, in the list and the bubbles: secondary, Plan's in its orange.
+/// A keyword's mark, in the list and the bubbles: secondary, the same for every one (Plan's
+/// orange is only its mode's, in the composer).
 struct KeywordMark: View {
     let keyword: Keyword
     var size: CGFloat = 12
@@ -101,7 +103,7 @@ struct KeywordMark: View {
     var body: some View {
         Image(systemName: keyword.symbol)
             .font(.system(size: size))
-            .foregroundStyle(keyword.isPlan ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+            .foregroundStyle(.secondary)
             .frame(width: 18)
             .accessibilityHidden(true)
     }
@@ -185,24 +187,19 @@ struct LoopList: View {
     }
 }
 
-/// A row of "/review "'s "Who reads it": the conversation's own model, another one, or Other
-/// Model…, which writes "with " to look for any.
+/// A model "/review … with " can name.
 enum ReviewerChoice: Identifiable, Equatable {
-    case same(String?)
     /// `note`: "picked last time", or who serves it.
     case reader(ReviewCommand.Reader, note: String)
-    case other
 
     var id: String {
         switch self {
-        case .same: "same"
         case .reader(let reader, _): reader.ref.providerID + "/" + reader.ref.id
-        case .other: "other"
         }
     }
 }
 
-/// "/review "'s "Who reads it", as "/loop "'s "How often": who reads the changes with fresh eyes.
+/// The models "/review … with " can name: who reads it with fresh eyes.
 struct ReviewerList: View {
     let choices: [ReviewerChoice]
     let selected: Int
@@ -227,32 +224,75 @@ struct ReviewerList: View {
 
     private func row(_ choice: ReviewerChoice) -> some View {
         HStack(spacing: 8) {
-            Group {
-                switch choice {
-                case .same: Image(systemName: "person")
-                case .reader: Image(systemName: "sparkle")
-                case .other: Color.clear
-                }
-            }
-            .font(.system(size: 12))
-            .foregroundStyle(.secondary)
-            .frame(width: 18)
+            Image(systemName: "sparkle")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
             switch choice {
-            case .same(let name):
-                Text("Same as this conversation")
-                    .font(.system(size: 13, weight: .medium))
-                Spacer(minLength: 8)
-                if let name { Text(name).font(.system(size: 12)).foregroundStyle(.secondary) }
             case .reader(let reader, let note):
                 Text(reader.name)
                     .font(.system(size: 13, weight: .medium))
                 Spacer(minLength: 8)
                 Text(note).font(.system(size: 12)).foregroundStyle(.secondary)
-            case .other:
-                Text("Other Model…")
-                    .font(.system(size: 13, weight: .medium))
-                Spacer(minLength: 0)
             }
+        }
+        .lineLimit(1)
+        .padding(.horizontal, 8)
+        .frame(height: 28)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// "/review "'s lists, as "/loop "'s "How often": what it reads, a commit or a folder for it, and
+/// what it looks for. "1 of 2" and "2 of 2" say there are two to answer.
+struct ReviewChoiceList: View {
+    let list: ReviewList
+    let selected: Int
+    let choose: (ReviewList.Row) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack {
+                Text(list.title)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 8)
+                if let step = list.step {
+                    Text(step)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityLabel("Step \(step)")
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 2)
+            ForEach(Array(list.rows.enumerated()), id: \.element.id) { index, row in
+                Button { choose(row) } label: { label(row) }
+                    .buttonStyle(ListRowButtonStyle(isSelected: index == selected))
+                    .accessibilityAddTraits(index == selected ? .isSelected : [])
+            }
+        }
+        .padding(.leading, -8)
+        .help("↑ ↓ to choose, Return to pick, Escape to close")
+    }
+
+    private func label(_ row: ReviewList.Row) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: row.symbol)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+                .accessibilityHidden(true)
+            Text(row.title)
+                .font(.system(size: 13, weight: .medium))
+                .layoutPriority(1)
+            if let note = row.note {
+                Text(note)
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(row.warns ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+            }
+            Spacer(minLength: 0)
         }
         .lineLimit(1)
         .padding(.horizontal, 8)

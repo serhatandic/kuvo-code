@@ -75,9 +75,6 @@ public enum Keyword: String, CaseIterable, Sendable, Hashable {
         }
     }
 
-    /// Drawn in Plan's orange, as the mode chip is, rather than the accent.
-    public var isPlan: Bool { self == .plan }
-
     /// The box feature it needs (`features` in `kuvo/info`): nil for one made of what every
     /// engine does (Plan mode, summarizing).
     public var feature: String? {
@@ -124,6 +121,8 @@ public struct SideQuestion: Codable, Sendable, Hashable, Identifiable {
     public enum State: String, Codable, Sendable, Hashable { case answering, answered, failed }
     public var id: String
     public var session: String
+    /// The side thread it's in: the id of the question that started it.
+    public var thread: String?
     public var question: String
     public var state: State
     public var answer: String?
@@ -133,12 +132,38 @@ public struct SideQuestion: Codable, Sendable, Hashable, Identifiable {
     public var answered: Double?
 
     public var askedDate: Date { Date(timeIntervalSince1970: asked / 1000) }
+    /// Its thread's id (its own, for one from before threads).
+    public var threadID: String { thread ?? id }
+}
+
+/// A conversation's side questions as side threads: each with its questions, oldest first, the
+/// threads in the order they were started.
+public struct SideThread: Identifiable, Hashable, Sendable {
+    public var id: String
+    public var questions: [SideQuestion]
+
+    /// What it started with.
+    public var first: SideQuestion { questions[0] }
+    public var latest: SideQuestion { questions[questions.count - 1] }
+
+    /// `questions` (oldest first) by thread.
+    public static func threads(_ questions: [SideQuestion]) -> [SideThread] {
+        var order: [String] = []
+        var byThread: [String: [SideQuestion]] = [:]
+        for question in questions {
+            if byThread[question.threadID] == nil { order.append(question.threadID) }
+            byThread[question.threadID, default: []].append(question)
+        }
+        return order.map { SideThread(id: $0, questions: byThread[$0]!) }
+    }
 }
 
 /// Every conversation on a box that has side questions: how many, and the latest.
 public struct SideQuestionSummary: Codable, Sendable, Hashable {
     public var session: String
     public var count: Int
+    /// How many side threads they're in (nil from a box from before threads).
+    public var threads: Int?
     public var latest: SideQuestion
 }
 
@@ -204,12 +229,128 @@ public enum ReviewScope: Codable, Sendable, Hashable {
     }
 }
 
+extension ReviewScope {
+    /// As the review's line and its footnote say it: "The whole project", "Commits since abc1234".
+    public var title: String {
+        switch self {
+        case .uncommitted: "Changes not committed yet"
+        case .branch(let base): base.map { "This branch against \($0)" } ?? "This branch"
+        case .commits(let from, let to):
+            from.hasSuffix("^") && to == nil ? "Commits since \(from.dropLast())" : "Commits \(from)..\(to ?? "HEAD")"
+        case .folder(let path): path
+        case .project: "The whole project"
+        }
+    }
+}
+
+extension ReviewScope {
+    /// It reads files as they are (a folder, the whole project), not changes.
+    public var readsFiles: Bool {
+        switch self {
+        case .folder, .project: true
+        default: false
+        }
+    }
+
+    /// In a sentence, as what a model reads: "the whole project", "the files in src/auth".
+    public var said: String {
+        switch self {
+        case .uncommitted: "the changes not committed yet"
+        case .branch: "this branch’s changes"
+        case .commits(let from, let to):
+            from.hasSuffix("^") && to == nil ? "the commits since \(from.dropLast())" : "the commits \(from)..\(to ?? "HEAD")"
+        case .folder(let path): "the files in \(path)"
+        case .project: "the whole project"
+        }
+    }
+}
+
+extension ReviewCommand.Preset {
+    /// As "Look for" lists it.
+    public var title: String {
+        switch self {
+        case .security: "Security"
+        case .performance: "Performance"
+        case .accessibility: "Accessibility"
+        }
+    }
+}
+
 /// How much a review of a scope would read: its files, and the parts it reads them in.
 public struct ReviewSize: Codable, Sendable, Hashable {
     public var files: Int
     public var parts: Int
     /// Files past what a review reads, left out.
     public var leftOut: Int
+    /// A branch's or a range's commits.
+    public var commits: Int?
+
+    public init(files: Int, parts: Int, leftOut: Int = 0, commits: Int? = nil) {
+        self.files = files
+        self.parts = parts
+        self.leftOut = leftOut
+        self.commits = commits
+    }
+}
+
+/// What "What to review" offers in a conversation's folder: the branch it's on (none on its base
+/// itself), its latest commits and its folders.
+public struct ReviewChoices: Codable, Sendable, Hashable {
+    public var repository: Bool
+    public var branch: Branch?
+    public var commits: [Commit]
+    public var folders: [Folder]
+
+    public struct Branch: Codable, Sendable, Hashable {
+        public var name: String
+        /// What it's compared with ("main").
+        public var base: String
+        /// Its own, since it left `base`.
+        public var commits: Int
+
+        public init(name: String, base: String, commits: Int) {
+            self.name = name
+            self.base = base
+            self.commits = commits
+        }
+    }
+
+    public struct Commit: Codable, Sendable, Hashable, Identifiable {
+        public var id: String
+        public var short: String
+        public var title: String
+        /// In ms since 1970.
+        public var time: Double
+
+        public var date: Date { Date(timeIntervalSince1970: time / 1000) }
+
+        public init(id: String, short: String, title: String, time: Double) {
+            self.id = id
+            self.short = short
+            self.title = title
+            self.time = time
+        }
+    }
+
+    public struct Folder: Codable, Sendable, Hashable, Identifiable {
+        public var path: String
+        /// At any depth.
+        public var files: Int
+
+        public var id: String { path }
+
+        public init(path: String, files: Int) {
+            self.path = path
+            self.files = files
+        }
+    }
+
+    public init(repository: Bool, branch: Branch? = nil, commits: [Commit] = [], folders: [Folder] = []) {
+        self.repository = repository
+        self.branch = branch
+        self.commits = commits
+        self.folders = folders
+    }
 }
 
 /// A review of a conversation's changes with fresh eyes ("/review").
@@ -262,6 +403,8 @@ public struct Review: Codable, Sendable, Hashable, Identifiable {
     public var focus: String?
     /// How far along one read in parts is, while it's under way.
     public var progress: Progress?
+    /// Where Stop ended one read in parts.
+    public var stopped: Progress?
     public struct Progress: Codable, Sendable, Hashable {
         public var read: Int
         public var of: Int
@@ -290,10 +433,16 @@ extension OpenCodeAPI {
         try await client.send(try client.request("GET", "api/kuvo/btw"), as: DataEnvelope<[SideQuestionSummary]>.self).data
     }
 
+    /// Asks a side question about `session`: a new side thread, or a follow-up in `thread`.
     @discardableResult
-    public func askSideQuestion(_ question: String, about session: String) async throws -> SideQuestion {
-        struct Body: Encodable { var question: String }
-        return try await client.send(try client.request("POST", "api/kuvo/btw/\(session.pathEscaped)", body: Body(question: question)), as: DataEnvelope<SideQuestion>.self).data
+    public func askSideQuestion(_ question: String, about session: String, thread: String? = nil) async throws -> SideQuestion {
+        struct Body: Encodable { var question: String; var thread: String? }
+        return try await client.send(try client.request("POST", "api/kuvo/btw/\(session.pathEscaped)", body: Body(question: question, thread: thread)), as: DataEnvelope<SideQuestion>.self).data
+    }
+
+    /// Takes a side thread away, all of it.
+    public func removeSideThread(_ thread: String, of session: String) async throws {
+        _ = try await client.send(try client.request("DELETE", "api/kuvo/btw/\(session.pathEscaped)/threads/\(thread.pathEscaped)"), as: Empty.self)
     }
 
     /// The words voice input listens for in a conversation: its project's own names, most useful
@@ -343,6 +492,11 @@ extension OpenCodeAPI {
     public func measureReview(session: String, scope: ReviewScope) async throws -> ReviewSize {
         struct Body: Encodable { var scope: ReviewScope }
         return try await client.send(try client.request("POST", "api/kuvo/reviews/\(session.pathEscaped)/measure", body: Body(scope: scope)), as: DataEnvelope<ReviewSize>.self).data
+    }
+
+    /// What "What to review" offers in `session`'s folder.
+    public func reviewChoices(session: String) async throws -> ReviewChoices {
+        try await client.send(try client.request("GET", "api/kuvo/reviews/\(session.pathEscaped)/choices"), as: DataEnvelope<ReviewChoices>.self).data
     }
 
     /// Ends a review under way where it is, keeping what it found so far.
