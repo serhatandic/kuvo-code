@@ -20,8 +20,8 @@ final class Workspace {
             for model in models.values where !RemoteFolder.isRemote(model.session.location.directory) && !OutsideAgents.isAgentSession(model.session) { model.reconnect(api) }
         }
     }
-    /// The main window's tabs, where a fork, a move to the coding agents and an agent's new session
-    /// open (the app sets it; none in a test of the workspace alone).
+    /// The main window's tabs, where a fork and a move to the coding agents open (the app sets it;
+    /// none in a test of the workspace alone).
     @ObservationIgnored weak var tabs: WindowTabs?
 
     /// The agents bridge: sessions with Claude Code, Codex, Cursor, Grok and Antigravity go to it,

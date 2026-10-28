@@ -251,15 +251,15 @@ final class WindowTabs {
     /// of its own next to it (side by side is only for when you ask), unless the pair is in view,
     /// where you work in it. A conversation whose subagent is open in its tab comes back in that tab.
     func open(_ key: TabKey) {
-        if !keys.contains(key), let id = key.sessionID, workspace.session(id) != nil,
+        var pair = pairs.first { $0.value == key.sessionID && keys.contains($0.key) }?.key
+        if let tab = pair, !(tab == selection && showsBeside) {
+            closeBeside(tab)
+            pair = nil
+        }
+        if pair == nil, !keys.contains(key), let id = key.sessionID, workspace.session(id) != nil,
            let subagent = keys.first(where: { $0.sessionID.map { workspace.session($0) == nil && workspace.root(of: $0) == id } ?? false }) {
             return swap(subagent, for: key)
         }
-        if let tab = pairs.first(where: { $0.value == key.sessionID && keys.contains($0.key) })?.key,
-           !(tab == selection && showsBeside) {
-            closeBeside(tab)
-        }
-        let pair = pairs.first { $0.value == key.sessionID && keys.contains($0.key) }?.key
         let key = pair ?? key
         if !keys.contains(key) {
             let index = selection.flatMap { keys.firstIndex(of: $0) }.map { $0 + 1 } ?? keys.count

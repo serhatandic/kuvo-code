@@ -471,7 +471,7 @@ final class AgentMail {
             folder = Workspace.isBotFolder(path) ? Workspace.chatsFolder : path
         }
         guard let folder else { return ("Give the folder it works in (folder), as a full path.", true) }
-        // A few at a time: an agent shouldn't fill the window with sessions unattended.
+        // A few at a time: an agent shouldn't fill the sidebar with sessions unattended.
         let key = caller ?? "outside"
         let lately = (started[key] ?? []).filter { $0.timeIntervalSinceNow > -600 }
         guard lately.count < 6 else {
