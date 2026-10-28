@@ -18,7 +18,7 @@ import { failure } from "./agent"
 import { Auto, autoProvider, resetTime, type AutoEntry } from "./auto"
 import { emit } from "./events"
 import { handover, withHandover } from "./handover"
-import { onMachine } from "./machine"
+import { onMachine, ownEnvironment } from "./machine"
 import { messageID, newID } from "./ids"
 import type { Roster } from "./roster"
 import { asksFirst, matches, ruled } from "./rules"
@@ -159,7 +159,7 @@ const shellOutputLimit = 50_000
  * (its end, when there's a lot), kept as it comes; stopped whole when it runs too long. Its output
  * stops being waited for a moment after it ends (a job it left running may keep it open).
  */
-function runCommand(command: string, directory: string): Promise<{ code: number; output: string; truncated: boolean; timedOut: boolean }> {
+export function runCommand(command: string, directory: string): Promise<{ code: number; output: string; truncated: boolean; timedOut: boolean }> {
   return new Promise((resolve) => {
     let output = ""
     let truncated = false
@@ -181,7 +181,12 @@ function runCommand(command: string, directory: string): Promise<{ code: number;
     }
     let child: ReturnType<typeof spawnProcess>
     try {
-      child = spawnProcess(process.env.SHELL || "/bin/zsh", ["-c", command], { cwd: directory, detached: true, stdio: ["ignore", "pipe", "pipe"] })
+      // As in your terminal: on a machine, with its own folders, not Kuvo Code's (where gh and git
+      // keep their settings).
+      const env: Record<string, string | undefined> = { ...process.env, ...ownEnvironment() }
+      for (const name of Object.keys(env)) if (env[name] === undefined) delete env[name]
+      const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh")
+      child = spawnProcess(shell, ["-c", command], { cwd: directory, detached: true, env, stdio: ["ignore", "pipe", "pipe"] })
     } catch (error: any) {
       output = String(error?.message ?? error)
       return finish(1)

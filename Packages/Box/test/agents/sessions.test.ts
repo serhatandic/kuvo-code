@@ -2654,3 +2654,26 @@ describe("what comes in while a turn starts, ends or is stopped, step by step", 
     expect(sessions.get(id).revert?.messageID).toBe(first)
   })
 })
+
+describe("a command you type with !", () => {
+  test("on a machine, runs with the machine's own folders (where gh and git keep their settings), as in your terminal there", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "kuvo-shell-"))
+    try {
+      const script = join(folder, "run.ts")
+      writeFileSync(script, [
+        `import { takeOwnFolders } from ${JSON.stringify(join(import.meta.dir, "../../src/agents/machine"))}`,
+        `import { runCommand } from ${JSON.stringify(join(import.meta.dir, "../../src/agents/sessions"))}`,
+        "takeOwnFolders()",
+        `const ran = await runCommand('printf "%s|%s" "$XDG_CONFIG_HOME" "\${XDG_DATA_HOME-unset}"', process.cwd())`,
+        "process.stdout.write(ran.output)",
+      ].join("\n"))
+      // As a machine's engine started the bridge: its folders pointed into Kuvo Code's, the machine's own kept aside.
+      const env = { ...process.env, KUVO_HOME: folder, KUVO_AGENTS_REMOTE: "1", XDG_CONFIG_HOME: join(folder, "config"), XDG_DATA_HOME: join(folder, "data"), KUVO_OWN_XDG_CONFIG_HOME: "/home/me/.config", KUVO_OWN_XDG_DATA_HOME: "" }
+      const ran = Bun.spawnSync([process.execPath, script], { cwd: folder, env, stderr: "pipe" })
+      expect(ran.stderr.toString()).toBe("")
+      expect(ran.stdout.toString()).toBe("/home/me/.config|unset")
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+})

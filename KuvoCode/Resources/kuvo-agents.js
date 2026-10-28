@@ -12601,7 +12601,12 @@ function runCommand(command, directory) {
     };
     let child;
     try {
-      child = spawnProcess(process.env.SHELL || "/bin/zsh", ["-c", command], { cwd: directory, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+      const env = { ...process.env, ...ownEnvironment() };
+      for (const name of Object.keys(env))
+        if (env[name] === undefined)
+          delete env[name];
+      const shell2 = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
+      child = spawnProcess(shell2, ["-c", command], { cwd: directory, detached: true, env, stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) {
       output = String(error?.message ?? error);
       return finish(1);
@@ -19955,4 +19960,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents d14b659232fc48c14e95dc9f046732341d82e4bd3ae5dbfd86d6f588b3a77e1a
+// Built from Packages/Box/src/agents 7f01b6534a615784e05a0555adb8d1a62b3c7d90ef18e7c0dadfc8f54ade6feb
