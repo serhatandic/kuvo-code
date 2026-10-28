@@ -4212,6 +4212,30 @@ function forgetMovedAway(sessions, now = Date.now()) {
     return;
   writePrivate(MOVED_FILE, JSON.stringify(kept.filter((each) => !sessions.includes(each.session))));
 }
+var ENDED_FILE = path24.join(MOVES, "ended.json");
+var ENDED_FOR = 7 * 24 * 3600000;
+function endedAs(id, now = Date.now()) {
+  try {
+    const kept = JSON.parse(fs25.readFileSync(ENDED_FILE, "utf8"));
+    const one = kept?.[id];
+    if (!one || typeof one.at !== "number" || now - one.at > ENDED_FOR)
+      return null;
+    return one.as === "switched" || one.as === "dropped" ? one.as : null;
+  } catch {
+    return null;
+  }
+}
+function noteEnded(id, as, now = Date.now()) {
+  let kept = {};
+  try {
+    kept = JSON.parse(fs25.readFileSync(ENDED_FILE, "utf8")) ?? {};
+  } catch {}
+  for (const [other, one] of Object.entries(kept))
+    if (!(typeof one?.at === "number" && now - one.at < ENDED_FOR))
+      delete kept[other];
+  kept[id] = { as, at: now };
+  writePrivate(ENDED_FILE, JSON.stringify(kept));
+}
 
 // Packages/Box/src/link/relay/frames.ts
 var Frame = { handshake1: 1, handshake2: 2, transport: 3, close: 4, mail: 5 };
@@ -7066,6 +7090,18 @@ function outcomeOf(id) {
     }, 500);
   });
 }
+var queues = new Map;
+function inTurn(id, step) {
+  const before = queues.get(id) ?? Promise.resolve();
+  const next = before.catch(() => {}).then(step);
+  const kept = next.catch(() => {});
+  queues.set(id, kept);
+  kept.then(() => {
+    if (queues.get(id) === kept)
+      queues.delete(id);
+  });
+  return next;
+}
 var hostOf = () => null;
 var watching = false;
 var driving = new Set;
@@ -7073,10 +7109,16 @@ function drive(id) {
   if (driving.has(id))
     return;
   driving.add(id);
-  carryOn(id).catch((error) => takeBack(id, String(error?.message ?? error), error?.status ?? 409)).finally(() => driving.delete(id));
+  inTurn(id, () => carryOn(id).catch((error) => takeBack(id, String(error?.message ?? error), error?.status ?? 409))).finally(() => driving.delete(id));
 }
 var nameOf = (key) => plainName(peersOf(readLink()).find((peer) => peer.key === key)?.name ?? "") || "the other computer";
+var sendInstead = null;
+function sendMovesWith(send) {
+  sendInstead = send;
+}
 function tell(peer, move) {
+  if (sendInstead)
+    return sendInstead(peer, move);
   const link = readLink();
   const to = peersOf(link).find((each) => each.key === peer);
   const bytes = link && to && mailFor(to, { move, at: Date.now() }, link);
@@ -7300,11 +7342,17 @@ function sendParts(record, now = Date.now()) {
   }
 }
 async function arrived(record) {
+  const still = () => {
+    const now = readMove(record.id);
+    return now?.role === "from" && now.stage === "copying" && !now.failed ? now : null;
+  };
   if (record.kind !== "group") {
     const engine = readEngineFile();
     await settle(engine, record.sessions, record.name);
     const again = await exportAll(engine, record.sessions[0]);
     const before = outgoing.get(record.id)?.exports;
+    if (!still())
+      return;
     if (!before || !same(again, before)) {
       if (record.tries >= 2)
         throw new Refused(say.busy(record.name));
@@ -7316,6 +7364,8 @@ async function arrived(record) {
       return drive(record.id);
     }
   }
+  if (!still())
+    return;
   const now = changeMove(record.id, (each) => {
     each.stage = "switching";
     each.step = "switch";
@@ -7372,6 +7422,17 @@ async function takeBack(id, message, status = 409) {
     forgetMove(id);
   }
   ended(id, { ok: false, status, message });
+}
+async function restore(record, message) {
+  outgoing.delete(record.id);
+  unhold(record.folder, record.wasPaused);
+  if (record.kind === "group")
+    await groupAction(readBridgeFile(), record.thing, "activate").catch(() => {});
+  forgetMove(record.id);
+  try {
+    fs38.rmSync(bundleOf(record.id), { recursive: true, force: true });
+  } catch {}
+  ended(record.id, { ok: false, status: 409, message });
 }
 var incoming = new Map;
 async function takeOffer(sender, given) {
@@ -7439,7 +7500,8 @@ async function takePart(sender, given) {
   const id = String(given.id);
   const record = readMove(id);
   const { i, of } = given;
-  if (!record || record.role !== "to" || record.peer !== sender.key || record.hash !== given.hash || !Number.isInteger(i) || !Number.isInteger(of) || typeof given.d !== "string")
+  const expected = Math.ceil((record?.size ?? 0) / PART_BYTES);
+  if (!record || record.role !== "to" || record.complete || record.peer !== sender.key || record.hash !== given.hash || !Number.isInteger(i) || of !== expected || i < 0 || i >= expected || typeof given.d !== "string" || given.d.length > Math.ceil(PART_BYTES * 4 / 3))
     return;
   const parts = incoming.get(id) ?? new Set;
   incoming.set(id, parts);
@@ -7460,6 +7522,9 @@ async function takePart(sender, given) {
   if (parts.size !== of)
     return;
   incoming.delete(id);
+  changeMove(id, (each) => {
+    each.complete = true;
+  });
   try {
     if (await hashOf(file) !== record.hash)
       throw new Error("What came wasn’t what was sent.");
@@ -7469,6 +7534,7 @@ async function takePart(sender, given) {
     });
     tell(sender.key, { op: "arrived", id });
   } catch (error) {
+    await drop(id).catch(() => {});
     tell(sender.key, { op: "failed", id, message: `It couldn’t be set up on ${HERE}: ${String(error?.message ?? error)}` });
   }
 }
@@ -7525,6 +7591,7 @@ async function drop(id) {
   const record = readMove(id);
   if (!record || record.role !== "to")
     return;
+  noteEnded(id, "dropped");
   incoming.delete(id);
   if (record.kind === "group") {
     await groupAction(readBridgeFile(), record.thing, "release").catch(() => {});
@@ -7548,7 +7615,11 @@ async function drop(id) {
 async function takeMoveMail(sender, given) {
   if (!isObject(given) || typeof given.op !== "string" || typeof given.id !== "string" || !/^mov_[A-Za-z0-9]{1,40}$/.test(given.id))
     return;
-  const id = given.id;
+  if (given.op === "part" || given.op === "got")
+    return moveMail(sender, given, given.id);
+  return inTurn(given.id, () => moveMail(sender, given, given.id));
+}
+async function moveMail(sender, given, id) {
   const record = readMove(id);
   const mine = record && record.peer === sender.key ? record : null;
   switch (given.op) {
@@ -7556,20 +7627,27 @@ async function takeMoveMail(sender, given) {
       return takeOffer(sender, given);
     case "part":
       return takePart(sender, given);
-    case "switch":
-      if (mine?.role === "to") {
+    case "switch": {
+      if (record && !mine)
+        return;
+      if (mine?.role === "to" && mine.complete && mine.sessions.length + (mine.kind === "group" ? 1 : 0) > 0) {
         await switchHere(mine);
+        noteEnded(id, "switched");
         forgetMove(id);
+        return void tell(sender.key, { op: "switched", id });
       }
-      if (!mine || mine.role === "to")
-        tell(sender.key, { op: "switched", id });
-      return;
-    case "drop":
       if (mine?.role === "to")
         await drop(id);
-      if (!mine || mine.role === "to")
-        tell(sender.key, { op: "dropped", id });
-      return;
+      return void tell(sender.key, { op: endedAs(id) === "switched" ? "switched" : "dropped", id });
+    }
+    case "drop":
+      if (record && !mine)
+        return;
+      if (endedAs(id) === "switched")
+        return void tell(sender.key, { op: "switched", id });
+      if (mine?.role === "to")
+        await drop(id);
+      return void tell(sender.key, { op: "dropped", id });
     case "ready":
       if (mine?.role !== "from" || mine.step !== "offer")
         return;
@@ -7603,21 +7681,23 @@ async function takeMoveMail(sender, given) {
       return;
     }
     case "arrived":
-      if (mine?.role !== "from" || mine.stage !== "copying")
+      if (mine?.role !== "from" || mine.stage !== "copying" || mine.failed)
         return;
       return arrived(mine).catch((error) => takeBack(id, String(error?.message ?? error), 409));
     case "refused":
     case "failed":
-      if (mine?.role !== "from" || mine.stage !== "copying")
+      if (mine?.role !== "from" || mine.stage !== "copying" || mine.failed)
         return;
       return takeBack(id, typeof given.message === "string" ? given.message : "It couldn’t go there.", 409);
     case "switched":
-      if (mine?.role !== "from" || mine.stage !== "switching")
+      if (mine?.role !== "from" || mine.stage !== "switching" && mine.stage !== "finishing")
         return;
       return finish(id).catch(() => {});
     case "dropped":
       if (mine?.role === "from" && mine.step === "drop")
-        forgetMove(id);
+        return void forgetMove(id);
+      if (mine?.role === "from" && mine.stage === "switching")
+        return restore(mine, `${mine.name} couldn’t be set up there, so it stayed here. Try again.`);
       return;
   }
 }
@@ -7634,12 +7714,12 @@ function keepMoving(now = Date.now()) {
     } catch {}
   for (const record of readMoves()) {
     if (!peers.has(record.peer)) {
-      endWithout(record).catch(() => {});
+      inTurn(record.id, () => endWithout(record)).catch(() => {});
       continue;
     }
     if (record.role === "to") {
       if (now - record.started > HELD_AT_MOST)
-        drop(record.id).catch(() => {});
+        inTurn(record.id, () => drop(record.id)).catch(() => {});
       continue;
     }
     if (record.stage === "holding" && !record.step) {
@@ -7650,7 +7730,7 @@ function keepMoving(now = Date.now()) {
     switch (record.step) {
       case "offer":
         if (record.tries === 0 && now - (record.sentAt ?? 0) > NO_ANSWER && !outgoing.get(record.id)?.got.size) {
-          takeBack(record.id, say.notConnected(nameOf(record.peer)), 503).catch(() => {});
+          inTurn(record.id, () => takeBack(record.id, say.notConnected(nameOf(record.peer)), 503)).catch(() => {});
         } else if (due) {
           changeMove(record.id, (each) => {
             each.sentAt = now;
@@ -7662,11 +7742,11 @@ function keepMoving(now = Date.now()) {
         if (outgoing.has(record.id))
           sendParts(record, now);
         else
-          takeBack(record.id, `${record.name} didn’t get there. Try again.`, 409).catch(() => {});
+          inTurn(record.id, () => takeBack(record.id, `${record.name} didn’t get there. Try again.`, 409)).catch(() => {});
         break;
       case "arrive":
         if (now - (record.sentAt ?? 0) > 10 * STEP_AGAIN)
-          takeBack(record.id, `${record.name} couldn’t be set up there. Try again.`, 409).catch(() => {});
+          inTurn(record.id, () => takeBack(record.id, `${record.name} couldn’t be set up there. Try again.`, 409)).catch(() => {});
         break;
       case "switch":
         if (due) {
@@ -12451,6 +12531,7 @@ export {
   seatPayloads,
   seatPeers,
   selftest,
+  sendMovesWith,
   sendOutbox,
   sendWakes,
   serveBox,
@@ -12475,6 +12556,7 @@ export {
   takeDoc,
   takeLegacyPeers,
   takeLetter,
+  takeMoveMail,
   takePersonalities,
   takePersonalitiesDocument,
   takeSeat,
@@ -12494,6 +12576,7 @@ export {
   watchAsks,
   watchBox,
   watchEvents,
+  watchMoves,
   watchSeats,
   worktreesWhere,
   writeAgents,

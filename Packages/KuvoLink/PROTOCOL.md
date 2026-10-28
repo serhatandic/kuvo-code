@@ -424,6 +424,11 @@ until it's answered:
    keys removed, the folder to Kuvo Code's trash (on a Mac, on to the Finder's Trash), a group chat
    released. It says for two days where those conversations live now ("Peers", `moved`).
 
+Each move's steps are taken one at a time on each box, in the order they come. The box it goes to
+sets a copy up once, whatever parts come again, and lets go of what it set up if setting it up
+fails. It keeps how each move that came to it ended for a week: a `switch` is answered `switched`
+only for a copy it has whole or switched to already, and `dropped` for any other (one it let go
+of, never set up, or doesn't know), and the box it left then goes on with its original, as it was.
 Before the switch, anything that goes wrong takes it back: the box it leaves sends `drop` →
 `dropped` (the copy there goes: its conversations, keys and folder, a group chat released) and
 goes on as it was. After it, only forward. Each box keeps its moves in `run/moves/<id>.json` (and

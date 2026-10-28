@@ -29,7 +29,7 @@ import type { LinkHost } from "../relay/host";
 import { readLink } from "../state";
 import { CHATS, MOST_BUNDLE, deleteSession, directoryOf, exportAll, folderOf, groupAction, hashOf, idsOf, importAll, keysOf, pack, same, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
-import { MOVES, bundleOf, changeMove, forgetMove, forgetMovedAway, moveOf, movesChanged, noteMovedAway, readMove, readMoves, saveMove, shownMove } from "./records";
+import { MOVES, bundleOf, changeMove, endedAs, forgetMove, forgetMovedAway, moveOf, movesChanged, noteEnded, noteMovedAway, readMove, readMoves, saveMove, shownMove } from "./records";
 import type { MoveRecord } from "./records";
 
 /** Raw bytes in each part (40,000 characters as base64url, as documents' parts are). */
@@ -94,6 +94,18 @@ export function outcomeOf(id: string): Promise<MoveOutcome> {
   });
 }
 
+// Each move's steps one at a time, in the order they come (its mail, and what `keepMoving` does for
+// it): one never runs while another of the same move is half done.
+const queues = new Map<string, Promise<unknown>>();
+function inTurn<T>(id: string, step: () => Promise<T>): Promise<T> {
+  const before = queues.get(id) ?? Promise.resolve();
+  const next = before.catch(() => {}).then(step);
+  const kept = next.catch(() => {});
+  queues.set(id, kept);
+  kept.then(() => { if (queues.get(id) === kept) queues.delete(id); });
+  return next;
+}
+
 // The relay connection that's up, for mail to the other box, in the process that moves things (the
 // running bridge: `watchMoves`); the moves it's carrying on now.
 let hostOf: () => Pick<LinkHost, "send"> | null | undefined = () => null;
@@ -102,12 +114,19 @@ const driving = new Set<string>();
 function drive(id: string): void {
   if (driving.has(id)) return;
   driving.add(id);
-  carryOn(id).catch(error => takeBack(id, String((error as Error | null)?.message ?? error), (error as Refused | null)?.status ?? 409)).finally(() => driving.delete(id));
+  inTurn(id, () => carryOn(id).catch(error => takeBack(id, String((error as Error | null)?.message ?? error), (error as Refused | null)?.status ?? 409))).finally(() => driving.delete(id));
 }
 
 const nameOf = (key: string): string => plainName(peersOf(readLink()).find(peer => peer.key === key)?.name ?? "") || "the other computer";
 
+// Where a move's mail goes instead of the relay: a test's scripted other computer.
+let sendInstead: ((peer: string, move: Record<string, unknown>) => boolean) | null = null;
+export function sendMovesWith(send: typeof sendInstead): void {
+  sendInstead = send;
+}
+
 function tell(peer: string, move: Record<string, unknown>): boolean {
+  if (sendInstead) return sendInstead(peer, move);
   const link = readLink();
   const to: Peer | undefined = peersOf(link).find(each => each.key === peer);
   const bytes = link && to && mailFor(to, { move, at: Date.now() }, link);
@@ -300,18 +319,25 @@ function sendParts(record: MoveRecord, now = Date.now()): void {
 
 /** It's there, held: settled and read again; the same, it switches; not, it all goes again. */
 async function arrived(record: MoveRecord): Promise<void> {
+  const still = () => {
+    const now = readMove(record.id);
+    return now?.role === "from" && now.stage === "copying" && !now.failed ? now : null;
+  };
   if (record.kind !== "group") {
     const engine = readEngineFile();
     await settle(engine, record.sessions, record.name);
     const again = await exportAll(engine, record.sessions[0]);
     const before = outgoing.get(record.id)?.exports;
+    // Taken back meanwhile (its copy there couldn't be set up, or it took too long): nothing more.
+    if (!still()) return;
     if (!before || !same(again, before)) {
       if (record.tries >= 2) throw new Refused(say.busy(record.name));
       changeMove(record.id, each => { each.tries += 1; each.stage = "holding"; each.step = undefined; });
       return drive(record.id);
     }
   }
-  // From here on the copy is the one.
+  // From here on the copy is the one: only while it's still under way (read and noted at once).
+  if (!still()) return;
   const now = changeMove(record.id, each => { each.stage = "switching"; each.step = "switch"; each.sentAt = Date.now(); });
   if (now) tell(now.peer, { op: "switch", id: now.id });
 }
@@ -356,6 +382,16 @@ async function takeBack(id: string, message: string, status = 409): Promise<void
     forgetMove(id);
   }
   ended(id, { ok: false, status, message });
+}
+
+/** A move whose copy the other box let go of before it was switched to: the original goes on here. */
+async function restore(record: MoveRecord, message: string): Promise<void> {
+  outgoing.delete(record.id);
+  unhold(record.folder, record.wasPaused);
+  if (record.kind === "group") await groupAction(readBridgeFile(), record.thing, "activate").catch(() => {});
+  forgetMove(record.id);
+  try { fs.rmSync(bundleOf(record.id), { recursive: true, force: true }); } catch {}
+  ended(record.id, { ok: false, status: 409, message });
 }
 
 // ---- The box it goes to ----
@@ -408,7 +444,9 @@ async function takePart(sender: MailSender, given: Record<string, unknown>): Pro
   const id = String(given.id);
   const record = readMove(id);
   const i = given.i, of = given.of;
-  if (!record || record.role !== "to" || record.peer !== sender.key || record.hash !== given.hash || !Number.isInteger(i) || !Number.isInteger(of) || typeof given.d !== "string") return;
+  const expected = Math.ceil((record?.size ?? 0) / PART_BYTES);
+  if (!record || record.role !== "to" || record.complete || record.peer !== sender.key || record.hash !== given.hash || !Number.isInteger(i) || of !== expected
+    || (i as number) < 0 || (i as number) >= expected || typeof given.d !== "string" || given.d.length > Math.ceil(PART_BYTES * 4 / 3)) return;
   const parts = incoming.get(id) ?? new Set<number>();
   incoming.set(id, parts);
   const bytes = Buffer.from(given.d, "base64url");
@@ -420,12 +458,17 @@ async function takePart(sender: MailSender, given: Record<string, unknown>): Pro
   if (parts.size % 32 === 0 || parts.size === of) changeMove(id, each => { each.sent = Math.min(each.size ?? 0, parts.size * PART_BYTES); });
   if (parts.size !== of) return;
   incoming.delete(id);
+  // All here: put in place once, whatever comes again after.
+  changeMove(id, each => { each.complete = true; });
   try {
     if (await hashOf(file) !== record.hash) throw new Error("What came wasn’t what was sent.");
     const sessions = await bringIn(record);
     changeMove(id, each => { each.sessions = sessions; });
     tell(sender.key, { op: "arrived", id });
   } catch (error) {
+    // What was set up of it goes: the box it came from takes it back, and a switch for it is
+    // answered `dropped`.
+    await drop(id).catch(() => {});
     tell(sender.key, { op: "failed", id, message: `It couldn’t be set up on ${HERE}: ${String((error as Error | null)?.message ?? error)}` });
   }
 }
@@ -477,6 +520,7 @@ async function switchHere(record: MoveRecord): Promise<void> {
 async function drop(id: string): Promise<void> {
   const record = readMove(id);
   if (!record || record.role !== "to") return;
+  noteEnded(id, "dropped");
   incoming.delete(id);
   if (record.kind === "group") {
     await groupAction(readBridgeFile(), record.thing, "release").catch(() => {});
@@ -499,25 +543,38 @@ async function drop(id: string): Promise<void> {
 /** A move's mail from another box (`{"move": {op, id, …}}`). */
 export async function takeMoveMail(sender: MailSender, given: unknown): Promise<void> {
   if (!isObject(given) || typeof given.op !== "string" || typeof given.id !== "string" || !/^mov_[A-Za-z0-9]{1,40}$/.test(given.id)) return;
-  const id = given.id;
+  // Parts and their answers come many at once, and need no turn of their own.
+  if (given.op === "part" || given.op === "got") return moveMail(sender, given, given.id);
+  return inTurn(given.id, () => moveMail(sender, given, given.id as string));
+}
+
+async function moveMail(sender: MailSender, given: Record<string, unknown>, id: string): Promise<void> {
   const record = readMove(id);
   const mine = record && record.peer === sender.key ? record : null;
   switch (given.op) {
     // To the box it goes to.
     case "offer": return takeOffer(sender, given);
     case "part": return takePart(sender, given);
-    case "switch":
-      if (mine?.role === "to") {
+    case "switch": {
+      if (record && !mine) return;
+      // Only a copy that's here, whole, is switched to; one switched before (its answer lost) says
+      // so again; any other (dropped, never set up, unknown) is `dropped`, and the box it came
+      // from keeps its original.
+      if (mine?.role === "to" && mine.complete && mine.sessions.length + (mine.kind === "group" ? 1 : 0) > 0) {
         await switchHere(mine);
+        noteEnded(id, "switched");
         forgetMove(id);
+        return void tell(sender.key, { op: "switched", id });
       }
-      // Switched before (its answer lost): the same.
-      if (!mine || mine.role === "to") tell(sender.key, { op: "switched", id });
-      return;
-    case "drop":
       if (mine?.role === "to") await drop(id);
-      if (!mine || mine.role === "to") tell(sender.key, { op: "dropped", id });
-      return;
+      return void tell(sender.key, { op: endedAs(id) === "switched" ? "switched" : "dropped", id });
+    }
+    case "drop":
+      if (record && !mine) return;
+      // A copy switched to already can't be let go: the box it came from goes on to finish.
+      if (endedAs(id) === "switched") return void tell(sender.key, { op: "switched", id });
+      if (mine?.role === "to") await drop(id);
+      return void tell(sender.key, { op: "dropped", id });
     // To the box it leaves.
     case "ready":
       if (mine?.role !== "from" || mine.step !== "offer") return;
@@ -539,17 +596,19 @@ export async function takeMoveMail(sender: MailSender, given: unknown): Promise<
       return;
     }
     case "arrived":
-      if (mine?.role !== "from" || mine.stage !== "copying") return;
+      if (mine?.role !== "from" || mine.stage !== "copying" || mine.failed) return;
       return arrived(mine).catch(error => takeBack(id, String((error as Error | null)?.message ?? error), 409));
     case "refused":
     case "failed":
-      if (mine?.role !== "from" || mine.stage !== "copying") return;
+      if (mine?.role !== "from" || mine.stage !== "copying" || mine.failed) return;
       return takeBack(id, typeof given.message === "string" ? given.message : "It couldn’t go there.", 409);
     case "switched":
-      if (mine?.role !== "from" || mine.stage !== "switching") return;
+      if (mine?.role !== "from" || (mine.stage !== "switching" && mine.stage !== "finishing")) return;
       return finish(id).catch(() => {});
     case "dropped":
-      if (mine?.role === "from" && mine.step === "drop") forgetMove(id);
+      if (mine?.role === "from" && mine.step === "drop") return void forgetMove(id);
+      // Its copy there is gone before it was switched to: the original here goes on, as it was.
+      if (mine?.role === "from" && mine.stage === "switching") return restore(mine, `${mine.name} couldn’t be set up there, so it stayed here. Try again.`);
       return;
   }
 }
@@ -565,11 +624,11 @@ export function keepMoving(now = Date.now()): void {
   for (const name of names) try { if (now - fs.statSync(path.join(MOVES, name)).mtimeMs > OUTCOME_KEPT) fs.rmSync(path.join(MOVES, name), { force: true }); } catch {}
   for (const record of readMoves()) {
     if (!peers.has(record.peer)) {
-      endWithout(record).catch(() => {});
+      inTurn(record.id, () => endWithout(record)).catch(() => {});
       continue;
     }
     if (record.role === "to") {
-      if (now - record.started > HELD_AT_MOST) drop(record.id).catch(() => {});
+      if (now - record.started > HELD_AT_MOST) inTurn(record.id, () => drop(record.id)).catch(() => {});
       continue;
     }
     // One asked for through another process: moved from here.
@@ -581,7 +640,7 @@ export function keepMoving(now = Date.now()): void {
     switch (record.step) {
       case "offer":
         if (record.tries === 0 && now - (record.sentAt ?? 0) > NO_ANSWER && !outgoing.get(record.id)?.got.size) {
-          takeBack(record.id, say.notConnected(nameOf(record.peer)), 503).catch(() => {});
+          inTurn(record.id, () => takeBack(record.id, say.notConnected(nameOf(record.peer)), 503)).catch(() => {});
         } else if (due) {
           changeMove(record.id, each => { each.sentAt = now; });
           offer(record);
@@ -589,11 +648,11 @@ export function keepMoving(now = Date.now()): void {
         break;
       case "parts":
         if (outgoing.has(record.id)) sendParts(record, now);
-        else takeBack(record.id, `${record.name} didn’t get there. Try again.`, 409).catch(() => {});
+        else inTurn(record.id, () => takeBack(record.id, `${record.name} didn’t get there. Try again.`, 409)).catch(() => {});
         break;
       case "arrive":
         // Its copy's set up there for a while at most; past that, it's taken back.
-        if (now - (record.sentAt ?? 0) > 10 * STEP_AGAIN) takeBack(record.id, `${record.name} couldn’t be set up there. Try again.`, 409).catch(() => {});
+        if (now - (record.sentAt ?? 0) > 10 * STEP_AGAIN) inTurn(record.id, () => takeBack(record.id, `${record.name} couldn’t be set up there. Try again.`, 409)).catch(() => {});
         break;
       case "switch":
         if (due) {

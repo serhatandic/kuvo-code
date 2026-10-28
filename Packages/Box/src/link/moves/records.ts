@@ -27,6 +27,9 @@ export interface MoveRecord extends Move {
   /** Where it is between the boxes: the source waits for `ready`, `arrived`, `switched`, `dropped`. */
   step?: "offer" | "parts" | "arrive" | "switch" | "drop" | "done";
   tries: number;
+  /** The box it goes to: all its parts came, and it's being (or was) put in place; parts that come
+   * after are ignored. */
+  complete?: boolean;
   /** A group chat's bots, which the box it goes to checks it has. */
   members?: string[];
   /** Offered to the other box at least once: a copy may be there, to drop if it's taken back. */
@@ -146,3 +149,27 @@ export function forgetMovedAway(sessions: readonly string[], now = Date.now()): 
 }
 
 export type { Move, MoveKind, MoveStage };
+
+// How each move that came here ended, for a week (`switched` or `dropped`): a step about it sent
+// again later is answered as it ended, never taken for one this box doesn't know.
+const ENDED_FILE = path.join(MOVES, "ended.json");
+const ENDED_FOR = 7 * 24 * 3600_000;
+
+export function endedAs(id: string, now = Date.now()): "switched" | "dropped" | null {
+  try {
+    const kept = JSON.parse(fs.readFileSync(ENDED_FILE, "utf8")) as Record<string, { as?: unknown; at?: unknown }>;
+    const one = kept?.[id];
+    if (!one || typeof one.at !== "number" || now - one.at > ENDED_FOR) return null;
+    return one.as === "switched" || one.as === "dropped" ? one.as : null;
+  } catch {
+    return null;
+  }
+}
+
+export function noteEnded(id: string, as: "switched" | "dropped", now = Date.now()): void {
+  let kept: Record<string, { as: string; at: number }> = {};
+  try { kept = JSON.parse(fs.readFileSync(ENDED_FILE, "utf8")) ?? {}; } catch {}
+  for (const [other, one] of Object.entries(kept)) if (!(typeof one?.at === "number" && now - one.at < ENDED_FOR)) delete kept[other];
+  kept[id] = { as, at: now };
+  writePrivate(ENDED_FILE, JSON.stringify(kept));
+}
