@@ -27,7 +27,7 @@ import { mailFor, ownKey, peersOf } from "../peers/known";
 import type { MailSender, Peer } from "../peers/known";
 import type { LinkHost } from "../relay/host";
 import { readLink } from "../state";
-import { CHATS, MOST_BUNDLE, deleteSession, directoryOf, exportAll, folderOf, groupAction, hashOf, idsOf, importAll, keysOf, pack, same, toTrash, unpack } from "./bundle";
+import { CHATS, MOST_BUNDLE, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
 import { MOVES, bundleOf, changeMove, endedAs, forgetMove, forgetMovedAway, moveOf, movesChanged, noteEnded, noteMovedAway, readMove, readMoves, saveMove, shownMove } from "./records";
 import type { MoveRecord } from "./records";
@@ -290,7 +290,7 @@ class Refused extends Error {
 
 // What the box it leaves has of each move in memory: the parts the other box has, and those on
 // their way (by when they went).
-const outgoing = new Map<string, { got: Set<number>; flying: Map<number, number>; exports: unknown[] }>();
+const outgoing = new Map<string, { got: Set<number>; flying: Map<number, number>; exports: string }>();
 
 /** The box it leaves, carrying on from where it is (as it starts, or step by step). */
 async function carryOn(id: string): Promise<void> {
@@ -319,7 +319,7 @@ async function carryOn(id: string): Promise<void> {
   }
   const bundle = await pack(id, contents);
   if (bundle.size > MOST_BUNDLE) throw new Refused(say.tooBig(record.name));
-  outgoing.set(id, { got: new Set(), flying: new Map(), exports });
+  outgoing.set(id, { got: new Set(), flying: new Map(), exports: conversationHash(exports) });
   const now = changeMove(id, each => {
     Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now() });
   });
@@ -364,7 +364,7 @@ async function arrived(record: MoveRecord): Promise<void> {
     const before = outgoing.get(record.id)?.exports;
     // Taken back meanwhile (its copy there couldn't be set up, or it took too long): nothing more.
     if (!still()) return;
-    if (!before || !same(again, before)) {
+    if (!before || conversationHash(again) !== before) {
       if (record.tries >= 2) throw new Refused(say.busy(record.name));
       changeMove(record.id, each => { each.tries += 1; each.stage = "holding"; each.step = undefined; });
       return drive(record.id);

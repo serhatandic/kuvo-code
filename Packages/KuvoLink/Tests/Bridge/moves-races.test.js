@@ -291,3 +291,29 @@ test("a copy on its way when this box starts again goes on from the parts it had
   assert.ok(engine.sessions.has(thing));
   await say({ op: "drop", id });
 });
+
+test("one that keeps getting messages while it moves goes again with them, and after three tries stays here, as it was", async () => {
+  chat("ses_busy1");
+  let offers = 0;
+  script = move => {
+    if (move.op === "offer") {
+      offers += 1;
+      say({ op: "ready", id: move.id });
+    }
+    if (move.op === "part") {
+      say({ op: "got", id: move.id, i: move.i });
+      if (move.i === move.of - 1) {
+        // A message reaches it just as its copy's there: what was sent isn't all of it any more.
+        engine.sessions.get("ses_busy1").messages.push({ info: { id: `msg_more${offers}`, role: "user" }, parts: [{ type: "text", text: "And this." }] });
+        say({ op: "arrived", id: move.id });
+      }
+    }
+    if (move.op === "drop") say({ op: "dropped", id: move.id });
+  };
+  const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_busy1", to: peerKey });
+  assert.equal(moved.status, 409);
+  assert.match(moved.json.message, /kept getting messages/);
+  assert.equal(offers, 3, "sent again with what came, three times");
+  assert.equal(engine.sessions.get("ses_busy1").messages.length, 4, "nothing lost here");
+  await asItWas("ses_busy1");
+});

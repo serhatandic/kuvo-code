@@ -6952,9 +6952,12 @@ var idsOf = (exports) => exports.flatMap((each) => {
   const id = isObject(each) && isObject(each.info) ? each.info.id : null;
   return typeof id === "string" ? [id] : [];
 });
-function same(one, other) {
-  const conversation = (exports) => JSON.stringify(exports.map((each) => isObject(each) ? [isObject(each.info) ? each.info.id : null, each.messages ?? null] : null));
-  return conversation(one) === conversation(other);
+function conversationHash(exports) {
+  const hash = crypto15.createHash("sha256");
+  for (const each of exports)
+    hash.update(JSON.stringify(isObject(each) ? [isObject(each.info) ? each.info.id : null, each.messages ?? null] : null)).update(`
+`);
+  return hash.digest("base64url");
 }
 async function keysOf(bot) {
   const listed = await answerBotKeys("GET", `kuvo/bots/${bot}/keys`, null, null);
@@ -7356,7 +7359,7 @@ async function carryOn(id) {
   const bundle = await pack(id, contents);
   if (bundle.size > MOST_BUNDLE)
     throw new Refused(say.tooBig(record.name));
-  outgoing.set(id, { got: new Set, flying: new Map, exports });
+  outgoing.set(id, { got: new Set, flying: new Map, exports: conversationHash(exports) });
   const now = changeMove(id, (each) => {
     Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now() });
   });
@@ -7401,7 +7404,7 @@ async function arrived(record) {
     const before = outgoing.get(record.id)?.exports;
     if (!still())
       return;
-    if (!before || !same(again, before)) {
+    if (!before || conversationHash(again) !== before) {
       if (record.tries >= 2)
         throw new Refused(say.busy(record.name));
       changeMove(record.id, (each) => {

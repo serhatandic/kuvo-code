@@ -99,10 +99,12 @@ export const idsOf = (exports: unknown[]): string[] => exports.flatMap(each => {
   return typeof id === "string" ? [id] : [];
 });
 
-/** Whether two reads of a conversation hold the same sessions with the same messages. */
-export function same(one: unknown[], other: unknown[]): boolean {
-  const conversation = (exports: unknown[]) => JSON.stringify(exports.map(each => isObject(each) ? [isObject(each.info) ? each.info.id : null, each.messages ?? null] : null));
-  return conversation(one) === conversation(other);
+/** A conversation's fingerprint as exported: its sessions and their messages, word for word, kept
+ * instead of the whole of it to see whether anything changed. */
+export function conversationHash(exports: unknown[]): string {
+  const hash = crypto.createHash("sha256");
+  for (const each of exports) hash.update(JSON.stringify(isObject(each) ? [isObject(each.info) ? each.info.id : null, each.messages ?? null] : null)).update("\n");
+  return hash.digest("base64url");
 }
 
 /** A bot's own keys here, by integration (null when they can't be read now). */
