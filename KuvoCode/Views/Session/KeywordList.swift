@@ -269,6 +269,7 @@ struct ReviewChoiceList: View {
             ForEach(Array(list.rows.enumerated()), id: \.element.id) { index, row in
                 Button { choose(row) } label: { label(row) }
                     .buttonStyle(ListRowButtonStyle(isSelected: index == selected))
+                    .accessibilityAddTraits(index == selected ? .isSelected : [])
             }
         }
         .padding(.leading, -8)

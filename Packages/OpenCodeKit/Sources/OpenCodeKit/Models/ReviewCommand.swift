@@ -136,7 +136,8 @@ public struct ReviewCommand: Equatable, Sendable {
                     continue
                 }
                 let query = String(name).trimmingCharacters(in: .whitespacesAndNewlines)
-                if query.isEmpty || !Self.search(query, in: readers).isEmpty {
+                // (A coding agent's conversation has none to look for: its own agent reads it.)
+                if !readers.isEmpty, query.isEmpty || !Self.search(query, in: readers).isEmpty {
                     searching = query
                     readerLength = rest[..<drawn].utf16.count
                     head = String(rest[..<start])
@@ -154,7 +155,14 @@ public struct ReviewCommand: Equatable, Sendable {
         let tail = rest[at...].drop { $0.isWhitespace }
         let typed = String(tail)
         head = String(rest[..<tail.startIndex])
-        let written = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A pick goes after a space: "/review for security" + "this branch".
+        if !head.isEmpty, head.last?.isWhitespace == false { head += " " }
+        var written = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Who reads it, named after your own words: "for the sign-in with Claude Sonnet 4.5".
+        if reader == nil, let (named, before) = Self.readerAtEnd(of: written, readers: readers, preferring: preferred) {
+            reader = named
+            written = before
+        }
         focus = Self.isWord("for", at: Substring(written)) ? written.dropFirst(3).trimmingCharacters(in: .whitespaces) : written
         // Nothing of your own yet, or the start of what a list offers: that list, for it.
         let lower = typed.lowercased()
@@ -176,7 +184,10 @@ public struct ReviewCommand: Equatable, Sendable {
     /// it ends what's typed (a commit or a folder, with what's typed of it; no scope yet while
     /// nothing is).
     static func scope(in words: Substring) -> (ReviewScope?, String.Index, Asking?)? {
-        for (phrase, scope) in [(uncommittedPhrase, ReviewScope.uncommitted), (branchPhrase, .branch(base: nil)), (projectPhrase, .project)] where isWord(phrase, at: words) {
+        // The words the lists write, and the short ones they're found by.
+        let phrases: [(String, ReviewScope)] = [(uncommittedPhrase, .uncommitted), ("uncommitted", .uncommitted), (branchPhrase, .branch(base: nil)), ("branch", .branch(base: nil)),
+                                                (projectPhrase, .project), ("whole project", .project), ("project", .project)]
+        for (phrase, scope) in phrases where isWord(phrase, at: words) {
             return (scope, words.index(words.startIndex, offsetBy: phrase.count), nil)
         }
         if isWord("since", at: words) {
@@ -210,6 +221,18 @@ public struct ReviewCommand: Equatable, Sendable {
             return (preset, after.index(after.startIndex, offsetBy: preset.rawValue.count))
         }
         return nil
+    }
+
+    /// A model named at the end of `words` after "with" ("the sign-in with Claude Sonnet 4.5"), and
+    /// the words before it; the longest name, and of two alike `preferred`.
+    static func readerAtEnd(of words: String, readers: [Reader], preferring preferred: ModelRef?) -> (Reader, String)? {
+        let lower = words.lowercased()
+        let named = readers.filter { lower.hasSuffix(" with " + $0.name.lowercased()) }
+        guard let longest = named.map(\.name.count).max() else { return nil }
+        let candidates = named.filter { $0.name.count == longest }
+        let reader = candidates.first { $0.ref == preferred } ?? candidates[0]
+        let before = words.dropLast(longest + " with ".count).trimmingCharacters(in: .whitespaces)
+        return (reader, before)
     }
 
     /// `words` start with `word`, in any case, as a whole word.

@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 
@@ -297,7 +298,7 @@ struct ReviewBar: View {
                     showHelp: "Show what the review found", hideHelp: "Hide it: this line stays", isHidden: $isHidden,
                     opens: showsFindings,
                     close: review.state == .reviewing ? { confirmsCancel = true } : putAway,
-                    closeHelp: review.state == .reviewing ? "Stop the review and throw it away" : "Put the review away")
+                    closeHelp: review.state == .reviewing ? (review.progress != nil ? "Throw the review away" : "Stop the review") : "Put the review away")
                 // Throwing one under way away can't be undone: it asks first, by the ✕.
                 .overlay(alignment: .trailing) {
                     Color.clear
@@ -331,7 +332,13 @@ struct ReviewBar: View {
         .animation(.ui, value: review.state)
         .animation(.ui, value: review.findings.count)
         // Done or gone meanwhile: nothing left to stop.
-        .onChange(of: review.state) { if review.state != .reviewing { confirmsCancel = false } }
+        .onChange(of: review.state) {
+            // Done or gone meanwhile: nothing left to stop, and nothing newer than the rest.
+            if review.state != .reviewing {
+                confirmsCancel = false
+                newest = []
+            }
+        }
         .onChange(of: review.findings.map(\.id)) { old, new in
             // A part read after others: what it found is the newest.
             newest = old.isEmpty ? [] : Set(new).subtracting(old)
@@ -389,17 +396,12 @@ struct ReviewBar: View {
             return "part \(min(progress.read + 1, progress.of)) of \(progress.of)"
         }
         guard review.state == .done else { return nil }
-        if let stopped = review.stopped { return "stopped after \(stopped.read) of \(stopped.of) parts" }
+        // Stopped: its summary under the line says where.
         return found.isEmpty ? nil : found.joined(separator: " · ")
     }
 
-    /// What it covered and who read it, under what it found: for one that was asked for more
-    /// than today's ("The whole project · security · read by Claude Sonnet 4.5").
-    private var footnote: String? {
-        guard review.state == .done, review.scope != nil || review.focus != nil else { return nil }
-        let focus = review.focus.map { ReviewCommand.Preset(rawValue: $0)?.rawValue ?? "“\($0)”" }
-        return [(review.scope ?? .uncommitted).title, focus, readerName.map { "read by " + $0 }].compactMap(\.self).joined(separator: " · ")
-    }
+    /// What it covered and who read it, under what it found.
+    private var footnote: String? { ReviewList.footnote(review, readerName: readerName) }
 
     /// Fix… for `findings` (nil: all of them); `outset` lines its words up with the text above.
     private func fixMenu(_ findings: [String]?, label: String, outset: Bool = false) -> some View {
@@ -780,15 +782,15 @@ private struct StopReviewConfirmation: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Stop the review?")
+            Text(inParts ? "Throw the review away?" : "Stop the review?")
                 .font(.system(size: 13, weight: .semibold))
-            Text(inParts ? "What it found so far goes too; Stop keeps it. Asked again, it reads from the start." : "What it has read so far isn’t kept. Asked again, it reads from the start.")
+            Text(inParts ? "What it found so far goes too; Stop in its line keeps that. Asked again, it reads from the start." : "What it has read so far isn’t kept. Asked again, it reads from the start.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
-                Button("Stop the Review", role: .destructive, action: stop)
+                Button(inParts ? "Throw Away" : "Stop the Review", role: .destructive, action: stop)
                 Button("Keep Reading", action: keep)
                     .keyboardShortcut(.defaultAction)
             }

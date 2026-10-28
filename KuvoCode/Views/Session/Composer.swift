@@ -126,8 +126,8 @@ struct Composer: View {
     @State private var reviewerIndex = 0
     /// The field has the keyboard: the shortcut's voice input would go here.
     @State private var fieldHasKeyboard = false
-    /// "/review"'s lists were closed with Escape.
-    @State private var dismissedReviewer = false
+    /// The "/review" list closed with Escape (its title, or "models"): another one still opens.
+    @State private var dismissedReviewList: String?
     /// What the box said of this folder for "/review"'s lists: what it offers, and how much each reads.
     @State private var reviewKnown = ReviewList.Known()
     /// The model picked last there (`Model.key`), offered first next time.
@@ -244,7 +244,7 @@ struct Composer: View {
                     // Not /review any more: its lists can open again.
                     if !new.hasPrefix(Keyword.review.typed) {
                         reviewerIndex = 0
-                        dismissedReviewer = false
+                        dismissedReviewList = nil
                     }
                     if !new.hasPrefix(Keyword.loop.typed) {
                         loopIndex = 0
@@ -388,7 +388,7 @@ struct Composer: View {
             dismissedLoop = false
             customLoop = false
             reviewerIndex = 0
-            dismissedReviewer = false
+            dismissedReviewList = nil
             isTargeted = false
             // The keyboard goes to this session's message, not a quote it was answering before.
             answerFocus = nil
@@ -704,17 +704,8 @@ struct Composer: View {
                 return (searching.isEmpty ? "Write a model’s name after “with”." : "Finish the model’s name, or pick it from the list.", false)
             }
             let reader = command.reader?.name ?? currentModel?.name ?? "The conversation’s model"
-            if reviewList != nil, let asking = command.asking {
-                switch asking {
-                case .what: return (isAgentConversation ? "Then what to look for." : "Then what to look for. “with” and a model’s name has another model read it.", false)
-                case .commit: return ("It reads that commit and every one after it.", false)
-                case .folder: return ("It reads the folder’s files as they are now.", false)
-                case .lookFor: return ("Picking one starts the review, read by \(reader).", false)
-                }
-            }
-            let what = (command.scope ?? .uncommitted).said
-            let looking = command.focusAsked == nil ? "" : command.preset != nil && command.focus.isEmpty ? ", looking for \(command.preset!.title.lowercased())" : ", looking especially at what you wrote"
-            return ("\(reader) reads \(what) with fresh eyes, without this conversation\(looking), and lists what it finds.", false)
+            if let hint = ReviewList.hint(command, listed: reviewList != nil, reader: reader, isAgent: isAgentConversation) { return (hint, false) }
+            return (ReviewList.summary(command, reader: reader), false)
         default:
             return (keyword.hint, false)
         }
@@ -734,7 +725,7 @@ struct Composer: View {
     /// The models "with" can name: after "with ", the one picked last, your starred ones, then the
     /// others; then those whose names have what's typed (and longer ones a name starts).
     private var reviewerChoices: [ReviewerChoice]? {
-        guard !dismissedReviewer, !isAgentConversation, historyIndex == nil, let (keyword, rest) = typedKeyword, keyword == .review,
+        guard dismissedReviewList != "models", !isAgentConversation, historyIndex == nil, let (keyword, rest) = typedKeyword, keyword == .review,
               rest.first?.isWhitespace == true else { return nil }
         let readers = catalog.reviewReaders
         let command = reviewCommand(rest)
@@ -762,9 +753,10 @@ struct Composer: View {
 
     /// "/review "'s What to review, a commit or a folder for it, or Look for, as what's typed asks.
     private var reviewList: ReviewList? {
-        guard !dismissedReviewer, historyIndex == nil, let (keyword, rest) = typedKeyword, keyword == .review,
-              rest.first?.isWhitespace == true, let asking = reviewCommand(rest).asking else { return nil }
-        return ReviewList.make(asking, known: reviewKnown)
+        guard historyIndex == nil, let (keyword, rest) = typedKeyword, keyword == .review,
+              rest.first?.isWhitespace == true, let asking = reviewCommand(rest).asking,
+              let list = ReviewList.make(asking, known: reviewKnown), list.title != dismissedReviewList else { return nil }
+        return list
     }
 
     /// The conversation's whose lists are asked about, while "/review" is typed.
@@ -783,14 +775,18 @@ struct Composer: View {
     }
 
     /// Picked from a "/review" list: its words written after what's there, for the next one; or,
-    /// from Look for, the review starts.
-    private func pickReview(_ row: ReviewList.Row) {
+    /// from Look for, the review starts (Tab only writes them).
+    private func pickReview(_ row: ReviewList.Row, starts: Bool = true) {
         reviewerIndex = 0
         guard let (_, rest) = typedKeyword else { return }
         let head = Keyword.review.typed + reviewCommand(rest).head
         switch row.pick {
         case .write(let words):
             text = head + words
+            focusAtEnd()
+        case .start(let words) where !starts:
+            text = head + words + (words.isEmpty ? "" : " ")
+            dismissedReviewList = "Look for"
             focusAtEnd()
         case .start(let words):
             text = (head + words).trimmingCharacters(in: .whitespaces)
@@ -803,8 +799,8 @@ struct Composer: View {
         switch key.name {
         case .return, .tab:
             guard key.modifiers.isEmpty else { return false }
-            pickReview(list.rows[min(reviewerIndex, list.rows.count - 1)])
-        case .escape: dismissedReviewer = true
+            pickReview(list.rows[min(reviewerIndex, list.rows.count - 1)], starts: key.name == .return)
+        case .escape: dismissedReviewList = list.title
         case .up: reviewerIndex = max(0, min(reviewerIndex, list.rows.count - 1) - 1)
         case .down: reviewerIndex = min(list.rows.count - 1, reviewerIndex + 1)
         }
@@ -826,7 +822,7 @@ struct Composer: View {
         case .return, .tab:
             guard key.modifiers.isEmpty else { return false }
             pickReviewer(choices[min(reviewerIndex, choices.count - 1)])
-        case .escape: dismissedReviewer = true
+        case .escape: dismissedReviewList = "models"
         case .up: reviewerIndex = max(0, min(reviewerIndex, choices.count - 1) - 1)
         case .down: reviewerIndex = min(choices.count - 1, reviewerIndex + 1)
         }

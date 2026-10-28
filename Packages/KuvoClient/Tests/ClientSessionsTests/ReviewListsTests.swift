@@ -25,8 +25,8 @@ struct ReviewListsTests {
         // Return on the first keeps today's: the changes not committed yet.
         #expect(list.rows[0].pick == .write("changes not committed yet "))
         // While it's measured, no size yet; nothing to commit says so.
-        let measuring = try #require(ReviewList.make(.what(""), known: ReviewList.Known(choices: known.choices, uncommitted: ReviewSize(files: 0, parts: 0))))
-        #expect(measuring.rows.map(\.note) == ["nothing to review", "12 commits", "pick where to start", "docs, src, tests…", nil])
+        let measuring = try #require(ReviewList.make(.what(""), known: ReviewList.Known(choices: known.choices, uncommitted: ReviewSize(files: 0, parts: 0), measured: false)))
+        #expect(measuring.rows.map(\.note) == ["nothing to review", "12 commits", "pick where to start", "docs, src, tests…", "…"])
     }
 
     @Test func typingFindsARowAndYourOwnWordsCloseTheList() throws {
@@ -61,5 +61,15 @@ struct ReviewListsTests {
         // else… waits for your words.
         #expect(list.rows.map(\.pick) == [.start(""), .start("for security"), .start("for performance"), .start("for accessibility"), .write("for ")])
         #expect(ReviewList.make(.lookFor("for sec"), known: known)?.rows.map(\.id) == ["security"])
+    }
+
+    @Test func theLineUnderAReviewSaysWhatItCoveredAndWhoReadIt() throws {
+        let review = { (json: String) in try JSONDecoder().decode(Review.self, from: Data(json.utf8)) }
+        let both = try review(#"{"id": "r", "session": "s", "state": "done", "scope": {"kind": "project"}, "focus": "security: the sign-in", "findings": [], "started": 1}"#)
+        #expect(ReviewList.footnote(both, readerName: "GLM") == "The whole project · security · “the sign-in” · read by GLM")
+        // Today's review says nothing more.
+        #expect(ReviewList.footnote(try review(#"{"id": "r", "session": "s", "state": "done", "findings": [], "started": 1}"#), readerName: "GLM") == nil)
+        #expect(ReviewList.unfinished(ReviewCommand(" since ", readers: [])) == "Write the commit to start with after “since”.")
+        #expect(ReviewList.summary(ReviewCommand(" folder src for performance", readers: []), reader: "GLM") == "GLM reads the files in src with fresh eyes, without this conversation, looking for performance, and lists what it finds.")
     }
 }

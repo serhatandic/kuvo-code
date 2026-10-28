@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientSessions
 import ClientText
 import Foundation
 import OpenCodeKit
@@ -1209,18 +1210,10 @@ final class SessionModel {
             failure = searching.isEmpty ? "Pick who reads it from the list, or write a model’s name after “with”." : "Finish the model’s name, or pick it from the list."
             return
         }
-        if let asking = command.asking, command.scope == nil {
-            switch asking {
-            case .commit:
-                restore(text: written)
-                failure = "Write the commit to start with after “since”."
-                return
-            case .folder:
-                restore(text: written)
-                failure = "Write the folder to review after “folder”."
-                return
-            default: break
-            }
+        if let unfinished = ReviewList.unfinished(command) {
+            restore(text: written)
+            failure = unfinished
+            return
         }
         guard let bridge = goalBridge(), let api = bridge.api else { return keywordUnavailable(written) }
         let session = id

@@ -133,3 +133,21 @@ private let readers = [flash, claude, sonnet, copilotSonnet]
     #expect(ReviewCommand(" an eye on the tests", readers: readers).asking == nil)
     #expect(ReviewCommand.longer(than: " this branch with Claude", readers: readers) == [sonnet, copilotSonnet])
 }
+
+// From review: a pick after typed words goes after a space; the short words the lists are found by
+// are read too; a model named after your own words reads it; a coding agent's conversation looks
+// for no model.
+@Test func picksShortWordsAndAModelAfterYourWordsAreRead() {
+    #expect(ReviewCommand(" for security", readers: readers).head == " for security ")
+    #expect(ReviewCommand(" this branch", readers: readers).head == " this branch ")
+    #expect(ReviewCommand(" project ", readers: readers).scope == .project)
+    #expect(ReviewCommand(" branch for security", readers: readers).scope == .branch(base: nil))
+    #expect(ReviewCommand(" uncommitted", readers: readers).scope == .uncommitted)
+
+    let late = ReviewCommand(" for the sign-in with Claude Sonnet 4.5", readers: readers)
+    #expect(late.reader == sonnet)
+    #expect(late.focus == "the sign-in")
+    // Coding agents: "with" is your words.
+    let agent = ReviewCommand(" this branch with ", readers: [])
+    #expect(agent.searching == nil)
+}
