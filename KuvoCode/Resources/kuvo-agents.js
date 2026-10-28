@@ -2469,6 +2469,31 @@ function failure(error, type = "agent") {
   return { type, message: message || "The agent stopped with an error." };
 }
 
+// Packages/Box/src/agents/rules.ts
+function matches(pattern, value) {
+  if (pattern === "*" || pattern === value)
+    return true;
+  if (pattern.endsWith(" *") && value === pattern.slice(0, -2))
+    return true;
+  const expression = "^" + pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$";
+  return new RegExp(expression, "s").test(value);
+}
+var holdsBack = (effect) => effect !== "allow" && effect !== "ask";
+function ruled(rules, action, resources) {
+  let effect;
+  for (const rule of rules ?? []) {
+    if (!matches(rule.action, action))
+      continue;
+    const targets = resources.length ? resources : ["*"];
+    if (targets.every((resource) => matches(rule.resource, resource)))
+      effect = holdsBack(rule.effect) ? "deny" : rule.effect;
+  }
+  return effect;
+}
+function asksFirst(rules) {
+  return (rules ?? []).some((rule) => rule.effect === "ask" && ["edit", "shell", "write", "patch", "*"].includes(rule.action));
+}
+
 // Packages/Box/src/agents/engine.ts
 class EngineLink {
   url;
@@ -2607,7 +2632,7 @@ ${directory}`;
       if (typeof policy.effect !== "string")
         continue;
       const at = policy.resource.indexOf(":");
-      rules.push({ action: at < 0 ? policy.resource : policy.resource.slice(0, at), resource: at < 0 ? "*" : policy.resource.slice(at + 1) || "*", effect: policy.effect === "allow" ? "allow" : "deny" });
+      rules.push({ action: at < 0 ? policy.resource : policy.resource.slice(0, at), resource: at < 0 ? "*" : policy.resource.slice(at + 1) || "*", effect: holdsBack(policy.effect) ? "deny" : policy.effect });
     }
     return rules;
   }
@@ -12208,31 +12233,6 @@ User message:
 ${text2}` : text2;
 }
 
-// Packages/Box/src/agents/rules.ts
-function matches(pattern, value) {
-  if (pattern === "*" || pattern === value)
-    return true;
-  if (pattern.endsWith(" *") && value === pattern.slice(0, -2))
-    return true;
-  const expression = "^" + pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$";
-  return new RegExp(expression, "s").test(value);
-}
-var holdsBack = (effect) => effect !== "allow" && effect !== "ask";
-function ruled(rules, action, resources2) {
-  let effect;
-  for (const rule of rules ?? []) {
-    if (!matches(rule.action, action))
-      continue;
-    const targets = resources2.length ? resources2 : ["*"];
-    if (targets.every((resource) => matches(rule.resource, resource)))
-      effect = holdsBack(rule.effect) ? "deny" : rule.effect;
-  }
-  return effect;
-}
-function asksFirst(rules) {
-  return (rules ?? []).some((rule) => rule.effect === "ask" && ["edit", "shell", "write", "patch", "*"].includes(rule.action));
-}
-
 // Packages/Box/src/agents/wire.ts
 var noTokens = () => ({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } });
 
@@ -20057,4 +20057,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents d8e04add706a5e5556bf9e12052bc52e6d4f88915eeb4467669ee5b3654c9eab
+// Built from Packages/Box/src/agents 6dbdb7cceb211b25f057e9bfc25d24baeef7571566ecd3a6804af68d715d4e43

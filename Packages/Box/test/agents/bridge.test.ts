@@ -162,6 +162,35 @@ describe("keeping an agent's program current", () => {
   })
 })
 
+describe("Settings' Blocks, as the engine gives them", () => {
+  test("keep their own kind: an ask asks, a block blocks, and one of a kind a newer engine has blocks too", async () => {
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: () =>
+        Response.json({ data: [{ info: { policies: [
+          { action: "tool.use", resource: "shell:git push *", effect: "ask" },
+          { action: "tool.use", resource: "shell:rm *", effect: "deny-forever" },
+          { action: "tool.use", resource: "webfetch", effect: "deny" },
+          { action: "tool.use", resource: "shell:ls", effect: "allow" },
+        ] } }] }),
+    })
+    const link = new EngineLink()
+    try {
+      link.configure(`http://127.0.0.1:${server.port}`, "x")
+      expect(await link.policies("/tmp/project")).toEqual([
+        { action: "shell", resource: "git push *", effect: "ask" },
+        { action: "shell", resource: "rm *", effect: "deny" },
+        { action: "webfetch", resource: "*", effect: "deny" },
+        { action: "shell", resource: "ls", effect: "allow" },
+      ])
+    } finally {
+      link.configure(undefined, undefined)
+      server.stop(true)
+    }
+  })
+})
+
 describe("a session's files", () => {
   test("a turn that ends while they can't be written (a full disk) still ends, and what it said is written once they can be", () => {
     const folder = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-store-"))
