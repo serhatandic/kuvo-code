@@ -121,6 +121,8 @@ public struct SideQuestion: Codable, Sendable, Hashable, Identifiable {
     public enum State: String, Codable, Sendable, Hashable { case answering, answered, failed }
     public var id: String
     public var session: String
+    /// The side thread it's in: the id of the question that started it.
+    public var thread: String?
     public var question: String
     public var state: State
     public var answer: String?
@@ -130,12 +132,38 @@ public struct SideQuestion: Codable, Sendable, Hashable, Identifiable {
     public var answered: Double?
 
     public var askedDate: Date { Date(timeIntervalSince1970: asked / 1000) }
+    /// Its thread's id (its own, for one from before threads).
+    public var threadID: String { thread ?? id }
+}
+
+/// A conversation's side questions as side threads: each with its questions, oldest first, the
+/// threads in the order they were started.
+public struct SideThread: Identifiable, Hashable, Sendable {
+    public var id: String
+    public var questions: [SideQuestion]
+
+    /// What it started with.
+    public var first: SideQuestion { questions[0] }
+    public var latest: SideQuestion { questions[questions.count - 1] }
+
+    /// `questions` (oldest first) by thread.
+    public static func threads(_ questions: [SideQuestion]) -> [SideThread] {
+        var order: [String] = []
+        var byThread: [String: [SideQuestion]] = [:]
+        for question in questions {
+            if byThread[question.threadID] == nil { order.append(question.threadID) }
+            byThread[question.threadID, default: []].append(question)
+        }
+        return order.map { SideThread(id: $0, questions: byThread[$0]!) }
+    }
 }
 
 /// Every conversation on a box that has side questions: how many, and the latest.
 public struct SideQuestionSummary: Codable, Sendable, Hashable {
     public var session: String
     public var count: Int
+    /// How many side threads they're in (nil from a box from before threads).
+    public var threads: Int?
     public var latest: SideQuestion
 }
 
@@ -405,10 +433,16 @@ extension OpenCodeAPI {
         try await client.send(try client.request("GET", "api/kuvo/btw"), as: DataEnvelope<[SideQuestionSummary]>.self).data
     }
 
+    /// Asks a side question about `session`: a new side thread, or a follow-up in `thread`.
     @discardableResult
-    public func askSideQuestion(_ question: String, about session: String) async throws -> SideQuestion {
-        struct Body: Encodable { var question: String }
-        return try await client.send(try client.request("POST", "api/kuvo/btw/\(session.pathEscaped)", body: Body(question: question)), as: DataEnvelope<SideQuestion>.self).data
+    public func askSideQuestion(_ question: String, about session: String, thread: String? = nil) async throws -> SideQuestion {
+        struct Body: Encodable { var question: String; var thread: String? }
+        return try await client.send(try client.request("POST", "api/kuvo/btw/\(session.pathEscaped)", body: Body(question: question, thread: thread)), as: DataEnvelope<SideQuestion>.self).data
+    }
+
+    /// Takes a side thread away, all of it.
+    public func removeSideThread(_ thread: String, of session: String) async throws {
+        _ = try await client.send(try client.request("DELETE", "api/kuvo/btw/\(session.pathEscaped)/threads/\(thread.pathEscaped)"), as: Empty.self)
     }
 
     /// The words voice input listens for in a conversation: its project's own names, most useful
