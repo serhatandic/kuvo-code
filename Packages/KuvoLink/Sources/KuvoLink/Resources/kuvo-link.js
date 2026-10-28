@@ -5519,7 +5519,13 @@ var letterTries = new Map;
 // Packages/Box/src/link/peers/seats.ts
 var SEAT_WHOLE = 48000;
 var seatParts = new Map;
-var bridgeClock = { answerIn: () => AbortSignal.timeout(1e4) };
+var bridgeClock = {
+  answerIn: () => AbortSignal.timeout(1e4),
+  after: (ms, work) => {
+    const timer = setTimeout(work, ms);
+    return () => clearTimeout(timer);
+  }
+};
 var bridgeAsk = async (method, route, body, signal) => {
   const target = readBridgeFile();
   if (!target?.port || !target?.password)
@@ -5691,16 +5697,31 @@ function giveUpSeat(id, letter, ask = bridgeAsk) {
       heard();
   }).finally(() => tellingGaveUp.delete(id));
 }
+var MAIL_QUIET = 60000;
 async function watchSeats(host, signal) {
   let attempt = 0;
   while (!signal?.aborted) {
+    const connection = new AbortController;
+    const end = () => connection.abort();
+    signal?.addEventListener("abort", end, { once: true });
+    let quiet = false;
+    let hush = () => {};
+    const heard = () => {
+      hush();
+      hush = bridgeClock.after(MAIL_QUIET, () => {
+        quiet = true;
+        connection.abort();
+      });
+    };
     try {
-      const response = await bridgeAsk("GET", "/mail", undefined, signal);
+      heard();
+      const response = await bridgeAsk("GET", "/mail", undefined, connection.signal);
       attempt = 0;
       await tellSeatPeers(readLink(), true).catch(() => {});
       let buffer = "";
       const decoder = new TextDecoder;
       for await (const chunk of response.body) {
+        heard();
         buffer += decoder.decode(chunk, { stream: true });
         let end;
         while ((end = buffer.indexOf(`
@@ -5717,7 +5738,12 @@ async function watchSeats(host, signal) {
             bridgeAsk("POST", "/sent", { ids: [given.id] }).catch(() => {});
         }
       }
-    } catch {}
+    } catch {} finally {
+      hush();
+      signal?.removeEventListener("abort", end);
+    }
+    if (quiet)
+      continue;
     attempt += 1;
     await pause(Math.min(30000, 1000 * 2 ** Math.min(attempt, 5)), signal);
   }

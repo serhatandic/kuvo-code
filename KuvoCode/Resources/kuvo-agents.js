@@ -18921,13 +18921,16 @@ class SeatServer {
 var kinds4 = new Set(SEAT_MAIL_KINDS);
 var isSeatMail = (value) => value !== null && typeof value === "object" && kinds4.has(value.kind);
 var sameMemory = (one, other) => one.kind === "memory" && other.kind === "memory" && one.memory.bot === other.memory.bot && one.memory.chat === other.memory.chat;
+var MAIL_HEARTBEAT = 20000;
 
 class PeerPost {
   file;
+  clock;
   followers = new Set;
   kept;
-  constructor(file) {
+  constructor(file, clock = realClock) {
     this.file = file;
+    this.clock = clock;
     let kept2 = [];
     try {
       if (file && existsSync15(file))
@@ -18973,7 +18976,25 @@ class PeerPost {
             stop();
           }
         };
+        let beat;
+        let following2 = true;
+        const beating = () => {
+          beat = this.clock.setTimeout(() => {
+            if (!following2)
+              return;
+            try {
+              controller.enqueue(encoder.encode(`
+`));
+            } catch {
+              return stop();
+            }
+            beating();
+          }, MAIL_HEARTBEAT);
+          beat?.unref?.();
+        };
         stop = () => {
+          following2 = false;
+          this.clock.clearTimeout(beat);
           this.followers.delete(write2);
           signal?.removeEventListener("abort", stop);
         };
@@ -18981,6 +19002,7 @@ class PeerPost {
         for (const line3 of this.kept)
           write2(line3);
         this.followers.add(write2);
+        beating();
       },
       cancel: () => stop()
     });
@@ -19919,4 +19941,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents e3c6f417c638c8683181eb28850b065d48cb16f7d87e526c8c9b84c45ee0ac56
+// Built from Packages/Box/src/agents b712fa145120ac4323ca7f58b1e8a03deb5656232befcb7677de99c5bccf4f17

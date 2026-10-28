@@ -290,3 +290,53 @@ test("what the bridge sends as it goes (its group chats' mail, followed) keeps c
     server.close();
   }
 });
+
+test("a bridge that answered and then says nothing for a minute is followed anew: what it sends then still goes, and it's told again who your computers are", async () => {
+  fresh();
+  const waiting = [];
+  const poke = () => { for (const resolve of waiting.splice(0)) resolve(); };
+  const until = async check => { while (!check()) await new Promise(resolve => waiting.push(resolve)); };
+  const follows = [], told = [], sent = [];
+  const server = http.createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      if (request.method === "GET" && request.url === "/api/kuvo/peers/mail") {
+        response.writeHead(200, { "content-type": "application/x-ndjson" });
+        response.flushHeaders();
+        follows.push(response);
+        // The first time it answers and then says nothing; the second, it sends.
+        if (follows.length === 2) response.write(JSON.stringify({ id: "sm_stop0001", to: second.pub, mail: { kind: "stop", id: "trn_1" }, durable: false }) + "\n");
+      } else {
+        if (request.method === "PUT") told.push(request.url);
+        response.writeHead(200, { "content-type": "application/json" }).end("{}");
+      }
+      poke();
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  fs.writeFileSync(path.join(run, "bridge.json"), JSON.stringify({ port: server.address().port, password: "bridge-pw" }));
+  const timers = [];
+  const after = link.bridgeClock.after;
+  link.bridgeClock.after = (ms, work) => {
+    const timer = { ms, work, live: true };
+    timers.push(timer);
+    poke();
+    return () => { timer.live = false; };
+  };
+  const stop = new AbortController();
+  try {
+    link.watchSeats(() => ({ send: bytes => { sent.push(bytes); poke(); } }), stop.signal);
+    await until(() => follows.length === 1 && told.length === 1);
+    const quiet = timers.findLast(timer => timer.live);
+    assert.ok(quiet, "it keeps an eye on how long the bridge has said nothing");
+    assert.equal(quiet.ms, 60_000);
+    // A minute without a word.
+    quiet.work();
+    await until(() => follows.length === 2 && sent.length === 1 && told.length === 2);
+  } finally {
+    stop.abort();
+    link.bridgeClock.after = after;
+    server.closeAllConnections();
+    server.close();
+  }
+});
