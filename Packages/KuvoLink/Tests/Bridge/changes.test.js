@@ -151,7 +151,7 @@ test("Discard of a move: the new name goes to the trash and the old one comes ba
 });
 
 test("Discard never takes the repository or a folder git keeps: a path that names one is refused or left be", async () => {
-  for (const name of [".", "./README.md", "src/", "a//b", "../x", "/etc/hosts"]) {
+  for (const name of [".", "./", "/", "./README.md", "a//b", "a//", "../x", "/etc/hosts"]) {
     assert.equal((await route("POST", "kuvo/git/discard", { root: repo, path: name, status: "modified" })).status, 400, name);
   }
   // A folder git keeps, named as a file: git puts its files back as they were committed, and the
@@ -161,6 +161,25 @@ test("Discard never takes the repository or a folder git keeps: a path that name
   await route("POST", "kuvo/git/discard", { root: repo, path: "src", status: "modified" });
   assert.equal(read("src/new.js"), "mine\n", "a folder git keeps isn't thrown away");
   assert.deepEqual(trashed(), before);
+});
+
+test("a repository inside the project, listed as \"web/\": staged, unstaged, and discarded whole to the trash", async () => {
+  const web = path.join(repo, "web");
+  fs.mkdirSync(web);
+  const inWeb = (...args) => execFileSync("git", ["-c", "user.name=Ada", "-c", "user.email=ada@example.com", ...args], { cwd: web, env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+  inWeb("init", "-q", "-b", "main");
+  fs.writeFileSync(path.join(web, "index.html"), "<p>hi</p>\n");
+  inWeb("add", "-A");
+  inWeb("commit", "-q", "-m", "Web");
+  assert.deepEqual((await changes()).json.untracked, ["web/"]);
+  assert.equal((await route("POST", "kuvo/git/stage", { root: repo, path: "web/", status: "added" })).status, 200);
+  assert.deepEqual(status(), ["A  web"]);
+  assert.equal((await route("POST", "kuvo/git/unstage", { root: repo, path: "web/", status: "added", scope: "staged" })).status, 200);
+  assert.deepEqual(status(), ["?? web/"]);
+  assert.equal((await route("POST", "kuvo/git/discard", { root: repo, path: "web/", status: "added" })).status, 200);
+  assert.equal(fs.existsSync(web), false);
+  assert.ok(trashed().some(name => name.endsWith(path.join("web", "index.html"))));
+  assert.deepEqual(status(), []);
 });
 
 test("Unstage in a repository with no commits yet: out of what's staged, the file left as it is", async () => {
