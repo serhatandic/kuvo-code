@@ -363,6 +363,91 @@ describe("Claude Code's subagents in the background", () => {
   })
 })
 
+describe("Writing to a Claude Code subagent", () => {
+  /** A conversation whose subagent (call1, Claude Code's ag1) went off in the background; `done`, it has finished since. */
+  async function sendOff(done: boolean) {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_rel_0001", text: "look into it in the background", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.out.push({ type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "call1", name: "Agent", input: { description: "Look into it", prompt: "Look into it", subagent_type: "general-purpose", run_in_background: true } }] }, parent_tool_use_id: null, user_message_uuids: [first] })
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "ag1", task_type: "local_agent", description: "Look into it", tool_use_id: "call1", is_backgrounded: true })
+    fake.out.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "ag1", task_type: "local_agent", description: "Look into it" }] })
+    fake.out.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "call1", content: "Launched in the background." }] }, parent_tool_use_id: null })
+    fake.out.push({ type: "assistant", message: { id: "m2", content: [{ type: "text", text: "Looking." }] }, parent_tool_use_id: "call1" })
+    fake.say("Launched.", [first])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    const child = sessions.list(root, id)[0].id
+    await until(() => texts(child).includes("Looking."))
+    if (done) {
+      fake.out.push({ type: "system", subtype: "task_notification", task_id: "ag1", status: "completed", tool_use_id: "call1", output_file: "", summary: "done" })
+      await until(() => idles(child).length === 1)
+    }
+    return { id, child }
+  }
+  const users = (id: string) => sessions.messages(id).flatMap((message) => (message.type === "user" ? [message.text] : []))
+
+  test("your message shows in its conversation at once, and the agent that started it is asked to pass it on, as it is", async () => {
+    const { id, child } = await sendOff(false)
+    expect(sessions.get(child).metadata?.kuvo).toMatchObject({ messages: { via: "parent" } })
+    sessions.prompt(child, { id: "msg_claude_rel_0002", text: "Check the tests too", files: [], delivery: "steer" })
+    expect(users(child)).toContain("Check the tests too")
+    // The conversation that started it gets a note, by Claude Code's id for it, and shows it.
+    await until(() => fake.sent.length === 2)
+    const note = fake.sent[1].message.content.find((part: any) => part.type === "text").text
+    expect(note).toContain('SendMessage tool (to: "ag1")')
+    expect(note).toContain("Check the tests too")
+    const shown = sessions.messages(id).find((message) => message.type === "synthetic") as any
+    expect(shown).toMatchObject({ description: "Your message for “Look into it”" })
+    // It passes it on; the subagent, still at work, takes it there.
+    fake.out.push({ type: "assistant", message: { id: "m3", content: [{ type: "tool_use", id: "send1", name: "SendMessage", input: { to: "ag1", message: "Check the tests too" } }] }, parent_tool_use_id: null, user_message_uuids: [fake.sent[1].uuid] })
+    fake.out.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "send1", content: "Message queued for delivery." }] }, parent_tool_use_id: null })
+    fake.result([fake.sent[1].uuid])
+    await until(() => idles(id).length === 2)
+    fake.out.push({ type: "assistant", message: { id: "m4", content: [{ type: "text", text: "The tests pass." }] }, parent_tool_use_id: "call1" })
+    await until(() => texts(child).includes("The tests pass."))
+    fake.out.push({ type: "system", subtype: "task_notification", task_id: "ag1", status: "completed", tool_use_id: "call1", output_file: "", summary: "done" })
+    await until(() => idles(child).length === 1)
+    expect(idles(child)[0].outcome).toBe("succeeded")
+  })
+
+  test("one that's done is picked up again: what it says after shows in the same conversation, until it's done again", async () => {
+    const { id, child } = await sendOff(true)
+    sessions.prompt(child, { id: "msg_claude_rel_0003", text: "One more thing", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 2)
+    // SendMessage resumes it: Claude Code starts its task again under that call, and what it says
+    // comes under the call that first started it, after the conversation's turn too.
+    fake.out.push({ type: "assistant", message: { id: "m3", content: [{ type: "tool_use", id: "send1", name: "SendMessage", input: { to: "ag1", message: "One more thing" } }] }, parent_tool_use_id: null, user_message_uuids: [fake.sent[1].uuid] })
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "ag1", task_type: "local_agent", description: "Look into it", tool_use_id: "send1" })
+    fake.out.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "send1", content: "Resuming agent ag1" }] }, parent_tool_use_id: null })
+    fake.result([fake.sent[1].uuid])
+    await until(() => idles(id).length === 2)
+    fake.out.push({ type: "assistant", message: { id: "m4", content: [{ type: "text", text: "Done that too." }] }, parent_tool_use_id: "call1" })
+    await until(() => texts(child).includes("Done that too."))
+    expect(sessions.active()).toContain(child)
+    fake.out.push({ type: "system", subtype: "task_notification", task_id: "ag1", status: "completed", tool_use_id: "send1", output_file: "", summary: "done" })
+    await until(() => idles(child).length === 2)
+    expect(users(child)).toContain("One more thing")
+    expect(idles(child)[1].outcome).toBe("succeeded")
+    expect(sessions.list(root, id)).toHaveLength(1)
+  })
+
+  test("its Explore agents take no messages, and say so", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_rel_0004", text: "look around", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.out.push({ type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "call1", name: "Agent", input: { description: "Look around", prompt: "Look around", subagent_type: "Explore" } }] }, parent_tool_use_id: null, user_message_uuids: [first] })
+    fake.out.push({ type: "assistant", message: { id: "m2", content: [{ type: "text", text: "Reading." }] }, parent_tool_use_id: "call1" })
+    await until(() => sessions.list(root, id).length === 1)
+    const child = sessions.list(root, id)[0].id
+    expect(() => sessions.prompt(child, { id: "msg_claude_rel_0005", text: "hi", files: [], delivery: "steer" })).toThrow("Claude Code's Explore agents can't take messages.")
+    expect(fake.sent).toHaveLength(1)
+    fake.result([first])
+  })
+})
+
 describe("Claude Code, nothing dropped", () => {
   async function turn(frames: (first: string) => any[]) {
     const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id

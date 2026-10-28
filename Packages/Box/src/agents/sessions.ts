@@ -13,7 +13,7 @@ import { readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import type { Agent, OwnTurn, PermissionAsk, PromptFile, QuestionAsk, RunInput, RunResult, SubagentRun, SubagentTask, Thread, TurnHooks } from "./agent"
+import type { Agent, OwnTurn, PermissionAsk, PromptFile, QuestionAsk, RunInput, RunResult, SubagentMessages, SubagentRun, SubagentTask, Thread, TurnHooks } from "./agent"
 import { failure } from "./agent"
 import { Auto, autoProvider, resetTime, type AutoEntry } from "./auto"
 import { emit } from "./events"
@@ -1020,8 +1020,11 @@ export class Sessions {
     }
     if (body.permissions !== undefined) session.permissions = body.permissions
     if (body.metadata !== undefined) {
-      // The bridge's own note stays, whatever the app writes.
+      // The bridge's own notes stay, whatever the app writes: whose agent it is, and how you
+      // can write to a subagent.
+      const messages = (session.metadata?.kuvo as Record<string, unknown> | undefined)?.messages
       session.metadata = { ...body.metadata, kuvoAgent: session.metadata?.kuvoAgent }
+      if (messages !== undefined) session.metadata.kuvo = { ...((body.metadata.kuvo as Record<string, unknown> | undefined) ?? {}), messages }
       emit("session.metadata.updated", { sessionID: id }, directory)
     }
     session.time.updated = Date.now()
@@ -1269,6 +1272,8 @@ export class Sessions {
     const session = record.session
     const previous = session.model
     if (!model?.providerID || !model.id) throw new BadRequest("That isn't a model.")
+    // A subagent of a coding agent's runs on what its agent picks, and is written to through it.
+    if (session.parentID && previous && (previous.providerID !== model.providerID || previous.id !== model.id || previous.variant !== model.variant)) throw new BadRequest("A subagent's model is its agent's to pick.")
     if (model.providerID === autoProvider && !this.auto.list(model.id).length) throw new BadRequest("That Custom Auto list is empty: add models to it in Settings › Custom Auto.")
     if (!this.runs(model)) throw new BadRequest("That model's agent isn't connected.")
     if (previous && previous.providerID === model.providerID && previous.id === model.id && previous.variant === model.variant) return
@@ -1319,7 +1324,12 @@ export class Sessions {
     const record = this.record(id)
     const live = this.state(id)
     if (live.doing.kind === "deleting") throw new NotFound(`No session ${id}.`)
-    if (record.session.parentID) throw new BadRequest("This subagent works for the conversation that started it: write to it there.")
+    if (record.session.parentID) return this.promptSubagent(id, record, input)
+    this.enqueue(id, record, live, input)
+  }
+
+  /** A message (yours, or a note from the app) in line: into the turn under way, now, or after it. */
+  private enqueue(id: string, record: Record_, live: Live, input: Input) {
     const queue = this.queue(record)
     // Sent twice (a retry after a timeout): once is enough.
     if (queue.some((waiting) => waiting.id === input.id) || record.messages.some((message) => message.id === input.id)) return
@@ -1333,9 +1343,84 @@ export class Sessions {
     const delivery: Delivery = into || (nothingRuns && (input.delivery !== "queue" || !queue.length)) ? "steer" : "queue"
     queue.push({ ...input, delivery })
     this.store.save(id, true)
-    emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "user", payload: { text: input.text, files: input.files }, delivery } }, record.session.location.directory)
+    const item = input.synthetic ? { type: "synthetic", payload: { text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata } } : { type: "user", payload: { text: input.text, files: input.files } }
+    emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { ...item, delivery } }, record.session.location.directory)
     if (into) void this.steerNow(id, live, into, input)
     else if (delivery === "steer") this.wake(id)
+  }
+
+  /**
+   * Your message for a subagent of a coding agent's: to it, where its agent takes one (Codex), or
+   * through the agent that started it, which passes it on (Claude Code). It shows in the
+   * subagent's conversation at once. Where its agent can't take one, it's refused, saying why.
+   */
+  private promptSubagent(id: string, record: Record_, input: Input) {
+    const session = record.session
+    const route = subagentMessages(session)
+    if (route.via === "none") throw new BadRequest(route.note)
+    // Sent twice (a retry after a timeout): once is enough.
+    if (record.messages.some((message) => message.id === input.id)) return
+    const parentID = session.parentID!
+    const parent = this.store.get(parentID)
+    const provider = session.model?.providerID
+    const found = provider ? this.agent(provider) : undefined
+    if (!parent || !provider || !found) throw new BadRequest("This subagent's agent isn't connected: write to the conversation that started it.")
+    const agent = { name: found.name.split(" · ")[0] }
+    const parentLive = this.state(parentID)
+    const attached = withTextFiles(input.text, input.files.map(promptFile))
+    if (route.via === "direct") {
+      const send = this.threadOf(parentID, parentLive, parent, provider)?.subagentMessages?.(id)
+      if (!send) throw new BadRequest(`${agent.name} has let this subagent go: write to the conversation that started it, which can pick it up again.`)
+      this.showMessage(id, record, input)
+      const missed = () => this.subagentNote(id, `${agent.name} didn't take that message: write to the conversation that started it.`)
+      void send({ id: input.id, text: attached.text, files: attached.files }, () => this.resumedRun(parentID, parentLive, id)).then((sent) => sent || missed(), missed)
+      return
+    }
+    // Passed on by the agent that started it: a note in that conversation, which shows the step.
+    if (parent.session.model?.providerID !== provider) throw new BadRequest(`${agent.name} no longer runs the conversation that started this subagent: write to it there.`)
+    const others = attached.files.filter((file) => file.path).map((file) => `- ${file.path}`)
+    const text = others.length ? `${attached.text}\n\nAttached files:\n${others.join("\n")}` : attached.text
+    const note = this.threadOf(parentID, parentLive, parent, provider)?.relayNote?.(id, text)
+    if (!note) throw new BadRequest(`${agent.name} doesn't know this subagent any more: write to the conversation that started it.`)
+    if (parentLive.doing.kind === "deleting") throw new NotFound(`No session ${parentID}.`)
+    this.showMessage(id, record, input)
+    const title = session.title || "its subagent"
+    this.enqueue(parentID, parent, parentLive, { id: newID("msg"), text: note, files: [], delivery: "steer", synthetic: { description: `Your message for “${title}”`, metadata: { kuvo: { relayedTo: id } } } })
+  }
+
+  /** Your message, in a subagent's conversation as it's sent. */
+  private showMessage(id: string, record: Record_, input: Input) {
+    const directory = record.session.location.directory
+    emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "user", payload: { text: input.text, files: input.files }, delivery: "steer" } }, directory)
+    emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory)
+    const attachments: Attachment[] = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }))
+    record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined })
+    record.session.time.updated = Date.now()
+    this.store.save(id, true)
+  }
+
+  /** A note from Kuvo Code in a subagent's conversation ("Codex didn't take that message"). */
+  private subagentNote(id: string, text: string) {
+    const record = this.store.get(id)
+    if (!record) return
+    const event = emit("session.synthetic", { sessionID: id, text }, record.session.location.directory)
+    record.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text })
+    this.store.save(id, true)
+  }
+
+  /** The agent's conversation in a session, for `provider`: the one open, or opened (nothing runs yet). */
+  private threadOf(id: string, live: Live, record: Record_, provider: string): Thread | undefined {
+    const open = live.threads.get(provider)
+    if (open) return open
+    const agent = this.agent(provider)
+    if (!agent) return undefined
+    const slot = (this.slots(record)[provider] ??= { state: {} })
+    const thread = agent.thread(record.session, slot.state)
+    thread.onOwnTurn = (note) => this.ownTurn(id, provider, note)
+    live.threads.set(provider, thread)
+    // Closed again a while after, as after a turn.
+    if (live.doing.kind === "idle") this.closeWhenIdle(id, live)
+    return thread
   }
 
   /**
@@ -1352,8 +1437,8 @@ export class Sessions {
     let taken = false
     let note: SnapshotNote | undefined
     try {
-      // The files as they are before it, for Undo.
-      if (this.snapshots) {
+      // The files as they are before it, for Undo (yours, not a note from the app).
+      if (this.snapshots && !input.synthetic) {
         try {
           const at = Date.now()
           const before = await this.snapshots.take(directory)
@@ -1392,7 +1477,8 @@ export class Sessions {
     queue.splice(at, 1)
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory)
     const attachments: Attachment[] = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }))
-    record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined })
+    if (input.synthetic) record.messages.push({ type: "synthetic", id: input.id, time: { created: Date.now() }, text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata })
+    else record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined })
     record.session.time.updated = Date.now()
     // Its own undo, while its turn is under way (what the turn changes from here on).
     // (One that couldn't be kept isn't noted: Undo from the message before covers it.)
@@ -1742,13 +1828,7 @@ export class Sessions {
     }
     const slots = this.slots(record)
     const slot = (slots[model.providerID] ??= { state: {} })
-    let thread = live.threads.get(model.providerID)
-    if (!thread) {
-      thread = agent.thread(record.session, slot.state)
-      const provider = model.providerID
-      thread.onOwnTurn = (note) => this.ownTurn(id, provider, note)
-      live.threads.set(model.providerID, thread)
-    }
+    const thread = this.threadOf(id, live, record, model.providerID)!
     live.models.set(model.providerID, model)
     const hooks = this.hooks(id, live, turn, signal, slot, input.plan)
     turn.setModel(model)
@@ -2069,11 +2149,13 @@ export class Sessions {
     const now = Date.now()
     const model = parentTurn.currentModel
     const before = task.sessionID ? this.store.get(task.sessionID) : undefined
+    const messages = task.messages ?? cantTakeMessages(this.agent(model.providerID)?.name)
     if (before && before.session.parentID === id) {
       // The same subagent, given more to do: its session goes on.
       if (task.prompt) before.messages.push({ type: "user", id: newID("msg"), time: { created: now }, text: task.prompt })
       before.session.time.updated = now
       this.store.save(before.session.id, true)
+      this.setMessages(before.session.id, messages)
       return this.subagentRun(id, live, parentTurn, toolCallID, before.session, task.background ?? false, plan)
     }
     const session: Session = {
@@ -2087,7 +2169,7 @@ export class Sessions {
       time: { created: now, updated: now },
       title: task.title || "A subagent's task",
       location: { directory },
-      metadata: { kuvoAgent: parent.metadata?.kuvoAgent, kuvoSubagent: true },
+      metadata: { kuvoAgent: parent.metadata?.kuvoAgent, kuvoSubagent: true, kuvo: { messages } },
     }
     this.store.add(session)
     const record = this.store.get(session.id)!
@@ -2097,14 +2179,19 @@ export class Sessions {
     return this.subagentRun(id, live, parentTurn, toolCallID, session, task.background ?? false, plan)
   }
 
-  private subagentRun(id: string, live: Live, parentTurn: Turn, toolCallID: string, session: Session, background: boolean, plan: boolean): SubagentRun {
+  /**
+   * A subagent's run: under a turn of the conversation that started it (`parentTurn`), or, given
+   * a message of yours while none is under way, on its own, as one sent off in the background.
+   */
+  private subagentRun(id: string, live: Live, parentTurn: Turn | undefined, toolCallID: string | undefined, session: Session, background: boolean, plan: boolean): SubagentRun {
     live.subagents.get(session.id)?.finish("succeeded")
-    const turn = new Turn(this.store, session.id, session.location.directory, parentTurn.currentModel, session.agent ?? "build")
+    const model = parentTurn?.currentModel ?? session.model ?? this.record(id).session.model!
+    const turn = new Turn(this.store, session.id, session.location.directory, model, session.agent ?? "build")
     live.subagents.set(session.id, turn)
     if (background) live.background.add(session.id)
     else live.background.delete(session.id)
     // Its step in the conversation that started it says which session it is.
-    parentTurn.toolProgress(toolCallID, { sessionID: session.id })
+    if (parentTurn && toolCallID) parentTurn.toolProgress(toolCallID, { sessionID: session.id })
     const run: SubagentRun = {
       sessionID: session.id,
       turn,
@@ -2126,9 +2213,27 @@ export class Sessions {
       },
       // Asked in the conversation that started it, while it works.
       permission: (ask) => this.askPermission(id, live, turn, ask, plan),
+      messages: (route) => this.setMessages(session.id, route),
     }
     live.runs.set(session.id, run)
     return run
+  }
+
+  /** A subagent you wrote to once it was done, at work again with no turn under way in `id`. */
+  private resumedRun(id: string, live: Live, childID: string): SubagentRun {
+    return this.subagentRun(id, live, undefined, undefined, this.record(childID).session, true, false)
+  }
+
+  /** How you can write to a subagent, in its session for the apps (`kuvo.messages`). */
+  private setMessages(id: string, route: SubagentMessages) {
+    const record = this.store.get(id)
+    if (!record) return
+    const metadata = record.session.metadata ?? {}
+    const kuvo = (metadata.kuvo as Record<string, unknown> | undefined) ?? {}
+    if (JSON.stringify(kuvo.messages) === JSON.stringify(route)) return
+    record.session.metadata = { ...metadata, kuvo: { ...kuvo, messages: route } }
+    this.store.save(id, true)
+    emit("session.metadata.updated", { sessionID: id }, record.session.location.directory)
   }
 
   /**
@@ -2348,6 +2453,20 @@ export class Sessions {
 
 export class NotFound extends Error {}
 export class BadRequest extends Error {}
+
+/** A subagent whose agent can't take messages for it, saying so. */
+function cantTakeMessages(agent: string | undefined): SubagentMessages {
+  // The agent's own name, not its account's ("Antigravity", not "Antigravity · Work").
+  return { via: "none", note: `${agent?.split(" · ")[0] ?? "Its agent"} can't take messages for its subagents.` }
+}
+
+/** How you can write to a subagent, as its session says (one from before it said: not at all). */
+function subagentMessages(session: Session): SubagentMessages {
+  const route = (session.metadata?.kuvo as Record<string, any> | undefined)?.messages
+  if (route?.via === "direct" || route?.via === "parent") return { via: route.via }
+  if (route?.via === "none" && typeof route.note === "string") return { via: "none", note: route.note }
+  return { via: "none", note: "This subagent works for the conversation that started it: write to it there." }
+}
 
 function mime(uri: string): string {
   if (uri.startsWith("data:")) return uri.slice(5).split(/[;,]/)[0] || "text/plain"

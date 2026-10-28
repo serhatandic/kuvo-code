@@ -153,6 +153,23 @@ export interface SubagentTask {
   sessionID?: string
   /** Sent off to work in the background: its session goes on after the turn that started it. */
   background?: boolean
+  /** How you can write to it (by default you can't: "<agent> can't take messages for its subagents."). */
+  messages?: SubagentMessages
+}
+
+/**
+ * How you can write to a subagent, as its session tells the apps (`kuvo.messages`): to it
+ * (`direct`), through the agent that started it, which passes it on (`parent`), or not at all
+ * (`none`, with why).
+ */
+export type SubagentMessages = { via: "direct" } | { via: "parent" } | { via: "none"; note: string }
+
+/** A message of yours, as it goes to an agent. */
+export interface MessageInput {
+  /** The session's id for it. */
+  id: string
+  text: string
+  files: PromptFile[]
 }
 
 export interface SubagentRun {
@@ -163,6 +180,8 @@ export interface SubagentRun {
   permission(ask: PermissionAsk): Promise<Decision>
   /** Set by its agent: stops it (Stop in its session, or in the conversation that started it once that turn is over). */
   stop?: () => Promise<void>
+  /** How you can write to it, as its agent learns it (a Codex agent's thread says as it starts). */
+  messages(route: SubagentMessages): void
 }
 
 export interface RunResult {
@@ -187,7 +206,20 @@ export interface Thread {
    * Adds a message of yours (`id`, the session's) to the turn under way, at its next step; false
    * when it can't. One it takes, the turn answers before it ends (or names it in `missed`).
    */
-  steer?(input: { id: string; text: string; files: PromptFile[] }): Promise<boolean>
+  steer?(input: MessageInput): Promise<boolean>
+  /**
+   * A subagent of this conversation's (its session) you write to yourself (`direct`): what sends
+   * your message to it, at its next step while it works, or starting it again once it's done
+   * (`resume` gives its run then, when no turn here is under way to have it). None when it doesn't
+   * know that subagent (any more). The sender is false when it couldn't send.
+   */
+  subagentMessages?(sessionID: string): ((input: MessageInput, resume: () => SubagentRun) => Promise<boolean>) | undefined
+  /**
+   * A subagent of this conversation's (its session) you write to through the agent (`parent`):
+   * the note that asks the agent to pass your message on, as it is. None when it doesn't know
+   * that subagent.
+   */
+  relayNote?(sessionID: string, text: string): string | undefined
   /** Stops the turn under way; `run` then ends with `interrupted`. */
   interrupt(): Promise<void>
   close(): void

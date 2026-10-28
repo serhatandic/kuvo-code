@@ -1,11 +1,12 @@
 import ClientDesign
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 
 // Subagents, where you can keep up with them: a bar over the conversation's composer while
-// they work, and each one's own conversation, opened from there, its row in the conversation or
-// in the sidebar under its session, with what it does as it does it and a composer of its own
-// to talk to it, stop it, or give it another model.
+// they work, and each one's own conversation, opened from there or its row in the conversation
+// (never the sidebar, which lists conversations you started), with what it does as it does it
+// and a composer of its own to talk to it, stop it, or give it another model.
 
 /// The task a subagent's session starts with: the agent's words, after the engine's line
 /// saying it's a subagent.
@@ -114,7 +115,7 @@ private struct SubagentsBarRow: View {
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
             Button("Open", systemImage: "arrow.turn.down.right") {
-                app.tabs.open(.session(subagent.id))
+                app.tabs.openInPlace(subagent.id)
             }
             .buttonStyle(TextButtonStyle())
             .font(.system(size: 13))
@@ -200,8 +201,11 @@ private struct SubagentConversation: View {
     @LastModel private var lastModel
 
     private var isWorking: Bool { model.isRunning || workspace.running.contains(model.id) }
-    /// A coding agent's (Claude Code's, say): its agent runs it, and it can't be written to here.
+    /// A coding agent's (Claude Code's, say): its agent runs it, and picks its model.
     private var isAgentsOwn: Bool { OutsideAgents.isAgentSession(model.session) }
+    /// How you can write to it, as its box says: to it, through the conversation that started it,
+    /// or not at all.
+    private var messages: SubagentMessages { SubagentMessages.of(model.session) }
     /// Its machine is out of reach: you can write, not send.
     private var isOffline: Bool { SessionView.offlineMachine(of: model, in: app) != nil }
 
@@ -231,10 +235,9 @@ private struct SubagentConversation: View {
                             FailureBar(text: failure) { model.failure = nil }
                                 .modifier(ComposerSurface())
                         }
-                        if isAgentsOwn {
-                            // Its agent runs it for the conversation that started it, and takes
-                            // nothing from elsewhere.
-                            Label("Its agent runs it for the conversation that started it: write there to steer it, or stop it.", systemImage: "info.circle")
+                        if !messages.takesMessages, let why = messages.line(parentTitle: parentTitle) {
+                            // Its agent takes nothing for it from elsewhere: why, in the composer's place.
+                            Label(why, systemImage: "info.circle")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -267,24 +270,26 @@ private struct SubagentConversation: View {
             }
             .frame(width: 18)
             VStack(alignment: .leading, spacing: 1) {
-                // Its task is the card's title: here, whose it is, and the way back there.
+                // Its task is the card's title: here, the way back to the conversation it works
+                // for, in its place.
                 Button { open(parent) } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 10, weight: .semibold))
-                        Text("From ") + Text(parentTitle).fontWeight(.semibold)
+                        Text(parentTitle).fontWeight(.semibold)
                     }
                     .font(.system(size: 13))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 }
                 .buttonStyle(TextButtonStyle(outset: true))
-                .help("Open the session that started it")
+                .help("Back to the conversation that started it")
+                // That it's a subagent, then its agent and what it's doing.
                 Group {
                     if isWorking {
-                        ShimmerText(text: [agentName, model.currentStep].compactMap { $0 }.joined(separator: " · "))
+                        ShimmerText(text: ["Subagent", agentName, model.currentStep].compactMap { $0 }.joined(separator: " · "))
                     } else {
-                        Text([agentName, status].compactMap { $0 }.joined(separator: " · "))
+                        Text(["Subagent", agentName, status].compactMap { $0 }.joined(separator: " · "))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -334,6 +339,8 @@ private struct SubagentConversation: View {
             onQueue: send,
             onStop: model.stop,
             showsMode: false,
+            showsModel: !isAgentsOwn,
+            note: messages.line(parentTitle: parentTitle),
             scope: .engine,
             focusesOnAppear: false,
             prompt: isWorking ? "Tell it something: it reads it at its next step…" : "Message it: it carries on from where it left off…"
