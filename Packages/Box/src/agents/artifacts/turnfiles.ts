@@ -25,12 +25,16 @@ const fileLimit = 200
  * Kuvo Code's own folders on this computer (the box's, with the files sent with messages, its run
  * state and records): never what an agent made, though a session working in the home folder walks
  * over them. On a machine they're `~/.kuvo-code`; on a Mac, the app's support folder, which holds
- * the bridge's and the box's, and its caches and logs, which the app names (`KUVO_OWN_FOLDERS`,
- * separated by colons).
+ * the bridge's and the box's, and what the app names (`KUVO_OWN_FOLDERS`, a JSON list: a Mac's
+ * caches, logs and preferences, folders or files).
  */
 function ownFolders(): string[] {
   const agents = process.env.KUVO_AGENTS_HOME
-  const named = (process.env.KUVO_OWN_FOLDERS ?? "").split(":")
+  let named: string[] = []
+  try {
+    const list = JSON.parse(process.env.KUVO_OWN_FOLDERS ?? "[]")
+    if (Array.isArray(list)) named = list.filter((each): each is string => typeof each === "string")
+  } catch {}
   return [process.env.KUVO_HOME, agents ? dirname(agents) : undefined, ...named].filter((folder): folder is string => !!folder)
 }
 
@@ -55,7 +59,7 @@ export function changedSince(folder: string, since: number, keep: (relative: str
   for (const path of candidates) {
     if (found.length >= fileLimit) break
     const relative = path.slice(folder.length + 1)
-    if (!keep(relative) || relative.split(sep).some((part) => skipped.has(part)) || own.some((inside) => path.startsWith(inside + sep))) continue
+    if (!keep(relative) || relative.split(sep).some((part) => skipped.has(part)) || own.some((inside) => path === inside || path.startsWith(inside + sep))) continue
     try {
       const stat = statSync(path)
       if (stat.isFile() && stat.mtimeMs >= since - clockSlack) found.push(path)

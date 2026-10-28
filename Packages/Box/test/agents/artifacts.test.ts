@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { unified } from "../../src/agents/diff"
 import { EngineLink } from "../../src/agents/engine"
@@ -345,12 +345,15 @@ describe("files a command made", () => {
     mkdirSync(caches, { recursive: true })
     mkdirSync(logs, { recursive: true })
     const was = process.env.KUVO_OWN_FOLDERS
-    process.env.KUVO_OWN_FOLDERS = `${caches}:${logs}`
+    const preferences = join(home, "Library", "Preferences", "run.kuvo.code.plist")
+    mkdirSync(dirname(preferences), { recursive: true })
+    process.env.KUVO_OWN_FOLDERS = JSON.stringify([caches, logs, preferences])
     try {
       session("ses_home", home)
       await hear([{ type: "session.execution.started", data: { sessionID: "ses_home" } }])
       writeFileSync(join(caches, "sessions.json"), "{}")
       writeFileSync(join(logs, "usage.log"), "line\n")
+      writeFileSync(preferences, "plist")
       writeFileSync(join(home, "notes.txt"), "made\n")
       await hear([{ type: "session.execution.succeeded", data: { sessionID: "ses_home" } }])
       expect((await route("GET", "kuvo/artifacts?session=ses_home")).value.artifacts.map((artifact: any) => artifact.name)).toEqual(["notes.txt"])

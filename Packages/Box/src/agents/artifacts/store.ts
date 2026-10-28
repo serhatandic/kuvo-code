@@ -15,7 +15,7 @@ import { createHash, createHmac, randomBytes } from "node:crypto"
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { basename, join, sep } from "node:path"
 import { fromPatch, unified } from "../diff"
-import { isText, kindOf, typeOf, type Kind } from "./kinds"
+import { isBinary, isText, kindOf, typeOf, type Kind } from "./kinds"
 import { CopyPolicy, freeSpace, privateReasons, type NoCopy } from "./policy"
 
 /** The biggest file a copy is kept of (as `kuvo/file` sends at most). */
@@ -308,7 +308,7 @@ export class ArtifactStore {
     }
     if (!artifact) {
       const kind = this.refine(kindOf(path, { bots: this.options.bots, download: made.download }), read.bytes)
-      artifact = { id: ArtifactStore.idOf(path), path, name: basename(path), kind, type: typeOf(path, kind), where: { bots: [], sessions: [], groups: [] }, pinned: null, gone: null, updated: stamp(now), versions: [], ...(this.policy.inGit(path) ? { git: true as const } : {}) }
+      artifact = { id: ArtifactStore.idOf(path), path, name: basename(path), kind, type: typeOf(path, !!read.bytes && isBinary(read.bytes)), where: { bots: [], sessions: [], groups: [] }, pinned: null, gone: null, updated: stamp(now), versions: [], ...(this.policy.inGit(path) ? { git: true as const } : {}) }
       this.artifacts.set(artifact.id, artifact)
     }
     const latest = artifact.versions.at(-1)
@@ -366,7 +366,7 @@ export class ArtifactStore {
     const hash = "sha256:" + createHash("sha256").update(bytes).digest("hex")
     const artifact: Artifact = {
       id: ArtifactStore.idOf(path), path, name: basename(path),
-      kind, type: typeOf(path, kind),
+      kind, type: typeOf(path, isBinary(bytes)),
       where: { bots: where.bot ? [where.bot] : [], sessions: [], groups: [] }, pinned: null, gone: null, updated: stamp(at), versions: [],
     }
     const version: Version = { n: 0, at: stamp(at), by: { kind: "outside" }, via: [], status: "added", edits: 0, size: bytes.length, hash, kept: true, before: true }
@@ -670,7 +670,7 @@ export class ArtifactStore {
   /** Code by its name, but not text by its bytes: a file. */
   private refine(kind: Kind, bytes?: Buffer): Kind {
     if (kind !== "code" || !bytes) return kind
-    return bytes.subarray(0, 8192).includes(0) ? "file" : kind
+    return isBinary(bytes) ? "file" : kind
   }
 
   /**
@@ -806,7 +806,7 @@ export class ArtifactStore {
     for (const artifact of this.artifacts.values()) {
       artifact.versions.sort((a, b) => a.n - b.n)
       // Recorded before its kind told its type (bytes that aren't text, said to be text).
-      artifact.type = typeOf(artifact.path, artifact.kind)
+      artifact.type = typeOf(artifact.path, artifact.kind === "file" || artifact.type === "application/octet-stream")
       for (const version of artifact.versions) {
         if (!version.kept || !version.hash) continue
         // A copy that went missing (deleted by hand): no longer kept.

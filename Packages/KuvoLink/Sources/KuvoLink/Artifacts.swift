@@ -89,7 +89,7 @@ public struct ArtifactVersion: Codable, Hashable, Identifiable, Sendable {
     public enum NoCopy: String, Codable, Hashable, Sendable {
         /// It looks like it holds a secret: never copied, never sent.
         case secret
-        /// Git ignores it: never copied, never sent.
+        /// Git ignores it: never copied; saved or shared only as the file is now (`mayLeave`).
         case ignored
         /// Code git keeps: only its change.
         case git

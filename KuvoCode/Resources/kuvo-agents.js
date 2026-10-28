@@ -408,23 +408,25 @@ var types = {
   rtf: "application/rtf",
   pages: "application/vnd.apple.pages",
   numbers: "application/vnd.apple.numbers",
-  key: "application/vnd.apple.keynote",
   odt: "application/vnd.oasis.opendocument.text",
   ods: "application/vnd.oasis.opendocument.spreadsheet"
 };
 var extension = (path) => extname(path).slice(1).toLowerCase();
-function typeOf(path, kind) {
+function typeOf(path, binary = false) {
   const ext = extension(path);
   if (types[ext])
     return types[ext];
-  return binaries.has(ext) || kind === "file" ? "application/octet-stream" : "text/plain";
+  return binaries.has(ext) || binary ? "application/octet-stream" : "text/plain";
+}
+function isBinary(bytes) {
+  return bytes.subarray(0, 8192).includes(0);
 }
 function isProse(path) {
   const ext = extension(path);
   return ext === "md" || ext === "markdown" || ext === "txt" || basename(path) === "job.json";
 }
 function isText(type) {
-  return type.startsWith("text/") || type === "application/json" || type === "image/svg+xml";
+  return type.startsWith("text/") || type === "application/rtf" || type === "application/json" || type === "image/svg+xml";
 }
 function kindOf(path, { bots, download = false } = {}) {
   if (download)
@@ -812,7 +814,7 @@ class ArtifactStore {
     }
     if (!artifact) {
       const kind = this.refine(kindOf(path, { bots: this.options.bots, download: made.download }), read.bytes);
-      artifact = { id: ArtifactStore.idOf(path), path, name: basename3(path), kind, type: typeOf(path, kind), where: { bots: [], sessions: [], groups: [] }, pinned: null, gone: null, updated: stamp(now), versions: [], ...this.policy.inGit(path) ? { git: true } : {} };
+      artifact = { id: ArtifactStore.idOf(path), path, name: basename3(path), kind, type: typeOf(path, !!read.bytes && isBinary(read.bytes)), where: { bots: [], sessions: [], groups: [] }, pinned: null, gone: null, updated: stamp(now), versions: [], ...this.policy.inGit(path) ? { git: true } : {} };
       this.artifacts.set(artifact.id, artifact);
     }
     const latest = artifact.versions.at(-1);
@@ -867,7 +869,7 @@ class ArtifactStore {
       path,
       name: basename3(path),
       kind,
-      type: typeOf(path, kind),
+      type: typeOf(path, isBinary(bytes)),
       where: { bots: where.bot ? [where.bot] : [], sessions: [], groups: [] },
       pinned: null,
       gone: null,
@@ -1156,7 +1158,7 @@ class ArtifactStore {
   refine(kind, bytes) {
     if (kind !== "code" || !bytes)
       return kind;
-    return bytes.subarray(0, 8192).includes(0) ? "file" : kind;
+    return isBinary(bytes) ? "file" : kind;
   }
   read(path, seen = this.look(path)) {
     if (!seen)
@@ -1290,7 +1292,7 @@ class ArtifactStore {
       this.compact(months);
     for (const artifact of this.artifacts.values()) {
       artifact.versions.sort((a, b) => a.n - b.n);
-      artifact.type = typeOf(artifact.path, artifact.kind);
+      artifact.type = typeOf(artifact.path, artifact.kind === "file" || artifact.type === "application/octet-stream");
       for (const version of artifact.versions) {
         if (!version.kept || !version.hash)
           continue;
@@ -1330,7 +1332,12 @@ var walkLimit = 20000;
 var fileLimit = 200;
 function ownFolders2() {
   const agents = process.env.KUVO_AGENTS_HOME;
-  const named = (process.env.KUVO_OWN_FOLDERS ?? "").split(":");
+  let named = [];
+  try {
+    const list = JSON.parse(process.env.KUVO_OWN_FOLDERS ?? "[]");
+    if (Array.isArray(list))
+      named = list.filter((each) => typeof each === "string");
+  } catch {}
   return [process.env.KUVO_HOME, agents ? dirname2(agents) : undefined, ...named].filter((folder) => !!folder);
 }
 function repositoryOf(folder) {
@@ -1350,7 +1357,7 @@ function changedSince(folder, since, keep = () => true) {
     if (found.length >= fileLimit)
       break;
     const relative2 = path.slice(folder.length + 1);
-    if (!keep(relative2) || relative2.split(sep4).some((part) => skipped.has(part)) || own.some((inside) => path.startsWith(inside + sep4)))
+    if (!keep(relative2) || relative2.split(sep4).some((part) => skipped.has(part)) || own.some((inside) => path === inside || path.startsWith(inside + sep4)))
       continue;
     try {
       const stat = statSync3(path);
@@ -19306,4 +19313,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 8f194a48018b89094279a51c9d3b0f62f5d18aa8d03ed059b4f1bd4d6d34fc6a
+// Built from Packages/Box/src/agents b18cd12f9165998d430a7f068fdffbed71ef3b59e1be0f3fa638e6f4d8745165

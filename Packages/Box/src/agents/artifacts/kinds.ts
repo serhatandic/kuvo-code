@@ -20,17 +20,25 @@ const types: Record<string, string> = {
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation", zip: "application/zip",
   doc: "application/msword", xls: "application/vnd.ms-excel", rtf: "application/rtf", pages: "application/vnd.apple.pages",
-  numbers: "application/vnd.apple.numbers", key: "application/vnd.apple.keynote", odt: "application/vnd.oasis.opendocument.text",
+  numbers: "application/vnd.apple.numbers", odt: "application/vnd.oasis.opendocument.text",
   ods: "application/vnd.oasis.opendocument.spreadsheet",
 }
 
 const extension = (path: string) => extname(path).slice(1).toLowerCase()
 
-/** Its media type, by its name, and by its kind where the name doesn't tell (bytes that aren't text make a "file"). */
-export function typeOf(path: string, kind?: Kind): string {
+/**
+ * Its media type, by its name, and where the name doesn't tell, by its bytes (`binary`: they aren't
+ * text). (A `.key` is more often a secret than a Keynote file: told by neither.)
+ */
+export function typeOf(path: string, binary = false): string {
   const ext = extension(path)
   if (types[ext]) return types[ext]
-  return binaries.has(ext) || kind === "file" ? "application/octet-stream" : "text/plain"
+  return binaries.has(ext) || binary ? "application/octet-stream" : "text/plain"
+}
+
+/** Whether bytes aren't text, by their start. */
+export function isBinary(bytes: Buffer): boolean {
+  return bytes.subarray(0, 8192).includes(0)
 }
 
 /** Whether its changes read as words (prose) rather than lines (code). */
@@ -41,7 +49,7 @@ export function isProse(path: string): boolean {
 
 /** Whether a media type is text. */
 export function isText(type: string): boolean {
-  return type.startsWith("text/") || type === "application/json" || type === "image/svg+xml"
+  return type.startsWith("text/") || type === "application/rtf" || type === "application/json" || type === "image/svg+xml"
 }
 
 /**
