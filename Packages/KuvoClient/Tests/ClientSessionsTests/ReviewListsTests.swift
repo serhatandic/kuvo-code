@@ -71,11 +71,6 @@ struct ReviewListsTests {
         older.choices?.describes = nil
         #expect(ReviewList.make(.what(""), known: older)?.rows.map(\.id).contains("described") == false)
 
-        // Closed, nothing written yet: what to write; then what it will do.
-        #expect(ReviewList.hint(ReviewCommand(" ", readers: []), listed: false, reader: "Claude", isAgent: false) == "Say what to review, like “the sign-in and its tests” or “what I changed today”.")
-        let command = ReviewCommand(" the new changes to the sign-in", readers: [])
-        #expect(ReviewList.hint(command, listed: false, reader: "Claude", isAgent: false) == nil)
-        #expect(ReviewList.summary(command, reader: "Claude") == "Claude finds the files that fit and reviews them with fresh eyes.")
     }
 
     @Test func theLineUnderAReviewSaysWhatItCoveredAndWhoReadIt() throws {
@@ -85,6 +80,5 @@ struct ReviewListsTests {
         // Today's review says nothing more.
         #expect(ReviewList.footnote(try review(#"{"id": "r", "session": "s", "state": "done", "findings": [], "started": 1}"#), readerName: "GLM") == nil)
         #expect(ReviewList.unfinished(ReviewCommand(" since ", readers: [])) == "Write the commit to start with after “since”.")
-        #expect(ReviewList.summary(ReviewCommand(" folder src for performance", readers: []), reader: "GLM") == "GLM reads the files in src with fresh eyes, without this conversation, looking for performance, and lists what it finds.")
     }
 }

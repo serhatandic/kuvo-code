@@ -407,18 +407,15 @@ struct CustomLoopRow: View {
     }
 }
 
-/// Under the message field while a keyword is typed: what will happen, in a line.
-struct KeywordHint: View {
+/// Under the message field while a keyword is typed: why what's typed can't be done as it is (a
+/// /loop whose "how often" can't be read), in a line.
+struct KeywordProblem: View {
     let text: String
-    /// What's typed can't be done as it is (a /loop whose "how often" can't be read).
-    var isProblem = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
-            if isProblem {
-                Image(systemName: "exclamationmark.circle")
-                    .accessibilityHidden(true)
-            }
+            Image(systemName: "exclamationmark.circle")
+                .accessibilityHidden(true)
             Text(text)
                 .fixedSize(horizontal: false, vertical: true)
         }

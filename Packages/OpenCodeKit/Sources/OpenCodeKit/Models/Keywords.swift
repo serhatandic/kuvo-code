@@ -48,20 +48,6 @@ public enum Keyword: String, CaseIterable, Sendable, Hashable {
         }
     }
 
-    /// What it will do, in the line under the field as it's typed. /loop's says its schedule
-    /// (`LoopCommand`), /review's its reviewer, so theirs are the client's.
-    public var hint: String {
-        switch self {
-        case .goal: "Checked after each turn. The agent keeps going until it’s met."
-        case .loop: "Repeats on a schedule."
-        case .plan: "Switches to Plan: the agent explores and plans, and changes no files."
-        case .review: "Reads the changes not committed yet with fresh eyes, and lists what it finds."
-        case .handoff: "Writes a handoff note, then carries on in a fresh conversation from it."
-        case .btw: "Answered on the side: nothing is added to this conversation."
-        case .compact: "Summarizes the conversation so far to make room in its context."
-        }
-    }
-
     /// Its mark, an SF Symbol: in the list, in place of its "/" as it's typed, and in the bubble.
     public var symbol: String {
         switch self {

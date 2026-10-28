@@ -294,12 +294,7 @@ struct Composer: View {
                     .frame(height: ceil(min(max(voiceHeight, line), line * 12)))
                 }
             }
-            if keywordHint != nil {
-                // Read again each minute: /loop's says when it first sends.
-                TimelineView(.everyMinute) { _ in
-                    if let keywordHint { KeywordHint(text: keywordHint.text, isProblem: keywordHint.isProblem) }
-                }
-            }
+            if let keywordProblem { KeywordProblem(text: keywordProblem) }
 
             if let voice = listening {
                 // The chips make way for the voice: how long, how loud, Cancel and Done.
@@ -698,33 +693,12 @@ struct Composer: View {
         return rest.allSatisfy(\.isWhitespace) ? keyword.argument : nil
     }
 
-    /// Under the field while a keyword is typed: what it will do. /loop's reads its schedule back
-    /// (or says it can't), /review's names who reads the changes.
-    private var keywordHint: (text: String, isProblem: Bool)? {
-        guard let (keyword, rest) = typedKeyword, commandMatches == nil else { return nil }
-        switch keyword {
-        case .loop:
-            let command = LoopCommand(rest)
-            guard let schedule = command.schedule else {
-                if loopChoices != nil || customLoop { return ("Pick how often, then write what to do each time.", false) }
-                return ("Can’t tell how often from that. Start with one like “every 30 min” or “weekdays at 9”.", true)
-            }
-            // Where it runs only when it isn't this Mac.
-            let place = folders.first.flatMap(RemoteFolder.machine(of:)).map { " · on \($0)" } ?? ""
-            // A wake-up sends words: what's attached goes with the first message, or stays.
-            let attached = files.isEmpty ? "" : schedule.keepsTimeOfDay ? " · attachments stay here" : " · attachments go with the first one only"
-            return ("\(schedule.title) · \(schedule.firstPhrase(now: .now))\(place)\(attached)", false)
-        case .review:
-            let command = reviewCommand(rest)
-            if let searching = command.searching {
-                return (searching.isEmpty ? "Write a model’s name after “with”." : "Finish the model’s name, or pick it from the list.", false)
-            }
-            let reader = command.reader?.name ?? currentModel?.name ?? "The conversation’s model"
-            if let hint = ReviewList.hint(command, listed: reviewList != nil, reader: reader, isAgent: isAgentConversation) { return (hint, false) }
-            return (ReviewList.summary(command, reader: reader), false)
-        default:
-            return (keyword.hint, false)
-        }
+    /// Under the field while a keyword is typed: only what's wrong with it (a /loop whose "how
+    /// often" can't be read); keywords explain nothing there.
+    private var keywordProblem: String? {
+        guard let (keyword, rest) = typedKeyword, commandMatches == nil, keyword == .loop, loopChoices == nil, !customLoop,
+              LoopCommand(rest).schedule == nil else { return nil }
+        return "Can’t tell how often from that. Start with one like “every 30 min” or “weekdays at 9”."
     }
 
     /// "/review"'s reading of what follows it, against this conversation's models.

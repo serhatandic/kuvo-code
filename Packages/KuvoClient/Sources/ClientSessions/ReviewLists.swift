@@ -157,19 +157,6 @@ public struct ReviewList: Equatable, Sendable {
 }
 
 extension ReviewList {
-    /// Under the field while a list is answered: what comes next. `listed`: the list shows.
-    public static func hint(_ command: ReviewCommand, listed: Bool, reader: String, isAgent: Bool) -> String? {
-        switch command.asking {
-        case .commit: return "It reads that commit and every one after it."
-        case .folder: return "It reads the folder’s files as they are now."
-        // Closed for your own words (Something else…), none written yet.
-        case .what("") where !listed && command.head.allSatisfy(\.isWhitespace): return "Say what to review, like “the sign-in and its tests” or “what I changed today”."
-        case .what where listed: return isAgent ? "Then what to look for." : "Then what to look for. “with” and a model’s name has another model read it."
-        case .lookFor where listed: return "Picking one starts the review, read by \(reader)."
-        default: return nil
-        }
-    }
-
     /// What "/review" still needs before it can be read, said as the composer says it; nil when
     /// nothing.
     public static func unfinished(_ command: ReviewCommand) -> String? {
@@ -179,14 +166,6 @@ extension ReviewList {
         case .folder(""): return "Write the folder to review after “folder”."
         default: return nil
         }
-    }
-
-    /// What it will do, once all of it is written.
-    public static func summary(_ command: ReviewCommand, reader: String) -> String {
-        // Your own words: in a few, what happens to them.
-        if command.described != nil { return "\(reader) finds the files that fit and reviews them with fresh eyes." }
-        let looking = command.focusAsked == nil ? "" : command.focus.isEmpty ? command.preset.map { ", looking for \($0.title.lowercased())" } ?? "" : ", looking especially at what you wrote"
-        return "\(reader) reads \((command.scopeAsked ?? .uncommitted).said) with fresh eyes, without this conversation\(looking), and lists what it finds."
     }
 
     /// The line under what a review found: what it covered and who read it ("The whole project ·
