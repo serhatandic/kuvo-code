@@ -114,7 +114,7 @@ private struct SubagentsBarRow: View {
             .font(.system(size: 12))
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Open", systemImage: "arrow.turn.down.right") {
+            Button("Open") {
                 app.tabs.openInPlace(subagent.id)
             }
             .buttonStyle(TextButtonStyle())
@@ -124,7 +124,7 @@ private struct SubagentsBarRow: View {
             .help("Open its conversation, to watch it and talk to it")
             // A coding agent's subagent stops with the conversation it works for.
             if !(model.map { OutsideAgents.isAgentSession($0.session) } ?? false) {
-                Button("Stop", systemImage: "stop.circle") { model?.stop() }
+                Button("Stop") { model?.stop() }
                     .buttonStyle(TextButtonStyle())
                     .font(.system(size: 13))
                     .fixedSize()
@@ -240,12 +240,12 @@ private struct SubagentConversation: View {
                             // Its agent takes nothing for it from elsewhere: why, in the composer's
                             // place, with Stop while it works, as the composer has.
                             HStack(spacing: 10) {
-                                Label(why, systemImage: "info.circle")
+                                Text(why)
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 if isWorking {
-                                    Button("Stop", systemImage: "stop.circle", action: model.stop)
+                                    Button("Stop", action: model.stop)
                                         .buttonStyle(TextButtonStyle())
                                         .font(.system(size: 13))
                                         .fixedSize()

@@ -45,19 +45,18 @@ struct QueueDock: View {
         let folds = folding && Self.folds(items.count)
         return VStack(alignment: .leading, spacing: 0) {
             if folds {
-                BarLine(mark: AnyView(Image(systemName: "text.line.last.and.arrowtriangle.forward").font(.system(size: 13)).foregroundStyle(.tertiary)),
+                // No mark: "queued" says it, and the rows' marks under it say which are steered.
+                BarLine(mark: AnyView(EmptyView()),
                         title: "\(items.count) queued", detail: items.first.map { Text(QueueRow.summary(of: $0)) },
                         showHelp: "Show the messages waiting", hideHelp: "Fold them to this line",
                         isHidden: Binding(get: { !isOpen.wrappedValue }, set: { isOpen.wrappedValue = !$0 }))
             }
             if isPaused {
                 HStack(spacing: 6) {
-                    Image(systemName: "pause.circle")
-                        .foregroundStyle(.secondary)
                     Text("Paused")
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 8)
-                    Button("Resume", systemImage: "play.fill", action: model.resumeQueue)
+                    Button("Resume", action: model.resumeQueue)
                         .buttonStyle(TextButtonStyle())
                         .help("Send the waiting messages, one after another")
                 }
@@ -128,7 +127,7 @@ private struct QueueRow: View {
                     Button {
                         isRunning ? model.steer(item) : model.sendNow(item)
                     } label: {
-                        Label(isRunning ? "Steer" : "Send", systemImage: isRunning ? "arrow.turn.down.right" : "arrow.up")
+                        Text(isRunning ? "Steer" : "Send")
                     }
                     .buttonStyle(TextButtonStyle())
                     .font(.system(size: 13))
@@ -145,7 +144,7 @@ private struct QueueRow: View {
                     Button {
                         model.sendNow(item)
                     } label: {
-                        Label("Send Now", systemImage: "arrow.up")
+                        Text("Send Now")
                     }
                     .buttonStyle(TextButtonStyle())
                     .font(.system(size: 13))

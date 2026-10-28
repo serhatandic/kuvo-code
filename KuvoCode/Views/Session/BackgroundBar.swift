@@ -260,7 +260,7 @@ private struct BackgroundJobRow: View {
                     .foregroundStyle(.secondary)
                     .help("How long it has been running")
             }
-            Button("Output", systemImage: "text.alignleft") { showsOutput.toggle() }
+            Button("Output") { showsOutput.toggle() }
                 .buttonStyle(TextButtonStyle())
                 .font(.system(size: 13))
                 .help("What it has printed so far")
@@ -268,7 +268,7 @@ private struct BackgroundJobRow: View {
                     ShellOutputView(job: job, api: api, directory: directory)
                         .popoverContent()
                 }
-            Button("Stop", systemImage: "stop.circle") { stop() }
+            Button("Stop") { stop() }
                 .buttonStyle(TextButtonStyle())
                 .font(.system(size: 13))
                 .help("Stop it: the agent hears that it ended, with what it printed")

@@ -103,8 +103,8 @@ struct ModeChip: View {
 
     var body: some View {
         NativeMenuButton(name: "mode", menu: makeMenu) {
+            // The mode in words; the hand says it asks first, which the words don't.
             HStack(spacing: 6) {
-                Image(systemName: Self.symbol(agent))
                 Text(agent.capitalized)
                 if approval == .askFirst {
                     Image(systemName: "hand.raised.fill")
@@ -167,10 +167,7 @@ struct WorkplaceChip: View {
 
     var body: some View {
         NativeMenuButton(name: "workplace", menu: makeMenu) {
-            HStack(spacing: 6) {
-                Image(systemName: worktree ? "arrow.triangle.branch" : "folder")
-                Text(worktree ? (attempts > 1 ? "Worktree ×\(attempts)" : "Worktree") : "Local")
-            }
+            Text(worktree ? (attempts > 1 ? "Worktree ×\(attempts)" : "Worktree") : "Local")
             .font(.callout)
             .padding(.horizontal, 8)
             .padding(.vertical, 6)

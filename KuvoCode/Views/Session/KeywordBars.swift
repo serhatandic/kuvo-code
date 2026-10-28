@@ -182,7 +182,7 @@ struct SideThreadBar: View {
                 VStack(alignment: .leading, spacing: 10) {
                     turns
                     field
-                    Label("Asks only, changes nothing", systemImage: "eye")
+                    Text("Asks only, changes nothing")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.tertiary)
                 }
@@ -297,12 +297,13 @@ struct SideThreadBar: View {
     }
 
     @ViewBuilder private var mark: some View {
+        // Only what the title doesn't say: that it's being answered, or couldn't be.
         if isAnswering {
             Spinner(size: 14)
-        } else {
-            Image(systemName: latest.state == .failed ? "exclamationmark.circle" : Keyword.btw.symbol)
+        } else if latest.state == .failed {
+            Image(systemName: "exclamationmark.circle")
                 .font(.system(size: 13))
-                .foregroundStyle(latest.state == .failed ? AnyShapeStyle(.orange) : AnyShapeStyle(.tint))
+                .foregroundStyle(.orange)
         }
     }
 

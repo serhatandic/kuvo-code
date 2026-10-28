@@ -177,7 +177,7 @@ struct Composer: View {
                 Menu {
                     Button("Discard Comments", role: .destructive, action: onDiscardComments)
                 } label: {
-                    Label(commentCount.counting("comment"), systemImage: "text.bubble")
+                    Text(commentCount.counting("comment"))
                         .font(.system(size: 12, weight: .medium))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
@@ -1208,11 +1208,9 @@ private struct ShellModeLabel: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "terminal")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.tint)
             Text("Shell")
                 .fontWeight(.medium)
+                .foregroundStyle(.tint)
             Text("runs \(place)")
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
