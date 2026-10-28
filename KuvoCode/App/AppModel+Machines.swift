@@ -585,15 +585,12 @@ extension AppModel {
         environment["KUVO_TZ"] = TimeZone.current.identifier
         // Its name as you know it, for what its agents bridge says ("not signed in on …").
         environment["KUVO_MACHINE_NAME"] = engine.machine.name
-        // What some providers need until opencode handles it, as on this Mac.
-        let compatibility = ProviderCompatibility.config
-        if !compatibility.isEmpty { environment["OPENCODE_CONFIG_CONTENT"] = AppModel.merged(compatibility, into: nil) }
-        let base = environment["OPENCODE_CONFIG_CONTENT"]
+        // (What some providers need from its engine, it adds itself: its box learns it.)
         var launch = MachineEngine.Launch(environment: environment, helper: MachineBrowserInstaller.helper, agents: MachineEngine.agentsBridge)
         launch.seed = { [weak self] in try await self?.machineSeed() ?? .init(settings: [:], keys: [:]) }
         launch.fromBox = { settings in
             let sites = Integrations.sites(Integrations.added(inSettings: settings).filter { !Integrations.macOnly.contains($0) })
-            return ["OPENCODE_CONFIG_CONTENT": AppModel.merged(MachineBrowserInstaller.engineConfig(sites: sites), into: base)]
+            return ["OPENCODE_CONFIG_CONTENT": AppModel.merged(MachineBrowserInstaller.engineConfig(sites: sites), into: nil)]
         }
         return launch
     }

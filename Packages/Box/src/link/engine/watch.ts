@@ -8,6 +8,7 @@ import { nameWorktreeBranch, tellWorktree } from "../areas/worktrees";
 import { freshenBot, freshenBots } from "../bots/tell";
 import { ANSWERED, GROUP_NEWS, NEWS, groupNotice, noticeFor, settleHeld } from "../notices/news";
 import { engineGet, readBridgeFile, readEngineFile } from "./client";
+import { learnCompatibility } from "./compatibility";
 import type { Target } from "../../shared/records";
 import type { SignInEvent } from "../areas/accounts";
 import type { NoticeHold } from "../notices/hold";
@@ -63,6 +64,7 @@ export interface WatchBoxOptions {
   notices?: boolean;
   signal?: AbortSignal;
   signedIn?: (event: BoxEvent) => void;
+  learned?: () => void;
 }
 
 /** Which part of the box's work `watchEvents` does as events come (and `steerAfter`, a test's wait
@@ -75,6 +77,8 @@ export interface WatchOptions {
   signedIn?: (event: BoxEvent) => void;
   steers?: boolean;
   steerAfter?: number;
+  learns?: boolean;
+  learned?: () => void;
 }
 
 // The events in a `text/event-stream` body, parsed.
@@ -109,6 +113,8 @@ async function* serverEvents(body: AsyncIterable<Uint8Array>): AsyncGenerator<Bo
 // (the call was asking you something first, say), it's tried again every `after` ms.
 // `background(session)` does it; each event from the engine goes to what this returns.
 export const STEER_AFTER = 3000;
+// How often a box reads its engine's models again, at most, while the engine's at work.
+const LEARN_EVERY = 600_000;
 export function steering(background: (session: string) => unknown, { after = STEER_AFTER, now = Date.now, schedule = setTimeout, cancel = clearTimeout, signal }: SteeringOptions = {}): (event: SteeringEvent) => void {
   const sessions = new Map<string, SteeredSession>(); // session → { names: call → tool, blocking: call → when it started, steers: messages waiting for its next step }
   const users = new Set<string>(); // messages sent as a message (steered or queued) that wait
@@ -202,9 +208,10 @@ function backgroundTools(engine: Target, session: string): Promise<Response> {
 // and a box's own work (`serve`) both start it: its bots kept told what they are, its sign-ins that
 // ended noted, and with `notices`, its news for your phones (`tell`, held in `hold`). `bots`: only
 // its bots' part of the box's work (this Mac's box, whose app does the rest).
-export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn }: WatchBoxOptions = {}): void {
+// `learned`: told each time it's read its engine's models for what they need (a test waits on it).
+export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn, learned }: WatchBoxOptions = {}): void {
   const answered = (id: string | undefined) => hold?.resolve(id);
-  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true });
+  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned });
   watchEvents(readBridgeFile, tell, signal, answered, { bots, notices });
 }
 
@@ -218,8 +225,17 @@ export function watchBox({ tell = () => true, hold = null, bots = false, notices
 // where those notices wait, settled each time the events are heard again (`settleHeld`).
 // `signedIn`: told once each event's been looked at for sign-ins (a test waits on it).
 // `steers`: your messages to an agent waiting on a command read at once (`steering`), the engine's.
-export async function watchEvents(read: () => Target, tell: (notice: Notice) => void, signal?: AbortSignal, answered: (id: string | undefined) => void = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter }: WatchOptions = {}): Promise<void> {
+// `learns`: what its providers' models need from it learned for its next start (`learnCompatibility`),
+// the engine's: as it's found, then every ten minutes at most while it's at work (a sign-in to
+// GitHub Copilot brings new models); `learned` told each time.
+export async function watchEvents(read: () => Target, tell: (notice: Notice) => void, signal?: AbortSignal, answered: (id: string | undefined) => void = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {} }: WatchOptions = {}): Promise<void> {
   let attempt = 0;
+  let lastLearned = 0;
+  const learn = (source: Target) => {
+    if (!learns || Date.now() - lastLearned < LEARN_EVERY) return;
+    lastLearned = Date.now();
+    learnCompatibility(source).catch(() => {}).finally(learned);
+  };
   while (!signal?.aborted) {
     // What this connection set going ends with it: what it heard of can't be settled once it's gone.
     const connection = new AbortController();
@@ -238,12 +254,15 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       if (notices && hold) settleHeld(source, hold).catch(() => {});
       // Found it (it started, or this did): its bots told what they are now, before their next turn.
       freshenBots(source).catch(() => {});
+      lastLearned = 0;
+      learn(source);
       for await (const event of serverEvents(response.body)) {
         // The box's own work, Mac connected or not: a session made in one of its worktrees told
         // so; a worktree's branch named after its session; a bot's job read from its memory as
         // its run ends.
         // A bot's run starting: what it's told brought up to date first (a run's events name its session).
         if (event.type === "session.execution.started") freshenBot(source, event.data?.sessionID!).catch(() => {});
+        learn(source);
         steer?.(event);
         if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (!bots) {

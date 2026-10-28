@@ -42,6 +42,7 @@ import { docsChanged, macDocsChanged } from "./documents/exchange";
 import { newSigningSeed, ownSign, SIGN } from "./documents/format";
 import { docsWork, ownDocs, pruneDocs } from "./documents/work";
 import { peerTargets, readBridgeFile, readEngineFile } from "./engine/client";
+import { engineConfigContent } from "./engine/compatibility";
 import { watchBox } from "./engine/watch";
 import { writePrivate } from "./files";
 import { IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, VERSION_FILE, homeFolder } from "./home";
@@ -86,6 +87,7 @@ export { IS_MAC, LINK_FILE } from "./home";
 export { BRIDGE_VERSION } from "./version";
 export { FEATURES } from "../shared/features";
 export { messageID } from "./engine/sessions";
+export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
 export { macLink, readLink, updateLink, writeLink } from "./state";
 export { searchPlugins } from "./areas/plugins";
 export { listFolders, makeFolder } from "./areas/folders";
@@ -681,6 +683,9 @@ if (main) {
   else if (mode === "box") await box(argument);
   else if (mode === "serve") await serve();
   else if (mode === "leave") leave(argument);
+  // A machine's start scripts' (`kuvo-launch`): what its engine starts with, its OPENCODE_CONFIG_CONTENT
+  // with what some providers need on top, as this box last learned it (PROTOCOL.md, "Settings per box").
+  else if (mode === "engine-config") process.stdout.write(engineConfigContent(process.env.OPENCODE_CONFIG_CONTENT));
   else if (mode === "update") {
     // `update [--now]`, and for a test's folder only, `--url <boxes.json> --key <public key>`. Once
     // it's updated, the running bridge goes, for the keeper to start the new one.
@@ -702,7 +707,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | update [--now] | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | update [--now] | selftest");
     process.exit(2);
   }
 }

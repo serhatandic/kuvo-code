@@ -76,7 +76,7 @@ import Testing
         try StubWeb.answer(Self.engine + "/api/model/default", json: ["location": location, "data": NSNull()])
         try StubWeb.answer(Self.engine + "/api/agent", json: ["location": location, "data": []])
         try StubWeb.answer(Self.engine + "/api/command", json: ["location": location, "data": []])
-        let catalog = Catalog(isMac: true)
+        let catalog = Catalog()
         catalog.api = workspace.api
         await catalog.refresh()
         let luna = ModelRef(id: "luna", providerID: "openai")

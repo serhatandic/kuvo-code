@@ -2014,6 +2014,20 @@ as `{status, bodyBase64, type}`. (`kuvo-link.js box read | change` are the same,
 0.8.0-beta.1, which uses them; `key` sets one of its keys.) This Mac's own settings are its box's too
 ("This Mac's box").
 
+What some providers need from the engine until opencode handles it is each box's own too: a
+settings layer its engine starts with, on top of everything else (`OPENCODE_CONFIG_CONTENT`), never
+in your settings. Today that's GitHub Copilot's Claude models named with
+`{"compatibility": {"supportsThinkingBlockBinding": false}}` (anomalyco/opencode#55160). The box
+learns them from its own engine's `GET /api/model` (Copilot's models whose id starts `claude-` and
+that have a `family`; an engine with no Copilot model leaves what it learned) as it finds the engine
+and every ten minutes at most while it's at work (on a machine, while its bridge runs: it has
+peers or phones), and keeps the layer in `run/compatibility.json` (Copilot's Claude models as of
+October 2026 until it has learned any). Whatever starts the engine asks the box: `kuvo-link.js
+engine-config` prints the `OPENCODE_CONFIG_CONTENT` it's run with, the layer merged on top. This
+Mac's app runs it as it starts its engine, and a machine's start scripts do, so an engine started
+after a restart with no Mac there gets it too; a box too old to know it starts its engine as
+before. A Mac sends none.
+
 ### Personalities
 
 The personalities you make are one library on every computer: each keeps its copy (a Mac in

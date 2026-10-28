@@ -275,7 +275,7 @@ import Testing
         engine.on("GET", "/api/model/default", json: ["location": location, "data": NSNull()])
         engine.on("GET", "/api/agent", json: ["location": location, "data": []])
         engine.on("GET", "/api/command", json: ["location": location, "data": []])
-        let catalog = Catalog(isMac: true)
+        let catalog = Catalog()
         catalog.api = engine.api
         await catalog.refresh()
         #expect(catalog.reviewReaders.map(\.name) == ["DeepSeek V4.1 Flash"])

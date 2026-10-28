@@ -23,7 +23,7 @@ final class AppModel {
     /// The login shell's environment (PATH and the like), for the engine and terminals.
     private(set) var shellEnvironment = ProcessInfo.processInfo.environment
 
-    let catalog = Catalog(isMac: true)
+    let catalog = Catalog()
     /// The right panel's tools; one window, so one set.
     let utilities = Utilities()
     /// Terminals that are tabs of the window, in place of a conversation; they end with it.
@@ -439,9 +439,11 @@ final class AppModel {
             // them as they change after.
             await Self.atMost(.seconds(10)) { [weak self] in await self?.prepareSettings() }
             guard launch == self.launch else { return }
-            // What some providers need until opencode handles it (see ProviderCompatibility).
-            let compatibility = ProviderCompatibility.config
-            if !compatibility.isEmpty { shell["OPENCODE_CONFIG_CONTENT"] = Self.merged(compatibility, into: shell["OPENCODE_CONFIG_CONTENT"]) }
+            // What some providers need until opencode handles it, on top, as this Mac's box learned
+            // it from its engine (as a machine's start adds it).
+            shell["OPENCODE_CONFIG_CONTENT"] = await BoxProcess.engineConfig(engine: binary, content: shell["OPENCODE_CONFIG_CONTENT"], environment: shell)
+            // COMPAT(0.8 provider-compatibility): what the app learned before its box did, gone. Goes 3 months after 0.8.0.
+            UserDefaults.standard.removeObject(forKey: "copilotClaudeModels")
             #if DEBUG
             // KUVO_PERF_PROVIDER: the stand-in model a group chat's discussion is measured on (PerfGroups).
             if let perf = PerfGroups.providerConfig { shell["OPENCODE_CONFIG_CONTENT"] = Self.merged(perf, into: shell["OPENCODE_CONFIG_CONTENT"]) }
