@@ -4059,6 +4059,12 @@ var partPermissions = [
 var newFileLimit = 256000;
 var madeByTools = /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|Gemfile\.lock|poetry\.lock|composer\.lock|Package\.resolved|go\.sum)$|\.min\.(js|css)$|\.map$/;
 
+class PartStopped extends Error {
+  constructor() {
+    super("The part was stopped.");
+  }
+}
+
 class ReviewError extends Error {
   status;
   constructor(status, message) {
@@ -4090,9 +4096,12 @@ class Reviews {
           continue;
         if (review.state === "reviewing") {
           Object.assign(review, { state: "failed", error: "The computer stopped before the review was done. Ask for it again." });
-          for (const part of review.parts ?? [])
+          for (const part of review.parts ?? []) {
+            if (part.state === "reading" && part.session)
+              this.places.engine.api.request("POST", at(part.session) + "/interrupt").catch(() => {});
             if (part.state === "reading" || part.state === "waiting")
               Object.assign(part, { state: "failed", now: undefined });
+          }
         }
         if (Array.isArray(review.findings) && review.findings.some((each) => typeof each?.id !== "string"))
           reshaped = true;
@@ -4112,6 +4121,11 @@ class Reviews {
     for (const stop of this.stops.values())
       stop();
     this.stops.clear();
+    for (const review of this.kept.values()) {
+      for (const part of review.parts ?? [])
+        if (part.state === "reading" && part.session)
+          this.places.engine.api.request("POST", at(part.session) + "/interrupt").catch(() => {});
+    }
   }
   follow(session) {
     if (this.stops.has(session))
@@ -4145,7 +4159,7 @@ class Reviews {
     const before = this.kept.get(session);
     if (before)
       this.forgetParts(before);
-    const review = { id: newID("rev"), session, state: "reviewing", model: onEngine ? model2 ?? info.model : info.model, ...scope && scope.kind !== "uncommitted" ? { scope } : {}, ...focus ? { focus } : {}, findings: [], started: this.now() };
+    const review = { id: newID("rev"), session, state: "reviewing", model: onEngine ? model2 ?? info.model : info.model, ...scope && scope.kind !== "uncommitted" ? { scope } : {}, ...focus ? { focus } : {}, findings: [], parts: [], started: this.now() };
     this.kept.set(session, review);
     this.follow(session);
     this.changed(review);
@@ -4262,7 +4276,7 @@ class Reviews {
       })();
     }
   }
-  async readInSession(review, info, part, prompt) {
+  async readInSession(review, info, part, prompt, going) {
     const { api, listen } = this.places.engine;
     const made = await api.request("POST", "/api/session", {
       title: `Review \xB7 part ${part.n} of ${part.of}`,
@@ -4271,11 +4285,15 @@ class Reviews {
       agent: "plan",
       parentID: info.id,
       permissions: partPermissions,
-      metadata: { kuvo: { reviewPart: { review: review.id, part: part.n, of: part.of } } }
+      metadata: { kuvo: { reviewPart: { review: review.id, part: part.n, of: part.of }, messages: { via: "none", note: "A reviewer reads on its own: this is what it read, thought and found." } } }
     });
     const id = made?.data?.id;
     if (!id)
       throw new Error("The engine didn't start a session for the part.");
+    if (!going()) {
+      await api.request("DELETE", at(id)).catch(() => {});
+      throw new Error("The review was stopped.");
+    }
     part.session = id;
     this.changed(review);
     const tools = new Map;
@@ -4290,7 +4308,7 @@ class Reviews {
         clearTimeout(timer);
         resolve2(how);
       };
-      unlisten = listen(id, {
+      unlisten = listen(info.id, {
         event: (type, data) => {
           if (data?.sessionID !== id)
             return;
@@ -4310,8 +4328,11 @@ class Reviews {
           const active = await api.request("GET", "/api/session/active").catch(() => {
             return;
           });
-          if (active && !active.data?.[id])
-            end("succeeded");
+          if (!active || active.data?.[id])
+            return;
+          const idle = (await messages(api, id, 20).catch(() => [])).findLast((message) => message?.type === "idle");
+          if (idle)
+            end(String(idle.outcome ?? "failed"));
         }
       });
       api.request("POST", at(id) + "/prompt", { text: prompt }).catch((error) => end(`failed: ${error?.message ?? error}`));
@@ -4319,11 +4340,15 @@ class Reviews {
     unlisten();
     if (outcome === "timed out")
       throw new Error("The part took too long to read.");
+    if (outcome === "interrupted")
+      throw new PartStopped;
     if (outcome !== "succeeded")
-      throw new Error(outcome.startsWith("failed: ") ? outcome.slice(8) : `The part's reading ${outcome === "interrupted" ? "was stopped" : "failed"}.`);
-    const said = (await messages(api, id, 50)).filter((message) => message?.type === "assistant");
-    return (said.at(-1)?.content ?? []).filter((content) => content?.type === "text").map((content) => String(content.text ?? "")).join(`
-`);
+      throw new Error(outcome.startsWith("failed: ") ? outcome.slice(8) : "The part's reading failed.");
+    const written = (await messages(api, id, 50)).filter((message) => message?.type === "assistant").map((message) => (message.content ?? []).filter((content) => content?.type === "text").map((content) => String(content.text ?? "")).join(`
+`).trim()).filter(Boolean);
+    if (!written.length)
+      throw new Error("The part's reviewer gave no answer.");
+    return written.at(-1);
   }
   async review(review, info) {
     await this.read(review, info);
@@ -4355,7 +4380,10 @@ class Reviews {
         let lastError;
         if (many)
           review.progress = { read: 0, of: parts.length };
-        review.parts = parts.map((part, index) => ({ n: index + 1, of: parts.length, files: filesIn([part], files).slice(0, partFilesShown), state: "waiting", found: 0 }));
+        review.parts = parts.map((part, index) => {
+          const named = filesIn([part], files);
+          return { n: index + 1, of: parts.length, files: named.slice(0, partFilesShown), fileCount: named.length, state: "waiting", found: 0 };
+        });
         this.changed(review);
         const onEngine = place === this.places.engine;
         for (const [index, part] of parts.entries()) {
@@ -4364,7 +4392,7 @@ class Reviews {
           shown2.state = "reading";
           this.changed(review);
           try {
-            const answer = onEngine ? await this.readInSession(review, info, shown2, prompt) : await freshAnswer(place.api, false, info, prompt, review.model);
+            const answer = onEngine ? await this.readInSession(review, info, shown2, prompt, going) : await freshAnswer(place.api, false, info, prompt, review.model);
             if (!going())
               return;
             const parsed = parseReview(answer);
@@ -4374,7 +4402,7 @@ class Reviews {
           } catch (error) {
             if (!going())
               return;
-            Object.assign(shown2, { state: "failed", now: undefined });
+            Object.assign(shown2, { state: error instanceof PartStopped ? "stopped" : "failed", now: undefined });
             if (!many)
               throw error;
             failed += 1;
@@ -20124,4 +20152,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 9628ba2e21e6cd7ad034a2c641066c39f0d8f69b7e9887481921aa369cd5cc58
+// Built from Packages/Box/src/agents 804fe0ea463d4a9e4bfa8db277e6bec080eb648d406d3f88d3ecfe994311ebf7

@@ -422,6 +422,46 @@ public struct Review: Codable, Sendable, Hashable, Identifiable {
     public var fix: String?
     public var started: Double
     public var ended: Double?
+    /// Its parts, each read by a reviewer of its own (nil from a box from before parts).
+    public var parts: [Part]?
+
+    /// A part of it, read by a reviewer of its own: what it reads, how it's going, and the
+    /// session it reads in, to watch it (none with the coding agents).
+    public struct Part: Codable, Sendable, Hashable, Identifiable {
+        public enum State: String, Codable, Sendable, Hashable {
+            case waiting, reading, done, failed, stopped
+            /// One a box from after this one says: as if it were done.
+            public init(from decoder: Decoder) throws {
+                self = State(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .done
+            }
+        }
+
+        public var n: Int
+        public var of: Int
+        /// Its first files (a box names 200 at most).
+        public var files: [String]
+        /// How many it reads, all of them.
+        public var fileCount: Int?
+        public var state: State
+        /// What it found.
+        public var found: Int
+        public var session: String?
+        /// What it's doing now, while it reads ("Reading src/a.ts").
+        public var now: String?
+
+        public var id: Int { n }
+
+        public init(n: Int, of: Int, files: [String], fileCount: Int? = nil, state: State, found: Int = 0, session: String? = nil, now: String? = nil) {
+            self.n = n
+            self.of = of
+            self.files = files
+            self.fileCount = fileCount
+            self.state = state
+            self.found = found
+            self.session = session
+            self.now = now
+        }
+    }
 }
 
 /// `kuvo.btw.updated`, `kuvo.review.updated` (null once put away) and `kuvo.handoff`.

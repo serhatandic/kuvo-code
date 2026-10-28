@@ -73,6 +73,30 @@ struct ReviewListsTests {
 
     }
 
+    // A review's parts in its card: each says what it's doing as it reads, then what it found,
+    // and opens once it reads in a session of its own; one alone is the reviewer.
+    @Test func eachPartSaysWhatItsDoingThenWhatItFound() throws {
+        let review = try JSONDecoder().decode(Review.self, from: Data(#"""
+        {"id": "r", "session": "s", "state": "reviewing", "findings": [], "started": 1, "parts": [
+          {"n": 1, "of": 3, "files": ["src/a.ts", "src/b.ts"], "state": "done", "found": 2, "session": "ses_p1"},
+          {"n": 2, "of": 3, "files": ["src/c.ts"], "state": "reading", "found": 0, "session": "ses_p2", "now": "Reading src/c.ts"},
+          {"n": 3, "of": 3, "files": ["src/d.ts", "src/e.ts", "src/f.ts"], "fileCount": 250, "state": "waiting", "found": 0}]}
+        """#.utf8))
+        let parts = try #require(review.parts)
+        #expect(parts.map(\.title) == ["Part 1", "Part 2", "Part 3"])
+        // All its files are counted, not only those named.
+        #expect(parts.map(\.line) == ["2 files · 2 found", "Reading src/c.ts", "250 files"])
+        #expect(parts.map(\.opens) == [true, true, false])
+        #expect(!review.hasNoParts)
+        // Alone, it's the reviewer; one a box from before parts reads says nothing of them.
+        #expect(Review.Part(n: 1, of: 1, files: ["a.ts"], state: .done).title == "The reviewer")
+        #expect(Review.Part(n: 1, of: 1, files: ["a.ts"], state: .done).line == "1 file · found nothing")
+        let older = try JSONDecoder().decode(Review.self, from: Data(#"{"id": "r", "session": "s", "state": "reviewing", "findings": [], "started": 1}"#.utf8))
+        #expect(older.hasNoParts)
+        // With the coding agents a part has no session: listed, not opened.
+        #expect(!Review.Part(n: 1, of: 2, files: ["a.ts"], state: .done, found: 1).opens)
+    }
+
     @Test func theLineUnderAReviewSaysWhatItCoveredAndWhoReadIt() throws {
         let review = { (json: String) in try JSONDecoder().decode(Review.self, from: Data(json.utf8)) }
         let both = try review(#"{"id": "r", "session": "s", "state": "done", "scope": {"kind": "project"}, "focus": "security: the sign-in", "findings": [], "started": 1}"#)

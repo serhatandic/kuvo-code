@@ -108,7 +108,8 @@ struct KeywordBars: View {
                 .transition(.fold)
         } else if let review = model.shownReview {
             ReviewBar(review: review, isHidden: hidden(.review, $model.hidesReview), sendTargets: sendTargets,
-                      readerName: review.model.flatMap { model.reviewCatalogNow?.model($0)?.name }) { findings, target in
+                      readerName: review.model.flatMap { model.reviewCatalogNow?.model($0)?.name },
+                      olderBox: RemoteFolder.machine(of: model.session.location.directory)) { findings, target in
                 fix(findings, target)
             } putAway: {
                 model.putAwayReview()
@@ -118,6 +119,11 @@ struct KeywordBars: View {
                 model.dismissReview()
             } open: { place in
                 if let url = Self.file(place.file, in: model.session.location.directory) { app.utilities.show(url) }
+            } openPart: { part in
+                guard let session = part.session else { return }
+                // In the conversation's place, as a subagent's: its header goes back.
+                workspace.rememberReviewPart(session, of: model.id)
+                app.tabs.openInPlace(session)
             }
             .modifier(CardRow())
             .transition(.fold)
@@ -377,12 +383,16 @@ struct ReviewBar: View {
     let sendTargets: [ReviewSendTarget]
     /// Who read it, for the line under what it found.
     var readerName: String?
+    /// The machine the conversation is on, when its box is from before parts: it says to update it.
+    var olderBox: String?
     /// `findings`: their ids, nil for all of them.
     let fix: (_ findings: [String]?, _ target: ReviewFixTarget) -> Void
     let putAway: () -> Void
     let stop: () -> Void
     let cancel: () -> Void
     let open: (Review.Place) -> Void
+    /// Opens a part's session, in the conversation's place.
+    var openPart: (Review.Part) -> Void = { _ in }
     @AppStorage(ReviewLayout.key) private var layout = ReviewLayout.list
     @State private var confirmsCancel = false
     /// What the part read last found, while there were findings before it.
@@ -390,8 +400,14 @@ struct ReviewBar: View {
     /// A finding's row, closed.
     @State private var rowHeight: CGFloat?
 
-    /// What it found shows while it's still reading, too.
-    private var showsFindings: Bool { review.state != .reviewing || !review.findings.isEmpty }
+    /// What it found shows while it's still reading, too, and its parts as they read.
+    private var showsFindings: Bool { review.state != .reviewing || !review.findings.isEmpty || !(review.parts ?? []).isEmpty }
+
+    /// Its parts, to show: any that opens, or more than one.
+    private var shownParts: [Review.Part]? {
+        guard let parts = review.parts, parts.count > 1 || parts.contains(where: \.opens) else { return nil }
+        return parts
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -420,8 +436,16 @@ struct ReviewBar: View {
                 ProgressLine("Reviewing", fraction: Double(progress.read) / Double(max(progress.of, 1)), layout: .bar)
                     .padding(.leading, 42)
                     .padding(.trailing, 16)
-                    .padding(.bottom, showsFindings && !isHidden ? 4 : 10)
+                    .padding(.bottom, showsFindings && !isHidden ? 4 : olderBox != nil && review.hasNoParts ? 4 : 10)
                     .transition(.opacity)
+            }
+            // A machine whose box can't show its parts: that it could, updated.
+            if let olderBox, review.hasNoParts {
+                Text("Update Kuvo Code on \(olderBox) to see inside each part.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
+                    .padding(.leading, 42)
+                    .padding(.bottom, 10)
             }
             if !isHidden, showsFindings {
                 details
@@ -536,10 +560,13 @@ struct ReviewBar: View {
         switch review.state {
         case .reviewing:
             VStack(alignment: .leading, spacing: 6) {
-                Text("Found so far:")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(.secondary)
-                findingList
+                if let parts = shownParts { ReviewPartList(parts: parts, open: openPart) }
+                if !review.findings.isEmpty {
+                    Text("Found so far:")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
+                    findingList
+                }
             }
         case .failed:
             Text(review.error ?? "It couldn’t be done. Try again.")
@@ -555,6 +582,8 @@ struct ReviewBar: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                // What each reviewer did, still there to open.
+                if let parts = shownParts { ReviewPartList(parts: parts, open: openPart) }
                 if !review.findings.isEmpty {
                     if layout == .single {
                         SingleFinding(findings: review.findings, fixMenu: { fixMenu([$0.id], label: "Fix This…", outset: true) }, open: open)
@@ -587,6 +616,102 @@ struct ReviewBar: View {
         .frame(maxHeight: (rowHeight ?? 34) * 5)
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, -8)
+    }
+}
+
+/// A review's parts, in its card: each with what it's doing as it reads, then what it found; one
+/// that reads in a session of its own opens it, in the conversation's place, as a subagent's
+/// does. Four rows show, then it scrolls.
+private struct ReviewPartList: View {
+    let parts: [Review.Part]
+    let open: (Review.Part) -> Void
+
+    private static let rowHeight: CGFloat = 28
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(parts) { part in
+                    ReviewPartRow(part: part, open: { open(part) })
+                }
+            }
+        }
+        .frame(maxHeight: Self.rowHeight * 4)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, -8)
+    }
+}
+
+private struct ReviewPartRow: View {
+    let part: Review.Part
+    let open: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 8) {
+                mark
+                    .frame(width: 14)
+                Text(part.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(part.state == .waiting ? .secondary : .primary)
+                    .fixedSize()
+                Group {
+                    if part.state == .reading {
+                        ShimmerText(text: part.line)
+                    } else {
+                        Text(part.line)
+                            .foregroundStyle(part.state == .waiting ? .tertiary : .secondary)
+                    }
+                }
+                .font(.system(size: 12.5))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if part.opens {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background(hovering && part.opens ? AnyShapeStyle(Pressable.hoverFill) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 7))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .clickablePointer()
+        // One that doesn't open reads as the others do, not dimmed.
+        .allowsHitTesting(part.opens)
+        .accessibilityRemoveTraits(part.opens ? [] : .isButton)
+        .help(part.opens ? "Open what this reviewer read, thought and found" : "")
+        .accessibilityLabel("\(part.title), \(part.line)")
+        .accessibilityHint(part.opens ? "Opens what it read, thought and found" : "")
+    }
+
+    @ViewBuilder private var mark: some View {
+        switch part.state {
+        case .reading: Spinner(size: 11)
+        case .done:
+            Image(systemName: "checkmark")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.green)
+        case .failed:
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 11))
+                .foregroundStyle(.orange)
+        case .stopped:
+            Image(systemName: "stop.circle")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        case .waiting:
+            Circle()
+                .strokeBorder(style: StrokeStyle(lineWidth: 1.2, dash: [2, 2]))
+                .foregroundStyle(.tertiary)
+                .frame(width: 10, height: 10)
+        }
     }
 }
 

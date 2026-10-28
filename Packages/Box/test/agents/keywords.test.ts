@@ -52,6 +52,13 @@ function places(bridge = false): GoalPlaces {
   }
 }
 
+/** As `places`, the engine's events heard through its real link (a session under another is
+ * heard through its parent's feed, as on a box). */
+function linkedPlaces(): GoalPlaces {
+  // As the box's own (agents/main.ts) hears it.
+  return { ...places(), engine: { api: link, listen: (session, told) => link.listen(session, { event: (event) => told.event(event.type, event.data), reconnected: told.reconnected }) } }
+}
+
 /** What the conversation was told (a note or a message), which a side question never is. */
 const told = (session = "ses_work") => engine.synthetic.filter((note) => note.session === session).length + engine.prompts(session).length
 
@@ -65,7 +72,9 @@ beforeEach(() => {
   engine = new StandIn(beat)
   // Its events reach those following them.
   engine.onEmit = (type, data) => {
-    for (const each of following.filter((each) => each.session === data?.sessionID)) each.event(type, data)
+    // A session under another is heard through its parent's feed too, as the engine's link does.
+    const parent = engine.made.find((each) => each.id === data?.sessionID)?.parentID
+    for (const each of following.filter((each) => each.session === data?.sessionID || (parent && each.session === parent))) each.event(type, data)
   }
   engine.session("ses_work", [
     { id: "msg_0001", type: "user", text: "Make the timer pause on blur.", time: { created: 1 } },
@@ -514,7 +523,7 @@ describe("a review with fresh eyes", () => {
     await reviews.start("ses_work")
     await until(() => reviews.get("ses_work")?.state === "done")
     expect(reviews.get("ses_work")!.summary).toBe("Fine.")
-    expect(engine.made.map((each) => Object.keys(each.metadata.kuvo))).toEqual([["reviewPart"]])
+    expect(engine.made.map((each) => Object.keys(each.metadata.kuvo))).toEqual([["reviewPart", "messages"]])
   })
 
   test("reads a folder's changes from its git: tracked files' diffs and new files whole", async () => {
@@ -691,7 +700,7 @@ describe("a review with fresh eyes", () => {
 
   test("each part is read in a session of its own under the conversation, which can be watched as it reads and looked at after", async () => {
     const parts: Parts = { parts: ["=== src/a.ts ===\n1  a()\n", "=== src/b.ts ===\n1  b()\n=== src/c.ts ===\n1  c()\n"], leftOut: 0 }
-    const reviews = new Reviews(join(root, "reviews.json"), places(), async () => parts)
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
     reviews.onEnded = beat
     engine.directory = "/tmp/project"
     engine.holdingChecks = true
@@ -699,6 +708,9 @@ describe("a review with fresh eyes", () => {
       `{"summary": "One.", "findings": [{"title": "a() throws", "explanation": "", "severity": "bug", "locations": [{"file": "src/a.ts", "line": 1}]}]}`,
       `{"summary": "Fine.", "findings": []}`,
     ]
+    // The engine's feed open, as a box's is long before a review: the conversation is followed.
+    const following = link.listen("ses_work", { event: () => {}, reconnected: () => {} })
+    await until(() => engine.listening)
     await reviews.start("ses_work", undefined, undefined, { kind: "project" })
     // The plan: each part, with the files it reads, waiting until its turn.
     await until(() => !!reviews.get("ses_work")?.parts?.[0]?.session)
@@ -740,12 +752,33 @@ describe("a review with fresh eyes", () => {
     reviews.dismiss("ses_work")
     await until(() => sessions.every((id) => engine.deleted.includes(id)))
     engine.holdingChecks = false
+    following()
+    reviews.stopAll()
+  })
+
+  test("a part whose end went by while the engine's feed was away is read once it's back, from how its turn ended", async () => {
+    const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+    reviews.onEnded = beat
+    const following = link.listen("ses_work", { event: () => {}, reconnected: () => {} })
+    await until(() => engine.listening)
+    engine.silentParts = true
+    engine.answers = [`{"summary": "One.", "findings": [{"title": "a() throws", "explanation": "", "severity": "bug", "locations": []}]}`]
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    await until(() => engine.checks.length === 1 && engine.conversations.get(reviews.get("ses_work")!.parts![0].session!)?.some((each) => each.type === "idle") === true)
+    // The link comes back (as when the engine started again): the part's end is read from its session.
+    link.configure(engine.url + "/", "x")
+    await until(() => reviews.get("ses_work")?.state === "done")
+    expect(reviews.get("ses_work")!.parts![0].state).toBe("done")
+    expect(reviews.get("ses_work")!.findings.map((each) => each.title)).toEqual(["a() throws"])
+    engine.silentParts = false
+    following()
     reviews.stopAll()
   })
 
   test("stopped while a part reads, its session is stopped too; the parts after it are never read", async () => {
     const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n", "=== b.ts ===\n1  b()\n"], leftOut: 0 }
-    const reviews = new Reviews(join(root, "reviews.json"), places(), async () => parts)
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
     reviews.onEnded = beat
     engine.holdingChecks = true
     await reviews.start("ses_work", undefined, undefined, { kind: "project" })

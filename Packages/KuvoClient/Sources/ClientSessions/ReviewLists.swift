@@ -228,3 +228,31 @@ extension ReviewList.Known {
         await update(known)
     }
 }
+
+/// A review's parts, as both apps list them in its card: each part's name and its line, which
+/// says what it's doing while it reads ("Reading src/a.ts"), then what it found.
+extension Review.Part {
+    /// "Part 2"; "The reviewer" when it's the only one.
+    public var title: String { of > 1 ? "Part \(n)" : "The reviewer" }
+
+    /// Its line: what it's doing now, what it found, or what it will read.
+    public var line: String {
+        let count = fileCount ?? files.count
+        let reads = count == 1 ? "1 file" : "\(count.formatted()) files"
+        switch state {
+        case .waiting: return reads
+        case .reading: return now ?? "Starting"
+        case .done: return found == 0 ? "\(reads) · found nothing" : "\(reads) · \(found) found"
+        case .failed: return "Couldn’t be read"
+        case .stopped: return found == 0 ? "Stopped" : "Stopped · \(found) found"
+        }
+    }
+
+    /// It can be opened: it reads, or read, in a session of its own.
+    public var opens: Bool { session != nil && state != .waiting }
+}
+
+extension Review {
+    /// Read on a box from before parts: under way, it can't say what each part does.
+    public var hasNoParts: Bool { state == .reviewing && parts == nil }
+}

@@ -162,6 +162,8 @@ export class StandIn {
         this.made.push({ id, ...body })
         this.conversations.set(id, [])
         if (body?.title) this.titles.set(id, body.title)
+        // As the engine says it: flat, with its parent.
+        this.emit("session.created", { sessionID: id, ...(body?.parentID ? { parentID: body.parentID } : {}) })
         return Response.json({ data: { id, ...body } })
       }
       const [, , session, what] = parts
@@ -248,12 +250,20 @@ export class StandIn {
     if (!failing) this.add(session, { type: "assistant", content: [{ type: "text", text: this.answers.shift() ?? `{"summary": "Fine.", "findings": []}` }] })
     this.add(session, { type: "idle", outcome: failing ? "failed" : "succeeded" })
     this.busy.delete(session)
-    this.emit(failing ? "session.execution.failed" : "session.execution.succeeded", { sessionID: session })
+    if (!this.silentParts) this.emit(failing ? "session.execution.failed" : "session.execution.succeeded", { sessionID: session })
     this.beat()
   }
 
   /** Parts whose reading fails, next. */
   failingParts = 0
+  /** A part's end goes untold (its events lost, as when the feed was away). */
+  silentParts = false
+
+  /** The feed drops, as when the engine's connection blips: a client connects again. */
+  drop() {
+    for (const feed of this.feeds) feed.close()
+    this.feeds.clear()
+  }
 
   private async check(kind: "fresh" | "own", prompt: string, model?: any, session?: string) {
     this.checks.push({ kind, prompt, ...(model ? { model } : {}), ...(session ? { session } : {}) })

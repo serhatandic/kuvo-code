@@ -165,9 +165,16 @@ struct SubagentPane: View {
                 SubagentConversation(model: model, parent: parent, open: open)
                     .transition(.replacingPlaceholder)
             } else if isMissing {
-                ContentUnavailableView("Subagent Not Found", systemImage: "person.2", description: Text("Its session is gone, or its machine can't be reached. Close this tab."))
-                    .frame(maxHeight: .infinity)
-                    .transition(.replacingPlaceholder)
+                // A review's part goes with its review: said so, not as a subagent missing.
+                Group {
+                    if workspace.isReviewPart(id) {
+                        ContentUnavailableView("Review Part Gone", systemImage: Keyword.review.symbol, description: Text("Its review was put away, and what this part read with it."))
+                    } else {
+                        ContentUnavailableView("Subagent Not Found", systemImage: "person.2", description: Text("Its session is gone, or its machine can't be reached. Close this tab."))
+                    }
+                }
+                .frame(maxHeight: .infinity)
+                .transition(.replacingPlaceholder)
             } else {
                 Placeholder(.lines(count: 8), label: "Loading subagent")
                     .padding(20)
@@ -250,7 +257,7 @@ private struct SubagentConversation: View {
                                         .font(.system(size: 13))
                                         .fixedSize()
                                         .disabled(isOffline)
-                                        .help("Stop it: the agent that started it hears it was stopped, and carries on")
+                                        .help(reviewPart == nil ? "Stop it: the agent that started it hears it was stopped, and carries on" : "Stop this part: the review goes on with the others")
                                 }
                             }
                             .padding(.horizontal, 14)
@@ -277,7 +284,7 @@ private struct SubagentConversation: View {
                 } else if let error = model.lastStepError, !error.isInterruption {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
                 } else {
-                    Image(systemName: "person.2").foregroundStyle(.secondary)
+                    Image(systemName: reviewPart == nil ? "person.2" : Keyword.review.symbol).foregroundStyle(.secondary)
                 }
             }
             .frame(width: 18)
@@ -299,9 +306,9 @@ private struct SubagentConversation: View {
                 // That it's a subagent, then its agent and what it's doing.
                 Group {
                     if isWorking {
-                        ShimmerText(text: ["Subagent", agentName, model.currentStep].compactMap { $0 }.joined(separator: " · "))
+                        ShimmerText(text: (kind + [model.currentStep]).joined(separator: " · "))
                     } else {
-                        Text(["Subagent", agentName, status].compactMap { $0 }.joined(separator: " · "))
+                        Text((kind + [status].compactMap { $0 }).joined(separator: " · "))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -314,6 +321,18 @@ private struct SubagentConversation: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .overlay(alignment: .bottom) { Divider().opacity(0.5) }
+    }
+
+    /// A review's part read in it (`kuvo.reviewPart`): which.
+    private var reviewPart: (n: Int, of: Int)? {
+        guard let part = model.session.metadata?["kuvo"]?["reviewPart"], let n = part["part"]?.number, let of = part["of"]?.number else { return nil }
+        return (Int(n), Int(of))
+    }
+
+    /// What it is: a subagent and its agent, or a review's part.
+    private var kind: [String] {
+        if let reviewPart { return [reviewPart.of > 1 ? "Review, part \(reviewPart.n) of \(reviewPart.of)" : "Review"] }
+        return ["Subagent", agentName].compactMap { $0 }
     }
 
     private var parentTitle: String {

@@ -566,6 +566,15 @@ enum DemoDirector {
             await DemoWait.until("its turn to end (KUVO_DEMO_REVIEW)", limit: .seconds(180)) { !model.isRunning }
             if let review = Self.sampleReview(kind, session: session.id, model: session.model) { model.goalBridge()?.took(review) }
         }
+        // KUVO_DEMO_OPEN_PART: the first part of a review the prompt asked for ("/review …"), opened in
+        // the conversation's place once it reads in a session of its own.
+        if environment["KUVO_DEMO_OPEN_PART"] != nil, let model = workspace.model(for: session.id) {
+            await DemoWait.until("a review's part (KUVO_DEMO_OPEN_PART)", limit: .seconds(120)) { model.review?.parts?.first?.session != nil }
+            if let part = model.review?.parts?.first?.session {
+                workspace.rememberReviewPart(part, of: session.id)
+                app.tabs.openInPlace(part)
+            }
+        }
         // KUVO_DEMO_SIDE_THREAD: a sample side thread over the composer (three questions, the last
         // `answering` when it says so) and another thread before it, once the first turn ended.
         if let kind = environment["KUVO_DEMO_SIDE_THREAD"], let model = workspace.model(for: session.id), let bridge = model.goalBridge() {
@@ -595,15 +604,30 @@ extension DemoDirector {
         ]
         var review: [String: Any] = ["id": "rev_demo_\(kind)", "session": session, "scope": ["kind": "project"], "focus": "security", "started": Date.now.timeIntervalSince1970 * 1000 - 240_000]
         if let model { review["model"] = ["providerID": model.providerID, "id": model.id] }
+        // Its parts, by the folders each reads (no session behind them: they show, they don't open,
+        // unless KUVO_DEMO_REVIEW_PART names one that's there).
+        let folders = ["src/auth", "src/billing", "src/server", "src/ui"]
+        let partSession = ProcessInfo.processInfo.environment["KUVO_DEMO_REVIEW_PART"]
+        func parts(read: Int, of: Int, reading: Bool) -> [[String: Any]] {
+            (1...of).map { n in
+                var part: [String: Any] = ["n": n, "of": of, "files": (1...(8 + n * 3)).map { "\(folders[(n - 1) % folders.count])/file\($0).ts" },
+                                           "state": n <= read ? "done" : n == read + 1 && reading ? "reading" : "waiting", "found": n <= read ? [2, 0, 1, 1][(n - 1) % 4] : 0]
+                if n <= read || (n == read + 1 && reading) { part["session"] = n == read + 1 ? partSession ?? "ses_demo_part_\(n)" : "ses_demo_part_\(n)" }
+                if n == read + 1 && reading { part["now"] = "Reading \(folders[(n - 1) % folders.count])/charge.ts" }
+                return part
+            }
+        }
         switch kind {
         case "starting":
             review["state"] = "reviewing"
             review["progress"] = ["read": 0, "of": 4]
             review["findings"] = [Any]()
+            review["parts"] = parts(read: 0, of: 4, reading: true)
         case "running":
             review["state"] = "reviewing"
             review["progress"] = ["read": 3, "of": 9]
             review["findings"] = Array(found.prefix(3))
+            review["parts"] = parts(read: 3, of: 9, reading: true)
         case "stopped":
             review["state"] = "done"
             review["stopped"] = ["read": 3, "of": 9]
@@ -618,6 +642,7 @@ extension DemoDirector {
                 ["id": "fnd_s7", "title": "Session cookies aren't marked Secure", "explanation": "", "severity": "risk", "locations": [["file": "src/server/session.ts", "line": 31]]],
             ]
             review["summary"] = "It read 312 files. It found 7 things to fix."
+            review["parts"] = parts(read: 4, of: 4, reading: false)
             review["fix"] = "Fix these."
         }
         return (try? JSONSerialization.data(withJSONObject: review)).flatMap { try? JSONDecoder().decode(Review.self, from: $0) }

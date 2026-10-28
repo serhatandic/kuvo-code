@@ -24,10 +24,41 @@ import Testing
         engine.on("GET", "/api/session/\(id)/message", json: ["data": [["id": "msg_0001", "type": "user", "text": "Make the timer pause on blur.", "time": ["created": 1]]]])
         engine.on("POST", "/api/experimental/generate") { _ in StubWeb.json(["data": ["text": answers.next()]]) }
         engine.on("POST", "/api/session/\(id)/generate") { _ in StubWeb.json(["data": ["text": answers.next()]]) }
+        // A review's parts, each read in a session of its own: made, told its part, and answering
+        // with the next answer; its end is read back as the box does after its feed came back.
+        let parts = Parts()
+        engine.on("POST", "/api/session") { _ in StubWeb.json(["data": ["id": parts.make()]]) }
+        for part in Parts.ids {
+            engine.on("POST", "/api/session/\(part)/prompt") { _ in
+                parts.answer(part, answers.next())
+                return StubWeb.json(["data": [:]])
+            }
+            engine.on("GET", "/api/session/\(part)/message") { _ in
+                // Newest first, as the engine lists them: its answer, then its turn's end.
+                var messages: [[String: Any]] = []
+                if let text = parts.answer(of: part) {
+                    messages = [["id": "msg_9", "type": "idle", "outcome": "succeeded"],
+                                ["id": "msg_8", "type": "assistant", "content": [["type": "text", "text": text]]]]
+                }
+                return StubWeb.json(["data": messages])
+            }
+            engine.on("DELETE", "/api/session/\(part)", json: ["data": [:]])
+        }
         engine.on("GET", "/api/session/active", json: ["data": [:]])
         engine.on("GET", "/api/event") { _ in StubWeb.Answer(status: 200, body: Data()) }
         engine.on("GET", "/api/provider", json: ["data": []])
         engine.on("GET", "/api/integration", json: ["data": []])
+    }
+
+    /// A review's parts' sessions, as the engine made them, and what each answered.
+    nonisolated final class Parts: @unchecked Sendable {
+        static let ids = (1...6).map { "ses_part\($0)" }
+        private let lock = NSLock()
+        private var made = 0
+        private var answers: [String: String] = [:]
+        func make() -> String { lock.withLock { made += 1; return Self.ids[min(made, Self.ids.count) - 1] } }
+        func answer(_ part: String, _ text: String) { lock.withLock { answers[part] = text } }
+        func answer(of part: String) -> String? { lock.withLock { answers[part] } }
     }
 
     nonisolated final class Answers: @unchecked Sendable {
@@ -359,8 +390,9 @@ import Testing
         #expect(model.review?.scope == .commits(from: first + "^", to: nil))
         #expect(model.review?.focus == "security")
         #expect(model.review?.findings.map(\.title) == ["The password is written to the log"])
-        // The model read both commits, from nothing before the first, and was told what to look for.
-        let asked = (engine.requests("POST", "/generate").map { "\($0.body)" }).joined()
+        // Its reviewer read both commits, from nothing before the first, and was told what to look for
+        // (in its part's session).
+        let asked = (engine.requests("POST", "/prompt").map { "\($0.body)" }).joined()
         #expect(asked.contains("+check(password)") && asked.contains("+log(password)"))
         #expect(asked.contains("security holes"))
     }

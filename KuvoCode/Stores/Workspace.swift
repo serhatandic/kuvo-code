@@ -2592,6 +2592,18 @@ final class Workspace {
         UserDefaults.standard.set(openedSubSessions, forKey: "openedSubSessions")
     }
 
+    /// A review's part, opened from its card: it opens as a sub-session of `parent` (the
+    /// conversation reviewed), whose list leaves it out as it does the box's other runs.
+    func rememberReviewPart(_ id: String, of parent: String) {
+        parents[id] = parent
+        reviewParts.insert(id)
+        rememberOpened(id)
+    }
+
+    /// A review's part, opened: once its review is put away, it's gone, not a subagent missing.
+    func isReviewPart(_ id: String) -> Bool { reviewParts.contains(id) }
+    @ObservationIgnored private var reviewParts: Set<String> = []
+
     /// Learns whose sub-session `id` is, when it has no row and that isn't known yet.
     func findParent(of id: String) async {
         guard session(id) == nil, parents[id] == nil else { return }
