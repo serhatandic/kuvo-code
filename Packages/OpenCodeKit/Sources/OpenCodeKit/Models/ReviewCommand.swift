@@ -1,7 +1,7 @@
 import Foundation
 
 /// What follows "/review": what it reads ("this branch", "since abc1234", "folder src/auth", "the
-/// whole project"; the changes not committed yet without), what to look for ("for security"), who
+/// whole project", "about \"the auth module and its tests\""; the changes not committed yet without), what to look for ("for security"), who
 /// reads it ("with DeepSeek V4.1 Flash": one of the conversation's models by its name; its own
 /// model without it), in any order, then anything else to look at, in your words. The composer's
 /// "What to review" and "Look for" write the first two, "with" looks for the third, and the
@@ -34,6 +34,8 @@ public struct ReviewCommand: Equatable, Sendable {
         case commit(String)
         /// A folder after "folder ".
         case folder(String)
+        /// What to review in your words, after "about " (its quotes not closed yet).
+        case described(String)
         /// "Look for".
         case lookFor(String)
     }
@@ -78,6 +80,8 @@ public struct ReviewCommand: Equatable, Sendable {
         case .commits(let from, _): return "since " + (from.hasSuffix("^") ? String(from.dropLast()) : from)
         case .folder(let path): return "folder " + (path.contains(where: \.isWhitespace) ? "\"\(path)\"" : path)
         case .project: return projectPhrase
+        // In quotes, which end it (one inside would end it early).
+        case .described(let words, _): return "about \"" + words.replacingOccurrences(of: "\"", with: "'") + "\""
         }
     }
 
@@ -176,7 +180,7 @@ public struct ReviewCommand: Equatable, Sendable {
     }
 
     /// The words "What to review"'s rows are written and found by.
-    static let whatWords = [uncommittedPhrase, "uncommitted", branchPhrase, "branch", "since ", "commits", "folder ", "a folder", projectPhrase, "whole project", "project"]
+    static let whatWords = [uncommittedPhrase, "uncommitted", branchPhrase, "branch", "since ", "commits", "folder ", "a folder", projectPhrase, "whole project", "project", "about ", "something else"]
     /// "Look for"'s, past the first "for " (Something else… writes that, to type after).
     static let lookForWords = Preset.allCases.flatMap { [phrase($0), $0.rawValue] } + ["anything wrong", "something else"]
 
@@ -211,6 +215,22 @@ public struct ReviewCommand: Equatable, Sendable {
             let word = path.prefix { !$0.isWhitespace }
             if word.isEmpty { return (nil, words.endIndex, .folder("")) }
             return (.folder(String(word)), word.endIndex, word.endIndex == words.endIndex ? .folder(String(word)) : nil)
+        }
+        if isWord("about", at: words) {
+            let after = words.dropFirst(5)
+            if after.allSatisfy(\.isWhitespace) { return (nil, words.endIndex, .described("")) }
+            let said = after.drop { $0.isWhitespace }
+            let trimmed = { (text: Substring) in text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if said.first == "\"" {
+                let inside = said.dropFirst()
+                guard let close = inside.firstIndex(of: "\"") else {
+                    return (trimmed(inside).isEmpty ? nil : .described(trimmed(inside)), words.endIndex, .described(String(inside)))
+                }
+                let text = trimmed(inside[..<close])
+                return (text.isEmpty ? nil : .described(text), inside.index(after: close), nil)
+            }
+            // Still being written, without its quotes yet: all of what follows.
+            return (.described(trimmed(said)), words.endIndex, .described(String(said)))
         }
         return nil
     }

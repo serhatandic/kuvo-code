@@ -189,15 +189,17 @@ public struct Handoff: Codable, Sendable, Hashable {
 
 /// What a review reads: the changes not committed yet, the branch's against its base (with those
 /// not committed yet), the commits after `from` up to `to` (git's `from..to`), or the files of a
-/// folder in the project or all of it.
+/// folder in the project, all of it, or those your words describe ("the auth module and its
+/// tests"), which the box finds: `paths` once it has.
 public enum ReviewScope: Codable, Sendable, Hashable {
     case uncommitted
     case branch(base: String?)
     case commits(from: String, to: String?)
     case folder(String)
     case project
+    case described(String, paths: [String]? = nil)
 
-    private enum Keys: String, CodingKey { case kind, base, from, to, path }
+    private enum Keys: String, CodingKey { case kind, base, from, to, path, words, paths }
 
     public init(from decoder: Decoder) throws {
         let keys = try decoder.container(keyedBy: Keys.self)
@@ -206,6 +208,7 @@ public enum ReviewScope: Codable, Sendable, Hashable {
         case "commits": self = .commits(from: try keys.decode(String.self, forKey: .from), to: try keys.decodeIfPresent(String.self, forKey: .to))
         case "folder": self = .folder(try keys.decode(String.self, forKey: .path))
         case "project": self = .project
+        case "described": self = .described(try keys.decode(String.self, forKey: .words), paths: try keys.decodeIfPresent([String].self, forKey: .paths))
         default: self = .uncommitted
         }
     }
@@ -225,6 +228,10 @@ public enum ReviewScope: Codable, Sendable, Hashable {
             try keys.encode("folder", forKey: .kind)
             try keys.encode(path, forKey: .path)
         case .project: try keys.encode("project", forKey: .kind)
+        case .described(let words, _):
+            // Only the words: the files they mean are the box's to find.
+            try keys.encode("described", forKey: .kind)
+            try keys.encode(words, forKey: .words)
         }
     }
 }
@@ -239,6 +246,7 @@ extension ReviewScope {
             from.hasSuffix("^") && to == nil ? "Commits since \(from.dropLast())" : "Commits \(from)..\(to ?? "HEAD")"
         case .folder(let path): path
         case .project: "The whole project"
+        case .described(let words, _): "“\(words)”"
         }
     }
 }
@@ -247,7 +255,7 @@ extension ReviewScope {
     /// It reads files as they are (a folder, the whole project), not changes.
     public var readsFiles: Bool {
         switch self {
-        case .folder, .project: true
+        case .folder, .project, .described: true
         default: false
         }
     }
@@ -261,6 +269,7 @@ extension ReviewScope {
             from.hasSuffix("^") && to == nil ? "the commits since \(from.dropLast())" : "the commits \(from)..\(to ?? "HEAD")"
         case .folder(let path): "the files in \(path)"
         case .project: "the whole project"
+        case .described(let words, _): "the files it finds for “\(words)”"
         }
     }
 }
@@ -284,12 +293,15 @@ public struct ReviewSize: Codable, Sendable, Hashable {
     public var leftOut: Int
     /// A branch's or a range's commits.
     public var commits: Int?
+    /// The first few files found for described words.
+    public var found: [String]?
 
-    public init(files: Int, parts: Int, leftOut: Int = 0, commits: Int? = nil) {
+    public init(files: Int, parts: Int, leftOut: Int = 0, commits: Int? = nil, found: [String]? = nil) {
         self.files = files
         self.parts = parts
         self.leftOut = leftOut
         self.commits = commits
+        self.found = found
     }
 }
 
@@ -300,6 +312,8 @@ public struct ReviewChoices: Codable, Sendable, Hashable {
     public var branch: Branch?
     public var commits: [Commit]
     public var folders: [Folder]
+    /// It reads the files your words describe (`described`); nil from a box from before.
+    public var describes: Bool?
 
     public struct Branch: Codable, Sendable, Hashable {
         public var name: String
@@ -345,11 +359,12 @@ public struct ReviewChoices: Codable, Sendable, Hashable {
         }
     }
 
-    public init(repository: Bool, branch: Branch? = nil, commits: [Commit] = [], folders: [Folder] = []) {
+    public init(repository: Bool, branch: Branch? = nil, commits: [Commit] = [], folders: [Folder] = [], describes: Bool? = nil) {
         self.repository = repository
         self.branch = branch
         self.commits = commits
         self.folders = folders
+        self.describes = describes
     }
 }
 

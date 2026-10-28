@@ -243,8 +243,8 @@ struct ReviewerList: View {
     }
 }
 
-/// "/review "'s lists, as "/loop "'s "How often": what it reads, a commit or a folder for it, and
-/// what it looks for. "1 of 2" and "2 of 2" say there are two to answer.
+/// "/review "'s lists, as "/loop "'s "How often": what it reads, a commit or a folder for it (or
+/// your own words), and what it looks for.
 struct ReviewChoiceList: View {
     let list: ReviewList
     let selected: Int
@@ -252,21 +252,12 @@ struct ReviewChoiceList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            HStack {
-                Text(list.title)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .accessibilityAddTraits(.isHeader)
-                Spacer(minLength: 8)
-                if let step = list.step {
-                    Text(step)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                        .accessibilityLabel("Step \(step)")
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 2)
+            Text(list.title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 2)
+                .accessibilityAddTraits(.isHeader)
             ForEach(Array(list.rows.enumerated()), id: \.element.id) { index, row in
                 Button { choose(row) } label: { label(row) }
                     .buttonStyle(ListRowButtonStyle(isSelected: index == selected))

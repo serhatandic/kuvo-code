@@ -437,6 +437,8 @@ enum DemoDirector {
                     })
                 }
             }
+            // KUVO_DEMO_DRAFT=<text>: typed, not sent, in its composer.
+            if let draft = environment["KUVO_DEMO_DRAFT"] { Drafts.shared[id].text = draft }
             // KUVO_DEMO_QUOTES=<n>: that many quotes to answer in its composer.
             if let count = Int(environment["KUVO_DEMO_QUOTES"] ?? "") {
                 Drafts.shared[id].quotes = []

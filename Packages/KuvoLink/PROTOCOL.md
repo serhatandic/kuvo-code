@@ -1519,7 +1519,14 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   - `{"kind": "folder", "path"}` and `{"kind": "project"}`: the files themselves, of a folder in
     the project (a path inside it, never `..` or absolute: `400`) or all of it, numbered line by
     line: those git keeps or would (all but hidden ones and `node_modules` out of a repository),
-    but for links, lock files, `.env` files, big files and ones that aren't text.
+    but for links, lock files, `.env` files, big files and ones that aren't text;
+  - `{"kind": "described", "words"}` (bridge 0.9.101, when `choices` says `describes`): the files
+    `words` describe ("the auth module and its tests", "the files I changed today"), which the
+    conversation's model picks from the project's files, told what git says was worked on lately
+    and today's date; then read as a folder's are. A client sends only `words` (500 characters at
+    most); the box finds the files, keeps them for half an hour for the same conversation and
+    words (so a review asked for after `measure` reads the same ones), and a review's `scope` has
+    them as `paths` once found. Words that fit no file are `422` with what to do.
 
   One too big to read at once is read in parts, one after another (at most 30; more is left out,
   and its summary says how many files), each by a fresh model.
@@ -1536,15 +1543,17 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
     when the title says it all), and every place it's in, none when it's about the change as a
     whole (a missing test). `fix` is what to send the agent, as your message, to fix them all.
   - `POST …/kuvo/reviews/<session>/measure` with `{"scope"?}` → `{data: {files, parts, leftOut,
-    commits?}}`: how much a review of it would read, to show before asking for a big one
-    (`commits` for a branch or a range of them); `422` with what's wrong when it can't be read
-    (not a repository, no such commit or folder).
+    commits?, found?}}`: how much a review of it would read, to show before asking for a big one
+    (`commits` for a branch or a range of them, `found` the first 10 files found for described
+    words); `422` with what's wrong when it can't be read (not a repository, no such commit or
+    folder, words that fit no file), `503` when the model couldn't be asked.
   - `GET …/kuvo/reviews/<session>/choices` → `{data: {repository, branch?: {name, base, commits},
-    commits: [{id, short, title, time}], folders: [{path, files}]}}`: what "What to review"
+    commits: [{id, short, title, time}], folders: [{path, files}], describes?: true}}`: what "What to review"
     offers in the conversation's folder: the branch it's on with its base and how many commits
     of its own (left out on the base itself), its 30 latest commits (`time` in ms), and its
     folders by path, with how many files each has at any depth (500 at most, shallowest first).
-    Out of a repository, `repository` is `false` and only the folders come.
+    Out of a repository, `repository` is `false` and only the folders come. `describes` says it
+    reads what you describe (`described`; a box from before leaves it out).
   - `POST …/kuvo/reviews/<session>/stop` → `{data: review}`: one under way ends where it is,
     `done`, keeping what it found so far (its summary says how far it got); `409` once it's over.
   - `POST …/kuvo/reviews/<session>/fix` with `{"findings"?: [id]}` → `{data: {text}}`: what to send

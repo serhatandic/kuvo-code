@@ -217,6 +217,31 @@ import Testing
         #expect(try await bridge.api?.reviews().isEmpty == true)
     }
 
+    // "/review about …": what to review said in your own words (What to review › Something else…);
+    // the box finds the files they mean and reads those, and the review says which.
+    @Test func aReviewOfWhatYouDescribeReadsTheFilesFoundForIt() async throws {
+        defer { clean() }
+        let repository = try TestRepository()
+        try repository.write("src/timer.ts", "export const tick = 1000\n")
+        try repository.write("src/billing.ts", "export const charge = 1\n")
+        try repository.write("test/timer.test.ts", "expect(tick)\n")
+        try repository.git("add", "-A")
+        try repository.git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "a")
+        serve(directory: repository.path, answers: [#"{"paths": ["src/timer.ts", "test/"]}"#, #"{"summary": "Fine.", "findings": []}"#])
+        let model = try session(directory: repository.path)
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+
+        model.draftText = #"/review about "the timer and its tests" for security"#
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { model.review?.state == .done }
+        let review = try #require(model.review)
+        #expect(review.scope == .described("the timer and its tests", paths: ["src/timer.ts", "test/timer.test.ts"]))
+        #expect(review.focus == "security")
+        #expect(review.summary == "Fine.")
+        #expect(ReviewList.footnote(review, readerName: nil) == "“the timer and its tests” · security")
+    }
+
     @Test func aReviewPutAwayCanBeBroughtBackAndOneFindingCanBeFixedAlone() async throws {
         defer { clean() }
         let repository = try TestRepository()
@@ -318,8 +343,8 @@ import Testing
         await ReviewList.Known.load(session: id, api: try #require(bridge.agents.api)) { known = $0 }
         // On main, with nothing uncommitted: no branch of its own, and the changes say so.
         let what = try #require(ReviewList.make(.what(""), known: known))
-        #expect(what.rows.map(\.title) == ["Changes not committed yet", "Commits…", "A folder…", "The whole project"])
-        #expect(what.rows.map(\.note) == ["nothing to review", "pick where to start", "src", "1 file"])
+        #expect(what.rows.map(\.title) == ["Changes not committed yet", "Commits…", "A folder…", "The whole project", "Something else…"])
+        #expect(what.rows.map(\.note) == ["nothing to review", "pick where to start", "src", "1 file", "say what to review"])
         let commits = try #require(ReviewList.make(.commit(""), known: known))
         #expect(commits.rows.map(\.title) == ["Log the sign-in", "Check the password"])
 

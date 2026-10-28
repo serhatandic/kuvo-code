@@ -134,6 +134,38 @@ private let readers = [flash, claude, sonnet, copilotSonnet]
     #expect(ReviewCommand.longer(than: " this branch with Claude", readers: readers) == [sonnet, copilotSonnet])
 }
 
+// Something else… in What to review: what to review in your own words, after "about", in quotes
+// once its row is picked; it's the box that finds the files, so only the words go to it, and a
+// review comes back with the files it found.
+@Test func whatToReviewCanBeSaidInYourOwnWords() throws {
+    // Being written: its list, and what's written so far is what it reads, sent as it is.
+    let typing = ReviewCommand(" about the auth module", readers: readers)
+    #expect(typing.asking == .described("the auth module"))
+    #expect(typing.scope == .described("the auth module"))
+    #expect(typing.head == " ")
+    #expect(ReviewCommand(" about ", readers: readers).asking == .described(""))
+    #expect(ReviewCommand(" about ", readers: readers).scope == nil)
+    #expect(ReviewCommand(" some", readers: readers).asking == .what("some"))
+    // Picked, in quotes: then Look for, and what follows reads as ever.
+    let picked = ReviewCommand.phrase(.described("the auth module and its tests"))
+    #expect(picked == #"about "the auth module and its tests""#)
+    let command = ReviewCommand(" " + picked + " for security with Claude Sonnet 4.5 the tokens", readers: readers)
+    #expect(command.scope == .described("the auth module and its tests"))
+    #expect(command.preset == .security)
+    #expect(command.reader == sonnet)
+    #expect(command.focus == "the tokens")
+    #expect(ReviewCommand(" " + picked + " ", readers: readers).asking == .lookFor(""))
+    // A quote in your words can't end them early.
+    #expect(ReviewCommand.phrase(.described(#"the "new" sign-in"#)) == #"about "the 'new' sign-in""#)
+
+    let said = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ReviewScope.described("files I touched today", paths: ["a.ts"]))) as? [String: String]
+    #expect(said == ["kind": "described", "words": "files I touched today"])
+    let kept = #"{"id":"rev_1","session":"ses_1","state":"done","scope":{"kind":"described","words":"the auth module","paths":["src/auth/login.ts"]},"findings":[],"started":1}"#
+    let review = try JSONDecoder().decode(Review.self, from: Data(kept.utf8))
+    #expect(review.scope == .described("the auth module", paths: ["src/auth/login.ts"]))
+    #expect(review.scope?.title == "“the auth module”")
+}
+
 // From review: a pick after typed words goes after a space; the short words the lists are found by
 // are read too; a model named after your own words reads it; a coding agent's conversation looks
 // for no model.

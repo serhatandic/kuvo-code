@@ -689,7 +689,58 @@ describe("a review with fresh eyes", () => {
     mkdirSync(join(folder, "lib", "deep"), { recursive: true })
     writeFileSync(join(folder, "lib", "a.ts"), "a\n")
     writeFileSync(join(folder, "lib", "deep", "b.ts"), "b\n")
-    expect(await reviewChoices(folder)).toEqual({ repository: false, commits: [], folders: [{ path: "lib", files: 2 }, { path: "lib/deep", files: 1 }] })
+    expect(await reviewChoices(folder)).toEqual({ repository: false, commits: [], folders: [{ path: "lib", files: 2 }, { path: "lib/deep", files: 1 }], describes: true })
+  })
+
+  test("what you describe in words is read as the files the model finds for it, measured first, the same ones reviewed", async () => {
+    const folder = join(root, "described")
+    const git = (...args: string[]) => run("git", ["-C", folder, "-c", "user.email=t@example.com", "-c", "user.name=T", ...args])
+    await run("git", ["init", "-q", "-b", "main", folder])
+    mkdirSync(join(folder, "src", "auth"), { recursive: true })
+    mkdirSync(join(folder, "test"))
+    writeFileSync(join(folder, "src", "auth", "login.ts"), "check(password)\n")
+    writeFileSync(join(folder, "src", "auth", "session.ts"), "keep(token)\n")
+    writeFileSync(join(folder, "test", "login.test.ts"), "expect(login())\n")
+    writeFileSync(join(folder, "src", "billing.ts"), "charge()\n")
+    writeFileSync(join(folder, ".env"), "KEY=secret\n")
+    await git("add", "-A")
+    await git("commit", "-qm", "first")
+    writeFileSync(join(folder, "src", "billing.ts"), "charge(twice)\n")
+    engine.directory = folder
+    const reviews = new Reviews(join(root, "reviews.json"), places())
+    reviews.onEnded = beat
+    const measure = (scope: any) => reviewRoutes(reviews, "POST", ["ses_work", "measure"], async () => ({ scope }))
+
+    // The model picks from the project's files, told what changed lately; a folder is each file
+    // in it, and one it made up, one out of the project or a secret is never read.
+    engine.answers = [`{"paths": ["src/auth/", "test/login.test.ts", "src/made-up.ts", "../outside.ts", ".env"]}`]
+    const size = (await (await measure({ kind: "described", words: "the auth module and its tests" })).json() as any).data
+    expect(size).toEqual({ files: 3, parts: 1, leftOut: 0, found: ["src/auth/login.ts", "src/auth/session.ts", "test/login.test.ts"] })
+    const asked = engine.checks.at(-1)!.prompt
+    expect(asked).toContain("<words>\nthe auth module and its tests\n</words>")
+    expect(asked).toContain("src/billing.ts")
+    expect(asked).toContain("Not committed yet:\nsrc/billing.ts")
+
+    // Asked for soon after, it reads those same files, without asking again, and keeps them.
+    const checks = engine.checks.length
+    engine.answers = [`{"summary": "Fine.", "findings": []}`]
+    await reviewRoutes(reviews, "POST", ["ses_work"], async () => ({ scope: { kind: "described", words: "the auth module and its tests", paths: ["src/billing.ts"] } }))
+    await until(() => reviews.get("ses_work")?.state === "done")
+    const review = reviews.get("ses_work")!
+    expect(review.scope).toEqual({ kind: "described", words: "the auth module and its tests", paths: ["src/auth/login.ts", "src/auth/session.ts", "test/login.test.ts"] })
+    expect(engine.checks.length).toBe(checks + 1)
+    const read = engine.checks.at(-1)!.prompt
+    expect(read).toContain("=== src/auth/session.ts ===")
+    expect(read).not.toContain("charge")
+    expect(read).not.toContain("KEY=secret")
+
+    // Words that fit nothing are said so; none at all aren't a scope.
+    engine.answers = [`{"paths": []}`]
+    const none = await measure({ kind: "described", words: "the payment gateway" })
+    expect(none.status).toBe(422)
+    expect(((await none.json()) as any).message).toBe("No files in this project fit that. Say it another way, or pick a folder.")
+    expect((await measure({ kind: "described", words: "  " })).status).toBe(400)
+    reviews.stopAll()
   })
 
   test("a big project is read in parts, and a folder that isn't a repository still has its files read", async () => {
