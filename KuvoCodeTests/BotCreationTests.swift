@@ -88,6 +88,24 @@ import Testing
         #expect(Beta1.jobs(in: botsFile)[bot.id] == "Sorts my inbox twice a day")
     }
 
+    /// New Bot's Create sent again (its answer lost on the way back, and clicked again): one bot,
+    /// one conversation, the same bot both times.
+    @Test func oneNewBotSentAgainMakesOneBot() async throws {
+        let box = try await TestBox(engine: engine.url)
+        defer { done(box) }
+        app.bots.boxes = { _ in box.client(engine: engine.url) }
+        engine.on("POST", "/api/session") { request in
+            StubWeb.json(["data": StubEngine.session("ses_inbox", title: request.body["title"] as? String ?? "", directory: (request.body["location"] as? [String: Any])?["directory"] as? String ?? "")])
+        }
+        await app.workspace.refresh()
+        let request = "req_" + UUID().uuidString
+        let first = try await app.bots.make(name: "Inbox Helper", look: BotLook(color: .mint, shape: .round, face: .calm), model: ModelRef(id: "big-pickle", providerID: "opencode"), machine: nil, project: nil, request: request)
+        let again = try await app.bots.make(name: "Inbox Helper", look: BotLook(color: .mint, shape: .round, face: .calm), model: ModelRef(id: "big-pickle", providerID: "opencode"), machine: nil, project: nil, request: request)
+        #expect(again.bot.id == first.bot.id)
+        #expect(app.bots.list.map(\.name) == ["Inbox Helper"])
+        #expect(engine.requests("POST", "/api/session").count == 1)
+    }
+
     /// The engine couldn't make its conversation: no bot, and no folder left of it.
     @Test func oneThatCouldntBeMadeLeavesNothing() async throws {
         let box = try await TestBox(engine: engine.url)

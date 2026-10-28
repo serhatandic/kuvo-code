@@ -38,6 +38,9 @@ struct BotEditor: View {
     @State private var failure: String?
     /// Making it: waiting for its machine to connect first, if it's on its way.
     @State private var creating: Task<Void, Never>?
+    /// This New Bot's own id, sent each time it's tried, so its box makes one bot however often it's
+    /// sent (an answer lost on the way back, and Create clicked again).
+    @State private var request = "req_" + UUID().uuidString
     @State private var waitsForMachine = false
     @State private var confirmsDelete = false
     @State private var isDeleting = false
@@ -570,7 +573,7 @@ struct BotEditor: View {
                 // From a template or a shared bot, its job is typed in its conversation for you;
                 // otherwise the bot writes first.
                 let made = try await bots.make(name: trimmedName, look: look, personality: personality, model: model, machine: machine, project: project,
-                                               template: template, shared: recipe.map { ($0.job, $0.instructions) })
+                                               template: template, shared: recipe.map { ($0.job, $0.instructions) }, request: request)
                 if let first = made.firstMessage, !first.isEmpty { Drafts.shared[made.bot.sessionID].text = first }
                 created(made.bot)
             } catch is CancellationError {
