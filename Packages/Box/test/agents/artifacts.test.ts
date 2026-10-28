@@ -313,6 +313,21 @@ describe("files a command made", () => {
     expect(value.artifacts.map((artifact: any) => [artifact.name, artifact.latest.via])).toEqual([["chart.csv", ["shell"]]])
   })
 
+  test("what a command made is kept, but not the scratch it left in a tmp folder (a render to check its work)", async () => {
+    recorder = record(store, { bots }).recorder
+    spawnSync("git", ["init", "-q", project])
+    session("ses_code", project)
+    await hear([{ type: "session.execution.started", data: { sessionID: "ses_code" } }])
+    mkdirSync(join(project, "output", "pdf"), { recursive: true })
+    writeFileSync(join(project, "output", "pdf", "moon.pdf"), "%PDF-1.4\n")
+    mkdirSync(join(project, "tmp", "pdfs"), { recursive: true })
+    writeFileSync(join(project, "tmp", "pdfs", "moon.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00]))
+    mkdirSync(join(project, "Temp"))
+    writeFileSync(join(project, "Temp", "check.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00]))
+    await hear([{ type: "session.execution.succeeded", data: { sessionID: "ses_code" } }])
+    expect((await route("GET", "kuvo/artifacts?session=ses_code")).value.artifacts.map((artifact: any) => artifact.name)).toEqual(["moon.pdf"])
+  })
+
   test("a project's are found as the turn ends: outside git by a walk, in git as git status lists them (not what it ignores)", async () => {
     recorder = record(store, { bots }).recorder
     session("ses_code", project)

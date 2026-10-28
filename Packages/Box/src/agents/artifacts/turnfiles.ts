@@ -11,6 +11,12 @@ import { dirname, join, sep } from "node:path"
 export const skipped = new Set([".git", "node_modules", ".venv", "venv", "__pycache__", ".cache", ".pytest_cache", ".mypy_cache", ".next", ".turbo", ".gradle", "target", "DerivedData"])
 
 /**
+ * A project's scratch folders, whatever their case: what a command leaves there (a render to check
+ * its work) isn't what it made for you. (A bot's own folder keeps what it puts in its tmp.)
+ */
+const scratch = new Set(["tmp", "temp", ".tmp"])
+
+/**
  * How much earlier than the turn a file's time may say it changed and still count: Linux stamps
  * files from a coarse clock (a few milliseconds behind the time read just before the write), and
  * some file systems keep whole seconds.
@@ -59,7 +65,7 @@ export function changedSince(folder: string, since: number, keep: (relative: str
   for (const path of candidates) {
     if (found.length >= fileLimit) break
     const relative = path.slice(folder.length + 1)
-    if (!keep(relative) || relative.split(sep).some((part) => skipped.has(part)) || own.some((inside) => path === inside || path.startsWith(inside + sep))) continue
+    if (!keep(relative) || relative.split(sep).some((part) => skipped.has(part) || scratch.has(part.toLowerCase())) || own.some((inside) => path === inside || path.startsWith(inside + sep))) continue
     try {
       const stat = statSync(path)
       if (stat.isFile() && stat.mtimeMs >= since - clockSlack) found.push(path)

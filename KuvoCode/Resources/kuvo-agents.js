@@ -1327,6 +1327,7 @@ import { spawnSync } from "child_process";
 import { existsSync as existsSync3, readdirSync as readdirSync3, statSync as statSync3 } from "fs";
 import { dirname as dirname2, join as join5, sep as sep4 } from "path";
 var skipped = new Set([".git", "node_modules", ".venv", "venv", "__pycache__", ".cache", ".pytest_cache", ".mypy_cache", ".next", ".turbo", ".gradle", "target", "DerivedData"]);
+var scratch = new Set(["tmp", "temp", ".tmp"]);
 var clockSlack = 2000;
 var walkLimit = 20000;
 var fileLimit = 200;
@@ -1357,7 +1358,7 @@ function changedSince(folder, since, keep = () => true) {
     if (found.length >= fileLimit)
       break;
     const relative2 = path.slice(folder.length + 1);
-    if (!keep(relative2) || relative2.split(sep4).some((part) => skipped.has(part)) || own.some((inside) => path === inside || path.startsWith(inside + sep4)))
+    if (!keep(relative2) || relative2.split(sep4).some((part) => skipped.has(part) || scratch.has(part.toLowerCase())) || own.some((inside) => path === inside || path.startsWith(inside + sep4)))
       continue;
     try {
       const stat = statSync3(path);
@@ -9408,6 +9409,107 @@ function safeBase642(path) {
 import { existsSync as existsSync12, lstatSync as lstatSync3, mkdirSync as mkdirSync11, readdirSync as readdirSync11, readFileSync as readFileSync18, readlinkSync, rmSync as rmSync9, symlinkSync as symlinkSync2 } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join19 } from "path";
+
+// Packages/Box/src/agents/agents/codex-citations.ts
+import { basename as basename6 } from "path";
+var opening2 = ":codex-";
+var longest = 4096;
+
+class CodexCitations {
+  held = "";
+  read(words2) {
+    const text2 = this.held + words2;
+    this.held = "";
+    const said2 = [];
+    let from = 0;
+    let at3 = text2.indexOf(":", from);
+    while (at3 >= 0) {
+      const rest = text2.slice(at3, at3 + opening2.length);
+      if (rest.length < opening2.length && opening2.startsWith(rest)) {
+        this.held = text2.slice(at3);
+        return push(said2, text2.slice(from, at3));
+      }
+      if (rest === opening2) {
+        const end = closing(text2, at3);
+        if (end === undefined) {
+          if (text2.length - at3 <= longest) {
+            this.held = text2.slice(at3);
+            return push(said2, text2.slice(from, at3));
+          }
+        } else if (end >= 0) {
+          push(said2, text2.slice(from, at3));
+          const directive = parse2(text2.slice(at3, end + 1));
+          if (directive)
+            said2.push(...directive);
+          from = end + 1;
+          at3 = text2.indexOf(":", from);
+          continue;
+        }
+      }
+      at3 = text2.indexOf(":", at3 + 1);
+    }
+    return push(said2, text2.slice(from));
+  }
+  end() {
+    const text2 = this.held;
+    this.held = "";
+    return push([], text2);
+  }
+}
+function plainCitations(text2) {
+  const reader = new CodexCitations;
+  return [...reader.read(text2), ...reader.end()].map((said2) => ("text" in said2) ? said2.text : basename6(said2.made)).join("");
+}
+function push(said2, text2) {
+  if (!text2)
+    return said2;
+  const last2 = said2[said2.length - 1];
+  if (last2 && "text" in last2)
+    last2.text += text2;
+  else
+    said2.push({ text: text2 });
+  return said2;
+}
+function closing(text2, at3) {
+  let index = at3 + opening2.length;
+  while (index < text2.length && /[a-z0-9-]/.test(text2[index]))
+    index++;
+  if (index === text2.length)
+    return;
+  if (text2[index] !== "{")
+    return -1;
+  let quoted = false;
+  for (index++;index < text2.length; index++) {
+    const char = text2[index];
+    if (char === `
+`)
+      return -1;
+    if (quoted && char === "\\")
+      index++;
+    else if (char === '"')
+      quoted = !quoted;
+    else if (char === "}" && !quoted)
+      return index;
+  }
+  return;
+}
+function parse2(directive) {
+  const name = /^:codex-([a-z0-9-]+)\{/.exec(directive)?.[1];
+  if (name !== "file-citation")
+    return;
+  const attributes = new Map;
+  for (const match of directive.matchAll(/([A-Za-z_][\w-]*)\s*=\s*"((?:[^"\\]|\\.)*)"/g))
+    attributes.set(match[1], match[2].replace(/\\(.)/g, "$1"));
+  const path = attributes.get("path");
+  if (!path)
+    return;
+  if (attributes.get("purpose") === "output")
+    return [{ made: path }];
+  const fence = path.includes("`") ? "``" : "`";
+  return [{ text: `${fence}${path}${fence}` }];
+}
+
+// Packages/Box/src/agents/agents/codex.ts
 var places2 = ["/opt/homebrew/bin", "/usr/local/bin", join19(homedir2(), ".local/bin"), join19(homedir2(), ".codex/bin")];
 var outputLimit4 = 30000;
 var noComputerUse = ["unified-computer-use@openai-bundled", "computer-use@openai-bundled"];
@@ -9745,7 +9847,7 @@ class CodexAgent {
         rpc,
         notify: (method, params) => {
           if (method === "item/completed" && params?.item?.type === "agentMessage" && typeof params.item.text === "string")
-            text2 = params.item.text;
+            text2 = plainCitations(params.item.text);
           if (method !== "turn/completed")
             return;
           if (params?.turn?.status === "completed")
@@ -9815,6 +9917,12 @@ function spawnMessages(direct) {
   if (direct === null)
     return { via: "none", note: "This Codex doesn't say whether its agents take messages: write to the conversation that started it." };
   return { via: "none", note: "Codex hasn't said yet whether this agent takes messages." };
+}
+function citationsOf(lane, item) {
+  let citations = lane.citations?.get(item);
+  if (!citations)
+    (lane.citations ??= new Map).set(item, citations = new CodexCitations);
+  return citations;
 }
 
 class CodexThread {
@@ -10191,7 +10299,7 @@ ${others.map((path) => `- ${path}`).join(`
       case "item/agentMessage/delta":
         this.words(lane);
         lane.streamed.add(params.itemId);
-        turn.text(params.delta ?? "");
+        this.say(lane, citationsOf(lane, params.itemId).read(params.delta ?? ""));
         return;
       case "item/reasoning/summaryTextDelta":
         this.words(lane);
@@ -10453,6 +10561,17 @@ ${others.map((path) => `- ${path}`).join(`
     lane.turn.endStep();
     lane.turn.startStep();
   }
+  say(lane, said2) {
+    for (const each of said2) {
+      if ("text" in each) {
+        lane.turn.text(each.text);
+        continue;
+      }
+      const id = `cited-${newID("call")}`;
+      lane.turn.toolStart(id, `${toolServerName}_show_file`, { path: each.made });
+      lane.turn.toolSucceeded(id, "Shown in the conversation.");
+    }
+  }
   itemStarted(lane, item) {
     const active = lane;
     const turn = lane.turn;
@@ -10580,10 +10699,13 @@ ${others.map((path) => `- ${path}`).join(`
         return;
       }
       case "agentMessage": {
+        const citations = citationsOf(active, item.id);
         if (!active.streamed.has(item.id) && item.text) {
           this.words(active);
-          turn.text(item.text);
+          this.say(active, citations.read(item.text));
         }
+        this.say(active, citations.end());
+        active.citations?.delete(item.id);
         const questions = (item.questions ?? []).map((question) => `- ${question.title ?? ""}${question.options?.length ? ` (${question.options.join(" / ")})` : ""}`);
         if (questions.length)
           turn.text(`
@@ -12641,7 +12763,7 @@ function scanCommands(text2, start, close, out, state) {
   let depth = 0;
   let escaped = false;
   const heredocs = [];
-  const push = () => {
+  const push2 = () => {
     addCommand(current, out, state);
     current = "";
   };
@@ -12649,7 +12771,7 @@ function scanCommands(text2, start, close, out, state) {
   while (i < text2.length) {
     const ch = text2[i];
     if (close && ch === close && (close !== ")" || depth === 0)) {
-      push();
+      push2();
       return i;
     }
     const wasEscaped = escaped;
@@ -12716,7 +12838,7 @@ function scanCommands(text2, start, close, out, state) {
       i += taken;
     } else if (ch === `
 `) {
-      push();
+      push2();
       i++;
       for (const doc of heredocs.splice(0)) {
         let found2 = false;
@@ -12748,14 +12870,14 @@ function scanCommands(text2, start, close, out, state) {
         else
           state.sure = false;
       }
-      push();
+      push2();
       i += text2[i + 1] === ch || ch === "|" && text2[i + 1] === "&" ? 2 : 1;
     } else {
       current += ch;
       i++;
     }
   }
-  push();
+  push2();
   if (close || heredocs.length || depth)
     state.sure = false;
   return text2.length;
@@ -15444,13 +15566,13 @@ function ring(task, all) {
   };
   return path(task);
 }
-var opening2 = "[Work from ";
+var opening3 = "[Work from ";
 var divider = `
 
 ---
 `;
 function compose(task, chat, wrapUp, from, before = []) {
-  let text2 = opening2 + chat.name + " \xB7 " + chat.id + `]
+  let text2 = opening3 + chat.name + " \xB7 " + chat.id + `]
 
 ` + task.task + divider + `The user agreed to this in the group chat "${chat.name}", and this part is yours. What was decided (${from}):
 
@@ -16719,7 +16841,7 @@ class Seats {
     const group = { id: chat2.id, name: chat2.name, purpose: chat2.purpose, members: chat2.members.map((member2) => member2.id), seats: {}, heard: {}, created: "" };
     return seatInstructions(bot, group, others, lead, personality, settings?.identityNote ?? "");
   }
-  async make(bot, chat2, title, scratch) {
+  async make(bot, chat2, title, scratch2) {
     const model2 = await this.model(bot);
     const onAgents = runsWithAgents(model2);
     const api = this.apiFor(onAgents);
@@ -16729,7 +16851,7 @@ class Seats {
     const text3 = this.seatText(bot, chat2);
     const session = await api.create(bot.directory, title, agent, model2, this.rules(bot));
     try {
-      await api.setMetadata(session.id, { kuvo: { seat: { group: chat2.id, bot: bot.id, ...scratch ? { scratch: true } : {} } } });
+      await api.setMetadata(session.id, { kuvo: { seat: { group: chat2.id, bot: bot.id, ...scratch2 ? { scratch: true } : {} } } });
       await api.setInstruction(session.id, seatKey, text3);
     } catch (error2) {
       await api.delete(session.id).catch(() => {});
@@ -16800,7 +16922,7 @@ class Seats {
     };
     const ownConversation = turn.kind === "guest" || turn.kind === "split";
     let provider;
-    let scratch;
+    let scratch2;
     try {
       const model2 = await this.model(bot);
       going();
@@ -16837,7 +16959,7 @@ class Seats {
         ({ seat, agents } = resume);
         api = this.apiFor(agents);
         if (ownConversation)
-          scratch = { seat, agents };
+          scratch2 = { seat, agents };
         else if (seat !== turn.seat) {
           report({ phase: "seated", seat, agents, ...turn.seat ? { replaced: turn.seat } : {} });
           if (turn.seat)
@@ -16846,7 +16968,7 @@ class Seats {
       } else if (ownConversation) {
         const title = turn.kind === "guest" ? `${bot.name} asked into ${turn.chat.name}` : `${bot.name} handing out the work in ${turn.chat.name}`;
         ({ seat, agents, api } = await this.make(bot, turn.chat, title, true));
-        scratch = { seat, agents };
+        scratch2 = { seat, agents };
         progress?.({ seat, agents });
       } else {
         let ours = Boolean(turn.seat);
@@ -16949,8 +17071,8 @@ class Seats {
         throw error2;
       return { ok: false, why: plainError(reason2(error2), provider, this.context.place) };
     } finally {
-      if (scratch)
-        this.drop(scratch.seat, scratch.agents);
+      if (scratch2)
+        this.drop(scratch2.seat, scratch2.agents);
     }
   }
   async give(bot, text3, chat2) {
@@ -19919,4 +20041,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents e3c6f417c638c8683181eb28850b065d48cb16f7d87e526c8c9b84c45ee0ac56
+// Built from Packages/Box/src/agents bb5d705f22bfb27a82a41bbe95d469b77b5e8d573554350d94d26e2c2621b164
