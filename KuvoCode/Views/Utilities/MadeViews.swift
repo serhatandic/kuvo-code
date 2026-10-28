@@ -241,25 +241,27 @@ struct MadePopover: View {
 
     private var heading: String { place.title }
 
-    /// A coding session's changes to files git tracks are in the panel.
+    /// A coding session's changes to tracked files are in the panel. Its words wrap rather
+    /// than cut off, beside a button that keeps its size.
     private var changesNote: some View {
         VStack(spacing: 0) {
             Divider()
             HStack(spacing: 8) {
-                Text("Changes to files git tracks are in the side panel.")
+                Text("Changes to tracked files are in the side panel.")
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
                 Button("Show Changes") {
                     close()
                     app.utilities.revealChanges()
                 }
                 .buttonStyle(TextButtonStyle(outset: true))
+                .fixedSize()
             }
             .font(.system(size: 12))
             .padding(.horizontal, 16)
-            .frame(height: 36)
+            .padding(.vertical, 9)
+            .frame(minHeight: 36)
             .accessibilityElement(children: .contain)
         }
     }
@@ -343,7 +345,7 @@ struct MadePopover: View {
         let detail = switch place {
         case .bot(let bot): "What \(bot.name) writes, makes and keeps in its memory shows up here, with every version."
         case .group: things.only == nil ? "What the bots in this chat write and make shows up here, each with its face." : "This bot hasn’t made anything in this chat yet."
-        case .session: "Pictures, documents and other files this session makes show up here. Changes to files git tracks are in the side panel."
+        case .session: "Pictures, documents and other files this session makes show up here. Changes to tracked files are in the side panel."
         }
         return MadeNotice(symbol: "tray", title: "Nothing Made Yet", detail: detail)
     }
