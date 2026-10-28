@@ -19726,16 +19726,25 @@ class Store {
     const record2 = this.records.get(id);
     if (!record2)
       return;
-    const folder = join24(this.root, id);
-    mkdirSync15(folder, { recursive: true });
-    for (const [name, value] of [
-      ["session.json", record2.session],
-      ["messages.json", record2.messages],
-      ["agent.json", record2.agent]
-    ]) {
-      const file = join24(folder, name);
-      writeFileSync17(file + ".new", JSON.stringify(value));
-      renameSync11(file + ".new", file);
+    try {
+      const folder = join24(this.root, id);
+      mkdirSync15(folder, { recursive: true });
+      for (const [name, value] of [
+        ["session.json", record2.session],
+        ["messages.json", record2.messages],
+        ["agent.json", record2.agent]
+      ]) {
+        const file = join24(folder, name);
+        writeFileSync17(file + ".new", JSON.stringify(value));
+        renameSync11(file + ".new", file);
+      }
+    } catch (error3) {
+      console.error(`session ${id} not written:`, error3);
+      if (!this.pending.has(id))
+        this.pending.set(id, setTimeout(() => {
+          this.pending.delete(id);
+          this.write(id);
+        }, 5000));
     }
   }
 }
@@ -19971,4 +19980,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents a9fe1b34a5e08ac1497e9e21cca10f46107c0cc5f31e682a6f8804ff6a92e993
+// Built from Packages/Box/src/agents 80ba8e4ab84b4b0827854bb583efcdf89889e4beec57ecd944a84fa822433a53

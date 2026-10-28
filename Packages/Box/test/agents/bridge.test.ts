@@ -162,6 +162,36 @@ describe("keeping an agent's program current", () => {
   })
 })
 
+describe("a session's files", () => {
+  test("a turn that ends while they can't be written (a full disk) still ends, and what it said is written once they can be", () => {
+    const folder = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-store-"))
+    const error = console.error
+    try {
+      const store = new Store(folder)
+      store.add({ id: "ses_full", projectID: "p", cost: 0, tokens: noTokens(), time: { created: 1, updated: 1 }, location: { directory: "/tmp" } })
+      const turn = new Turn(store, "ses_full", "/tmp", { providerID: "opencode", id: "m" }, "build")
+      turn.startStep()
+      turn.blockDelta("text-0", "text", "Done.")
+      turn.endStep()
+      // Nothing more can be written there.
+      chmodSync(join(folder, "ses_full"), 0o500)
+      console.error = () => {}
+      turn.finish("succeeded")
+      expect(turn.isEnded).toBe(true)
+      // Room again: written.
+      chmodSync(join(folder, "ses_full"), 0o700)
+      store.flush()
+      const kept = JSON.parse(readFileSync(join(folder, "ses_full", "messages.json"), "utf8"))
+      expect(kept.at(-1)).toMatchObject({ type: "idle", outcome: "succeeded" })
+      expect(JSON.stringify(kept)).toContain("Done.")
+    } finally {
+      console.error = error
+      chmodSync(join(folder, "ses_full"), 0o700)
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("blocks an agent keeps apart", () => {
   test("thinking and words that interleave stay two blocks", () => {
     const folder = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-turn-"))
