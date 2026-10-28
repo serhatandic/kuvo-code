@@ -1248,7 +1248,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   mention, `info` the session as the engine lists it (for a client that doesn't list it: an older
   one, archived).
   Every session of the box's engine and of its coding agents' bridge (archived ones too; not a
-  subagent's, a group chat seat's or a coding agent's turn), with no regard for case or accents.
+  group chat seat's or a coding agent's turn, nor their subagents'), with no regard for case or
+  accents. A subagent's words find the conversation at the top of its chain, once (its own words
+  first), with `subagent`, the subagent's session as the engine lists it (from bridge 0.9.93;
+  before, subagents weren't searched).
   Only what was said and worked on is searched: what you wrote (not what Kuvo Code adds to a
   message's end), other agents' messages and wake-ups, the agent's replies, what each step worked
   on, and the commands you ran with their output; not who's speaking, nor the app's words for a

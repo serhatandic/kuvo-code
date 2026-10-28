@@ -1,8 +1,9 @@
 // Searching what was said in a box's conversations (PROTOCOL.md, `kuvo/search`), on every box, for
 // a client's sidebar search: sessions whose conversation has the words, archived ones too, the
 // latest first, with the words around them; not for a word only the app's own labels have ("You",
-// "Agent", "Read …" for a step), though a step's file is found; never a subagent's, a group chat
-// seat's or a coding agent's turn. A conversation is read again only once its session changed.
+// "Agent", "Read …" for a step), though a step's file is found; a subagent's words find the
+// conversation it works for; never a group chat seat's or a coding agent's turn. A conversation is
+// read again only once its session changed.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/search.test.js`.
 import assert from "node:assert/strict";
@@ -52,7 +53,9 @@ async function engine(t, sessions, conversations) {
     };
     if (url.pathname === "/api/session") {
       if (sessions.down) return response.writeHead(500).end("{}");
-      return reply(paged(sessions.list.filter(each => !each.parentID), 100));
+      // Those under none (`parentID=null`), or all of them, subagents' too.
+      const roots = url.searchParams.get("parentID") === "null";
+      return reply(paged(sessions.list.filter(each => !roots || !each.parentID), 100));
     }
     const messages = /^\/api\/session\/([^/]+)\/message$/.exec(url.pathname);
     // Newest first, as the engine pages them.
@@ -96,25 +99,68 @@ test("the app's own words for who spoke and for a step find nothing, but what a 
   assert.deepEqual((await box.search("dark.swift")).found, ["ses_dark"]);
 });
 
-test("not a subagent's, a group chat seat's or a coding agent's turn, nor what Kuvo Code adds to a message", async t => {
+test("not a group chat seat's or a coding agent's turn, nor their subagents', nor what Kuvo Code adds to a message", async t => {
   const box = await engine(t, { list: [
     session("ses_here", "Here", 40),
-    session("ses_sub", "Sub", 30, { parentID: "ses_here" }),
     session("ses_seat", "Seat", 20, { metadata: { kuvo: { seat: "grp_1" } } }),
+    session("ses_seat_sub", "Seat's subagent", 25, { parentID: "ses_seat" }),
     session("ses_turn", "Turn", 10, { metadata: { kuvo: { engineFor: "ses_here" } } }),
   ] }, {
     ses_here: [
       { id: "msg_1", type: "user", text: "Check the release notes\n\n<sent-with>\nThe user sent this with a keyword, which Kuvo Code ran as they typed it:\n/plan\n</sent-with>" },
       { id: "msg_2", type: "user", text: "Picked the second\n\n<from-widget>\nThe user sent this from a widget shown in this conversation (show_widget), titled:\nRelease checklist\n</from-widget>" },
     ],
-    ses_sub: conversation("sub", "release notes", "release notes"),
     ses_seat: conversation("seat", "release notes", "release notes"),
+    ses_seat_sub: conversation("seatsub", "release notes", "release notes"),
     ses_turn: conversation("turn", "release notes", "release notes"),
   });
   assert.deepEqual((await box.search("release notes")).found, ["ses_here"]);
   assert.deepEqual((await box.search("keyword")).found, [], "the keyword's note isn't what was said");
   assert.deepEqual((await box.search("show_widget")).found, [], "nor a widget's");
   assert.deepEqual((await box.search("picked the second")).found, ["ses_here"]);
+});
+
+test("a subagent's words find the conversation it works for, as that conversation, once, with the subagent that said them", async t => {
+  const box = await engine(t, { list: [
+    session("ses_timer", "Timer cycle", 50),
+    session("ses_find", "Find the timer", 45, { parentID: "ses_timer" }),
+    session("ses_deeper", "Read the settings", 44, { parentID: "ses_find" }),
+    session("ses_other", "Theme", 40),
+    session("ses_orphan", "Its conversation is gone", 60, { parentID: "ses_deleted" }),
+  ] }, {
+    ses_timer: conversation("timer", "Make the timer cycle", "Done: it cycles."),
+    ses_find: conversation("find", "Find where the timer lives", "It's in TimerStore, next to the pomodoro count."),
+    ses_deeper: conversation("deeper", "Read the settings file", "The cycle length is in the plist."),
+    ses_other: conversation("other", "Add a dark theme", "Done: the pomodoro count is themed too."),
+    ses_orphan: conversation("orphan", "pomodoro", "pomodoro"),
+  });
+  const found = await box.search("pomodoro count");
+  assert.deepEqual(found.found, ["ses_timer", "ses_other"], "the conversation, the latest first; not a subagent whose conversation is gone");
+  const [timer, other] = found.body.results;
+  assert.equal(timer.info.title, "Timer cycle", "the conversation as listed");
+  assert.equal(timer.subagent?.id, "ses_find", "with the subagent that said it");
+  assert.ok(timer.snippet.includes("pomodoro count"), timer.snippet);
+  assert.equal(other.subagent, undefined, "its own words: no subagent");
+  // A subagent's subagent finds the same conversation.
+  const deeper = await box.search("plist");
+  assert.deepEqual(deeper.found, ["ses_timer"]);
+  assert.equal(deeper.body.results[0].subagent?.id, "ses_deeper");
+  // Its own words come first, and it's found once.
+  const own = await box.search("timer");
+  assert.deepEqual(own.found, ["ses_timer"]);
+  assert.equal(own.body.results[0].subagent, undefined);
+});
+
+test("a subagent's words, once it has said more, are found as it says them now", async t => {
+  const sessions = { list: [session("ses_top", "Top", 50), session("ses_sub", "Sub", 40, { parentID: "ses_top" })] };
+  const conversations = { ses_top: conversation("top", "Look into it", "On it."), ses_sub: conversation("sub", "Find the walrus", "Not yet.") };
+  const box = await engine(t, sessions, conversations);
+  assert.deepEqual((await box.search("narwhal")).found, []);
+  conversations.ses_sub = conversation("sub", "Find the walrus", "Found a narwhal instead.");
+  sessions.list = [session("ses_top", "Top", 50), session("ses_sub", "Sub", 41, { parentID: "ses_top" })];
+  const found = await box.search("narwhal");
+  assert.deepEqual(found.found, ["ses_top"]);
+  assert.equal(found.body.results[0].subagent?.id, "ses_sub");
 });
 
 test("a conversation is read again only once its session changed, and asking with nothing says so", async t => {

@@ -485,10 +485,15 @@ final class Workspace {
     /// each machine that's connected, and only what's listed here is shown.
     /// `answered`: each box's finds as it answers (by its id, `BoxClient.mac` or a machine's), for
     /// a sidebar that shows them as they come.
-    func searchConversations(_ query: String, limit: Int = 20, answered: ((String, [(session: Session, snippet: String)]) -> Void)? = nil) async -> [(session: Session, snippet: String)] {
+    func searchConversations(_ query: String, limit: Int = 20, answered: ((String, [ConversationFind]) -> Void)? = nil) async -> [ConversationFind] {
         nonisolated struct Found: Decodable, Sendable {
             var results: [Hit]
-            struct Hit: Decodable, Sendable { var session: String; var snippet: String }
+            struct Hit: Decodable, Sendable {
+                var session: String
+                var snippet: String
+                var subagent: Subagent?
+                struct Subagent: Decodable, Sendable { var id: String }
+            }
             /// Its answer: what it found, or why it couldn't search.
             static func asked(_ client: BoxClient, _ path: String) async -> Result<[Hit], UnsearchedFailure> {
                 guard let (status, body) = try? await client.send("GET", path) else { return .failure(.init(reason: .didntAnswer)) }
@@ -507,7 +512,7 @@ final class Workspace {
             for await answer in group {
                 answers[answer.0] = answer.1
                 let found = (try? answer.1.get()) ?? []
-                answered?(answer.0, found.compactMap { result in session(result.session).map { (session: $0, snippet: result.snippet) } })
+                answered?(answer.0, found.compactMap { result in session(result.session).map { ConversationFind(session: $0, snippet: result.snippet, subagent: result.subagent?.id) } })
             }
             return answers
         }
@@ -520,9 +525,17 @@ final class Workspace {
         }
         if unsearched != self.unsearched { self.unsearched = unsearched }
         return answers.values.compactMap { try? $0.get() }.flatMap(\.self)
-            .compactMap { result in session(result.session).map { (session: $0, snippet: result.snippet) } }
+            .compactMap { result in session(result.session).map { ConversationFind(session: $0, snippet: result.snippet, subagent: result.subagent?.id) } }
             .sorted { $0.session.time.updated > $1.session.time.updated }
             .prefix(limit).map { $0 }
+    }
+
+    /// A conversation a search of what was said found: the words around the first mention, and
+    /// the subagent that said them when it wasn't the conversation itself.
+    struct ConversationFind {
+        var session: Session
+        var snippet: String
+        var subagent: String?
     }
 
     /// The computers the last search of conversations couldn't search, each with why, by name.

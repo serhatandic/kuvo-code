@@ -17,10 +17,10 @@ interface Page<T> {
   cursor?: { next?: string; previous?: string } | null;
 }
 
-/** Every session `target` lists that works for no other (a subagent's isn't one), newest first. */
-export async function rootSessions(target: Target): Promise<EngineSession[]> {
+/** Every session `target` lists, subagents' too, newest first. */
+export async function everySession(target: Target): Promise<EngineSession[]> {
   const all: EngineSession[] = [];
-  let page = await engineGet(target, "api/session?limit=100&order=desc&parentID=null") as Page<EngineSession> | null;
+  let page = await engineGet(target, "api/session?limit=100&order=desc") as Page<EngineSession> | null;
   for (let pages = 0; pages < 1000 && page?.data?.length; pages++) {
     all.push(...page.data);
     const cursor = page.cursor?.next;

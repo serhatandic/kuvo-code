@@ -81,6 +81,31 @@ import Testing
         #expect(snippet.contains("forgets the email"), "the words around it: \(snippet)")
     }
 
+    /// What a subagent said finds the conversation it works for, which shows what it found, once.
+    @Test func aSubagentsWordsFindItsConversation() async throws {
+        let box = try await searching()
+        defer {
+            box.stop()
+            engine.stop()
+        }
+        await start()
+        engine.list([
+            StubEngine.session("ses_login", title: "Login", directory: "/tmp/kuvo-tests-search", created: 30),
+            StubEngine.session("ses_find", title: "Find the form", directory: "/tmp/kuvo-tests-search", created: 31,
+                               extra: ["parentID": "ses_login"]),
+            StubEngine.session("ses_dark", title: "Theme", directory: "/tmp/kuvo-tests-search", created: 20),
+        ])
+        engine.conversation("ses_find", conversation("find", you: "Find the sign-in form", agent: "It's in LoginView, beside the cookie banner."))
+        await workspace.refresh()
+        let found = await workspace.searchConversations("cookie banner")
+        #expect(found.map(\.session.id) == ["ses_login"])
+        #expect(found.first?.snippet.contains("cookie banner") == true)
+        #expect(found.first?.subagent == "ses_find", "said by its subagent: opened without Find, which has nothing to show")
+        let form = await workspace.searchConversations("form")
+        #expect(form.map(\.session.id) == ["ses_login"], "its own words and its subagent's: found once")
+        #expect(form.first?.subagent == nil, "by its own words first")
+    }
+
     /// Words only the app adds when it writes a conversation out (who's speaking, its title) find
     /// nothing: no one said them.
     /// Each computer's finds show as it answers: one that's slow (a machine reading its
