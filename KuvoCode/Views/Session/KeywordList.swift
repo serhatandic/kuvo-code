@@ -94,7 +94,8 @@ struct SlashList: View {
     }
 }
 
-/// A keyword's mark, in the list and the bubbles: secondary, Plan's in its orange.
+/// A keyword's mark, in the list and the bubbles: secondary, the same for every one (Plan's
+/// orange is only its mode's, in the composer).
 struct KeywordMark: View {
     let keyword: Keyword
     var size: CGFloat = 12
@@ -102,7 +103,7 @@ struct KeywordMark: View {
     var body: some View {
         Image(systemName: keyword.symbol)
             .font(.system(size: size))
-            .foregroundStyle(keyword.isPlan ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+            .foregroundStyle(.secondary)
             .frame(width: 18)
             .accessibilityHidden(true)
     }

@@ -29,17 +29,16 @@ struct MessageField: NSViewRepresentable {
     /// How many pictures are attached: "[Image n]" up to that stands out.
     var images = 0
     /// The keyword the message starts with ("/goal"), drawn as a token: its mark in place of the
-    /// "/", the rest in bold, in the accent (Plan's orange). The text stays as typed.
+    /// "/", the rest in bold, in the accent. The text stays as typed.
     var token: Token?
     /// In grey after what's written (a keyword's example, "what to do each time"), until more is.
     var example: String?
 
     /// A keyword at the start: how much of the text it is, in UTF-16 (/loop's takes in its
-    /// schedule, "/loop every morning at 9"), its mark, and whether it's Plan's orange.
+    /// schedule, "/loop every morning at 9"), and its mark.
     struct Token: Equatable {
         var length: Int
         var symbol: String
-        var orange = false
     }
     /// A key, before the field has it: true when it's taken.
     var onKey: (Key) -> Bool = { _ in false }
@@ -435,7 +434,7 @@ final class MessageTextView: NSTextView {
         }
         if let token, token.length > 1, token.length <= length {
             let span = NSRange(location: 0, length: token.length)
-            let ink: NSColor = token.orange ? .systemOrange : NSColor(Color.accentColor)
+            let ink = NSColor(Color.accentColor)
             storage.addAttributes([.font: bold, .foregroundColor: ink], range: span)
             // Not one piece for Backspace: what's typed stays text you can correct a letter at a time.
             face(Self.symbol(token.symbol, size: size, ink: ink), at: span)

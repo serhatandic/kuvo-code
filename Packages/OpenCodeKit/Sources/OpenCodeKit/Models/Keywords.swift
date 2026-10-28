@@ -75,9 +75,6 @@ public enum Keyword: String, CaseIterable, Sendable, Hashable {
         }
     }
 
-    /// Drawn in Plan's orange, as the mode chip is, rather than the accent.
-    public var isPlan: Bool { self == .plan }
-
     /// The box feature it needs (`features` in `kuvo/info`): nil for one made of what every
     /// engine does (Plan mode, summarizing).
     public var feature: String? {

@@ -662,7 +662,7 @@ struct Composer: View {
     private var token: MessageField.Token? {
         guard let (keyword, rest) = typedKeyword else { return nil }
         let schedule = keyword == .loop ? LoopCommand(rest).scheduleLength : keyword == .review ? reviewCommand(rest).readerLength : 0
-        return MessageField.Token(length: keyword.typed.utf16.count + schedule, symbol: keyword.symbol, orange: keyword.isPlan)
+        return MessageField.Token(length: keyword.typed.utf16.count + schedule, symbol: keyword.symbol)
     }
 
     /// In grey after the keyword until something follows it: what to write ("/loop"'s once it
