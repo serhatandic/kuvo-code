@@ -95,6 +95,9 @@ struct ReviewListsTests {
         #expect(older.hasNoParts)
         // With the coding agents a part has no session: listed, not opened.
         #expect(!Review.Part(n: 1, of: 2, files: ["a.ts"], state: .done, found: 1).opens)
+        // A part that failed says so in its own view, and what became of its review.
+        #expect(ReviewPartWords.failed(stopped: false, alone: false) == "This part couldn’t be read. The review went on with the others.")
+        #expect(ReviewPartWords.failed(stopped: false, alone: true) == "The reviewer couldn’t read this, so the review couldn’t be done. Ask for it again.")
     }
 
     @Test func theLineUnderAReviewSaysWhatItCoveredAndWhoReadIt() throws {

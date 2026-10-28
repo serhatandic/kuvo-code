@@ -6,9 +6,9 @@
 // does it, here beside the engine, with the folder's git, for the engine's sessions and the
 // coding agents' alike (PROTOCOL.md, "Reviews").
 
-import { lstatSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync, type Dirent } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync, type Dirent } from "node:fs"
 import { lstat, readFile } from "node:fs/promises"
-import { join, sep } from "node:path"
+import { dirname, join, sep } from "node:path"
 import { emit } from "./events"
 import type { GoalPlaces } from "./goals"
 import { newID } from "./ids"
@@ -125,13 +125,19 @@ const readLimit = partLimit * partsLimit
 const partFilesShown = 200
 /** How long a part's reviewer has to read it. */
 const partTime = 10 * 60_000
-/** What a part's reviewer may do: read the project, nothing more (the last rule that matches wins). */
-const partPermissions = [
-  { action: "*", resource: "*", effect: "deny" },
-  ...["read", "grep", "glob", "list"].map((action) => ({ action, resource: "*", effect: "allow" })),
-  { action: "read", resource: "*.env", effect: "deny" },
-  { action: "read", resource: "*.env.*", effect: "deny" },
-]
+/** What a part's reviewer may do: read the project, from outside it, and nothing more (the last
+ * rule that matches wins). Its session is in a folder of its own (`partsFolder`), so no "Always
+ * allow" saved for the project (saved by project, and checked after these) reaches it. */
+function partPermissions(project: string) {
+  return [
+    { action: "*", resource: "*", effect: "deny" },
+    ...["read", "grep", "glob", "list"].map((action) => ({ action, resource: "*", effect: "allow" })),
+    { action: "external_directory", resource: project, effect: "allow" },
+    { action: "external_directory", resource: join(project, "*"), effect: "allow" },
+    { action: "read", resource: "*.env", effect: "deny" },
+    { action: "read", resource: "*.env.*", effect: "deny" },
+  ]
+}
 /** A file bigger than this isn't read (a dump, a video): it's named, not shown. */
 const newFileLimit = 256_000
 /** Files that are written by tools, not people: not read when reading files. */
@@ -364,6 +370,18 @@ export class Reviews {
     return review
   }
 
+  /** Where parts' sessions are: a folder of the box's own beside its reviews, a git repository with
+   * one empty commit, so it's a project of its own, which no "Always allow" was ever saved for. */
+  private async partsFolder(): Promise<string> {
+    const folder = join(dirname(this.file), "reviewers")
+    if (existsSync(join(folder, ".git"))) return folder
+    mkdirSync(folder, { recursive: true })
+    const git = (...args: string[]) => run("git", ["-C", folder, "-c", "user.name=Kuvo Code", "-c", "user.email=reviewers@kuvo.run", ...args], { timeout: 30_000 }).catch(() => undefined)
+    await git("init", "-q")
+    await git("commit", "-q", "--allow-empty", "-m", "Kuvo Code's reviewers read projects from here")
+    return folder
+  }
+
   /** A review put away or replaced: the sessions its parts were read in go with it. */
   private forgetParts(review: Review) {
     for (const part of review.parts ?? []) {
@@ -383,11 +401,11 @@ export class Reviews {
     const { api, listen } = this.places.engine
     const made = await api.request<{ data?: { id?: string } }>("POST", "/api/session", {
       title: `Review · part ${part.n} of ${part.of}`,
-      location: { directory: info.directory },
+      location: { directory: await this.partsFolder() },
       ...(review.model ? { model: review.model } : {}),
       agent: "plan",
       parentID: info.id,
-      permissions: partPermissions,
+      permissions: partPermissions(info.directory!),
       // Watched, never written to: it reads on its own.
       metadata: { kuvo: { reviewPart: { review: review.id, part: part.n, of: part.of }, messages: { via: "none", note: "A reviewer reads on its own: this is what it read, thought and found." } } },
     })
@@ -435,7 +453,8 @@ export class Reviews {
           if (idle) end(String(idle.outcome ?? "failed"))
         },
       })
-      api.request("POST", at(id) + "/prompt", { text: prompt }).catch((error: any) => end(`failed: ${error?.message ?? error}`))
+      const told = `${prompt}\n\nThe project is in ${info.directory}: read more of its files there if you need to. You can read; you can't change anything.`
+      api.request("POST", at(id) + "/prompt", { text: told }).catch((error: any) => end(`failed: ${error?.message ?? error}`))
     })
     unlisten()
     if (outcome === "timed out") throw new Error("The part took too long to read.")

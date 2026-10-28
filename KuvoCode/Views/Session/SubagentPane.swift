@@ -227,6 +227,7 @@ private struct SubagentConversation: View {
                 // A bot that started it, by its name, as the header says it.
                 .environment(\.subagentStarter, workspace.botName?(parent) ?? SubagentStarter.name(of: workspace.session(parent) ?? workspace.subSession(parent)))
                 .environment(\.isOffline, isOffline)
+                .environment(\.takesNoMessages, !messages.takesMessages)
                 .frame(maxHeight: .infinity)
                 .conversationBar {
                     VStack(spacing: 10) {
@@ -243,7 +244,7 @@ private struct SubagentConversation: View {
                             FailureBar(text: failure) { model.failure = nil }
                                 .modifier(ComposerSurface())
                         }
-                        if !messages.takesMessages, let why = messages.line(parentTitle: parentTitle) {
+                        if !messages.takesMessages, let why = reviewPartFailure ?? messages.line(parentTitle: parentTitle) {
                             // Its agent takes nothing for it from elsewhere: why, in the composer's
                             // place, with Stop while it works, as the composer has.
                             HStack(spacing: 10) {
@@ -327,6 +328,12 @@ private struct SubagentConversation: View {
     private var reviewPart: (n: Int, of: Int)? {
         guard let part = model.session.metadata?["kuvo"]?["reviewPart"], let n = part["part"]?.number, let of = part["of"]?.number else { return nil }
         return (Int(n), Int(of))
+    }
+
+    /// A review's part that failed, said plainly in the composer's place.
+    private var reviewPartFailure: String? {
+        guard let reviewPart, let error = model.lastStepError, !isWorking else { return nil }
+        return ReviewPartWords.failed(stopped: error.isInterruption, alone: reviewPart.of == 1)
     }
 
     /// What it is: a subagent and its agent, or a review's part.

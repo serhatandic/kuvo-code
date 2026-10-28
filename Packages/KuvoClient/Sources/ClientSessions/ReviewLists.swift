@@ -256,3 +256,17 @@ extension Review {
     /// Read on a box from before parts: under way, it can't say what each part does.
     public var hasNoParts: Bool { state == .reviewing && parts == nil }
 }
+
+/// What a review's part that failed says in its own view, in the composer's place: plainly, and
+/// what became of its review.
+public enum ReviewPartWords {
+    /// `alone`: it was the review's only part.
+    public static func failed(stopped: Bool, alone: Bool) -> String {
+        switch (stopped, alone) {
+        case (true, false): "This part was stopped. The review went on with the others."
+        case (false, false): "This part couldn’t be read. The review went on with the others."
+        case (true, true): "The review was stopped here."
+        case (false, true): "The reviewer couldn’t read this, so the review couldn’t be done. Ask for it again."
+        }
+    }
+}

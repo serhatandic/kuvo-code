@@ -725,8 +725,17 @@ describe("a review with fresh eyes", () => {
     expect(made.metadata.kuvo.reviewPart).toEqual({ review: reviews.get("ses_work")!.id, part: 1, of: 2 })
     expect(made.agent).toBe("plan")
     expect(made.permissions[0]).toEqual({ action: "*", resource: "*", effect: "deny" })
+    // Read-only whatever was saved for the project: its session is in a project of its own (the
+    // box's, a git repository with one empty commit), which no "Always allow" was ever saved for,
+    // and from there it may only read, the project's folder too.
+    expect(made.location.directory).toBe(join(root, "reviewers"))
+    expect((await run("git", ["-C", join(root, "reviewers"), "log", "--format=%s"])).stdout.trim()).toBe("Kuvo Code's reviewers read projects from here")
+    expect(made.permissions.filter((rule: any) => rule.effect === "allow").map((rule: any) => `${rule.action} ${rule.resource}`)).toEqual([
+      "read *", "grep *", "glob *", "list *", "external_directory /tmp/project", "external_directory /tmp/project/*",
+    ])
     await until(() => engine.prompts(first[0].session!).length === 1)
     expect(engine.prompts(first[0].session!)[0].text).toContain("=== src/a.ts ===")
+    expect(engine.prompts(first[0].session!)[0].text).toContain("The project is in /tmp/project")
 
     // What it's doing now, as it goes: the file it reads, by its path in the project.
     engine.emit("session.tool.input.started", { sessionID: first[0].session, id: "t1", name: "read" })
