@@ -379,7 +379,9 @@ test("a Mac's files for a machine take the phone's path: kept on the machine's b
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => { server.closeAllConnections(); server.close(); });
   const target = () => ({ pid: process.pid, port: server.address().port, password: "s3cret", version: "2.0.32" });
-  const handle = link.engineHandler(target, {}, target);
+  // The agents' bridge, as a process the box takes for it on a Mac and on Linux alike.
+  const agents = await runningAs("kuvo-agents", t);
+  const handle = link.engineHandler(target, {}, () => ({ ...target(), pid: agents }));
   const pdf = Buffer.from("%PDF-1.4\nThe secret word is MARMALADE.\n%%EOF\n");
   const files = [{ uri: `data:application/pdf;base64,${pdf.toString("base64")}`, name: "note.pdf" }];
   // As `box route` hands it on: from Kuvo Code on another computer, never a phone. What the Mac
@@ -410,9 +412,9 @@ test("a Mac's files for a machine take the phone's path: kept on the machine's b
   // A session the coding agents run gets them through the agents' bridge, the same way.
   delete prompted["/api/session/ses_mac1/prompt"];
   await ask("kuvo/agents/api/session/ses_mac1/prompt", { id: "msg_2", text: "Read it", files });
-  const agents = prompted["/api/session/ses_mac1/prompt"];
-  assert.equal(agents.files, undefined);
-  assert.ok(agents.text.startsWith("Read it\n\n<attached-files>\nOpen these attached files with your tools if you need them:\n"), agents.text);
+  const throughAgents = prompted["/api/session/ses_mac1/prompt"];
+  assert.equal(throughAgents.files, undefined);
+  assert.ok(throughAgents.text.startsWith("Read it\n\n<attached-files>\nOpen these attached files with your tools if you need them:\n"), throughAgents.text);
 
   // A model that can't be found out: the engine's gets the PDF, as most read them; the coding
   // agents open it from where it's kept.
