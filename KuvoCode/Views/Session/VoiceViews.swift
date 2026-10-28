@@ -70,7 +70,7 @@ struct VoiceComposerRow: View {
             // Escape anywhere in the window (the composer's field handles it first).
             .keyboardShortcut(.cancelAction)
             .help("Stop listening, without keeping what you said (Escape)")
-            if voice.phase == .listening || voice.phase == .finishing {
+            if voice.phase == .listening || voice.phase == .finishing || voice.keepsWords {
                 Button(action: done) {
                     HStack(spacing: 5) {
                         Text("Done")
@@ -87,6 +87,7 @@ struct VoiceComposerRow: View {
         .controlSize(.regular)
         .frame(minHeight: 32)
     }
+
 }
 
 /// The voice field ("Voice Field"): the whole window steps back while you speak. How long it's
@@ -138,7 +139,7 @@ struct VoiceField: View {
                 .buttonBorderShape(.capsule)
                 .keyboardShortcut(.cancelAction)
                 .help("Stop listening, without keeping what you said (Escape)")
-                if case .failed(let failure) = voice.phase {
+                if case .failed(let failure) = voice.phase, failure.opensSettings || voice.transcript.isEmpty {
                     if failure.opensSettings {
                         Button("Open Settings", action: openSettings)
                             .buttonStyle(.borderedProminent)
@@ -154,7 +155,8 @@ struct VoiceField: View {
                     .buttonStyle(.borderedProminent)
                     .buttonBorderShape(.capsule)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(voice.phase != .listening)
+                    // Stopped by a failure, it still takes what was written.
+                    .disabled(voice.phase != .listening && !voice.keepsWords)
                     .help("Put what you said in the message (Return)")
                 }
             }

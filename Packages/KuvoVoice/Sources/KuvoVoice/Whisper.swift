@@ -98,6 +98,8 @@ actor WhisperDictation {
     enum Heard: Equatable, Sendable {
         case guess(String, start: Double)
         case final(String, start: Double)
+        /// Whisper couldn't write a phrase: why, once; nothing more is written.
+        case failed(String)
     }
 
     private let folder: URL
@@ -111,6 +113,8 @@ actor WhisperDictation {
     private var prompt: [Int]?
     private var names = ProjectNames([])
     private var asking: Task<Void, Never>?
+    /// A phrase couldn't be written: the rest isn't tried.
+    private var failed = false
     /// When it started taking samples, and how much it's taken: behind the microphone, it doesn't guess.
     private var since: ContinuousClock.Instant?
     private var taken = 0.0
@@ -155,9 +159,9 @@ actor WhisperDictation {
             taken += Double(chunk.count) / Double(PhraseCutter.rate)
             for phrase in cutter.take(chunk) { await write(phrase) }
             // A guess at the phrase under way, unless it's behind what you've said.
-            if let partial = cutter.partial, partial.seconds - guessedAt >= Self.guessEvery, !isBehind {
+            if !failed, let partial = cutter.partial, partial.seconds - guessedAt >= Self.guessEvery, !isBehind {
                 guessedAt = partial.seconds
-                if let text = await transcribe(partial.samples, guess: true) { heard(.guess(text, start: partial.start)) }
+                if let text = try? await transcribe(partial.samples, guess: true) { heard(.guess(text, start: partial.start)) }
             }
         }
         // Canceled: nothing more is written.
@@ -181,18 +185,24 @@ actor WhisperDictation {
     }
 
     private func write(_ phrase: PhraseCutter.Phrase) async {
+        guard !failed else { return }
         guessedAt = 0
-        // What it settles on replaces its guess, nothing included.
-        heard(.final(await transcribe(phrase.samples) ?? "", start: phrase.start))
+        do {
+            // What it settles on replaces its guess, nothing included.
+            heard(.final(try await transcribe(phrase.samples) ?? "", start: phrase.start))
+        } catch {
+            failed = true
+            heard(.failed(error.localizedDescription))
+        }
     }
 
-    private func transcribe(_ samples: [Float], guess: Bool = false) async -> String? {
+    private func transcribe(_ samples: [Float], guess: Bool = false) async throws -> String? {
         guard let kit = whisper?.kit else { return nil }
         // A guess is tried once; what it settles on may try again, warmer, when it's unsure.
         let options = DecodingOptions(task: .transcribe, language: language, temperature: 0, temperatureFallbackCount: guess ? 0 : 5,
                                       usePrefillPrompt: true, detectLanguage: language == nil,
                                       skipSpecialTokens: true, withoutTimestamps: true, promptTokens: prompt, suppressBlank: true)
-        guard let results = try? await kit.transcribe(audioArray: samples, decodeOptions: options) else { return nil }
+        let results = try await kit.transcribe(audioArray: samples, decodeOptions: options)
         return names.fix(Self.clean(results.map(\.text).joined(separator: " ")))
     }
 
