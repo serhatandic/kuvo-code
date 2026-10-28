@@ -1,0 +1,105 @@
+import ClientSessions
+import Foundation
+import OpenCodeKit
+import Testing
+@testable import KuvoCode
+
+/// Conversations you start from another show under it in the sidebar: one made with Branch from
+/// here (its box marks where it came from) and a handoff's, newest first, a branch's own under
+/// it. A subagent's session isn't one: the agent started it, and it shows in the conversation it
+/// works for. The box is the agents bridge the app ships, run for real; the engine is stubbed.
+@MainActor
+@Suite(.serialized, .timeLimit(.minutes(1))) struct BranchesTests {
+    let engine = StubEngine(port: 47915)
+    let workspace = Workspace()
+    let folder = AppInfo.testRoot.appending(path: "Branches-\(UUID().uuidString.prefix(6))")
+    let directory = "/tmp/kuvo-tests-branches"
+
+    init() {
+        workspace.api = engine.api
+    }
+
+    private func session(_ id: String, _ title: String, created: Double, extra: [String: Any] = [:]) -> [String: Any] {
+        StubEngine.session(id, title: title, directory: directory, created: created, extra: extra)
+    }
+
+    private func clean() {
+        engine.stop()
+        try? FileManager.default.removeItem(at: folder)
+    }
+
+    @Test func branchFromHereShowsUnderTheConversationItCameFrom() async throws {
+        defer { clean() }
+        engine.list([session("ses_timer", "Timer cycle", created: 1, extra: ["model": ["id": "m", "providerID": "p"]])])
+        engine.on("GET", "/api/session/ses_timer", json: ["data": session("ses_timer", "Timer cycle", created: 1)])
+        engine.on("GET", "/api/session/active", json: ["data": [:]])
+        engine.on("GET", "/api/event") { _ in StubWeb.Answer(status: 200, body: Data()) }
+        engine.on("GET", "/api/provider", json: ["data": []])
+        engine.on("GET", "/api/integration", json: ["data": []])
+        let messages: [[String: Any]] = [
+            ["id": "msg_0001", "type": "user", "text": "Split the timer into phases.", "time": ["created": 1]],
+            ["id": "msg_0002", "type": "user", "text": "Now test the long break.", "time": ["created": 3]],
+        ]
+        engine.conversation("ses_timer", messages)
+        // The engine's copy, which says nothing of where it came from.
+        engine.on("POST", "/api/session/ses_timer/fork", json: ["data": session("ses_tried", "Timer cycle", created: 5)])
+        engine.on("PATCH", "/api/session/ses_tried", json: ["data": [:]])
+        await workspace.refresh()
+
+        let bridge = try await RealBridge.start(engine: engine, folder: folder)
+        defer { bridge.stop() }
+        workspace.agents = bridge.agents
+        try await until { bridge.agents.runsKeywords == true }
+
+        guard case .user(let message) = try JSONDecoder().decode(Message.self, from: JSONSerialization.data(withJSONObject: messages[1])) else {
+            throw TestFailure("not a user message")
+        }
+        try await workspace.fork("ses_timer", from: message)
+
+        #expect(engine.requests("POST", "/api/session/ses_timer/fork").first?.body["before"] as? String == "msg_0002")
+        let marked = try #require(engine.requests("PATCH", "/api/session/ses_tried").first?.body["metadata"] as? [String: Any])
+        #expect((marked["kuvo"] as? [String: Any])?["branchedFrom"] as? String == "ses_timer", "its box marked where it came from")
+        #expect(Branches.tree(workspace.projects.flatMap(\.sessions)).under["ses_timer"]?.map(\.id) == ["ses_tried"], "under the one it came from")
+        #expect(workspace.projects.flatMap(\.sessions).map(\.id).contains("ses_tried"), "a conversation of its own, all the same")
+        #expect(Branches.tree(workspace.projects.flatMap(\.sessions)).top.map(\.id) == ["ses_timer"], "not a row at the top")
+    }
+
+    /// With no box that marks it (one from before branches, its bridge down), the engine's copy is
+    /// marked from here as the box would: under the one it came from, unpinned, not under where
+    /// that one was handed off from.
+    @Test func withoutTheBoxsRouteABranchIsStillMarked() async throws {
+        defer { clean() }
+        engine.list([session("ses_timer", "Timer cycle", created: 1)])
+        engine.on("POST", "/api/session/ses_timer/fork", json: ["data": session("ses_tried", "Timer cycle", created: 5,
+                                                                                extra: ["metadata": ["kuvo.pinned": true, "kuvo": ["handoffFrom": "ses_old", "kuvoAgent": "claude"]]])])
+        engine.on("PATCH", "/api/session/ses_tried", json: ["data": [:]])
+        await workspace.refresh()
+        let message = Message.User(id: "msg_0002", time: .init(created: 3), text: "Now test the long break.")
+        try await workspace.fork("ses_timer", from: message)
+
+        let marked = try #require(engine.requests("PATCH", "/api/session/ses_tried").first?.body["metadata"] as? [String: Any])
+        #expect(marked["kuvo.pinned"] == nil, "it starts unpinned")
+        #expect(marked["kuvo"] as? [String: String] == ["branchedFrom": "ses_timer", "kuvoAgent": "claude"])
+        #expect(Branches.tree(workspace.projects.flatMap(\.sessions)).under["ses_timer"]?.map(\.id) == ["ses_tried"])
+    }
+
+    @Test func branchesAndHandoffsNestAndSubagentsStayInTheirConversation() async throws {
+        defer { clean() }
+        engine.list([
+            session("ses_timer", "Timer cycle", created: 1),
+            session("ses_tried", "Try a state machine", created: 10, extra: ["metadata": ["kuvo": ["branchedFrom": "ses_timer"]]]),
+            session("ses_carried", "Timer cycle (continued)", created: 20, extra: ["metadata": ["kuvo": ["handoffFrom": "ses_timer"]]]),
+            session("ses_deeper", "Try it with an enum", created: 30, extra: ["metadata": ["kuvo": ["branchedFrom": "ses_tried"]]]),
+            session("ses_find", "Find where the timer state lives", created: 40, extra: ["parentID": "ses_timer"]),
+            session("ses_lost", "From one archived since", created: 50, extra: ["metadata": ["kuvo": ["branchedFrom": "ses_gone"]]]),
+        ])
+        await workspace.refresh()
+
+        let tree = Branches.latestFirst(try #require(workspace.projects.first).sessions)
+        #expect(tree.under["ses_timer"]?.map(\.id) == ["ses_carried", "ses_tried"], "newest first")
+        #expect(tree.under["ses_tried"]?.map(\.id) == ["ses_deeper"], "a branch's own, under it")
+        #expect(tree.top.map(\.id) == ["ses_lost", "ses_timer"], "the latest first, each as new as its newest branch")
+        #expect(!tree.under.values.joined().contains { $0.id == "ses_find" }, "a subagent isn't a branch")
+        #expect(workspace.subSessions["ses_timer"]?.map(\.id) == ["ses_find"], "it's the conversation's, shown there")
+    }
+}

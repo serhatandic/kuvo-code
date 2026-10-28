@@ -185,6 +185,16 @@ export class StandIn {
         }
         return Response.json({ data: {} })
       }
+      if (what === "fork") {
+        // A copy up to the message, with its source's metadata, as the coding agents' bridge makes one.
+        const at = conversation.findIndex((message) => message.id === body?.before)
+        if (at < 0) return Response.json({ message: "That message isn't in this session." }, { status: 404 })
+        const id = `ses_fork${this.next++}`
+        this.conversations.set(id, structuredClone(conversation.slice(0, at)))
+        if (this.titles.has(session)) this.titles.set(id, this.titles.get(session)!)
+        if (this.metadata.has(session)) this.metadata.set(id, structuredClone(this.metadata.get(session)))
+        return Response.json({ data: { id, title: this.titles.get(id), ...(this.metadata.has(id) ? { metadata: this.metadata.get(id) } : {}), location: { directory: this.directory } } })
+      }
       if (what === "generate") return await this.check("own", body.prompt, undefined, session)
       if (what === "prompt") {
         this.prompted.push({ session, text: body.text })

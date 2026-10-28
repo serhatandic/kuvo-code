@@ -204,15 +204,16 @@ struct SidebarView: View {
             }
         }
         #endif
-        // Only the open session's place is remembered; picked elsewhere, it shows in its project.
-        .onChange(of: selection) { pickedIn = pickedIn.filter { $0.key == selection } }
-        // A sub-session opened (from its conversation, say): the sessions above it unfold to show it.
+        // Only the open session's place is remembered (the conversation's, while one of its
+        // subagents is open in its place); picked elsewhere, it shows in its project.
+        .onChange(of: selection) { pickedIn = pickedIn.filter { $0.key == selection || $0.key == selection.map(topConversation) } }
+        // A branch opened (a new one, say): the conversations it came from unfold to show it.
         .onChange(of: selection.map { "\($0)|\(workspace.parent(of: $0) ?? "")" }, initial: true) {
-            var id = selection
-            for _ in 0..<5 {
-                guard let current = id, let parent = workspace.parent(of: current) else { break }
-                unfolded.insert(parent)
-                id = parent
+            var id = selection.map(topConversation)
+            for _ in 0..<10 {
+                guard let current = id, let source = workspace.session(current).flatMap(Branches.origin(of:))?.id, source != current else { break }
+                unfolded.insert(source)
+                id = source
             }
         }
         // A tab on another box: its page slides in, so what's in view has its row in sight.
@@ -337,11 +338,11 @@ struct SidebarView: View {
     @ViewBuilder private func page(_ box: SidebarBox) -> some View {
         if boxes.count > 1 { BoxHeading(box: box) }
         let pinned = pinned(on: box)
-        if !pinned.isEmpty {
+        if !pinned.top.isEmpty {
             SectionHeader(title: "Pinned", isFolded: folded("pinned")) { EmptyView() }
             if !isFolded("pinned") {
-                ForEach(pinned) { session in
-                    sessionRow(session, in: .pinned)
+                ForEach(pinned.top) { session in
+                    sessionRow(session, in: .pinned, branches: pinned.under)
                 }
             }
         }
@@ -391,11 +392,11 @@ struct SidebarView: View {
             }
         }
         let recents = recents(on: box)
-        if !recents.isEmpty {
+        if !recents.top.isEmpty {
             SectionHeader(title: "Recents", isFolded: folded("recents")) { EmptyView() }
             if !isFolded("recents") {
-                ForEach(recents) { session in
-                    sessionRow(session, in: .recents)
+                ForEach(recents.top) { session in
+                    sessionRow(session, in: .recents, branches: recents.under)
                 }
             }
         }
@@ -497,7 +498,7 @@ struct SidebarView: View {
         }
         ForEach(results) { found in
             switch found {
-            case .session(let session): sessionRow(session, in: .recents)
+            case .session(let session): sessionRow(session, in: .recents, branches: [:])
             case .bot(let bot): botRow(bot)
             }
         }
@@ -517,8 +518,15 @@ struct SidebarView: View {
             ForEach(inConversations, id: \.found.id) { result in
                 let show = {
                     selection = result.found.id
-                    // A subagent's words aren't in the conversation itself: nothing there to find.
-                    if result.subagent == nil { workspace.model(for: result.found.id)?.showFind(search.trimmingCharacters(in: .whitespaces)) }
+                    let words = search.trimmingCharacters(in: .whitespaces)
+                    if let subagent = result.subagent {
+                        // Said by one of its subagents: that one, in its place, with Find on the words.
+                        app.tabs.openInPlace(subagent)
+                        let folder = workspace.session(result.found.id)?.location.directory ?? ""
+                        Task { await workspace.subagentModel(for: subagent, in: folder)?.showFind(words) }
+                    } else {
+                        workspace.model(for: result.found.id)?.showFind(words)
+                    }
                 }
                 switch result.found {
                 case .bot(let bot):
@@ -693,10 +701,13 @@ struct SidebarView: View {
             }
             terminalRows(terminals(in: project.directory), indented: true)
             let all = showsAll.contains(project.directory) || Self.demoShowsAll
-            ForEach(all ? project.sessions : Array(project.sessions.prefix(Self.sessionsPerProject))) { session in
-                sessionRow(session, in: .project)
+            // Branched and handed-off ones show under the conversation they came from.
+            let tree = Branches.latestFirst(project.sessions)
+            let sessions = tree.top
+            ForEach(all ? sessions : Array(sessions.prefix(Self.sessionsPerProject))) { session in
+                sessionRow(session, in: .project, branches: tree.under)
             }
-            if project.sessions.count > Self.sessionsPerProject, !Self.demoShowsAll {
+            if sessions.count > Self.sessionsPerProject, !Self.demoShowsAll {
                 SidebarRow(isSelected: false, indented: true, action: {
                     withAnimation(.ui) {
                         if all { showsAll.remove(project.directory) } else { showsAll.insert(project.directory) }
@@ -704,7 +715,7 @@ struct SidebarView: View {
                 }) {
                     EmptyView()
                 } title: {
-                    Text(all ? "Show Less" : "Show \(project.sessions.count - Self.sessionsPerProject) More")
+                    Text(all ? "Show Less" : "Show \(sessions.count - Self.sessionsPerProject) More")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -736,7 +747,8 @@ struct SidebarView: View {
     /// Conversations of no project on `box`: a row for each, the newest few until you ask for the
     /// rest.
     @ViewBuilder private func chatsSection(_ box: SidebarBox) -> some View {
-        let chats = workspace.chats.filter { SidebarBox(directory: $0.location.directory) == box }
+        let tree = Branches.latestFirst(workspace.chats.filter { SidebarBox(directory: $0.location.directory) == box })
+        let chats = tree.top
         let isDraft = selection.flatMap(Self.draftDirectory).map { Workspace.isChat($0) && SidebarBox(directory: $0) == box } ?? false
         let more = box.machine.map { "chats:" + $0 } ?? Workspace.chatsFolder
         let newChat = { if let machine = box.machine { self.newChat(on: machine) } else { newSession(Workspace.chatsFolder) } }
@@ -767,7 +779,7 @@ struct SidebarView: View {
             }
             let all = showsAll.contains(more)
             ForEach(all ? chats : Array(chats.prefix(Self.sessionsPerProject))) { session in
-                sessionRow(session, in: .chats)
+                sessionRow(session, in: .chats, branches: tree.under)
             }
             if chats.count > Self.sessionsPerProject {
                 SidebarRow(isSelected: false, action: {
@@ -815,39 +827,54 @@ struct SidebarView: View {
         SidebarSearch.byName(search, in: workspace, bots: bots)
     }
 
-    /// `box`'s latest; pinned ones are already at the top.
-    private func recents(on box: SidebarBox) -> [Session] {
-        Array((workspace.projects.flatMap(\.sessions) + workspace.chats).filter { !Workspace.isPinned($0) && SidebarBox(directory: $0.location.directory) == box }
-            .sorted { $0.time.updated > $1.time.updated }.prefix(Self.recentCount))
+    /// `box`'s latest, each with its branches under it, a conversation as new as its newest
+    /// branch; pinned ones are already at the top.
+    private func recents(on box: SidebarBox) -> (top: [Session], under: [String: [Session]]) {
+        let tree = Branches.latestFirst((workspace.projects.flatMap(\.sessions) + workspace.chats).filter { !Workspace.isPinned($0) && SidebarBox(directory: $0.location.directory) == box }
+            .sorted { $0.time.updated > $1.time.updated })
+        return (Array(tree.top.prefix(Self.recentCount)), tree.under)
     }
 
-    private func pinned(on box: SidebarBox) -> [Session] {
-        (workspace.projects.flatMap(\.sessions) + workspace.chats).filter { Workspace.isPinned($0) && SidebarBox(directory: $0.location.directory) == box }
-            .sorted { $0.time.updated > $1.time.updated }
+    /// `box`'s pinned ones, a pinned branch under its source when that's pinned too.
+    private func pinned(on box: SidebarBox) -> (top: [Session], under: [String: [Session]]) {
+        Branches.latestFirst((workspace.projects.flatMap(\.sessions) + workspace.chats).filter { Workspace.isPinned($0) && SidebarBox(directory: $0.location.directory) == box }
+            .sorted { $0.time.updated > $1.time.updated })
+    }
+
+    /// The conversation `id` is a subagent of, through subagents of subagents; any other, itself.
+    private func topConversation(_ id: String) -> String {
+        var id = id
+        for _ in 0..<10 {
+            guard workspace.session(id) == nil, let parent = workspace.parent(of: id) else { break }
+            id = parent
+        }
+        return id
+    }
+
+    /// Where a branch came from, for VoiceOver: "Branched from Timer cycle".
+    static func origin(of session: Session, in workspace: Workspace) -> String {
+        guard let origin = Branches.origin(of: session) else { return "" }
+        let title = workspace.session(origin.id)?.title ?? "another conversation"
+        return (origin.kind == .handoff ? "Carried on from " : "Branched from ") + title
     }
 
     /// Highlighted where it was picked; picked elsewhere (a tab, a new session), in its project.
+    /// A subagent's conversation open, the one it works for is.
     private func isHighlighted(_ session: Session, in place: Place) -> Bool {
-        guard selection == session.id else { return false }
+        guard let selection, topConversation(selection) == session.id else { return false }
         if let picked = pickedIn[session.id] { return picked == place }
         return place == (Workspace.isChat(session.location.directory) ? .chats : .project)
     }
 
-    /// A session's row, and under it, unfolded, the sessions its agent started.
-    private func sessionRow(_ session: Session, in place: Place) -> some View {
+    /// A session's row, and under it, unfolded, the conversations branched or handed off from it
+    /// in the same list (`branches`, by the one each came from).
+    private func sessionRow(_ session: Session, in place: Place, branches: [String: [Session]]) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            sessionOnlyRow(session, in: place)
-            if isUnfolded(session.id), !(workspace.subSessions[session.id] ?? []).isEmpty {
-                SubSessionRows(parent: session, titleInset: 10 + (place == .project ? SidebarMetrics.iconWidth + 10 : 0),
-                               isSelected: { child in
-                                   guard selection == child.id else { return false }
-                                   return (pickedIn[child.id] ?? (Workspace.isChat(session.location.directory) ? .chats : .project)) == place
-                               },
-                               open: { child in
-                                   pickedIn[child.id] = place
-                                   selection = child.id
-                               },
-                               isUnfolded: { isUnfolded($0) }, toggle: toggleSubSessions)
+            sessionOnlyRow(session, in: place, branches: branches[session.id]?.count ?? 0)
+            if isUnfolded(session.id), !(branches[session.id] ?? []).isEmpty {
+                BranchRows(parent: session.id, branches: branches, titleInset: 10 + (place == .project ? SidebarMetrics.iconWidth + 10 : 0), isUnfolded: { isUnfolded($0) }) { child, inset in
+                    AnyView(sessionOnlyRow(child, in: place, branches: branches[child.id]?.count ?? 0, branchInset: inset))
+                }
             }
         }
     }
@@ -862,20 +889,22 @@ struct SidebarView: View {
 
     private func isUnfolded(_ id: String) -> Bool {
         #if DEBUG
-        // KUVO_DEMO_UNFOLD: every session's sub-sessions shown, for a look at them.
+        // KUVO_DEMO_UNFOLD: every session's branches shown, for a look at them.
         if ProcessInfo.processInfo.environment["KUVO_DEMO_UNFOLD"] != nil { return true }
         #endif
         return unfolded.contains(id)
     }
 
-    private func toggleSubSessions(of id: String) {
+    private func toggleBranches(of id: String) {
         withAnimation(.ui) {
             if unfolded.contains(id) { unfolded.remove(id) } else { unfolded.insert(id) }
         }
     }
 
-    private func sessionOnlyRow(_ session: Session, in place: Place) -> some View {
-        SidebarRow(isSelected: isHighlighted(session, in: place), indented: place == .project, isEditing: renaming == RenameTarget(id: session.id, place: place), action: {
+    /// `branchInset`: a branch's, under the conversation it came from, its title that far in.
+    /// `branches`: how many are under it.
+    private func sessionOnlyRow(_ session: Session, in place: Place, branches: Int, branchInset: CGFloat? = nil) -> some View {
+        SidebarRow(isSelected: isHighlighted(session, in: place), indented: place == .project, branchInset: branchInset, isEditing: renaming == RenameTarget(id: session.id, place: place), action: {
             pickedIn[session.id] = place
             selection = session.id
         }) {
@@ -917,17 +946,18 @@ struct SidebarView: View {
                     if let count = workspace.agents(forFolder: session.location.directory)?.sideQuestionCounts[session.id], count > 0 {
                         SideQuestionsButton(count: count) { showSideQuestion(nil, of: session, in: place) }
                     }
-                    let children = workspace.subSessions[session.id] ?? []
-                    if !children.isEmpty {
-                        SubSessionToggle(count: children.count, isUnfolded: isUnfolded(session.id)) { toggleSubSessions(of: session.id) }
+                    if branches > 0 {
+                        BranchesToggle(count: branches, isUnfolded: isUnfolded(session.id)) { toggleBranches(of: session.id) }
                     }
-                    // Folded, a sub-session finished since you were here shows on it.
-                    SessionStatus(session: session, isUnread: session.isUnread || !isUnfolded(session.id) && workspace.hasNewSubSessions(session.id))
+                    // A subagent that finished since you were here shows on it: what it found is
+                    // in its conversation.
+                    SessionStatus(session: session, isUnread: session.isUnread || workspace.hasNewSubSessions(session.id))
                 }
             }
         }
         .contextMenu { menu(for: session, in: place) }
-        .modifier(SubSessionsAction(count: workspace.subSessions[session.id]?.count ?? 0, isUnfolded: isUnfolded(session.id)) { toggleSubSessions(of: session.id) })
+        .modifier(BranchesAction(count: branches, isUnfolded: isUnfolded(session.id)) { toggleBranches(of: session.id) })
+        .accessibilityHint(branchInset == nil ? "" : Self.origin(of: session, in: workspace))
         .modifier(SideQuestionsAction(count: workspace.agents(forFolder: session.location.directory)?.sideQuestionCounts[session.id] ?? 0) { showSideQuestion(nil, of: session, in: place) })
     }
 
@@ -1182,6 +1212,8 @@ struct RowHighlight: ViewModifier {
 private struct SidebarRow<Icon: View, Title: View, Accessory: View>: View {
     var isSelected: Bool
     var indented = false
+    /// A branch's, under the conversation it came from: its title this far in, past the line.
+    var branchInset: CGFloat?
     /// Its title is being typed (renamed): not a button meanwhile, so the field takes the keys.
     var isEditing = false
     let action: () -> Void
@@ -1206,7 +1238,7 @@ private struct SidebarRow<Icon: View, Title: View, Accessory: View>: View {
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
                     .frame(width: SidebarMetrics.iconWidth)
-            } else if indented {
+            } else if indented, branchInset == nil {
                 Color.clear.frame(width: SidebarMetrics.iconWidth, height: 1)
             }
             // The title takes the room up to the accessory, one gap from its mark, rather than
@@ -1218,16 +1250,18 @@ private struct SidebarRow<Icon: View, Title: View, Accessory: View>: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             accessory()
         }
-        .padding(.horizontal, 10)
+        .padding(.leading, branchInset ?? 10)
+        .padding(.trailing, 10)
         .frame(height: SidebarMetrics.rowHeight)
-        // An indented row's fill starts at its title, beside the project's line of sessions.
-        .modifier(RowHighlight(isSelected: isSelected, leading: indented && Icon.self == EmptyView.self ? 10 + SidebarMetrics.iconWidth : 0))
+        // An indented row's fill starts at its title, beside the project's line of sessions; a
+        // branch's just before its title, so the line and its elbow stay in view.
+        .modifier(RowHighlight(isSelected: isSelected, leading: branchInset.map { $0 - 5 } ?? (indented && Icon.self == EmptyView.self ? 10 + SidebarMetrics.iconWidth : 0)))
     }
 }
 
 extension SidebarRow where Accessory == EmptyView {
     init(isSelected: Bool, indented: Bool = false, action: @escaping () -> Void, @ViewBuilder icon: @escaping () -> Icon, @ViewBuilder title: @escaping () -> Title) {
-        self.init(isSelected: isSelected, indented: indented, action: action, icon: icon, title: title, accessory: { EmptyView() })
+        self.init(isSelected: isSelected, indented: indented, branchInset: nil, action: action, icon: icon, title: title, accessory: { EmptyView() })
     }
 }
 
@@ -1825,26 +1859,26 @@ private struct SessionStatus: View {
     }
 }
 
-// MARK: Sub-sessions
+// MARK: Branches
 
-/// A session's sub-sessions (its subagents'), under its row while it's unfolded: hung from one
-/// line under the session's title, with a rounded elbow into each, each with its status. One with
-/// sub-sessions of its own folds and unfolds the same way.
-private struct SubSessionRows: View {
-    let parent: Session
+/// The conversations branched or handed off from one, under its row while it's unfolded: hung
+/// from one line under its title, with a rounded elbow into each. Each is a conversation's row
+/// like any other (`row`, given where its title starts); one with branches of its own folds and
+/// unfolds the same way.
+private struct BranchRows: View {
+    let parent: String
+    /// The list's branches, by the one each came from.
+    let branches: [String: [Session]]
     /// Where the parent's title starts in its row: the line hangs under it.
     let titleInset: CGFloat
-    let isSelected: (Session) -> Bool
-    let open: (Session) -> Void
     let isUnfolded: (String) -> Bool
-    let toggle: (String) -> Void
-    @Environment(Workspace.self) private var workspace
+    let row: (Session, CGFloat) -> AnyView
 
     @State private var showsAll = false
     private static let shown = 8
 
-    private var all: [Session] { workspace.subSessions[parent.id] ?? [] }
-    private var children: [Session] { showsAll || SidebarView.demoShowsAll ? all : Array(all.prefix(Self.shown)) }
+    private var all: [Session] { branches[parent] ?? [] }
+    private var children: [Session] { showsAll ? all : Array(all.prefix(Self.shown)) }
     private var lineX: CGFloat { titleInset + 5 }
     private var childInset: CGFloat { lineX + 14 }
 
@@ -1852,12 +1886,9 @@ private struct SubSessionRows: View {
         VStack(alignment: .leading, spacing: 1) {
             ForEach(children) { child in
                 VStack(alignment: .leading, spacing: 1) {
-                    SubSessionRow(session: child, inset: childInset, isSelected: isSelected(child),
-                                  isUnfolded: isUnfolded(child.id), toggle: { toggle(child.id) }) {
-                        open(child)
-                    }
-                    if isUnfolded(child.id), !(workspace.subSessions[child.id] ?? []).isEmpty {
-                        SubSessionRows(parent: child, titleInset: childInset, isSelected: isSelected, open: open, isUnfolded: isUnfolded, toggle: toggle)
+                    row(child, childInset)
+                    if isUnfolded(child.id), !(branches[child.id] ?? []).isEmpty {
+                        BranchRows(parent: child.id, branches: branches, titleInset: childInset, isUnfolded: isUnfolded, row: row)
                     }
                 }
                 // Its piece of the line: from the gap above it (so the line runs on without a
@@ -1881,7 +1912,7 @@ private struct SubSessionRows: View {
     }
 }
 
-/// A piece of the line sub-sessions hang from: down from 1pt above its top, a rounded elbow
+/// A piece of the line branches hang from: down from 1pt above its top, a rounded elbow
 /// into its row, and on to its bottom when another follows. One stroke, so the pieces meet
 /// without a seam or a darker overlap.
 private struct BranchLine: View {
@@ -1910,52 +1941,9 @@ private struct BranchLine: View {
     }
 }
 
-/// A sub-session: its task, a step in from the line, and its status. Finished, it's new to you
-/// only if you haven't been in its session since.
-private struct SubSessionRow: View {
-    let session: Session
-    let inset: CGFloat
-    let isSelected: Bool
-    let isUnfolded: Bool
-    let toggle: () -> Void
-    let action: () -> Void
-    @Environment(Workspace.self) private var workspace
-
-    /// Finished and not seen; folded, one of its own that is.
-    private var isUnread: Bool { workspace.isNew(session) || !isUnfolded && workspace.hasNewSubSessions(session.id) }
-    private var count: Int { workspace.subSessions[session.id]?.count ?? 0 }
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Text(SubagentTask.title(session.title ?? ""))
-                    .font(.system(size: 13))
-                    .fontWeight(isUnread ? .semibold : .regular)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 6) {
-                    if count > 0 {
-                        SubSessionToggle(count: count, isUnfolded: isUnfolded, toggle: toggle)
-                    }
-                    SessionStatus(session: session, isUnread: isUnread)
-                }
-            }
-            .padding(.leading, inset)
-            .padding(.trailing, 10)
-            .frame(height: SidebarMetrics.rowHeight)
-            // From just before its title: the line and its elbow stay in view.
-            .modifier(RowHighlight(isSelected: isSelected, leading: inset - 5))
-        }
-        .buttonStyle(.plain)
-        .clickablePointer()
-        .accessibilityHint("A subagent's conversation")
-        .modifier(SubSessionsAction(count: count, isUnfolded: isUnfolded, toggle: toggle))
-    }
-}
-
-/// How many sub-sessions a session has, and the chevron that folds them away or shows them.
-private struct SubSessionToggle: View {
+/// How many conversations were branched or handed off from one, and the chevron that folds them
+/// away or shows them.
+private struct BranchesToggle: View {
     let count: Int
     let isUnfolded: Bool
     let toggle: () -> Void
@@ -1972,8 +1960,8 @@ private struct SubSessionToggle: View {
             .font(.system(size: 12, weight: .medium))
         }
         .buttonStyle(TextButtonStyle())
-        .help(isUnfolded ? "Hide its subagents" : "Show its \(count.counting("subagent"))")
-        // The row it's in says so, with its action (see `SubSessionsAction`).
+        .help(isUnfolded ? "Hide its branches" : "Show its \(count.counting("branch", "branches"))")
+        // The row it's in says so, with its action (see `BranchesAction`).
         .accessibilityHidden(true)
     }
 }
@@ -2017,9 +2005,9 @@ private struct SideQuestionsAction: ViewModifier {
     }
 }
 
-/// A row with sub-sessions, for VoiceOver: how many, and the action that shows or hides them,
-/// as the toggle inside it does.
-private struct SubSessionsAction: ViewModifier {
+/// A row with branches under it, for VoiceOver: how many, and the action that shows or hides
+/// them, as the count inside it does.
+private struct BranchesAction: ViewModifier {
     let count: Int
     let isUnfolded: Bool
     let toggle: () -> Void
@@ -2027,8 +2015,8 @@ private struct SubSessionsAction: ViewModifier {
     func body(content: Content) -> some View {
         if count > 0 {
             content
-                .accessibilityValue(count.counting("subagent") + (isUnfolded ? ", shown" : ""))
-                .accessibilityAction(named: isUnfolded ? "Hide Subagents" : "Show Subagents", toggle)
+                .accessibilityValue(count.counting("branch", "branches") + (isUnfolded ? ", shown" : ""))
+                .accessibilityAction(named: isUnfolded ? "Hide Branches" : "Show Branches", toggle)
         } else {
             content
         }

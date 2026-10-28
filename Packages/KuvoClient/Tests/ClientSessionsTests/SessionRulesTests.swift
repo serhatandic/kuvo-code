@@ -8,8 +8,8 @@ import Testing
 /// down, and its box is told each; a read elsewhere is taken when it's later; seats and the
 /// engine's runs for coding agents are kept out of sight.
 struct SessionRulesTests {
-    private func session(_ id: String, idle: Double? = nil, viewed: Double? = nil, metadata: String = "null") throws -> Session {
-        var time = #""created": 1, "updated": 2"#
+    private func session(_ id: String, idle: Double? = nil, viewed: Double? = nil, created: Double = 1, updated: Double = 2, metadata: String = "null") throws -> Session {
+        var time = #""created": \#(created), "updated": \#(updated)"#
         if let idle { time += #", "idle": \#(idle)"# }
         if let viewed { time += #", "viewed": \#(viewed)"# }
         let json = #"{"id": "\#(id)", "projectID": "p", "title": "\#(id)", "cost": 0, "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}}, "time": {\#(time)}, "location": {"directory": "/p"}, "metadata": \#(metadata)}"#
@@ -61,6 +61,37 @@ struct SessionRulesTests {
     @Test func eachReasonAComputerWasntSearchedIsSaid() {
         #expect(UnsearchedReason.notConnected.line(for: "lokum") == "lokum isn’t connected, so its conversations weren’t searched.")
         #expect(UnsearchedReason.needsUpdate.line(for: "lokum").contains("needs an update"))
+    }
+
+    /// Conversations branched or handed off from another show under it, newest first, all the way
+    /// down, wherever that one is listed too; one whose source isn't listed (archived, deleted,
+    /// elsewhere), a subagent's, and a loop stay at the top.
+    @Test func branchesShowUnderWhereTheyCameFrom() throws {
+        let timer = try session("ses_timer")
+        let tried = try session("ses_tried", created: 5, metadata: #"{"kuvo": {"branchedFrom": "ses_timer"}}"#)
+        let carried = try session("ses_carried", created: 9, metadata: #"{"kuvo": {"handoffFrom": "ses_timer"}}"#)
+        let deeper = try session("ses_deeper", metadata: #"{"kuvo": {"branchedFrom": "ses_tried"}}"#)
+        let orphan = try session("ses_orphan", metadata: #"{"kuvo": {"branchedFrom": "ses_gone"}}"#)
+        let loopA = try session("ses_a", metadata: #"{"kuvo": {"branchedFrom": "ses_b"}}"#)
+        let loopB = try session("ses_b", metadata: #"{"kuvo": {"branchedFrom": "ses_a"}}"#)
+        let tree = Branches.tree([tried, timer, deeper, carried, orphan, loopA, loopB])
+        #expect(tree.top.map(\.id) == ["ses_timer", "ses_orphan", "ses_a", "ses_b"])
+        #expect(tree.under["ses_timer"]?.map(\.id) == ["ses_carried", "ses_tried"])
+        #expect(tree.under["ses_tried"]?.map(\.id) == ["ses_deeper"])
+        #expect(Branches.origin(of: carried)?.kind == .handoff)
+        #expect(Branches.origin(of: tried)?.kind == .branch)
+        // Listed without the one it came from: at the top.
+        #expect(Branches.tree([tried, deeper]).top.map(\.id) == ["ses_tried"])
+    }
+
+    /// In a list of the latest, a conversation counts as new as its newest branch: one at work
+    /// under an older one keeps it in view.
+    @Test func aBusyBranchKeepsItsSourceInTheLatest() throws {
+        let old = try session("ses_old", created: 1, updated: 1)
+        let newer = try session("ses_newer", created: 5, updated: 5)
+        let busy = try session("ses_busy", created: 2, updated: 9, metadata: #"{"kuvo": {"branchedFrom": "ses_old"}}"#)
+        #expect(Branches.latestFirst([newer, busy, old]).top.map(\.id) == ["ses_old", "ses_newer"])
+        #expect(Branches.latestFirst([newer, busy, old]).under["ses_old"]?.map(\.id) == ["ses_busy"])
     }
 
     @Test func aSubagentsTaskIsFromTheAgentThatStartedIt() throws {

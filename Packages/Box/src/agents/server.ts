@@ -8,8 +8,9 @@ import type { Auto } from "./auto"
 import type { EngineLink } from "./engine"
 import type { Roster } from "./roster"
 import { emit, feed } from "./events"
-import { goalRoutes, type Goals } from "./goals"
+import { goalRoutes, type GoalPlaces, type Goals } from "./goals"
 import { sideQuestionRoutes, type SideQuestions } from "./btw"
+import { branchRoutes } from "./branch"
 import { handoffRoutes, type Handoffs } from "./handoff"
 import { reviewRoutes, type Reviews } from "./reviews"
 import { voiceRoutes, type VoiceWords } from "./voice"
@@ -46,6 +47,8 @@ export interface Context {
   /** The box's other keywords: side questions, handoffs and reviews (btw.ts, handoff.ts, reviews.ts). */
   sideQuestions?: SideQuestions
   handoffs?: Handoffs
+  /** Where conversations are, for branching one (branch.ts). */
+  places?: GoalPlaces
   reviews?: Reviews
   /** The project's words for voice input to listen for (voice.ts). */
   voice?: VoiceWords
@@ -464,6 +467,7 @@ export function handler(context: Context) {
       if (area === "kuvo" && a === "goals") return await goalRoutes(context.goals, method, parts.slice(3), body)
       if (area === "kuvo" && a === "btw") return await sideQuestionRoutes(context.sideQuestions, method, parts.slice(3), body)
       if (area === "kuvo" && a === "handoff") return await handoffRoutes(context.handoffs, method, parts.slice(3), body)
+      if (area === "kuvo" && a === "branch") return await branchRoutes(context.places, method, parts.slice(3), body)
       if (area === "kuvo" && a === "reviews") return await reviewRoutes(context.reviews, method, parts.slice(3), body)
       if (area === "kuvo" && a === "voice") return await voiceRoutes(context.voice, method, parts.slice(3))
       if (area === "kuvo" && a === "groups") return await groupRoutes(context.groups?.runner, context.groups?.store, method, parts.slice(3), body)

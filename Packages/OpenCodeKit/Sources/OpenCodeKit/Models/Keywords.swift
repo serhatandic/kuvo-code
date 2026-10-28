@@ -315,6 +315,13 @@ extension OpenCodeAPI {
         return try await client.send(try client.request("POST", "api/kuvo/handoff/\(session.pathEscaped)", body: Body(next: next)), as: DataEnvelope<Handoff>.self).data
     }
 
+    /// A new conversation with `session`'s words before `before` ("Branch from here"), marked by
+    /// its box as branched from it (`kuvo.branchedFrom`), on the engine or with the coding agents.
+    public func branch(session: String, before: String) async throws -> Session {
+        struct Body: Encodable { var before: String }
+        return appSession(try await client.send(try client.request("POST", "api/kuvo/branch/\(session.pathEscaped)", body: Body(before: before)), as: DataEnvelope<Session>.self).data)
+    }
+
     /// A conversation's latest handoff, while its box runs; nil when it has none.
     public func handoff(session: String) async throws -> Handoff? {
         do {

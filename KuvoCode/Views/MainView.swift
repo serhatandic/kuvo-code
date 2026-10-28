@@ -736,7 +736,7 @@ struct MainView: View {
                         .help("Close Tab")
                 } content: {
                     SubagentPane(id: id, folder: root?.location.directory ?? workspace.subSession(id)?.location.directory ?? "", parent: parent) {
-                        tabs.open(.session($0))
+                        tabs.openInPlace($0)
                     }
                 }
                 .onAppear { workspace.rememberOpened(id) }

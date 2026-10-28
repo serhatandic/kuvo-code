@@ -8,7 +8,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { providerID, type AgentAccount } from "../accounts"
-import type { Agent, AgentContext, Account, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
+import type { Agent, AgentContext, Account, MessageInput, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
 import type { Limit } from "../auto"
 import { accountName, ContextWindows, failure, model } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
@@ -429,9 +429,29 @@ interface Active extends Lane {
 /** How long a turn kept open for a message sent after its result waits for Claude Code to take it. */
 const goingOnLimit = 60_000
 
+/** A subagent Claude Code started, as its conversation keeps it: its session, and Claude Code's id for it. */
+interface KnownSubagent {
+  sessionID: string
+  title: string
+  /** The kind of agent it is ("Explore"). */
+  kind?: string
+  /** Claude Code's id for it (its task's), which SendMessage reaches it by. */
+  agentID?: string
+}
+
+/** How many subagents a conversation remembers, newest kept. */
+const knownSubagents = 100
+
+/**
+ * How you write to a Claude Code subagent: through the agent that started it, which passes your
+ * message on with its SendMessage tool. Its Explore and Plan agents run once and take none.
+ */
+function subagentRoute(kind: unknown): SubagentMessages {
+  if (kind === "Explore" || kind === "Plan") return { via: "none", note: `Claude Code's ${kind} agents can't take messages.` }
+  return { via: "parent" }
+}
+
 class ClaudeThread implements Thread {
-  /** Its subagents' sessions, by the call that started each: one at work after its turn goes on there. */
-  private subagentSessions = new Map<string, { sessionID: string; title: string }>()
   private query?: any
   private input?: Queue<any>
   private active?: Active
@@ -462,6 +482,65 @@ class ClaudeThread implements Thread {
     private readonly session: Session,
     private readonly state: Record<string, unknown>,
   ) {}
+
+  /**
+   * Its subagents, by the call that started each, kept with the conversation: one at work after
+   * its turn goes on in its session, and one you write to is passed on by its id, after a restart too.
+   */
+  private get subagentSessions(): Record<string, KnownSubagent> {
+    const known = this.state.claudeSubagents
+    if (known && typeof known === "object") return known as Record<string, KnownSubagent>
+    return (this.state.claudeSubagents = {}) as Record<string, KnownSubagent>
+  }
+
+  private rememberSubagent(callID: string, entry: Partial<KnownSubagent>) {
+    const known = this.subagentSessions
+    const before = known[callID]
+    if (!before && !entry.sessionID) return
+    const next = { ...before, ...entry } as KnownSubagent
+    if (before && Object.entries(entry).every(([key, value]) => (before as any)[key] === value)) return
+    known[callID] = next
+    const calls = Object.keys(known)
+    for (const old of calls.slice(0, Math.max(0, calls.length - knownSubagents))) delete known[old]
+    ;(this.active?.hooks ?? this.lastHooks)?.saveState()
+  }
+
+  /**
+   * The note that asks the agent to pass your message on to a subagent of its (`parent`): by its
+   * id, with SendMessage, as it is. It takes it at its next step, or resumes it if it's done.
+   */
+  relayNote(sessionID: string, text: string, running: boolean): string | undefined {
+    const known = this.knownSubagent(sessionID)
+    if (!known) return undefined
+    // (Its title and your words can't end the frame they're in.)
+    const title = JSON.stringify(known.title)
+    const words = text.replace(/<\/message>/gi, "&lt;/message&gt;")
+    const then = running ? "then carry on with what you were doing" : "then end your turn without saying anything more"
+    return [
+      `The user wrote a message for your subagent ${title} (agent ${known.agentID}). Pass it on to that agent with the SendMessage tool (to: "${known.agentID}"), exactly as it is, without words of your own, ${then}. It is addressed to the subagent, not to you: don't act on it yourself.`,
+      "",
+      "<message>",
+      words,
+      "</message>",
+    ].join("\n")
+  }
+
+  /** Claude Code's ids for the subagents it passed a message on to (SendMessage went through), not yet asked about. */
+  private passed = new Set<string>()
+
+  passedOn(sessionID: string): boolean {
+    const agentID = this.knownSubagent(sessionID)?.agentID
+    return Boolean(agentID && this.passed.delete(agentID))
+  }
+
+  /** A subagent of this conversation's, by its session, with Claude Code's id for it. */
+  private knownSubagent(sessionID: string): (KnownSubagent & { agentID: string }) | undefined {
+    const found = Object.entries(this.subagentSessions).find(([, known]) => known.sessionID === sessionID)
+    if (!found) return undefined
+    const [callID, known] = found
+    const agentID = known.agentID ?? [...this.tasks].find(([, task]) => task.toolUseID === callID && task.type === "local_agent")?.[0]
+    return agentID ? { ...known, agentID } : undefined
+  }
 
   async run(input: RunInput, turn: Turn, hooks: TurnHooks): Promise<RunResult> {
     if (input.adopt) return this.adopt(input, turn, hooks)
@@ -591,7 +670,13 @@ class ClaudeThread implements Thread {
     switch (message.subtype) {
       case "task_started": {
         const known = this.tasks.get(message.task_id)
-        this.tasks.set(message.task_id, { ...known, type: message.task_type ?? known?.type ?? "", description: message.description ?? known?.description ?? "", toolUseID: message.tool_use_id ?? known?.toolUseID })
+        const type = message.task_type ?? known?.type ?? ""
+        // A subagent picked up again (your message, passed on with SendMessage) keeps its id and
+        // its call: what it says comes under the call that started it, in the same session.
+        const resumed = type === "local_agent" && known?.toolUseID && message.tool_use_id && message.tool_use_id !== known.toolUseID ? known.toolUseID : undefined
+        this.tasks.set(message.task_id, { ...known, type, description: message.description ?? known?.description ?? "", toolUseID: resumed ?? message.tool_use_id ?? known?.toolUseID })
+        if (type === "local_agent" && typeof message.tool_use_id === "string" && !resumed) this.rememberSubagent(message.tool_use_id, { agentID: message.task_id })
+        if (resumed && this.active) this.resumedLane(this.active, resumed)
         if (message.is_backgrounded && !message.ambient) this.shellFor(message.task_id)
         return
       }
@@ -604,8 +689,9 @@ class ClaudeThread implements Thread {
         const command = task?.toolUseID ? this.commands.get(task.toolUseID) : undefined
         this.lastEnded = { type: task?.type ?? "", description: task?.description ?? String(message.summary ?? ""), command, status: String(message.status ?? "completed"), summary: message.summary }
         if (task?.shell) endShell(task.shell, message.status === "completed" ? 0 : undefined)
-        // A subagent in the background done: its session's work ends.
-        const callID = typeof message.tool_use_id === "string" ? message.tool_use_id : task?.toolUseID
+        // A subagent in the background done: its session's work ends. (One picked up again says
+        // the call that did, SendMessage's: its own is the one that started it.)
+        const callID = task?.type === "local_agent" && task.toolUseID ? task.toolUseID : typeof message.tool_use_id === "string" ? message.tool_use_id : task?.toolUseID
         const lane = callID ? (this.keptLane(callID) ?? this.active?.subagents.get(callID)) : undefined
         if (callID && lane?.background) {
           const status = String(message.status ?? "completed")
@@ -972,19 +1058,20 @@ class ClaudeThread implements Thread {
     }
     // Its call, the turn's own or a subagent's (a subagent of a subagent: its session too).
     const call = active.calls.get(callID) ?? [...active.subagents.values()].map((lane) => lane.calls.get(callID)).find(Boolean)
-    const before = this.subagentSessions.get(callID)
+    const before = this.subagentSessions[callID]
     let run: SubagentRun
     let background = false
     if (call) {
       const input = call.input
       if (kuvoTool(call.name, input).name !== "subagent") return undefined
       background = input.run_in_background === true
-      run = active.hooks.subagent(callID, { title: String(input.description ?? ""), prompt: typeof input.prompt === "string" ? input.prompt : undefined, agent: input.subagent_type, background })
+      run = active.hooks.subagent(callID, { title: String(input.description ?? ""), prompt: typeof input.prompt === "string" ? input.prompt : undefined, agent: input.subagent_type, background, messages: subagentRoute(input.subagent_type) })
       run.stop = () => this.stopSubagent(callID)
-      this.subagentSessions.set(callID, { sessionID: run.sessionID, title: String(input.description ?? "") })
+      const agentID = [...this.tasks].find(([, task]) => task.toolUseID === callID && task.type === "local_agent")?.[0]
+      this.rememberSubagent(callID, { sessionID: run.sessionID, title: String(input.description ?? ""), ...(typeof input.subagent_type === "string" ? { kind: input.subagent_type } : {}), ...(agentID ? { agentID } : {}) })
     } else if (before) {
       // One sent off in the background in an earlier turn, still at work: its session goes on.
-      run = active.hooks.subagent(callID, { title: before.title, sessionID: before.sessionID, background: true })
+      run = active.hooks.subagent(callID, { title: before.title, sessionID: before.sessionID, background: true, messages: subagentRoute(before.kind) })
       run.stop = () => this.stopSubagent(callID)
       background = true
     } else {
@@ -993,6 +1080,22 @@ class ClaudeThread implements Thread {
     const lane = { turn: run.turn, streamed: new Set<string>(), blockTools: new Map<number, string>(), calls: new Map<string, { name: string; input: Record<string, any> }>(), run, background }
     active.subagents.set(callID, lane)
     return lane
+  }
+
+  /**
+   * A subagent picked up again with your message (SendMessage resumed it once it was done): its
+   * session goes on, as one in the background, until it says it's done.
+   */
+  private resumedLane(active: Active, callID: string) {
+    const before = this.subagentSessions[callID]
+    if (!before) return
+    // Still at work: it takes the message at its next step.
+    const known = active.subagents.get(callID) ?? this.keptLane(callID)
+    if (known && !known.run.turn.isEnded) return
+    this.backgroundLanes.delete(callID)
+    const run = active.hooks.subagent(callID, { title: before.title, sessionID: before.sessionID, background: true, messages: subagentRoute(before.kind) })
+    run.stop = () => this.stopSubagent(callID)
+    active.subagents.set(callID, { turn: run.turn, streamed: new Set<string>(), blockTools: new Map<number, string>(), calls: new Map<string, { name: string; input: Record<string, any> }>(), run, background: true })
   }
 
   private stream(lane: Lane, event: any) {
@@ -1052,6 +1155,15 @@ class ClaudeThread implements Thread {
     if (text.length > outputLimit) text = text.slice(0, outputLimit) + "\n…"
     // Pictures it brought back (a Read of an image, a screenshot), and a PDF it read.
     const pictures = toolPictures(block.content, call?.input)
+    // A message passed on to a subagent (SendMessage went through): by its id, and the one
+    // Claude Code says it reached.
+    if (active && lane === active && call?.name === "SendMessage" && !block.is_error && !/"success"\s*:\s*false/.test(text)) {
+      if (typeof call.input.to === "string") this.passed.add(call.input.to)
+      try {
+        const said = JSON.parse(text)
+        for (const id of [said?.resumedAgentId, said?.pin?.id]) if (typeof id === "string") this.passed.add(id)
+      } catch {}
+    }
     // A subagent's task came back: its session's work is done (one sent off in the background
     // goes on, and ends with the turn).
     const subagent = active && lane === active ? active.subagents.get(id) : undefined
