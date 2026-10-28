@@ -134,13 +134,29 @@ struct LauncherTests {
         """#.write(to: npm, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: npm.path)
         try Launcher.install(in: bin, engine: folder.appending(path: "engine"))
-        // A lock left by a start that's gone: a process number nothing runs as.
         let lock = cache.appending(path: "kuvo-npx/some-mcp@1.0.0.lock")
-        try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
-        try "99999999\n".write(to: lock.appending(path: "pid"), atomically: true, encoding: .utf8)
-
-        let said = try run(bin.appending(path: Launcher.name), ["some-mcp@1.0.0", "--stdio"], path: tools.path + ":/bin:/usr/bin", cache: cache, more: ["KUVO_NPX_WAITS": "1"])
-        #expect(said == "node --stdio")
-        #expect(!FileManager.default.fileExists(atPath: lock.path), "its lock let go of once it's done")
+        let breaking = cache.appending(path: "kuvo-npx/some-mcp@1.0.0.lock.breaking")
+        let old = Date(timeIntervalSinceNow: -10 * 60)
+        let cases: [(String, () throws -> Void)] = [
+            // Its start is gone: a process number nothing runs as.
+            ("a start that's gone", { try "99999999\n".write(to: lock.appending(path: "pid"), atomically: true, encoding: .utf8) }),
+            // An older kuvo-npx's, which names none, from minutes ago.
+            ("an older kuvo-npx's", { try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: lock.path) }),
+            // A start that's gone, and a taking over that crashed half way, minutes ago.
+            ("a taking over that crashed", {
+                try "99999999\n".write(to: lock.appending(path: "pid"), atomically: true, encoding: .utf8)
+                try FileManager.default.createDirectory(at: breaking, withIntermediateDirectories: true)
+                try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: breaking.path)
+            }),
+        ]
+        for (name, leave) in cases {
+            try? FileManager.default.removeItem(at: cache)
+            try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
+            try leave()
+            let said = try run(bin.appending(path: Launcher.name), ["some-mcp@1.0.0", "--stdio"], path: tools.path + ":/bin:/usr/bin", cache: cache, more: ["KUVO_NPX_WAITS": "1"])
+            #expect(said == "node --stdio", "\(name)")
+            #expect(!FileManager.default.fileExists(atPath: lock.path), "\(name): its lock let go of once it's done")
+            #expect(!FileManager.default.fileExists(atPath: breaking.path), "\(name)")
+        }
     }
 }

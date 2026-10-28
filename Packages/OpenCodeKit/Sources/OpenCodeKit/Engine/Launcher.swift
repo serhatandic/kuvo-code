@@ -53,8 +53,17 @@ public enum Launcher {
                 echo $$ >"$folder.lock/pid"; locked=1; break
               fi
               [ -s "$folder/.main" ] && break
-              holder=$(cat "$folder.lock/pid" 2>/dev/null)
-              if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null && mkdir "$folder.lock.breaking" 2>/dev/null; then
+              # Its start is gone: its process doesn't run, or it named none (an older kuvo-npx's,
+              # or one that crashed as it took it) minutes ago. A taking over that crashed half way
+              # is let go of after a minute.
+              holder=$(cat "$folder.lock/pid" 2>/dev/null); gone=
+              if [ -n "$holder" ]; then
+                kill -0 "$holder" 2>/dev/null || gone=1
+              elif [ -n "$(find "$folder.lock" -maxdepth 0 -mmin +2 2>/dev/null)" ]; then
+                gone=1
+              fi
+              [ -n "$(find "$folder.lock.breaking" -maxdepth 0 -mmin +1 2>/dev/null)" ] && rmdir "$folder.lock.breaking" 2>/dev/null
+              if [ -n "$gone" ] && mkdir "$folder.lock.breaking" 2>/dev/null; then
                 [ "$(cat "$folder.lock/pid" 2>/dev/null)" = "$holder" ] && rm -rf "$folder.lock"
                 rmdir "$folder.lock.breaking"
                 continue
