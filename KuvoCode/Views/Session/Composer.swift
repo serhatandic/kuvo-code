@@ -381,7 +381,6 @@ struct Composer: View {
         .onDisappear {
             if isDictating { app.dictation.cancel() }
             app.dictation.withdraw(voiceOwner)
-            waitsForModel.wrappedValue = false
         }
         .onChange(of: session) { old, _ in
             // Listening for the session it showed: that stops, rather than going on unseen, and
@@ -584,36 +583,7 @@ struct Composer: View {
 
     /// Talk instead of typing: what you say goes after what's written, and nothing is sent.
     private var voiceButton: some View {
-        Button(action: startVoice) {
-            Image(systemName: "mic")
-                .font(.system(size: 14, weight: .medium))
-                .frame(width: 30, height: 28)
-                .overlay { MicRing(model: .shared) }
-                .hoverHighlight(in: Capsule(), selected: waitsForModel.wrappedValue, mutesInk: true)
-        }
-        .buttonStyle(.plain)
-        .clickablePointer()
-        .help(MicRing.words(.shared) ?? "Talk Instead of Typing (⇧⌘Space)")
-        .accessibilityLabel("Voice Input")
-        .accessibilityValue(MicRing.words(.shared) ?? "")
-        .accessibilityHint(SpeechModel.shared.canListen ? "Talk instead of typing" : "Downloads the voice model first")
-        // Pressed while the voice model comes (or by the shortcut): how far it's come.
-        .popover(isPresented: waitsForModel, arrowEdge: .top) {
-            VoiceModelPopover(model: .shared) { waitsForModel.wrappedValue = false }
-                .popoverContent()
-        }
-    }
-
-    /// This composer's mic was pressed before voice input could listen, until it can (or the
-    /// popover is closed).
-    private var waitsForModel: Binding<Bool> {
-        // Read as the view is drawn, so it's drawn again when they change.
-        let shown = app.dictation.waitsForModel == voiceOwner && !SpeechModel.shared.canListen
-        return Binding {
-            shown
-        } set: { shown in
-            if !shown, app.dictation.waitsForModel == voiceOwner { app.dictation.waitsForModel = nil }
-        }
+        MicButton(owner: voiceOwner, start: startVoice)
     }
 
     private func startVoice() {

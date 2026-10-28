@@ -25,11 +25,11 @@ final class Dictation {
 
     /// Listens for the composer `owner`, for `words`; `deliver` gets what was said once it's done.
     /// Until the voice model is here, nothing listens: the press brings it in, and that
-    /// composer's mic says how far it's come.
+    /// composer's mic says how far it's come (pressed again, it stops saying so).
     func start(for owner: String, words: @escaping Words = { [] }, deliver: @escaping (String) -> Void) {
         cancel()
         guard SpeechModel.shared.micPressed() == .listen else {
-            waitsForModel = owner
+            waitsForModel = waitsForModel == owner ? nil : owner
             return
         }
         waitsForModel = nil
@@ -71,6 +71,11 @@ final class Dictation {
     }
 
     func isListening(for owner: String?) -> Bool { voice != nil && self.owner == owner }
+
+    /// `owner`'s mic stops saying how far the voice model has come.
+    func stopWaiting(for owner: String) {
+        if waitsForModel == owner { waitsForModel = nil }
+    }
 
     /// The composer you're typing in says so (and where its words go), for the shortcut.
     func offer(_ owner: String, words: @escaping Words, deliver: @escaping (String) -> Void) {
@@ -121,7 +126,8 @@ final class Dictation {
     /// Space, down or up: whether the shortcut took it.
     private func shortcut(isDown: Bool, isRepeat: Bool, commandShift: Bool) -> Bool {
         if isDown, commandShift {
-            if isRepeat { return voice != nil }
+            // Held while the voice model comes, as while it listens: its repeats are the shortcut's.
+            if isRepeat { return voice != nil || waitsForModel != nil }
             let wasListening = voice != nil
             guard toggleFromShortcut() else { return false }
             heldSince = !wasListening && voice != nil ? Date() : nil

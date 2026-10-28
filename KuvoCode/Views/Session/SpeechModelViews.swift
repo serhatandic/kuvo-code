@@ -24,9 +24,52 @@ struct MicRing: View {
         }
     }
 
-    /// For the mic's help and VoiceOver: what's coming, while it is.
-    static func words(_ model: SpeechModel) -> String? {
-        model.isUnderway ? model.micWords.title : nil
+}
+
+/// The composer's mic: it listens once the voice model can; until then a press brings the model
+/// in, and its popover says how far it's come. Its own view, so the composer isn't drawn again
+/// with each piece of the download.
+struct MicButton: View {
+    @Environment(AppModel.self) private var app
+    /// The composer it's for.
+    let owner: String
+    let start: () -> Void
+    private var model: SpeechModel { .shared }
+
+    var body: some View {
+        // Where the model is, once there's something to say: while it comes, or stopped.
+        let words = model.canListen || model.state == .absent ? nil : model.micWords.title
+        let shown = app.dictation.waitsForModel == owner && !model.canListen
+        Button(action: start) {
+            Image(systemName: "mic")
+                .font(.system(size: 14, weight: .medium))
+                .frame(width: 30, height: 28)
+                .overlay { MicRing(model: model) }
+                .hoverHighlight(in: Capsule(), selected: shown, mutesInk: true)
+        }
+        .buttonStyle(.plain)
+        .clickablePointer()
+        .help(words ?? "Talk Instead of Typing (⇧⌘Space)")
+        .accessibilityLabel("Voice Input")
+        .accessibilityValue(words ?? "")
+        .accessibilityHint(model.canListen ? "Talk instead of typing" : model.state == .absent ? "Downloads the voice model first" : "Says how far the voice model has come")
+        // Pressed while the voice model comes (or by the shortcut): how far it's come.
+        .popover(isPresented: Binding { shown } set: { if !$0 { app.dictation.stopWaiting(for: owner) } }, arrowEdge: .top) {
+            VoiceModelPopover(model: model) { app.dictation.stopWaiting(for: owner) }
+                .popoverContent()
+        }
+        // VoiceOver doesn't go into a popover by itself: it hears where the model is, and when it's ready.
+        .onChange(of: shown) { _, shown in
+            if shown { AccessibilityNotification.Announcement(model.micWords.title).post() }
+        }
+        .onChange(of: model.canListen) { _, canListen in
+            guard canListen, app.dictation.waitsForModel == owner else { return }
+            app.dictation.stopWaiting(for: owner)
+            AccessibilityNotification.Announcement("Voice input is ready").post()
+        }
+        // Another conversation in this composer, or none: the popover was that one's.
+        .onChange(of: owner) { old, _ in app.dictation.stopWaiting(for: old) }
+        .onDisappear { app.dictation.stopWaiting(for: owner) }
     }
 }
 
@@ -70,7 +113,9 @@ struct VoiceModelPopover: View {
                 model.pause()
                 close()
             })
-        case .failed, .lowSpace, .paused:
+        case .lowSpace:
+            AnyView(Button("Manage Storage…") { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.settings.Storage")!) })
+        case .failed, .paused:
             AnyView(Button(model.state == .paused ? "Resume" : "Try Again") { model.download() }
                 .keyboardShortcut(.defaultAction))
         default:
@@ -137,7 +182,7 @@ struct SpeechModelRow: View {
         .confirmationDialog("Remove Whisper from this Mac?", isPresented: $confirmsRemoving) {
             Button("Remove Download", role: .destructive) { model.remove() }
         } message: {
-            Text("Voice input needs it: it’s downloaded again the next time you press the mic, or here.")
+            Text("Voice input needs it: it’s downloaded again the next time you click the microphone, or here.")
         }
     }
 }

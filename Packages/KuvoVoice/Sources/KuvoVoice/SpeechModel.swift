@@ -551,7 +551,7 @@ extension SpeechModel {
         case .paused: return ("Paused · \(percent)", nil)
         case .preparing: return ("Getting ready…", "This takes a few minutes, once.")
         case .lowSpace(let free): return ("Not enough space for the voice model", "Needs \(Self.megabytes(size - received)) MB · \(Self.megabytes(free)) MB free")
-        case .failed(let words): return ("Couldn’t download the voice model", words)
+        case .failed(let words): return ("Voice input isn’t ready", words)
         case .absent: return ("Voice input needs its model", "\(Self.megabytes(size)) MB, downloaded once.")
         case .ready, .unsupported: return ("", nil)
         }
