@@ -103,6 +103,12 @@ export interface WorkWatch {
  * one message; each, a change to its bot's work. `targets()`: where conversations here run. */
 export function workWatcher(source: Target, targets: () => Target[], { gather = GATHER, schedule = setTimeout, file = WORK_WAKES }: WorkWatch = {}): (event: WorkEvent) => Promise<void> {
   const due = new Set<string>();
+  // How many tries in a row each has failed, for the wait before the next.
+  const failures = new Map<string, number>();
+  const putBack = (starter: string, waiting: Waiting) => changeWaiting(file, all => {
+    const now = all[starter];
+    all[starter] = { lines: [...waiting.lines, ...(now?.lines ?? [])], asks: waiting.asks || Boolean(now?.asks), since: waiting.since };
+  });
   const send = async (starter: string) => {
     due.delete(starter);
     const waiting = changeWaiting(file, all => {
@@ -111,23 +117,25 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       return one;
     });
     if (!waiting?.lines.length) return;
+    // Gone for sure: nothing to tell. Not to be reached now (the engine starting again): kept, and
+    // tried again a little later each time.
     const place = await placeOfSession(starter, targets()).catch(() => undefined);
-    // Gone, or not here: nothing to tell.
-    if (!place) return;
+    if (place === null) return;
     try {
+      if (!place) throw new Error("Not reached.");
       await asked(place.target, "POST", `api/session/${encodeURIComponent(starter)}/prompt`, { id: messageID(), text: wakeText(waiting.lines), delivery: waiting.asks ? "steer" : "queue" });
+      failures.delete(starter);
     } catch {
-      // Kept to go with the next.
-      changeWaiting(file, all => {
-        const now = all[starter];
-        all[starter] = { lines: [...waiting.lines, ...(now?.lines ?? [])], asks: waiting.asks || Boolean(now?.asks), since: waiting.since };
-      });
+      putBack(starter, waiting);
+      const tries = (failures.get(starter) ?? 0) + 1;
+      failures.set(starter, tries);
+      soon(starter, Math.min(300_000, gather * 2 ** tries));
     }
   };
-  const soon = (starter: string) => {
+  const soon = (starter: string, after = gather) => {
     if (due.has(starter)) return;
     due.add(starter);
-    schedule(() => send(starter).catch(() => {}), gather);
+    schedule(() => send(starter).catch(() => {}), after);
   };
   // What a box left waiting as it stopped: sent now.
   for (const starter of Object.keys(readWaiting(file))) soon(starter);

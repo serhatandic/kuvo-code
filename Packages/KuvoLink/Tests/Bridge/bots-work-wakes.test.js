@@ -108,3 +108,17 @@ test("what a box had gathered as it stopped still reaches the bot", async () => 
   assert.equal(prompts[0].text, "[Session finished] \"Sign-in\" in tidepool (address ses_signin):\nDone.");
   assert.deepEqual(JSON.parse(fs.readFileSync(wakesFile, "utf8")), {});
 });
+
+test("a wake that can't reach the bot now (its engine starting again) is kept and goes later", async () => {
+  const { schedule, runAll } = clock();
+  let reachable = false;
+  const watch = link.workWatcher(source, () => (reachable ? [source] : []), { schedule });
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_signin" } });
+  await runAll();
+  assert.equal(prompts.length, 0);
+  assert.equal(Object.keys(JSON.parse(fs.readFileSync(wakesFile, "utf8"))).length, 1, "kept");
+  reachable = true;
+  await runAll();
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0].text, /^\[Session finished\] "Sign-in"/);
+});

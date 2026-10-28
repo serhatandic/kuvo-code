@@ -467,7 +467,9 @@ client shows it from the same routes.
 
 - **Marked as its work**: a session a bot starts, and every one under it, has metadata
   `kuvo: {startedBy, beside, by: {bot, name}, depth, wake?}`: the bot it works for, how deep it is
-  (1 for one the bot started), and what its starter hears of it. Clients mark rows by `kuvo.by`.
+  (1 for one the bot started), and what its starter hears of it (a bot: both, or only its asks
+  when it waited for the answer). What a starter hears is gathered a few seconds and sent as one
+  message (an ask to be read at its next step), kept in `run/work/wakes.json` until it's sent. Clients mark rows by `kuvo.by`.
   Its task ends with the session's half of the playbook: review your work with reviewer subagents,
   fix what they find, and end with a short report.
 - **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
@@ -476,16 +478,19 @@ client shows it from the same routes.
   (`{session, archive?}`; only one of its own), `answer_ask` (`{session, ask, decision: allow|deny,
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
   an account for here, `provider/model`, with their efforts).
-- **Answering asks**: a bot may allow what one of its sessions asks only where it could go ahead
-  itself (its own rules allow it: a bot that asks first can't allow what it would ask about), and
-  never what always comes to you: pushing, changing what's on GitHub, publishing, sending to a
-  store, deploying, deleting outside the project. It may always deny, with its reason passed on.
+- **Answering asks**: a bot may allow what one of its sessions (or a subagent of one) asks only
+  where it could go ahead itself (the engine's rules for its own conversation allow it: its
+  defaults, Settings › Permissions, then the conversation's own; a bot that asks first can't allow
+  what it would ask about), and never what always comes to you, told by what each command runs:
+  pushing, changing what's on GitHub, publishing, sending to a store, deploying or releasing
+  (a script or task named for it too), deleting outside the session's folder. It may always deny,
+  with its reason passed on.
   Each answer is kept on the session, `kuvo.answers: [{ask, call?, what, decision, reason, by:
   {bot?, name}, at}]` (the latest 40), where clients show it on the ask's tool call ("Allowed by
   Pixel") and in the bot's work.
 - **Limits you set** (Edit Bot › Work; `PATCH kuvo/bots/<id>` `{work: {limits}}`, null for none;
   `limits` in `kuvo/bots`): `atOnce` (its sessions working at once), `perDay` (started since
-  midnight), `depth`, `tokensPerDay`. None until you set one; past one, `start_session` refuses
+  midnight, archived ones too), `depth`, `tokensPerDay` (of the sessions started today). None until you set one; past one, `start_session` refuses
   with words saying which.
 - **`GET kuvo/work?bot=<id>`** → `{bot, sessions: [{session, title, folder, project?, startedBy,
   depth, model?, mode?, state, asks?, started, tokens, cost?, lastReply?}], answered: [answer with

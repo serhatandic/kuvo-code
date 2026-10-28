@@ -10,7 +10,7 @@ import { targetsOf } from "../letters/tools";
 import { answersOn } from "../work/answers";
 import { noteWorkChanged, readWorkChanges, WORK_FOLDER, workFollowers } from "../work/changes";
 import { botLimits } from "../work/limits";
-import { describeWork, ofBot, workingNow, workSessions } from "../work/tree";
+import { askingNow, describeWork, ofBot, workingNow, workSessions } from "../work/tree";
 import type { BotWork, WorkAnswer } from "../../shared/routes/work";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
@@ -22,10 +22,11 @@ async function botWork(bot: string, context: RouteContext): Promise<BotWork> {
   const targets = targetsOf({ readEngine, bridge });
   const work = ofBot(bot, await workSessions(targets, signal ?? undefined));
   const working = await workingNow(targets, signal ?? undefined);
-  const sessions = [];
-  for (const each of work.slice(0, 60)) {
-    const { askID: _, ...described } = await describeWork(each, working, { replies: true, signal: signal ?? undefined });
-    sessions.push(described);
+  // A few at a time: each asks the engine what it asks and said.
+  const sessions: Awaited<ReturnType<typeof describeWork>>[] = [];
+  const shown = work.slice(0, 60);
+  for (let at = 0; at < shown.length; at += 8) {
+    sessions.push(...await Promise.all(shown.slice(at, at + 8).map(each => describeWork(each, working, { replies: true, signal: signal ?? undefined }))));
   }
   const answered: WorkAnswer[] = work.flatMap(each => answersOn(each.data.metadata).map(answer => ({ ...answer, session: each.data.id }))).sort((a, b) => b.at - a.at).slice(0, 100);
   const midnight = new Date().setHours(0, 0, 0, 0);
@@ -33,7 +34,7 @@ async function botWork(bot: string, context: RouteContext): Promise<BotWork> {
   const cost = today.reduce((sum, each) => sum + (typeof each.data.cost === "number" ? each.data.cost : 0), 0);
   return {
     bot,
-    sessions,
+    sessions: sessions.map(({ askID: _, ...described }) => described),
     answered,
     today: {
       started: today.length,
@@ -74,9 +75,10 @@ export async function* workRoute(context: RouteContext, match: RegExpMatchArray)
   if (!targets.length) return yield* json(503, { message: "The engine isn't running." });
   const work = ofBot(bot, await workSessions(targets, signal ?? undefined));
   const working = await workingNow(targets, signal ?? undefined);
+  // Those working, and those waiting on an answer (which may not count as working).
   let stopped = 0;
   for (const each of work) {
-    if (!working.has(each.data.id)) continue;
+    if (!working.has(each.data.id) && !(await askingNow(each, signal ?? undefined))) continue;
     if (await stopSession(each.target, each.data.id).then(() => true, () => false)) stopped += 1;
   }
   noteWorkChanged(bot);

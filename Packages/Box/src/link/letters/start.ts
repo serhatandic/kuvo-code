@@ -101,8 +101,9 @@ export const sessionNote = (bot: string) => `You were started by ${bot}, a bot c
 
 // What a start's wake names: what its starter hears of it.
 const WAKES = ["finished", "asks"];
-function wakesFrom(given: unknown, byBot: boolean): string[] {
-  if (given === undefined || given === null) return byBot ? [...WAKES] : [];
+function wakesFrom(given: unknown, byBot: boolean, waits: boolean): string[] {
+  // (One waited for answers here: hearing it finish again would say it twice.)
+  if (given === undefined || given === null) return byBot ? WAKES.filter(each => !waits || each !== "finished") : [];
   if (given === "both") return [...WAKES];
   if (given === "none" || given === false) return [];
   const named = Array.isArray(given) ? given : [given];
@@ -228,7 +229,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     const limits = botLimits(bot.bot);
     if (limits) {
       const targets = [engine, bridge].filter((each): each is Target => Boolean(each));
-      const work = ofBot(bot.bot, await workSessions(targets, place.signal));
+      const work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
       const working = await workingNow(targets, place.signal);
       const midnight = new Date().setHours(0, 0, 0, 0);
       const today = work.filter(each => (each.data.time?.created ?? 0) >= midnight);
@@ -244,7 +245,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const counted = key ? allowed(kind, key) : null;
   if (key && counted === null) return no(429, bot ? "You've started a great many sessions in the last few minutes, which looks like a loop. Stop, check on the ones you have (list_sessions), and tell the user." : "You've started several sessions in the last few minutes. Write to those (send_message), or ask the user before starting more.");
   const giveBack = () => { if (key && counted !== null) takeBack(kind, key, counted); };
-  // In a worktree of its project's, on a branch of its own.
+  // In a worktree of its project's, on a branch of its own (taken away again should the session not
+  // start).
+  let madeTree: string | null = null;
   if (given.worktree === true) {
     const project = projectDirectory ?? (folder !== CHATS ? (readWorktrees().find(each => (each.folder ?? each.root) === folder)?.project ?? folder) : null);
     if (!project) {
@@ -258,6 +261,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
       return no(made.status === 409 ? 400 : 502, `Couldn't make a worktree of ${path.basename(project)}: ${String(tree.message ?? "it failed")}`);
     }
     folder = tree.folder;
+    madeTree = typeof (tree as { root?: unknown }).root === "string" ? (tree as { root: string }).root : null;
     if (typeof tree.branch === "string") picked.push(`worktree ${tree.branch}`);
   }
   // Its approval: the starter's, or asking first if it says so, and never above the starter's.
@@ -275,6 +279,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     session = made.id;
   } catch (error) {
     giveBack();
+    if (madeTree) await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true }, engine, place.signal).catch(() => {});
     return no(502, `Couldn't start a session in ${folder}: ${String((error as Error | null)?.message ?? error)}`);
   }
   const address = encodeURIComponent(session);
@@ -282,7 +287,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/kuvo.project-folders`, { value: projectsNote(folder, project.folders) }).catch(() => {});
   }
   await tellWorktree(target, session).catch(() => {});
-  const wakes = wakesFrom(given.wake, Boolean(ownBot));
+  const wakes = wakesFrom(given.wake, Boolean(ownBot), given.wait === true);
   if (by?.place) {
     const kuvo = { startedBy: by.session, beside, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) };
     await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo } }).catch(() => {});

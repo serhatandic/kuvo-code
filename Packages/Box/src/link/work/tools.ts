@@ -7,7 +7,7 @@ import { call } from "../engine/client";
 import { stopSession } from "../engine/queue";
 import { holdArchived } from "../areas/wakes";
 import { noteWorkChanged } from "./changes";
-import { alwaysYours, keepAnswer, pendingAsk, permissionWords, withinLevel } from "./answers";
+import { alwaysYours, keepAnswer, noteSession, pendingAsk, permissionWords, rulesOf, withinLevel } from "./answers";
 import { describeModels, usableModels } from "./models";
 import { botOfConversation, describeWork, placeWords, under, workingNow, workSessions, worksFor } from "./tree";
 import type { Target } from "../../shared/records";
@@ -85,9 +85,10 @@ export async function stopSessionTool(caller: Caller, args: Record<string, unkno
   }
   changed(data);
   if (args.archive === true) {
-    const at = `/api/session/${encodeURIComponent(data.id)}`;
-    const now = await call(target, "GET", at, undefined, signal).catch(() => null) as { metadata?: Record<string, unknown> } | null;
-    await call(target, "PATCH", at, { metadata: { ...(now?.metadata ?? {}), "kuvo.archived": true } }, signal).then(() => holdArchived(data.id, true)).catch(() => {});
+    await noteSession(target, data.id, (kuvo, metadata) => {
+      metadata["kuvo.archived"] = true;
+      return kuvo;
+    }).then(() => holdArchived(data.id, true)).catch(() => {});
     return said(`Stopped and archived "${data.title || "New Session"}".`);
   }
   return said(`Stopped "${data.title || "New Session"}".`);
@@ -104,17 +105,16 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
   if (typeof args.ask !== "string" || !args.ask.trim()) return refused("Say which ask (ask), by its id from the [Session asks] message or list_sessions.");
   const reason = typeof args.reason === "string" ? args.reason.trim() : "";
   if (!reason) return refused("Say why, in a line (reason): the user sees it with your answer.");
-  const ask = await pendingAsk(target, data.id, args.ask.trim());
+  const ask = await pendingAsk(target, data.id, args.ask.trim(), signal);
   if (!ask) return refused(`"${title}" doesn't ask ${args.ask.trim()} now: it was answered, or it moved on.`);
   const bot = botOfConversation(caller.session);
   const by = bot ?? { name: caller.name };
-  const at = `/api/session/${encodeURIComponent(data.id)}`;
   if ("question" in ask) {
     const answer = typeof args.answer === "string" ? args.answer.trim() : "";
     if (!answer) return refused(`"${title}" asks: ${ask.question.text} Answer it in words (answer).`);
     if (!ask.question.key) return refused(`"${title}"'s question has more than one part: tell the user, who answers it in the session.`);
     try {
-      await call(target, "POST", `${at}/form/${encodeURIComponent(ask.question.id)}/reply`, { answer: { [ask.question.key]: answer } }, signal);
+      await call(target, "POST", `/api/session/${encodeURIComponent(ask.question.asker)}/form/${encodeURIComponent(ask.question.id)}/reply`, { answer: { [ask.question.key]: answer } }, signal);
     } catch (error) {
       return refused(`Couldn't answer it: ${why(error)}`);
     }
@@ -127,13 +127,14 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
   const shown = permission.resources.filter(each => each !== "*").join(", ") || permission.action;
   if (args.decision !== "allow" && args.decision !== "deny") return refused("Say allow or deny (decision).");
   if (args.decision === "allow") {
-    const yours = alwaysYours(permission.resources);
+    const folder = data.location?.directory ?? data.directory ?? "";
+    const yours = alwaysYours(permission.action, permission.resources, folder ? [folder] : []);
     if (yours) return refused(`That's ${yours}, which always comes to the user: you can't allow it. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
-    const rules = (caller.place.data.permissions ?? []) as KitRule[];
+    const rules = rulesOf((caller.place.data.permissions ?? []) as KitRule[]);
     if (!withinLevel(rules, permission.action, permission.resources)) return refused(`You can't allow that: you'd have to ask the user about it yourself. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
   }
   try {
-    await call(target, "POST", `${at}/permission/${encodeURIComponent(permission.id)}/reply`, args.decision === "allow" ? { decision: "once" } : { decision: "reject", message: `${by.name}: ${reason}` }, signal);
+    await call(target, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, args.decision === "allow" ? { decision: "once" } : { decision: "reject", message: `${by.name}: ${reason}` }, signal);
   } catch (error) {
     return refused(`Couldn't answer it: ${why(error)}`);
   }

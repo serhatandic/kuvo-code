@@ -10,6 +10,7 @@ import { call } from "../engine/client";
 import { CHATS } from "../home";
 import { describePermission, projectNameOf } from "../notices/news";
 import { listBots } from "../bots/list";
+import { asksIn } from "./answers";
 import type { Target } from "../../shared/records";
 import type { WorkSession, WorksFor } from "../../shared/routes/work";
 import type { EngineSession } from "../engine/sessions";
@@ -54,8 +55,9 @@ export const wakesOf = (data: Partial<EngineSession> | null | undefined): string
 const isArchived = (data: Partial<EngineSession>) => Boolean(data.time?.archived || data.metadata?.["kuvo.archived"] === true || data.metadata?.kuvo?.archived === true);
 
 /** Every session here that's someone's work (started by another conversation), the latest first,
- * from the engine and the coding agents' bridge; those put away left out. */
-export async function workSessions(targets: Target[], signal?: AbortSignal): Promise<Listed[]> {
+ * from the engine and the coding agents' bridge; those put away left out, unless `archived` (as
+ * limits count them). */
+export async function workSessions(targets: Target[], signal?: AbortSignal, { archived = false }: { archived?: boolean } = {}): Promise<Listed[]> {
   const found: Listed[] = [];
   for (const target of targets) {
     let listed: unknown;
@@ -65,7 +67,7 @@ export async function workSessions(targets: Target[], signal?: AbortSignal): Pro
       continue;
     }
     for (const data of Array.isArray(listed) ? listed as Listed["data"][] : []) {
-      if (!data?.id || data.parentID || isArchived(data) || !startedByOf(data)) continue;
+      if (!data?.id || data.parentID || (!archived && isArchived(data)) || !startedByOf(data)) continue;
       found.push({ target, data });
     }
   }
@@ -99,19 +101,12 @@ export async function workingNow(targets: Target[], signal?: AbortSignal): Promi
   return working;
 }
 
-/** What a session asks now (a permission, or a question), in words, with the ask's id; null for
- * nothing. */
+/** What a session (or one of its subagents) asks now, a permission or a question, in words, with
+ * the ask's id; null for nothing. */
 export async function askingNow(listed: Listed, signal?: AbortSignal): Promise<{ id: string; what: string } | null> {
-  const at = `/api/session/${encodeURIComponent(listed.data.id)}`;
-  const permissions = await call(listed.target, "GET", `${at}/permission`, undefined, signal).catch(() => null);
-  const permission = Array.isArray(permissions) ? permissions.find(each => isObject(each) && typeof each.id === "string") : null;
-  if (permission) return { id: permission.id, what: describePermission(permission) };
-  const forms = await call(listed.target, "GET", `${at}/form`, undefined, signal).catch(() => null);
-  const form = Array.isArray(forms) ? forms.find(each => isObject(each) && typeof each.id === "string") : null;
-  if (form) {
-    const field = Array.isArray(form.fields) ? form.fields.find((each: unknown) => isObject(each) && !each.hidden) : null;
-    return { id: form.id, what: `Asks: ${String(field?.description || field?.title || form.title || "a question")}` };
-  }
+  const { permissions, questions } = await asksIn(listed.target, listed.data.id, signal);
+  if (permissions[0]) return { id: permissions[0].id, what: describePermission(permissions[0]) };
+  if (questions[0]) return { id: questions[0].id, what: `Asks: ${questions[0].text}` };
   return null;
 }
 
@@ -158,13 +153,3 @@ export async function describeWork(listed: Listed, working: Set<string>, { repli
 
 /** A session's place, in words: "in Tidepool", "in the chats". */
 export const placeWords = (work: Pick<WorkSession, "project" | "folder">) => (work.project ? `in ${work.project}` : work.folder === CHATS ? "in the chats" : `in ${path.basename(work.folder) || work.folder}`);
-
-/** What a session's metadata notes are, changed: the engine keeps them whole, so they're read
- * first and sent back with the change. */
-export async function noteSession(target: Target, session: string, change: (kuvo: Record<string, unknown>) => Record<string, unknown>): Promise<void> {
-  const at = `/api/session/${encodeURIComponent(session)}`;
-  const data = await call(target, "GET", at) as Partial<EngineSession> | null;
-  const metadata = isObject(data?.metadata) ? data.metadata : {};
-  const kuvo = isObject(metadata.kuvo) ? metadata.kuvo : {};
-  await call(target, "PATCH", at, { metadata: { ...metadata, kuvo: change({ ...kuvo }) } });
-}

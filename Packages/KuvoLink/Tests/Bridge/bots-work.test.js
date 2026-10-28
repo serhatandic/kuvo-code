@@ -73,7 +73,11 @@ const engine = http.createServer((request, response) => {
         { id: "gpt-5", providerID: "openai", name: "GPT-5", variants: [], enabled: true },
       ] });
     }
-    if (url.pathname === "/api/session" && request.method === "GET") return reply({ data: [...sessions.values()].filter(each => !each.parentID) });
+    if (url.pathname === "/api/session" && request.method === "GET") {
+      // A session's subagents by `parentID`; the rest, those at the top.
+      const parent = url.searchParams.get("parentID");
+      return reply({ data: [...sessions.values()].filter(each => (parent && parent !== "null" ? each.parentID === parent : !each.parentID)) });
+    }
     if (url.pathname === "/api/session" && request.method === "POST") {
       const given = JSON.parse(body);
       const id = `ses_new${made.length + 1}`;
@@ -299,4 +303,58 @@ test("a client stops all of a bot's work at once", async () => {
   const stopped = await route("POST", "kuvo/bots/bot_pixel00001/stop-all");
   assert.deepEqual(stopped, { status: 200, body: { stopped: 2 } });
   assert.deepEqual(interrupted.sort(), [one, two].sort());
+});
+
+test("a bot that asks first can't allow a folder outside the project, which it would be asked about itself", async () => {
+  const session = startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_mira"));
+  asked.set(session, [{ id: "per_1", sessionID: session, action: "external_directory", resources: [path.join(home, ".ssh", "*")] }]);
+  const said = await tool("answer_ask", { session, ask: "per_1", decision: "allow", reason: "It needs the keys." }, "ses_mira");
+  assert.equal(said.isError, true);
+  assert.equal(replied.length, 0);
+});
+
+test("what a session's subagent asks, the bot answers on the subagent", async () => {
+  const session = startedAddress(await tool("start_session", { task: "Review it.", project: "Tidepool" }, "ses_pixel"));
+  sessions.set("ses_reviewer", { id: "ses_reviewer", parentID: session, title: "Reviewer", location: { directory: tidepool }, time: { created: 1, updated: 1 } });
+  asked.set("ses_reviewer", [{ id: "per_7", sessionID: "ses_reviewer", action: "shell", resources: ["npm test"] }]);
+  const listed = await tool("list_sessions", {}, "ses_pixel");
+  assert.match(listed.text, /asks to run a command: npm test \(ask per_7\)/, "its subagent's ask is the session's");
+  const said = await tool("answer_ask", { session, ask: "per_7", decision: "allow", reason: "Tests." }, "ses_pixel");
+  assert.equal(said.isError, false, said.text);
+  assert.deepEqual(replied[0], { session: "ses_reviewer", permission: "per_7", decision: "once" });
+});
+
+test("what always comes to the user is told by what a command runs, not by a word in it", async () => {
+  const session = startedAddress(await tool("start_session", { task: "Ship it.", project: "Tidepool" }, "ses_pixel"));
+  const yours = ["npm run deploy", "make release", "./scripts/publish.sh", "fastlane ios release", "\"git\" push origin main", "git -C app push", "cd app && git push", "gh workflow run deploy.yml", "gh api -X POST repos/a/b/merges", "rm -r -f ~/old", "rm -rf ../../elsewhere", "rm --recursive /etc/thing", "npx vercel --prod"];
+  const fine = ["git log --grep push", "cargo build --release", `rm -rf ${path.join(tidepool, "build")}`, "rm -rf build", "xcodebuild -configuration Release build", "npm test", "gh pr view 12", "gh api repos/a/b/pulls"];
+  asked.set(session, [...yours, ...fine].map((command, at) => ({ id: `per_${at}`, sessionID: session, action: "shell", resources: [command] })));
+  const [all] = [[...yours, ...fine]];
+  for (const [at, command] of all.entries()) {
+    const said = await tool("answer_ask", { session, ask: `per_${at}`, decision: "allow", reason: "Part of the plan." }, "ses_pixel");
+    assert.equal(said.isError, at < yours.length, `${command}: ${said.text}`);
+  }
+});
+
+test("two answers given at once on one session are both kept", async () => {
+  const session = startedAddress(await tool("start_session", { task: "Add haptics.", project: "Tidepool" }, "ses_pixel"));
+  asked.set(session, [{ id: "per_1", sessionID: session, action: "shell", resources: ["npm test"] }, { id: "per_2", sessionID: session, action: "shell", resources: ["npm run lint"] }]);
+  await Promise.all([
+    tool("answer_ask", { session, ask: "per_1", decision: "allow", reason: "Tests." }, "ses_pixel"),
+    tool("answer_ask", { session, ask: "per_2", decision: "allow", reason: "Lint." }, "ses_pixel"),
+  ]);
+  assert.deepEqual(sessions.get(session).metadata.kuvo.answers.map(each => each.ask).sort(), ["per_1", "per_2"]);
+  assert.equal(sessions.get(session).metadata.kuvo.by.bot, "bot_pixel00001", "the rest of its notes kept");
+});
+
+test("a day's limit counts sessions archived since, and one waited for isn't heard of twice", async () => {
+  setBots({ pixelWork: { limits: { perDay: 2 } } });
+  const first = startedAddress(await tool("start_session", { task: "One.", project: "Tidepool", wait: true }, "ses_pixel"));
+  assert.deepEqual(sessions.get(first).metadata.kuvo.wake, ["asks"], "its answer came back here: only its asks wake the bot");
+  startedAddress(await tool("start_session", { task: "Two.", project: "Tidepool" }, "ses_pixel"));
+  assert.equal((await tool("stop_session", { session: first, archive: true }, "ses_pixel")).text, "Stopped and archived \"New Session\".");
+  assert.equal(sessions.get(first).metadata["kuvo.archived"], true);
+  const third = await tool("start_session", { task: "Three.", project: "Tidepool" }, "ses_pixel");
+  assert.equal(third.isError, true);
+  assert.match(third.text, /2 new sessions a day/);
 });
