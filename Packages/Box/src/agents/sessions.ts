@@ -20,7 +20,7 @@ import { citedIn, plainCitations } from "./agents/codex-citations"
 import { Auto, autoProvider, resetTime, type AutoEntry } from "./auto"
 import { emit } from "./events"
 import { handover, withHandover } from "./handover"
-import { onMachine } from "./machine"
+import { onMachine, ownEnvironment } from "./machine"
 import { messageID, newID } from "./ids"
 import type { Roster } from "./roster"
 import { asksFirst, matches, ruled } from "./rules"
@@ -146,11 +146,30 @@ const legacyKeys = ["claudeSession", "claudeStarted", "codexThread", "acpSession
 /** What an agent that has your message already is told when it's to go on with it on another of its models. */
 const carryOn = "Carry on with my last message from where you left off: you're on another model now."
 
-/** How long an agent gets to stop when you press Stop, before its conversation is closed; how long a session's agents keep running with nothing to do (the next message starts them again, in the same conversation); how lately a turn the bridge quit in must have last written for what changed since to count as its own. */
-export const timing = { stopGrace: 8_000, idleClose: 15 * 60_000, cutShort: 2 * 60_000 }
+/** How long an agent gets to stop when you press Stop, before its conversation is closed; how long a session's agents keep running with nothing to do (the next message starts them again, in the same conversation); how lately a turn the bridge quit in must have last written for what changed since to count as its own; how long your `!` commands get to stop once their session goes, before they're made to. */
+export const timing = { stopGrace: 8_000, idleClose: 15 * 60_000, cutShort: 2 * 60_000, shellGrace: 5_000 }
 
 /** In plan mode, what changes files: refused, whatever your rules say. */
 const changes = new Set(["edit", "write", "patch"])
+
+/** How your `!` commands are started and signalled (a test's stand-ins instead). */
+export const shellProcesses = { spawn: spawnProcess, kill: (pid: number, signal: NodeJS.Signals | 0) => void process.kill(pid, signal) }
+
+/** Whether anything still runs in process group `group`. */
+function groupRuns(group: number): boolean {
+  try {
+    shellProcesses.kill(-group, 0)
+    return true
+  } catch (error: any) {
+    return error?.code === "EPERM"
+  }
+}
+
+function signalGroup(group: number, signal: NodeJS.Signals) {
+  try {
+    shellProcesses.kill(-group, signal)
+  } catch {}
+}
 
 /** How long a command you run with "!" may take, and how much of what it printed is kept. */
 const shellTimeout = 10 * 60_000
@@ -161,7 +180,7 @@ const shellOutputLimit = 50_000
  * (its end, when there's a lot), kept as it comes; stopped whole when it runs too long. Its output
  * stops being waited for a moment after it ends (a job it left running may keep it open).
  */
-function runCommand(command: string, directory: string): Promise<{ code: number; output: string; truncated: boolean; timedOut: boolean }> {
+export function runCommand(command: string, directory: string, started: (group: number) => void = () => {}): Promise<{ code: number; output: string; truncated: boolean; timedOut: boolean }> {
   return new Promise((resolve) => {
     let output = ""
     let truncated = false
@@ -181,9 +200,14 @@ function runCommand(command: string, directory: string): Promise<{ code: number;
       const text = plain(output).trimEnd()
       resolve({ code, output: text.length > shellOutputLimit ? text.slice(-shellOutputLimit) : text, truncated: truncated || text.length > shellOutputLimit, timedOut })
     }
-    let child: ReturnType<typeof spawnProcess>
+    let child: ReturnType<typeof shellProcesses.spawn>
     try {
-      child = spawnProcess(process.env.SHELL || "/bin/zsh", ["-c", command], { cwd: directory, detached: true, stdio: ["ignore", "pipe", "pipe"] })
+      // As in your terminal: on a machine, with its own folders, not Kuvo Code's (where gh and git
+      // keep their settings).
+      const env: Record<string, string | undefined> = { ...process.env, ...ownEnvironment() }
+      for (const name of Object.keys(env)) if (env[name] === undefined) delete env[name]
+      const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh")
+      child = shellProcesses.spawn(shell, ["-c", command], { cwd: directory, detached: true, env, stdio: ["ignore", "pipe", "pipe"] })
     } catch (error: any) {
       output = String(error?.message ?? error)
       return finish(1)
@@ -198,6 +222,7 @@ function runCommand(command: string, directory: string): Promise<{ code: number;
       group("SIGTERM")
       setTimeout(() => group("SIGKILL"), 5_000)
     }, shellTimeout)
+    if (child.pid) started(child.pid)
     child.stdout?.on("data", take)
     child.stderr?.on("data", take)
     child.on("error", (error) => {
@@ -744,6 +769,14 @@ export class Sessions {
    * was made to mark shown, as it does a file a reply shows now.
    */
   readonly cited: { path: string; at: number }[] = []
+  /** Your `!` commands' process groups, by session, while anything in them runs (a server one left
+   * in the background too): each stops with its session. A group's number the system gives
+   * another command once it's gone is that command's: it leaves the others' (`ownShell`), and
+   * gone groups are let go of every few seconds (`pruneShells`). */
+  private shells = new Map<string, Set<number>>()
+  /** Groups asked to stop, by the token their making them stop waits with. */
+  private stopping = new Map<number, symbol>()
+  private pruning?: ReturnType<typeof setInterval>
 
   constructor(
     private readonly store: Store,
@@ -1081,6 +1114,7 @@ export class Sessions {
     for (const child of this.list(undefined, id)) if (!this.shownElsewhere(child.id, id)) await this.remove(child.id)
     for (const thread of live.threads.values()) thread.close()
     for (const [provider, slot] of Object.entries(this.slots(record))) await this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {})
+    this.stopShells(id)
     this.store.remove(id)
     this.live.delete(id)
     emit("session.deleted", { sessionID: id }, record.session.location.directory)
@@ -1131,7 +1165,14 @@ export class Sessions {
     // Run while an agent works: it hasn't seen it when its turn ends, and gets it with your next message.
     if (this.atWork(id)) record.agent.lateShells = [...((record.agent.lateShells as string[] | undefined) ?? []), message.id]
     this.store.save(id, true)
-    void runCommand(text, directory).then((ran) => {
+    let group: number | undefined
+    void runCommand(text, directory, (started) => {
+      group = started
+      this.ownShell(id, started)
+    }).then((ran) => {
+      const groups = this.shells.get(id)
+      // Kept while what it started runs on in its group.
+      if (group !== undefined && !groupRuns(group)) groups?.delete(group)
       message.status = ran.code === 0 && !ran.timedOut ? "completed" : "failed"
       message.exit = ran.code
       message.output = { output: ran.timedOut ? `${ran.output}\n(Stopped: it ran past ${shellTimeout / 60_000} minutes.)`.trim() : ran.output, truncated: ran.truncated }
@@ -2489,8 +2530,57 @@ export class Sessions {
     emit(answer ? "form.replied" : "form.cancelled", { id: formID, sessionID: id }, this.record(id).session.location.directory)
   }
 
-  /** The bridge is stopping: every turn ends as stopped, and every agent's conversation closes. */
+  /** A `!` command's group, just made: the session's, and no other's (its number may be one a
+   * gone group had). */
+  private ownShell(id: string, group: number) {
+    for (const groups of this.shells.values()) groups.delete(group)
+    this.stopping.delete(group)
+    const groups = this.shells.get(id) ?? new Set<number>()
+    groups.add(group)
+    this.shells.set(id, groups)
+    this.pruning ??= setInterval(() => this.pruneShells(), 3_000)
+    ;(this.pruning as any).unref?.()
+  }
+
+  /** Groups gone let go of, so a number the system gives out again is never taken for one. */
+  private pruneShells() {
+    for (const [id, groups] of this.shells) {
+      for (const group of groups) if (!groupRuns(group)) groups.delete(group)
+      if (!groups.size) this.shells.delete(id)
+    }
+    if (!this.shells.size) {
+      clearInterval(this.pruning)
+      this.pruning = undefined
+    }
+  }
+
+  /** A session's `!` commands still running, asked to stop, and made to a moment later unless
+   * another command has its group's number by then (`now`: at once, as the bridge goes and won't
+   * be there to). */
+  private stopShells(id: string, now = false) {
+    for (const group of this.shells.get(id) ?? []) {
+      signalGroup(group, "SIGTERM")
+      if (now) {
+        signalGroup(group, "SIGKILL")
+        continue
+      }
+      const token = Symbol(group)
+      this.stopping.set(group, token)
+      setTimeout(() => {
+        if (this.stopping.get(group) !== token) return
+        this.stopping.delete(group)
+        signalGroup(group, "SIGKILL")
+      }, timing.shellGrace)
+    }
+    this.shells.delete(id)
+  }
+
+  /** The bridge is stopping: every turn ends as stopped, every agent's conversation closes, and
+   * your `!` commands still running stop. */
   closeAll() {
+    for (const id of [...this.shells.keys()]) this.stopShells(id, true)
+    clearInterval(this.pruning)
+    this.pruning = undefined
     for (const [id, live] of this.live) {
       live.go = false
       live.own = undefined
@@ -2504,11 +2594,18 @@ export class Sessions {
     }
   }
 
-  /** An account went: its conversations in sessions close (their sessions go on with another model). */
+  /** An account went: its conversations in sessions close (their sessions go on with another
+   * model), and a turn its agent is at work on ends as stopped (its agent is gone with it). */
   forgetProvider(providerID: string) {
-    for (const live of this.live.values()) {
+    for (const [id, live] of this.live) {
       const thread = live.threads.get(providerID)
       if (!thread) continue
+      const run = runOf(live.doing)
+      if (run?.agent?.provider === providerID) {
+        run.abort.abort()
+        this.settleAsks(id, live)
+        run.agent.abandon()
+      }
       thread.close()
       live.threads.delete(providerID)
     }

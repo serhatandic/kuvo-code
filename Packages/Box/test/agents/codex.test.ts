@@ -160,6 +160,36 @@ const askFirst: PermissionRule[] = ["edit", "write", "patch", "shell", "webfetch
 /** A command Codex runs, as it tells one (in your login shell). */
 const command = (id: string, line: string, more: Record<string, unknown> = {}) => ({ type: "commandExecution", id, command: `/bin/zsh -lc '${line}'`, cwd: root, status: "inProgress", ...more })
 
+describe("Codex that won't start", () => {
+  test("a Codex that turns down being started (an older or newer one) isn't left running, however often it's tried", async () => {
+    const script = join(root, "refuses.js")
+    writeFileSync(script, `require("node:fs").appendFileSync(${JSON.stringify(join(root, "pids.txt"))}, process.pid + "\\n")
+process.stdin.on("data", (chunk) => {
+  for (const line of String(chunk).split("\\n").filter(Boolean)) {
+    const message = JSON.parse(line)
+    if (message.method === "initialize") process.stdout.write(JSON.stringify({ id: message.id, error: { code: -32601, message: "Unknown method" } }) + "\\n")
+  }
+})
+`)
+    const launcher = join(root, "codex")
+    writeFileSync(launcher, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`)
+    chmodSync(launcher, 0o755)
+    codex = new TestCodex(launcher, root)
+    for (let attempt = 0; attempt < 2; attempt++) await expect(codex.rpc()).rejects.toThrow()
+    const pids = readFileSync(join(root, "pids.txt"), "utf8").trim().split("\n").map(Number)
+    expect(pids).toHaveLength(2)
+    const running = (pid: number) => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    await until(() => !pids.some(running))
+  })
+})
+
 describe("Codex, nothing dropped", () => {
   test("an image it made, one it looked at, a function's pictures, and an item kind the bridge doesn't know", async () => {
     const id = await run([
@@ -815,5 +845,15 @@ describe("Stopping Codex", () => {
     expect(sent().filter((message) => message.method === "turn/interrupt").map((message) => message.params)).toEqual([{ threadId: "t1", turnId: "u1" }])
     expect(sessions.messages(id).at(-1)).toMatchObject({ type: "idle", outcome: "interrupted" })
     expect(tools(id)[0].state).toMatchObject({ status: "error", error: { type: "aborted" }, content: [{ type: "text", text: "Stopped." }] })
+  })
+
+  test("its account removed while it works (Settings › Accounts): the turn ends as stopped, without Stop", async () => {
+    const id = start([["item/started", { item: command("c1", "npm run dev") }], untilStopped])
+    await until(() => tools(id).length > 0)
+    // As removing an account does: its conversations close, and its Codex stops.
+    sessions.forgetProvider(codex!.providerID)
+    codex!.shutdown()
+    await until(() => ended(id))
+    expect(sessions.messages(id).at(-1)).toMatchObject({ type: "idle", outcome: "interrupted" })
   })
 })

@@ -2351,9 +2351,13 @@ class Auto {
     this.schedule();
   }
   save() {
-    mkdirSync4(this.root, { recursive: true });
-    writeFileSync4(this.file + ".new", JSON.stringify({ lists: this.lists, limits: this.held }, null, 2));
-    renameSync3(this.file + ".new", this.file);
+    try {
+      mkdirSync4(this.root, { recursive: true });
+      writeFileSync4(this.file + ".new", JSON.stringify({ lists: this.lists, limits: this.held }, null, 2));
+      renameSync3(this.file + ".new", this.file);
+    } catch (error) {
+      console.error("Custom Auto not kept:", error);
+    }
   }
 }
 function resetsIn(text, now = Date.now()) {
@@ -3514,8 +3518,20 @@ class Goals {
     return this.places.isBridge(session) ? this.places.bridge : this.places.engine;
   }
   async messages(session, place) {
-    const answer = await place.api.request("GET", at2(session) + "/message?limit=200");
-    return [...answer?.data ?? []].reverse();
+    let page = await place.api.request("GET", at2(session) + `/message?limit=${PAGE}`);
+    let messages2 = [...page?.data ?? []].reverse();
+    for (let pages2 = 1;pages2 < MOST_PAGES && (page?.data?.length ?? 0) >= PAGE; pages2++) {
+      if (messages2.filter((message) => message?.type === "idle").length >= 2)
+        break;
+      const cursor = page?.cursor?.next ?? page?.cursor?.previous;
+      if (!cursor)
+        break;
+      page = await place.api.request("GET", at2(session) + `/message?limit=${PAGE}&cursor=${encodeURIComponent(cursor)}`);
+      if (!page?.data?.length)
+        break;
+      messages2 = [...page.data].reverse().concat(messages2);
+    }
+    return messages2;
   }
   changed(goal) {
     if (this.stopped || this.goals.get(goal.session) !== goal)
@@ -3533,6 +3549,8 @@ class Goals {
   }
 }
 var at2 = (session) => "/api/session/" + encodeURIComponent(session);
+var PAGE = 200;
+var MOST_PAGES = 25;
 function shown(goal) {
   const { checkedIdle: _idle, quiet: _quiet, limit: _limit, recheck: _recheck, epoch: _epoch, since: _since, ...rest } = goal;
   return rest;
@@ -5458,7 +5476,7 @@ class Snapshots {
     return this.exclusive(repository, async () => {
       const files = [];
       for (const path of paths.slice(0, fileLimit3)) {
-        const ran = await this.git(repository, ["diff", "--no-color", "--no-renames", "--no-ext-diff", from, to, "--", path]).catch(() => {
+        const ran = await this.git(repository, ["-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-renames", "--no-ext-diff", "--no-textconv", from, to, "--", path]).catch(() => {
           return;
         });
         if (ran?.code !== 0)
@@ -9768,7 +9786,12 @@ class CodexAgent {
       for (const thread of this.threads.values())
         thread.serverStopped();
     };
-    await rpc.request("initialize", { clientInfo: { name: "kuvo-code", title: "Kuvo Code", version: "1" }, capabilities: { experimentalApi: true, optOutNotificationMethods: ["turn/diff/updated"] } }, 30000);
+    try {
+      await rpc.request("initialize", { clientInfo: { name: "kuvo-code", title: "Kuvo Code", version: "1" }, capabilities: { experimentalApi: true, optOutNotificationMethods: ["turn/diff/updated"] } }, 30000);
+    } catch (error) {
+      rpc.kill();
+      throw error;
+    }
     rpc.notify("initialized");
     this.server = rpc;
     return rpc;
@@ -12820,11 +12843,25 @@ function runOf(doing) {
 }
 var legacyKeys = ["claudeSession", "claudeStarted", "codexThread", "acpSession", "acpInstructed", "cursorAgent", "cursorInstructed"];
 var carryOn = "Carry on with my last message from where you left off: you're on another model now.";
-var timing = { stopGrace: 8000, idleClose: 15 * 60000, cutShort: 2 * 60000 };
+var timing = { stopGrace: 8000, idleClose: 15 * 60000, cutShort: 2 * 60000, shellGrace: 5000 };
 var changes2 = new Set(["edit", "write", "patch"]);
+var shellProcesses = { spawn: spawnProcess, kill: (pid, signal) => void process.kill(pid, signal) };
+function groupRuns(group) {
+  try {
+    shellProcesses.kill(-group, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+function signalGroup(group, signal) {
+  try {
+    shellProcesses.kill(-group, signal);
+  } catch {}
+}
 var shellTimeout = 10 * 60000;
 var shellOutputLimit = 50000;
-function runCommand(command, directory) {
+function runCommand(command, directory, started = () => {}) {
   return new Promise((resolve6) => {
     let output = "";
     let truncated = false;
@@ -12847,7 +12884,12 @@ function runCommand(command, directory) {
     };
     let child;
     try {
-      child = spawnProcess(process.env.SHELL || "/bin/zsh", ["-c", command], { cwd: directory, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+      const env = { ...process.env, ...ownEnvironment() };
+      for (const name of Object.keys(env))
+        if (env[name] === undefined)
+          delete env[name];
+      const shell2 = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
+      child = shellProcesses.spawn(shell2, ["-c", command], { cwd: directory, detached: true, env, stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) {
       output = String(error?.message ?? error);
       return finish(1);
@@ -12863,6 +12905,8 @@ function runCommand(command, directory) {
       group("SIGTERM");
       setTimeout(() => group("SIGKILL"), 5000);
     }, shellTimeout);
+    if (child.pid)
+      started(child.pid);
     child.stdout?.on("data", take);
     child.stderr?.on("data", take);
     child.on("error", (error) => {
@@ -13347,6 +13391,9 @@ class Sessions {
   titleModel;
   live = new Map;
   cited = [];
+  shells = new Map;
+  stopping = new Map;
+  pruning;
   constructor(store, roster, auto, engine, policies, agentInfo, snapshots, titleModel) {
     this.store = store;
     this.roster = roster;
@@ -13652,6 +13699,7 @@ class Sessions {
       thread.close();
     for (const [provider, slot] of Object.entries(this.slots(record2)))
       await this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {});
+    this.stopShells(id);
     this.store.remove(id);
     this.live.delete(id);
     emit("session.deleted", { sessionID: id }, record2.session.location.directory);
@@ -13698,7 +13746,14 @@ class Sessions {
     if (this.atWork(id))
       record2.agent.lateShells = [...record2.agent.lateShells ?? [], message.id];
     this.store.save(id, true);
-    runCommand(text2, directory).then((ran) => {
+    let group;
+    runCommand(text2, directory, (started) => {
+      group = started;
+      this.ownShell(id, started);
+    }).then((ran) => {
+      const groups = this.shells.get(id);
+      if (group !== undefined && !groupRuns(group))
+        groups?.delete(group);
       message.status = ran.code === 0 && !ran.timedOut ? "completed" : "failed";
       message.exit = ran.code;
       message.output = { output: ran.timedOut ? `${ran.output}
@@ -14995,7 +15050,52 @@ ${live.agentPrompt}` : ""
     pending.resolve(answer);
     emit(answer ? "form.replied" : "form.cancelled", { id: formID, sessionID: id }, this.record(id).session.location.directory);
   }
+  ownShell(id, group) {
+    for (const groups2 of this.shells.values())
+      groups2.delete(group);
+    this.stopping.delete(group);
+    const groups = this.shells.get(id) ?? new Set;
+    groups.add(group);
+    this.shells.set(id, groups);
+    this.pruning ??= setInterval(() => this.pruneShells(), 3000);
+    this.pruning.unref?.();
+  }
+  pruneShells() {
+    for (const [id, groups] of this.shells) {
+      for (const group of groups)
+        if (!groupRuns(group))
+          groups.delete(group);
+      if (!groups.size)
+        this.shells.delete(id);
+    }
+    if (!this.shells.size) {
+      clearInterval(this.pruning);
+      this.pruning = undefined;
+    }
+  }
+  stopShells(id, now = false) {
+    for (const group of this.shells.get(id) ?? []) {
+      signalGroup(group, "SIGTERM");
+      if (now) {
+        signalGroup(group, "SIGKILL");
+        continue;
+      }
+      const token = Symbol(group);
+      this.stopping.set(group, token);
+      setTimeout(() => {
+        if (this.stopping.get(group) !== token)
+          return;
+        this.stopping.delete(group);
+        signalGroup(group, "SIGKILL");
+      }, timing.shellGrace);
+    }
+    this.shells.delete(id);
+  }
   closeAll() {
+    for (const id of [...this.shells.keys()])
+      this.stopShells(id, true);
+    clearInterval(this.pruning);
+    this.pruning = undefined;
     for (const [id, live] of this.live) {
       live.go = false;
       live.own = undefined;
@@ -15011,10 +15111,16 @@ ${live.agentPrompt}` : ""
     }
   }
   forgetProvider(providerID2) {
-    for (const live of this.live.values()) {
+    for (const [id, live] of this.live) {
       const thread = live.threads.get(providerID2);
       if (!thread)
         continue;
+      const run2 = runOf(live.doing);
+      if (run2?.agent?.provider === providerID2) {
+        run2.abort.abort();
+        this.settleAsks(id, live);
+        run2.agent.abandon();
+      }
       thread.close();
       live.threads.delete(providerID2);
     }
@@ -19204,13 +19310,16 @@ class SeatServer {
 var kinds4 = new Set(SEAT_MAIL_KINDS);
 var isSeatMail = (value) => value !== null && typeof value === "object" && kinds4.has(value.kind);
 var sameMemory = (one, other) => one.kind === "memory" && other.kind === "memory" && one.memory.bot === other.memory.bot && one.memory.chat === other.memory.chat;
+var MAIL_HEARTBEAT = 20000;
 
 class PeerPost {
   file;
+  clock;
   followers = new Set;
   kept;
-  constructor(file) {
+  constructor(file, clock = realClock) {
     this.file = file;
+    this.clock = clock;
     let kept2 = [];
     try {
       if (file && existsSync15(file))
@@ -19256,7 +19365,25 @@ class PeerPost {
             stop();
           }
         };
+        let beat;
+        let following2 = true;
+        const beating = () => {
+          beat = this.clock.setTimeout(() => {
+            if (!following2)
+              return;
+            try {
+              controller.enqueue(encoder.encode(`
+`));
+            } catch {
+              return stop();
+            }
+            beating();
+          }, MAIL_HEARTBEAT);
+          beat?.unref?.();
+        };
         stop = () => {
+          following2 = false;
+          this.clock.clearTimeout(beat);
           this.followers.delete(write2);
           signal?.removeEventListener("abort", stop);
         };
@@ -19264,6 +19391,7 @@ class PeerPost {
         for (const line3 of this.kept)
           write2(line3);
         this.followers.add(write2);
+        beating();
       },
       cancel: () => stop()
     });
@@ -19957,16 +20085,25 @@ class Store {
     const record2 = this.records.get(id);
     if (!record2)
       return;
-    const folder = join24(this.root, id);
-    mkdirSync15(folder, { recursive: true });
-    for (const [name, value] of [
-      ["session.json", record2.session],
-      ["messages.json", record2.messages],
-      ["agent.json", record2.agent]
-    ]) {
-      const file = join24(folder, name);
-      writeFileSync17(file + ".new", JSON.stringify(value));
-      renameSync11(file + ".new", file);
+    try {
+      const folder = join24(this.root, id);
+      mkdirSync15(folder, { recursive: true });
+      for (const [name, value] of [
+        ["session.json", record2.session],
+        ["messages.json", record2.messages],
+        ["agent.json", record2.agent]
+      ]) {
+        const file = join24(folder, name);
+        writeFileSync17(file + ".new", JSON.stringify(value));
+        renameSync11(file + ".new", file);
+      }
+    } catch (error3) {
+      console.error(`session ${id} not written:`, error3);
+      if (!this.pending.has(id))
+        this.pending.set(id, setTimeout(() => {
+          this.pending.delete(id);
+          this.write(id);
+        }, 5000));
     }
   }
 }
@@ -20202,4 +20339,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 3f2d0619b8a758f8278464d0fc64db1ea17cf124e2656d4a579c57c03a652b1e
+// Built from Packages/Box/src/agents 8f51b62ae543eb75f2ae167ec6e59c205845074d9cf8f992f79bafa190407f51

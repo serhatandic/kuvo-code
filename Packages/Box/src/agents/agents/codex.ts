@@ -174,7 +174,13 @@ export class CodexAgent implements Agent {
       this.server = undefined
       for (const thread of this.threads.values()) thread.serverStopped()
     }
-    await rpc.request("initialize", { clientInfo: { name: "kuvo-code", title: "Kuvo Code", version: "1" }, capabilities: { experimentalApi: true, optOutNotificationMethods: ["turn/diff/updated"] } }, 30_000)
+    try {
+      await rpc.request("initialize", { clientInfo: { name: "kuvo-code", title: "Kuvo Code", version: "1" }, capabilities: { experimentalApi: true, optOutNotificationMethods: ["turn/diff/updated"] } }, 30_000)
+    } catch (error) {
+      // One that won't start isn't left running: the next ask starts another.
+      rpc.kill()
+      throw error
+    }
     rpc.notify("initialized")
     this.server = rpc
     return rpc

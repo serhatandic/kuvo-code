@@ -66,6 +66,36 @@ struct GitDiffTests {
         #expect(files[2].isBinary && files[2].lines.isEmpty)
     }
 
+    /// A line whose words start with a mark that joins what's before it (an accent, a vowel sign,
+    /// a joiner) is read as any line, its numbers and those after it right.
+    @Test func aLineStartingWithAJoiningMarkIsReadAsAnyLine() throws {
+        let patch = """
+        diff --git a/words.txt b/words.txt
+        --- a/words.txt
+        +++ b/words.txt
+        @@ -1,4 +1,4 @@
+         \u{301}accent
+        -\u{93E}sign
+        +\u{200D}joined
+         end
+        """
+        let lines = try #require(DiffParser.parse(patch).first).lines
+        #expect(lines.map(\.kind) == [.context, .removed, .added, .context])
+        #expect(lines.map(\.text) == ["\u{301}accent", "\u{93E}sign", "\u{200D}joined", "end"])
+        #expect(lines[3].oldNumber == 3 && lines[3].newNumber == 3)
+    }
+
+    /// A hunk that says it starts where no file's lines are (as big as numbers go) is read without
+    /// trouble, on either kind of diff.
+    @Test func aHunkStartingAsFarAsNumbersGoIsReadSafely() throws {
+        for header in ["diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -9223372036854775807,2 +9223372036854775807,2 @@",
+                       "diff --cc x\n--- a/x\n+++ b/x\n@@@ -9223372036854775807,2 -9223372036854775807,2 +9223372036854775807,2 @@@"] {
+            let marks = header.hasPrefix("diff --cc") ? "  " : " "
+            let lines = try #require(DiffParser.parse(header + "\n\(marks)one\n\(marks)two\n").first).lines
+            #expect(lines.map(\.text) == ["one", "two"])
+        }
+    }
+
     @Test func newFilesGitDoesntKnowAreListedToBeRead() throws {
         var files = DiffParser.listed(patch: patch, untracked: ["src/hooks/useColorScheme.ts", "vendor/web/", "src/theme.ts"])
         // One the diff has already isn't listed twice.

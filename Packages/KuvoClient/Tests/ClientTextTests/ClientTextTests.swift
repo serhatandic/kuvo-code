@@ -60,6 +60,19 @@ import ClientText
         // Where SVG isn't drawn, it isn't offered.
         #expect(SiteAddresses.declaredIcons(in: html, page: page, drawsSVG: false).first?.absoluteString == "https://cdn.example.com/32.png")
     }
+
+    /// A page's sizes are its author's words: any number at all, read without trouble, a size
+    /// that can't be one counting as none given.
+    @Test func anyNumberAPageGivesForASizeIsReadSafely() {
+        let html = """
+        <link rel="icon" sizes="-9223372036854775808x1" href="/least.png">
+        <link rel="icon" sizes="9223372036854775807x1" href="/most.png">
+        <link rel="icon" sizes="64x64" href="/64.png">
+        """
+        let page = URL(string: "https://site.example.com/")!
+        #expect(SiteAddresses.declaredIcons(in: html, page: page).map(\.absoluteString)
+            == ["https://site.example.com/64.png", "https://site.example.com/least.png", "https://site.example.com/most.png"])
+    }
 }
 
 /// A message field keeps every key while the app hands it its draft late: as it was a key or two
