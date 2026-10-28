@@ -806,7 +806,8 @@ final class Workspace {
         guard let api = isAgents ? bridge?.api : api(forFolder: directory) else { throw CancellationError() }
         let directory = addFolder(directory)
         let folder = worktree ? try await makeWorktree(of: directory) : directory
-        let extra = settings[directory]?.folders ?? []
+        // As its engine knows them: a machine's folders are plain paths there.
+        let extra = (settings[directory]?.folders ?? []).map(api.enginePath)
         let rules = ProjectFolders.permissions(approval.rules(settings: EngineConfig.rules(on: RemoteFolder.machine(of: directory))), folders: extra)
         let session: Session
         do {
@@ -817,7 +818,7 @@ final class Workspace {
             throw error
         }
         if !extra.isEmpty {
-            try? await api.setInstruction(session: session.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: folder, folders: extra))
+            try? await api.setInstruction(session: session.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: api.enginePath(folder), folders: extra))
         }
         if let tree = worktrees[folder] {
             toldWorktree.insert(session.id)
