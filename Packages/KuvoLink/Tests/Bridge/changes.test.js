@@ -67,6 +67,16 @@ test("what changed: an edit as git's diff with the whole file around it, and a n
   assert.equal(json.uncommitted, true);
 });
 
+test("an unchanged blank line keeps its place in what changed, whatever your git settings say", async () => {
+  // Git told to write unchanged blank lines as nothing at all, which reads as no line.
+  git("config", "diff.suppressBlankEmpty", "true");
+  write("src/app.js", "let a = 1\n\nlet b = 2\n");
+  git("commit", "-qam", "Blank line");
+  write("src/app.js", "let a = 1\n\nlet b = 3\n");
+  const { json } = await changes();
+  assert.match(json.patch, /\n let a = 1\n \n-let b = 2\n\+let b = 3\n/);
+});
+
 test("a folder outside a repository has no changes to list", async () => {
   const plain = fs.mkdtempSync(path.join(root, "plain-"));
   const { status: code, json } = await changes("uncommitted", plain);
