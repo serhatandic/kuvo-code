@@ -112,10 +112,13 @@ struct KeywordBars: View {
                 .modifier(CardRow())
                 .transition(.fold)
         } else if let review = model.shownReview {
-            ReviewBar(review: review, isHidden: hidden(.review, $model.hidesReview), sendTargets: sendTargets) { findings, target in
+            ReviewBar(review: review, isHidden: hidden(.review, $model.hidesReview), sendTargets: sendTargets,
+                      readerName: review.model.flatMap { model.reviewCatalogNow?.model($0)?.name }) { findings, target in
                 fix(findings, target)
             } putAway: {
                 model.putAwayReview()
+            } stop: {
+                model.stopReview()
             } cancel: {
                 model.dismissReview()
             } open: { place in
@@ -263,35 +266,45 @@ enum ReviewLayout: String {
 
 /// A review with fresh eyes, in the card over the composer: under way, then what it found, bugs
 /// first. Its line counts them by how bad they are, with Fix… for them all; under it, each with
-/// what's wrong, why, and every place it's in, and its own Fix…. ✕ asks before it stops one
-/// under way; a finished one goes at once, with Undo for a few seconds.
+/// what's wrong, why, and every place it's in, and its own Fix…. One read in parts says how far
+/// along it is, with a thin bar, and shows what it found so far, the newest marked; Stop ends it
+/// there, keeping them. ✕ asks before it throws one under way away; a finished one goes at once,
+/// with Undo for a few seconds.
 struct ReviewBar: View {
     let review: Review
     @Binding var isHidden: Bool
     let sendTargets: [ReviewSendTarget]
+    /// Who read it, for the line under what it found.
+    var readerName: String?
     /// `findings`: their ids, nil for all of them.
     let fix: (_ findings: [String]?, _ target: ReviewFixTarget) -> Void
     let putAway: () -> Void
+    let stop: () -> Void
     let cancel: () -> Void
     let open: (Review.Place) -> Void
     @AppStorage(ReviewLayout.key) private var layout = ReviewLayout.list.rawValue
     @State private var confirmsCancel = false
+    /// What the part read last found, while there were findings before it.
+    @State private var newest: Set<String> = []
+
+    /// What it found shows while it's still reading, too.
+    private var showsFindings: Bool { review.state != .reviewing || !review.findings.isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             BarLine(mark: AnyView(mark), title: title, progress: count, detail: review.summary.map { Text($0) },
-                    accessory: review.state == .done && !review.findings.isEmpty ? AnyView(fixMenu(nil, label: "Fix…")) : nil,
+                    accessory: accessory,
                     showHelp: "Show what the review found", hideHelp: "Hide it: this line stays", isHidden: $isHidden,
-                    opens: review.state != .reviewing,
+                    opens: showsFindings,
                     close: review.state == .reviewing ? { confirmsCancel = true } : putAway,
-                    closeHelp: review.state == .reviewing ? "Stop the review" : "Put the review away")
-                // Stopping one under way can't be undone: it asks first, by the ✕.
+                    closeHelp: review.state == .reviewing ? "Stop the review and throw it away" : "Put the review away")
+                // Throwing one under way away can't be undone: it asks first, by the ✕.
                 .overlay(alignment: .trailing) {
                     Color.clear
                         .frame(width: 24, height: 24)
                         .padding(.trailing, 8)
                         .popover(isPresented: $confirmsCancel, arrowEdge: .bottom) {
-                            StopReviewConfirmation {
+                            StopReviewConfirmation(inParts: review.progress != nil) {
                                 confirmsCancel = false
                                 cancel()
                             } keep: {
@@ -300,7 +313,14 @@ struct ReviewBar: View {
                             .popoverContent()
                         }
                 }
-            if !isHidden, review.state != .reviewing {
+            if let progress = review.progress, review.state == .reviewing {
+                ProgressLine("Reviewing", fraction: Double(progress.read) / Double(max(progress.of, 1)), layout: .bar)
+                    .padding(.leading, 42)
+                    .padding(.trailing, 16)
+                    .padding(.bottom, showsFindings && !isHidden ? 4 : 10)
+                    .transition(.opacity)
+            }
+            if !isHidden, showsFindings {
                 details
                     .padding(.leading, 42)
                     .padding(.trailing, 16)
@@ -309,8 +329,27 @@ struct ReviewBar: View {
             }
         }
         .animation(.ui, value: review.state)
+        .animation(.ui, value: review.findings.count)
         // Done or gone meanwhile: nothing left to stop.
         .onChange(of: review.state) { if review.state != .reviewing { confirmsCancel = false } }
+        .onChange(of: review.findings.map(\.id)) { old, new in
+            // A part read after others: what it found is the newest.
+            newest = old.isEmpty ? [] : Set(new).subtracting(old)
+        }
+        .onChange(of: review.id) { newest = [] }
+    }
+
+    /// While it reads in parts, Stop (and Fix… for what it found so far); once done, Fix….
+    private var accessory: AnyView? {
+        let fixes = !review.findings.isEmpty && review.state != .failed
+        guard review.state == .reviewing, review.progress != nil else { return fixes ? AnyView(fixMenu(nil, label: "Fix…")) : nil }
+        return AnyView(HStack(spacing: 2) {
+            if fixes { fixMenu(nil, label: "Fix…") }
+            Button("Stop", action: stop)
+                .buttonStyle(TextButtonStyle())
+                .font(.system(size: 13))
+                .help("Stop reading: what it found so far stays")
+        })
     }
 
     @ViewBuilder private var mark: some View {
@@ -330,21 +369,36 @@ struct ReviewBar: View {
 
     private var title: String {
         switch review.state {
-        case .reviewing: "Review"
+        case .reviewing: review.scope.map { "Reviewing " + $0.said } ?? "Review"
         case .failed: "Review couldn’t be done"
         case .done: review.findings.isEmpty ? "Review found nothing to fix" : "Review"
         }
     }
 
-    /// "1 bug · 2 risks · 1 nit"; while it reads, who's reading.
+    /// "1 bug · 2 risks · 1 nit"; while it reads in parts, how far along it is ("part 4 of 9"),
+    /// and where Stop ended it.
     private var count: String? {
-        if review.state == .reviewing { return "Reading the changes…" }
-        guard review.state == .done, !review.findings.isEmpty else { return nil }
         let names: [(Review.Severity, String)] = [(.bug, "bug"), (.risk, "risk"), (.nit, "nit")]
-        return names.compactMap { severity, name in
+        let found = names.compactMap { severity, name in
             let n = review.findings.filter { $0.severity == severity }.count
             return n == 0 ? nil : n.counting(name)
-        }.joined(separator: " · ")
+        }
+        if review.state == .reviewing {
+            guard let progress = review.progress else { return review.scope?.readsFiles == true ? "Reading the files…" : "Reading the changes…" }
+            // What it found so far is counted in the list under it: the line has room for how far along.
+            return "part \(min(progress.read + 1, progress.of)) of \(progress.of)"
+        }
+        guard review.state == .done else { return nil }
+        if let stopped = review.stopped { return "stopped after \(stopped.read) of \(stopped.of) parts" }
+        return found.isEmpty ? nil : found.joined(separator: " · ")
+    }
+
+    /// What it covered and who read it, under what it found: for one that was asked for more
+    /// than today's ("The whole project · security · read by Claude Sonnet 4.5").
+    private var footnote: String? {
+        guard review.state == .done, review.scope != nil || review.focus != nil else { return nil }
+        let focus = review.focus.map { ReviewCommand.Preset(rawValue: $0)?.rawValue ?? "“\($0)”" }
+        return [(review.scope ?? .uncommitted).title, focus, readerName.map { "read by " + $0 }].compactMap(\.self).joined(separator: " · ")
     }
 
     /// Fix… for `findings` (nil: all of them); `outset` lines its words up with the text above.
@@ -376,7 +430,12 @@ struct ReviewBar: View {
     @ViewBuilder private var details: some View {
         switch review.state {
         case .reviewing:
-            EmptyView()
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Found so far:")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                findingList
+            }
         case .failed:
             Text(review.error ?? "It couldn’t be done. Try again.")
                 .font(.system(size: 13))
@@ -400,21 +459,32 @@ struct ReviewBar: View {
                     if layout == ReviewLayout.single.rawValue {
                         SingleFinding(findings: review.findings, fixMenu: { fixMenu([$0.id], label: "Fix This…", outset: true) }, open: open)
                     } else {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 0) {
-                                ForEach(review.findings) { finding in
-                                    FindingRow(finding: finding, fixMenu: { fixMenu([finding.id], label: "Fix…") }, fix: { fix([finding.id], $0) }, open: open)
-                                }
-                            }
-                        }
-                        // About five, then it scrolls.
-                        .frame(maxHeight: 176)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, -8)
+                        findingList
                     }
+                }
+                if let footnote {
+                    Text(footnote)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
                 }
             }
         }
+    }
+
+    private var findingList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(review.findings) { finding in
+                    FindingRow(finding: finding, isNew: newest.contains(finding.id), fixMenu: { fixMenu([finding.id], label: "Fix…") }, fix: { fix([finding.id], $0) }, open: open)
+                }
+            }
+        }
+        // About five, then it scrolls.
+        .frame(maxHeight: 176)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, -8)
     }
 
     /// The list, or one at a time: kept for the next review too.
@@ -460,6 +530,8 @@ private extension Review.Severity {
 /// for it, so nothing moves.
 private struct FindingRow: View {
     let finding: Review.Finding
+    /// Found by the part read last.
+    var isNew = false
     let fixMenu: () -> AnyView
     /// Its Fix…'s choices, for VoiceOver, which can't hover.
     let fix: (ReviewFixTarget) -> Void
@@ -467,8 +539,9 @@ private struct FindingRow: View {
     @State private var isOpen = false
     @State private var hovering = false
 
-    init(finding: Review.Finding, fixMenu: @escaping () -> some View, fix: @escaping (ReviewFixTarget) -> Void, open: @escaping (Review.Place) -> Void) {
+    init(finding: Review.Finding, isNew: Bool = false, fixMenu: @escaping () -> some View, fix: @escaping (ReviewFixTarget) -> Void, open: @escaping (Review.Place) -> Void) {
         self.finding = finding
+        self.isNew = isNew
         self.fixMenu = { AnyView(fixMenu()) }
         self.fix = fix
         self.open = open
@@ -479,11 +552,19 @@ private struct FindingRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 SeverityDot(severity: finding.severity)
                     .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-                Text(finding.title)
-                    .font(.system(size: 13, weight: isOpen ? .semibold : .regular))
-                    .lineLimit(isOpen ? nil : 1)
-                    .fixedSize(horizontal: false, vertical: isOpen)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(finding.title)
+                        .font(.system(size: 13, weight: isOpen ? .semibold : .regular))
+                        .lineLimit(isOpen ? nil : 1)
+                        .fixedSize(horizontal: false, vertical: isOpen)
+                    if isNew {
+                        Text("new")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.tint)
+                            .fixedSize()
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 if !isOpen { firstPlace }
                 fixMenu()
                     .opacity(hovering ? 1 : 0)
@@ -513,7 +594,7 @@ private struct FindingRow: View {
         .onHover { hovering = $0 }
         .clickablePointer()
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(finding.severity.name): \(finding.title)")
+        .accessibilityLabel("\(finding.severity.name): \(finding.title)\(isNew ? ", new" : "")")
         .accessibilityValue(isOpen ? finding.explanation : "")
         .accessibilityHint(isOpen ? "Hides why" : "Shows why and where")
         .accessibilityAddTraits(.isButton)
@@ -690,8 +771,10 @@ private struct SingleFinding: View {
     }
 }
 
-/// Asked by a running review's ✕: stopping can't be undone (asked again, it reads from the start).
+/// Asked by a running review's ✕: throwing it away can't be undone (asked again, it reads from
+/// the start). One read in parts has Stop, which keeps what it found, beside it.
 private struct StopReviewConfirmation: View {
+    var inParts = false
     let stop: () -> Void
     let keep: () -> Void
 
@@ -699,7 +782,7 @@ private struct StopReviewConfirmation: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Stop the review?")
                 .font(.system(size: 13, weight: .semibold))
-            Text("What it has read so far isn’t kept. Asked again, it reads from the start.")
+            Text(inParts ? "What it found so far goes too; Stop keeps it. Asked again, it reads from the start." : "What it has read so far isn’t kept. Asked again, it reads from the start.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

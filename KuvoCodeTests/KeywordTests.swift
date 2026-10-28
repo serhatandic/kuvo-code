@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientSessions
 import Foundation
 import OpenCodeKit
 import Testing
@@ -263,6 +264,48 @@ import Testing
         try await until { model.review?.state == .done }
         #expect(model.review?.model == ModelRef(id: "v4.1-flash", providerID: "deepseek"))
         #expect(model.review?.focus == "the pause handling")
+    }
+
+    // "/review"'s lists, from the conversation's box: what it can read here with how much each
+    // is, and the commits to start from; picked as the composer writes them, the review reads
+    // those commits (the first too) and looks for security holes.
+    @Test func aReviewReadsWhatYouPickLookingForWhatYouPick() async throws {
+        defer { clean() }
+        let repository = try TestRepository()
+        try repository.write("src/login.ts", "check(password)\n")
+        try repository.git("add", "-A")
+        try repository.git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "Check the password")
+        try repository.write("src/login.ts", "check(password)\nlog(password)\n")
+        try repository.git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qam", "Log the sign-in")
+        serve(directory: repository.path, answers: [#"{"summary": "The password is logged.", "findings": [{"title": "The password is written to the log", "explanation": "", "severity": "bug", "locations": [{"file": "src/login.ts", "line": 2}]}]}"#])
+        let model = try session(directory: repository.path)
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+
+        var known = ReviewList.Known()
+        await ReviewList.Known.load(session: id, api: try #require(bridge.agents.api)) { known = $0 }
+        // On main, with nothing uncommitted: no branch of its own, and the changes say so.
+        let what = try #require(ReviewList.make(.what(""), known: known))
+        #expect(what.rows.map(\.title) == ["Changes not committed yet", "Commits…", "A folder…", "The whole project"])
+        #expect(what.rows.map(\.note) == ["nothing to review", "pick where to start", "src", "1 file"])
+        let commits = try #require(ReviewList.make(.commit(""), known: known))
+        #expect(commits.rows.map(\.title) == ["Log the sign-in", "Check the password"])
+
+        guard case .write(let since) = commits.rows[1].pick, case .start(let security)? = ReviewList.make(.lookFor(""), known: known)?.rows[1].pick else {
+            Issue.record("The rows don't write what they pick.")
+            return
+        }
+        model.draftText = "/review " + since + security
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { model.review?.state == .done }
+        let first = try repository.git("rev-parse", "--short", "HEAD~1").trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(model.review?.scope == .commits(from: first + "^", to: nil))
+        #expect(model.review?.focus == "security")
+        #expect(model.review?.findings.map(\.title) == ["The password is written to the log"])
+        // The model read both commits, from nothing before the first, and was told what to look for.
+        let asked = (engine.requests("POST", "/generate").map { "\($0.body)" }).joined()
+        #expect(asked.contains("+check(password)") && asked.contains("+log(password)"))
+        #expect(asked.contains("security holes"))
     }
 
     @Test func theEnginesOwnReviewStaysReachableAsReviewQuick() async throws {

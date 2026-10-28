@@ -298,6 +298,7 @@ when you're there to answer.
 | `KUVO_DEMO_BESIDE` | Open the session with this ID or title beside the tab in view, as Open Beside does (`KUVO_DEMO_SWAP_BESIDE=<seconds>`: the two trade places that long after) |
 | `KUVO_DEMO_MOVE_TO_AGENTS` | `<provider>/<model>\|<seconds>`: the session in view carries on with the coding agents that long after launch, as picking their model does |
 | `KUVO_DEMO_QUEUE` | Messages to queue once that session's agent is working, separated by `\|` |
+| `KUVO_DEMO_REVIEW` | With `KUVO_DEMO_PROMPT`: `running`, `stopped` or `done`, a sample security review of the whole project in parts over the composer once the first turn ends (no model reads it) |
 | `KUVO_DEMO_WAITING` | With `KUVO_DEMO_SESSION`: these messages shown waiting in its queue, separated by `\|`, without sending them; `<words>@<picture path>` attaches a picture |
 | `KUVO_DEMO_NEW_PROJECT` | Open the New Project sheet with these comma-separated folders |
 | `KUVO_DEMO_BACKGROUND` | Don't bring the window forward, so it doesn't take the keyboard while you work elsewhere; it also asks nothing of macOS (above) |

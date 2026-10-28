@@ -1191,27 +1191,57 @@ final class SessionModel {
     /// The catalog of the engine it runs on, whose models can read a review: the app's (a test
     /// gives its own).
     @ObservationIgnored var reviewCatalog: (() -> Catalog?)?
+    /// Its models, by which a review's line names who read it.
+    var reviewCatalogNow: Catalog? { catalog() }
     private func catalog() -> Catalog? {
         if let reviewCatalog { return reviewCatalog() }
         guard let app = AgentMail.shared.app else { return nil }
         return RemoteFolder.machine(of: session.location.directory).flatMap { app.machines.engine($0)?.catalog } ?? app.catalog
     }
 
-    /// "/review [with <model>] [what to look at]": read by that model (the conversation's own
-    /// without one), looking especially there. A name it can't find comes back to the composer.
+    /// "/review [what it reads] [for what] [with <model>] [what to look at]": what it names (the
+    /// changes not committed yet without), read by that model (the conversation's own without
+    /// one), looking especially there. A name or a commit or folder it can't read comes back to
+    /// the composer.
     private func startReview(_ command: ReviewCommand, written: String) {
         if let searching = command.searching {
             restore(text: written)
             failure = searching.isEmpty ? "Pick who reads it from the list, or write a model’s name after “with”." : "Finish the model’s name, or pick it from the list."
             return
         }
+        if let asking = command.asking, command.scope == nil {
+            switch asking {
+            case .commit:
+                restore(text: written)
+                failure = "Write the commit to start with after “since”."
+                return
+            case .folder:
+                restore(text: written)
+                failure = "Write the folder to review after “folder”."
+                return
+            default: break
+            }
+        }
         guard let bridge = goalBridge(), let api = bridge.api else { return keywordUnavailable(written) }
         let session = id
         Task {
             do {
-                bridge.took(try await api.startReview(session: session, model: command.reader?.ref, focus: command.focus))
+                bridge.took(try await api.startReview(session: session, model: command.reader?.ref, focus: command.focusAsked, scope: command.scope == .uncommitted ? nil : command.scope))
             } catch {
                 restore(text: written)
+                fail(error)
+            }
+        }
+    }
+
+    /// Ends the review under way where it is, keeping what it found so far.
+    func stopReview() {
+        guard let bridge = goalBridge(), let api = bridge.api else { return }
+        let session = id
+        Task {
+            do {
+                bridge.took(try await api.stopReview(session: session))
+            } catch {
                 fail(error)
             }
         }
