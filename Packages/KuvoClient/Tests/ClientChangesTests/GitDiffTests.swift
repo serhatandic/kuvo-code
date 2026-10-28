@@ -85,6 +85,17 @@ struct GitDiffTests {
         #expect(lines[3].oldNumber == 3 && lines[3].newNumber == 3)
     }
 
+    /// A hunk that says it starts where no file's lines are (as big as numbers go) is read without
+    /// trouble, on either kind of diff.
+    @Test func aHunkStartingAsFarAsNumbersGoIsReadSafely() throws {
+        for header in ["diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -9223372036854775807,2 +9223372036854775807,2 @@",
+                       "diff --cc x\n--- a/x\n+++ b/x\n@@@ -9223372036854775807,2 -9223372036854775807,2 +9223372036854775807,2 @@@"] {
+            let marks = header.hasPrefix("diff --cc") ? "  " : " "
+            let lines = try #require(DiffParser.parse(header + "\n\(marks)one\n\(marks)two\n").first).lines
+            #expect(lines.map(\.text) == ["one", "two"])
+        }
+    }
+
     @Test func newFilesGitDoesntKnowAreListedToBeRead() throws {
         var files = DiffParser.listed(patch: patch, untracked: ["src/hooks/useColorScheme.ts", "vendor/web/", "src/theme.ts"])
         // One the diff has already isn't listed twice.

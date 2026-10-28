@@ -253,7 +253,7 @@ public enum DiffParser {
         let parts = line.split(separator: " ")
         func start(_ part: Substring?) -> Int {
             guard let part else { return 1 }
-            return max(part.dropFirst().split(separator: ",").first.flatMap { Int($0) } ?? 1, 1)
+            return lineStart(part.dropFirst().split(separator: ",").first.flatMap { Int($0) })
         }
         return (start(parts.first { $0.hasPrefix("-") }), start(parts.first { $0.hasPrefix("+") }))
     }
@@ -263,10 +263,15 @@ public enum DiffParser {
         let parts = line.split(separator: " ")
         func start(_ part: Substring?) -> Int {
             guard let part else { return 1 }
-            let number = part.dropFirst().split(separator: ",").first.flatMap { Int($0) } ?? 1
-            return max(number, 1)
+            return lineStart(part.dropFirst().split(separator: ",").first.flatMap { Int($0) })
         }
         return (start(parts.dropFirst().first), start(parts.dropFirst(2).first))
+    }
+
+    /// A hunk's first line as its header says, kept where a file's lines can be (each line after
+    /// it counts on from there).
+    private static func lineStart(_ number: Int?) -> Int {
+        min(max(number ?? 1, 1), Int(Int32.max))
     }
 }
 
