@@ -67,11 +67,11 @@ public struct LoopSchedule: Equatable, Sendable, Hashable {
         }
     }
 
-    /// When it first sends, as the list and the hint say it: "now, then every 5 minutes",
+    /// When it first sends, as the list and the hint say it: "starts now",
     /// "first today at 14:30", "first tomorrow at 9:00", "first Monday at 9:00" (the time in
     /// `locale`'s way).
     public func firstPhrase(now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
-        guard keepsTimeOfDay else { return "now, then " + title.prefix(1).lowercased() + title.dropFirst() }
+        guard keepsTimeOfDay else { return "starts now" }
         let first = firstRun(now: now, calendar: calendar)
         var style = Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, calendar: calendar)
         style.timeZone = calendar.timeZone
