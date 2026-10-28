@@ -296,6 +296,13 @@ extension OpenCodeAPI {
         return try await client.send(try client.request("POST", "api/kuvo/btw/\(session.pathEscaped)", body: Body(question: question)), as: DataEnvelope<SideQuestion>.self).data
     }
 
+    /// The words voice input listens for in a conversation: its project's own names, most useful
+    /// first. None from a box that doesn't give them yet.
+    public func voiceWords(for session: String) async throws -> [String] {
+        struct Words: Decodable { var words: [String] }
+        return try await client.send(try client.request("GET", "api/kuvo/voice/words/\(session.pathEscaped)"), as: DataEnvelope<Words>.self).data.words
+    }
+
     /// One side question taken away, or all of a conversation's (`id` nil).
     public func removeSideQuestion(_ id: String?, of session: String) async throws {
         _ = try await client.send(try client.request("DELETE", "api/kuvo/btw/\(session.pathEscaped)" + (id.map { "/\($0.pathEscaped)" } ?? "")), as: Empty.self)

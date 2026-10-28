@@ -1,0 +1,323 @@
+import AVFoundation
+import CryptoKit
+import Foundation
+import Synchronization
+import Testing
+@testable import KuvoVoice
+
+// Whisper's side of voice input: what it's given of what you say (phrases, never the silence
+// between them), and its model coming onto the device (downloaded, resumed, checked, removed).
+
+// MARK: Phrases
+
+/// Something like speech: a tone that comes and goes, as loud as talking near a microphone.
+private func speech(_ seconds: Double) -> [Float] {
+    let count = Int(seconds * 16_000)
+    return (0..<count).map { index in
+        let t = Double(index) / 16_000
+        return Float(0.25 * sin(2 * .pi * 180 * t) * (0.6 + 0.4 * sin(2 * .pi * 3 * t)))
+    }
+}
+
+/// A quiet room: a faint, steady hiss (about -55 dBFS), so a pause isn't digital silence.
+private func quiet(_ seconds: Double) -> [Float] {
+    var seed: UInt32 = 7
+    return (0..<Int(seconds * 16_000)).map { _ in
+        seed = seed &* 1_664_525 &+ 1_013_904_223
+        return (Float(seed >> 8) / Float(1 << 24) - 0.5) * 0.004
+    }
+}
+
+/// Fed as the microphone gives it, in tenths of a second; what it cut, and what was left at the end.
+private func cut(_ samples: [Float]) -> [PhraseCutter.Phrase] {
+    var cutter = PhraseCutter()
+    var phrases: [PhraseCutter.Phrase] = []
+    stride(from: 0, to: samples.count, by: 1_600).forEach { phrases += cutter.take(Array(samples[$0..<min($0 + 1_600, samples.count)])) }
+    if let last = cutter.flush() { phrases.append(last) }
+    return phrases
+}
+
+@Test func minutesOfThinkingGiveWhisperNothingToWrite() {
+    // Two sentences, three minutes apart.
+    let phrases = cut(quiet(1) + speech(3) + quiet(180) + speech(2.5) + quiet(2))
+    #expect(phrases.count == 2)
+    #expect(abs(phrases[0].start - 0.7) < 0.1)
+    #expect(abs(phrases[1].start - 183.7) < 0.1)
+    // Each is its speech and a moment either side, not the pause.
+    #expect(phrases[0].seconds < 3.8)
+    #expect(phrases[1].seconds < 3.3)
+}
+
+@Test func aBreathMidSentenceDoesntCutItButAPauseDoes() {
+    let phrases = cut(speech(1.5) + quiet(0.3) + speech(1.5) + quiet(1.2) + speech(1))
+    #expect(phrases.count == 2)
+    #expect(phrases[0].seconds > 3.2)
+}
+
+@Test func aClickIsntSpeech() {
+    #expect(cut(quiet(1) + speech(0.06) + quiet(2)).isEmpty)
+}
+
+@Test func talkingWithoutAPauseIsCutBeforeWhispersWindowIsFull() {
+    let phrases = cut(speech(40) + quiet(1))
+    #expect(phrases.count == 2)
+    #expect(phrases.allSatisfy { $0.seconds <= PhraseCutter.longest + 0.05 })
+}
+
+@Test func whatWhisperWritesForNoWordsIsDropped() {
+    #expect(WhisperDictation.clean(" [BLANK_AUDIO] ").isEmpty)
+    #expect(WhisperDictation.clean("(music)").isEmpty)
+    #expect(WhisperDictation.clean(" Run npm test.") == "Run npm test.")
+}
+
+// MARK: The real model
+
+// What you say, written by Whisper itself: a spoken clip (macOS's own voice) with a long pause in
+// it, through the same phrases and prompt as the microphone's. Needs the model downloaded, in the
+// folder `KUVO_TEST_WHISPER_MODEL` names, so it runs here, not on CI.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["KUVO_TEST_WHISPER_MODEL"] != nil))
+func whisperWritesTheProjectsNamesAsTheyreWrittenAndNothingInThePause() async throws {
+    let folder = URL(fileURLWithPath: ProcessInfo.processInfo.environment["KUVO_TEST_WHISPER_MODEL"]!)
+    let scratch = FileManager.default.temporaryDirectory.appending(path: "kuvo-voice-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: scratch) }
+    let first = try spoken("Open S R C slash timer dot T S, and run N P M test.", in: scratch)
+    let second = try spoken("Then add a use effect hook that calls fetch user.", in: scratch)
+    let clip = quiet(0.5) + first + quiet(60) + second + quiet(1.5)
+
+    let heard = Mutex<[WhisperDictation.Heard]>([])
+    let dictation = WhisperDictation(folder: folder, locale: Locale(identifier: "en_US"), words: {
+        ["src/timer.ts", "npm test", "useEffect", "fetchUser", "startTimer", "ContentView.swift"]
+    }) { one in heard.withLock { $0.append(one) } }
+    try await dictation.prepare()
+    let (stream, continuation) = AsyncStream<[Float]>.makeStream()
+    stride(from: 0, to: clip.count, by: 1_600).forEach { continuation.yield(Array(clip[$0..<min($0 + 1_600, clip.count)])) }
+    continuation.finish()
+    await dictation.run(stream)
+
+    var transcript = VoiceTranscript()
+    let finals = heard.withLock { $0 }.compactMap { one -> (String, Double)? in
+        if case .final(let text, let start) = one { return (text, start) } else { return nil }
+    }
+    finals.forEach { transcript.take($0.0, start: $0.1, isFinal: true) }
+    #expect(finals.filter { !$0.0.isEmpty }.count == 2, "\(finals)")
+    for name in ["src/timer.ts", "npm test", "useEffect", "fetchUser"] {
+        #expect(transcript.text.contains(name), "\(transcript.text)")
+    }
+}
+
+/// `words`, said by macOS's own voice, as 16 kHz samples.
+private func spoken(_ words: String, in folder: URL) throws -> [Float] {
+    let file = folder.appending(path: "\(UUID().uuidString).wav")
+    let say = Process()
+    say.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+    say.arguments = ["-v", "Samantha", "-o", file.path, "--data-format=LEF32@16000", words]
+    try say.run()
+    say.waitUntilExit()
+    let audio = try AVAudioFile(forReading: file)
+    let buffer = AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: AVAudioFrameCount(audio.length))!
+    try audio.read(into: buffer)
+    return Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength)))
+}
+
+// MARK: Downloading it
+
+/// The network, as Hugging Face would answer: each file's bytes, from a range when it's asked
+/// for one. Each test has a host of its own.
+final class StubHub: URLProtocol, @unchecked Sendable {
+    struct Host: Sendable {
+        var files: [String: Data] = [:]
+        var requests: [(path: String, range: String?)] = []
+    }
+    static let hosts = Mutex<[String: Host]>([:])
+
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host?.hasSuffix(".stub") == true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let url = request.url!, range = request.value(forHTTPHeaderField: "Range")
+        let data = Self.hosts.withLock { hosts -> Data? in
+            hosts[url.host!]?.requests.append((url.path, range))
+            return hosts[url.host!]?.files[url.path]
+        }
+        guard let data else {
+            client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: 404, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+            return client!.urlProtocolDidFinishLoading(self)
+        }
+        let from = range.flatMap { Int($0.dropFirst("bytes=".count).dropLast()) } ?? 0
+        let response = HTTPURLResponse(url: url, statusCode: from > 0 ? 206 : 200, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data.subdata(in: from..<data.count))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+/// A model of a few small files, served by its own stub host, kept in a folder of its own.
+@MainActor
+private final class Rig {
+    let host = "hub-\(UUID().uuidString.prefix(8)).stub"
+    let folder = FileManager.default.temporaryDirectory.appending(path: "kuvo-speech-\(UUID().uuidString)")
+    let contents: [String: Data] = [
+        "Encoder.mlmodelc/weights/weight.bin": Data((0..<300_000).map { UInt8($0 % 251) }),
+        "Encoder.mlmodelc/model.mil": Data("program".utf8),
+        "tokenizer.json": Data(#"{"model":{}}"#.utf8),
+    ]
+    nonisolated let prepared = Mutex<[URL]>([])
+    let defaults: UserDefaults
+
+    init() {
+        defaults = UserDefaults(suiteName: "kuvo-voice-\(UUID().uuidString)")!
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let host = host, contents = contents
+        StubHub.hosts.withLock { $0[host] = .init(files: Dictionary(uniqueKeysWithValues: contents.map { ("/m/\($0.key)", $0.value) })) }
+    }
+
+    var files: [SpeechModel.File] {
+        contents.keys.sorted().map { path in
+            let data = contents[path]!
+            return SpeechModel.File(path, Int64(data.count), SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), from: URL(string: "https://\(host)/m/\(path)")!)
+        }
+    }
+
+    func model(free: Int64? = nil) -> SpeechModel {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubHub.self]
+        let model = SpeechModel(files: files, defaults: defaults, session: configuration, supported: true, freeSpace: { _ in free ?? 10_000_000_000 },
+                                prepare: { [self] folder in prepared.withLock { $0.append(folder) } })
+        model.use(folder: folder)
+        return model
+    }
+
+    var requests: [(path: String, range: String?)] { StubHub.hosts.withLock { $0[host]?.requests ?? [] } }
+    func serve(_ path: String, _ data: Data) { StubHub.hosts.withLock { $0[host]?.files["/m/\(path)"] = data } }
+
+    func done() {
+        try? FileManager.default.removeItem(at: folder)
+        StubHub.hosts.withLock { $0[host] = nil }
+    }
+}
+
+/// Waits for `model` to settle somewhere other than downloading or preparing.
+@MainActor
+private func settled(_ model: SpeechModel) async -> SpeechModel.State {
+    while model.state == .downloading || model.state == .preparing { await Task.yield() }
+    return model.state
+}
+
+@MainActor
+@Test func theFirstTimeYouTalkItDownloadsAndIsMadeReady() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    let model = rig.model()
+    #expect(model.state == .absent)
+    model.voiceStarted()
+    #expect(model.state == .downloading)
+    #expect(await settled(model) == .ready)
+    #expect(model.received == model.size)
+    #expect(model.isNewlyReady)
+    // In its folder, checked, made ready once; nothing left half-done.
+    let kept = rig.folder.appending(path: "whisper-large-v3-turbo")
+    #expect(FileManager.default.contents(atPath: kept.appending(path: "tokenizer.json").path) == rig.contents["tokenizer.json"])
+    #expect(!FileManager.default.fileExists(atPath: rig.folder.appending(path: "partial").path))
+    #expect(rig.prepared.withLock { $0 }.map(\.path) == [kept.path])
+    // Opened again later, it's there, without downloading.
+    let again = rig.model()
+    #expect(again.state == .ready)
+    #expect(rig.requests.count == rig.contents.count)
+}
+
+@MainActor
+@Test func aDownloadThatStoppedGoesOnFromWhereItWas() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    // Half the weights came before the app quit.
+    let path = "Encoder.mlmodelc/weights/weight.bin", whole = rig.contents[path]!
+    let partial = rig.folder.appending(path: "partial").appending(path: path)
+    try FileManager.default.createDirectory(at: partial.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try whole.prefix(120_000).write(to: partial)
+    let model = rig.model()
+    #expect(model.state == .paused)
+    #expect(model.received == 120_000)
+    model.download()
+    #expect(await settled(model) == .ready)
+    #expect(rig.requests.first { $0.path.hasSuffix("weight.bin") }?.range == "bytes=120000-")
+    #expect(FileManager.default.contents(atPath: rig.folder.appending(path: "whisper-large-v3-turbo").appending(path: path).path) == whole)
+}
+
+@MainActor
+@Test func aFileThatDoesntMatchIsNeverUsedAndTryAgainFetchesIt() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.serve("tokenizer.json", Data(#"{"model":[]}"#.utf8))
+    let model = rig.model()
+    model.download()
+    guard case .failed(let words) = await settled(model) else { Issue.record("not failed: \(model.state)"); return }
+    #expect(words.contains("didn’t match"))
+    #expect(rig.prepared.withLock { $0 }.isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: rig.folder.appending(path: "whisper-large-v3-turbo").appending(path: "tokenizer.json").path))
+    // Fixed on the server: Try Again fetches only what's missing.
+    rig.serve("tokenizer.json", rig.contents["tokenizer.json"]!)
+    let before = rig.requests.count
+    model.download()
+    #expect(await settled(model) == .ready)
+    #expect(rig.requests.dropFirst(before).map(\.path) == ["/m/tokenizer.json"])
+}
+
+@MainActor
+@Test func withoutRoomForItNothingDownloadsAndItSaysHowMuchIsFree() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    let model = rig.model(free: 40_000_000)
+    model.voiceStarted()
+    #expect(model.state == .lowSpace(free: 40_000_000))
+    #expect(rig.requests.isEmpty)
+}
+
+@MainActor
+@Test func removedItsGoneAndDoesntComeBackByItself() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    let model = rig.model()
+    model.download()
+    #expect(await settled(model) == .ready)
+    model.remove()
+    #expect(model.state == .absent)
+    #expect(model.received == 0)
+    #expect(!FileManager.default.fileExists(atPath: rig.folder.appending(path: "whisper-large-v3-turbo").path))
+    // Talking again keeps to Apple's dictation; choosing it in Settings brings it back.
+    let before = rig.requests.count
+    model.voiceStarted()
+    #expect(model.state == .absent)
+    #expect(rig.model().state == .absent)
+    #expect(rig.requests.count == before)
+    model.download()
+    #expect(await settled(model) == .ready)
+}
+
+@MainActor
+@Test func pausedItKeepsWhatCameAndTalkingDoesntResumeIt() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    let model = rig.model()
+    model.download()
+    model.pause()
+    #expect(model.state == .paused)
+    model.voiceStarted()
+    #expect(model.state == .paused)
+}
+
+// MARK: The project's names
+
+@Test func theProjectsNamesComeOutAsTheyreWritten() {
+    let names = ProjectNames(["fetchUser", "ContentView.swift", "useEffect", "README", "npm test", "Codex", "test", "docs"])
+    // Said apart, run together, or in the wrong case (as Apple's dictation and Whisper wrote them).
+    #expect(names.fix("Add a use effect hook that calls fetch user.") == "Add a useEffect hook that calls fetchUser.")
+    #expect(names.fix("then callsFetchUser") == "then calls fetchUser")
+    #expect(names.fix("Open content view.swift, and the readme") == "Open ContentView.swift, and the README")
+    // Other words stay as they were said: a plain name in a sentence's case, and words that only
+    // sound like a name.
+    #expect(names.fix("Test it, then fetch the user.") == "Test it, then fetch the user.")
+    #expect(names.fix("Run npm test") == "Run npm test")
+}

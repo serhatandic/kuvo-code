@@ -91,7 +91,7 @@ import Testing
 
     let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
     let levels = Mutex<Int>(0)
-    VoiceInput.tap(player, natural: natural, format: analyzed, continuation: continuation) { _ in levels.withLock { $0 += 1 } }
+    VoiceInput.tap(player, natural: natural, format: analyzed, deliver: { continuation.yield(AnalyzerInput(buffer: $0)) }) { _ in levels.withLock { $0 += 1 } }
     try engine.start()
     player.scheduleBuffer(tone, at: nil, options: .loops, completionHandler: nil)
     player.play()

@@ -7,7 +7,8 @@ import Speech
 /// it listens on this device's microphone, writes what you say as you say it (`transcript`), says
 /// how loud you are (`level`, for the motion), and goes on, through any silence, until you say
 /// done. Then `ended` gets the words, for the composer to take. Speech is recognized on the
-/// device, with its own model for your language, downloaded the first time.
+/// device: by Whisper once it's here (`SpeechModel`), and until then by Apple's dictation, each
+/// told the words you're likely to say (the project's names).
 @MainActor
 @Observable
 public final class VoiceInput {
@@ -54,6 +55,10 @@ public final class VoiceInput {
     public static let recentCount = 64
     /// When it started listening, for how long it's been.
     public private(set) var listeningSince: Date?
+    /// Whisper is writing what you say (not Apple's dictation).
+    public private(set) var usesWhisper = false
+    /// The speech model it uses once it's in.
+    public let model: SpeechModel
     /// Told the words once `finish` has ended it (none, when nothing was heard),
     /// never after `cancel`.
     public var ended: ((String) -> Void)?
@@ -70,6 +75,9 @@ public final class VoiceInput {
     @ObservationIgnored private var inputs: AsyncStream<AnalyzerInput>.Continuation?
     @ObservationIgnored private var listening: Task<Void, Never>?
     @ObservationIgnored private var results: Task<Void, Never>?
+    @ObservationIgnored private var samples: AsyncStream<[Float]>.Continuation?
+    /// The project's names, to put back as they're written in what Apple's dictation heard.
+    @ObservationIgnored private var names = ProjectNames([])
     @ObservationIgnored private var meter = VoiceLevel()
     #if os(iOS)
     @ObservationIgnored private var interruption: (any NSObjectProtocol)?
@@ -77,21 +85,32 @@ public final class VoiceInput {
     /// Counts each start: what comes from an earlier one (a cancel, then a start) is dropped.
     @ObservationIgnored private(set) var run = 0
 
-    public init() {}
+    public init(model: SpeechModel = .shared) {
+        self.model = model
+    }
 
-    /// Starts listening in `locale`'s language: asks for the microphone the first time, and
-    /// downloads the speech model if this device hasn't one yet.
-    public func start(locale: Locale = .current) {
+    /// Starts listening in `locale`'s language, for `words` (the project's names, which it's told
+    /// to expect): asks for the microphone the first time, and starts Whisper's download if
+    /// this device hasn't it yet.
+    public func start(locale: Locale = .current, words: @escaping @Sendable () async -> [String] = { [] }) {
         guard !isActive else { return }
         run += 1
         let run = run
         transcript = VoiceTranscript()
+        names = ProjectNames([])
         level = 0
         recentLevels = []
         listeningSince = nil
         meter = VoiceLevel()
         phase = .preparing(progress: nil)
-        listening = Task { await listen(locale: locale, run: run) }
+        model.voiceStarted()
+        if model.isReady, let folder = model.modelFolder {
+            usesWhisper = true
+            listening = Task { await listenWithWhisper(folder: folder, locale: locale, words: words, run: run) }
+        } else {
+            usesWhisper = false
+            listening = Task { await listen(locale: locale, words: words, run: run) }
+        }
     }
 
     /// You're done: what was said last is settled, and `ended` gets the words.
@@ -108,6 +127,7 @@ public final class VoiceInput {
         stopMicrophone()
         Task {
             try? await analyzer?.finalizeAndFinishThroughEndOfInput()
+            if usesWhisper { await listening?.value }
             await results?.value
             guard self.run == run else { return }
             end(run: run)
@@ -131,6 +151,7 @@ public final class VoiceInput {
     /// a demo copy's screenshots, which mustn't ask for it.
     public func showSample(confirmed: String, guess: String, level: Double = 0.5) {
         run += 1
+        usesWhisper = model.isReady
         transcript = VoiceTranscript()
         transcript.take(confirmed, start: 0, isFinal: true)
         if !guess.isEmpty { transcript.take(guess, start: 1, isFinal: false) }
@@ -147,7 +168,7 @@ public final class VoiceInput {
 
     // MARK: Listening
 
-    private func listen(locale: Locale, run: Int) async {
+    private func listen(locale: Locale, words: @escaping @Sendable () async -> [String], run: Int) async {
         // The microphone, asked for once.
         guard await Self.microphoneAllowed() else { return fail(.microphoneDenied, run: run) }
         guard let language = await DictationTranscriber.supportedLocale(equivalentTo: locale) else { return fail(.unsupported, run: run) }
@@ -167,17 +188,7 @@ public final class VoiceInput {
                 try await request.downloadAndInstall()
             }
             guard self.run == run else { return }
-            #if os(iOS)
-            // AirPods' microphone too, when they're in.
-            try AVAudioSession.sharedInstance().setCategory(.record, mode: .spokenAudio, options: [.duckOthers, .allowBluetoothHFP])
-            try AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
-            // A call, Siri or an alarm takes the microphone: what was said so far is kept, rather
-            // than listening on to nothing.
-            interruption = NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
-                guard (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap(AVAudioSession.InterruptionType.init(rawValue:)) == .began else { return }
-                MainActor.assumeIsolated { self?.finish() }
-            }
-            #endif
+            try startSession()
             let engine = AVAudioEngine()
             let input = engine.inputNode
             let natural = input.outputFormat(forBus: 0)
@@ -190,7 +201,17 @@ public final class VoiceInput {
             self.analyzer = analyzer
             inputs = continuation
             results = Task { [weak self] in await self?.read(transcriber, run: run) }
-            Self.tap(input, natural: natural, format: format, continuation: continuation) { [weak self] rms in
+            // The project's names, as they come (they're asked of the box).
+            Task { [weak self] in
+                let names = await words()
+                guard !names.isEmpty else { return }
+                if self?.run == run { self?.names = ProjectNames(names) }
+                let context = AnalysisContext()
+                // Apple's dictation takes at most 100.
+                context.contextualStrings[.general] = Array(names.prefix(100))
+                try? await analyzer.setContext(context)
+            }
+            Self.tap(input, natural: natural, format: format, deliver: { continuation.yield(AnalyzerInput(buffer: $0)) }) { [weak self] rms in
                 Task { @MainActor in self?.heard(rms: rms, run: run) }
             }
             engine.prepare()
@@ -209,12 +230,71 @@ public final class VoiceInput {
         do {
             for try await result in transcriber.results {
                 guard self.run == run else { return }
-                transcript.take(String(result.text.characters), start: result.range.start.seconds, isFinal: result.isFinal)
+                transcript.take(names.fix(String(result.text.characters)), start: result.range.start.seconds, isFinal: result.isFinal)
             }
         } catch {
             guard self.run == run, phase == .listening else { return }
             fail(Self.failure(of: error), run: run)
         }
+    }
+
+    /// Listening with Whisper: the microphone comes on at once (what you say while Whisper loads
+    /// waits for it), and each phrase is written as it ends.
+    private func listenWithWhisper(folder: URL, locale: Locale, words: @escaping @Sendable () async -> [String], run: Int) async {
+        guard await Self.microphoneAllowed() else { return fail(.microphoneDenied, run: run) }
+        guard self.run == run else { return }
+        do {
+            try startSession()
+            let engine = AVAudioEngine()
+            let input = engine.inputNode
+            let natural = input.outputFormat(forBus: 0)
+            let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(PhraseCutter.rate), channels: 1, interleaved: false)!
+            let (stream, continuation) = AsyncStream<[Float]>.makeStream()
+            let dictation = WhisperDictation(folder: folder, locale: locale, words: words) { [weak self] heard in
+                Task { @MainActor in self?.take(heard, run: run) }
+            }
+            self.engine = engine
+            samples = continuation
+            Self.tap(input, natural: natural, format: format, deliver: { buffer in
+                guard let channel = buffer.floatChannelData?[0] else { return }
+                continuation.yield(Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))))
+            }) { [weak self] rms in
+                Task { @MainActor in self?.heard(rms: rms, run: run) }
+            }
+            engine.prepare()
+            try engine.start()
+            phase = .listening
+            listeningSince = .now
+            try await dictation.prepare()
+            guard self.run == run else { return }
+            await dictation.run(stream)
+        } catch {
+            guard self.run == run else { return }
+            fail(.other("Whisper couldn’t start: \(error.localizedDescription)"), run: run)
+        }
+    }
+
+    private func take(_ heard: WhisperDictation.Heard, run: Int) {
+        guard self.run == run else { return }
+        switch heard {
+        case .guess(let text, let start): transcript.take(text, start: start, isFinal: false)
+        case .final(let text, let start): transcript.take(text, start: start, isFinal: true)
+        }
+    }
+
+    /// The phone's audio, set for listening.
+    private func startSession() throws {
+        #if os(iOS)
+        // AirPods' microphone too, when they're in.
+        try AVAudioSession.sharedInstance().setCategory(.record, mode: .spokenAudio, options: [.duckOthers, .allowBluetoothHFP])
+        try AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
+        // A call, Siri or an alarm takes the microphone: what was said so far is kept, rather
+        // than listening on to nothing.
+        interruption = NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+            guard (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap(AVAudioSession.InterruptionType.init(rawValue:)) == .began else { return }
+            MainActor.assumeIsolated { self?.finish() }
+        }
+        #endif
     }
 
     func heard(rms: Float, run: Int) {
@@ -245,6 +325,8 @@ public final class VoiceInput {
         engine = nil
         inputs?.finish()
         inputs = nil
+        samples?.finish()
+        samples = nil
         level = 0
         #if os(iOS)
         if let interruption { NotificationCenter.default.removeObserver(interruption) }
@@ -260,12 +342,12 @@ public final class VoiceInput {
         listeningSince = nil
     }
 
-    /// Taps `node` for what it hears: on the audio engine's own queue, each buffer goes to the
-    /// analyzer (converted to `format`), and how loud it is to `level`. Done here, off the main
+    /// Taps `node` for what it hears: on the audio engine's own queue, each buffer goes to
+    /// `deliver` (converted to `format`), and how loud it is to `level`. Done here, off the main
     /// actor: a tap installed from `listen` would be the main actor's, and Swift traps when the
     /// audio queue calls it.
-    nonisolated static func tap(_ node: AVAudioNode, natural: AVAudioFormat, format: AVAudioFormat, continuation: AsyncStream<AnalyzerInput>.Continuation, level: @escaping @Sendable (Float) -> Void) {
-        let tap = Tap(format: format, converter: natural == format ? nil : AVAudioConverter(from: natural, to: format), continuation: continuation, level: level)
+    nonisolated static func tap(_ node: AVAudioNode, natural: AVAudioFormat, format: AVAudioFormat, deliver: @escaping @Sendable (AVAudioPCMBuffer) -> Void, level: @escaping @Sendable (Float) -> Void) {
+        let tap = Tap(format: format, converter: natural == format ? nil : AVAudioConverter(from: natural, to: format), deliver: deliver, level: level)
         node.installTap(onBus: 0, bufferSize: 1024, format: natural) { buffer, _ in tap.take(buffer) }
     }
 
@@ -297,17 +379,17 @@ public final class VoiceInput {
 }
 
 /// The microphone's samples, on the audio thread: how loud they are, and each converted to the
-/// format the analyzer takes.
+/// format the recognizer takes.
 private final class Tap: @unchecked Sendable {
     let format: AVAudioFormat
     let converter: AVAudioConverter?
-    let continuation: AsyncStream<AnalyzerInput>.Continuation
+    let deliver: @Sendable (AVAudioPCMBuffer) -> Void
     let level: @Sendable (Float) -> Void
 
-    init(format: AVAudioFormat, converter: AVAudioConverter?, continuation: AsyncStream<AnalyzerInput>.Continuation, level: @escaping @Sendable (Float) -> Void) {
+    init(format: AVAudioFormat, converter: AVAudioConverter?, deliver: @escaping @Sendable (AVAudioPCMBuffer) -> Void, level: @escaping @Sendable (Float) -> Void) {
         self.format = format
         self.converter = converter
-        self.continuation = continuation
+        self.deliver = deliver
         self.level = level
     }
 
@@ -317,7 +399,7 @@ private final class Tap: @unchecked Sendable {
             level(rms)
         }
         guard let converter else {
-            continuation.yield(AnalyzerInput(buffer: buffer))
+            deliver(buffer)
             return
         }
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * format.sampleRate / buffer.format.sampleRate) + 1
@@ -333,7 +415,7 @@ private final class Tap: @unchecked Sendable {
             status.pointee = .haveData
             return buffer
         }
-        if error == nil, converted.frameLength > 0 { continuation.yield(AnalyzerInput(buffer: converted)) }
+        if error == nil, converted.frameLength > 0 { deliver(converted) }
     }
 
 }
