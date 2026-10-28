@@ -41,14 +41,25 @@ public enum Launcher {
           folder="$XDG_CACHE_HOME/kuvo-npx/$(printf '%s' "$spec" | tr '/' '+')"
           if [ ! -s "$folder/.main" ]; then
             mkdir -p "$XDG_CACHE_HOME/kuvo-npx"
-            # One install at a time: another start waits for it (one left by a crash, for 5 minutes).
-            # One that stops waiting without the lock leaves the other's install alone, and npx runs it.
+            # One install at a time, by the start that holds the lock (its process in it): another
+            # waits for it, however long it takes, and takes over one whose start is gone (it
+            # crashed), one at a time and only once it's sure. One that stops waiting without the
+            # lock leaves the other's install alone, and npx runs it.
+            waits=$KUVO_NPX_WAITS
+            case $waits in '' | *[!0-9]*) waits=600 ;; esac
             i=0; locked=
             while :; do
-              mkdir "$folder.lock" 2>/dev/null && { locked=1; break; }
+              if mkdir "$folder.lock" 2>/dev/null; then
+                echo $$ >"$folder.lock/pid"; locked=1; break
+              fi
               [ -s "$folder/.main" ] && break
-              [ -n "$(find "$folder.lock" -maxdepth 0 -mmin +5 2>/dev/null)" ] && rmdir "$folder.lock" 2>/dev/null
-              [ $i -ge "${KUVO_NPX_WAITS:-600}" ] && break
+              holder=$(cat "$folder.lock/pid" 2>/dev/null)
+              if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null && mkdir "$folder.lock.breaking" 2>/dev/null; then
+                [ "$(cat "$folder.lock/pid" 2>/dev/null)" = "$holder" ] && rm -rf "$folder.lock"
+                rmdir "$folder.lock.breaking"
+                continue
+              fi
+              [ $i -ge "$waits" ] && break
               sleep 0.5; i=$((i + 1))
             done
             if [ -n "$locked" ] && [ ! -s "$folder/.main" ]; then
@@ -58,11 +69,12 @@ public enum Launcher {
                 node -e 'const [dir, short] = process.argv.slice(1); const bin = JSON.parse(require("fs").readFileSync(dir + "/package.json", "utf8")).bin; const main = typeof bin === "string" ? bin : bin && (bin[short] || Object.values(bin)[0]); if (main) console.log(main)' "$folder/node_modules/$name" "${name##*/}" >"$folder/.main"
               if [ -s "$folder/.main" ] && [ "$name" != "$spec" ]; then
                 for other in "${folder%@*}"@*; do
-                  case $other in "$folder" | *.lock) ;; *) rm -rf "$other" ;; esac
+                  case $other in "$folder" | *.lock | *.lock.breaking) ;; *) rm -rf "$other" ;; esac
                 done
               fi
             fi
-            [ -n "$locked" ] && rmdir "$folder.lock" 2>/dev/null
+            # (Only its own: a start that took over from it has its own there.)
+            [ -n "$locked" ] && [ "$(cat "$folder.lock/pid" 2>/dev/null)" = $$ ] && rm -rf "$folder.lock"
           fi
           if [ -s "$folder/.main" ]; then
             [ -n "$here" ] && cd "$here" 2>/dev/null
