@@ -5,7 +5,7 @@ import Testing
 @testable import KuvoCode
 
 /// Conversations you start from another show under it in the sidebar: one made with Branch from
-/// here (its box marks where it came from) and a handoff's, newest first, a branch's own under
+/// here (its box marks where it came from), a handoff's and one its agent started, newest first, a branch's own under
 /// it. A subagent's session isn't one: the agent started it, and it shows in the conversation it
 /// works for. The box is the agents bridge the app ships, run for real; the engine is stubbed.
 @MainActor
@@ -71,7 +71,7 @@ import Testing
         defer { clean() }
         engine.list([session("ses_timer", "Timer cycle", created: 1)])
         engine.on("POST", "/api/session/ses_timer/fork", json: ["data": session("ses_tried", "Timer cycle", created: 5,
-                                                                                extra: ["metadata": ["kuvo.pinned": true, "kuvo": ["handoffFrom": "ses_old", "kuvoAgent": "claude"]]])])
+                                                                                extra: ["metadata": ["kuvo.pinned": true, "kuvo": ["handoffFrom": "ses_old", "startedBy": "ses_lead", "beside": true, "kuvoAgent": "claude"]]])])
         engine.on("PATCH", "/api/session/ses_tried", json: ["data": [:]])
         await workspace.refresh()
         let message = Message.User(id: "msg_0002", time: .init(created: 3), text: "Now test the long break.")
@@ -92,11 +92,13 @@ import Testing
             session("ses_deeper", "Try it with an enum", created: 30, extra: ["metadata": ["kuvo": ["branchedFrom": "ses_tried"]]]),
             session("ses_find", "Find where the timer state lives", created: 40, extra: ["parentID": "ses_timer"]),
             session("ses_lost", "From one archived since", created: 50, extra: ["metadata": ["kuvo": ["branchedFrom": "ses_gone"]]]),
+            // One its agent started (start_session), for any kind of agent.
+            session("ses_review", "Review the timer tests", created: 25, extra: ["metadata": ["kuvo": ["startedBy": "ses_timer", "beside": true], "kuvoAgent": "codex"]]),
         ])
         await workspace.refresh()
 
         let tree = Branches.latestFirst(try #require(workspace.projects.first).sessions)
-        #expect(tree.under["ses_timer"]?.map(\.id) == ["ses_carried", "ses_tried"], "newest first")
+        #expect(tree.under["ses_timer"]?.map(\.id) == ["ses_review", "ses_carried", "ses_tried"], "newest first, one its agent started too")
         #expect(tree.under["ses_tried"]?.map(\.id) == ["ses_deeper"], "a branch's own, under it")
         #expect(tree.top.map(\.id) == ["ses_lost", "ses_timer"], "the latest first, each as new as its newest branch")
         #expect(!tree.under.values.joined().contains { $0.id == "ses_find" }, "a subagent isn't a branch")

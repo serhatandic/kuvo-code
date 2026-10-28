@@ -84,6 +84,25 @@ struct SessionRulesTests {
         #expect(Branches.tree([tried, deeper]).top.map(\.id) == ["ses_tried"])
     }
 
+    /// Sessions an agent started from a conversation (its start_session tool, on a Mac or a
+    /// machine, for any kind of agent) show under that conversation too; one started from outside
+    /// any conversation stays at the top.
+    @Test func sessionsAnAgentStartedShowUnderIt() throws {
+        let demo = try session("ses_demo")
+        let docs = try session("ses_docs", created: 5, metadata: #"{"kuvo": {"startedBy": "ses_demo", "beside": true}, "kuvoAgent": "codex"}"#)
+        let tests = try session("ses_tests", created: 7, metadata: #"{"kuvo": {"beside": true, "startedBy": "ses_demo"}}"#)
+        let outside = try session("ses_outside", metadata: #"{"kuvo": {"startedBy": "", "beside": true}}"#)
+        let tree = Branches.tree([tests, demo, docs, outside])
+        #expect(tree.top.map(\.id) == ["ses_demo", "ses_outside"])
+        #expect(tree.under["ses_demo"]?.map(\.id) == ["ses_tests", "ses_docs"])
+        #expect(Branches.origin(of: docs)?.kind == .started)
+        #expect(Branches.hint(.started, from: "Leave a small demo") == "Started from Leave a small demo")
+        // The step that started it, in the conversation, opens it: as a Mac's tool and a machine's say.
+        #expect(Branches.started(byStep: #"Started "Review project docs" in test project, beside this conversation (address ses_181e55e7c001jWyTnZQbZrCAfZ). It's on it now."#) == "ses_181e55e7c001jWyTnZQbZrCAfZ")
+        #expect(Branches.started(byStep: "Started a new session on this machine, in a tab (address ses_m1). It's on it now.") == "ses_m1")
+        #expect(Branches.started(byStep: "Couldn't start a session in /x: gone") == nil)
+    }
+
     /// In a list of the latest, a conversation counts as new as its newest branch: one at work
     /// under an older one keeps it in view.
     @Test func aBusyBranchKeepsItsSourceInTheLatest() throws {

@@ -1493,7 +1493,9 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   a message of yours, made by its place (the engine's own fork, or the bridge's), and marked as
   branched from it in its metadata (`kuvo.branchedFrom`; where its source came from or was handed
   off to isn't carried over, and it starts unpinned and not archived; if the mark can't be written,
-  it's answered without it). Show a conversation marked `kuvo.branchedFrom` or `kuvo.handoffFrom`
+  it's answered without it). Show a conversation marked `kuvo.branchedFrom` or `kuvo.handoffFrom`,
+  or `kuvo.startedBy` (one an agent started with its start_session tool, on a Mac or a machine;
+  `kuvo.beside` says where it first opens, and neither is carried over to a branch either),
   under that one when it's in the same list, newest first, and rank it in a list of the latest by
   its newest branch; a subagent's session (one with a `parentID`) is never shown so: it shows in
   the conversation it works for. A box from before branches answers `404` "Not available for this

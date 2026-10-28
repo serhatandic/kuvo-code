@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 
@@ -56,6 +57,15 @@ struct ToolCallView: View {
                     }
                     .buttonStyle(TextButtonStyle(outset: true))
                     .help("Show it in the panel")
+                } else if let started = startedSession {
+                    // A session the agent started: a click opens it.
+                    Button {
+                        app.tabs.open(.session(started))
+                    } label: {
+                        header
+                    }
+                    .buttonStyle(TextButtonStyle(outset: true))
+                    .help("Open this session")
                 } else {
                     header.foregroundStyle(.secondary)
                 }
@@ -391,6 +401,13 @@ struct ToolCallView: View {
         guard call.name == "kuvo-browser_" + BrowserTools.showInPanel, case .completed = call.state, let path = string("path"),
               let isFolder = BrowserTools.shownFolder(in: outputText) else { return nil }
         return (RemoteFolder.fileURL(path, in: directory), isFolder)
+    }
+
+    /// The session a start_session step started, once it's listed here.
+    private var startedSession: String? {
+        guard call.name == "kuvo-browser_start_session", case .completed = call.state,
+              let id = Branches.started(byStep: outputText), app.workspace.session(id) != nil else { return nil }
+        return id
     }
 
     /// The session a subagent works in, once it has started.

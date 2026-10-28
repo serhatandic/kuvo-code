@@ -307,6 +307,13 @@ describe("a branch", () => {
     expect(engine.metadata.get("ses_work").kuvo.handoffTo).toBe("ses_new")
   })
 
+  test("a branch of a session an agent started came from the one it's branched from, and opens nowhere by itself", async () => {
+    engine.metadata.set("ses_work", { kuvo: { startedBy: "ses_lead", beside: true } })
+    const made = ((await (await route("ses_work", "msg_0002")).json()) as any).data
+    expect(made.metadata).toEqual({ kuvo: { branchedFrom: "ses_work" } })
+    expect(engine.metadata.get(made.id)).toEqual({ kuvo: { branchedFrom: "ses_work" } })
+  })
+
   test("a subagent's, a message that isn't there, and no message at all are turned away", async () => {
     engine.session("ses_sub", [{ id: "msg_0001", type: "user", text: "Find it.", time: { created: 1 } }])
     engine.parents.set("ses_sub", "ses_work")

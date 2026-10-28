@@ -18,14 +18,32 @@ public enum HiddenSessions {
 /// here") or a handoff's ("/handoff"), as their box marks them. A subagent's session isn't one:
 /// the agent started it, and it shows in the conversation it works for.
 public enum Branches {
-    public enum Kind: Sendable, Equatable { case branch, handoff }
+    /// `started`: one an agent started from it (its start_session tool).
+    public enum Kind: Sendable, Equatable { case branch, handoff, started }
 
     /// The conversation `session` came from, and how.
     public static func origin(of session: Session) -> (id: String, kind: Kind)? {
         let kuvo = session.metadata?["kuvo"]
         if let id = kuvo?["branchedFrom"]?.string, !id.isEmpty { return (id, .branch) }
         if let id = kuvo?["handoffFrom"]?.string, !id.isEmpty { return (id, .handoff) }
+        if let id = kuvo?["startedBy"]?.string, !id.isEmpty { return (id, .started) }
         return nil
+    }
+
+    /// The session a start_session step started, as its result names it ("… (address ses_…)"), on
+    /// a Mac or a machine: its row in the conversation opens it.
+    public static func started(byStep result: String) -> String? {
+        guard let range = result.range(of: #"\(address (ses_[A-Za-z0-9]+)\)"#, options: .regularExpression) else { return nil }
+        return String(result[range].dropFirst("(address ".count).dropLast())
+    }
+
+    /// The sidebar's hint for a conversation that came from `title`'s.
+    public static func hint(_ kind: Kind, from title: String) -> String {
+        switch kind {
+        case .branch: "Branched from " + title
+        case .handoff: "Carried on from " + title
+        case .started: "Started from " + title
+        }
     }
 
     /// `sessions`, each under the one it came from when that one is among them too (all the way

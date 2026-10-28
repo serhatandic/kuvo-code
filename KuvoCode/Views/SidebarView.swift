@@ -855,7 +855,7 @@ struct SidebarView: View {
     static func origin(of session: Session, in workspace: Workspace) -> String {
         guard let origin = Branches.origin(of: session) else { return "" }
         let title = workspace.session(origin.id)?.title ?? "another conversation"
-        return (origin.kind == .handoff ? "Carried on from " : "Branched from ") + title
+        return Branches.hint(origin.kind, from: title)
     }
 
     /// Highlighted where it was picked; picked elsewhere (a tab, a new session), in its project.

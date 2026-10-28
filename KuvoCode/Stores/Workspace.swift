@@ -1300,7 +1300,7 @@ final class Workspace {
         // Its copy may carry where its source came from: that isn't this one's.
         // Nor is its place in the lists: it starts unpinned and not archived.
         var metadata = (session.metadata?.object ?? [:]).filter { $0.key != Self.pinnedKey && $0.key != Self.archivedKey }
-        var kuvo = (metadata["kuvo"]?.object ?? [:]).filter { !["branchedFrom", "handoffFrom", "handoffTo"].contains($0.key) }
+        var kuvo = (metadata["kuvo"]?.object ?? [:]).filter { !["branchedFrom", "handoffFrom", "handoffTo", "startedBy", "beside"].contains($0.key) }
         kuvo["branchedFrom"] = .string(id)
         metadata["kuvo"] = .object(kuvo)
         session.metadata = .object(metadata)
