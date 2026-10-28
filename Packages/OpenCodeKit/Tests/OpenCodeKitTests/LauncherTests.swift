@@ -5,12 +5,13 @@ import Testing
 /// `kuvo-npx`, run with this Mac's sh as the engine runs an integration's server.
 struct LauncherTests {
     /// Runs `kuvo-npx` with `arguments` and only `path` to find commands in.
-    private func run(_ launcher: URL, _ arguments: [String], path: String, cache: URL? = nil) throws -> String {
+    private func run(_ launcher: URL, _ arguments: [String], path: String, cache: URL? = nil, more: [String: String] = [:]) throws -> String {
         let process = Process()
         process.executableURL = launcher
         process.arguments = arguments
         process.environment = ["PATH": path, "KUVO_KEY_OTHER_TOKEN": "secret", "FIGMA_API_KEY": "mine"]
             .merging(cache.map { ["XDG_CACHE_HOME": $0.path] } ?? [:]) { $1 }
+            .merging(more) { $1 }
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
@@ -83,5 +84,29 @@ struct LauncherTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: packages.path) == ["@kuvo+some-mcp@1.1.0"])
         // Without the engine's cache, npx as before.
         #expect(try run(launcher, ["some-mcp@1.0.0"], path: tried) == "npx BUN_BE_BUN= -y some-mcp@1.0.0 mine")
+    }
+
+    /// A start that waits for another one's install and gives up waiting leaves that install
+    /// alone (it may still be under way, on a slow network) and runs the server with npx.
+    @Test func aStartThatGivesUpWaitingLeavesAnotherInstallAlone() throws {
+        let path = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init) + ["/opt/homebrew/bin", "/usr/local/bin"]
+        guard let node = path.map({ $0 + "/node" }).first(where: FileManager.default.isExecutableFile(atPath:)) else { return }
+        let folder = FileManager.default.temporaryDirectory.appending(path: "launcher-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let bin = folder.appending(path: "bin"), tools = folder.appending(path: "tools"), cache = folder.appending(path: "cache")
+        try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: tools.appending(path: "node"), withDestinationURL: URL(filePath: node))
+        try fake(tools.appending(path: "npx"), says: "npx")
+        try fake(tools.appending(path: "npm"), says: "npm")
+        try Launcher.install(in: bin, engine: folder.appending(path: "engine"))
+        // Another start's install, under way: its lock, and what it has put there so far.
+        let installing = cache.appending(path: "kuvo-npx/some-mcp@1.0.0")
+        try FileManager.default.createDirectory(at: installing.appending(path: "node_modules"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: cache.appending(path: "kuvo-npx/some-mcp@1.0.0.lock"), withIntermediateDirectories: true)
+
+        let said = try run(bin.appending(path: Launcher.name), ["some-mcp@1.0.0"], path: tools.path + ":/bin:/usr/bin", cache: cache, more: ["KUVO_NPX_WAITS": "1"])
+        #expect(said == "npx BUN_BE_BUN= -y some-mcp@1.0.0 mine")
+        #expect(FileManager.default.fileExists(atPath: installing.appending(path: "node_modules").path), "its install is left as it is")
+        #expect(FileManager.default.fileExists(atPath: installing.path + ".lock"), "and its lock")
     }
 }

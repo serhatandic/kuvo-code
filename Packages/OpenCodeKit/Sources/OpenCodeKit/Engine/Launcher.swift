@@ -42,14 +42,16 @@ public enum Launcher {
           if [ ! -s "$folder/.main" ]; then
             mkdir -p "$XDG_CACHE_HOME/kuvo-npx"
             # One install at a time: another start waits for it (one left by a crash, for 5 minutes).
-            i=0
-            until mkdir "$folder.lock" 2>/dev/null; do
+            # One that stops waiting without the lock leaves the other's install alone, and npx runs it.
+            i=0; locked=
+            while :; do
+              mkdir "$folder.lock" 2>/dev/null && { locked=1; break; }
               [ -s "$folder/.main" ] && break
               [ -n "$(find "$folder.lock" -maxdepth 0 -mmin +5 2>/dev/null)" ] && rmdir "$folder.lock" 2>/dev/null
-              [ $i -ge 600 ] && break
+              [ $i -ge "${KUVO_NPX_WAITS:-600}" ] && break
               sleep 0.5; i=$((i + 1))
             done
-            if [ ! -s "$folder/.main" ]; then
+            if [ -n "$locked" ] && [ ! -s "$folder/.main" ]; then
               rm -rf "$folder"
               # Its output to stderr: stdout is the server's, to the engine.
               npm install --prefix "$folder" --no-save --no-package-lock --no-audit --no-fund --loglevel=error "$spec" >&2 &&
@@ -60,7 +62,7 @@ public enum Launcher {
                 done
               fi
             fi
-            rmdir "$folder.lock" 2>/dev/null
+            [ -n "$locked" ] && rmdir "$folder.lock" 2>/dev/null
           fi
           if [ -s "$folder/.main" ]; then
             [ -n "$here" ] && cd "$here" 2>/dev/null
