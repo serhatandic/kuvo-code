@@ -68,15 +68,29 @@ export type BridgeAsk = (method: string, route: string, body?: unknown, signal?:
 const SEAT_WHOLE = 48_000;
 const seatParts = new Map<string, PendingParts>();
 
+/** How long the bridge has to answer an ask without a signal of its own (a test's clock instead). */
+export const bridgeClock = { answerIn: (): AbortSignal => AbortSignal.timeout(10_000) };
+
+// Without a signal, the bridge has a while to answer, not to finish: what it sends as it goes (its
+// mail, `GET /mail`, followed for as long as it runs) isn't cut off once that while is up.
 export const bridgeAsk: BridgeAsk = async (method, route, body, signal) => {
   const target = readBridgeFile();
   if (!target?.port || !target?.password) throw new Error("The coding agents' bridge isn't running.");
-  const response = await fetch(`http://127.0.0.1:${target.port}/api/kuvo/peers${route}`, {
-    method,
-    headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`, ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-    signal: signal ?? AbortSignal.timeout(10_000),
-  });
+  const waiting = signal ? null : new AbortController();
+  const deadline = signal ? null : bridgeClock.answerIn();
+  const late = () => waiting?.abort(deadline?.reason);
+  deadline?.addEventListener("abort", late, { once: true });
+  let response: Response;
+  try {
+    response = await fetch(`http://127.0.0.1:${target.port}/api/kuvo/peers${route}`, {
+      method,
+      headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`, ...(body ? { "content-type": "application/json" } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: signal ?? waiting!.signal,
+    });
+  } finally {
+    deadline?.removeEventListener("abort", late);
+  }
   if (!response.ok) throw Object.assign(new Error(`The coding agents' bridge answered ${response.status}.`), { status: response.status });
   return response;
 };

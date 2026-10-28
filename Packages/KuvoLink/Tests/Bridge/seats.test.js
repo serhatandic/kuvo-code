@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
@@ -259,4 +260,33 @@ test("a bridge that turns down hearing it was given up (an older one, or group c
   }
   assert.deepEqual(asked, ["/gaveup"]);
   assert.equal(fs.existsSync(path.join(sending, "sm_huge0002.json")), false);
+});
+
+test("what the bridge sends as it goes (its group chats' mail, followed) keeps coming past the time the bridge has to answer", async () => {
+  fresh();
+  let following;
+  const server = http.createServer((request, response) => {
+    response.writeHead(200, { "content-type": "application/x-ndjson" });
+    response.write('{"n":1}\n');
+    following = response;
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  fs.writeFileSync(path.join(run, "bridge.json"), JSON.stringify({ port: server.address().port, password: "bridge-pw" }));
+  const deadline = new AbortController();
+  const answerIn = link.bridgeClock.answerIn;
+  link.bridgeClock.answerIn = () => deadline.signal;
+  try {
+    const answer = await link.bridgeAsk("GET", "/mail");
+    const reader = answer.body.getReader();
+    const decoder = new TextDecoder();
+    let text = decoder.decode((await reader.read()).value, { stream: true });
+    // The time it had to answer is up, and it sends more.
+    deadline.abort(new DOMException("The operation timed out.", "TimeoutError"));
+    following.end('{"n":2}\n');
+    for (let part = await reader.read(); !part.done; part = await reader.read()) text += decoder.decode(part.value, { stream: true });
+    assert.equal(text, '{"n":1}\n{"n":2}\n');
+  } finally {
+    link.bridgeClock.answerIn = answerIn;
+    server.close();
+  }
 });

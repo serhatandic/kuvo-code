@@ -4982,16 +4982,26 @@ var letterTries = new Map;
 // Packages/Box/src/link/peers/seats.ts
 var SEAT_WHOLE = 48000;
 var seatParts = new Map;
+var bridgeClock = { answerIn: () => AbortSignal.timeout(1e4) };
 var bridgeAsk = async (method, route, body, signal) => {
   const target = readBridgeFile();
   if (!target?.port || !target?.password)
     throw new Error("The coding agents' bridge isn't running.");
-  const response = await fetch(`http://127.0.0.1:${target.port}/api/kuvo/peers${route}`, {
-    method,
-    headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`, ...body ? { "content-type": "application/json" } : {} },
-    body: body ? JSON.stringify(body) : undefined,
-    signal: signal ?? AbortSignal.timeout(1e4)
-  });
+  const waiting = signal ? null : new AbortController;
+  const deadline = signal ? null : bridgeClock.answerIn();
+  const late = () => waiting?.abort(deadline?.reason);
+  deadline?.addEventListener("abort", late, { once: true });
+  let response;
+  try {
+    response = await fetch(`http://127.0.0.1:${target.port}/api/kuvo/peers${route}`, {
+      method,
+      headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`, ...body ? { "content-type": "application/json" } : {} },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: signal ?? waiting.signal
+    });
+  } finally {
+    deadline?.removeEventListener("abort", late);
+  }
   if (!response.ok)
     throw Object.assign(new Error(`The coding agents' bridge answered ${response.status}.`), { status: response.status });
   return response;
@@ -11195,6 +11205,8 @@ export {
   boxProjects,
   boxVersion,
   branchSlug,
+  bridgeAsk,
+  bridgeClock,
   canonicalPath,
   carrySeat,
   carryToAgents,
