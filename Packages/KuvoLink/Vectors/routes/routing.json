@@ -30,7 +30,7 @@
               "<includes>": ["accounts.credentials", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "config", "config.apply", "engine.restart", "file", "goals", "groups", "btw", "handoff", "branch", "reviews", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills", "skills.trash", "wakes", "wakes.edit", "worktrees", "worktrees.events", "folders", "git", "plugins.search", "programs", "providers.models", "worktrees.where",
                 "engine.start", "update", "wakes.events", "personalities.events", "accounts.ended", "accounts.found"],
               "<excludes>": ["claude-code", "hosts", "mac", "machines", "usage"],
-              "<length>": 55
+              "<length>": 56
             } } }
           }
         }
