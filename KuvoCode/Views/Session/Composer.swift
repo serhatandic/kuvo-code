@@ -555,10 +555,11 @@ struct Composer: View {
 
     private var placeholder: String {
         if let prompt { return prompt }
-        if isRunning { return "Add to the task, or ⌘↩ to queue a follow-up…" }
+        // ⌘↩ to queue instead is in the send button's help.
+        if isRunning { return "Add to the task…" }
         if let bot { return bot.job.isEmpty ? "Tell \(bot.name) its job…" : "Message \(bot.name)…" }
-        if folders.first.map(Workspace.isChat) == true { return "Ask anything…" }
-        return agent == "plan" ? "Ask the agent to plan something…" : "Ask the agent to build, fix or explain something…"
+        // The mode is named beside it, so it isn't said again here.
+        return "Ask anything…"
     }
 
     /// Where what's said goes: this composer's session, or a new session's draft.
