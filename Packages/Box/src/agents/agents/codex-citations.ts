@@ -5,6 +5,9 @@
 // directive split between them is held back until it's whole.
 
 import { basename } from "node:path"
+import { parseProvider } from "../accounts"
+import { toolServerName } from "../kuvotools"
+import type { Content, Message } from "../wire"
 
 /** What its words become: words, or a file it made, to show. */
 export type Said = { text: string } | { made: string }
@@ -64,6 +67,42 @@ export class CodexCitations {
 export function plainCitations(text: string): string {
   const reader = new CodexCitations()
   return [...reader.read(text), ...reader.end()].map((said) => ("text" in said ? said.text : basename(said.made))).join("")
+}
+
+/**
+ * A reply kept from before its directives were read (`:codex-…` in its words), as a reply now
+ * has it: its words without them, and each file it cites as what it made a file shown, as
+ * `CodexCitations` gives it. The files it made and when, or nothing when it had none of its
+ * directives (or isn't Codex's).
+ */
+export function citedIn(message: Message): { made: string[]; at: number } | undefined {
+  // Codex's own: another agent's words may quote one, as words.
+  if (message.type !== "assistant" || parseProvider(message.model.providerID)?.kind !== "codex") return undefined
+  if (!message.content.some((content) => content.type === "text" && content.text.includes(opening))) return undefined
+  const made: string[] = []
+  const content: Content[] = []
+  const at = message.time.completed ?? message.time.created
+  for (const each of message.content) {
+    if (each.type !== "text" || !each.text.includes(opening)) {
+      content.push(each)
+      continue
+    }
+    const reader = new CodexCitations()
+    let words: { type: "text"; text: string } | undefined
+    for (const said of [...reader.read(each.text), ...reader.end()]) {
+      if ("text" in said) {
+        if (words) words.text += said.text
+        else content.push((words = { type: "text", text: said.text, ...(each.time ? { time: each.time } : {}) }))
+        continue
+      }
+      words = undefined
+      made.push(said.made)
+      // As a reply now has it (codex.ts, `say`): its words after it go on in a block of their own.
+      content.push({ type: "tool", id: `cited-${message.id}-${made.length}`, name: `${toolServerName}_show_file`, state: { status: "completed", input: { path: said.made }, content: [{ type: "text", text: "Shown in the conversation." }] }, time: { created: at, ran: at, completed: at } })
+    }
+  }
+  message.content = content.filter((each) => each.type !== "text" || each.text)
+  return { made, at }
 }
 
 function push(said: Said[], text: string): Said[] {

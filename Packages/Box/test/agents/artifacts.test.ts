@@ -328,6 +328,68 @@ describe("files a command made", () => {
     expect((await route("GET", "kuvo/artifacts?session=ses_code")).value.artifacts.map((artifact: any) => artifact.name)).toEqual(["moon.pdf"])
   })
 
+  test("scratch a command left in a tmp folder, recorded before it was left out, is gone from the record when the box starts again, unless you kept it", async () => {
+    spawnSync("git", ["init", "-q", project])
+    const files = { render: join(project, "tmp", "pdfs", "moon.png"), kept: join(project, "tmp", "kept.png"), shown: join(project, "tmp", "shown.png"), written: join(project, "tmp", "notes.md"), pdf: join(project, "output", "moon.pdf") }
+    mkdirSync(join(project, "tmp", "pdfs"), { recursive: true })
+    mkdirSync(join(project, "output"))
+    writeFileSync(files.render, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x01]))
+    writeFileSync(files.kept, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x02]))
+    writeFileSync(files.shown, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x03]))
+    writeFileSync(files.written, "# Notes\n")
+    writeFileSync(files.pdf, "%PDF-1.4\n")
+    // As an older box recorded a turn's end: every file a command made, scratch too.
+    const made = (via: string) => ({ by: { kind: "agent" as const, session: "ses_code", agent: "codex" }, turn: { session: "ses_code" }, via, where: { project, session: "ses_code" } })
+    await store.changeAll([files.render, files.kept, files.shown, files.pdf], made("shell"))
+    await store.change(files.written, made("write"))
+    await store.shown(files.shown, made("show_file"))
+    await store.pin(ArtifactStore.idOf(files.kept), { by: "you" })
+    const render = store.at(files.render)!.versions[0].hash!
+    const copy = join(root, "artifacts", "copies", render.slice(7, 9), render.slice(7))
+    expect(readFileSync(copy).length).toBe(5)
+
+    for (let start = 0; start < 2; start++) {
+      // And gone for good: not back as the box starts again after.
+      store = new ArtifactStore(join(root, "artifacts"), { bots, disk: () => disk })
+      const names = (await route("GET", "kuvo/artifacts?session=ses_code")).value.artifacts.map((artifact: any) => artifact.name).sort()
+      expect(names).toEqual(["kept.png", "moon.pdf", "notes.md", "shown.png"])
+      expect(() => readFileSync(copy)).toThrow()
+    }
+    // A command making it again later is recorded afresh, not with the versions taken off.
+    await store.changeAll([files.render], made("show_file"))
+    store = new ArtifactStore(join(root, "artifacts"), { bots, disk: () => disk })
+    expect(store.at(files.render)?.versions.map((version) => version.n)).toEqual([1])
+  })
+
+  test("a file a kept reply cited as what it made, read as the box starts again, is shown then, with its versions as they were, and stays shown; a cited one in a tmp folder isn't taken off", async () => {
+    spawnSync("git", ["init", "-q", project])
+    mkdirSync(join(project, "output"))
+    mkdirSync(join(project, "tmp"))
+    const pdf = join(project, "output", "moon.pdf")
+    const report = join(project, "tmp", "report.pdf")
+    writeFileSync(pdf, "%PDF-1.4\n")
+    writeFileSync(report, "%PDF-1.4 first\n")
+    const made = { by: { kind: "agent" as const, session: "ses_code", agent: "codex" }, turn: { session: "ses_code" }, via: "shell", where: { project, session: "ses_code" } }
+    await store.changeAll([pdf, report], made)
+    writeFileSync(report, "%PDF-1.4 second\n")
+    await store.changeAll([report], { ...made, turn: { session: "ses_code", message: "m2" } })
+    // Changed by you since: not a version of the agent's.
+    writeFileSync(pdf, "%PDF-1.4 yours\n")
+    const versions = (path: string) => store.at(path)!.versions.map((version) => [version.n, version.hash])
+    const before = { pdf: versions(pdf), report: versions(report) }
+    expect(before.report.length).toBe(2)
+
+    const cited = Date.parse("2026-10-20T10:00:00Z")
+    store = new ArtifactStore(join(root, "artifacts"), { bots, disk: () => disk, shown: [{ path: pdf, at: cited }, { path: report, at: cited }] })
+    for (const reopened of [false, true]) {
+      if (reopened) store = new ArtifactStore(join(root, "artifacts"), { bots, disk: () => disk })
+      const listed = (await route("GET", "kuvo/artifacts?session=ses_code")).value.artifacts
+      expect(listed.map((artifact: any) => [artifact.name, artifact.shown]).sort()).toEqual([["moon.pdf", cited / 1000], ["report.pdf", cited / 1000]])
+      expect({ pdf: versions(pdf), report: versions(report) }).toEqual(before)
+      expect((await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(report)}/versions/1`)).value).toBe("%PDF-1.4 first\n")
+    }
+  })
+
   test("a project's are found as the turn ends: outside git by a walk, in git as git status lists them (not what it ignores)", async () => {
     recorder = record(store, { bots }).recorder
     session("ses_code", project)

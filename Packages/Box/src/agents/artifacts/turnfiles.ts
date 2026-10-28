@@ -16,6 +16,12 @@ export const skipped = new Set([".git", "node_modules", ".venv", "venv", "__pyca
  */
 const scratch = new Set(["tmp", "temp", ".tmp"])
 
+/** Whether `path` is in a scratch folder of `project`'s. */
+export function inScratch(path: string, project: string): boolean {
+  if (!path.startsWith(project + sep)) return false
+  return path.slice(project.length + 1).split(sep).slice(0, -1).some((part) => scratch.has(part.toLowerCase()))
+}
+
 /**
  * How much earlier than the turn a file's time may say it changed and still count: Linux stamps
  * files from a coarse clock (a few milliseconds behind the time read just before the write), and

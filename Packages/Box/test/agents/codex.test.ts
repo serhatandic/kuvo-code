@@ -266,6 +266,36 @@ describe("Codex's file citations", () => {
     const shown = tools(id).find((tool: any) => tool.name === "kuvo-browser_show_file")
     expect(shown?.state).toMatchObject({ status: "completed", input: { path: pdf } })
   })
+
+  test("a reply kept from before its citations were read shows as one does now once the bridge starts again: the file it made shown, and no directive", () => {
+    const pdf = join(root, "output/pdf/moon.pdf")
+    const store = new Store(join(root, "sessions"))
+    // Only to make it: Codex itself isn't asked anything.
+    const first = new Sessions(store, { find: (id: string | undefined) => (id === "codex-cli" ? { providerID: "codex-cli" } : undefined) } as unknown as Roster, new Auto(root))
+    const id = first.create({ title: "Codex", model: { providerID: "codex-cli", id: "gpt-test" }, location: { directory: root } }).id
+    const words = `Created the field note: one page.\n\n:codex-file-citation{path="${pdf}" purpose="output"}\n\nIt follows :codex-file-citation{path="/w/notes.md" purpose="source"}.`
+    const kept: Message = { type: "assistant", id: "msg_kept", time: { created: 1, completed: 2 }, agent: "build", model: { providerID: "codex-cli", id: "gpt-test" }, content: [{ type: "text", text: words }] }
+    // Another agent's words quoting one (Auto went on with Claude): words, as they were.
+    const quoted: Message = { type: "assistant", id: "msg_quoted", time: { created: 3, completed: 4 }, agent: "build", model: { providerID: "claude-code", id: "sonnet" }, content: [{ type: "text", text: words }] }
+    store.get(id)!.messages.push(kept, quoted)
+    store.save(id, true)
+    first.closeAll()
+
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: () => undefined } as unknown as Roster, new Auto(root))
+    const reply = sessions.messages(id).find((message) => message.id === "msg_kept") as any
+    expect(reply.content.map((part: any) => (part.type === "text" ? part.text : `[${part.name} ${part.state.status} ${part.state.input.path}]`))).toEqual([
+      "Created the field note: one page.\n\n",
+      `[kuvo-browser_show_file completed ${pdf}]`,
+      "\n\nIt follows `/w/notes.md`.",
+    ])
+    expect((sessions.messages(id).find((message) => message.id === "msg_quoted") as any).content).toEqual([{ type: "text", text: words }])
+    expect(sessions.cited).toEqual([{ path: pdf, at: 2 }])
+    // Kept as it reads now: read once, not again at the next start.
+    expect(readFileSync(join(root, "sessions", id, "messages.json"), "utf8").split(":codex-").length).toBe(3)
+    sessions.closeAll()
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: () => undefined } as unknown as Roster, new Auto(root))
+    expect(sessions.cited).toEqual([])
+  })
 })
 
 describe("What Codex asks you", () => {
