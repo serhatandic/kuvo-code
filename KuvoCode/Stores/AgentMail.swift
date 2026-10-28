@@ -451,7 +451,7 @@ final class AgentMail {
     /// (or the one given), on the caller's model, with the caller's approval (yours by default for
     /// one from outside a session), so Ask First isn't got around. It gets `task` as a
     /// message from the caller, so it knows who to report to, and its metadata says who started it,
-    /// for the window to show it beside them.
+    /// for the sidebar to list it under them (it opens nothing by itself).
     func start(_ arguments: [String: Any], caller: String?) async -> (text: String, isError: Bool) {
         guard let app else { return ("Kuvo Code isn't ready yet.", true) }
         guard let task = (arguments["task"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !task.isEmpty else {
@@ -488,8 +488,7 @@ final class AgentMail {
         guard let api = workspace.api(forSession: session.id) else { return ("Couldn't reach the new session.", true) }
         let title = (arguments["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let title, !title.isEmpty { try? await api.renameSession(session.id, title: title) }
-        let beside = (arguments["beside"] as? NSNumber)?.boolValue ?? true
-        try? await api.setMetadata(session: session.id, .object(["kuvo": .object(["startedBy": .string(caller ?? ""), "beside": .bool(beside)])]))
+        try? await api.setMetadata(session: session.id, .object(["kuvo": .object(["startedBy": .string(caller ?? "")])]))
         let waits = (arguments["wait"] as? NSNumber)?.boolValue ?? false
         let id = Identifier.message()
         do {
@@ -497,12 +496,11 @@ final class AgentMail {
         } catch {
             return ("Started a session (\(session.id)), but the task didn't reach it: \(error.localizedDescription)", true)
         }
-        Analytics.shared.track("agent_started_session", ["waits": waits, "beside": beside])
+        Analytics.shared.track("agent_started_session", ["waits": waits])
         let name = title.flatMap { $0.isEmpty ? nil : "\"\($0)\"" } ?? "a new session"
         let place = Workspace.isChat(folder) ? "" : " in \(workspace.projectName(folder))"
-        let shown = beside ? ", beside this conversation" : ", in a tab"
         guard waits else {
-            return ("Started \(name)\(place)\(shown) (address \(session.id)). It's on it now. Write to it with send_message; it can write back to you the same way.", false)
+            return ("Started \(name)\(place) (address \(session.id)). It's on it now. Write to it with send_message; it can write back to you the same way.", false)
         }
         // A new session: anything it says is its answer.
         if let reply = await reply(in: session.id, to: id, known: [], api: api) {

@@ -2226,7 +2226,7 @@ const startedSessions = new Map();
 
 /// A new session on this machine, from the conversation `from`: an agent of its own, in the caller's
 /// folder (or the one given), with the caller's model and rules, given the task as a message from
-/// the caller. Its metadata says who started it, for Kuvo Code to show it beside them. The same as
+/// the caller. Its metadata says who started it, for Kuvo Code to list it under them. The same as
 /// start_session on the Mac.
 async function startSession(args, from, agents, here) {
   const task = typeof args.task === "string" ? args.task.trim() : "";
@@ -2248,7 +2248,6 @@ async function startSession(args, from, agents, here) {
   if (lately.length >= 6) return text("You've started several sessions in the last few minutes. Write to those (send_message), or ask the user before starting more.", true);
   startedSessions.set(key, [...lately, Date.now()]);
   const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : undefined;
-  const beside = args.beside !== false;
   const created = await engine("POST", "api/session", {
     location: { directory: folder },
     ...(title ? { title } : {}),
@@ -2257,13 +2256,13 @@ async function startSession(args, from, agents, here) {
   });
   const session = created?.data?.id;
   if (!session) return text("Couldn't start a session here.", true);
-  await engine("PATCH", `api/session/${encodeURIComponent(session)}`, { metadata: { kuvo: { startedBy: from ?? "", beside } } }).catch(() => {});
+  await engine("PATCH", `api/session/${encodeURIComponent(session)}`, { metadata: { kuvo: { startedBy: from ?? "" } } }).catch(() => {});
   const waits = args.wait === true;
   const sender = agents.find((agent) => agent.session === from)?.name ?? (here ? `an agent on ${here}` : "an agent on a machine");
   const id = messageID();
   await engine("POST", `api/session/${encodeURIComponent(session)}/prompt`, { id, text: composeMail(sender, from ?? "unknown", task, waits), delivery: "steer" });
   const name = title ? `"${title}"` : "a new session";
-  if (!waits) return text(`Started ${name} on this machine${beside ? ", beside this conversation" : ", in a tab"} (address ${session}). It's on it now. Write to it with send_message; it can write back to you the same way.`);
+  if (!waits) return text(`Started ${name} on this machine (address ${session}). It's on it now. Write to it with send_message; it can write back to you the same way.`);
   const answer = await replyTo(session, id);
   return text(`Started ${name} (address ${session}). ` + (answer ? `It answered:\n\n${answer}` : "It hasn't answered yet; it may still write back with send_message."));
 }

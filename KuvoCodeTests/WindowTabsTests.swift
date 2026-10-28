@@ -5,8 +5,9 @@ import Testing
 
 /// The window's tabs (A2): opening, closing and reopening tabs where they were, split views and
 /// which half you work in, what the side panel follows, a conversation moved to the coding agents
-/// keeping its tab, an agent's new session opening beside the one that started it, and the tabs
-/// coming back at the next launch, also as an older version kept them. The engine and the agents'
+/// keeping its tab, an agent's new session leaving the window as it was, a session opened from
+/// beside another showing by itself, and the tabs coming back at the next launch, also as an older
+/// version kept them. The engine and the agents'
 /// bridge are stubbed; the window itself isn't driven: what it shows is what `WindowTabs` holds.
 @MainActor
 @Suite(.serialized) struct WindowTabsTests {
@@ -286,21 +287,46 @@ import Testing
         #expect(tabs.selection == .session("ses_agent"))
     }
 
-    /// An agent's start_session: beside the conversation in view that started it; another
-    /// conversation's in a tab at the end, for you to find.
-    @Test func anAgentsNewSessionOpensBesideTheOneThatStartedIt() async throws {
+    /// An agent's start_session opens nothing: the window stays as it was, wherever the agent that
+    /// started it is, and the new session waits under its conversation in the sidebar.
+    @Test func anAgentsNewSessionLeavesTheWindowAsItWas() async throws {
         defer { done() }
         await sessions(["ses_a", "ses_b"])
         tabs.open(.session("ses_a"))
         let now = Date.now.timeIntervalSince1970 * 1000
         for (id, starter) in [("ses_helper", "ses_a"), ("ses_other", "ses_b")] {
-            engine.on("GET", "/api/session/\(id)", json: ["data": StubEngine.session(id, directory: folder, created: now, extra: ["metadata": ["kuvo": ["startedBy": starter]]])])
+            engine.on("GET", "/api/session/\(id)", json: ["data": StubEngine.session(id, directory: folder, created: now, extra: ["metadata": ["kuvo": ["startedBy": starter, "beside": true]]])])
             app.workspace.handle(try ServerEvent(json: JSONSerialization.data(withJSONObject: ["id": UUID().uuidString, "type": "session.created", "created": 1, "data": ["sessionID": id]])))
             await app.workspace.reloading[id]?.value
         }
-        #expect(tabs.pairs[.session("ses_a")] == "ses_helper")
-        #expect(keys == ["ses_a", "ses_other"])
+        #expect(app.workspace.session("ses_helper") != nil, "it's there, to open from the sidebar")
+        #expect(tabs.pairs.isEmpty, "nothing beside the conversation")
+        #expect(keys == ["ses_a"], "no tab of its own either")
         #expect(tabs.selection == .session("ses_a"))
+    }
+
+    /// A session opened from the sidebar (or ⌘K, a notification, a link) is the one you get, by
+    /// itself: one beside another conversation comes out of that pair into a tab of its own, unless
+    /// the pair is in view, where it only takes the keyboard.
+    @Test func aSessionBesideAnotherOpensByItself() async {
+        defer { done() }
+        await sessions(["ses_a", "ses_b", "ses_c"])
+        tabs.open(.session("ses_a"))
+        tabs.openBeside("ses_b")
+        tabs.open(.session("ses_c"))
+
+        tabs.open(.session("ses_b"))
+        #expect(tabs.selection == .session("ses_b"), "the session itself, not the conversation it was beside")
+        #expect(tabs.pairs.isEmpty)
+        #expect(keys == ["ses_a", "ses_b", "ses_c"], "in a tab of its own, next to the one it was beside")
+
+        // In view beside the conversation you're in: it stays there, and you work in it.
+        tabs.open(.session("ses_a"))
+        tabs.openBeside("ses_b")
+        tabs.open(.session("ses_b"))
+        #expect(tabs.pairs[.session("ses_a")] == "ses_b")
+        #expect(tabs.selection == .session("ses_a"))
+        #expect(tabs.focus == .split)
     }
 
     // MARK: Keeping them

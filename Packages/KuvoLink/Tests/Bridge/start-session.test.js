@@ -74,6 +74,6 @@ test("a session started from a conversation, its subagent or its engine run is m
     assert.equal(result.isError ?? false, false, result.content?.[0]?.text);
     const started = result.content[0].text.match(/\(address (ses_\w+)\)/)?.[1];
     assert.ok(started, result.content[0].text);
-    assert.deepEqual(marked.get(started), { kuvo: { startedBy: "ses_lead", beside: true } }, `started from ${caller}`);
+    assert.deepEqual(marked.get(started), { kuvo: { startedBy: "ses_lead" } }, `started from ${caller}`);
   }
 });
