@@ -140,6 +140,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - The servers behind Outlook and Microsoft 365, Todoist, CalDAV calendars, Apple Calendar and Reminders, and Chrome DevTools are updated to their latest versions, with their makers' fixes.
 - Kuvo Code runs opencode 2.2.0: long conversations load and compact better, a busy provider is tried again instead of being reported as a full conversation, and HEIC, AVIF and QuickTime attachments are recognized.
 - Diagrams in replies and in a Markdown file's preview have a new look, with tidier layouts, square-cornered lines and soft shadows (Mermaid 12).
+- In a group chat with bots on a machine, **Stop** and messages you send while a bot works reach it every time; before, the machine could miss one sent in a few seconds' gap.
+- A bot made or deleted from your phone while it loses its connection is made or deleted whole, rather than leaving a conversation without its bot or a group chat still listing it.
+- A machine's nightly update waits while its browser waits on you (a sign-in, a code), and **Start** or **Restart** for its engine during an update says it's updating.
 
 ## 0.7.2
 
