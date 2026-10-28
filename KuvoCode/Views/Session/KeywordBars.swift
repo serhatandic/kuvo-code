@@ -304,6 +304,9 @@ struct SideThreadBar: View {
             Image(systemName: "exclamationmark.circle")
                 .font(.system(size: 13))
                 .foregroundStyle(.orange)
+        } else {
+            // Its column kept, so the title stays where it is when one comes.
+            Color.clear.frame(height: 1)
         }
     }
 

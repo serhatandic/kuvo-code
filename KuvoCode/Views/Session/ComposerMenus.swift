@@ -168,10 +168,10 @@ struct WorkplaceChip: View {
     var body: some View {
         NativeMenuButton(name: "workplace", menu: makeMenu) {
             Text(worktree ? (attempts > 1 ? "Worktree ×\(attempts)" : "Worktree") : "Local")
-            .font(.callout)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .hoverHighlight(in: Capsule(), mutesInk: true)
+                .font(.callout)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .hoverHighlight(in: Capsule(), mutesInk: true)
         }
         .help("Where the session works: in the project's folder, or in a worktree of its own")
     }

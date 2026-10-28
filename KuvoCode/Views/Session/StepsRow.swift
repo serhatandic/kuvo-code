@@ -53,6 +53,8 @@ struct StepsRow: View {
                     }
                     .buttonStyle(TextButtonStyle(outset: true))
                     .help(isExpanded ? "Hide the steps" : "Show each step")
+                    // What they were, read with how long they took.
+                    .accessibilityLabel(timed(done) ? line(done) + ": " + Self.summary(of: done) : line(done))
                     if isExpanded {
                         // Together, so they fold as one, the space above them too.
                         VStack(alignment: .leading, spacing: 10) {
@@ -96,7 +98,7 @@ struct StepsRow: View {
     }
 
     private func timed(_ done: [Message.Content]) -> Bool {
-        detail == .summary && !isLive && StepTime.seconds(of: done) != nil
+        !isLive && Self.saysTime(done, detail: detail)
     }
 
     /// The line says how long these took: the turn's end then doesn't say it again.

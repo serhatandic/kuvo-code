@@ -46,7 +46,7 @@ struct QueueDock: View {
         return VStack(alignment: .leading, spacing: 0) {
             if folds {
                 // No mark: "queued" says it, and the rows' marks under it say which are steered.
-                BarLine(mark: AnyView(EmptyView()),
+                BarLine(mark: AnyView(Color.clear.frame(height: 1)),
                         title: "\(items.count) queued", detail: items.first.map { Text(QueueRow.summary(of: $0)) },
                         showHelp: "Show the messages waiting", hideHelp: "Fold them to this line",
                         isHidden: Binding(get: { !isOpen.wrappedValue }, set: { isOpen.wrappedValue = !$0 }))
