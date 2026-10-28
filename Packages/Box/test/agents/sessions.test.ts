@@ -2,7 +2,7 @@
 // Auto down its list, and what a session keeps. Each test has a folder of its own, removed after.
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AcpThread } from "../../src/agents/acp"
@@ -2261,6 +2261,21 @@ process.stdin.on("data", (chunk) => {
     const held = auto.limits()[0]
     expect(held.until - Date.now()).toBeLessThan(4 * 60_000)
     expect(held.until - Date.now()).toBeGreaterThan(2 * 60_000)
+  })
+
+  test("a limit hit while its file can't be written (a full disk) is still held, and stops nothing", () => {
+    const folder = mkdtempSync(join(root, "auto-"))
+    const held = new Auto(folder)
+    const error = console.error
+    chmodSync(folder, 0o500)
+    console.error = () => {}
+    try {
+      held.hold({ providerID: "alpha", modelID: "one" }, { scope: "model", resetsAt: Date.now() + 60_000 })
+      expect(held.isHeld({ providerID: "alpha", modelID: "one" })).toBeTruthy()
+    } finally {
+      console.error = error
+      chmodSync(folder, 0o700)
+    }
   })
 
   test("an empty list can't be picked", () => {

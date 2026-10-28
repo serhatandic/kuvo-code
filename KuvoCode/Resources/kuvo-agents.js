@@ -2314,9 +2314,13 @@ class Auto {
     this.schedule();
   }
   save() {
-    mkdirSync4(this.root, { recursive: true });
-    writeFileSync4(this.file + ".new", JSON.stringify({ lists: this.lists, limits: this.held }, null, 2));
-    renameSync3(this.file + ".new", this.file);
+    try {
+      mkdirSync4(this.root, { recursive: true });
+      writeFileSync4(this.file + ".new", JSON.stringify({ lists: this.lists, limits: this.held }, null, 2));
+      renameSync3(this.file + ".new", this.file);
+    } catch (error) {
+      console.error("Custom Auto not kept:", error);
+    }
   }
 }
 function resetsIn(text, now = Date.now()) {
@@ -19999,4 +20003,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 50022ee741d7435934a88a3ca2ce0430ff3673831cd1f028645b6c94c433f47b
+// Built from Packages/Box/src/agents ed42182ca994ce5ae7be23ec47a9ab2719f6d5714459492cdd70c63a0ee12635
