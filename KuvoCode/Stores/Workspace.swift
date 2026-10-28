@@ -1518,7 +1518,8 @@ final class Workspace {
                 Task { try? await api.markViewed(id, idle: idle) }
             }
             for (id, model) in models where isMacs(model.session) {
-                guard let session = listed.first(where: { $0.id == id }) else {
+                // A subagent's isn't one of the conversations listed: among all of the bridge's.
+                guard let session = (model.isSubagent ? everything : listed).first(where: { $0.id == id }) else {
                     models[id] = nil
                     continue
                 }
