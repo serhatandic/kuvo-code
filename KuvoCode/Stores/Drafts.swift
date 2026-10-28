@@ -116,8 +116,14 @@ final class Drafts {
     /// under the ID given until it's `sent`: if the app quits first (it waited for a move), it's
     /// in `key`'s composer the next time.
     func onItsWay(_ text: String, to key: String) -> String {
+        onItsWay(Draft(text: text), to: key)
+    }
+
+    /// `draft`, sent from `key`'s composer, kept on disk as on its way under the ID given until
+    /// it's `sent`: if the app quits first, it's back in that composer the next time.
+    func onItsWay(_ draft: Draft, to key: String) -> String {
         let id = UUID().uuidString
-        sending[id] = Sending(key: key, draft: Draft(text: text), at: .now)
+        sending[id] = Sending(key: key, draft: draft, at: .now)
         saveNow()
         return id
     }

@@ -923,8 +923,15 @@ final class SessionModel {
         if delivery == .steer { isQueuePaused = false }
         outgoing[id] = Outgoing(state: .sending, isOurs: true, startsRun: delivery == .steer && !isBusy)
         editTranscript { $0.addLocal(id: id, text: text, delivery: delivery, files: files) }
+        // Kept on disk until the engine has it, it's back in the composer, or it's taken away: a
+        // quit meanwhile (its tools starting, a slow engine) puts it back in the composer.
+        let (quotes, words) = Quoting.draft(of: WidgetAnswer.split(written).text)
+        var kept = Drafts.Draft(text: words, files: files, quotes: quotes)
+        kept.comments = comments
+        let onItsWay = Drafts.shared.onItsWay(kept, to: self.id)
         let previous = sending
         sending = Task {
+            defer { Drafts.shared.sent(onItsWay) }
             await previous?.value
             do {
                 // Converting a photo takes a moment; keep it off the main thread. A machine's engine
