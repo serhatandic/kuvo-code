@@ -317,12 +317,13 @@ final class Workspace {
         if Moves.isFrozen(id) { throw Moves.Failure.moving }
         guard let api = api(forFolder: directory) else { return }
         try await api.moveSession(id, to: directory)
-        let extra = settings[directory]?.folders ?? []
+        // As its engine knows them: a machine's folders are plain paths there.
+        let extra = (settings[directory]?.folders ?? []).map(api.enginePath)
         try? await api.setPermissions(session: id, rules: ProjectFolders.permissions(session.permissions ?? [], folders: extra))
         if extra.isEmpty {
             try? await api.removeInstruction(session: id, key: ProjectFolders.instructionKey)
         } else {
-            try? await api.setInstruction(session: id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: directory, folders: extra))
+            try? await api.setInstruction(session: id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: api.enginePath(directory), folders: extra))
         }
         // Its open conversation stays as it is, now in its new place.
         await reload(id)
@@ -1389,9 +1390,10 @@ final class Workspace {
                                                    permissions: current.permissions, messages: messages, waiting: carried)
         moving = false
         for item in waiting { try? await engine.cancelInbox(session: id, item: item.id) }
-        let extra = extraFolders(session.location.directory)
+        // As its bridge knows them: a machine's folders are plain paths there.
+        let extra = extraFolders(session.location.directory).map(bridge.enginePath)
         if !extra.isEmpty {
-            try? await bridge.setInstruction(session: moved.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: session.location.directory, folders: extra))
+            try? await bridge.setInstruction(session: moved.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: bridge.enginePath(session.location.directory), folders: extra))
         }
         if let tree = worktrees[session.location.directory] {
             try? await bridge.setInstruction(session: moved.id, key: Self.worktreeInstructionKey, text: Self.instructions(for: tree))

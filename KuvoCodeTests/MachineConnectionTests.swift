@@ -237,6 +237,30 @@ import Testing
         #expect(link.setupFailed[id] == nil)
     }
 
+    /// A chat on a machine moved into one of its projects that has other folders works in them
+    /// there: its rules and what its agent is told name the machine's own paths, never this Mac's
+    /// names for them (`ssh://…`), which nothing on the machine matches.
+    @Test func aChatMovedIntoAMachinesProjectWorksInItsOtherFoldersThere() async throws {
+        defer { done() }
+        let id = Self.name()
+        let prefix = RemoteFolder.prefix(for: id)
+        machine.list([StubEngine.session("ses_mchat", title: "Question", directory: "/home/tests/.kuvo-code/chats")])
+        await app.connect(add(id, at: machine)).value
+        try await until { app.workspace.session("ses_mchat") != nil }
+        app.workspace.saveProject(prefix + "/home/tests/app", settings: Workspace.ProjectSettings(folders: [prefix + "/home/tests/shared"]))
+        machine.on("GET", "/api/session/ses_mchat", json: ["data": StubEngine.session("ses_mchat", title: "Question", directory: "/home/tests/app")])
+        machine.on("POST", "/api/session/ses_mchat/move", json: [:])
+        machine.on("PATCH", "/api/session/ses_mchat", json: ["data": [:]])
+        machine.on("PUT", "/api/experimental/session/ses_mchat/instructions/entries/*", json: [:])
+        try await app.workspace.move("ses_mchat", toProject: prefix + "/home/tests/app")
+
+        let rules = try #require(machine.requests("PATCH", "/api/session/ses_mchat").last?.body["permissions"] as? [[String: Any]])
+        #expect(rules.contains { $0["action"] as? String == "external_directory" && $0["resource"] as? String == "/home/tests/shared/*" })
+        #expect(!rules.contains { ($0["resource"] as? String)?.contains("ssh://") == true })
+        let told = try #require(machine.requests("PUT", "/api/experimental/session/ses_mchat/instructions/entries/\(ProjectFolders.instructionKey)").last?.body["value"] as? String)
+        #expect(told.contains("/home/tests/shared") && !told.contains("ssh://"))
+    }
+
     /// `id` added, its engine `stub` once it connects.
     private func add(_ id: String, at stub: StubEngine) -> MachineEngine {
         reachable.apis[id] = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: stub.url)!, password: "test"), folderPrefix: RemoteFolder.prefix(for: id))
