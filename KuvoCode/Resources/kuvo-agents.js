@@ -4032,7 +4032,7 @@ async function handoffRoutes(handoffs, method, parts, body) {
 }
 
 // Packages/Box/src/agents/reviews.ts
-import { existsSync as existsSync5, lstatSync, mkdirSync as mkdirSync6, readdirSync as readdirSync6, readFileSync as readFileSync11, realpathSync, renameSync as renameSync6, writeFileSync as writeFileSync8 } from "fs";
+import { lstatSync, mkdirSync as mkdirSync6, readdirSync as readdirSync6, readFileSync as readFileSync11, realpathSync, renameSync as renameSync6, writeFileSync as writeFileSync8 } from "fs";
 import { lstat, readFile } from "fs/promises";
 import { dirname as dirname3, join as join11, sep as sep8 } from "path";
 function readsFiles(scope) {
@@ -4102,7 +4102,7 @@ class Reviews {
           Object.assign(review, { state: "failed", error: "The computer stopped before the review was done. Ask for it again." });
           for (const part of review.parts ?? []) {
             if (part.state === "reading" && part.session)
-              this.places.engine.api.request("POST", at(part.session) + "/interrupt").catch(() => {});
+              this.leftReading.push(part.session);
             if (part.state === "reading" || part.state === "waiting")
               Object.assign(part, { state: "failed", now: undefined });
           }
@@ -4269,16 +4269,68 @@ class Reviews {
     return review;
   }
   async partsFolder() {
-    const folder = join11(dirname3(this.file), "reviewers");
-    if (existsSync5(join11(folder, ".git")))
-      return folder;
-    mkdirSync6(folder, { recursive: true });
-    const git = (...args) => run("git", ["-C", folder, "-c", "user.name=Kuvo Code", "-c", "user.email=reviewers@kuvo.run", ...args], { timeout: 30000 }).catch(() => {
+    const folder = this.reviewersFolder;
+    const git = (...args) => run("git", ["-C", folder, "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
+      timeout: 30000,
+      env: { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "reviewers@kuvo.run", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "reviewers@kuvo.run" }
+    }).catch(() => {
       return;
     });
+    const made = async () => {
+      const ran = await git("rev-parse", "--show-toplevel", "--verify", "-q", "HEAD");
+      if (ran?.code !== 0)
+        return false;
+      try {
+        return realpathSync(ran.stdout.split(`
+`)[0].trim()) === realpathSync(folder);
+      } catch {
+        return false;
+      }
+    };
+    if (await made())
+      return folder;
+    try {
+      mkdirSync6(folder, { recursive: true });
+    } catch {}
     await git("init", "-q");
     await git("commit", "-q", "--allow-empty", "-m", "Kuvo Code's reviewers read projects from here");
+    if (!await made())
+      throw new Error("Kuvo Code couldn't set up the folder its reviewers read from (it needs git), so it can't make sure they only read.");
     return folder;
+  }
+  get reviewersFolder() {
+    return join11(dirname3(this.file), "reviewers");
+  }
+  whenUp(task, tries = 60) {
+    task().catch(() => {
+      if (this.stopped || tries <= 1)
+        return;
+      const timer = setTimeout(() => this.whenUp(task, tries - 1), 3000);
+      timer.unref?.();
+    });
+  }
+  leftReading = [];
+  resume() {
+    const reading2 = this.leftReading.splice(0);
+    this.whenUp(async () => {
+      for (const session of reading2)
+        await this.places.engine.api.request("POST", at(session) + "/interrupt").catch(() => {});
+      await this.sweepParts();
+    });
+  }
+  async sweepParts() {
+    const api = this.places.engine.api;
+    const known = new Set([...this.kept.values()].flatMap((review) => (review.parts ?? []).map((part) => part.session)).filter(Boolean));
+    let query = `limit=100&order=desc&directory=${encodeURIComponent(this.reviewersFolder)}`;
+    for (let pages2 = 0;pages2 < 20 && query; pages2++) {
+      const listed = await api.request("GET", `/api/session?${query}`);
+      const data = Array.isArray(listed?.data) ? listed.data : [];
+      for (const session of data) {
+        if (session?.metadata?.kuvo?.reviewPart && typeof session.id === "string" && !known.has(session.id))
+          await api.request("DELETE", at(session.id)).catch(() => {});
+      }
+      query = data.length && listed?.cursor?.next ? `limit=100&cursor=${encodeURIComponent(listed.cursor.next)}` : undefined;
+    }
   }
   forgetParts(review) {
     for (const part of review.parts ?? []) {
@@ -4324,10 +4376,18 @@ class Reviews {
         clearTimeout(timer);
         resolve2(how);
       };
+      let stopping = false;
+      const stopIfStopped = () => {
+        if (going() || stopping)
+          return;
+        stopping = true;
+        api.request("POST", at(id) + "/interrupt").catch(() => {});
+      };
       unlisten = listen(info.id, {
         event: (type, data) => {
           if (data?.sessionID !== id)
             return;
+          stopIfStopped();
           if (type === "session.execution.succeeded")
             return end("succeeded");
           if (type === "session.execution.failed" || type === "session.execution.interrupted")
@@ -4354,7 +4414,7 @@ class Reviews {
       const told = `${prompt}
 
 The project is in ${info.directory}: read more of its files there if you need to. You can read; you can't change anything.`;
-      api.request("POST", at(id) + "/prompt", { text: told }).catch((error) => end(`failed: ${error?.message ?? error}`));
+      api.request("POST", at(id) + "/prompt", { text: told }).then(stopIfStopped, (error) => end(`failed: ${error?.message ?? error}`));
     });
     unlisten();
     if (outcome === "timed out")
@@ -4422,6 +4482,11 @@ The project is in ${info.directory}: read more of its files there if you need to
             if (!going())
               return;
             Object.assign(shown2, { state: error instanceof PartStopped ? "stopped" : "failed", now: undefined });
+            if (!many && error instanceof PartStopped) {
+              Object.assign(review, { state: "done", summary: "Stopped before it read anything.", ended: this.now() });
+              this.changed(review);
+              return;
+            }
             if (!many)
               throw error;
             failed += 1;
@@ -20121,6 +20186,7 @@ self = server2(`http://127.0.0.1:${server3.port}`, password);
 link2.whenReady().then(() => {
   goals.start();
   sideQuestions.start();
+  reviews.resume();
   try {
     groups?.runner.start();
     groups?.peers.server.start();
@@ -20171,4 +20237,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents d6188116a6c7e2a9eab81cff86c2f9b1850af2398e159c5e62b8cd626028bf77
+// Built from Packages/Box/src/agents 2428a2f2ea2201e7f895bfe8c75f3f93a8ec2eed94770f11edd74d95496895fd

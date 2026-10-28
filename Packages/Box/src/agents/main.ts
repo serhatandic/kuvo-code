@@ -275,6 +275,7 @@ self = requester(`http://127.0.0.1:${server.port}`, password)
 void link.whenReady().then(() => {
   goals.start()
   sideQuestions.start()
+  reviews.resume()
   try {
     groups?.runner.start()
     groups?.peers.server.start()

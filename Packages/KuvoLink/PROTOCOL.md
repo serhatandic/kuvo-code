@@ -1549,12 +1549,16 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
     `kuvo.reviewPart: {review, part, of}` and kept out of lists like the box's other runs, its
     agent `plan` with rules that let it read the project and nothing more. Its folder is the box's
     own (`reviewers` beside its reviews, a git repository with one empty commit), reading the
-    project from outside it, so no "Always allow" saved for the project reaches it; `kuvo.messages`
-    says it takes none. A client opens it as it
+    project from outside it, so no "Always allow" saved for the project reaches it (a box that
+    can't make that folder so, without git, fails the part, saying why, rather than read it
+    elsewhere); `kuvo.messages` says it takes none. A client opens it as it
     opens a subagent's, to watch it read and to look at it after; it goes when the review is put
     away or another takes its place. `now` is what it's doing as it reads ("Reading src/a.ts",
     "Looking for “token”", "Thinking", "Writing what it found"), told as it changes (not kept),
     gone once it's done. Stop stops the part reading (`stopped`); those after it stay `waiting`.
+    A review's only part stopped from its own session ends the review as its Stop does. Parts'
+    sessions no kept review records (made as the box stopped) are deleted once the box's engine
+    is there again, and one left reading is stopped.
     With the coding agents a part has no `session`. A box from before `parts` leaves it out.
   - `POST …/kuvo/reviews/<session>/measure` with `{"scope"?}` → `{data: {files, parts, leftOut,
     commits?, found?}}`: how much a review of it would read, to show before asking for a big one

@@ -801,6 +801,110 @@ describe("a review with fresh eyes", () => {
     reviews.stopAll()
   })
 
+  test("stopped while a part's prompt is on its way, its turn is stopped once it begins", async () => {
+    const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+    reviews.onEnded = beat
+    engine.holdingPrompts = true
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    await until(() => !!reviews.get("ses_work")?.parts?.[0]?.session && engine.prompts(reviews.get("ses_work")!.parts![0].session!).length === 1)
+    const reading = reviews.get("ses_work")!.parts![0].session!
+    // Stopped before the engine began its turn: that interrupt finds nothing to stop…
+    reviews.stop("ses_work")
+    await until(() => engine.interrupted.includes(reading))
+    // …so it's stopped again once the turn has begun.
+    engine.beginPrompts()
+    await until(() => engine.interrupted.filter((each) => each === reading).length === 2)
+    reviews.stopAll()
+  })
+
+  test("the only part stopped from its own session leaves the review stopped, not failed", async () => {
+    const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+    reviews.onEnded = beat
+    engine.holdingChecks = true
+    engine.interruptEndsParts = true
+    const following = link.listen("ses_work", { event: () => {}, reconnected: () => {} })
+    await until(() => engine.listening)
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    await until(() => engine.checks.length === 1)
+    // Its Stop, in its own view.
+    await link.request("POST", `/api/session/${reviews.get("ses_work")!.parts![0].session}/interrupt`)
+    await until(() => reviews.get("ses_work")?.state !== "reviewing")
+    const review = reviews.get("ses_work")!
+    expect({ state: review.state, summary: review.summary, error: review.error }).toEqual({ state: "done", summary: "Stopped before it read anything.", error: undefined })
+    expect(review.parts!.map((part) => part.state)).toEqual(["stopped"])
+    engine.answerChecks()
+    following()
+    reviews.stopAll()
+  })
+
+  test("parts read from a project of their own though your git signs commits, and a folder left without its commit is set up again", async () => {
+    // Your own git: every commit signed (by a program that can't sign here), and a hook that fails.
+    const config = join(root, "gitconfig")
+    mkdirSync(join(root, "hooks"))
+    writeFileSync(join(root, "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
+    writeFileSync(config, `[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = /usr/bin/false\n[core]\n\thooksPath = ${join(root, "hooks")}\n`)
+    const before = process.env.GIT_CONFIG_GLOBAL
+    process.env.GIT_CONFIG_GLOBAL = config
+    try {
+      // Left from before: a repository without its commit.
+      mkdirSync(join(root, "reviewers"))
+      await run("git", ["-C", join(root, "reviewers"), "init", "-q"])
+      const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
+      const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+      reviews.onEnded = beat
+      await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+      await until(() => reviews.get("ses_work")?.state !== "reviewing")
+      expect(reviews.get("ses_work")!.state).toBe("done")
+      expect(engine.made[0].location.directory).toBe(join(root, "reviewers"))
+      expect((await run("git", ["-C", join(root, "reviewers"), "log", "--format=%s"])).stdout.trim()).toBe("Kuvo Code's reviewers read projects from here")
+      reviews.stopAll()
+    } finally {
+      process.env.GIT_CONFIG_GLOBAL = before
+    }
+  })
+
+  test("a part isn't read when its project of its own can't be set up, and the review says why", async () => {
+    // Where the folder would be, a file.
+    writeFileSync(join(root, "reviewers"), "")
+    const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+    reviews.onEnded = beat
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    await until(() => reviews.get("ses_work")?.state !== "reviewing")
+    expect(reviews.get("ses_work")!.state).toBe("failed")
+    expect(reviews.get("ses_work")!.error).toContain("couldn't set up the folder its reviewers read from")
+    expect(engine.made).toEqual([])
+    expect(engine.checks).toEqual([])
+    reviews.stopAll()
+  })
+
+  test("once the engine's there after the box starts again, a part left reading is stopped and parts' sessions no review records are deleted", async () => {
+    const folder = join(root, "reviewers")
+    const part = (n: number) => ({ title: "Review · part", parentID: "ses_work", location: { directory: folder }, metadata: { kuvo: { reviewPart: { review: "rev_1", part: n, of: 2 } } } })
+    const recorded = (await link.request("POST", "/api/session", part(1))).data.id
+    const orphan = (await link.request("POST", "/api/session", part(2))).data.id
+    const elsewhere = (await link.request("POST", "/api/session", { ...part(2), location: { directory: "/tmp/project" } })).data.id
+    const plain = (await link.request("POST", "/api/session", { title: "Yours", location: { directory: folder } })).data.id
+    writeFileSync(join(root, "reviews.json"), JSON.stringify([{ id: "rev_1", session: "ses_work", state: "reviewing", findings: [], started: 1, parts: [
+      { n: 1, of: 2, files: ["a.ts"], fileCount: 1, state: "reading", found: 0, session: recorded },
+      { n: 2, of: 2, files: ["b.ts"], fileCount: 1, state: "waiting", found: 0 },
+    ] }]))
+    // The box starts before it knows where the engine is.
+    const late = new EngineLink()
+    const reviews = new Reviews(join(root, "reviews.json"), { ...places(), engine: { api: late, listen } }, async () => ({ parts: [], leftOut: 0 }))
+    const starting = late.whenReady().then(() => reviews.resume())
+    expect(engine.interrupted).toEqual([])
+    late.configure(engine.url, "x")
+    await starting
+    await until(() => engine.interrupted.includes(recorded) && engine.deleted.includes(orphan))
+    expect(engine.deleted).toEqual([orphan])
+    expect([recorded, elsewhere, plain].every((id) => engine.conversations.has(id))).toBe(true)
+    late.configure(undefined, undefined)
+    reviews.stopAll()
+  })
+
   test("out of a repository, What to review offers only the folders", async () => {
     const folder = join(root, "loose")
     mkdirSync(join(folder, "lib", "deep"), { recursive: true })

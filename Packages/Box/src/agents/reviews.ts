@@ -189,8 +189,8 @@ export class Reviews {
         if (review.state === "reviewing") {
           Object.assign(review, { state: "failed", error: "The computer stopped before the review was done. Ask for it again." })
           for (const part of review.parts ?? []) {
-            // The part reading then still reads on the engine: stopped, as nothing waits for it now.
-            if (part.state === "reading" && part.session) void this.places.engine.api.request("POST", at(part.session) + "/interrupt").catch(() => {})
+            // The part reading then still reads on the engine: stopped (`resume`), as nothing waits for it now.
+            if (part.state === "reading" && part.session) this.leftReading.push(part.session)
             if (part.state === "reading" || part.state === "waiting") Object.assign(part, { state: "failed", now: undefined })
           }
         }
@@ -371,15 +371,76 @@ export class Reviews {
   }
 
   /** Where parts' sessions are: a folder of the box's own beside its reviews, a git repository with
-   * one empty commit, so it's a project of its own, which no "Always allow" was ever saved for. */
+   * one empty commit, so it's a project of its own, which no "Always allow" was ever saved for.
+   * One that can't be made so isn't used: without its commit the engine would file it with every
+   * folder outside a repository, where an "Always allow" may have been saved. */
   private async partsFolder(): Promise<string> {
-    const folder = join(dirname(this.file), "reviewers")
-    if (existsSync(join(folder, ".git"))) return folder
-    mkdirSync(folder, { recursive: true })
-    const git = (...args: string[]) => run("git", ["-C", folder, "-c", "user.name=Kuvo Code", "-c", "user.email=reviewers@kuvo.run", ...args], { timeout: 30_000 }).catch(() => undefined)
+    const folder = this.reviewersFolder
+    const git = (...args: string[]) =>
+      run("git", ["-C", folder, "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
+        timeout: 30_000,
+        env: { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "reviewers@kuvo.run", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "reviewers@kuvo.run" },
+      }).catch(() => undefined)
+    // A repository of its own with its commit (not one it happens to sit in).
+    const made = async () => {
+      const ran = await git("rev-parse", "--show-toplevel", "--verify", "-q", "HEAD")
+      if (ran?.code !== 0) return false
+      try {
+        return realpathSync(ran.stdout.split("\n")[0].trim()) === realpathSync(folder)
+      } catch {
+        return false
+      }
+    }
+    if (await made()) return folder
+    try {
+      mkdirSync(folder, { recursive: true })
+    } catch {}
     await git("init", "-q")
     await git("commit", "-q", "--allow-empty", "-m", "Kuvo Code's reviewers read projects from here")
+    if (!(await made())) throw new Error("Kuvo Code couldn't set up the folder its reviewers read from (it needs git), so it can't make sure they only read.")
     return folder
+  }
+
+  private get reviewersFolder() {
+    return join(dirname(this.file), "reviewers")
+  }
+
+  /** Runs `task`, trying again a while if the engine doesn't answer yet (it may still be starting). */
+  private whenUp(task: () => Promise<void>, tries = 60) {
+    task().catch(() => {
+      if (this.stopped || tries <= 1) return
+      const timer = setTimeout(() => this.whenUp(task, tries - 1), 3_000)
+      timer.unref?.()
+    })
+  }
+
+  /** Parts' sessions that were reading when the box stopped. */
+  private leftReading: string[] = []
+
+  /** Once the engine's link is up: parts left reading when the box stopped are stopped, and parts'
+   * sessions no review here records (made as the box stopped) are deleted. */
+  resume() {
+    const reading = this.leftReading.splice(0)
+    this.whenUp(async () => {
+      for (const session of reading) await this.places.engine.api.request("POST", at(session) + "/interrupt").catch(() => {})
+      await this.sweepParts()
+    })
+  }
+
+  /** Deletes parts' sessions in the reviewers' folder that no review here records: made as the box
+   * stopped, before their review heard of them. */
+  private async sweepParts() {
+    const api = this.places.engine.api
+    const known = new Set([...this.kept.values()].flatMap((review) => (review.parts ?? []).map((part) => part.session)).filter(Boolean))
+    let query: string | undefined = `limit=100&order=desc&directory=${encodeURIComponent(this.reviewersFolder)}`
+    for (let pages = 0; pages < 20 && query; pages++) {
+      const listed = await api.request<{ data?: any[]; cursor?: { next?: string } }>("GET", `/api/session?${query}`)
+      const data: any[] = Array.isArray(listed?.data) ? listed.data : []
+      for (const session of data) {
+        if (session?.metadata?.kuvo?.reviewPart && typeof session.id === "string" && !known.has(session.id)) await api.request("DELETE", at(session.id)).catch(() => {})
+      }
+      query = data.length && listed?.cursor?.next ? `limit=100&cursor=${encodeURIComponent(listed.cursor.next)}` : undefined
+    }
   }
 
   /** A review put away or replaced: the sessions its parts were read in go with it. */
@@ -432,9 +493,17 @@ export class Reviews {
       }
       // A session under the conversation is heard through the conversation's own feed (the engine's
       // link tells a child's events to its parent's listeners): its own events, picked out.
+      // Stopped before its turn began (its prompt on its way): stopped once it starts.
+      let stopping = false
+      const stopIfStopped = () => {
+        if (going() || stopping) return
+        stopping = true
+        void api.request("POST", at(id) + "/interrupt").catch(() => {})
+      }
       unlisten = listen(info.id, {
         event: (type, data) => {
           if (data?.sessionID !== id) return
+          stopIfStopped()
           if (type === "session.execution.succeeded") return end("succeeded")
           if (type === "session.execution.failed" || type === "session.execution.interrupted") return end(type.split(".").at(-1)!)
           if (type === "session.tool.input.started" && data.id) tools.set(data.id, String(data.name ?? ""))
@@ -454,7 +523,7 @@ export class Reviews {
         },
       })
       const told = `${prompt}\n\nThe project is in ${info.directory}: read more of its files there if you need to. You can read; you can't change anything.`
-      api.request("POST", at(id) + "/prompt", { text: told }).catch((error: any) => end(`failed: ${error?.message ?? error}`))
+      api.request("POST", at(id) + "/prompt", { text: told }).then(stopIfStopped, (error: any) => end(`failed: ${error?.message ?? error}`))
     })
     unlisten()
     if (outcome === "timed out") throw new Error("The part took too long to read.")
@@ -525,6 +594,12 @@ export class Reviews {
             if (!going()) return
             // Stopped from its own session (its Stop): stopped, not failed; the others go on.
             Object.assign(shown, { state: error instanceof PartStopped ? "stopped" : "failed", now: undefined })
+            // The only part stopped: the review stopped, as its own Stop has it.
+            if (!many && error instanceof PartStopped) {
+              Object.assign(review, { state: "done", summary: "Stopped before it read anything.", ended: this.now() })
+              this.changed(review)
+              return
+            }
             if (!many) throw error
             failed += 1
             lastError = error

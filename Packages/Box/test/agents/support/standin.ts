@@ -157,6 +157,12 @@ export class StandIn {
         if (this.freeModel) return Response.json({ message: "Free usage limit reached." }, { status: 503 })
         return await this.check("fresh", body.prompt, body.model)
       }
+      // Sessions made through it, a page (no cursor): those in `directory` when it's asked.
+      if (url.pathname === "/api/session" && request.method === "GET") {
+        const directory = url.searchParams.get("directory")
+        const listed = this.made.filter((each) => this.conversations.has(each.id) && (!directory || each.location?.directory === directory))
+        return Response.json({ data: listed.map((each) => ({ id: each.id, ...(each.parentID ? { parentID: each.parentID } : {}), ...(each.metadata ? { metadata: each.metadata } : {}), location: each.location })) })
+      }
       if (url.pathname === "/api/session" && request.method === "POST") {
         const id = `ses_made${this.next++}`
         this.made.push({ id, ...body })
@@ -214,6 +220,11 @@ export class StandIn {
         // A review's part: its reviewer answers as a one-off answer would, in a turn of its own.
         const made = this.made.find((each) => each.id === session)
         if (made?.metadata?.kuvo?.reviewPart) {
+          // Taken, not yet begun (its answer on its way back).
+          if (this.holdingPrompts) {
+            this.beat()
+            await new Promise<void>((resolve) => this.heldPrompts.push(resolve))
+          }
           this.add(session, { type: "user", text: body.text })
           void this.readPart(session, body.text, made.model)
           return Response.json({ data: {} })
@@ -226,6 +237,12 @@ export class StandIn {
       }
       if (what === "interrupt") {
         this.interrupted.push(session)
+        // A part reading ends where it is, as the engine stops a turn.
+        if (this.interruptEndsParts && this.busy.has(session) && this.made.find((each) => each.id === session)?.metadata?.kuvo?.reviewPart) {
+          this.busy.delete(session)
+          this.add(session, { type: "idle", outcome: "interrupted" })
+          this.emit("session.execution.interrupted", { sessionID: session })
+        }
         return Response.json({ data: {} })
       }
       return Response.json({ data: {} })
@@ -244,7 +261,7 @@ export class StandIn {
     this.emit("session.execution.started", { sessionID: session })
     this.beat()
     if (this.holdingChecks) await new Promise<void>((resolve) => this.heldChecks.push(resolve))
-    if (!this.conversations.has(session)) return
+    if (!this.conversations.has(session) || !this.busy.has(session)) return
     const failing = this.failingParts > 0
     if (failing) this.failingParts -= 1
     if (!failing) this.add(session, { type: "assistant", content: [{ type: "text", text: this.answers.shift() ?? `{"summary": "Fine.", "findings": []}` }] })
@@ -253,6 +270,15 @@ export class StandIn {
     if (!this.silentParts) this.emit(failing ? "session.execution.failed" : "session.execution.succeeded", { sessionID: session })
     this.beat()
   }
+
+  /** A part's prompt is taken but its turn doesn't begin until `beginPrompts`. */
+  holdingPrompts = false
+  private heldPrompts: (() => void)[] = []
+  beginPrompts() {
+    for (const begin of this.heldPrompts.splice(0)) begin()
+  }
+  /** An interrupt ends a part's turn as interrupted (the engine's way); otherwise it's only counted. */
+  interruptEndsParts = false
 
   /** Parts whose reading fails, next. */
   failingParts = 0
