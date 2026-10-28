@@ -19,6 +19,18 @@ import Testing
         return file.path
     }
 
+    /// A profile that says something as the shell starts (a greeting, a system summary) doesn't
+    /// take the first of its settings with it.
+    @Test func whatYourProfileSaysIsntTakenForASetting() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appending(path: "chatty")
+        try "#!/bin/sh\nprintf 'Welcome to your Mac\\n'\nexec /usr/bin/env -i AAA_FIRST=one PATH=/usr/bin:/bin /bin/sh -c \"$2\"\n".write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        let environment = await ShellEnvironment.run(shell: file.path, flags: "-lc", timeout: .seconds(30))
+        #expect(environment?["AAA_FIRST"] == "one")
+        #expect(environment?.keys.contains { $0.contains("Welcome") } == false)
+    }
+
     @Test func whatYourShellSetsIsRead() async throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let environment = await ShellEnvironment.run(shell: try shell("export KUVO_FROM_PROFILE=yes"), flags: "-lc", timeout: .seconds(30))
