@@ -34,12 +34,18 @@ export interface StartGiven {
 }
 
 /** The conversation starting it: its root (a subagent's, an engine run's), where it runs, and its
- * name as the other agents know it. */
+ * name as the other agents know it; or an agent outside any conversation this box has
+ * (`OUTSIDE`). */
 export interface Starter {
   session: string;
-  place: SessionPlace;
+  place: SessionPlace | null;
   name: string;
 }
+
+/** An agent's call from no conversation this box has: counted together, its task from "another
+ * agent" that can't be answered, and asking first, as nothing says it may do more. */
+export const OUTSIDE: Starter = { session: "unknown", place: null, name: "another agent" };
+const ASKS_FIRST: KitRule[] = [{ action: "shell", resource: "*", effect: "ask" }];
 
 /** A session started: its address, title, folder and project (null for a chat), whether it shows
  * beside the conversation that started it, and with `wait`, its first answer (null for none yet). */
@@ -121,8 +127,8 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const no = (status: StartRefusal["status"], message: string, session?: string) => ({ refused: { status, message, ...(session ? { session } : {}) } });
   const task = typeof given.task === "string" ? given.task.trim() : "";
   if (!task) return no(400, "Say what it's to do (task).");
-  if (by?.place.data.metadata?.kuvo?.seat) return { refused: seatRefusal() };
-  const parent = by?.place.data ?? null;
+  if (by?.place?.data.metadata?.kuvo?.seat) return { refused: seatRefusal() };
+  const parent = by ? by.place?.data ?? { permissions: ASKS_FIRST } : null;
   const parentFolder = parent?.location?.directory ?? parent?.directory;
   let folder = parentFolder ? (isBotFolder(parentFolder) ? CHATS : parentFolder) : null;
   if (typeof given.folder === "string" && given.folder.trim()) {
@@ -135,14 +141,14 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   }
   if (!folder) return no(400, "Give the folder it works in (folder), as a full path.");
   // A few at a time: an agent shouldn't fill the window with sessions unattended.
-  const key = by?.session ?? null;
+  const key = by ? (by.place ? by.session : "outside") : null;
   const counted = key ? allowed("sessions", key) : null;
   if (key && counted === null) return no(429, "You've started several sessions in the last few minutes. Write to those (send_message), or ask the user before starting more.");
   const giveBack = () => { if (key && counted !== null) takeBack("sessions", key, counted); };
   // Where the conversation that starts it runs (the engine, or the coding agents' bridge).
   let target: Target;
   try {
-    target = by?.place.target ?? place.readEngine();
+    target = by?.place?.target ?? place.readEngine();
   } catch {
     giveBack();
     return no(503, `The engine on ${HERE} isn't running.`);
@@ -165,7 +171,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/kuvo.project-folders`, { value: projectsNote(folder, project.folders) }).catch(() => {});
   }
   await tellWorktree(target, session).catch(() => {});
-  if (by) await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo: { startedBy: by.session, beside } } }).catch(() => {});
+  if (by?.place) await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo: { startedBy: by.session, beside } } }).catch(() => {});
   const waits = given.wait === true;
   const id = messageID();
   try {

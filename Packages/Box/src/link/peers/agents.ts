@@ -95,9 +95,11 @@ export function ownAsLast(ownID: string | null): ListedAgent[] {
 // Writes `run/agents.json`: this box's agents and its peers'. Its own as last written while it
 // can't say yet (its engine starting), rather than none.
 export function writeAgents(link: LinkState | null = readLink()): void {
+  // COMPAT(beta.1 mac-agents): a Mac's list over SSH, no longer read. Goes 3 months after 0.8.0.
+  fs.rmSync(MAC_AGENTS_FILE, { force: true });
   const ownID = ownMachine ?? link?.id ?? null;
   const own = ownAsLast(ownID);
-  const composed = composeAgents(own, ownID, peersOf(link), readPeerAgents(undefined, undefined, link), movedOf(link));
+  const composed = composeAgents(own, ownID, peersOf(link), readPeerAgents(), movedOf(link));
   try {
     const text = JSON.stringify(composed);
     if (textOf(AGENTS_FILE) !== text) writePrivate(AGENTS_FILE, text);

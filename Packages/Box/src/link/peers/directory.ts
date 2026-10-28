@@ -9,17 +9,13 @@ import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
 import { locked, writePrivate } from "../files";
 import { RUN } from "../home";
-import { readLink } from "../state";
-import { macsOf } from "./known";
 import type { AgentsFile, ListedAgent, ToldAgents } from "../../shared/records";
 import type { EngineSession } from "../engine/sessions";
 import { type BotLook, LOOKS as LOOK_WORDS } from "../../shared/routes/bots";
-import type { LinkState } from "../state";
 import type { Peer } from "./known";
 
 export const PEER_AGENTS_FILE = path.join(RUN, "peer-agents.json");
-// What a Mac connected over SSH says its agents are (as it mails them), for when the relay can't
-// be reached.
+// COMPAT(beta.1 mac-agents): what a Mac connected over SSH said its agents were, for when the relay couldn't be reached; no Mac writes it now, and it's removed. Goes 3 months after 0.8.0.
 export const MAC_AGENTS_FILE = path.join(RUN, "mac-agents.json");
 export const AGENTS_FILE = path.join(RUN, "agents.json");
 
@@ -75,17 +71,10 @@ export function takeAgents(sender: { key: string; kind: "mac" | "machine"; id?: 
   });
 }
 
-// What each peer told, by its key; a Mac's as it last said it, by mail or over SSH, whichever's newer.
-export function readPeerAgents(file = PEER_AGENTS_FILE, macFile = MAC_AGENTS_FILE, link: LinkState | null = null): Record<string, ToldAgents> {
+// What each peer told, by its key, as it last said it by mail.
+export function readPeerAgents(file = PEER_AGENTS_FILE): Record<string, ToldAgents> {
   let all: Record<string, ToldAgents> = {};
   try { all = JSON.parse(fs.readFileSync(file, "utf8")) ?? {}; } catch {}
-  try {
-    const given = JSON.parse(fs.readFileSync(macFile, "utf8"));
-    const macs = macsOf(link ?? readLink() ?? {});
-    if (macs.includes(given?.key) && typeof given.at === "number" && Array.isArray(given.list) && given.at > (all[given.key]?.at ?? 0)) {
-      all[given.key] = { at: given.at, kind: "mac", list: given.list.filter(fitsAgent).slice(0, MOST_AGENTS).map(keptAgent) };
-    }
-  } catch {}
   return all;
 }
 

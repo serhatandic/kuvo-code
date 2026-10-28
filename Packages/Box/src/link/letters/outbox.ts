@@ -88,6 +88,8 @@ export interface AnswerReply {
   to?: string | null;
   from?: string;
   name?: string;
+  /** A conversation read: only for the tool waiting, never a message. */
+  read?: boolean;
 }
 
 /** What a tool waiting for a letter's answer reads (`run/replies/<id>.json`, or on this Mac, its
@@ -125,6 +127,17 @@ function reply(id: string, value: LetterReply): void {
   try {
     fs.mkdirSync(REPLIES, { recursive: true, mode: 0o700 });
     writePrivate(path.join(REPLIES, `${id}.json`), JSON.stringify(value));
+  } catch {}
+}
+
+/** A letter whose tool stopped waiting: it goes on without waiting (its answer comes as a message),
+ * or, one that only asked to read a conversation, not at all. */
+export function givenUp(id: string): void {
+  const file = path.join(SENDING, `${id}.json`);
+  try {
+    const letter = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (isObject(letter?.read)) fs.rmSync(file, { force: true });
+    else writePrivate(file, JSON.stringify({ ...letter, wait: false }));
   } catch {}
 }
 
@@ -197,8 +210,13 @@ export function answered(sender: { key: string; name?: string }, { answers: id, 
   // Its sender as that box named it, when that box alone lists it.
   const told = readPeerAgents();
   const agent = peerOf(from, peersOf(readLink()), told)?.key === sender.key ? (told[sender.key]?.list ?? []).find(each => each.session === from) : null;
+  // A conversation read: for the tool alone.
+  if (letter.read) {
+    reply(id, { text: cutText(text, READ_BY_MAIL), read: true });
+    return true;
+  }
   // For the conversation that asked (as this box's letter has it, not as the answer says).
-  reply(id, { text: cutText(text, letter.read ? READ_BY_MAIL : ANSWER_TEXT), to: letter.from, from: agent ? from : "unknown", name: agent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}` });
+  reply(id, { text: cutText(text, ANSWER_TEXT), to: letter.from, from: agent ? from : "unknown", name: agent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}` });
   return true;
 }
 
@@ -214,10 +232,16 @@ export async function deliverLeftAnswers(now = Date.now(), targets: Target[] = p
     const file = path.join(REPLIES, name);
     let answer: Partial<AnswerReply> | null;
     try { answer = JSON.parse(fs.readFileSync(file, "utf8")); } catch { continue; }
-    if (typeof answer?.text !== "string" || typeof answer.to !== "string") continue;
     let alive = 0;
     try { alive = fs.statSync(path.join(REPLIES, `${id}.alive`)).mtimeMs; } catch {}
     if (!fs.existsSync(path.join(REPLIES, `${id}.gaveup`)) && now - alive <= 10_000) continue;
+    // A conversation read that came as its tool went: it just goes.
+    if (answer?.read === true) {
+      fs.rmSync(file, { force: true });
+      fs.rmSync(path.join(REPLIES, `${id}.gaveup`), { force: true });
+      continue;
+    }
+    if (typeof answer?.text !== "string" || typeof answer.to !== "string") continue;
     const taken = `${file}.delivering`;
     try { fs.renameSync(file, taken); } catch { continue; }
     try {
@@ -256,7 +280,7 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
   const telling: Promise<void>[] = [];
   if (!link?.key) return Promise.all(telling);
   const peers = peersOf(link);
-  const told = readPeerAgents(undefined, undefined, link);
+  const told = readPeerAgents();
   const moved = movedOf(link);
   // COMPAT(beta.1 outbox): letters an older Kuvo Code left in `run/outbox` for a Mac to collect over SSH (its tools', and those its link handed over without the relay), taken on here. Goes 3 months after 0.8.0.
   // No Mac collects them any more: they go as this link's own. (Not one a Mac took to deliver,
@@ -273,8 +297,7 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
     const id = name.slice(0, -7);
     fs.rmSync(path.join(REPLIES, name), { force: true });
     fs.rmSync(path.join(REPLIES, `${id}.wait`), { force: true });
-    const file = path.join(SENDING, `${id}.json`);
-    try { writePrivate(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), wait: false })); } catch {}
+    givenUp(id);
   }
   const listed = new Set<string>();
   // Oldest first, as they were left.

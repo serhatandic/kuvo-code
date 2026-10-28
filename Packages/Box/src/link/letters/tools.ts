@@ -20,7 +20,7 @@ import { excerpt, folded, READ_BY_MAIL, READ_LIMIT, readConversation } from "./c
 import { letterAnswer, leaveLetter, offRelay } from "./leave";
 import { composeLetter, placeOfSession } from "./letter";
 import { allowed, takeBack } from "./limits";
-import { seatRefusal, startedWords, startSession } from "./start";
+import { OUTSIDE, seatRefusal, startedWords, startSession } from "./start";
 import { answerTo } from "./take";
 import type { ListedAgent, Target } from "../../shared/records";
 import type { SessionPlace } from "./letter";
@@ -72,7 +72,7 @@ export async function everyone(place: Pick<ToolPlace, "readEngine">): Promise<Ev
   const fresh = await ownAgents(place.readEngine, link?.id).catch(() => null);
   if (fresh) keepOwn(fresh, link?.id ?? null);
   const here = IS_MAC ? null : link?.id ?? null;
-  return { here, agents: composeAgents(fresh ?? ownAsLast(link?.id ?? null), here, peersOf(link), readPeerAgents(undefined, undefined, link), movedOf(link)).agents };
+  return { here, agents: composeAgents(fresh ?? ownAsLast(link?.id ?? null), here, peersOf(link), readPeerAgents(), movedOf(link)).agents };
 }
 
 /** The conversation a call works for, where it runs: itself, a subagent's (the one that started
@@ -149,7 +149,7 @@ const offlineNote = () => `Your other computers can't be reached through the rel
 function peerFor(session: string) {
   const link = readLink();
   const peers = peersOf(link);
-  const told = readPeerAgents(undefined, undefined, link);
+  const told = readPeerAgents();
   const peer = peerOf(session, peers, told, movedOf(link));
   return peer ? { peer, features: told[peer.key]?.features ?? [] } : null;
 }
@@ -202,8 +202,9 @@ async function sendMessage(args: Record<string, unknown>, caller: string | null,
   }
   if (!wait) return said(waits && caller && offline ? offlineNote() : `On its way to ${target.name}${target.machine ? ` on ${target.machine}` : ""}. Its answer, if it writes one, comes to you as a message.`);
   const answer = await letterAnswer(id, place.signal, { step: place.step });
-  if (!answer || !("text" in answer)) return answer && "failed" in answer ? refused(`It didn't reach ${target.name}: ${answer.failed}`) : answer && "note" in answer ? said(answer.note) : said(`${target.name} hasn't answered yet. It may still write back with send_message.`);
-  return said(`${target.name} answered:\n\n${answer.text}`);
+  if (answer && "failed" in answer) return failed(`It didn't reach ${target.name}: ${answer.failed}`);
+  if (answer && "note" in answer) return said(answer.note);
+  return said(answer?.text ? `${target.name} answered:\n\n${answer.text}` : `${target.name} hasn't answered yet. It may still write back with send_message.`);
 }
 
 // The conversation of the agent `args.of` names, as you'd read it; a long one as its start and its
@@ -262,7 +263,9 @@ export async function agentTool(name: AgentToolName, args: Record<string, unknow
     case "read_conversation":
       return readOne(args, caller, all, targets, place);
     case "start_session": {
-      const by = root ? { ...root, name: nameOf(root.session, all) } : null;
+      // From a conversation this box doesn't have: an agent all the same, counted and approved as
+      // one (`outside`).
+      const by = root ? { ...root, name: nameOf(root.session, all) } : OUTSIDE;
       return startedWords(await startSession(args, by, { readEngine: place.readEngine, step: place.step, signal: place.signal }), args.wait === true);
     }
   }

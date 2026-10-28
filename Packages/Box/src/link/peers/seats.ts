@@ -150,7 +150,7 @@ export async function takeSeat(sender: MailSender, payload: Record<string, unkno
 
 // Who can be in this box's group chats from your other computers: each peer (taking a chat's turns
 // when its `features` say `groups.seats`), and the bots it told of, by their id.
-export function seatPeers(link: LinkState | null = readLink(), told: Record<string, ToldAgents> = readPeerAgents(undefined, undefined, link)): SeatPeers {
+export function seatPeers(link: LinkState | null = readLink(), told: Record<string, ToldAgents> = readPeerAgents()): SeatPeers {
   const peers = peersOf(link);
   return {
     boxes: peers.map(peer => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),

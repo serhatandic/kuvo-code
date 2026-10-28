@@ -90,13 +90,6 @@ test("each box's agents: a newer list kept, and list_agents here names each by w
   const both = link.readPeerAgents(file);
   assert.equal(link.peerOf("ses_b2", [second.peer, stranger.peer], both), null);
   assert.equal(link.composeAgents([], "lokum", [second.peer, stranger.peer], both).agents.some(each => each.session === "ses_b2"), false);
-
-  // The Mac's list over SSH, for when the relay can't be reached: taken when it's newer than its mail.
-  const macFile = path.join(run, "mac.json");
-  fs.writeFileSync(macFile, JSON.stringify({ key: mac.pub, at: 2, list: [agent("ses_m2", "Over SSH")] }));
-  assert.deepEqual(link.readPeerAgents(file, macFile, link.readLink())[mac.pub].list.map(each => each.name), ["Over SSH"]);
-  fs.writeFileSync(macFile, JSON.stringify({ key: stranger.pub, at: 9, list: [agent("ses_x", "Not a Mac")] }));
-  assert.equal(link.readPeerAgents(file, macFile, link.readLink())[stranger.pub].list[0].name, "Claimed", "only a Mac's");
 });
 
 // An engine with one session, for letters to reach: its prompts, and an answer once it's done.
@@ -581,4 +574,22 @@ test("an answer that came just as the tool waiting for it stopped reaches its co
   await link.deliverLeftAnswers(now + 20_000, [target]);
   assert.equal(prompts.length, count);
   assert.equal(fs.existsSync(path.join(replies, "ltr_asked2.json")), false, "not kept either");
+});
+
+test("a conversation read by mail whose tool stopped waiting as it came is dropped, never delivered as a message", async () => {
+  fresh({ peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } });
+  const replies = path.join(run, "replies");
+  fs.mkdirSync(replies, { recursive: true });
+  // The letter that asked, as the link keeps it once the other computer has it.
+  fs.writeFileSync(path.join(replies, "ltr_read01.wait"), JSON.stringify({ from: "ses_here", to: "ses_target", text: "read", wait: true, sentTo: second.pub, read: {} }));
+  fs.writeFileSync(path.join(replies, "ltr_read01.alive"), "");
+  assert.equal(link.answered(second.peer, { answers: "ltr_read01", from: "ses_target", text: "# API\n\nEverything it said." }), true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(replies, "ltr_read01.json"), "utf8")), { text: "# API\n\nEverything it said.", read: true });
+  // Its tool stopped before it read it.
+  fs.rmSync(path.join(replies, "ltr_read01.alive"));
+  fs.writeFileSync(path.join(replies, "ltr_read01.gaveup"), "");
+  // (No engine here: one asked to take it would throw, and the answer would stay to try again.)
+  await link.deliverLeftAnswers(Date.now(), []);
+  assert.equal(fs.existsSync(path.join(replies, "ltr_read01.json")), false, "gone, not kept to deliver");
+  assert.equal(fs.existsSync(path.join(replies, "ltr_read01.gaveup")), false);
 });

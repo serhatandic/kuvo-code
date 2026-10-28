@@ -218,7 +218,7 @@ export async function* macLinkRoute(route: string, request: LinkRequest, signal:
       // The agents your other computers told this Mac of, by computer (its key, and its id here).
       if (method !== "GET") return yield* json(405, {});
       const link = readLink();
-      const told = readPeerAgents(undefined, undefined, link);
+      const told = readPeerAgents();
       return yield* json(200, { peers: peersOf(link).map(peer => ({ key: peer.key, id: peer.id ?? null, at: told[peer.key]?.at ?? 0,
         list: told[peer.key]?.list ?? [], features: told[peer.key]?.features ?? [] })) });
     }

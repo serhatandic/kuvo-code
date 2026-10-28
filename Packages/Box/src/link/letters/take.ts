@@ -131,7 +131,7 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     noteSeen(id, now);
     return send(sender, { delivered: { id, ok: true } });
   }
-  if (isObject(letter.read)) return readFor(sender, letter as ReadLetter, { send, targets, answer, now });
+  if (isObject(letter.read)) return readFor(sender, letter as ReadLetter, { send, targets, answer, now, moved, moving });
   if (tooMany(sender.key, now)) return no("It's sent a lot of messages in the last few minutes.", true);
   delivering.add(id);
   let place: SessionPlace | null, prompt: string, fromAgent: ListedAgent | null = null;
@@ -170,7 +170,7 @@ type ReadLetter = { id: string; to: string; from?: unknown; read: { query?: unkn
 // then its words go back as the letter's answer, as much as fits in one. Any agent of your other
 // computers may read one here, as on this one, but only one an agent could be (not a subagent's, a
 // group chat's seat, nor one put away). Reading isn't writing to it: it isn't counted.
-async function readFor(sender: LetterSender, letter: ReadLetter, { send, targets, answer = () => {}, now = Date.now() }: Pick<TakeLetterOptions, "send" | "targets" | "answer" | "now">): Promise<void> {
+async function readFor(sender: LetterSender, letter: ReadLetter, { send, targets, answer = () => {}, now = Date.now(), moved = new Map(), moving = async () => false }: Pick<TakeLetterOptions, "send" | "targets" | "answer" | "now" | "moved" | "moving">): Promise<void> {
   const { id } = letter;
   const no = (why: string, again = false) => send(sender, { delivered: { id, ok: false, why, ...(again ? { retry: true } : {}) } });
   if (typeof letter.from !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(letter.from)) return no("Its answer has nowhere to go.");
@@ -178,6 +178,9 @@ async function readFor(sender: LetterSender, letter: ReadLetter, { send, targets
   delivering.add(id);
   let words: string;
   try {
+    // Moving to or from another computer, or living on another now: asked again once it's there.
+    const lives = moved.get(letter.to);
+    if ((lives && lives !== ownKey(readLink() ?? {})) || (await moving(letter.to))) return no("It's moving to another computer: it's read once it's there.", true);
     const place = await placeOfSession(letter.to, targets);
     if (!place) return no("There's no such conversation here.");
     const kuvo = place.data?.metadata?.kuvo ?? {};

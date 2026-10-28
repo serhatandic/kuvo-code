@@ -2,14 +2,10 @@
 // As a machine's link does it (`run`): its agents told to them, its letters sent and their answers
 // waited for, its group chats' mail carried, and whether this Mac's in use.
 
-import fs from "node:fs";
-import path from "node:path";
 import { isObject } from "../../shared/json";
 import type { Body } from "../../shared/json";
 import { readEngineFile } from "../engine/client";
-import { writePrivate } from "../files";
-import { SENDING } from "../letters/letter";
-import { macWaiting, sendOutbox } from "../letters/outbox";
+import { givenUp, macWaiting, sendOutbox } from "../letters/outbox";
 import { attentionGiven } from "../notices/hold";
 import { announce, refreshOwn } from "../peers/agents";
 import { mailFor, peersOf } from "../peers/known";
@@ -92,12 +88,11 @@ export function macLetterAnswer(id: string, signal?: AbortSignal | null, most = 
       macWaiting.delete(id);
       clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
-      if (!value) {
-        const file = path.join(SENDING, `${id}.json`);
-        try { writePrivate(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), wait: false })); } catch {}
-      }
+      if (!value) givenUp(id);
       resolve(value ?? { text: null });
     }
     macWaiting.set(id, waiter);
+    // Its asker gone already: nothing waits.
+    if (signal?.aborted) finish(null);
   });
 }
