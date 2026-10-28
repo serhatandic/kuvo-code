@@ -31,10 +31,6 @@ export class StandIn {
   queuesNotes = false
   /** The folder its sessions work in. */
   directory = "/tmp/project"
-  /** What each session asks you and waits on (its permissions and questions), by session. */
-  readonly asks = new Map<string, { permission?: any[]; form?: any[] }>()
-  /** How often what a session waits on was asked for. */
-  asksLooked = 0
   /** Sessions whose parent is another (a subagent's). */
   readonly parents = new Map<string, string>()
   /** Metadata given to sessions, by session, as last set. */
@@ -198,10 +194,6 @@ export class StandIn {
         if (this.titles.has(session)) this.titles.set(id, this.titles.get(session)!)
         if (this.metadata.has(session)) this.metadata.set(id, structuredClone(this.metadata.get(session)))
         return Response.json({ data: { id, title: this.titles.get(id), ...(this.metadata.has(id) ? { metadata: this.metadata.get(id) } : {}), location: { directory: this.directory } } })
-      }
-      if ((what === "permission" || what === "form") && request.method === "GET") {
-        this.asksLooked += 1
-        return Response.json({ data: this.asks.get(session)?.[what] ?? [] })
       }
       if (what === "generate") return await this.check("own", body.prompt, undefined, session)
       if (what === "prompt") {

@@ -9081,7 +9081,7 @@ import fs44 from "node:fs";
 import path44 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.99";
+var BRIDGE_VERSION = "0.9.100";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

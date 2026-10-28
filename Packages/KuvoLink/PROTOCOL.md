@@ -1409,10 +1409,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 A conversation's goal ("/goal all tests in test/auth pass"): its agent works toward it on its own,
 turn after turn, until a check after each turn finds it met. Each box runs its own, in its agents
 bridge beside the engine, for the engine's sessions and the coding agents' alike, with no client
-there (a machine's with the Mac closed too). The check reads the conversation and the names of the
-files in its folder (what exists, so a plan isn't taken for proof), and runs nothing; a turn that
-ends waiting on you (a permission or a question of its open, or one the check finds asking you) isn't
-judged or nudged, and the turn after your answer is: on
+there (a machine's with the Mac closed too). The check reads the conversation and runs nothing: on
 the engine, the session's model afresh, apart from the agent (OpenCode's free models answer only in
 the session's own context, so there it's asked there); with the coding agents, their one-off
 answer, another agent you're signed in to answering for one that has none (Antigravity, Cursor,
