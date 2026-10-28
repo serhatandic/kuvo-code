@@ -493,13 +493,6 @@ private struct FileViewer: View {
         return text
     }
 
-    /// Whether a machine's file of this type can be shown here: a picture, or what reads as text
-    /// (an unknown kind too, which may well be).
-    nonisolated static func showsFromAMachine(_ type: UTType?) -> Bool {
-        guard let type, !type.isDynamic else { return true }
-        return [.image, .text, .sourceCode, .propertyList, .xml, .json].contains { type.conforms(to: $0) }
-    }
-
     /// Text up to 2 MB as text, pictures as pictures, the rest for Quick Look.
     /// `machine`: the box a machine's file is on, which sends it as it does a phone (`kuvo/file`).
     static func load(_ url: URL, from machine: BoxClient?) async -> Content {
@@ -509,7 +502,7 @@ private struct FileViewer: View {
                 // On a machine: pictures and text, from its box; nothing for Quick Look there.
                 guard let machine, let path = RemoteFolder.parse(url)?.path else { return .preview }
                 // What can't be shown here (a PDF, an archive, a video) isn't fetched to find out.
-                guard Self.showsFromAMachine(type) else { return .preview }
+                guard MachineFiles.shows(url.pathExtension) else { return .preview }
                 // Pictures whole; anything else only as far as it's shown as text.
                 let data: Data
                 do {
@@ -682,4 +675,19 @@ private struct QuickLookView: NSViewRepresentable {
     static func dismantleNSView(_ view: QLPreviewView, coordinator: ()) {
         view.close()
     }
+}
+
+/// What the panel shows of a machine's files.
+nonisolated enum MachineFiles {
+    /// Whether a machine's file can be shown here, by its extension: all but what's never text nor
+    /// a picture (a PDF, an archive, a video), whose bytes decide. By name, not by this Mac's file
+    /// types, which its apps change (to macOS, `.ts` is a video, and `.mod` a song with one).
+    static func shows(_ extension: String) -> Bool {
+        !neverShown.contains(`extension`.lowercased())
+    }
+
+    private static let neverShown: Set<String> = [
+        "pdf", "zip", "gz", "tgz", "bz2", "xz", "zst", "7z", "rar", "tar", "jar", "dmg", "iso", "pkg",
+        "mp4", "mov", "m4v", "mkv", "avi", "webm", "mp3", "wav", "m4a", "aac", "flac", "ogg",
+    ]
 }

@@ -29,6 +29,8 @@ nonisolated struct ChangedFile: Identifiable, Hashable, Sendable {
     var newObject: String?
     /// A new file on a machine, listed but not read yet: its box sends it (`Git.readNew`).
     var unread = false
+    /// git's hash of a machine's new file, as listed: its read is kept until the hash changes.
+    var hash: String?
 
     var id: String { path }
 
@@ -84,6 +86,11 @@ final class ProjectChanges {
     private(set) var hasUncommitted = true
     private(set) var isLoaded = false
     private var signature = 0
+    /// Each refresh's number: only the latest one's list shows.
+    private var generation = 0
+    /// A machine's new files as its box last sent them, by path and git's hash, so each poll
+    /// reads only what changed.
+    private var machineReads: [String: ChangedFile] = [:]
 
     init(directory: String) {
         self.directory = directory
@@ -97,6 +104,8 @@ final class ProjectChanges {
     /// session's edits changed.
     func refresh(fallback: [FileDiff] = [], edits: [FileDiff] = []) async {
         let directory = directory, scope = scope, base = base
+        generation += 1
+        let mine = generation
         if scope == .session {
             hasUncommitted = false
             apply(fallback.map { DiffParser.file(from: $0, directory: directory) })
@@ -107,9 +116,13 @@ final class ProjectChanges {
             (Git.changes(in: directory, scope: scope, base: base), scope != .branch || Git.hasUncommittedChanges(in: directory))
         }.value
         if let result {
+            let read = await Git.readNew(result, known: machineReads)
+            // Gone to another scope, or a later refresh is under way: theirs shows.
+            guard mine == generation, !Task.isCancelled else { return }
+            machineReads = Git.kept(read)
             isRepository = true
             if hasUncommitted != uncommitted { hasUncommitted = uncommitted }
-            apply(await Git.readNew(result))
+            apply(read)
         } else {
             isRepository = false
             apply((fallback.isEmpty ? edits : fallback).map { DiffParser.file(from: $0, directory: directory) })
@@ -216,6 +229,13 @@ nonisolated enum Git {
             let untracked = run(["-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard", "-z", "--", limit.isEmpty ? "." : limit], in: root) ?? ""
             for path in untracked.split(separator: "\0").map(String.init) where !files.contains(where: { $0.path == path }) {
                 files.append(newFile(path, root: root))
+            }
+            // A machine's: git's hash of each, in one call, so they're read from its box only when
+            // they change.
+            let unread = files.indices.filter { files[$0].unread }.prefix(500)
+            if !unread.isEmpty, let hashes = run(["hash-object", "--"] + unread.map { files[$0].path }, in: root)?.split(separator: "\n"),
+               hashes.count == unread.count {
+                for (index, hash) in zip(unread, hashes) { files[index].hash = String(hash) }
             }
         }
         return files.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
@@ -404,10 +424,16 @@ nonisolated enum Git {
     }
 
     /// A machine's new files, read from its box (`box`, by the machine's id): their lines, or binary
-    /// or too big, as this Mac's are.
-    static func readNew(_ files: [ChangedFile], box: (String) -> BoxClient = BoxClient.machine) async -> [ChangedFile] {
+    /// or too big, as this Mac's are. `known`: those read before (`kept`), used again while git's
+    /// hash is the same.
+    @concurrent static func readNew(_ files: [ChangedFile], known: [String: ChangedFile] = [:],
+                                    box: @Sendable (String) -> BoxClient = BoxClient.machine) async -> [ChangedFile] {
         var read = files
         for index in read.indices where read[index].unread {
+            if let hash = read[index].hash, let before = known[read[index].path + "\0" + hash] {
+                read[index] = before
+                continue
+            }
             read[index].unread = false
             guard let (machine, path) = RemoteFolder.parse(read[index].url) else { continue }
             do {
@@ -416,9 +442,16 @@ nonisolated enum Git {
                 read[index].isTooBig = true
             } catch {
                 read[index].isBinary = true
+                // Not kept: read again next time (the box away for a moment, a refresh stopped).
+                read[index].hash = nil
             }
         }
         return read
+    }
+
+    /// What `readNew` read, to use again (its `known`).
+    static func kept(_ files: [ChangedFile]) -> [String: ChangedFile] {
+        Dictionary(files.compactMap { file in file.hash.map { (file.path + "\0" + $0, file) } }, uniquingKeysWith: { first, _ in first })
     }
 
     /// A new file's lines from its bytes: binary when they aren't text, too big past what's read through.
