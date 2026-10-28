@@ -1474,7 +1474,7 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
     fails, and makes no new conversation.
   - `GET …/kuvo/handoff/<session>` → `{data: handoff}`, its latest while the box runs.
   - Event `kuvo.handoff` `{sessionID, handoff}` as it starts and ends: open `to` once it's `done`.
-- **Reviews** (`reviews`, "/review"): what `scope` names in the conversation's folder, read by a
+- **Reviews** (`reviews`, "/review"; scopes `reviews.scopes`): what `scope` names in the conversation's folder, read by a
   model with none of the conversation's context: on the engine, its own model afresh, or `model`
   when given; with the coding agents, its own agent (another one you're signed in to when it
   can't), `model` left out. A scope:
@@ -1485,7 +1485,8 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
     main or master, yours or origin's, whichever is newer, or origin's HEAD), with those not
     committed yet;
   - `{"kind": "commits", "from", "to"?}`: what the commits after `from`, up to `to` (HEAD when
-    left out), changed, git's `from..to`;
+    left out), changed, git's `from..to`; `from` as `<commit>^` starts with that commit, the
+    first one too ("/review since <commit>");
   - `{"kind": "folder", "path"}` and `{"kind": "project"}`: the files themselves, of a folder in
     the project (a path inside it, never `..` or absolute: `400`) or all of it, numbered line by
     line: those git keeps or would (all but hidden ones and `node_modules` out of a repository),
@@ -1498,16 +1499,23 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
     makes no sense. `focus` is what to look at especially, as the user wrote it ("/review with
     <model> <focus>"), or `security`, `performance` or `accessibility`, which the box spells out
     for the reviewer. A review: `{id, session, state: "reviewing" | "done" | "failed", model?,
-    scope?, focus?, progress?: {read, of}, summary?, findings: [finding], error?, fix?, started,
-    ended?}`, its findings bugs first; `scope` is left out for the changes not committed yet, and
-    `progress` is there while one read in parts is under way (`read` of `of` parts), its findings
-    so far in `findings`. A finding: `{id, title, explanation, severity: "bug" | "risk" | "nit",
+    scope?, focus?, progress?: {read, of}, stopped?: {read, of}, summary?, findings: [finding],
+    error?, fix?, started, ended?}`, its findings bugs first; `scope` is left out for the changes
+    not committed yet, `progress` is there while one read in parts is under way (`read` of `of`
+    parts), its findings so far in `findings`, and `stopped` says where Stop ended one. A finding: `{id, title, explanation, severity: "bug" | "risk" | "nit",
     locations: [{file, line?, endLine?}]}`: what's wrong in a line, why and how to fix it (`""`
     when the title says it all), and every place it's in, none when it's about the change as a
     whole (a missing test). `fix` is what to send the agent, as your message, to fix them all.
-  - `POST …/kuvo/reviews/<session>/measure` with `{"scope"?}` → `{data: {files, parts, leftOut}}`:
-    how much a review of it would read, to show before asking for a big one; `422` with what's
-    wrong when it can't be read (not a repository, no such commit or folder).
+  - `POST …/kuvo/reviews/<session>/measure` with `{"scope"?}` → `{data: {files, parts, leftOut,
+    commits?}}`: how much a review of it would read, to show before asking for a big one
+    (`commits` for a branch or a range of them); `422` with what's wrong when it can't be read
+    (not a repository, no such commit or folder).
+  - `GET …/kuvo/reviews/<session>/choices` → `{data: {repository, branch?: {name, base, commits},
+    commits: [{id, short, title, time}], folders: [{path, files}]}}`: what "What to review"
+    offers in the conversation's folder: the branch it's on with its base and how many commits
+    of its own (left out on the base itself), its 30 latest commits (`time` in ms), and its
+    folders by path, with how many files each has at any depth (500 at most, shallowest first).
+    Out of a repository, `repository` is `false` and only the folders come.
   - `POST …/kuvo/reviews/<session>/stop` → `{data: review}`: one under way ends where it is,
     `done`, keeping what it found so far (its summary says how far it got); `409` once it's over.
   - `POST …/kuvo/reviews/<session>/fix` with `{"findings"?: [id]}` → `{data: {text}}`: what to send
@@ -1563,6 +1571,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
 | `handoff` | `kuvo/agents/api/kuvo/handoff…`: handoffs |
 | `reviews` | `kuvo/agents/api/kuvo/reviews…`: reviews with fresh eyes |
+| `reviews.scopes` | a review's `scope`, `measure`, `choices` and `stop` (bridge 0.9.95); without it a box reads the changes not committed yet whatever the scope |
 | `groups` | `kuvo/groups`, `…/events`, one chat's events, and writing, stopping, keep going, viewed, undo and start |
 | `groups.make` | `POST kuvo/groups` |
 | `groups.edit` | `PATCH kuvo/groups/<id>` |

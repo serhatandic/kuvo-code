@@ -9,7 +9,7 @@ import type { GoalPlaces } from "../../src/agents/goals"
 import { server } from "../../src/agents/groups/api"
 import { handoffMarker, handoffRoutes, Handoffs } from "../../src/agents/handoff"
 import { run } from "../../src/agents/proc"
-import { gitChanges, readScope, reviewRoutes, Reviews, type Parts } from "../../src/agents/reviews"
+import { gitChanges, readScope, reviewChoices, reviewRoutes, Reviews, type Parts } from "../../src/agents/reviews"
 import type { ServerEvent } from "../../src/agents/wire"
 import { StandIn } from "./support/standin"
 
@@ -526,7 +526,24 @@ describe("a review with fresh eyes", () => {
     const reviews = new Reviews(join(root, "reviews.json"), places())
     const measure = async (scope: any) => (await (await reviewRoutes(reviews, "POST", ["ses_work", "measure"], async () => ({ scope }))).json() as any).data
     expect(await measure({ kind: "project" })).toEqual({ files: 3, parts: 1, leftOut: 0 })
-    expect(await measure({ kind: "branch" })).toEqual({ files: 3, parts: 1, leftOut: 0 })
+    expect(await measure({ kind: "branch" })).toEqual({ files: 3, parts: 1, leftOut: 0, commits: 1 })
+    // "since" the first commit: it and every one after, from nothing before it.
+    expect(await measure({ kind: "commits", from: first + "^" })).toEqual({ files: 3, parts: 1, leftOut: 0, commits: 2 })
+    expect(JSON.stringify(await readScope(folder, { kind: "commits", from: first + "^" }))).toContain("+check(password)")
+    await expect(readScope(folder, { kind: "commits", from: "nothere^" })).rejects.toThrow("There's no commit nothere here.")
+
+    // What "What to review" offers: the branch with its own commits, the latest commits, the folders.
+    const choices = (await (await reviewRoutes(reviews, "GET", ["ses_work", "choices"], async () => ({}))).json() as any).data
+    expect(choices.repository).toBe(true)
+    expect(choices.branch).toEqual({ name: "feature", base: "main", commits: 1 })
+    expect(choices.commits.map((each: any) => each.title)).toEqual(["log it", "first"])
+    expect(choices.commits[0].short.length).toBeGreaterThanOrEqual(4)
+    // (src has the link to a private file too: listed, never read.)
+    expect(choices.folders).toEqual([{ path: "src", files: 2 }, { path: "src/auth", files: 1 }])
+    // On main itself there's no branch of its own to offer.
+    await git("checkout", "-q", "main")
+    expect((await reviewChoices(folder)).branch).toBeUndefined()
+    await git("checkout", "-q", "feature")
     reviews.stopAll()
     const auth = ((await readScope(folder, { kind: "folder", path: "src/auth" })) as Parts).parts
     expect(auth.join("")).toContain("=== src/auth/login.ts ===")
@@ -599,6 +616,14 @@ describe("a review with fresh eyes", () => {
     held.stopAll()
   })
 
+  test("out of a repository, What to review offers only the folders", async () => {
+    const folder = join(root, "loose")
+    mkdirSync(join(folder, "lib", "deep"), { recursive: true })
+    writeFileSync(join(folder, "lib", "a.ts"), "a\n")
+    writeFileSync(join(folder, "lib", "deep", "b.ts"), "b\n")
+    expect(await reviewChoices(folder)).toEqual({ repository: false, commits: [], folders: [{ path: "lib", files: 2 }, { path: "lib/deep", files: 1 }] })
+  })
+
   test("a big project is read in parts, and a folder that isn't a repository still has its files read", async () => {
     const folder = join(root, "plain")
     mkdirSync(join(folder, "node_modules"), { recursive: true })
@@ -630,6 +655,7 @@ describe("a review with fresh eyes", () => {
     const review = reviews.get("ses_work")!
     expect(review.state).toBe("done")
     expect(review.summary).toBe("Stopped after 1 of 2 parts. It found 1 thing to fix.")
+    expect(review.stopped).toEqual({ read: 1, of: 2 })
     expect(review.findings.map((each) => each.title)).toEqual(["Leak in a.ts"])
     expect(review.fix).toContain("Leak in a.ts")
     expect((await reviewRoutes(reviews, "POST", ["ses_work", "stop"], async () => ({}))).status).toBe(409)

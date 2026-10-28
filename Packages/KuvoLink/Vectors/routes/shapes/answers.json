@@ -2192,6 +2192,9 @@
             "literal": "reviews"
            },
            {
+            "literal": "reviews.scopes"
+           },
+           {
             "literal": "search"
            },
            {
@@ -2405,6 +2408,9 @@
            },
            {
             "literal": "reviews"
+           },
+           {
+            "literal": "reviews.scopes"
            },
            {
             "literal": "search"

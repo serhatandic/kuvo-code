@@ -48,6 +48,8 @@ export interface Review {
   focus?: string
   /** How far along it is, in parts read, while one too big to read at once is under way. */
   progress?: { read: number; of: number }
+  /** Where one read in parts was stopped with what it found so far. */
+  stopped?: { read: number; of: number }
   /** In a sentence: how it looks. */
   summary?: string
   findings: Finding[]
@@ -197,14 +199,24 @@ export class Reviews {
 
   /** How much a review of what `scope` names would read, before it's asked for: its files, and
    * the parts it would read them in (more parts take longer, and use more of your plan). */
-  async measure(session: string, scope: Scope): Promise<{ files: number; parts: number; leftOut: number }> {
+  async measure(session: string, scope: Scope): Promise<{ files: number; parts: number; leftOut: number; commits?: number }> {
     const info = await this.folderOf(session)
     const read = await this.changes(info.directory!, scope).catch((error: any) => {
       throw new ReviewError(422, error?.message ?? String(error))
     })
     const files = scope.kind === "folder" || scope.kind === "project"
     const { parts, leftOut } = partsOf(read)
-    return { files: countFiles(parts, files), parts: parts.length, leftOut }
+    const commits = await commitCount(info.directory!, scope)
+    return { files: countFiles(parts, files), parts: parts.length, leftOut, ...(commits === undefined ? {} : { commits }) }
+  }
+
+  /** What "What to review" offers for a conversation's folder: its branch, its latest commits
+   * and its folders. */
+  async choices(session: string): Promise<Choices> {
+    const info = await this.folderOf(session)
+    return reviewChoices(info.directory!).catch((error: any) => {
+      throw new ReviewError(422, error?.message ?? String(error))
+    })
   }
 
   private async folderOf(session: string): Promise<SessionInfo> {
@@ -232,7 +244,7 @@ export class Reviews {
     const read = review.progress?.read ?? 0
     const of = review.progress?.of
     const summary = read === 0 && !review.findings.length ? "Stopped before it read anything." : `Stopped after ${of ? `${read} of ${of} parts` : "starting"}. ${found(review.findings.length)}`
-    Object.assign(review, { state: "done", summary, ended: this.now() })
+    Object.assign(review, { state: "done", summary, ended: this.now(), ...(of ? { stopped: { read, of } } : {}) })
     delete review.progress
     if (review.findings.length) review.fix = fixMessage(review)
     this.changed(review)
@@ -338,13 +350,98 @@ export async function readScope(directory: string, scope: Scope): Promise<string
     if (fork.code !== 0) throw new Error(`This branch and ${base} have no commit in common to compare them from.`)
     return gitChanges(directory, fork.stdout.trim())
   }
-  for (const each of [scope.from, scope.to ?? "HEAD"]) {
-    if ((await git(["rev-parse", "--verify", "-q", `${each}^{commit}`])).code !== 0) throw new Error(`There's no commit ${each} here.`)
-  }
-  const diff = await git(["diff", "--relative", "--no-color", "--no-ext-diff", scope.from, scope.to ?? "HEAD", "--"])
+  const from = await rangeStart(git, scope.from)
+  if ((await git(["rev-parse", "--verify", "-q", `${scope.to ?? "HEAD"}^{commit}`])).code !== 0) throw new Error(`There's no commit ${scope.to} here.`)
+  const diff = await git(["diff", "--relative", "--no-color", "--no-ext-diff", from, scope.to ?? "HEAD", "--"])
   if (diff.code !== 0) throw new Error(diff.stderr.trim().split("\n")[0] || "git couldn't read the changes.")
   return diff.stdout
 }
+
+/** Where a range of commits starts: `from` itself, or, for the parent of the first commit
+ * (`abc^`, "since abc"), nothing: git's empty tree. */
+async function rangeStart(git: ReturnType<typeof gitIn>, from: string): Promise<string> {
+  const has = async (ref: string) => (await git(["rev-parse", "--verify", "-q", `${ref}^{commit}`])).code === 0
+  if (await has(from)) return from
+  const commit = from.endsWith("^") ? from.slice(0, -1) : ""
+  if (commit && (await has(commit)) && (await git(["rev-list", "--parents", "-n", "1", commit])).stdout.trim().split(" ").length === 1) {
+    return (await git(["hash-object", "-t", "tree", "/dev/null"])).stdout.trim()
+  }
+  throw new Error(`There's no commit ${commit || from} here.`)
+}
+
+/** How many commits a branch or a range of them is, for "12 commits · 41 files"; nil for other
+ * scopes, or when git can't say. */
+async function commitCount(directory: string, scope: Scope): Promise<number | undefined> {
+  if (scope.kind !== "branch" && scope.kind !== "commits") return undefined
+  try {
+    const git = gitIn(directory)
+    let range: string
+    if (scope.kind === "branch") {
+      const fork = await git(["merge-base", scope.base ?? (await defaultBase(git)), "HEAD"])
+      if (fork.code !== 0) return undefined
+      range = `${fork.stdout.trim()}..HEAD`
+    } else {
+      const from = await rangeStart(git, scope.from)
+      // From the empty tree: every commit up to `to`.
+      range = (await git(["rev-parse", "--verify", "-q", `${from}^{commit}`])).code === 0 ? `${from}..${scope.to ?? "HEAD"}` : scope.to ?? "HEAD"
+    }
+    const counted = await git(["rev-list", "--count", range])
+    return counted.code === 0 ? Number(counted.stdout.trim()) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** What "What to review" offers: the branch you're on with its base and how many commits it has
+ * of its own (none on the base itself or between branches), the latest commits, and the
+ * project's folders with how many files each has. Out of a repository, only its folders. */
+export interface Choices {
+  repository: boolean
+  branch?: { name: string; base: string; commits: number }
+  commits: { id: string; short: string; title: string; time: number }[]
+  folders: { path: string; files: number }[]
+}
+
+export async function reviewChoices(directory: string): Promise<Choices> {
+  const git = gitIn(directory)
+  const top = realpathSync(directory)
+  const inside = await git(["rev-parse", "--is-inside-work-tree"]).catch(() => undefined)
+  const repository = inside?.code === 0 && inside.stdout.trim() === "true"
+  const folders = foldersOf(await listFiles(top).catch(() => []))
+  if (!repository) return { repository, commits: [], folders }
+  let branch: Choices["branch"]
+  const name = (await git(["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim()
+  const base = name && name !== "HEAD" ? await defaultBase(git).catch(() => undefined) : undefined
+  if (base && base.replace(/^origin\//, "") !== name) {
+    const commits = await commitCount(directory, { kind: "branch", base })
+    if (commits) branch = { name, base: base.replace(/^origin\//, ""), commits }
+  }
+  const log = await git(["log", "-n", "30", "--no-color", "--format=%H%x1f%h%x1f%ct%x1f%s"])
+  const commits = log.code !== 0 ? [] : log.stdout.split("\n").filter(Boolean).map((line) => {
+    const [id, short, time, title] = line.split("\x1f")
+    return { id, short, title: title ?? "", time: Number(time) * 1000 }
+  })
+  return { repository, ...(branch ? { branch } : {}), commits, folders }
+}
+
+/** Each folder files are in, at any depth, with how many files it has in all: by path, at most
+ * `foldersLimit`, the shallowest kept first. */
+function foldersOf(files: string[]): { path: string; files: number }[] {
+  const counts = new Map<string, number>()
+  for (const file of files) {
+    const parts = file.split("/")
+    for (let depth = 1; depth < parts.length; depth++) {
+      const path = parts.slice(0, depth).join("/")
+      counts.set(path, (counts.get(path) ?? 0) + 1)
+    }
+  }
+  const depth = (path: string) => path.split("/").length
+  const kept = [...counts.entries()].sort((a, b) => depth(a[0]) - depth(b[0]) || (a[0] < b[0] ? -1 : 1)).slice(0, foldersLimit)
+  return kept.sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([path, files]) => ({ path, files }))
+}
+
+/** The folders "What to review" offers, at most. */
+const foldersLimit = 500
 
 function gitIn(directory: string) {
   return async (args: string[]) => {
@@ -751,6 +848,11 @@ export async function reviewRoutes(reviews: Reviews | undefined, method: string,
       if (method !== "POST") return json({ message: "Not allowed" }, 405)
       const { scope } = (await body()) ?? {}
       return json({ data: await reviews.measure(session, readScopeAsked(scope ?? { kind: "uncommitted" })) })
+    }
+    if (parts[1] === "choices") {
+      // What "What to review" offers: the branch, the latest commits, the folders.
+      if (method !== "GET") return json({ message: "Not allowed" }, 405)
+      return json({ data: await reviews.choices(session) })
     }
     if (parts[1] === "stop") {
       // Ended where it is, keeping what it found so far.
