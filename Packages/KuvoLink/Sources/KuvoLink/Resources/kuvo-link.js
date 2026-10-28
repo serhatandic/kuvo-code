@@ -6160,7 +6160,31 @@ async function signInRefusal(model, engine, signal) {
   const ids = Array.isArray(ready) ? ready.map((each) => each?.id) : [];
   return ids.length && !ids.includes(model.providerID) ? `${model.id} needs a sign-in on ${HERE}: sign in to it in Settings › Accounts, or choose another model.` : null;
 }
-async function makeBot(given, readEngine, readBridge, machine, signal) {
+var REQUEST = /^[A-Za-z0-9_-]{8,64}$/;
+var MADE_FOR = 3600000;
+var madeFor = new Map;
+function makeBot(given, readEngine, readBridge, machine, signal) {
+  const request = typeof given?.request === "string" && REQUEST.test(given.request) ? given.request : null;
+  if (!request)
+    return makeOnce(given, readEngine, readBridge, machine, signal);
+  const now = Date.now();
+  for (const [id, made] of madeFor)
+    if (now - made.at > MADE_FOR)
+      madeFor.delete(id);
+  const before = madeFor.get(request);
+  if (before)
+    return before.answer;
+  const answer = makeOnce(given, readEngine, readBridge, machine, signal).then((made) => {
+    if (made.status === 201)
+      madeFor.set(request, { answer, at: Date.now() });
+    else
+      madeFor.delete(request);
+    return made;
+  });
+  madeFor.set(request, { answer, at: now });
+  return answer;
+}
+async function makeOnce(given, readEngine, readBridge, machine, signal) {
   const no = (status, message) => ({ status, value: { message } });
   const kit = readKit();
   if (!kit)

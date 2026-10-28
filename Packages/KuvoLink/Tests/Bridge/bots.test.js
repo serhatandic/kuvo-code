@@ -410,6 +410,27 @@ test("with the Mac closed, a bot is made here as New Bot makes it: its folder, c
   }
 });
 
+test("New Bot sent again with the same request (the phone tried again after its connection dropped) makes one bot, answered alike both times", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  const engine = await makingEngine();
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+    // The second while the first is still being made, and once more after.
+    const [first, again] = await Promise.all([1, 2].map(() => ask(handle, "POST", "kuvo/bots", { name: "Scout", request: "req_newbot0001" })));
+    const later = await ask(handle, "POST", "kuvo/bots", { name: "Scout", request: "req_newbot0001" });
+    for (const answer of [first, again, later]) assert.equal(answer.status, 201);
+    assert.equal(again.json.bot.id, first.json.bot.id);
+    assert.equal(later.json.bot.id, first.json.bot.id);
+    assert.deepEqual(link.listBots().map(each => each.name), ["Scout"]);
+    assert.equal(engine.asked.filter(each => each.method === "POST" && each.url === "/api/session").length, 1);
+    // Another New Bot, though its name is the same: another bot.
+    assert.notEqual((await ask(handle, "POST", "kuvo/bots", { name: "Scout", request: "req_newbot0002" })).json.bot.id, first.json.bot.id);
+    assert.equal(link.listBots().length, 2);
+  } finally {
+    engine.close();
+  }
+});
+
 test("what's missing or unknown is said, and nothing is made", async () => {
   write(path.join(bots, "kit.json"), JSON.stringify(kit));
   const engine = await makingEngine(["opencode"]);

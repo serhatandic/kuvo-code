@@ -41,6 +41,8 @@ export interface GivenBot {
   look?: unknown;
   /** A model (BotModel), or null for the template's or the kit's. */
   model?: unknown;
+  /** The client's own id for this New Bot, the same each time it sends it again (`MADE_FOR`). */
+  request?: unknown;
 }
 
 /** What `makeBot` answers: the bot made and its job for your composer, or why not. */
@@ -59,7 +61,30 @@ export async function signInRefusal(model: BotModel, engine: Target, signal?: Ab
 
 // `POST kuvo/bots`, as the Mac's: the bot made here, its folder, conversation and instructions,
 // and the template's job for your composer, or else its greeting, so it writes first.
-export async function makeBot(given: GivenBot | null | undefined, readEngine: () => Target, readBridge: () => Target | null, machine?: string, signal?: AbortSignal): Promise<MadeAnswer> {
+// New Bot sent again with the same `request` (the phone's connection dropped, and it tried again,
+// while the first was made all the same): answered as the first was, while it's being made and for
+// an hour after, rather than made twice. One that wasn't made is tried again.
+const REQUEST = /^[A-Za-z0-9_-]{8,64}$/;
+const MADE_FOR = 3600_000;
+const madeFor = new Map<string, { answer: Promise<MadeAnswer>; at: number }>();
+
+export function makeBot(given: GivenBot | null | undefined, readEngine: () => Target, readBridge: () => Target | null, machine?: string, signal?: AbortSignal): Promise<MadeAnswer> {
+  const request = typeof given?.request === "string" && REQUEST.test(given.request) ? given.request : null;
+  if (!request) return makeOnce(given, readEngine, readBridge, machine, signal);
+  const now = Date.now();
+  for (const [id, made] of madeFor) if (now - made.at > MADE_FOR) madeFor.delete(id);
+  const before = madeFor.get(request);
+  if (before) return before.answer;
+  const answer = makeOnce(given, readEngine, readBridge, machine, signal).then(made => {
+    if (made.status === 201) madeFor.set(request, { answer, at: Date.now() });
+    else madeFor.delete(request);
+    return made;
+  });
+  madeFor.set(request, { answer, at: now });
+  return answer;
+}
+
+async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Target, readBridge: () => Target | null, machine?: string, signal?: AbortSignal): Promise<MadeAnswer> {
   const no = (status: OtherStatus, message: string): MadeAnswer => ({ status, value: { message } });
   const kit = readKit();
   if (!kit) return no(409, NO_KIT);

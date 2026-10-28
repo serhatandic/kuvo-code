@@ -1179,6 +1179,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   (a shared bot's, from File › Import Bot…) makes it wait the same way, with that job as
   `firstMessage`; otherwise it's null and the bot writes first. A machine's box ignores
   `machine`; a Mac's answers 400 for one (a bot for a machine is made on that machine's box).
+  `request` (8 to 64 of `A-Za-z0-9_-`, the client's own id for this New Bot, kept as it sends it
+  again) makes a repeat safe: once a bot's being made for it, the same `request` gets the same
+  answer for an hour (a client whose connection dropped before the answer came tries again with
+  it); one that wasn't made is tried again. Since a bot is made whole once it's started, whatever
+  becomes of the request, a client that sends none can make it twice.
   Errors are `{"message"}`: 400 for a missing name or an unknown template, personality or
   project; 409 while its box has no kit yet (below); 422 for a model that can't run there (its
   account isn't signed in there); 503 when it couldn't be made.
