@@ -1174,7 +1174,9 @@ final class Workspace {
         for folder in unsentProjects.filter({ Self.box(of: $0) == box }).sorted() {
             let body = Self.boxBody(settings[folder] ?? ProjectSettings(), removed: !folders.contains(folder))
             guard let (status, _) = try? await client.send("PUT", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(folder)), body: body) else { continue }
-            if (200..<300).contains(status) || status == 400 { unsentProjects.remove(folder) }
+            // Changed again while it went: still to send, as it is now (its own turn does).
+            let now = Self.boxBody(settings[folder] ?? ProjectSettings(), removed: !folders.contains(folder))
+            if (200..<300).contains(status) || status == 400, now == body { unsentProjects.remove(folder) }
         }
     }
 
