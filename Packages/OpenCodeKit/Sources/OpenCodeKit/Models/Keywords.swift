@@ -218,6 +218,28 @@ extension ReviewScope {
     }
 }
 
+extension ReviewScope {
+    /// It reads files as they are (a folder, the whole project), not changes.
+    public var readsFiles: Bool {
+        switch self {
+        case .folder, .project: true
+        default: false
+        }
+    }
+
+    /// In a sentence, as what a model reads: "the whole project", "the files in src/auth".
+    public var said: String {
+        switch self {
+        case .uncommitted: "the changes not committed yet"
+        case .branch: "this branch’s changes"
+        case .commits(let from, let to):
+            from.hasSuffix("^") && to == nil ? "the commits since \(from.dropLast())" : "the commits \(from)..\(to ?? "HEAD")"
+        case .folder(let path): "the files in \(path)"
+        case .project: "the whole project"
+        }
+    }
+}
+
 extension ReviewCommand.Preset {
     /// As "Look for" lists it.
     public var title: String {
@@ -260,6 +282,12 @@ public struct ReviewChoices: Codable, Sendable, Hashable {
         public var base: String
         /// Its own, since it left `base`.
         public var commits: Int
+
+        public init(name: String, base: String, commits: Int) {
+            self.name = name
+            self.base = base
+            self.commits = commits
+        }
     }
 
     public struct Commit: Codable, Sendable, Hashable, Identifiable {
@@ -270,6 +298,13 @@ public struct ReviewChoices: Codable, Sendable, Hashable {
         public var time: Double
 
         public var date: Date { Date(timeIntervalSince1970: time / 1000) }
+
+        public init(id: String, short: String, title: String, time: Double) {
+            self.id = id
+            self.short = short
+            self.title = title
+            self.time = time
+        }
     }
 
     public struct Folder: Codable, Sendable, Hashable, Identifiable {
@@ -278,6 +313,11 @@ public struct ReviewChoices: Codable, Sendable, Hashable {
         public var files: Int
 
         public var id: String { path }
+
+        public init(path: String, files: Int) {
+            self.path = path
+            self.files = files
+        }
     }
 
     public init(repository: Bool, branch: Branch? = nil, commits: [Commit] = [], folders: [Folder] = []) {

@@ -18,6 +18,8 @@ public struct ProgressLine: View {
         case stacked
         /// The numbers beside the bar, on one line, for a row with no room under it.
         case inline
+        /// The bar alone, where the words beside it say how far ("part 4 of 9").
+        case bar
     }
 
     let label: String
@@ -79,6 +81,8 @@ public struct ProgressLine: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 }
+            case .bar:
+                bar
             case .inline:
                 HStack(spacing: 8) {
                     bar
