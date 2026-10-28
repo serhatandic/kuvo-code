@@ -143,6 +143,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - In a group chat with bots on a machine, **Stop** and messages you send while a bot works reach it every time; before, the machine could miss one sent in a few seconds' gap.
 - A bot made or deleted from your phone while it loses its connection is made or deleted whole, rather than leaving a conversation without its bot or a group chat still listing it.
 - A machine's nightly update waits while its browser waits on you (a sign-in, a code), and **Start** or **Restart** for its engine during an update says it's updating.
+- A goal keeps going after a very long turn (hundreds of steps): it's checked and nudged as after any other, instead of showing it's working while nothing happens.
+- A command you type with **!** in a Claude Code, Codex, Cursor, Grok or Antigravity session on a machine runs as in your terminal there, with your `gh` sign-in and git settings; one still running stops when you delete its session.
+- Removing an account while one of its sessions works ends that turn as stopped, instead of leaving it working until you press Stop.
 
 ## 0.7.2
 
