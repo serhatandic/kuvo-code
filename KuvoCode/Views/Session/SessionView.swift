@@ -332,7 +332,8 @@ private struct BottomStack: View {
                         Spacer()
                         HideBarsTab { model.tuck.hide() }
                     }
-                    .padding(.trailing, 18)
+                    // Its end over the bars' ✕ itself (narrower than its button).
+                    .padding(.trailing, BarEnd.trailing + 8)
                     .padding(.bottom, -8)
                     .transition(.opacity)
                 }

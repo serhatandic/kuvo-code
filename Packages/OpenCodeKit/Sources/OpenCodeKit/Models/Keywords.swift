@@ -369,7 +369,16 @@ public struct Review: Codable, Sendable, Hashable, Identifiable {
 
         /// As people write it: `src/timer.ts:88-92`.
         public var text: String {
-            file + (line.map { ":\($0)" } ?? "") + (endLine.map { "-\($0)" } ?? "")
+            file + lines
+        }
+
+        /// Its file's name and lines, for where there's no room for the path: `timer.ts:88-92`.
+        public var shortText: String {
+            (file.split(separator: "/").last.map(String.init) ?? file) + lines
+        }
+
+        private var lines: String {
+            (line.map { ":\($0)" } ?? "") + (endLine.map { "-\($0)" } ?? "")
         }
     }
     public struct Finding: Codable, Sendable, Hashable, Identifiable {

@@ -211,6 +211,36 @@ struct FilledButtonStyle<S: Shape>: ButtonStyle {
     }
 }
 
+/// A small capsule button that's an action of its own on a line, like a review's Fix All…: an
+/// outline and a faint fill that deepens under the pointer, or, `tinted`, the accent's.
+struct ChipButtonStyle: ButtonStyle {
+    var tinted = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        Chip(configuration: configuration, tinted: tinted)
+    }
+
+    private struct Chip: View {
+        let configuration: ButtonStyleConfiguration
+        let tinted: Bool
+        @State private var isHovering = false
+
+        var body: some View {
+            let deeper = configuration.isPressed ? 0.1 : isHovering ? 0.05 : 0
+            configuration.label
+                .foregroundStyle(tinted ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .padding(.horizontal, 9)
+                .frame(height: 22)
+                .background(Capsule().fill(tinted ? AnyShapeStyle(.tint.opacity(0.14 + deeper)) : AnyShapeStyle(Color.primary.opacity(0.04 + deeper))))
+                .overlay(Capsule().strokeBorder(tinted ? AnyShapeStyle(.clear) : AnyShapeStyle(Color.primary.opacity(0.12)), lineWidth: 1))
+                .contentShape(Capsule())
+                .onHover { isHovering = $0 }
+                .clickablePointer()
+                .animation(.easeOut(duration: 0.12), value: isHovering)
+        }
+    }
+}
+
 /// The little chevron that tells a title or a label opens a menu.
 struct MenuChevron: View {
     var body: some View {

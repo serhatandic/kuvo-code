@@ -387,6 +387,8 @@ struct ReviewBar: View {
     @State private var confirmsCancel = false
     /// What the part read last found, while there were findings before it.
     @State private var newest: Set<String> = []
+    /// A finding's row, closed.
+    @State private var rowHeight: CGFloat?
 
     /// What it found shows while it's still reading, too.
     private var showsFindings: Bool { review.state != .reviewing || !review.findings.isEmpty }
@@ -449,9 +451,9 @@ struct ReviewBar: View {
     /// While it reads in parts, Stop (and Fix… for what it found so far); once done, Fix….
     private var accessory: AnyView? {
         let fixes = !review.findings.isEmpty && review.state != .failed
-        guard review.state == .reviewing, review.progress != nil else { return fixes ? AnyView(fixMenu(nil, label: "Fix…")) : nil }
+        guard review.state == .reviewing, review.progress != nil else { return fixes ? AnyView(fixMenu(nil, label: "Fix All…")) : nil }
         return AnyView(HStack(spacing: 2) {
-            if fixes { fixMenu(nil, label: "Fix…") }
+            if fixes { fixMenu(nil, label: "Fix All…") }
             Button("Stop", action: stop)
                 .buttonStyle(TextButtonStyle())
                 .font(.system(size: 13))
@@ -504,6 +506,8 @@ struct ReviewBar: View {
     private var footnote: String? { ReviewList.footnote(review, readerName: readerName) }
 
     /// Fix… for `findings` (nil: all of them); `outset` lines its words up with the text above.
+    /// For them all (`findings` nil) a chip, an action of its own on the bar's line; for one, a
+    /// word on its row.
     private func fixMenu(_ findings: [String]?, label: String, outset: Bool = false) -> some View {
         Menu {
             Button("Fix in a New Session", systemImage: "plus.square") { fix(findings, .newSession) }
@@ -523,8 +527,7 @@ struct ReviewBar: View {
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)
-        .buttonStyle(TextButtonStyle(outset: outset))
-        .font(.system(size: 13))
+        .modifier(FixLook(isChip: findings == nil, outset: outset))
         .fixedSize()
         .help(findings == nil ? "Fix what it found: in a new session, here, or elsewhere" : "Fix this one: in a new session, here, or elsewhere")
     }
@@ -575,13 +578,33 @@ struct ReviewBar: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(review.findings) { finding in
                     FindingRow(finding: finding, isNew: newest.contains(finding.id), fixMenu: { fixMenu([finding.id], label: "Fix…") }, fix: { fix([finding.id], $0) }, open: open)
+                        // A closed row's height (an open one's is more).
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowHeight = min(rowHeight ?? $0, $0) }
                 }
             }
         }
-        // About five, then it scrolls.
-        .frame(maxHeight: 176)
+        // Five whole rows, then it scrolls: the list never ends halfway through one.
+        .frame(maxHeight: (rowHeight ?? 34) * 5)
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, -8)
+    }
+}
+
+/// Fix…'s look: for them all, a chip on the bar's line; for one, a word on its row.
+private struct FixLook: ViewModifier {
+    let isChip: Bool
+    let outset: Bool
+
+    func body(content: Content) -> some View {
+        if isChip {
+            content
+                .buttonStyle(ChipButtonStyle())
+                .font(.system(size: 12, weight: .medium))
+        } else {
+            content
+                .buttonStyle(TextButtonStyle(outset: outset))
+                .font(.system(size: 13))
+        }
     }
 }
 
@@ -676,7 +699,7 @@ private struct FindingRow: View {
         .onHover { hovering = $0 }
         .clickablePointer()
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(finding.severity.name): \(finding.title)\(isNew ? ", new" : "")")
+        .accessibilityLabel("\(finding.severity.name): \(finding.title)\(isNew ? ", new" : "")\(placesSaid)")
         .accessibilityValue(isOpen ? finding.explanation : "")
         .accessibilityHint(isOpen ? "Hides why" : "Shows why and where")
         .accessibilityAddTraits(.isButton)
@@ -691,15 +714,22 @@ private struct FindingRow: View {
         }
     }
 
-    /// Its first place, and how many more; none for one about the change as a whole.
+    /// Where it is, for VoiceOver: every place by its path.
+    private var placesSaid: String {
+        finding.locations.isEmpty ? "" : ", in " + ListFormatter.localizedString(byJoining: finding.locations.map(\.text))
+    }
+
+    /// Its first place, by its file's name and lines (the paths under the pointer), and how many
+    /// more; none for one about the change as a whole.
     @ViewBuilder private var firstPlace: some View {
         if let first = finding.locations.first {
-            Text(first.text + (finding.locations.count > 1 ? " +\(finding.locations.count - 1)" : ""))
+            Text(first.shortText + (finding.locations.count > 1 ? " +\(finding.locations.count - 1) more" : ""))
                 .font(.system(size: 11.5, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .truncationMode(.head)
+                .truncationMode(.middle)
                 .frame(maxWidth: 220, alignment: .trailing)
+                .help(finding.locations.map(\.text).joined(separator: "\n"))
         } else {
             Text("the change as a whole")
                 .font(.system(size: 11.5))
