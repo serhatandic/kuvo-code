@@ -172,9 +172,10 @@ export class EngineLink {
     const rules: PermissionRule[] = []
     for (const policy of policies as { action?: string; resource?: string; effect?: string }[]) {
       if (policy?.action !== "tool.use" || typeof policy.resource !== "string") continue
-      if (policy.effect !== "deny" && policy.effect !== "allow") continue
+      if (typeof policy.effect !== "string") continue
       const at = policy.resource.indexOf(":")
-      rules.push({ action: at < 0 ? policy.resource : policy.resource.slice(0, at), resource: at < 0 ? "*" : policy.resource.slice(at + 1) || "*", effect: policy.effect })
+      // (One of a kind a newer engine has: nothing allows it either.)
+      rules.push({ action: at < 0 ? policy.resource : policy.resource.slice(0, at), resource: at < 0 ? "*" : policy.resource.slice(at + 1) || "*", effect: policy.effect === "allow" ? "allow" : "deny" })
     }
     return rules
   }

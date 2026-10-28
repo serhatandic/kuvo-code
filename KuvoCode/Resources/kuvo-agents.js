@@ -2604,10 +2604,10 @@ ${directory}`;
     for (const policy of policies) {
       if (policy?.action !== "tool.use" || typeof policy.resource !== "string")
         continue;
-      if (policy.effect !== "deny" && policy.effect !== "allow")
+      if (typeof policy.effect !== "string")
         continue;
       const at = policy.resource.indexOf(":");
-      rules.push({ action: at < 0 ? policy.resource : policy.resource.slice(0, at), resource: at < 0 ? "*" : policy.resource.slice(at + 1) || "*", effect: policy.effect });
+      rules.push({ action: at < 0 ? policy.resource : policy.resource.slice(0, at), resource: at < 0 ? "*" : policy.resource.slice(at + 1) || "*", effect: policy.effect === "allow" ? "allow" : "deny" });
     }
     return rules;
   }
@@ -12217,6 +12217,7 @@ function matches(pattern, value) {
   const expression = "^" + pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$";
   return new RegExp(expression, "s").test(value);
 }
+var holdsBack = (effect) => effect !== "allow" && effect !== "ask";
 function ruled(rules, action, resources2) {
   let effect;
   for (const rule of rules ?? []) {
@@ -12224,7 +12225,7 @@ function ruled(rules, action, resources2) {
       continue;
     const targets = resources2.length ? resources2 : ["*"];
     if (targets.every((resource) => matches(rule.resource, resource)))
-      effect = rule.effect;
+      effect = holdsBack(rule.effect) ? "deny" : rule.effect;
   }
   return effect;
 }
@@ -13063,7 +13064,7 @@ function dequote(word) {
   return out;
 }
 function hidesFromBlocks(blocks, ask) {
-  if (!isShell(ask.action) || !blocks?.some((rule) => rule.effect === "deny" && isShell(rule.action)))
+  if (!isShell(ask.action) || !blocks?.some((rule) => holdsBack(rule.effect) && isShell(rule.action)))
     return false;
   return ask.resources.some((line3) => !parseCommands(line3.trim()).sure);
 }
@@ -14477,14 +14478,14 @@ ${live.agentPrompt}` : ""
       approvesAll: (canAsk = true) => {
         if (plan)
           return false;
-        if ((record2.session.permissions ?? []).some((rule) => rule.effect === "ask" || rule.effect === "deny"))
+        if ((record2.session.permissions ?? []).some((rule) => rule.effect !== "allow"))
           return false;
         const isDefault = (rule) => engineDefaults.some((other) => other.action === rule.action && other.resource === rule.resource && other.effect === rule.effect);
         if ((live.agentRules ?? []).some((rule) => rule.effect !== "allow" && agentActions.has(rule.action) && !isDefault(rule)))
           return false;
         if (live.blocks === undefined)
           return !canAsk;
-        return !live.blocks.some((rule) => rule.effect === "deny");
+        return !live.blocks.some((rule) => holdsBack(rule.effect));
       },
       check: (ask, ownPlan) => this.checkPermission(live, record2.session, ask, plan && !ownPlan),
       permission: (ask) => this.askPermission(id, live, turn, ask, plan),
@@ -15854,7 +15855,7 @@ class GroupStore {
       personalities: value.personalities && typeof value.personalities === "object" ? value.personalities : {},
       identityNote: typeof value.identityNote === "string" ? value.identityNote : "",
       askFirst: value.askFirst === true,
-      denies: Array.isArray(value.denies) ? value.denies.filter((rule) => rule?.effect === "deny" && typeof rule.action === "string") : [],
+      denies: Array.isArray(value.denies) ? value.denies.filter((rule) => typeof rule?.effect === "string" && holdsBack(rule.effect) && typeof rule.action === "string") : [],
       timeZone: typeof value.timeZone === "string" ? value.timeZone : undefined,
       locale: typeof value.locale === "string" ? value.locale : undefined
     };
@@ -20056,4 +20057,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 72c76c812ffd8121fab3890ce7f2ed85982d1fbf78783116c05f9c3b812f69eb
+// Built from Packages/Box/src/agents d8e04add706a5e5556bf9e12052bc52e6d4f88915eeb4467669ee5b3654c9eab

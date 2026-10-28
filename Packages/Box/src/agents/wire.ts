@@ -27,7 +27,8 @@ export interface StructuredError {
 export interface PermissionRule {
   action: string
   resource: string
-  effect: "allow" | "deny" | "ask"
+  /** Or one a newer engine has that this bridge doesn't know: held back, as "deny" is (`holdsBack`). */
+  effect: "allow" | "deny" | "ask" | (string & {})
 }
 
 export interface Session {
