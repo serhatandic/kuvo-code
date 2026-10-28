@@ -357,7 +357,8 @@ struct ReviewSendTarget: Identifiable, Equatable {
     var isBot: Bool
 }
 
-/// How a review's findings show: a list, each opening in place (the default), or one at a time.
+/// How a review's findings show: a list, each opening in place (the default), or one at a time
+/// (Settings › Appearance).
 enum ReviewLayout: String {
     case list, single
 
@@ -382,7 +383,7 @@ struct ReviewBar: View {
     let stop: () -> Void
     let cancel: () -> Void
     let open: (Review.Place) -> Void
-    @AppStorage(ReviewLayout.key) private var layout = ReviewLayout.list.rawValue
+    @AppStorage(ReviewLayout.key) private var layout = ReviewLayout.list
     @State private var confirmsCancel = false
     /// What the part read last found, while there were findings before it.
     @State private var newest: Set<String> = []
@@ -544,20 +545,15 @@ struct ReviewBar: View {
                 .textSelection(.enabled)
         case .done:
             VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    if let summary = review.summary {
-                        Text(summary)
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        Spacer(minLength: 0)
-                    }
-                    if review.findings.count > 1 { layoutSwitch }
+                if let summary = review.summary {
+                    Text(summary)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if !review.findings.isEmpty {
-                    if layout == ReviewLayout.single.rawValue {
+                    if layout == .single {
                         SingleFinding(findings: review.findings, fixMenu: { fixMenu([$0.id], label: "Fix This…", outset: true) }, open: open)
                     } else {
                         findingList
@@ -586,21 +582,6 @@ struct ReviewBar: View {
         .frame(maxHeight: 176)
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, -8)
-    }
-
-    /// The list, or one at a time: kept for the next review too.
-    private var layoutSwitch: some View {
-        HStack(spacing: 0) {
-            ForEach([ReviewLayout.list, .single], id: \.rawValue) { each in
-                Button(each == .list ? "As a List" : "One at a Time", systemImage: each == .list ? "list.bullet" : "rectangle.portrait") {
-                    withAnimation(.ui) { layout = each.rawValue }
-                }
-                .buttonStyle(IconButtonStyle(width: 22, height: 20))
-                .foregroundStyle(layout == each.rawValue ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
-                .help(each == .list ? "Show them as a list" : "Show them one at a time")
-                .accessibilityAddTraits(layout == each.rawValue ? .isSelected : [])
-            }
-        }
     }
 }
 
