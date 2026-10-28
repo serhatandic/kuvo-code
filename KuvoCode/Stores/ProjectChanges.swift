@@ -117,9 +117,10 @@ final class ProjectChanges {
         }.value
         if let result {
             let read = await Git.readNew(result, known: machineReads)
+            // Kept whichever list shows: what was read is the file as it is.
+            machineReads = Git.kept(read)
             // Gone to another scope, or a later refresh is under way: theirs shows.
             guard mine == generation, !Task.isCancelled else { return }
-            machineReads = Git.kept(read)
             isRepository = true
             if hasUncommitted != uncommitted { hasUncommitted = uncommitted }
             apply(read)
@@ -230,12 +231,19 @@ nonisolated enum Git {
             for path in untracked.split(separator: "\0").map(String.init) where !files.contains(where: { $0.path == path }) {
                 files.append(newFile(path, root: root))
             }
-            // A machine's: git's hash of each, in one call, so they're read from its box only when
-            // they change.
-            let unread = files.indices.filter { files[$0].unread }.prefix(500)
-            if !unread.isEmpty, let hashes = run(["hash-object", "--"] + unread.map { files[$0].path }, in: root)?.split(separator: "\n"),
-               hashes.count == unread.count {
-                for (index, hash) in zip(unread, hashes) { files[index].hash = String(hash) }
+            // A machine's: git's hash of each (as they are, no filters run), in one call, so they're
+            // read from its box only when they change. One git can't hash (a broken link) fails the
+            // call: then each on its own.
+            let unread = Array(files.indices.filter { files[$0].unread }.prefix(500))
+            func hashes(_ indices: [Int]) -> [Substring]? {
+                run(["hash-object", "--no-filters", "--"] + indices.map { files[$0].path }, in: root)?.split(separator: "\n")
+            }
+            if !unread.isEmpty {
+                if let all = hashes(unread), all.count == unread.count {
+                    for (index, hash) in zip(unread, all) { files[index].hash = String(hash) }
+                } else {
+                    for index in unread { files[index].hash = hashes([index])?.first.map(String.init) }
+                }
             }
         }
         return files.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
