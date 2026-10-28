@@ -14752,10 +14752,16 @@ ${live.agentPrompt}` : ""
     }
   }
   forgetProvider(providerID2) {
-    for (const live of this.live.values()) {
+    for (const [id, live] of this.live) {
       const thread = live.threads.get(providerID2);
       if (!thread)
         continue;
+      const run2 = runOf(live.doing);
+      if (run2?.agent?.provider === providerID2) {
+        run2.abort.abort();
+        this.settleAsks(id, live);
+        run2.agent.abandon();
+      }
       thread.close();
       live.threads.delete(providerID2);
     }
@@ -19965,4 +19971,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 09083b4a486ad4fefbfa45bf6f9b597da492402a8aee5cc28df3627d99e9efa5
+// Built from Packages/Box/src/agents a9fe1b34a5e08ac1497e9e21cca10f46107c0cc5f31e682a6f8804ff6a92e993

@@ -2482,11 +2482,18 @@ export class Sessions {
     }
   }
 
-  /** An account went: its conversations in sessions close (their sessions go on with another model). */
+  /** An account went: its conversations in sessions close (their sessions go on with another
+   * model), and a turn its agent is at work on ends as stopped (its agent is gone with it). */
   forgetProvider(providerID: string) {
-    for (const live of this.live.values()) {
+    for (const [id, live] of this.live) {
       const thread = live.threads.get(providerID)
       if (!thread) continue
+      const run = runOf(live.doing)
+      if (run?.agent?.provider === providerID) {
+        run.abort.abort()
+        this.settleAsks(id, live)
+        run.agent.abandon()
+      }
       thread.close()
       live.threads.delete(providerID)
     }

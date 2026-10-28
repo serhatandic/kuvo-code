@@ -795,4 +795,14 @@ describe("Stopping Codex", () => {
     expect(sessions.messages(id).at(-1)).toMatchObject({ type: "idle", outcome: "interrupted" })
     expect(tools(id)[0].state).toMatchObject({ status: "error", error: { type: "aborted" }, content: [{ type: "text", text: "Stopped." }] })
   })
+
+  test("its account removed while it works (Settings › Accounts): the turn ends as stopped, without Stop", async () => {
+    const id = start([["item/started", { item: command("c1", "npm run dev") }], untilStopped])
+    await until(() => tools(id).length > 0)
+    // As removing an account does: its conversations close, and its Codex stops.
+    sessions.forgetProvider(codex!.providerID)
+    codex!.shutdown()
+    await until(() => ended(id))
+    expect(sessions.messages(id).at(-1)).toMatchObject({ type: "idle", outcome: "interrupted" })
+  })
 })
