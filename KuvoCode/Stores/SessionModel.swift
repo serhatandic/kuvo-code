@@ -1137,7 +1137,10 @@ final class SessionModel {
     /// comes back where it was written (`written`; the follow-up field's when nil).
     private func askSideQuestion(_ question: String, written: String?, thread: String? = nil) {
         guard let bridge = goalBridge(), let api = bridge.api else {
-            if let written { keywordUnavailable(written) }
+            if let written { return keywordUnavailable(written) }
+            // A follow-up: back in its field, saying why.
+            unsentFollowUp = question
+            failure = "This runs in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment."
             return
         }
         let session = id

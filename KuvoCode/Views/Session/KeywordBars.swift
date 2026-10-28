@@ -135,7 +135,11 @@ struct KeywordBars: View {
                 model.removeSideThread(thread)
             } done: {
                 model.shownSideQuestion = nil
+            } leave: {
+                model.focusComposer()
             }
+            // Its own per conversation and thread: a follow-up half written for one never shows in another.
+            .id(model.id + "/" + thread.id)
             .modifier(CardRow())
             .transition(.fold)
         }
@@ -160,6 +164,8 @@ struct SideThreadBar: View {
     let newThread: () -> Void
     let remove: () -> Void
     let done: () -> Void
+    /// The keyboard back to the message field.
+    var leave: () -> Void = {}
     @State private var followUp = ""
     @FocusState private var followUpFocused: Bool
 
@@ -179,7 +185,6 @@ struct SideThreadBar: View {
                     Label("Asks only, changes nothing", systemImage: "eye")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.tertiary)
-                        .help("Answered from the conversation without adding to it: it can’t run commands or change files.")
                 }
                 .padding(.leading, 42)
                 .padding(.trailing, 16)
@@ -210,9 +215,10 @@ struct SideThreadBar: View {
             }
             .frame(maxHeight: 260)
             .fixedSize(horizontal: false, vertical: true)
-            .onAppear { reader.scrollTo(latest.id, anchor: .bottom) }
-            .onChange(of: latest.id) { withAnimation(.ui) { reader.scrollTo(latest.id, anchor: .bottom) } }
-            .onChange(of: latest.state) { withAnimation(.ui) { reader.scrollTo(latest.id, anchor: .bottom) } }
+            // The newest from its question: a long answer reads from its start.
+            .onAppear { reader.scrollTo(latest.id, anchor: .top) }
+            .onChange(of: latest.id) { withAnimation(.ui) { reader.scrollTo(latest.id, anchor: .top) } }
+            .onChange(of: latest.state) { withAnimation(.ui) { reader.scrollTo(latest.id, anchor: .top) } }
         }
     }
 
@@ -260,6 +266,11 @@ struct SideThreadBar: View {
                 .lineLimit(1...4)
                 .focused($followUpFocused)
                 .onSubmit(send)
+                // Escape: back to the message field.
+                .onExitCommand {
+                    followUpFocused = false
+                    leave()
+                }
             Button(action: send) {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 11, weight: .semibold))

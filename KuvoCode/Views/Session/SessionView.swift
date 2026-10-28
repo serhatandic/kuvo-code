@@ -187,8 +187,8 @@ private struct BottomStack: View {
                     : BarStripItem(bar: bar, symbol: Keyword.review.symbol, words: "Review · \(review.findings.count)")
                 }
             case .sideQuestion:
-                let answering = model.sideQuestions.first { $0.id == model.shownSideQuestion }?.state == .answering
-                return BarStripItem(bar: bar, symbol: answering ? nil : Keyword.btw.symbol, words: answering ? "Answering…" : "Side question")
+                let answering = model.shownSideThread?.latest.state == .answering
+                return BarStripItem(bar: bar, symbol: answering ? nil : Keyword.btw.symbol, words: answering ? "Answering…" : (model.shownSideThread?.questions.count ?? 1) > 1 ? "Side thread" : "Side question")
             case .subagents:
                 return BarStripItem(bar: bar, symbol: nil, words: subagentsAtWork.count == 1 ? "A subagent" : "\(subagentsAtWork.count) subagents")
             case .background:
@@ -243,7 +243,7 @@ private struct BottomStack: View {
     /// work isn't, nor a goal you paused yourself.
     private var news: [ComposerBar: Bool] {
         [.review: model.review.map { $0.state == .done && !$0.findings.isEmpty } ?? false,
-         .sideQuestion: model.sideQuestions.first { $0.id == model.shownSideQuestion }?.state == .answered,
+         .sideQuestion: model.shownSideThread?.latest.state == .answered,
          .goal: model.goal.map { goal in
              goal.state == .met || goal.state == .unmet || (goal.state == .paused && (goal.pausedBy == .error || goal.pausedBy == .stalled))
          } ?? false]

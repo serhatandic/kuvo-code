@@ -127,6 +127,19 @@ describe("a side question", () => {
     expect((await sideQuestionRoutes(questions, "DELETE", ["ses_work", "threads", first.id], async () => ({}))).status).toBe(404)
   })
 
+  test("a follow-up asked while the one before it is answered (from another client) still sees it", async () => {
+    const questions = new SideQuestions(join(root, "btw.json"), places())
+    questions.onAnswered = beat
+    engine.holdingChecks = true
+    const first = await questions.ask("ses_work", "Which event?")
+    await until(() => engine.checks.length === 1)
+    await questions.ask("ses_work", "And which browsers?", first.id)
+    await until(() => engine.checks.length === 2)
+    expect(engine.checks[1].prompt).toContain("Q: Which event?\nA: (not answered yet)")
+    engine.answerChecks()
+    questions.stopAll()
+  })
+
   test("about a coding agent's conversation is answered with the conversation in the question", async () => {
     const questions = new SideQuestions(join(root, "btw.json"), places(true))
     questions.onAnswered = beat

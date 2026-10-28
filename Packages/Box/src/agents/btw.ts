@@ -129,6 +129,8 @@ export class SideQuestions {
     await sessionInfo(place.api, session).catch((error: any) => {
       throw new SideQuestionError(error?.status === 404 ? 404 : 503, error?.status === 404 ? "There's no such conversation here." : "The conversation can't be reached now.")
     })
+    // Taken away meanwhile: no follow-up left in a thread that's gone.
+    if (thread !== undefined && !this.list(session).some((each) => threadOf(each) === thread)) throw new SideQuestionError(404, "There's no such side thread.")
     const id = newID("btw")
     const asked: SideQuestion = { id, session, thread: thread ?? id, question: text, state: "answering", asked: this.now() }
     const list = [...(this.kept.get(session) ?? []), asked].slice(-keptLimit)
@@ -166,9 +168,11 @@ export class SideQuestions {
     // Its thread so far, so a follow-up follows on from it; a new thread starts afresh.
     const list = this.list(question.session)
     const before = list.slice(0, Math.max(0, list.indexOf(question)))
-    const earlier = before.filter((each) => threadOf(each) === threadOf(question) && each.state === "answered").slice(-threadContext)
+    // (One still being answered, asked from another client meanwhile, is there unanswered.)
+    const earlier = before.filter((each) => threadOf(each) === threadOf(question) && each.state !== "failed").slice(-threadContext)
+    const said = (each: SideQuestion) => `Q: ${each.question}\nA: ${each.state === "answered" ? each.answer : "(not answered yet)"}`
     const prompt = `Someone working with you in this conversation asks a side question. Answer it briefly and plainly, from what this conversation shows and what you know. Don't run anything or change anything: this answer isn't added to the conversation, and the work in it carries on as it was.
-${earlier.length ? `\nIt follows on from their side thread so far, with your answers:\n${earlier.map((each) => `Q: ${each.question}\nA: ${each.answer}`).join("\n\n")}\n` : ""}
+${earlier.length ? `\nIt follows on from their side thread so far, with your answers:\n${earlier.map(said).join("\n\n")}\n` : ""}
 <question>
 ${question.question}
 </question>`
