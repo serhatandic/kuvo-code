@@ -43,9 +43,9 @@ enum ToolApproval: String, CaseIterable {
     /// they're folded in: Approve All runs what Settings asks first about, without asking; Ask
     /// First still lets through what Settings allows (a command like "npm test *", a bot's
     /// memory), asking about the rest; and both keep what Settings doesn't allow, which nothing
-    /// overrides.
+    /// overrides (one a newer engine set that this app doesn't know counts as that too, sent as it is).
     func rules(settings: [PermissionRule]) -> [PermissionRule] {
-        let denied = settings.filter { $0.effect == .deny }
+        let denied = settings.filter { $0.effect.holdsBack }
         switch self {
         case .approveAll:
             return settings.filter { $0.effect == .ask }.map { PermissionRule(action: $0.action, resource: $0.resource, effect: .allow) } + denied
@@ -56,7 +56,7 @@ enum ToolApproval: String, CaseIterable {
             let everywhere = settings.last { $0.action == "external_directory" && $0.resource == "*" }?.effect == .allow
             let mode = everywhere ? rules : rules.filter { $0.action != "external_directory" }
             // What Settings says of particular things (an Ask under a broader Allow too), in its order.
-            return mode + settings.filter { $0.effect != .deny && $0.resource != "*" && $0.action != "external_directory" } + denied
+            return mode + settings.filter { !$0.effect.holdsBack && $0.resource != "*" && $0.action != "external_directory" } + denied
         }
     }
 

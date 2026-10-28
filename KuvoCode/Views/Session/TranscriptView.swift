@@ -1288,7 +1288,8 @@ private struct TurnEndView: View {
                     replyButtons
                 }
             }
-        case .interrupted:
+        // (One a newer engine says that this app doesn't know: it stopped.)
+        case .interrupted, .unknown:
             HStack(spacing: 6) {
                 Label("Stopped", systemImage: "stop.circle")
                     .font(.caption)

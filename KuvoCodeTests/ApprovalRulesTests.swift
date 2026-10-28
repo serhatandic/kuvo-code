@@ -48,6 +48,21 @@ import Testing
         #expect(ToolApproval(rules: rules) == .askFirst)
     }
 
+    /// A rule a newer engine set in Settings, of a kind this app doesn't know ("deny-forever"), is
+    /// never let through by the approval: in Approve All (which lets through what Settings asks
+    /// about) and Ask First alike, it goes to the session as it is, for the engine to apply.
+    @Test func aRuleOfANewerEnginesKindIsNeverLetThrough() throws {
+        let newer = try JSONDecoder().decode(PermissionRule.self, from: Data(#"{"action":"shell","resource":"rm *","effect":"deny-forever"}"#.utf8))
+        let settings = [PermissionRule(action: "shell", effect: .ask), newer]
+        for approval in [ToolApproval.approveAll, .askFirst] {
+            let rules = approval.rules(settings: settings)
+            #expect(effect(rules, "shell", "rm -rf build", settings: settings) == .unknown("deny-forever"), "\(approval)")
+            #expect(!rules.contains { $0.resource == "rm *" && $0.effect == .allow })
+            let sent = String(decoding: try JSONEncoder().encode(rules), as: UTF8.self)
+            #expect(sent.contains(#""effect":"deny-forever""#))
+        }
+    }
+
     @Test func askFirstAsksAboutFoldersWhenSettingsAllowsThemAll() {
         let settings = [PermissionRule(action: "external_directory", effect: .allow)]
         let rules = ToolApproval.askFirst.rules(settings: settings)

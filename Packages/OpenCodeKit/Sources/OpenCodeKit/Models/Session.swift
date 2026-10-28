@@ -39,13 +39,37 @@ public struct Session: Codable, Sendable, Hashable, Identifiable {
         public var archived: Milliseconds?
     }
 
-    public enum Outcome: String, Codable, Sendable {
+    public enum Outcome: Codable, Sendable, Hashable {
         case succeeded, failed, interrupted
+        /// One a newer engine says that this app doesn't know: shown as stopped, and kept as it was
+        /// (rather than losing the list it's in, or being written back as another).
+        case unknown(String)
 
-        /// One a newer engine says that this app doesn't know: it stopped (rather than losing the
-        /// list it's in).
+        public init(rawValue: String) {
+            switch rawValue {
+            case "succeeded": self = .succeeded
+            case "failed": self = .failed
+            case "interrupted": self = .interrupted
+            default: self = .unknown(rawValue)
+            }
+        }
+
+        public var rawValue: String {
+            switch self {
+            case .succeeded: "succeeded"
+            case .failed: "failed"
+            case .interrupted: "interrupted"
+            case .unknown(let word): word
+            }
+        }
+
         public init(from decoder: Decoder) throws {
-            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .interrupted
+            self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
         }
     }
 
@@ -62,12 +86,47 @@ public struct PermissionRule: Codable, Sendable, Hashable {
     public var resource: String
     public var effect: Effect
 
-    public enum Effect: String, Codable, Sendable {
+    public enum Effect: Codable, Sendable, Hashable {
         case allow, deny, ask
+        /// One a newer engine has that this app doesn't know: kept as it was, and taken as Don't
+        /// Allow wherever this app decides what a rule lets through (`holdsBack`), never as Ask
+        /// (which Approve All turns into Allow).
+        case unknown(String)
 
-        /// One a newer engine has that this app doesn't know: it asks you.
+        public init(rawValue: String) {
+            switch rawValue {
+            case "allow": self = .allow
+            case "deny": self = .deny
+            case "ask": self = .ask
+            default: self = .unknown(rawValue)
+            }
+        }
+
+        public var rawValue: String {
+            switch self {
+            case .allow: "allow"
+            case .deny: "deny"
+            case .ask: "ask"
+            case .unknown(let word): word
+            }
+        }
+
+        /// What it matches is held back, as far as this app decides: Don't Allow, or one it
+        /// doesn't know.
+        public var holdsBack: Bool {
+            switch self {
+            case .deny, .unknown: true
+            case .allow, .ask: false
+            }
+        }
+
         public init(from decoder: Decoder) throws {
-            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .ask
+            self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
         }
     }
 

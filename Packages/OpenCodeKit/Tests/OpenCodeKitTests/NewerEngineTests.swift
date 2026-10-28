@@ -16,9 +16,15 @@ struct NewerEngineTests {
         """
         let sessions = try JSONDecoder().decode([Session].self, from: Data(json.utf8))
         #expect(sessions.map(\.id) == ["ses_1", "ses_2"])
-        #expect(sessions[0].outcome == .interrupted, "a run that ended some new way: it stopped")
-        #expect(sessions[0].permissions?.first?.effect == .ask, "a rule of a kind it doesn't know asks you")
+        #expect(sessions[0].outcome == .unknown("timed-out"))
         #expect(sessions[1].outcome == .failed)
+        // A rule of a kind it doesn't know holds back what it matches, never asks (which Approve
+        // All would make an Allow).
+        let effect = try #require(sessions[0].permissions?.first?.effect)
+        #expect(effect == .unknown("deny-forever") && effect.holdsBack)
+        // Both go back as they came, sent again or carried to another computer.
+        let again = String(decoding: try JSONEncoder().encode(sessions[0]), as: UTF8.self)
+        #expect(again.contains(#""outcome":"timed-out""#) && again.contains(#""effect":"deny-forever""#))
     }
 
     @Test func aConversationAndAQueueWithAWordThisAppDoesntKnowAreReadWhole() throws {
