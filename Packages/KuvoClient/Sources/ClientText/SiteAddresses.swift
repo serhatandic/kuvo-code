@@ -39,7 +39,8 @@ public enum SiteAddresses {
                   !rel.contains("mask-icon"), let href = attribute(.href, in: tag),
                   let url = URL(string: href.trimmingCharacters(in: .whitespaces), relativeTo: page)?.absoluteURL,
                   ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { continue }
-            let size = attribute(.sizes, in: tag).flatMap { Int($0.lowercased().split(separator: "x").first ?? "") }
+            // (The page's own words: a size no icon could have counts as none given.)
+            let size = attribute(.sizes, in: tag).flatMap { Int($0.lowercased().split(separator: "x").first ?? "") }.flatMap { (1...4096).contains($0) ? $0 : nil }
             let isSVG = url.pathExtension.lowercased() == "svg" || attribute(.type, in: tag)?.contains("svg") == true
             if isSVG, !drawsSVG { continue }
             var score = isSVG ? 1100 : size.map { 1000 - abs($0 - 64) } ?? 500
