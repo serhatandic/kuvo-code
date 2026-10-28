@@ -37,6 +37,18 @@ public enum Branches {
         return String(result[range].dropFirst("(address ".count).dropLast())
     }
 
+    /// The session a start_session step started while the step still waits for its first answer
+    /// (its result, with the address, comes only then): one an agent started once the step began,
+    /// with the title the step gave it if it gave one, the first of them. So its row opens it at once.
+    public static func started(byWaiting step: Message.ToolCall, among sessions: [Session]) -> String? {
+        guard case .running(let input, _) = step.state, let began = step.time?.created ?? step.time?.ran else { return nil }
+        let title = input["title"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return sessions
+            .filter { origin(of: $0)?.kind == .started && $0.time.created >= began - 1_000 }
+            .filter { title?.isEmpty != false || $0.title == title }
+            .min { $0.time.created < $1.time.created }?.id
+    }
+
     /// The sidebar's hint for a conversation that came from `title`'s.
     public static func hint(_ kind: Kind, from title: String) -> String {
         switch kind {
