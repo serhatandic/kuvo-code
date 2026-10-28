@@ -24,6 +24,7 @@ struct TranscriptView: View {
     @State private var rowCache = RowCache()
     /// Find in the conversation (⌘F).
     @State private var find = ConversationFind()
+    @Environment(\.isConversationShown) private var isShown
 
     /// The thinking under way at the end, if any.
     private static func thinking(in rows: [Row]) -> Thinking? {
@@ -167,6 +168,8 @@ struct TranscriptView: View {
             scroller.toEnd()
         }
         #endif
+        // (Kept out of view for going back to: its Find isn't Esc's meanwhile.)
+        .onChange(of: isShown, initial: true) { find.isShown = isShown }
         .onChange(of: model.findRequest, initial: true) {
             guard model.findRequest > 0 else { return }
             find.open(model.findPreset)
