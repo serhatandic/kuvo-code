@@ -81,7 +81,7 @@ public struct ReviewCommand: Equatable, Sendable {
         case .folder(let path): return "folder " + (path.contains(where: \.isWhitespace) ? "\"\(path)\"" : path)
         case .project: return projectPhrase
         // In quotes, which end it (one inside would end it early).
-        case .described(let words, _): return "about \"" + words.replacingOccurrences(of: "\"", with: "'") + "\""
+        case .described(let words, _): return "about \"" + String(words.map { isQuote($0) ? "'" : $0 }) + "\""
         }
     }
 
@@ -207,9 +207,9 @@ public struct ReviewCommand: Equatable, Sendable {
             let after = words.dropFirst(6)
             if after.allSatisfy(\.isWhitespace) { return (nil, words.endIndex, .folder("")) }
             let path = after.drop { $0.isWhitespace }
-            if path.first == "\"" {
+            if let first = path.first, isQuote(first) {
                 let inside = path.dropFirst()
-                guard let close = inside.firstIndex(of: "\"") else { return (inside.isEmpty ? nil : .folder(String(inside)), words.endIndex, .folder(String(inside))) }
+                guard let close = inside.firstIndex(where: isQuote) else { return (inside.isEmpty ? nil : .folder(String(inside)), words.endIndex, .folder(String(inside))) }
                 return (.folder(String(inside[..<close])), inside.index(after: close), nil)
             }
             let word = path.prefix { !$0.isWhitespace }
@@ -221,18 +221,37 @@ public struct ReviewCommand: Equatable, Sendable {
             if after.allSatisfy(\.isWhitespace) { return (nil, words.endIndex, .described("")) }
             let said = after.drop { $0.isWhitespace }
             let trimmed = { (text: Substring) in text.trimmingCharacters(in: .whitespacesAndNewlines) }
-            if said.first == "\"" {
+            if let first = said.first, isQuote(first) {
                 let inside = said.dropFirst()
-                guard let close = inside.firstIndex(of: "\"") else {
+                guard let close = inside.firstIndex(where: isQuote) else {
                     return (trimmed(inside).isEmpty ? nil : .described(trimmed(inside)), words.endIndex, .described(String(inside)))
                 }
                 let text = trimmed(inside[..<close])
                 return (text.isEmpty ? nil : .described(text), inside.index(after: close), nil)
             }
-            // Still being written, without its quotes yet: all of what follows.
+            // Still being written, without its quotes yet: what follows, up to what to look for or
+            // who reads it ("about the sign-in for security").
+            var end = said.endIndex
+            var at = said.startIndex
+            while at < said.endIndex {
+                if said[at].isWhitespace {
+                    let next = said[at...].drop { $0.isWhitespace }
+                    if isWord("with", at: next) || preset(in: next) != nil {
+                        end = at
+                        break
+                    }
+                }
+                at = said.index(after: at)
+            }
+            if end < said.endIndex { return (trimmed(said[..<end]).isEmpty ? nil : .described(trimmed(said[..<end])), end, nil) }
             return (.described(trimmed(said)), words.endIndex, .described(String(said)))
         }
         return nil
+    }
+
+    /// A straight quote, or a curly one, as a field that types them makes.
+    static func isQuote(_ character: Character) -> Bool {
+        character == "\"" || character == "“" || character == "”"
     }
 
     static func preset(in words: Substring) -> (Preset, String.Index)? {

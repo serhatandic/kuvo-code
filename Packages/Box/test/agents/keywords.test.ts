@@ -740,6 +740,42 @@ describe("a review with fresh eyes", () => {
     expect(none.status).toBe(422)
     expect(((await none.json()) as any).message).toBe("No files in this project fit that. Say it another way, or pick a folder.")
     expect((await measure({ kind: "described", words: "  " })).status).toBe(400)
+
+    // Files that fit but can't be read (a picture) are said so before a review is asked for, and
+    // only the ones it reads are named.
+    writeFileSync(join(folder, "logo.png"), "\0\x01binary")
+    writeFileSync(join(folder, "package-lock.json"), "{}\n")
+    await git("add", "-A")
+    await git("commit", "-qm", "more")
+    engine.answers = [`{"paths": ["logo.png", "package-lock.json"]}`]
+    const unreadable = await measure({ kind: "described", words: "the logo" })
+    expect(unreadable.status).toBe(422)
+    expect(((await unreadable.json()) as any).message).toBe("None of the files that fit can be reviewed: they aren't text, or they're too big.")
+    engine.answers = [`{"paths": ["src/billing.ts", "package-lock.json"]}`]
+    expect(((await (await measure({ kind: "described", words: "billing" })).json()) as any).data).toEqual({ files: 1, parts: 1, leftOut: 0, found: ["src/billing.ts"] })
+    reviews.stopAll()
+  })
+
+  test("a review asked for while its words' files are still being found waits for them, and reads the same ones", async () => {
+    const folder = join(root, "pending")
+    await run("git", ["init", "-q", "-b", "main", folder])
+    writeFileSync(join(folder, "a.ts"), "a()\n")
+    writeFileSync(join(folder, "b.ts"), "b()\n")
+    engine.directory = folder
+    const reviews = new Reviews(join(root, "reviews.json"), places())
+    reviews.onEnded = beat
+    engine.holdingChecks = true
+    const measuring = reviewRoutes(reviews, "POST", ["ses_work", "measure"], async () => ({ scope: { kind: "described", words: "the a file" } }))
+    await until(() => engine.checks.length === 1)
+    await reviewRoutes(reviews, "POST", ["ses_work"], async () => ({ scope: { kind: "described", words: "the a file" } }))
+    engine.answers = [`{"paths": ["a.ts"]}`, `{"summary": "Fine.", "findings": []}`]
+    engine.holdingChecks = false
+    engine.answerChecks()
+    expect(((await (await measuring).json()) as any).data.found).toEqual(["a.ts"])
+    await until(() => reviews.get("ses_work")?.state === "done")
+    // One question for the files, one for the review.
+    expect(engine.checks.length).toBe(2)
+    expect(reviews.get("ses_work")!.scope).toEqual({ kind: "described", words: "the a file", paths: ["a.ts"] })
     reviews.stopAll()
   })
 

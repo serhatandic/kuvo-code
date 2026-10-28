@@ -254,8 +254,9 @@ extension ReviewList.Described {
     public static func find(_ words: String, session: String, api: OpenCodeAPI) async -> Self {
         do {
             return Self(words: words, size: try await api.measureReview(session: session, scope: .described(words)))
-        } catch let error as ServerError where error.status == 422 || error.status == 503 {
-            // Nothing fits, or the model couldn't be asked: the box says which.
+        } catch let error as ServerError where [400, 422, 503].contains(error.status) {
+            // Nothing fits, the model couldn't be asked, or (a box from before) it can't: the box
+            // says which.
             return Self(words: words, problem: error.message)
         } catch {
             return Self(words: words, problem: "It couldn’t find the files for that. Try again, or pick a folder.")

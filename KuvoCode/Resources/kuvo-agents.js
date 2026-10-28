@@ -4146,15 +4146,33 @@ class Reviews {
     });
     const { parts, leftOut } = partsOf(read);
     const commits = await commitCount(info.directory, scope);
-    const found = scope.kind === "described" ? { found: scope.paths.slice(0, foundShown) } : {};
+    let found = {};
+    if (scope.kind === "described") {
+      const readable = filesIn(parts, true);
+      if (!readable.length)
+        throw new ReviewError(422, "None of the files that fit can be reviewed: they aren't text, or they're too big.");
+      found = { found: readable.slice(0, foundShown) };
+    }
     return { files: countFiles(parts, readsFiles(scope)), parts: parts.length, leftOut, ...commits === undefined ? {} : { commits }, ...found };
   }
   async filesFor(session, info, words2) {
     const key = session + `
 ` + words2;
+    for (const [each, kept2] of this.found)
+      if (this.now() - kept2.at >= foundKept)
+        this.found.delete(each);
     const kept = this.found.get(key);
-    if (kept && this.now() - kept.at < foundKept)
+    if (kept)
       return kept.paths;
+    const paths = this.find(session, info, words2);
+    this.found.set(key, { paths, at: this.now() });
+    paths.catch(() => {
+      if (this.found.get(key)?.paths === paths)
+        this.found.delete(key);
+    });
+    return paths;
+  }
+  async find(session, info, words2) {
     const all = await listFiles(realpathSync(info.directory)).catch((error) => {
       throw new ReviewError(422, error?.message ?? String(error));
     });
@@ -4169,7 +4187,6 @@ class Reviews {
     const paths = pickedFiles(answer, listed);
     if (!paths.length)
       throw new ReviewError(422, "No files in this project fit that. Say it another way, or pick a folder.");
-    this.found.set(key, { paths, at: this.now() });
     return paths;
   }
   async choices(session) {
@@ -4599,12 +4616,15 @@ function inParts(units) {
   return { parts, leftOut };
 }
 function countFiles(parts, files) {
+  return filesIn(parts, files).length;
+}
+function filesIn(parts, files) {
   const named = new Set;
   for (const part of parts) {
     for (const line3 of part.matchAll(files ? /^=== (.+?) ===$/gm : /^diff --git a\/(.+?) b\//gm))
       named.add(line3[1]);
   }
-  return named.size;
+  return [...named];
 }
 function found(count) {
   return count === 0 ? "It found nothing wrong." : count === 1 ? "It found 1 thing to fix." : `It found ${count} things to fix.`;
@@ -19970,4 +19990,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 9f924d2711c6496cc62579cd06e09fddfb405465191b9ccc98c982fbf8961e7e
+// Built from Packages/Box/src/agents 926e62e50a3de21143870860ac413a9b92a9f0faf05ad4cb0192c1aaaa353196

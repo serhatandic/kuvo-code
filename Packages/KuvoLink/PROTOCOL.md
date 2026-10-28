@@ -1545,8 +1545,10 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   - `POST …/kuvo/reviews/<session>/measure` with `{"scope"?}` → `{data: {files, parts, leftOut,
     commits?, found?}}`: how much a review of it would read, to show before asking for a big one
     (`commits` for a branch or a range of them, `found` the first 10 files found for described
-    words); `422` with what's wrong when it can't be read (not a repository, no such commit or
-    folder, words that fit no file), `503` when the model couldn't be asked.
+    words that it reads); `422` with what's wrong when it can't be read (not a repository, no such
+    commit or folder, words that fit no file, or only files it can't read), `503` when the model
+    couldn't be asked. Described words still being found are waited for, not asked again, by a
+    review or another `measure` meanwhile.
   - `GET …/kuvo/reviews/<session>/choices` → `{data: {repository, branch?: {name, base, commits},
     commits: [{id, short, title, time}], folders: [{path, files}], describes?: true}}`: what "What to review"
     offers in the conversation's folder: the branch it's on with its base and how many commits

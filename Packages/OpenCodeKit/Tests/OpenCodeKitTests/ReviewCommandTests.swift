@@ -155,8 +155,19 @@ private let readers = [flash, claude, sonnet, copilotSonnet]
     #expect(command.reader == sonnet)
     #expect(command.focus == "the tokens")
     #expect(ReviewCommand(" " + picked + " ", readers: readers).asking == .lookFor(""))
+    // Curly quotes, as the field types them, are quotes too.
+    #expect(ReviewCommand(" about “the auth module” ", readers: readers).asking == .lookFor(""))
+    #expect(ReviewCommand(" about “the auth module” ", readers: readers).scope == .described("the auth module"))
+    #expect(ReviewCommand(#" folder “My Docs” the links"#, readers: readers).scope == .folder("My Docs"))
+    // Written without them, they end where what to look for or who reads it starts.
+    let unquoted = ReviewCommand(" about the auth module for security with Claude Sonnet 4.5", readers: readers)
+    #expect(unquoted.scope == .described("the auth module"))
+    #expect(unquoted.preset == .security)
+    #expect(unquoted.reader == sonnet)
+    #expect(ReviewCommand(" about the tests for the parser", readers: readers).scope == .described("the tests for the parser"))
     // A quote in your words can't end them early.
     #expect(ReviewCommand.phrase(.described(#"the "new" sign-in"#)) == #"about "the 'new' sign-in""#)
+    #expect(ReviewCommand.phrase(.described("the “new” sign-in")) == #"about "the 'new' sign-in""#)
 
     let said = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ReviewScope.described("files I touched today", paths: ["a.ts"]))) as? [String: String]
     #expect(said == ["kind": "described", "words": "files I touched today"])

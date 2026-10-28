@@ -135,8 +135,10 @@ struct Composer: View {
     @State private var dismissedReviewList: String?
     /// What the box said of this folder for "/review"'s lists: what it offers, and how much each reads.
     @State private var reviewKnown = ReviewList.Known()
-    /// What the box found for the words "/review about" says to review.
+    /// What the box found for the words "/review about" says to review, and for which conversation
+    /// and words (`describedReview`).
     @State private var reviewFound: ReviewList.Described?
+    @State private var reviewFoundFor: [String]?
     /// The model picked last there (`Model.key`), offered first next time.
     @AppStorage(Catalog.lastReviewerKey) private var lastReviewer = ""
     /// Your starred models (the model picker's), offered there after it.
@@ -726,7 +728,7 @@ struct Composer: View {
             let reader = command.reader?.name ?? currentModel?.name ?? "The conversation’s model"
             let hint = ReviewList.hint(command, listed: reviewList != nil, reader: reader, isAgent: isAgentConversation) ?? ReviewList.summary(command, reader: reader)
             // What it found for your words first, or why it found nothing.
-            if let found = ReviewList.found(command, described: reviewFound) { return found.isProblem ? found : (found.text + " " + hint, false) }
+            if let found = ReviewList.found(command, described: reviewFoundFor == describedReview ? reviewFound : nil) { return found.isProblem ? found : (found.text + " " + hint, false) }
             return (hint, false)
         default:
             return (keyword.hint, false)
@@ -803,12 +805,22 @@ struct Composer: View {
     }
 
     private func findDescribed() async {
-        guard let described = describedReview, reviewFound?.words != described[1] else { return }
+        // Found already for these: kept (a problem is asked about again).
+        guard let described = describedReview, reviewFoundFor != described || reviewFound?.size == nil else { return }
         let words = described[1]
+        reviewFoundFor = described
         reviewFound = ReviewList.Described(words: words)
-        guard let directory = workspace.session(described[0])?.location.directory, let api = workspace.agents(forFolder: directory)?.api else { return }
+        guard let directory = workspace.session(described[0])?.location.directory, let api = workspace.agents(forFolder: directory)?.api else {
+            reviewFound = ReviewList.Described(words: words, problem: "This conversation’s computer can’t be reached now.")
+            return
+        }
         let found = await ReviewList.Described.find(words, session: described[0], api: api)
-        if !Task.isCancelled { reviewFound = found }
+        // Left before it answered: nothing is kept, so it's asked again next time.
+        guard !Task.isCancelled else {
+            if reviewFoundFor == described, reviewFound == ReviewList.Described(words: words) { reviewFoundFor = nil; reviewFound = nil }
+            return
+        }
+        reviewFound = found
     }
 
     /// Picked from a "/review" list: its words written after what's there, for the next one; or,

@@ -120,7 +120,7 @@ export class Reviews {
   private stopped = false
   /** The files described words were found to mean, by conversation and words, for a while: a
    * review reads the ones its size was measured from. */
-  private found = new Map<string, { paths: string[]; at: number }>()
+  private found = new Map<string, { paths: Promise<string[]>; at: number }>()
   /** Told once a review ends (a test waits on it). */
   onEnded?: () => void
 
@@ -217,8 +217,14 @@ export class Reviews {
     })
     const { parts, leftOut } = partsOf(read)
     const commits = await commitCount(info.directory!, scope)
-    // What it found for your words, the first few, to show what it understood.
-    const found = scope.kind === "described" ? { found: scope.paths!.slice(0, foundShown) } : {}
+    // What it found for your words that it can read (not a picture, a lock file or a big one), the
+    // first few, to show what it understood.
+    let found = {}
+    if (scope.kind === "described") {
+      const readable = filesIn(parts, true)
+      if (!readable.length) throw new ReviewError(422, "None of the files that fit can be reviewed: they aren't text, or they're too big.")
+      found = { found: readable.slice(0, foundShown) }
+    }
     return { files: countFiles(parts, readsFiles(scope)), parts: parts.length, leftOut, ...(commits === undefined ? {} : { commits }), ...found }
   }
 
@@ -227,8 +233,21 @@ export class Reviews {
    * on lately; kept a while, so the review reads the same ones its size was measured from. */
   private async filesFor(session: string, info: SessionInfo, words: string): Promise<string[]> {
     const key = session + "\n" + words
+    for (const [each, kept] of this.found) if (this.now() - kept.at >= foundKept) this.found.delete(each)
+    // One still being found is waited for, not asked again: a review asked for meanwhile reads
+    // the same files.
     const kept = this.found.get(key)
-    if (kept && this.now() - kept.at < foundKept) return kept.paths
+    if (kept) return kept.paths
+    const paths = this.find(session, info, words)
+    this.found.set(key, { paths, at: this.now() })
+    // What couldn't be found is asked again next time.
+    paths.catch(() => {
+      if (this.found.get(key)?.paths === paths) this.found.delete(key)
+    })
+    return paths
+  }
+
+  private async find(session: string, info: SessionInfo, words: string): Promise<string[]> {
     // (Never one named for secrets, which a review never reads.)
     const all = await listFiles(realpathSync(info.directory!)).catch((error: any) => {
       throw new ReviewError(422, error?.message ?? String(error))
@@ -242,7 +261,6 @@ export class Reviews {
     })
     const paths = pickedFiles(answer, listed)
     if (!paths.length) throw new ReviewError(422, "No files in this project fit that. Say it another way, or pick a folder.")
-    this.found.set(key, { paths, at: this.now() })
     return paths
   }
 
@@ -688,11 +706,16 @@ export function inParts(units: string[]): { parts: string[]; leftOut: number } {
 
 /** How many files a review read: `=== path ===` lines, or a diff's files. */
 function countFiles(parts: string[], files: boolean): number {
+  return filesIn(parts, files).length
+}
+
+/** The files `parts` have, in order: files' or a diff's. */
+function filesIn(parts: string[], files: boolean): string[] {
   const named = new Set<string>()
   for (const part of parts) {
     for (const line of part.matchAll(files ? /^=== (.+?) ===$/gm : /^diff --git a\/(.+?) b\//gm)) named.add(line[1])
   }
-  return named.size
+  return [...named]
 }
 
 function found(count: number): string {
