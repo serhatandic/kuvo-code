@@ -62,4 +62,19 @@ struct SessionRulesTests {
         #expect(UnsearchedReason.notConnected.line(for: "lokum") == "lokum isn’t connected, so its conversations weren’t searched.")
         #expect(UnsearchedReason.needsUpdate.line(for: "lokum").contains("needs an update"))
     }
+
+    @Test func aSubagentsTaskIsFromTheAgentThatStartedIt() throws {
+        var main = try session("ses_timer")
+        main.title = "Check the settings screen"
+        var finder = try session("ses_find")
+        finder.parentID = "ses_timer"
+        finder.title = "Find where settings are read"
+        #expect(SubagentStarter.name(of: main) == "the main agent")
+        // One a subagent started is from that subagent, by its task, as its conversation's header says.
+        #expect(SubagentStarter.name(of: finder) == "Find where settings are read")
+        finder.title = nil
+        #expect(SubagentStarter.name(of: finder) == "a subagent")
+        // Its starter not known (yet): the main agent, which starts most.
+        #expect(SubagentStarter.name(of: nil) == "the main agent")
+    }
 }
