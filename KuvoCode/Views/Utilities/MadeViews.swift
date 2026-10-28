@@ -241,12 +241,12 @@ struct MadePopover: View {
 
     private var heading: String { place.title }
 
-    /// A coding session's code changes are in the panel.
+    /// A coding session's changes to files git tracks are in the panel.
     private var changesNote: some View {
         VStack(spacing: 0) {
             Divider()
             HStack(spacing: 8) {
-                Text("Its code changes are in the side panel.")
+                Text("Changes to files git tracks are in the side panel.")
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -343,7 +343,7 @@ struct MadePopover: View {
         let detail = switch place {
         case .bot(let bot): "What \(bot.name) writes, makes and keeps in its memory shows up here, with every version."
         case .group: things.only == nil ? "What the bots in this chat write and make shows up here, each with its face." : "This bot hasn’t made anything in this chat yet."
-        case .session: "Pictures, documents and other files this session makes, besides code, show up here."
+        case .session: "Pictures, documents and other files this session makes show up here. Changes to files git tracks are in the side panel."
         }
         return MadeNotice(symbol: "tray", title: "Nothing Made Yet", detail: detail)
     }
