@@ -206,6 +206,8 @@ struct CardActionStyle: ButtonStyle {
                 .labelStyle(.iconOnly)
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(!isEnabled ? .tertiary : hovering ? .primary : .secondary)
+                // A ring in it (saving a copy) greys with its icons.
+                .markInk(.control)
                 .frame(width: 26, height: 24)
                 .background(configuration.isPressed && isEnabled ? Pressable.pressedFill : hovering ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 6))
                 .contentShape(.rect)

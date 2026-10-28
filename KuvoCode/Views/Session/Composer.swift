@@ -68,6 +68,11 @@ struct Composer: View {
     /// The mode and approval chip: hidden where they're not yours to pick (a subagent's are its
     /// agent's).
     var showsMode = true
+    /// The model chip: hidden where the model isn't yours to pick (a coding agent's subagent's).
+    var showsModel = true
+    /// A quiet line over the field: where what you write goes, when it isn't straight there (a
+    /// Claude Code subagent's: through the conversation that started it).
+    var note: String?
     /// The models its picker offers, when they aren't the session's (a subagent's: the engine's).
     var scope: ModelScope?
     /// Takes the keyboard as it shows; a subagent's beside the conversation leaves it there.
@@ -209,6 +214,14 @@ struct Composer: View {
                               fieldFocused(focused)
                           }, onPaste: pasteAttachments)
             }
+            if let note {
+                Text(note)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             ZStack(alignment: .topLeading) {
                 MessageField(
                     text: $text,
@@ -313,8 +326,10 @@ struct Composer: View {
                                 ModeChip(agent: agent, approval: approval, onSelectAgent: onSelectAgent, onSelectApproval: onSelectApproval)
                                     .disabled(isOffline)
                             }
-                            ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse)
-                                .disabled(isOffline)
+                            if showsModel {
+                                ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse)
+                                    .disabled(isOffline)
+                            }
                             if let worktree {
                                 WorkplaceChip(worktree: worktree, attempts: attempts, onSelect: onSelectWorktree, onSelectAttempts: onSelectAttempts)
                             }

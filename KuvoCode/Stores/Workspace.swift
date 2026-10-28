@@ -1264,11 +1264,12 @@ final class Workspace {
     }
 
     /// A new session with `id`'s conversation before `message`, opened in a tab with the
-    /// message in its composer, ready to try another way.
+    /// message in its composer, ready to try another way. Its box makes it and marks it as
+    /// branched from `id`, so it shows under it.
     func fork(_ id: String, from message: Message.User) async throws {
         Analytics.shared.track("session_branched")
         guard let api = api(forSession: id) else { return }
-        let session = try await api.forkSession(id, before: message.id)
+        let session = try await branch(id, before: message.id, api: api)
         upsert(session)
         let (text, comments, paths, _) = SentMessage.split(CommandMessages.shared.text(of: message))
         // The engine's copy carries the attachments; one seen arrive live has them as picked.
@@ -1282,6 +1283,29 @@ final class Workspace {
         draft.comments = comments
         Drafts.shared[session.id] = draft
         tabs?.open(.session(session.id))
+    }
+
+    /// `id`'s conversation before `before`, in a new session marked as branched from it: made by
+    /// its box, or, by one from before it could (or with its bridge down), by its engine's fork,
+    /// marked from here as the box would.
+    private func branch(_ id: String, before: String, api: OpenCodeAPI) async throws -> Session {
+        if let box = self.session(id).flatMap({ agents(forFolder: $0.location.directory) })?.api {
+            do {
+                return try await box.branch(session: id, before: before)
+            } catch let error as ServerError where error.status == 404 && error.message == "Not available for this agent." {
+                // A box from before branches: its route isn't there.
+            }
+        }
+        var session = try await api.forkSession(id, before: before)
+        // Its copy may carry where its source came from: that isn't this one's.
+        // Nor is its place in the lists: it starts unpinned and not archived.
+        var metadata = (session.metadata?.object ?? [:]).filter { $0.key != Self.pinnedKey && $0.key != Self.archivedKey }
+        var kuvo = (metadata["kuvo"]?.object ?? [:]).filter { !["branchedFrom", "handoffFrom", "handoffTo"].contains($0.key) }
+        kuvo["branchedFrom"] = .string(id)
+        metadata["kuvo"] = .object(kuvo)
+        session.metadata = .object(metadata)
+        try? await api.setMetadata(session: session.id, .object(metadata))
+        return session
     }
 
     /// An engine session you picked a coding agent's model (or Auto) in: it carries on with the

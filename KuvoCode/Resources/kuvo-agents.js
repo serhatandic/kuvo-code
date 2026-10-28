@@ -8109,12 +8109,17 @@ function fallbackModels(providerID2) {
   ];
 }
 var goingOnLimit = 60000;
+var knownSubagents = 100;
+function subagentRoute(kind) {
+  if (kind === "Explore" || kind === "Plan")
+    return { via: "none", note: `Claude Code's ${kind} agents can't take messages.` };
+  return { via: "parent" };
+}
 
 class ClaudeThread {
   agent;
   session;
   state;
-  subagentSessions = new Map;
   query;
   input;
   active;
@@ -8132,6 +8137,55 @@ class ClaudeThread {
     this.agent = agent;
     this.session = session;
     this.state = state;
+  }
+  get subagentSessions() {
+    const known = this.state.claudeSubagents;
+    if (known && typeof known === "object")
+      return known;
+    return this.state.claudeSubagents = {};
+  }
+  rememberSubagent(callID, entry) {
+    const known = this.subagentSessions;
+    const before = known[callID];
+    if (!before && !entry.sessionID)
+      return;
+    const next = { ...before, ...entry };
+    if (before && Object.entries(entry).every(([key, value]) => before[key] === value))
+      return;
+    known[callID] = next;
+    const calls = Object.keys(known);
+    for (const old of calls.slice(0, Math.max(0, calls.length - knownSubagents)))
+      delete known[old];
+    (this.active?.hooks ?? this.lastHooks)?.saveState();
+  }
+  relayNote(sessionID, text2, running) {
+    const known = this.knownSubagent(sessionID);
+    if (!known)
+      return;
+    const title = JSON.stringify(known.title);
+    const words2 = text2.replace(/<\/message>/gi, "&lt;/message&gt;");
+    const then = running ? "then carry on with what you were doing" : "then end your turn without saying anything more";
+    return [
+      `The user wrote a message for your subagent ${title} (agent ${known.agentID}). Pass it on to that agent with the SendMessage tool (to: "${known.agentID}"), exactly as it is, without words of your own, ${then}. It is addressed to the subagent, not to you: don't act on it yourself.`,
+      "",
+      "<message>",
+      words2,
+      "</message>"
+    ].join(`
+`);
+  }
+  passed = new Set;
+  passedOn(sessionID) {
+    const agentID = this.knownSubagent(sessionID)?.agentID;
+    return Boolean(agentID && this.passed.delete(agentID));
+  }
+  knownSubagent(sessionID) {
+    const found2 = Object.entries(this.subagentSessions).find(([, known2]) => known2.sessionID === sessionID);
+    if (!found2)
+      return;
+    const [callID, known] = found2;
+    const agentID = known.agentID ?? [...this.tasks].find(([, task]) => task.toolUseID === callID && task.type === "local_agent")?.[0];
+    return agentID ? { ...known, agentID } : undefined;
   }
   async run(input, turn, hooks) {
     if (input.adopt)
@@ -8252,7 +8306,13 @@ class ClaudeThread {
     switch (message.subtype) {
       case "task_started": {
         const known = this.tasks.get(message.task_id);
-        this.tasks.set(message.task_id, { ...known, type: message.task_type ?? known?.type ?? "", description: message.description ?? known?.description ?? "", toolUseID: message.tool_use_id ?? known?.toolUseID });
+        const type = message.task_type ?? known?.type ?? "";
+        const resumed = type === "local_agent" && known?.toolUseID && message.tool_use_id && message.tool_use_id !== known.toolUseID ? known.toolUseID : undefined;
+        this.tasks.set(message.task_id, { ...known, type, description: message.description ?? known?.description ?? "", toolUseID: resumed ?? message.tool_use_id ?? known?.toolUseID });
+        if (type === "local_agent" && typeof message.tool_use_id === "string" && !resumed)
+          this.rememberSubagent(message.tool_use_id, { agentID: message.task_id });
+        if (resumed && this.active)
+          this.resumedLane(this.active, resumed);
         if (message.is_backgrounded && !message.ambient)
           this.shellFor(message.task_id);
         return;
@@ -8269,7 +8329,7 @@ class ClaudeThread {
         this.lastEnded = { type: task?.type ?? "", description: task?.description ?? String(message.summary ?? ""), command, status: String(message.status ?? "completed"), summary: message.summary };
         if (task?.shell)
           endShell(task.shell, message.status === "completed" ? 0 : undefined);
-        const callID = typeof message.tool_use_id === "string" ? message.tool_use_id : task?.toolUseID;
+        const callID = task?.type === "local_agent" && task.toolUseID ? task.toolUseID : typeof message.tool_use_id === "string" ? message.tool_use_id : task?.toolUseID;
         const lane = callID ? this.keptLane(callID) ?? this.active?.subagents.get(callID) : undefined;
         if (callID && lane?.background) {
           const status = String(message.status ?? "completed");
@@ -8651,7 +8711,7 @@ class ClaudeThread {
       return kept2;
     }
     const call = active.calls.get(callID) ?? [...active.subagents.values()].map((lane2) => lane2.calls.get(callID)).find(Boolean);
-    const before = this.subagentSessions.get(callID);
+    const before = this.subagentSessions[callID];
     let run2;
     let background = false;
     if (call) {
@@ -8659,11 +8719,12 @@ class ClaudeThread {
       if (kuvoTool2(call.name, input).name !== "subagent")
         return;
       background = input.run_in_background === true;
-      run2 = active.hooks.subagent(callID, { title: String(input.description ?? ""), prompt: typeof input.prompt === "string" ? input.prompt : undefined, agent: input.subagent_type, background });
+      run2 = active.hooks.subagent(callID, { title: String(input.description ?? ""), prompt: typeof input.prompt === "string" ? input.prompt : undefined, agent: input.subagent_type, background, messages: subagentRoute(input.subagent_type) });
       run2.stop = () => this.stopSubagent(callID);
-      this.subagentSessions.set(callID, { sessionID: run2.sessionID, title: String(input.description ?? "") });
+      const agentID = [...this.tasks].find(([, task]) => task.toolUseID === callID && task.type === "local_agent")?.[0];
+      this.rememberSubagent(callID, { sessionID: run2.sessionID, title: String(input.description ?? ""), ...typeof input.subagent_type === "string" ? { kind: input.subagent_type } : {}, ...agentID ? { agentID } : {} });
     } else if (before) {
-      run2 = active.hooks.subagent(callID, { title: before.title, sessionID: before.sessionID, background: true });
+      run2 = active.hooks.subagent(callID, { title: before.title, sessionID: before.sessionID, background: true, messages: subagentRoute(before.kind) });
       run2.stop = () => this.stopSubagent(callID);
       background = true;
     } else {
@@ -8672,6 +8733,18 @@ class ClaudeThread {
     const lane = { turn: run2.turn, streamed: new Set, blockTools: new Map, calls: new Map, run: run2, background };
     active.subagents.set(callID, lane);
     return lane;
+  }
+  resumedLane(active, callID) {
+    const before = this.subagentSessions[callID];
+    if (!before)
+      return;
+    const known = active.subagents.get(callID) ?? this.keptLane(callID);
+    if (known && !known.run.turn.isEnded)
+      return;
+    this.backgroundLanes.delete(callID);
+    const run2 = active.hooks.subagent(callID, { title: before.title, sessionID: before.sessionID, background: true, messages: subagentRoute(before.kind) });
+    run2.stop = () => this.stopSubagent(callID);
+    active.subagents.set(callID, { turn: run2.turn, streamed: new Set, blockTools: new Map, calls: new Map, run: run2, background: true });
   }
   stream(lane, event) {
     const turn = lane.turn;
@@ -8736,6 +8809,16 @@ class ClaudeThread {
       text2 = text2.slice(0, outputLimit3) + `
 \u2026`;
     const pictures = toolPictures(block.content, call?.input);
+    if (active && lane === active && call?.name === "SendMessage" && !block.is_error && !/"success"\s*:\s*false/.test(text2)) {
+      if (typeof call.input.to === "string")
+        this.passed.add(call.input.to);
+      try {
+        const said2 = JSON.parse(text2);
+        for (const id2 of [said2?.resumedAgentId, said2?.pin?.id])
+          if (typeof id2 === "string")
+            this.passed.add(id2);
+      } catch {}
+    }
     const subagent = active && lane === active ? active.subagents.get(id) : undefined;
     if (active && subagent && !subagent.background) {
       subagent.run.end(block.is_error ? "failed" : "succeeded", block.is_error ? { type: "agent", message: text2 || "The subagent failed." } : undefined);
@@ -9388,6 +9471,7 @@ class CodexAgent {
       const parent = thread2?.source?.subAgent?.thread_spawn?.parent_thread_id;
       const owner = parent ? this.threadFor(parent) : undefined;
       if (owner && thread2?.id) {
+        this.directInput.set(thread2.id, typeof thread2.canAcceptDirectInput === "boolean" ? thread2.canAcceptDirectInput : null);
         this.spawned.set(thread2.id, owner);
         owner.spawnStarted(thread2.id);
       }
@@ -9453,6 +9537,7 @@ class CodexAgent {
     emit("model.updated", {});
   }
   spawned = new Map;
+  directInput = new Map;
   adopt(threadID, thread) {
     this.spawned.set(threadID, thread);
     const early = this.early.get(threadID);
@@ -9634,6 +9719,16 @@ class CodexAgent {
         this.spawned.delete(spawn3);
   }
 }
+var knownSpawns = 100;
+function spawnMessages(direct) {
+  if (direct === true)
+    return { via: "direct" };
+  if (direct === false)
+    return { via: "none", note: "Codex agents of this kind take messages only from the agent that started them." };
+  if (direct === null)
+    return { via: "none", note: "This Codex doesn't say whether its agents take messages: write to the conversation that started it." };
+  return { via: "none", note: "Codex hasn't said yet whether this agent takes messages." };
+}
 
 class CodexThread {
   agent;
@@ -9647,13 +9742,37 @@ class CodexThread {
   startedOver = false;
   toolsKey;
   skillsKey;
-  spawnedSessions = new Map;
+  get spawnedSessions() {
+    const known = this.state.codexSubagents;
+    if (known && typeof known === "object")
+      return known;
+    return this.state.codexSubagents = {};
+  }
+  rememberSpawn(threadID, entry) {
+    const known = this.spawnedSessions;
+    const before = known[threadID];
+    if (!before && !entry.sessionID)
+      return;
+    if (before && Object.entries(entry).every(([key, value]) => before[key] === value))
+      return;
+    known[threadID] = { ...before, ...entry };
+    const threads = Object.keys(known);
+    for (const old of threads.slice(0, Math.max(0, threads.length - knownSpawns)))
+      delete known[old];
+    this.active?.hooks.saveState();
+  }
+  messagesFor(threadID) {
+    return spawnMessages(this.agent.directInput.has(threadID) ? this.agent.directInput.get(threadID) : this.spawnedSessions[threadID]?.direct);
+  }
   backgroundLanes = new Map;
+  resuming = new Map;
   constructor(agent, session, state) {
     this.agent = agent;
     this.session = session;
     this.state = state;
     this.nativeID = state.codexThread;
+    for (const threadID of Object.keys(this.spawnedSessions))
+      this.agent.adopt(threadID, this);
   }
   serverStopped() {
     this.loaded = false;
@@ -9735,29 +9854,49 @@ class CodexThread {
     const active = this.active;
     if (!active?.turnID || !this.nativeID)
       return false;
-    const items = [{ type: "text", text: input.text, text_elements: [] }];
-    const others = [];
-    for (const file of input.files) {
-      if (file.mime.startsWith("image/") && file.path)
-        items.push({ type: "localImage", path: file.path });
-      else if (file.mime.startsWith("image/") && file.data)
-        items.push({ type: "image", url: `data:${file.mime};base64,${file.data}` });
-      else if (file.path)
-        others.push(file.path);
-    }
-    if (others.length)
-      items[0].text += `
-
-Attached files:
-${others.map((path) => `- ${path}`).join(`
-`)}`;
     try {
       const rpc = await this.agent.rpc();
-      await rpc.request("turn/steer", { threadId: this.nativeID, input: items, expectedTurnId: active.turnID }, 30000);
+      await rpc.request("turn/steer", { threadId: this.nativeID, input: codexInput(input), expectedTurnId: active.turnID }, 30000);
       return this.active === active;
     } catch {
       return false;
     }
+  }
+  subagentMessages(sessionID) {
+    const threadID = Object.entries(this.spawnedSessions).find(([, known]) => known.sessionID === sessionID)?.[0];
+    if (!threadID || this.messagesFor(threadID).via !== "direct")
+      return;
+    return async (input, resume) => {
+      let rpc;
+      try {
+        rpc = await this.agent.rpc();
+      } catch {
+        return false;
+      }
+      const items = codexInput(input);
+      const lane = this.active?.subagents.get(threadID) ?? this.backgroundLanes.get(threadID);
+      if (lane && !lane.ended) {
+        try {
+          await rpc.request("turn/steer", { threadId: threadID, input: items, ...lane.turnID ? { expectedTurnId: lane.turnID } : {} }, 30000);
+          return true;
+        } catch {}
+      }
+      this.resuming.set(threadID, resume);
+      const start = () => rpc.request("turn/start", { threadId: threadID, input: items }, 30000);
+      try {
+        await start();
+        return true;
+      } catch {
+        try {
+          await rpc.request("thread/resume", { threadId: threadID, excludeTurns: true }, 60000);
+          await start();
+          return true;
+        } catch {
+          this.resuming.delete(threadID);
+          return false;
+        }
+      }
+    };
   }
   async prepare(input, hooks) {
     this.inTurn = true;
@@ -10048,6 +10187,10 @@ ${others.map((path) => `- ${path}`).join(`
     const call = active?.spawning[0];
     if (active && call && !active.subagents.has(threadID))
       this.linkSubagent(active, call, threadID);
+    if (this.spawnedSessions[threadID])
+      this.rememberSpawn(threadID, { direct: this.agent.directInput.get(threadID) });
+    const lane = active?.subagents.get(threadID) ?? this.backgroundLanes.get(threadID);
+    lane?.run.messages(this.messagesFor(threadID));
   }
   subagentNotification(active, threadID, method, params) {
     let lane = active?.subagents.get(threadID);
@@ -10059,23 +10202,28 @@ ${others.map((path) => `- ${path}`).join(`
         active.subagents.set(threadID, kept2);
       }
     }
-    if (!active && !lane)
+    const resume = method === "turn/started" ? this.resuming.get(threadID) : undefined;
+    if (resume)
+      this.resuming.delete(threadID);
+    if (!active && !lane && !resume)
       return;
     if (!lane) {
-      if (!active || method !== "turn/started")
+      if (method !== "turn/started")
         return;
-      const before = this.spawnedSessions.get(threadID);
+      const before = this.spawnedSessions[threadID];
       if (!before)
         return;
-      const run2 = active.hooks.subagent(before.call, { title: before.title, sessionID: before.sessionID, background: true });
-      run2.stop = () => this.stopSubagent(threadID);
-      lane = { turn: run2.turn, streamed: new Set, changes: new Map, output: new Map, toolsSinceText: false, run: run2, threadID, call: before.call, title: before.title, ended: false };
-      active.subagents.set(threadID, lane);
+      lane = this.resumedLane(active, threadID, before.call, before.title, before.sessionID, resume);
+      if (!lane)
+        return;
     }
     if (lane.ended) {
-      if (method !== "turn/started" || !active)
+      if (method !== "turn/started")
         return;
-      lane = this.continueSubagent(active, threadID, lane);
+      const next = this.resumedLane(active, threadID, lane.call, lane.title, lane.run.sessionID, resume);
+      if (!next)
+        return;
+      lane = next;
     }
     const turnID = params?.turn?.id ?? params?.turnId;
     if (typeof turnID === "string" && method !== "turn/completed")
@@ -10115,18 +10263,29 @@ ${others.map((path) => `- ${path}`).join(`
     active.spawning = active.spawning.filter((waiting) => waiting !== call);
     const input = active.turn.toolInput(call) ?? {};
     const title = String(input.description ?? "") || "A spawned agent's task";
-    const run2 = active.hooks.subagent(call, { title, prompt: prompt ?? input.prompt, background: true });
+    const run2 = active.hooks.subagent(call, { title, prompt: prompt ?? input.prompt, background: true, messages: this.messagesFor(threadID) });
     run2.stop = () => this.stopSubagent(threadID);
     const lane = { turn: run2.turn, streamed: new Set, changes: new Map, output: new Map, toolsSinceText: false, run: run2, threadID, call, title, ended: false };
     active.subagents.set(threadID, lane);
-    this.spawnedSessions.set(threadID, { call, title, sessionID: run2.sessionID });
+    this.rememberSpawn(threadID, { call, title, sessionID: run2.sessionID, ...this.agent.directInput.has(threadID) ? { direct: this.agent.directInput.get(threadID) } : {} });
     this.agent.adopt(threadID, this);
     return lane;
   }
-  continueSubagent(active, threadID, lane) {
-    const run2 = active.hooks.subagent(lane.call, { title: lane.title, sessionID: lane.run.sessionID, background: true });
+  resumedLane(active, threadID, call, title, sessionID, resume) {
+    if (active)
+      return this.continueSubagent(active, threadID, call, title, sessionID);
+    if (!resume)
+      return;
+    const run2 = resume();
     run2.stop = () => this.stopSubagent(threadID);
-    const next = { turn: run2.turn, streamed: new Set, changes: new Map, output: new Map, toolsSinceText: false, run: run2, threadID, call: lane.call, title: lane.title, ended: false };
+    const lane = { turn: run2.turn, streamed: new Set, changes: new Map, output: new Map, toolsSinceText: false, run: run2, threadID, call, title, ended: false };
+    this.backgroundLanes.set(threadID, lane);
+    return lane;
+  }
+  continueSubagent(active, threadID, call, title, sessionID) {
+    const run2 = active.hooks.subagent(call, { title, sessionID, background: true, messages: this.messagesFor(threadID) });
+    run2.stop = () => this.stopSubagent(threadID);
+    const next = { turn: run2.turn, streamed: new Set, changes: new Map, output: new Map, toolsSinceText: false, run: run2, threadID, call, title, ended: false };
     active.subagents.set(threadID, next);
     return next;
   }
@@ -10738,6 +10897,25 @@ function firstLine2(text2) {
   const line3 = text2.trim().split(`
 `)[0] ?? "";
   return line3.length > 80 ? line3.slice(0, 79) + "\u2026" : line3;
+}
+function codexInput(input) {
+  const items = [{ type: "text", text: input.text, text_elements: [] }];
+  const others = [];
+  for (const file of input.files) {
+    if (file.mime.startsWith("image/") && file.path)
+      items.push({ type: "localImage", path: file.path });
+    else if (file.mime.startsWith("image/") && file.data)
+      items.push({ type: "image", url: `data:${file.mime};base64,${file.data}` });
+    else if (file.path)
+      others.push(file.path);
+  }
+  if (others.length)
+    items[0].text += `
+
+Attached files:
+${others.map((path) => `- ${path}`).join(`
+`)}`;
+  return items;
 }
 
 // Packages/Box/src/agents/agents/cursor.ts
@@ -11673,6 +11851,61 @@ class Roster {
       case "antigravity":
         return new AntigravityAgent(this.context, account);
     }
+  }
+}
+
+// Packages/Box/src/agents/branch.ts
+var origins = ["branchedFrom", "handoffFrom", "handoffTo"];
+var listed2 = ["kuvo.pinned", "kuvo.archived"];
+
+class BranchError extends Error {
+  status;
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+async function branch(places4, session, before) {
+  const place = places4.isBridge(session) ? places4.bridge : places4.engine;
+  const info = await sessionInfo(place.api, session).catch((error) => {
+    throw new BranchError(error?.status === 404 ? 404 : 503, error?.status === 404 ? "There's no such conversation here." : "The conversation can't be reached now.");
+  });
+  if (info.parentID)
+    throw new BranchError(409, "A subagent's conversation can't be branched. Branch the conversation it works for.");
+  const made = await place.api.request("POST", at(session) + "/fork", { before }).catch((error) => {
+    if (error?.status === 404)
+      throw new BranchError(404, "That message isn't in this conversation.");
+    if (error?.status >= 400 && error?.status < 500)
+      throw new BranchError(error.status, String(error?.message ?? error));
+    throw new BranchError(503, "The new conversation couldn't be started.");
+  });
+  const copy2 = made?.data;
+  if (typeof copy2?.id !== "string")
+    throw new BranchError(503, "The new conversation couldn't be started.");
+  const metadata = Object.fromEntries(Object.entries(copy2.metadata ?? {}).filter(([key]) => !listed2.includes(key)));
+  const kuvo = Object.fromEntries(Object.entries(metadata.kuvo ?? {}).filter(([key]) => !origins.includes(key)));
+  metadata.kuvo = { ...kuvo, branchedFrom: session };
+  const marked = await place.api.request("PATCH", at(copy2.id), { metadata }).then(() => true, () => false);
+  return marked ? { ...copy2, metadata } : copy2;
+}
+var json6 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+async function branchRoutes(places4, method, parts, body) {
+  if (!places4)
+    return json6({ message: "Branches aren't running on this computer." }, 503);
+  const [session] = parts;
+  if (!session || method !== "POST")
+    return json6({ message: "Not allowed" }, 405);
+  if (!/^ses_[A-Za-z0-9_]+$/.test(session))
+    return json6({ message: "There's no such conversation here." }, 404);
+  const { before } = await body() ?? {};
+  if (typeof before !== "string" || !before)
+    return json6({ message: "Say which message to branch before." }, 400);
+  try {
+    return json6({ data: await branch(places4, session, before) });
+  } catch (error) {
+    if (error instanceof BranchError)
+      return json6({ message: error.message }, error.status);
+    throw error;
   }
 }
 
@@ -12955,7 +13188,10 @@ class Sessions {
     if (body.permissions !== undefined)
       session.permissions = body.permissions;
     if (body.metadata !== undefined) {
+      const messages2 = session.metadata?.kuvo?.messages;
       session.metadata = { ...body.metadata, kuvoAgent: session.metadata?.kuvoAgent };
+      if (messages2 !== undefined)
+        session.metadata.kuvo = { ...body.metadata.kuvo ?? {}, messages: messages2 };
       emit("session.metadata.updated", { sessionID: id }, directory);
     }
     session.time.updated = Date.now();
@@ -13203,6 +13439,8 @@ class Sessions {
     const previous = session.model;
     if (!model2?.providerID || !model2.id)
       throw new BadRequest("That isn't a model.");
+    if (session.parentID && previous && (previous.providerID !== model2.providerID || previous.id !== model2.id || previous.variant !== model2.variant))
+      throw new BadRequest("A subagent's model is its agent's to pick.");
     if (model2.providerID === autoProvider && !this.auto.list(model2.id).length)
       throw new BadRequest("That Custom Auto list is empty: add models to it in Settings \u203A Custom Auto.");
     if (!this.runs(model2))
@@ -13251,7 +13489,10 @@ class Sessions {
     if (live.doing.kind === "deleting")
       throw new NotFound(`No session ${id}.`);
     if (record2.session.parentID)
-      throw new BadRequest("This subagent works for the conversation that started it: write to it there.");
+      return this.promptSubagent(id, record2, input);
+    this.enqueue(id, record2, live, input);
+  }
+  enqueue(id, record2, live, input) {
     const queue = this.queue(record2);
     if (queue.some((waiting) => waiting.id === input.id) || record2.messages.some((message) => message.id === input.id))
       return;
@@ -13261,11 +13502,108 @@ class Sessions {
     const delivery = into || nothingRuns && (input.delivery !== "queue" || !queue.length) ? "steer" : "queue";
     queue.push({ ...input, delivery });
     this.store.save(id, true);
-    emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "user", payload: { text: input.text, files: input.files }, delivery } }, record2.session.location.directory);
+    const item = input.synthetic ? { type: "synthetic", payload: { text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata } } : { type: "user", payload: { text: input.text, files: input.files } };
+    emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { ...item, delivery } }, record2.session.location.directory);
     if (into)
       this.steerNow(id, live, into, input);
     else if (delivery === "steer")
       this.wake(id);
+  }
+  promptSubagent(id, record2, input) {
+    const session = record2.session;
+    const route = subagentMessages(session);
+    if (route.via === "none")
+      throw new BadRequest(route.note);
+    if (record2.messages.some((message) => message.id === input.id))
+      return;
+    const parentID = session.parentID;
+    const parent = this.store.get(parentID);
+    const provider = session.model?.providerID;
+    const found2 = provider ? this.agent(provider) : undefined;
+    if (!parent || !provider || !found2)
+      throw new BadRequest("This subagent's agent isn't connected: write to the conversation that started it.");
+    const agent = { name: found2.name.split(" \xB7 ")[0] };
+    const parentLive = this.state(parentID);
+    const attached = withTextFiles(input.text, input.files.map(promptFile));
+    if (route.via === "direct") {
+      const send = this.threadOf(parentID, parentLive, parent, provider)?.subagentMessages?.(id);
+      if (!send)
+        throw new BadRequest(`${agent.name} has let this subagent go: write to the conversation that started it, which can pick it up again.`);
+      this.showMessage(id, record2, input);
+      const missed = () => this.subagentNote(id, `${agent.name} didn't take that message: write to the conversation that started it.`);
+      send({ id: input.id, text: attached.text, files: attached.files }, () => this.resumedRun(parentID, parentLive, id)).then((sent) => sent || missed(), missed);
+      return;
+    }
+    if (parent.session.model?.providerID !== provider)
+      throw new BadRequest(`${agent.name} no longer runs the conversation that started this subagent: write to it there.`);
+    const others = attached.files.filter((file) => file.path).map((file) => `- ${file.path}`);
+    const text2 = others.length ? `${attached.text}
+
+Attached files:
+${others.join(`
+`)}` : attached.text;
+    const note = this.threadOf(parentID, parentLive, parent, provider)?.relayNote?.(id, text2, runOf(parentLive.doing) !== undefined);
+    if (!note)
+      throw new BadRequest(`${agent.name} doesn't know this subagent any more: write to the conversation that started it.`);
+    if (parentLive.doing.kind === "deleting")
+      throw new NotFound(`No session ${parentID}.`);
+    this.showMessage(id, record2, input);
+    const title = session.title || "its subagent";
+    const relay = newID("msg");
+    (parentLive.relays ??= new Map).set(relay, { child: id, provider });
+    this.enqueue(parentID, parent, parentLive, { id: relay, text: note, files: [], delivery: "steer", synthetic: { description: `Your message for \u201C${title}\u201D`, metadata: { kuvo: { relayedTo: id } } } });
+  }
+  settleRelays(live, run2) {
+    for (const inputID of run2.relayed ?? []) {
+      const relay = live.relays?.get(inputID);
+      live.relays?.delete(inputID);
+      if (!relay || live.threads.get(relay.provider)?.passedOn?.(relay.child))
+        continue;
+      this.subagentNote(relay.child, `${this.agentName(relay.provider)} didn't pass your message on: write to the conversation that started it.`);
+    }
+  }
+  relayHeld(live, inputID, cancelled) {
+    const relay = live?.relays?.get(inputID);
+    if (!relay)
+      return;
+    if (cancelled)
+      live.relays.delete(inputID);
+    this.subagentNote(relay.child, cancelled ? `Your message wasn't passed on: it was taken back.` : `Your message hasn't been passed on yet: it waits in the conversation that started it.`);
+  }
+  agentName(provider) {
+    return this.agent(provider)?.name.split(" \xB7 ")[0] ?? "Its agent";
+  }
+  showMessage(id, record2, input) {
+    const directory = record2.session.location.directory;
+    emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "user", payload: { text: input.text, files: input.files }, delivery: "steer" } }, directory);
+    emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory);
+    const attachments = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }));
+    record2.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined });
+    record2.session.time.updated = Date.now();
+    this.store.save(id, true);
+  }
+  subagentNote(id, text2) {
+    const record2 = this.store.get(id);
+    if (!record2)
+      return;
+    const event = emit("session.synthetic", { sessionID: id, text: text2 }, record2.session.location.directory);
+    record2.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text: text2 });
+    this.store.save(id, true);
+  }
+  threadOf(id, live, record2, provider) {
+    const open = live.threads.get(provider);
+    if (open)
+      return open;
+    const agent = this.agent(provider);
+    if (!agent)
+      return;
+    const slot = this.slots(record2)[provider] ??= { state: {} };
+    const thread = agent.thread(record2.session, slot.state);
+    thread.onOwnTurn = (note) => this.ownTurn(id, provider, note);
+    live.threads.set(provider, thread);
+    if (live.doing.kind === "idle")
+      this.closeWhenIdle(id, live);
+    return thread;
   }
   async steerNow(id, live, run2, input) {
     const agent = run2.agent;
@@ -13277,7 +13615,7 @@ class Sessions {
     let taken = false;
     let note;
     try {
-      if (this.snapshots) {
+      if (this.snapshots && !input.synthetic) {
         try {
           const at4 = Date.now();
           const before = await this.snapshots.take(directory);
@@ -13309,14 +13647,21 @@ class Sessions {
         this.cancelInput(id, input.id);
       else if (next)
         this.advance(id, live);
-      else
+      else {
         this.setDelivery(id, input.id, "queue");
+        this.relayHeld(live, input.id, false);
+      }
       return;
     }
+    if (live.relays?.has(input.id))
+      (run2.relayed ??= []).push(input.id);
     queue.splice(at3, 1);
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory);
     const attachments = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }));
-    record2.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined });
+    if (input.synthetic)
+      record2.messages.push({ type: "synthetic", id: input.id, time: { created: Date.now() }, text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata });
+    else
+      record2.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined });
     record2.session.time.updated = Date.now();
     if (note?.before && runOf(live.doing) === run2) {
       this.notes(record2)[input.id] = note;
@@ -13355,6 +13700,7 @@ class Sessions {
     queue.splice(index, 1);
     this.store.save(id, true);
     emit("session.inbox.cancelled", { sessionID: id, inboxID: inputID }, record2.session.location.directory);
+    this.relayHeld(this.live.get(id), inputID, true);
   }
   wake(id) {
     if (!this.store.get(id))
@@ -13494,6 +13840,8 @@ ${text2.slice(0, 4000)}
     const model2 = session.model;
     this.commitRevert(id, record2, live);
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory);
+    if (live.relays?.has(input.id))
+      (run2.relayed ??= []).push(input.id);
     const attachments = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }));
     if (input.synthetic)
       record2.messages.push({ type: "synthetic", id: input.id, time: { created: Date.now() }, text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata });
@@ -13553,6 +13901,7 @@ ${text2.slice(0, 4000)}
     const outcome = abort.signal.aborted ? "interrupted" : result.outcome;
     const before = record2.messages[record2.messages.length - 1]?.id;
     turn.finish(outcome, outcome === "interrupted" ? undefined : result.error);
+    this.settleRelays(live, run2);
     for (const [child, childTurn] of [...live.subagents]) {
       if (outcome === "succeeded" && live.background.has(child) && !childTurn.isEnded)
         continue;
@@ -13647,13 +13996,7 @@ ${text2.slice(0, 4000)}
     }
     const slots = this.slots(record2);
     const slot = slots[model2.providerID] ??= { state: {} };
-    let thread = live.threads.get(model2.providerID);
-    if (!thread) {
-      thread = agent.thread(record2.session, slot.state);
-      const provider = model2.providerID;
-      thread.onOwnTurn = (note) => this.ownTurn(id, provider, note);
-      live.threads.set(model2.providerID, thread);
-    }
+    const thread = this.threadOf(id, live, record2, model2.providerID);
     live.models.set(model2.providerID, model2);
     const hooks = this.hooks(id, live, turn, signal, slot, input.plan);
     turn.setModel(model2);
@@ -13954,11 +14297,13 @@ ${live.agentPrompt}` : ""
     const now = Date.now();
     const model2 = parentTurn.currentModel;
     const before = task.sessionID ? this.store.get(task.sessionID) : undefined;
+    const messages2 = task.messages ?? cantTakeMessages(this.agent(model2.providerID)?.name);
     if (before && before.session.parentID === id) {
       if (task.prompt)
         before.messages.push({ type: "user", id: newID("msg"), time: { created: now }, text: task.prompt });
       before.session.time.updated = now;
       this.store.save(before.session.id, true);
+      this.setMessages(before.session.id, messages2);
       return this.subagentRun(id, live, parentTurn, toolCallID, before.session, task.background ?? false, plan);
     }
     const session = {
@@ -13972,7 +14317,7 @@ ${live.agentPrompt}` : ""
       time: { created: now, updated: now },
       title: task.title || "A subagent's task",
       location: { directory },
-      metadata: { kuvoAgent: parent.metadata?.kuvoAgent, kuvoSubagent: true }
+      metadata: { kuvoAgent: parent.metadata?.kuvoAgent, kuvoSubagent: true, kuvo: { messages: messages2 } }
     };
     this.store.add(session);
     const record2 = this.store.get(session.id);
@@ -13984,13 +14329,15 @@ ${live.agentPrompt}` : ""
   }
   subagentRun(id, live, parentTurn, toolCallID, session, background, plan) {
     live.subagents.get(session.id)?.finish("succeeded");
-    const turn = new Turn(this.store, session.id, session.location.directory, parentTurn.currentModel, session.agent ?? "build");
+    const model2 = parentTurn?.currentModel ?? session.model ?? this.record(id).session.model;
+    const turn = new Turn(this.store, session.id, session.location.directory, model2, session.agent ?? "build");
     live.subagents.set(session.id, turn);
     if (background)
       live.background.add(session.id);
     else
       live.background.delete(session.id);
-    parentTurn.toolProgress(toolCallID, { sessionID: session.id });
+    if (parentTurn && toolCallID)
+      parentTurn.toolProgress(toolCallID, { sessionID: session.id });
     const run2 = {
       sessionID: session.id,
       turn,
@@ -14011,10 +14358,26 @@ ${live.agentPrompt}` : ""
           emit("permission.replied", { sessionID: id, requestID }, directory);
         }
       },
-      permission: (ask) => this.askPermission(id, live, turn, ask, plan)
+      permission: (ask) => this.askPermission(id, live, turn, ask, plan),
+      messages: (route) => this.setMessages(session.id, route)
     };
     live.runs.set(session.id, run2);
     return run2;
+  }
+  resumedRun(id, live, childID) {
+    return this.subagentRun(id, live, undefined, undefined, this.record(childID).session, true, false);
+  }
+  setMessages(id, route) {
+    const record2 = this.store.get(id);
+    if (!record2)
+      return;
+    const metadata = record2.session.metadata ?? {};
+    const kuvo = metadata.kuvo ?? {};
+    if (JSON.stringify(kuvo.messages) === JSON.stringify(route))
+      return;
+    record2.session.metadata = { ...metadata, kuvo: { ...kuvo, messages: route } };
+    this.store.save(id, true);
+    emit("session.metadata.updated", { sessionID: id }, record2.session.location.directory);
   }
   async stopSubagents(id) {
     const parent = this.store.get(id)?.session.parentID;
@@ -14234,6 +14597,17 @@ class NotFound extends Error {
 
 class BadRequest extends Error {
 }
+function cantTakeMessages(agent) {
+  return { via: "none", note: `${agent?.split(" \xB7 ")[0] ?? "Its agent"} can't take messages for its subagents.` };
+}
+function subagentMessages(session) {
+  const route = session.metadata?.kuvo?.messages;
+  if (route?.via === "direct" || route?.via === "parent")
+    return { via: route.via };
+  if (route?.via === "none" && typeof route.note === "string")
+    return { via: "none", note: route.note };
+  return { via: "none", note: "This subagent works for the conversation that started it: write to it there." };
+}
 function mime(uri) {
   if (uri.startsWith("data:"))
     return uri.slice(5).split(/[;,]/)[0] || "text/plain";
@@ -14309,8 +14683,8 @@ function ownWords(message) {
 }
 
 // Packages/Box/src/agents/artifacts/routes.ts
-var json6 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var message = (status, text2) => json6({ message: text2 }, status);
+var json7 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var message = (status, text2) => json7({ message: text2 }, status);
 var kinds2 = new Set(["memory", "skill", "image", "page", "document", "download", "code", "file"]);
 var seconds = (text2) => {
   if (!text2)
@@ -14366,7 +14740,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     const scope = scopeOf(query);
     if (typeof scope === "string")
       return message(400, scope);
-    return json6(list(store, scope, Math.min(500, Math.max(1, Number(query.get("limit")) || 200)), beforeOf(query)));
+    return json7(list(store, scope, Math.min(500, Math.max(1, Number(query.get("limit")) || 200)), beforeOf(query)));
   }
   if (first === "events" || first === "timeline" && second === "events") {
     if (method !== "GET")
@@ -14382,7 +14756,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     const scope = scopeOf(query);
     if (typeof scope === "string")
       return message(400, scope);
-    return json6(timeline(store, scope, Math.min(500, Math.max(1, Number(query.get("limit")) || 200)), beforeOf(query)));
+    return json7(timeline(store, scope, Math.min(500, Math.max(1, Number(query.get("limit")) || 200)), beforeOf(query)));
   }
   if (first === "storage") {
     if (!second && method === "POST") {
@@ -14390,14 +14764,14 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
       if (typeof budget2 !== "number" || !Number.isFinite(budget2) || budget2 < 0)
         return message(400, "Say the budget for older versions, in bytes (budget).");
       store.setBudget(budget2);
-      return json6(store.storage());
+      return json7(store.storage());
     }
     if (!second)
-      return method === "GET" ? json6(store.storage()) : message(405, "Read it with GET, or set its budget with POST.");
+      return method === "GET" ? json7(store.storage()) : message(405, "Read it with GET, or set its budget with POST.");
     if (second === "clear" && method === "POST") {
       const { before } = await body() ?? {};
       const at3 = typeof before === "number" ? new Date(before * 1000).toISOString() : undefined;
-      return json6({ cleared: store.clearOlder(at3), ...store.storage() });
+      return json7({ cleared: store.clearOlder(at3), ...store.storage() });
     }
     return message(404, "No such route.");
   }
@@ -14405,7 +14779,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
   if (!artifact)
     return message(404, "That isn't in this computer's record.");
   if (!second)
-    return method === "GET" ? json6(clientArtifact(await store.checkGone(artifact.id) ?? artifact, store)) : message(405, "Read it with GET.");
+    return method === "GET" ? json7(clientArtifact(await store.checkGone(artifact.id) ?? artifact, store)) : message(405, "Read it with GET.");
   if (second === "pin") {
     if (method !== "POST")
       return message(405, "Pin it with POST.");
@@ -14413,7 +14787,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     if (typeof pinned !== "boolean")
       return message(400, "Say whether it's pinned (pinned).");
     const changed = await store.pin(artifact.id, pinned ? { by: "you", ...typeof note === "string" && note.trim() ? { note: note.trim() } : {} } : null);
-    return changed ? json6(clientArtifact(changed, store)) : message(409, "It couldn't be kept now. Try again in a moment.");
+    return changed ? json7(clientArtifact(changed, store)) : message(409, "It couldn't be kept now. Try again in a moment.");
   }
   if (second === "restore") {
     if (method !== "POST")
@@ -14422,7 +14796,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     if (!Number.isInteger(version2))
       return message(400, "Say which version to put back (version).");
     const restored = await store.restore(artifact.id, version2);
-    return typeof restored === "string" ? message(409, restored) : json6(clientArtifact(restored, store));
+    return typeof restored === "string" ? message(409, restored) : json7(clientArtifact(restored, store));
   }
   if (second === "versions" && third !== undefined) {
     const n = Number(third);
@@ -14444,15 +14818,15 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
       if (version2.reason && privateReasons.has(version2.reason))
         return message(410, notKept(version2));
       if (version2.patch)
-        return json6({ style: "lines", patch: version2.patch, added: version2.lines?.added ?? 0, removed: version2.lines?.removed ?? 0, from: from?.n ?? null, to: n });
+        return json7({ style: "lines", patch: version2.patch, added: version2.lines?.added ?? 0, removed: version2.lines?.removed ?? 0, from: from?.n ?? null, to: n });
       if (!isText(artifact.type)) {
-        return json6({ style: artifact.kind === "image" || artifact.type === "application/pdf" ? "pair" : "none", from: from?.n ?? null, to: n });
+        return json7({ style: artifact.kind === "image" || artifact.type === "application/pdf" ? "pair" : "none", from: from?.n ?? null, to: n });
       }
       const after = version2.status === "deleted" ? "" : store.bytes(artifact.id, n);
       const before = from ? from.status === "deleted" ? "" : store.bytes(artifact.id, from.n) : "";
       if (after === null || after === undefined || before === null || before === undefined)
         return message(410, version2.kept ? "The version before isn't kept, so what changed can't be shown." : notKept(version2));
-      return json6({ ...changes(before.toString(), after.toString(), isProse(artifact.path)), from: from?.n ?? null, to: n });
+      return json7({ ...changes(before.toString(), after.toString(), isProse(artifact.path)), from: from?.n ?? null, to: n });
     }
   }
   return message(404, "No such route.");
@@ -14469,7 +14843,7 @@ async function notedRoute(noted, method, body) {
     return message(400, "Say whose it is (session).");
   if (via !== "download")
     return message(400, "Say how it came (via: download).");
-  return await noted(session, path, via) ? json6({ ok: true }) : message(404, "There's no such conversation on this computer.");
+  return await noted(session, path, via) ? json7({ ok: true }) : message(404, "There's no such conversation on this computer.");
 }
 function notKept(version2) {
   if (version2.status === "deleted")
@@ -15559,15 +15933,15 @@ function planMeeting(plan, before, zone2, now = Date.now()) {
 }
 
 // Packages/Box/src/agents/groups/routes.ts
-var json7 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var error = (status, message2) => json7({ message: message2 }, status);
+var json8 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var error = (status, message2) => json8({ message: message2 }, status);
 async function groupRoutes(runner, store, method, parts2, body) {
   if (!runner || !store)
     return error(404, "Group chats run on the Mac here.");
   const [id, action] = parts2;
   if (!id) {
     if (method === "GET")
-      return json7({ version: version2, data: runner.list() });
+      return json8({ version: version2, data: runner.list() });
     return error(405, "Not allowed");
   }
   if (id === "settings" && method === "PUT") {
@@ -15584,14 +15958,14 @@ async function groupRoutes(runner, store, method, parts2, body) {
     const after = store.settings();
     if (JSON.stringify([before?.askFirst, before?.denies]) !== JSON.stringify([after?.askFirst, after?.denies]))
       runner.rulesChanged();
-    return json7({});
+    return json8({});
   }
   if (!/^grp_[a-z0-9]+$/.test(id))
     return error(404, "No such chat.");
   if (!action) {
     if (method === "GET") {
       const chat = runner.get(id);
-      return chat ? json7({ version: version2, data: chat }) : error(404, "No such chat.");
+      return chat ? json8({ version: version2, data: chat }) : error(404, "No such chat.");
     }
     if (method === "PUT") {
       const { group, messages: messages2, status, replace } = await body();
@@ -15599,7 +15973,7 @@ async function groupRoutes(runner, store, method, parts2, body) {
         return error(400, "That isn't a group chat.");
       if (!runner.put(group, messages2 ?? [], status === "active" ? "active" : "held", replace === true))
         return error(409, "That chat is here already.");
-      return json7({ data: runner.get(id) });
+      return json8({ data: runner.get(id) });
     }
     if (method === "PATCH") {
       const edits2 = await body();
@@ -15620,12 +15994,12 @@ async function groupRoutes(runner, store, method, parts2, body) {
         return error(400, "That isn't a meeting.");
       if (edits2?.members !== undefined && !(Array.isArray(edits2.members) && edits2.members.every((member) => typeof member === "string")))
         return error(400, "Those aren't bots.");
-      return await runner.update(id, edits2 ?? {}) ? json7({ data: runner.get(id) }) : error(404, "No such chat.");
+      return await runner.update(id, edits2 ?? {}) ? json8({ data: runner.get(id) }) : error(404, "No such chat.");
     }
     if (method === "DELETE") {
       if (runner.get(id)?.status === "held")
         return error(409, "That chat is moving.");
-      return await runner.delete(id) ? json7({}) : error(404, "No such chat.");
+      return await runner.delete(id) ? json8({}) : error(404, "No such chat.");
     }
     return error(405, "Not allowed");
   }
@@ -15637,12 +16011,12 @@ async function groupRoutes(runner, store, method, parts2, body) {
   switch (action) {
     case "activate":
       runner.activate(id);
-      return json7({ data: runner.get(id) });
+      return json8({ data: runner.get(id) });
     case "hold":
-      return json7({ data: runner.hold(id) });
+      return json8({ data: runner.hold(id) });
     case "release":
       runner.release(id);
-      return json7({});
+      return json8({});
   }
   if (found2.status !== "active")
     return error(409, "That chat is moving.");
@@ -15652,32 +16026,32 @@ async function groupRoutes(runner, store, method, parts2, body) {
       const members = new Set(found2.group.members.flatMap((member) => store.bot(member)?.sessionID ?? runner.peers?.bots().find((bot) => bot.id === member)?.session ?? []));
       const named2 = typeof text3 === "string" ? namedBlock(text3, readDirectory(store.agentsFile), members) : undefined;
       const message2 = typeof text3 === "string" ? runner.send(id, text3, named2) : undefined;
-      return message2 ? json7({ data: message2 }) : error(400, "Nothing to send.");
+      return message2 ? json8({ data: message2 }) : error(400, "Nothing to send.");
     }
     case "stop":
       runner.stop(id);
-      return json7({});
+      return json8({});
     case "keep-going":
       runner.keepGoing(id);
-      return json7({});
+      return json8({});
     case "undo": {
       const { message: message2 } = await body();
       const text3 = typeof message2 === "string" ? runner.undo(id, message2) : undefined;
-      return text3 === undefined ? error(404, "No such message.") : json7({ data: { text: text3 } });
+      return text3 === undefined ? error(404, "No such message.") : json8({ data: { text: text3 } });
     }
     case "start-work": {
       const { wrapUp } = await body();
       if (typeof wrapUp === "string")
         runner.startWork(wrapUp, id);
-      return json7({});
+      return json8({});
     }
   }
   return error(404, "Not found");
 }
 
 // Packages/Box/src/agents/groups/link.ts
-var json8 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var message2 = (status, text3) => json8({ message: text3 }, status);
+var json9 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var message2 = (status, text3) => json9({ message: text3 }, status);
 var seconds2 = (text3) => {
   const time = Date.parse(text3 ?? "");
   return Number.isFinite(time) ? time / 1000 : undefined;
@@ -15818,7 +16192,7 @@ function joinable(runner, store) {
 }
 async function linkRoutes(runner, store, method, parts2, body, signal) {
   if (!runner || !store)
-    return json8({}, 404);
+    return json9({}, 404);
   const [id, action] = parts2;
   const here = () => {
     const { here: here2, there } = bots(runner, store);
@@ -15826,21 +16200,21 @@ async function linkRoutes(runner, store, method, parts2, body, signal) {
   };
   if (!id || id === "events") {
     if (method === "GET")
-      return id ? following(() => list2(runner, store), false, signal) : json8(list2(runner, store));
+      return id ? following(() => list2(runner, store), false, signal) : json9(list2(runner, store));
     if (method === "POST" && !id)
       return await make(runner, store, await body().catch(() => {
         return;
       }), here());
-    return json8({}, 405);
+    return json9({}, 405);
   }
   if (id === "joinable")
-    return method === "GET" ? json8({ bots: joinable(runner, store) }) : json8({}, 405);
+    return method === "GET" ? json9({ bots: joinable(runner, store) }) : json9({}, 405);
   if (!/^grp_[a-z0-9]+$/.test(id))
-    return json8({}, 404);
+    return json9({}, 404);
   if (method === "GET" && (!action || action === "events")) {
     if (!chat(runner, id))
-      return json8({}, 404);
-    return action ? following(() => chat(runner, id), true, signal) : json8(chat(runner, id));
+      return json9({}, 404);
+    return action ? following(() => chat(runner, id), true, signal) : json9(chat(runner, id));
   }
   if (method === "PATCH" && !action) {
     const given2 = await body().catch(() => {
@@ -15874,18 +16248,18 @@ async function linkRoutes(runner, store, method, parts2, body, signal) {
     const asked2 = await ask(runner, store, "PATCH", [id], edits2);
     if (asked2.status !== 200)
       return message2([400, 404, 409].includes(asked2.status) ? asked2.status : 503, asked2.value?.message ?? "The group chat couldn\u2019t be changed.");
-    return json8({ group: list2(runner, store).groups.find((each) => each.id === id) ?? null });
+    return json9({ group: list2(runner, store).groups.find((each) => each.id === id) ?? null });
   }
   if (method === "DELETE" && !action) {
     const asked2 = await ask(runner, store, "DELETE", [id]);
     if (asked2.status === 200 || asked2.status === 404 && asked2.value?.message === "No such chat.")
-      return json8({});
+      return json9({});
     if (asked2.status === 409)
       return message2(409, "That chat is moving. Try again once it\u2019s there.");
     return message2(503, asked2.value?.message ?? "The group chat couldn\u2019t be deleted. Try again in a moment.");
   }
   if (method !== "POST" || action === "events")
-    return json8({}, 405);
+    return json9({}, 405);
   const given = await body().catch(() => {
     return;
   }) ?? {};
@@ -15893,7 +16267,7 @@ async function linkRoutes(runner, store, method, parts2, body, signal) {
   switch (action) {
     case undefined:
       if (typeof given.text !== "string" || !trim(given.text))
-        return json8({}, 400);
+        return json9({}, 400);
       asked = await ask(runner, store, "POST", [id, "send"], { text: given.text, ...typeof given.named === "string" ? { named: given.named } : {} });
       break;
     case "stop":
@@ -15905,21 +16279,21 @@ async function linkRoutes(runner, store, method, parts2, body, signal) {
       break;
     case "undo": {
       if (typeof given.message !== "string")
-        return json8({}, 404);
+        return json9({}, 404);
       asked = await ask(runner, store, "POST", [id, "undo"], { message: given.message });
       if (asked.status !== 200)
-        return json8({}, failed(asked.status));
-      return json8({ text: asked.value?.data?.text ?? "" });
+        return json9({}, failed(asked.status));
+      return json9({ text: asked.value?.data?.text ?? "" });
     }
     case "start":
       if (typeof given.message !== "string")
-        return json8({}, 404);
+        return json9({}, 404);
       asked = await ask(runner, store, "POST", [id, "start-work"], { wrapUp: given.message });
       break;
     default:
-      return json8({}, 404);
+      return json9({}, 404);
   }
-  return json8({}, asked.status === 200 ? 200 : failed(asked.status));
+  return json9({}, asked.status === 200 ? 200 : failed(asked.status));
 }
 async function make(runner, store, given, here) {
   if (!given || typeof given !== "object" || Array.isArray(given))
@@ -15946,7 +16320,7 @@ async function make(runner, store, given, here) {
   if (!runner.put({ id, name, ...purpose ? { purpose } : {}, members, seats: {}, heard: {}, created: now, viewed: now, ...meeting ? { meeting } : {} }, [], "active", false)) {
     return message2(409, "That chat is here already.");
   }
-  return json8({ group: list2(runner, store).groups.find((each) => each.id === id) ?? null }, 201);
+  return json9({ group: list2(runner, store).groups.find((each) => each.id === id) ?? null }, 201);
 }
 
 // Packages/Box/src/agents/groups/post.ts
@@ -16020,8 +16394,8 @@ class SeatAPI {
     const ready = Array.isArray(providers?.data) ? providers.data.map((each) => each?.id) : [];
     if (!ready.length)
       return;
-    const listed2 = Array.isArray(integrations?.data) ? integrations.data : [];
-    const provider = listed2.find((each) => each?.id === model2.providerID);
+    const listed3 = Array.isArray(integrations?.data) ? integrations.data : [];
+    const provider = listed3.find((each) => each?.id === model2.providerID);
     return { name: String(provider?.name ?? model2.providerID), signedOut: provider !== undefined && !ready.includes(model2.providerID) };
   }
   async create(directory, title, agent, model2, permissions) {
@@ -18493,10 +18867,10 @@ function gaveUp(parts2, to, mail, at4) {
       return;
   }
 }
-var json9 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var json10 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 async function peerRoutes(parts2, method, path, body, signal) {
   if (!parts2)
-    return json9({ message: "Group chats don't run here." }, 404);
+    return json10({ message: "Group chats don't run here." }, 404);
   const [what2] = path;
   if (what2 === "mail" && method === "GET")
     return parts2.post.follow(signal);
@@ -18505,35 +18879,35 @@ async function peerRoutes(parts2, method, path, body, signal) {
       return;
     });
     if (typeof given?.from !== "string" || !given.from || !isSeatMail(given.mail))
-      return json9({ message: "That isn't group chat mail." }, 400);
+      return json10({ message: "That isn't group chat mail." }, 400);
     receive(parts2, given.from, given.mail);
-    return json9({});
+    return json10({});
   }
   if (what2 === "gaveup" && method === "POST") {
     const given = await body().catch(() => {
       return;
     });
     if (typeof given?.to !== "string" || !given.to || !isSeatMail(given.mail))
-      return json9({ message: "That isn't group chat mail." }, 400);
+      return json10({ message: "That isn't group chat mail." }, 400);
     if (!parts2.directory.told)
-      return json9({ message: "Not yet." }, 503);
+      return json10({ message: "Not yet." }, 503);
     gaveUp(parts2, given.to, given.mail, typeof given.at === "number" ? given.at : undefined);
-    return json9({});
+    return json10({});
   }
   if (what2 === "sent" && method === "POST") {
     const given = await body().catch(() => {
       return;
     });
     if (!Array.isArray(given?.ids) || !given.ids.every((id) => typeof id === "string"))
-      return json9({ message: "Those aren't mail." }, 400);
+      return json10({ message: "Those aren't mail." }, 400);
     parts2.post.sent(given.ids);
-    return json9({});
+    return json10({});
   }
   if (!what2 && method === "PUT")
     return parts2.directory.set(await body().catch(() => {
       return;
-    })) ? json9({}) : json9({ message: "That isn't who your computers are." }, 400);
-  return json9({ message: "Not found" }, 404);
+    })) ? json10({}) : json10({ message: "That isn't who your computers are." }, 400);
+  return json10({ message: "Not found" }, 404);
 }
 
 class LinkDirectory {
@@ -18605,9 +18979,9 @@ setInterval(() => {
     attempts.delete(id);
   }
 }, 60000).unref?.();
-var json10 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var located = (value) => json10({ location: { directory: process.cwd() }, data: value });
-var error2 = (status, message3) => json10({ message: message3 }, status);
+var json11 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var located = (value) => json11({ location: { directory: process.cwd() }, data: value });
+var error2 = (status, message3) => json11({ message: message3 }, status);
 var lastSeen = new Map;
 var lastMaintained = new Map;
 async function maintainedSoon(agent, fresh) {
@@ -18706,7 +19080,7 @@ function handler(context) {
         return error2(404, "Not found");
       const [, area, a, b, c, d, e] = parts2;
       if (area === "info")
-        return json10({ version: context.version, pid: process.pid });
+        return json11({ version: context.version, pid: process.pid });
       if (area === "event")
         return feed();
       if (area === "integration") {
@@ -18752,12 +19126,12 @@ function handler(context) {
             if (!pending.attempt.complete)
               return error2(400, "This sign-in finishes in the browser.");
             await pending.attempt.complete(String(code ?? ""));
-            return json10({});
+            return json11({});
           }
           if (method === "DELETE") {
             pending.attempt.cancel();
             attempts.delete(d);
-            return json10({});
+            return json11({});
           }
         }
         if (b === "connect" && c === "key" && method === "POST") {
@@ -18765,7 +19139,7 @@ function handler(context) {
           if (!agent.signInWithKey)
             return error2(400, `${agent.name} doesn't take a key here.`);
           await agent.signInWithKey(String(key ?? "").trim());
-          return json10({});
+          return json11({});
         }
         if (b === "update" && method === "POST") {
           if (!agent.update)
@@ -18778,7 +19152,7 @@ function handler(context) {
             emit("integration.updated", { integrationID: agent.providerID });
             emit("model.updated", {});
           }
-          return json10({ data: result });
+          return json11({ data: result });
         }
         if (b === "install" && method === "POST") {
           if (!agent.installProgram)
@@ -18791,13 +19165,13 @@ function handler(context) {
             emit("integration.updated", { integrationID: agent.providerID });
             emit("model.updated", {});
           }
-          return json10({ data: result });
+          return json11({ data: result });
         }
         if (b === "disconnect" && method === "POST") {
           if (!agent.signOut)
             return error2(400, `Sign out of ${agent.name} where you signed in.`);
           await agent.signOut();
-          return json10({});
+          return json11({});
         }
       }
       if (area === "model") {
@@ -18824,33 +19198,33 @@ function handler(context) {
           return read2 ? located(read2) : error2(404, "No such command.");
         }
         if (a && !b && method === "DELETE")
-          return await stopShell(a) ? json10({}) : error2(404, "No such command.");
+          return await stopShell(a) ? json11({}) : error2(404, "No such command.");
       }
       if (area === "session") {
         if (!a) {
           if (method === "POST")
-            return json10({ data: sessions.create(await body()) });
+            return json11({ data: sessions.create(await body()) });
           const directory = url.searchParams.get("directory") ?? undefined;
           const under = url.searchParams.get("parentID") ?? url.searchParams.get("cursor")?.split(":")[2] ?? null;
           const roots = sessions.list(directory, under === null || under === "" ? undefined : under === "null" ? null : under);
           const ordered = url.searchParams.get("cursor")?.startsWith("asc") || url.searchParams.get("order") === "asc" ? [...roots].reverse() : roots;
-          return json10(page(ordered, url));
+          return json11(page(ordered, url));
         }
         if (a === "active")
-          return json10({ data: Object.fromEntries(sessions.active().map((id2) => [id2, { type: "busy" }])) });
+          return json11({ data: Object.fromEntries(sessions.active().map((id2) => [id2, { type: "busy" }])) });
         if (a === "import" && method === "POST")
-          return json10({ data: sessions.importSession(await body()) });
+          return json11({ data: sessions.importSession(await body()) });
         const id = a;
         if (!b) {
           if (method === "GET")
-            return json10({ data: sessions.get(id) });
+            return json11({ data: sessions.get(id) });
           if (method === "PATCH") {
             sessions.update(id, await body());
-            return json10({ data: sessions.get(id) });
+            return json11({ data: sessions.get(id) });
           }
           if (method === "DELETE") {
             await sessions.remove(id);
-            return json10({});
+            return json11({});
           }
         }
         switch (b) {
@@ -18860,51 +19234,51 @@ function handler(context) {
             const ordered = asc ? messages2 : [...messages2].reverse();
             if (c) {
               const found2 = messages2.find((message3) => message3.id === c);
-              return found2 ? json10({ data: found2 }) : error2(404, "No such message.");
+              return found2 ? json11({ data: found2 }) : error2(404, "No such message.");
             }
-            return json10(page(ordered, url));
+            return json11(page(ordered, url));
           }
           case "inbox":
             if (method === "DELETE" && c) {
               sessions.cancelInput(id, c);
-              return json10({});
+              return json11({});
             }
             if (method === "PATCH" && c) {
               sessions.setDelivery(id, c, (await body()).delivery);
-              return json10({});
+              return json11({});
             }
-            return json10({ data: sessions.inbox(id) });
+            return json11({ data: sessions.inbox(id) });
           case "prompt": {
             const input = await body();
             sessions.prompt(id, { id: input.id ?? newID("msg"), text: String(input.text ?? ""), files: input.files ?? [], delivery: input.delivery ?? "steer" });
-            return json10({});
+            return json11({});
           }
           case "fork":
-            return json10({ data: sessions.fork(id, String((await body()).before ?? "")) });
+            return json11({ data: sessions.fork(id, String((await body()).before ?? "")) });
           case "revert":
             if (c === "stage" && method === "POST")
-              return json10({ data: await sessions.stageRevert(id, String((await body()).messageID ?? "")) });
+              return json11({ data: await sessions.stageRevert(id, String((await body()).messageID ?? "")) });
             if (!c && method === "DELETE") {
               await sessions.clearRevert(id);
-              return json10({});
+              return json11({});
             }
             break;
           case "shell":
             if (method !== "POST")
               break;
             sessions.runShell(id, String((await body()).command ?? ""));
-            return json10({});
+            return json11({});
           case "synthetic": {
             const input = await body();
             sessions.synthetic(id, String(input.text ?? ""), typeof input.description === "string" ? input.description : undefined);
-            return json10({});
+            return json11({});
           }
           case "generate": {
             const input = await body();
             const prompt = String(input.prompt ?? "");
             if (!prompt.trim())
               throw new BadRequest("Say what to write.");
-            return json10({ data: { text: await sessions.generate(id, prompt, { orAnother: input.orAnother === true }) } });
+            return json11({ data: { text: await sessions.generate(id, prompt, { orAnother: input.orAnother === true }) } });
           }
           case "command": {
             const input = await body();
@@ -18913,44 +19287,44 @@ function handler(context) {
             const template = name ? await link2.commandTemplate(name, sessions.get(id).location.directory) : undefined;
             const text3 = template ? expandCommand(template, written) : `/${name} ${written}`.trim();
             sessions.prompt(id, { id: newID("msg"), text: text3, files: input.files ?? [], delivery: input.delivery ?? "steer" });
-            return json10({});
+            return json11({});
           }
           case "interrupt":
-            return json10({ interrupted: await sessions.interrupt(id, url.searchParams.get("resume") === "true") });
+            return json11({ interrupted: await sessions.interrupt(id, url.searchParams.get("resume") === "true") });
           case "model":
             sessions.selectModel(id, (await body()).model);
-            return json10({});
+            return json11({});
           case "agent":
             sessions.selectAgent(id, (await body()).agent);
-            return json10({});
+            return json11({});
           case "permission":
             if (!c)
-              return json10({ data: id === "global" ? [] : sessions.permissions(id) });
+              return json11({ data: id === "global" ? [] : sessions.permissions(id) });
             if (d === "reply") {
               const { decision } = await body();
               sessions.replyPermission(id, c, decision);
-              return json10({});
+              return json11({});
             }
             break;
           case "form":
             if (!c)
-              return json10({ data: id === "global" ? [] : sessions.forms(id) });
+              return json11({ data: id === "global" ? [] : sessions.forms(id) });
             if (d === "reply") {
               sessions.replyForm(id, c, (await body()).answer ?? {});
-              return json10({});
+              return json11({});
             }
             if (method === "DELETE") {
               sessions.replyForm(id, c, null);
-              return json10({});
+              return json11({});
             }
             break;
           case "view": {
             const { idle } = await body();
             sessions.view(id, Number(idle) || Date.now());
-            return json10({});
+            return json11({});
           }
           case "diff":
-            return json10({ data: [] });
+            return json11({ data: [] });
         }
       }
       if (area === "kuvo" && a === "accounts") {
@@ -18962,7 +19336,7 @@ function handler(context) {
           roster.sync();
           const added = roster.all().find((each) => each.instance.id === record2.id && each.id === agent);
           emit("integration.updated", { integrationID: added.providerID });
-          return json10({ data: { providerID: added.providerID } });
+          return json11({ data: { providerID: added.providerID } });
         }
         const target = b ? roster.find(b) : undefined;
         if (!target)
@@ -18973,7 +19347,7 @@ function handler(context) {
           roster.accounts.rename(target.providerID, (await body()).label);
           roster.sync();
           emit("integration.updated", { integrationID: target.providerID });
-          return json10({});
+          return json11({});
         }
         if (method === "DELETE") {
           sessions.forgetProvider(target.providerID);
@@ -18983,7 +19357,7 @@ function handler(context) {
           roster.sync();
           emit("integration.updated", { integrationID: target.providerID });
           emit("model.updated", {});
-          return json10({});
+          return json11({});
         }
       }
       if (area === "kuvo" && a === "goals")
@@ -18992,6 +19366,8 @@ function handler(context) {
         return await sideQuestionRoutes(context.sideQuestions, method, parts2.slice(3), body);
       if (area === "kuvo" && a === "handoff")
         return await handoffRoutes(context.handoffs, method, parts2.slice(3), body);
+      if (area === "kuvo" && a === "branch")
+        return await branchRoutes(context.places, method, parts2.slice(3), body);
       if (area === "kuvo" && a === "reviews")
         return await reviewRoutes(context.reviews, method, parts2.slice(3), body);
       if (area === "kuvo" && a === "voice")
@@ -19009,12 +19385,12 @@ function handler(context) {
       if (area === "kuvo" && a === "tools" && method === "PUT") {
         const { url: address, token, timeout } = await body();
         setToolServer(typeof address === "string" && address && typeof token === "string" ? { url: address, token, timeout: Number(timeout) || 960000 } : undefined);
-        return json10({});
+        return json11({});
       }
       if (area === "kuvo" && a === "engine" && method === "PUT") {
         const { url: address, password } = await body();
         link2.configure(typeof address === "string" && address ? address : undefined, typeof password === "string" ? password : undefined);
-        return json10({});
+        return json11({});
       }
       if (area === "kuvo" && a === "auto") {
         if (b === "limits" && method === "DELETE") {
@@ -19024,7 +19400,7 @@ function handler(context) {
           else
             auto.clearLimits();
           emit("kuvo.auto.updated", {});
-          return json10({});
+          return json11({});
         }
         if (!b && method === "PUT") {
           const { entries, lists } = await body();
@@ -19041,20 +19417,20 @@ function handler(context) {
           emit("kuvo.auto.updated", {});
         }
         if (!b && (method === "GET" || method === "PUT"))
-          return json10({ data: { entries: auto.list(), lists: auto.all(), limits: auto.limits() } });
+          return json11({ data: { entries: auto.list(), lists: auto.all(), limits: auto.limits() } });
       }
       if (area === "experimental" && a === "session" && b) {
         const id = b;
         if (c === "instructions" && d === "entries" && !e && method === "GET")
-          return json10({ data: sessions.instructionEntries(id) });
+          return json11({ data: sessions.instructionEntries(id) });
         if (c === "instructions" && d === "entries" && e && (method === "PUT" || method === "DELETE")) {
           sessions.setInstruction(id, e, method === "DELETE" ? undefined : String((await body()).value ?? ""));
-          return json10({});
+          return json11({});
         }
         if (c === "wait") {
           while (sessions.active().includes(id))
             await Bun.sleep(200);
-          return json10({});
+          return json11({});
         }
       }
       return error2(404, "Not available for this agent.");
@@ -19336,7 +19712,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link: link2, password, version: version3, groups, goals, sideQuestions, handoffs, reviews, voice, artifacts, noted })
+    fetch: handler({ roster, sessions, auto, link: link2, password, version: version3, groups, goals, sideQuestions, handoffs, places: places4, reviews, voice, artifacts, noted })
   });
 } catch (error3) {
   console.error("couldn't listen:", error3?.message ?? error3);
@@ -19397,4 +19773,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents a6b3bcd1ed1e2ef0837f7cd88be93076b671c19a65aba61b55ccebea6bf0a96e
+// Built from Packages/Box/src/agents d5c2555e47b80ddf6e51463121fae8188ca2c1385d8701f74df272f4e346fba3

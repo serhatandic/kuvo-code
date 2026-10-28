@@ -2,7 +2,7 @@
 
 <h1 align="center">Kuvo Code</h1>
 
-<p align="center"><strong>Any model. One native harness.</strong></p>
+<p align="center"><strong>Your bots. Your computers. Any model.</strong></p>
 
 <p align="center">
   <a href="https://github.com/serhatandic/kuvo-code/actions/workflows/ci.yml"><img src="https://github.com/serhatandic/kuvo-code/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>

@@ -55,6 +55,8 @@ public struct StatusMark: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.markInk) private var markInk
 
     public init(_ kind: Kind, size: CGFloat = 14) {
         self.kind = kind
@@ -68,8 +70,18 @@ public struct StatusMark: View {
         self.size = size
     }
 
+    /// The label it sits in, for its ink: see `markInk(_:)`.
+    private var label: StatusMarkInk.Label {
+        switch markInk {
+        case .own: .standard
+        case .control: isEnabled ? .standard : .disabled
+        case .onFill: isEnabled ? .onFill : .disabled
+        }
+    }
+
     public var body: some View {
-        StatusMarkHost(kind: kind, size: size, still: reduceMotion, ink: StatusMarkInk(scheme: scheme, accent: accent))
+        StatusMarkHost(kind: kind, size: size, still: reduceMotion,
+                       ink: StatusMarkInk(scheme: scheme, accent: accent, label: label))
             .frame(width: size, height: size)
             // Beside text, on its middle.
             .alignmentGuide(.firstTextBaseline) { $0.height * 0.85 }
@@ -99,8 +111,40 @@ public enum ConversationState {
     }
 }
 
+extension StatusMark {
+    /// The colour a mark takes from the control it sits in, as the control's own words do.
+    public enum Ink: Sendable {
+        /// Its own ink, whatever is around it: a disabled container (a row while it sends) doesn't
+        /// dim it, nor its words.
+        case own
+        /// A control's label that greys when it's disabled (a system button, a card's action): the
+        /// same grey then.
+        case control
+        /// A filled accent button's white: its grey once it's disabled (a default or glass prominent
+        /// button's, which loses its fill then).
+        case onFill
+    }
+}
+
+extension View {
+    /// The colour the marks in this view (a `Spinner` in a button's label) take from the control:
+    /// grey with its words when it's disabled, or a filled accent button's white. Without it a
+    /// mark keeps its own ink.
+    public func markInk(_ ink: StatusMark.Ink) -> some View {
+        environment(\.markInk, ink)
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var markInk = StatusMark.Ink.own
+}
+
 /// The colours a mark draws with, resolved for its appearance.
 struct StatusMarkInk: Equatable {
+    /// What the mark sits in, for its ink: a label like any other, a filled accent button's white
+    /// one, or a disabled control's grey one.
+    enum Label { case standard, onFill, disabled }
+
     var ink: Color.Resolved
     /// Quieter than ink, still clear of the row: a state that's away rather than at work.
     var muted: Color.Resolved
@@ -109,12 +153,23 @@ struct StatusMarkInk: Equatable {
     var orange: Color.Resolved
     var red: Color.Resolved
 
-    init(scheme: ColorScheme, accent: Color) {
+    init(scheme: ColorScheme, accent: Color, label: Label = .standard) {
         var environment = EnvironmentValues()
         environment.colorScheme = scheme
-        ink = Color.primary.opacity(0.6).resolve(in: environment)
+        // The ring and its track in the label's colour: the button's white on its fill, a disabled
+        // control's grey (as dim as its words).
+        switch label {
+        case .standard:
+            ink = Color.primary.opacity(0.6).resolve(in: environment)
+            faint = Color.primary.opacity(0.16).resolve(in: environment)
+        case .onFill:
+            ink = Color.white.opacity(0.95).resolve(in: environment)
+            faint = Color.white.opacity(0.32).resolve(in: environment)
+        case .disabled:
+            ink = Color.primary.opacity(0.3).resolve(in: environment)
+            faint = Color.primary.opacity(0.1).resolve(in: environment)
+        }
         muted = Color.primary.opacity(0.38).resolve(in: environment)
-        faint = Color.primary.opacity(0.16).resolve(in: environment)
         self.accent = accent.resolve(in: environment)
         orange = Color.orange.resolve(in: environment)
         red = Color.red.resolve(in: environment)

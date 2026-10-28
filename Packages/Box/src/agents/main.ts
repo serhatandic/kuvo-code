@@ -261,7 +261,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, reviews, voice, artifacts, noted }),
+    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted }),
   })
 } catch (error: any) {
   console.error("couldn't listen:", error?.message ?? error)

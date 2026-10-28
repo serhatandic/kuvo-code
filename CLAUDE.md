@@ -238,6 +238,15 @@ Releases come only from the pipeline: pushing an annotated `vX.Y.Z` tag on `main
 
 Betas are manual: an annotated `vX.Y.Z-beta.N` tag on `main` (the version it leads up to) goes through the same pipeline as a prerelease, with the changelog's Unreleased notes as they are (don't rename the heading). Only copies with **Settings › General › Get beta updates** on are offered it; the update feed keeps the newest release and any newer beta (`scripts/merge-appcast.py`). Its build version is `X.Y.ZbN`, which Sparkle orders before `X.Y.Z` (it ignores anything after a dash).
 
+## Go easy on GitHub (strict)
+
+On 2026-10-28 GitHub's automated abuse checks hid the user's account: the profile, the repos and the release downloads (the DMG and the update feed) answered 404 to everyone else. The likely cause is the heavy automated traffic of many sessions at once. A reinstatement request is open. Until the user says the account is cleared, and as a habit after it:
+
+- **Push in batches.** Land finished, reviewed pieces together: at most about one push per repo per hour from a session. Never push only to start CI.
+- **No polling.** Never loop on `gh run`, `gh api`, `gh pr` or `git fetch`. Check CI once after a push, and read the result when you're told it's done.
+- **No GitHub writes beyond the task**: no issues, labels, releases, tags or repo settings unless the user asks.
+- **One account.** Never create or use another GitHub account or token.
+
 ## Commits
 
 - Commit in small, logical chunks with plain messages.

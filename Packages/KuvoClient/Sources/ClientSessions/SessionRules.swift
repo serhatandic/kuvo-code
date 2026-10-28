@@ -14,6 +14,57 @@ public enum HiddenSessions {
     }
 }
 
+/// Conversations you started from another one, which show under it: a branch ("Branch from
+/// here") or a handoff's ("/handoff"), as their box marks them. A subagent's session isn't one:
+/// the agent started it, and it shows in the conversation it works for.
+public enum Branches {
+    public enum Kind: Sendable, Equatable { case branch, handoff }
+
+    /// The conversation `session` came from, and how.
+    public static func origin(of session: Session) -> (id: String, kind: Kind)? {
+        let kuvo = session.metadata?["kuvo"]
+        if let id = kuvo?["branchedFrom"]?.string, !id.isEmpty { return (id, .branch) }
+        if let id = kuvo?["handoffFrom"]?.string, !id.isEmpty { return (id, .handoff) }
+        return nil
+    }
+
+    /// `sessions`, each under the one it came from when that one is among them too (all the way
+    /// up, never in a loop): those at the top, in their order, and those under each, newest first.
+    public static func tree(_ sessions: [Session]) -> (top: [Session], under: [String: [Session]]) {
+        let listed = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        func parent(of session: Session) -> String? {
+            guard let origin = origin(of: session)?.id, origin != session.id, listed[origin] != nil else { return nil }
+            // One whose chain comes back round to it stays at the top.
+            var seen: Set<String> = [session.id]
+            var above: String? = origin
+            while let id = above {
+                guard seen.insert(id).inserted else { return nil }
+                above = listed[id].flatMap { Branches.origin(of: $0)?.id }.flatMap { listed[$0] != nil ? $0 : nil }
+            }
+            return origin
+        }
+        var top: [Session] = []
+        var under: [String: [Session]] = [:]
+        for session in sessions {
+            if let parent = parent(of: session) { under[parent, default: []].append(session) } else { top.append(session) }
+        }
+        return (top, under.mapValues { $0.sorted { $0.time.created > $1.time.created } })
+    }
+
+    /// `tree(sessions)` for a list that shows the latest first, and maybe only the first few:
+    /// those at the top by the latest of each and what's under it, so one at work under an older
+    /// one keeps it in view.
+    public static func latestFirst(_ sessions: [Session]) -> (top: [Session], under: [String: [Session]]) {
+        let (top, under) = tree(sessions)
+        func latest(_ session: Session, depth: Int = 0) -> Milliseconds {
+            guard depth < 20 else { return session.time.updated }
+            return ([session.time.updated] + (under[session.id] ?? []).map { latest($0, depth: depth + 1) }).max() ?? session.time.updated
+        }
+        let ranked = top.map { ($0, latest($0)) }.enumerated().sorted { $0.element.1 != $1.element.1 ? $0.element.1 > $1.element.1 : $0.offset < $1.offset }
+        return (ranked.map(\.element.0), under)
+    }
+}
+
 /// What you haven't read, and what reading reads.
 public enum ReadState {
     /// A sub-session (a subagent's session) finished since you were last in it, or in the session

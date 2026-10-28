@@ -616,6 +616,13 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   done, it carries on), `POST api/session/<id>/interrupt` to stop it (the agent waiting on it
   hears it was cancelled, and carries on), and choose its model. Choose it without interrupting:
   an interrupt, even with `resume`, ends that agent's wait, and it gives up on the subagent.
+  A coding agent's subagent says how it takes messages in `metadata.kuvo.messages`:
+  `{"via": "direct"}` (Codex: a prompt goes to it, into its turn or a new one), `{"via":
+  "parent"}` (Claude Code: the prompt shows in the subagent at once and reaches the conversation
+  that started it as a `synthetic` note, `metadata.kuvo.relayedTo`, asking its agent to pass it
+  on, which that conversation shows), or `{"via": "none", "note"}` (a prompt answers `400` with
+  `note` to show). Without it (an older bridge): none. Its model is its agent's (`400`).
+  `ClientSessions.SubagentMessages` reads it, for both apps.
 - **What's been read** is the box's, never a client's, so a conversation read on one client is
   read on all of them, a machine's with the Mac closed too. A session (a bot's too) is unread
   while `time.idle` is later than `time.viewed`. Read it with `POST api/session/<id>/view`
@@ -1441,8 +1448,8 @@ Grok). With none to answer, the goal pauses and says so. A client reaches them a
 
 ### Side questions, handoffs and reviews
 
-Three more keywords each box answers in its agents bridge, as it does goals ("Goals"), for the
-engine's sessions and the coding agents' alike, with no client there: `kuvo/agents/api/kuvo/…` on
+Three more keywords each box answers in its agents bridge, as it does goals ("Goals"), and its
+branches, for the engine's sessions and the coding agents' alike, with no client there: `kuvo/agents/api/kuvo/…` on
 the box the conversation lives on (the Mac app at `api/kuvo/…` on the bridge), while `kuvo/info` has
 `agents: true` (503 otherwise), where `features` names them. Each answers `400`, `404` (no such
 conversation, or nothing of it), `409` and `503` with `{message}` to show. Times are ms since 1970.
@@ -1475,6 +1482,18 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
     fails, and makes no new conversation.
   - `GET …/kuvo/handoff/<session>` → `{data: handoff}`, its latest while the box runs.
   - Event `kuvo.handoff` `{sessionID, handoff}` as it starts and ends: open `to` once it's `done`.
+- **Branches** (`branch`, "Branch from here"): a new conversation with another one's words before
+  a message of yours, made by its place (the engine's own fork, or the bridge's), and marked as
+  branched from it in its metadata (`kuvo.branchedFrom`; where its source came from or was handed
+  off to isn't carried over, and it starts unpinned and not archived; if the mark can't be written,
+  it's answered without it). Show a conversation marked `kuvo.branchedFrom` or `kuvo.handoffFrom`
+  under that one when it's in the same list, newest first, and rank it in a list of the latest by
+  its newest branch; a subagent's session (one with a `parentID`) is never shown so: it shows in
+  the conversation it works for. A box from before branches answers `404` "Not available for this
+  agent.": fork with the engine's own route, and mark it so yourself.
+  - `POST …/kuvo/branch/<session>` with `{"before"}`, the message's id → `{data: session}`, the new
+    conversation, marked. `400` with no `before`, `404` for a message not in it, `409` for a
+    subagent's.
 - **Reviews** (`reviews`, "/review"; scopes `reviews.scopes`): what `scope` names in the conversation's folder, read by a
   model with none of the conversation's context: on the engine, its own model afresh, or `model`
   when given; with the coding agents, its own agent (another one you're signed in to when it
@@ -1571,8 +1590,9 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
 | `handoff` | `kuvo/agents/api/kuvo/handoff…`: handoffs |
+| `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
 | `reviews` | `kuvo/agents/api/kuvo/reviews…`: reviews with fresh eyes |
-| `reviews.scopes` | a review's `scope`, `measure`, `choices` and `stop` (bridge 0.9.96); without it a box reads the changes not committed yet whatever the scope |
+| `reviews.scopes` | a review's `scope`, `measure`, `choices` and `stop` (bridge 0.9.97); without it a box reads the changes not committed yet whatever the scope |
 | `groups` | `kuvo/groups`, `…/events`, one chat's events, and writing, stopping, keep going, viewed, undo and start |
 | `groups.make` | `POST kuvo/groups` |
 | `groups.edit` | `PATCH kuvo/groups/<id>` |

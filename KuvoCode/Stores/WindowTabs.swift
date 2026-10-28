@@ -247,8 +247,13 @@ final class WindowTabs {
     // MARK: Opening and closing
 
     /// Shows a tab, opening it next to the current one if needed (the session beside a tab: that
-    /// tab, with it beside, and you in it while it shows), out of Settings and any editor.
+    /// tab, with it beside, and you in it while it shows), out of Settings and any editor. A
+    /// conversation whose subagent is open in its tab comes back in that tab.
     func open(_ key: TabKey) {
+        if !keys.contains(key), let id = key.sessionID, workspace.session(id) != nil,
+           let subagent = keys.first(where: { $0.sessionID.map { workspace.session($0) == nil && workspace.root(of: $0) == id } ?? false }) {
+            return swap(subagent, for: key)
+        }
         let pair = pairs.first { $0.value == key.sessionID && keys.contains($0.key) }?.key
         let key = pair ?? key
         if !keys.contains(key) {
@@ -258,6 +263,35 @@ final class WindowTabs {
         withAnimation(.ui) {
             selection = key
             focus = pair != nil && showsBeside ? .split : .conversation
+            app.showsSettings = false
+            botEditor = nil
+            groupEditor = nil
+        }
+    }
+
+    /// A subagent's conversation (or, from one, the conversation above it) in place of the
+    /// conversation in view, in its tab: the way back at its top swaps them again, and the
+    /// sidebar keeps the conversation it works for picked. With no conversation in view, a tab of
+    /// its own.
+    func openInPlace(_ id: String) {
+        guard let current = selection, current.sessionID != nil else { return open(.session(id)) }
+        swap(current, for: .session(id))
+    }
+
+    private func swap(_ old: TabKey, for new: TabKey) {
+        guard old != new, let index = keys.firstIndex(of: old) else { return open(new) }
+        var keys = keys
+        keys[index] = new
+        // One tab of it is enough.
+        if let other = keys.indices.first(where: { $0 != index && keys[$0] == new }) { keys.remove(at: other) }
+        if let beside = pairs[old] {
+            pairs[old] = nil
+            pairs[new] = beside
+        }
+        withAnimation(.ui) {
+            self.keys = keys
+            selection = new
+            focus = .conversation
             app.showsSettings = false
             botEditor = nil
             groupEditor = nil

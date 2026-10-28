@@ -1598,6 +1598,9 @@ process.stdin.on("data", (chunk) => {
     ])
     expect(texts(first)).toContain("hi")
     expect(sessions.messages(first).at(-1)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    // You can't write to them: it says why, with the agent's name.
+    expect(sessions.get(first).metadata?.kuvo).toMatchObject({ messages: { via: "none", note: "Gamma can't take messages for its subagents." } })
+    expect(() => sessions.prompt(first, { id: "msg_test_agy_child", text: "hi", files: [], delivery: "steer" })).toThrow("Gamma can't take messages for its subagents.")
     const working = sessions.messages(second).find((message) => message.type === "assistant") as any
     expect(working.content.find((content: any) => content.type === "tool")).toMatchObject({ name: "shell", state: { input: { command: "sleep 100" } } })
     expect(sessions.active()).not.toContain(second)
