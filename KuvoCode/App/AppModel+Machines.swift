@@ -68,6 +68,8 @@ extension AppModel {
         BrowserTools.job = { [weak self] arguments, caller in
             await self?.bots.setJob(arguments, caller: caller) ?? ("Kuvo Code isn't ready yet.", true)
         }
+        // The vault's tools and fills, through this Mac's box.
+        wireVault()
         // The browser sends agents from the sites of integrations you added to their tools.
         BrowserTools.integrationSites = { [weak self] in self.map { Integrations.sites(Integrations.added(in: $0.engineConfig)) } ?? [] }
         // An agent on a machine left a message for one elsewhere: on its way at once.

@@ -98,8 +98,6 @@ export const VAULT_TOOL_LIST = object({ tools: list(any) });
 export const VAULT_TOOL = object({ text: string, isError: bool });
 /** A fill for the browser's own process: the item, its username, and the values it fills. */
 export const VAULT_FILL = object({ item: object({ id: string, name: string }), "username?": string, values: map(string) });
-/** A fill that waits for you: the ask it's waiting on. */
-export const VAULT_FILL_ASKED = object({ ask: string, message: string });
 
 export type VaultItem = Infer<typeof VAULT_ITEM>;
 export type VaultWho = Infer<typeof VAULT_WHO>;
@@ -126,5 +124,5 @@ export const VAULT_ROUTES: RouteShape[] = [
   { route: "POST kuvo/vault/asks/:id", answers: { 200: NOTHING } },
   { route: "GET kuvo/vault/tools", answers: { 200: VAULT_TOOL_LIST } },
   { route: "POST kuvo/vault/tools", answers: { 200: VAULT_TOOL } },
-  { route: "POST kuvo/vault/fill", answers: { 200: VAULT_FILL, 202: VAULT_FILL_ASKED } },
+  { route: "POST kuvo/vault/fill", answers: { 200: VAULT_FILL } },
 ];

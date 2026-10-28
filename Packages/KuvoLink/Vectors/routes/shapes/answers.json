@@ -5346,12 +5346,6 @@
        "map": "string"
       }
      }
-    },
-    "202": {
-     "object": {
-      "ask": "string",
-      "message": "string"
-     }
     }
    }
   },

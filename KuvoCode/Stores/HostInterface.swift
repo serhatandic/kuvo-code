@@ -215,6 +215,19 @@ final class HostInterface {
         case "/keys/delete":
             guard let name, Self.isKey(name) else { return .init(status: 400) }
             return await Task.detached(operation: { IntegrationKeys.set(nil, for: name) }).value ? .json([:]) : Self.failed
+        case "/vault/get", "/vault/set", "/vault/delete":
+            // The vault's values, by item, in the Keychain: the box keeps everything else about them.
+            guard let id = given["id"] as? String, VaultValues.isItem(id) else { return .init(status: 400) }
+            switch request.path {
+            case "/vault/get":
+                guard let values = await Task.detached(operation: { VaultValues.values(id) }).value else { return .init(status: 404) }
+                return .json(["values": values])
+            case "/vault/set":
+                guard let values = given["values"] as? [String: String] else { return .init(status: 400) }
+                return await Task.detached(operation: { VaultValues.set(values, for: id) }).value ? .json([:]) : Self.failed
+            default:
+                return await Task.detached(operation: { VaultValues.remove(id) }).value ? .json([:]) : Self.failed
+            }
         case "/sites/signed-in":
             // Whether the panel's browser is signed in to the sites the agent uses there, as their
             // cookies say (read again once they've changed): only those it can tell.

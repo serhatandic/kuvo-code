@@ -1,0 +1,38 @@
+import Foundation
+
+extension AppModel {
+    /// The vault's tools for this Mac's conversations, which its box lists and carries out
+    /// (KuvoLink's PROTOCOL.md, "Vault"), and the fills its browser asks it for.
+    func wireVault() {
+        BrowserTools.vaultDefinitions = { [weak self] in
+            if let kept = VaultTools.definitions { return kept }
+            guard let self, let answer = try? await box(BoxClient.mac).send("GET", "kuvo/vault/tools"), answer.status == 200,
+                  let tools = (try? JSONSerialization.jsonObject(with: answer.body) as? [String: Any])?["tools"] as? [[String: Any]] else { return [] }
+            VaultTools.definitions = tools
+            return tools
+        }
+        BrowserTools.vault = { [weak self] name, arguments, caller in
+            guard let self else { return ("Kuvo Code isn't ready yet.", true) }
+            var body: [String: Any] = ["name": name, "arguments": arguments]
+            if let caller { body["session"] = caller }
+            guard let data = try? JSONSerialization.data(withJSONObject: body),
+                  let answer = try? await box(BoxClient.mac).send("POST", "kuvo/vault/tools", body: data) else {
+                return ("This Mac's vault can't be reached now. Try again in a moment.", true)
+            }
+            let said = (try? JSONSerialization.jsonObject(with: answer.body)) as? [String: Any]
+            guard answer.status == 200, let text = said?["text"] as? String else { return (said?["message"] as? String ?? "The vault couldn't do that (\(answer.status)).", true) }
+            return (text, said?["isError"] as? Bool ?? false)
+        }
+        BrowserTools.vaultFill = { [weak self] body in
+            guard let self, let data = try? JSONSerialization.data(withJSONObject: body),
+                  let answer = try? await box(BoxClient.mac).send("POST", "kuvo/vault/fill", body: data) else { return nil }
+            return (answer.status, ((try? JSONSerialization.jsonObject(with: answer.body)) as? [String: Any]) ?? [:])
+        }
+    }
+}
+
+/// The vault tools' definitions, as this Mac's box gave them: asked once a launch.
+@MainActor
+enum VaultTools {
+    static var definitions: [[String: Any]]?
+}

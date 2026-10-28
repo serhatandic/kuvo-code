@@ -42,7 +42,7 @@ function clientOf({ request, phone }: RouteContext): string | null {
 }
 
 /** Whether `proof` is a Mac that set this machine up, asking for its vault's key: its signing key's
- * signature of `kuvo-vault-key\0<at>`, made within five minutes. */
+ * signature of `kuvo-vault-key\0<this machine's id on its Macs>\0<at>`, made within five minutes. */
 function provedMac(given: Record<string, unknown>): boolean {
   const link = readLink();
   const mac = typeof given.mac === "string" ? given.mac : "";
@@ -52,7 +52,7 @@ function provedMac(given: Record<string, unknown>): boolean {
   try {
     const key = crypto.createPublicKey({ key: Buffer.concat([ED_SPKI, Buffer.from(sign, "base64url")]), format: "der", type: "spki" });
     const signature = Buffer.from(given.proof, "base64url");
-    return signature.length === 64 && crypto.verify(null, Buffer.from(`kuvo-vault-key\0${at}`), key, signature);
+    return signature.length === 64 && typeof link?.id === "string" && crypto.verify(null, Buffer.from(`kuvo-vault-key\0${link.id}\0${at}`), key, signature);
   } catch {
     return false;
   }
@@ -93,6 +93,9 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
   }
   if (route === "kuvo/vault/fill") {
     if (method !== "POST") return yield* json(405, {});
+    // Its values are for the browser's own process alone: on this Mac, the app's panel browser.
+    // (On a machine, the browser and anything you run there share your account: PROTOCOL.md.)
+    if (onHost() && !request.fromApp) return yield* json(403, { message: CLIENTS_ONLY });
     if (isLocked()) return yield* json(423, { message: LOCKED });
     const caller = await callerOf(given.session, readEngine, readBridge);
     const outcome = await fill(given, caller, signal);

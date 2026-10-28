@@ -520,7 +520,7 @@ async function askHost(host, call, body, missing = false) {
       method: "POST",
       headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(["keys/get", "keys/set", "link/identity"].includes(call) ? 120000 : 15000)
+      signal: AbortSignal.timeout(["keys/get", "keys/set", "link/identity", "vault/get", "vault/set"].includes(call) ? 120000 : 15000)
     });
   } catch {
     provenBy = null;
@@ -6777,7 +6777,6 @@ var VAULT_KEY = object({ key: string });
 var VAULT_TOOL_LIST = object({ tools: list(any) });
 var VAULT_TOOL = object({ text: string, isError: bool });
 var VAULT_FILL = object({ item: object({ id: string, name: string }), "username?": string, values: map(string) });
-var VAULT_FILL_ASKED = object({ ask: string, message: string });
 
 // Packages/Box/src/link/vault/store.ts
 var VAULT_FOLDER = path34.join(BOX, "vault");
@@ -6990,7 +6989,16 @@ var cleanName = (given) => {
     throw new VaultRefusal(400, "Give it a name.");
   return name;
 };
-async function addItem(given) {
+var itemQueue = Promise.resolve();
+var oneAtATime2 = (work) => {
+  const run = itemQueue.then(work, work);
+  itemQueue = run.catch(() => {});
+  return run;
+};
+var addItem = (given) => oneAtATime2(() => addOne(given));
+var changeItem = (id, given) => oneAtATime2(() => changeOne(id, given));
+var removeItem = (id) => oneAtATime2(() => removeOne(id));
+async function addOne(given) {
   if (!ITEM_KINDS.includes(given.kind))
     throw new VaultRefusal(400, `An item is one of: ${ITEM_KINDS.join(", ")}.`);
   const kind = given.kind;
@@ -7018,7 +7026,7 @@ async function addItem(given) {
   vaultWork(() => keepItems([...readItems(), item]));
   return item;
 }
-async function changeItem(id, given) {
+async function changeOne(id, given) {
   checkedID(id);
   const before = itemByID(id);
   if (!before)
@@ -7064,10 +7072,10 @@ async function changeItem(id, given) {
     await keepValues(id, values);
     item.fields = Object.keys(values).sort();
   }
-  vaultWork(() => keepItems(readItems().map((each) => each.id === id ? item : each)));
+  vaultWork(() => keepItems(readItems().map((each) => each.id === id ? { ...item, ...each.used ? { used: each.used } : {} } : each)));
   return item;
 }
-async function removeItem(id) {
+async function removeOne(id) {
   checkedID(id);
   const item = itemByID(id);
   if (!item)
@@ -11002,6 +11010,30 @@ var whoOf = (caller) => ({
   ...caller.sessionName ? { sessionName: caller.sessionName } : {}
 });
 var itemOf = (item) => ({ item: item.id, itemName: item.name, kind: item.kind });
+var ONCE_FOR = 30 * 60000;
+var once = new Map;
+var onceKey = (caller, item) => `${caller.root ?? caller.session ?? ""}\x00${item}`;
+function allowOnce(caller, item) {
+  once.set(onceKey(caller, item), Date.now() + ONCE_FOR);
+}
+function hasOnce(caller, item, take = false) {
+  const key = onceKey(caller, item);
+  const until = once.get(key);
+  if (!until || until < Date.now()) {
+    once.delete(key);
+    return false;
+  }
+  if (take)
+    once.delete(key);
+  return true;
+}
+function alwaysFor(caller) {
+  if (caller.bot)
+    return { bot: caller.bot };
+  if (caller.folder && caller.folder !== "/" && caller.folder !== homeFolder())
+    return { project: caller.folder };
+  return null;
+}
 async function mayUse(item, caller, use) {
   const where = { ...use.site ? { site: use.site } : {}, ...use.program ? { program: use.program } : {}, ...use.why ? { why: use.why } : {} };
   const paused = pausedFor(caller.bot);
@@ -11012,6 +11044,8 @@ async function mayUse(item, caller, use) {
   const how = grantFor(item, caller);
   if (how === "own")
     return { ok: true, how: "own" };
+  if (hasOnce(caller, item.id, true))
+    return { ok: true, how: "once" };
   if (how === null && !use.askWithout) {
     note({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: "no grant" });
     return { ok: false, message: `You may not use “${item.name}”. Ask the user for it with vault_ask.` };
@@ -11022,15 +11056,14 @@ async function mayUse(item, caller, use) {
     note({ what: "declined", ...itemOf(item), ...whoOf(caller), ...where, ...answered.client ? { client: answered.client } : {} });
     return { ok: false, message: `The user didn't let you use “${item.name}”.` };
   }
-  if (answered.answer === "always") {
-    const who = caller.bot ? { bot: caller.bot } : caller.folder ? { project: caller.folder } : null;
-    if (who) {
-      setGrant(item.id, who, "own");
-      note({ what: "granted", ...itemOf(item), ...whoOf(caller), how: "own", ...answered.client ? { client: answered.client } : {} });
-    }
+  const always = answered.answer === "always" ? alwaysFor(caller) : null;
+  if (always) {
+    setGrant(item.id, always, "own");
+    note({ what: "granted", ...itemOf(item), ...whoOf(caller), how: "own", ...answered.client ? { client: answered.client } : {} });
   }
-  note({ what: "allowed", ...itemOf(item), ...whoOf(caller), ...where, how: answered.answer, ...answered.client ? { client: answered.client } : {} });
-  return { ok: true, how: answered.answer };
+  const allowed = always ? "always" : "once";
+  note({ what: "allowed", ...itemOf(item), ...whoOf(caller), ...where, how: allowed, ...answered.client ? { client: answered.client } : {} });
+  return { ok: true, how: allowed };
 }
 function tripwire(item, caller, site) {
   const why = `It tried to use “${item.name}” on ${site}, which isn't one of its sites.`;
@@ -11075,7 +11108,7 @@ async function fill(given, caller, signal) {
   } else {
     if (purpose === "field")
       return refused(400, "Name the item to fill from.");
-    const own = readItems().filter((each) => each.kind === "login" && usableOn(each, site) && grantFor(each, caller) === "own");
+    const own = readItems().filter((each) => each.kind === "login" && usableOn(each, site) && (grantFor(each, caller) === "own" || hasOnce(caller, each.id)));
     if (own.length !== 1)
       return refused(404, own.length ? "More than one sign-in fits this site." : "No sign-in in the vault is yours to use on this site.");
     item = own[0];
@@ -11114,6 +11147,9 @@ var MOST2 = 8 * 1024 * 1024;
 function holdVault(handle) {
   holding = true;
   fs52.mkdirSync(RUN, { recursive: true, mode: 448 });
+  try {
+    fs52.rmSync(path53.join(RUN, "vault-run"), { recursive: true, force: true });
+  } catch {}
   try {
     fs52.rmSync(VAULT_SOCKET, { force: true });
   } catch {}
@@ -11181,7 +11217,7 @@ function holdVault(handle) {
   } finally {
     process.umask(old);
   }
-  server.on("error", () => {});
+  server.on("error", (error) => console.error(`The vault's socket (${VAULT_SOCKET}) couldn't listen: ${error.message}`));
   server.unref();
   return server;
 }
@@ -11235,32 +11271,51 @@ import path54 from "node:path";
 
 // Packages/Box/src/link/vault/mask.ts
 var SHORTEST = 4;
+var SHORTEST_PART = 8;
 var escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-function formsOf(value) {
-  const forms = new Set([value]);
+function encodings(value) {
   const bytes = Buffer.from(value, "utf8");
-  forms.add(bytes.toString("base64"));
-  forms.add(bytes.toString("base64").replace(/=+$/, ""));
-  forms.add(bytes.toString("base64url"));
-  forms.add(bytes.toString("hex"));
-  forms.add(encodeURIComponent(value));
-  forms.add(JSON.stringify(value).slice(1, -1));
-  const pem = value.match(/-----BEGIN [^-]+-----([\s\S]*?)-----END [^-]+-----/);
-  if (pem) {
-    for (const line of pem[1].split(/\r?\n/))
-      if (line.trim().length >= 16)
-        forms.add(line.trim());
+  return [value, bytes.toString("base64"), bytes.toString("base64").replace(/=+$/, ""), bytes.toString("base64url"), bytes.toString("hex"), encodeURIComponent(value), JSON.stringify(value).slice(1, -1)];
+}
+function stringsIn(value, found = []) {
+  if (typeof value === "string")
+    found.push(value);
+  else if (Array.isArray(value))
+    for (const each of value)
+      stringsIn(each, found);
+  else if (value && typeof value === "object")
+    for (const each of Object.values(value))
+      stringsIn(each, found);
+  return found;
+}
+function formsOf(value) {
+  const forms = new Set(encodings(value).filter((form) => form.length >= SHORTEST));
+  const parts = [];
+  if (/[\r\n]/.test(value))
+    parts.push(...value.split(/\r?\n/).map((line) => line.trim()));
+  try {
+    parts.push(...stringsIn(JSON.parse(value)));
+  } catch {}
+  for (const part of parts) {
+    if (part.length < SHORTEST_PART)
+      continue;
+    forms.add(part);
+    forms.add(JSON.stringify(part).slice(1, -1));
   }
-  return [...forms].filter((form) => form.length >= SHORTEST).sort((a, b) => b.length - a.length);
+  return [...forms];
 }
 function maskValues(text, hidden) {
-  let masked = text;
+  const forms = [];
   for (const { item, value } of hidden) {
     if (!value || value.length < SHORTEST)
       continue;
     for (const form of formsOf(value))
-      masked = masked.replace(new RegExp(escapeRegExp(form), "g"), `[vault: ${item}]`);
+      forms.push({ form, label: `[vault: ${item}]` });
   }
+  forms.sort((a, b) => b.form.length - a.form.length);
+  let masked = text;
+  for (const { form, label } of forms)
+    masked = masked.replace(new RegExp(escapeRegExp(form), "g"), () => label);
   return masked;
 }
 
@@ -11295,7 +11350,7 @@ var VAULT_TOOLS = [
         command: { type: "string", description: "The command, run with the user's shell." },
         variables: { type: "object", additionalProperties: { type: "string" }, description: "Each environment variable, and the item (or `Item.field`) whose value it gets." },
         why: { type: "string", description: "Why you need these, in one sentence the user reads." },
-        timeout: { type: "number", description: "How long it may run, in seconds (300 unless you say; at most 1800)." }
+        timeout: { type: "number", description: "How long it may run, in seconds (300 unless you say; at most 600)." }
       },
       required: ["command", "variables", "why"],
       additionalProperties: false
@@ -11352,12 +11407,32 @@ async function askForItem(caller, args, signal) {
   const item = answered.item ? readItems().find((each) => each.id === answered.item) : undefined;
   if (answered.answer === "no" || !item)
     return { text: "The user didn't give you anything for this. Go on without it, or say what's missing in your report.", isError: false };
-  const once = answered.answer === "once";
+  const always = answered.answer === "always" ? alwaysFor(caller) : null;
+  if (always)
+    setGrant(item.id, always, "own");
+  else
+    allowOnce(caller, item.id);
+  note({ what: always ? "granted" : "allowed", item: item.id, itemName: item.name, kind: item.kind, ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {}, ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}, how: always ? "own" : "once", ...answered.client ? { client: answered.client } : {} });
+  const once = !always;
   return { text: `The user gave you “${item.name}” (a ${KIND_WORDS[item.kind]}${item.sites.length ? ` for ${item.sites.join(", ")}` : ""})${once ? ", for this once" : ""}. Use it by that name${item.kind === "login" ? " with browser_sign_in" : " with vault_run or browser_fill"}.`, isError: false };
 }
 var MOST_OUTPUT2 = 64 * 1024;
+var MOST_KEPT2 = 4 * 1024 * 1024;
+var CALL_BUDGET = 15.5 * 60000;
 var VARIABLE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
-var PRIVATE = ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "KUVO_HOST_URL", "KUVO_HOST_PASSWORD"];
+var PRIVATE = ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "BUN_BE_BUN"];
+var RUN_FOLDER = path54.join(RUN, "vault-run");
+var running = new Map;
+process.once("exit", () => {
+  for (const [scratch, pid] of running) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {}
+    try {
+      fs53.rmSync(scratch, { recursive: true, force: true });
+    } catch {}
+  }
+});
 function namedValue(named) {
   const whole = itemNamed(named);
   if (whole)
@@ -11385,6 +11460,7 @@ async function runWith(caller, args, signal) {
     return failed("Say why you need these values.");
   if (!isObject(args.variables) || !Object.keys(args.variables).length)
     return failed("Name at least one variable and the item it gets.");
+  const started = Date.now();
   const program = path54.basename(command.split(/\s+/)[0] ?? "");
   const folder = caller.folder && fs53.existsSync(caller.folder) ? caller.folder : homeFolder();
   const wanted = [];
@@ -11410,7 +11486,7 @@ async function runWith(caller, args, signal) {
       return failed(may.message);
     allowed.set(item.id, may.how);
   }
-  const scratch = path54.join(RUN, "vault-run", crypto20.randomBytes(8).toString("hex"));
+  const scratch = path54.join(RUN_FOLDER, crypto20.randomBytes(8).toString("hex"));
   const env = {};
   for (const [name, value] of Object.entries(process.env))
     if (value !== undefined && !PRIVATE.includes(name))
@@ -11423,7 +11499,9 @@ async function runWith(caller, args, signal) {
       if (value === undefined)
         return failed(`“${item.name}” has no ${field} kept.`);
       if (item.kind === "file" && field === "file") {
-        const file = path54.join(scratch, item.fileName || `${variable.toLowerCase()}`);
+        const name = path54.basename(item.fileName ?? "");
+        const file = path54.join(scratch, variable, name && name !== "." && name !== ".." ? name : variable.toLowerCase());
+        fs53.mkdirSync(path54.dirname(file), { recursive: true, mode: 448 });
         const bytes = Buffer.from(value, "base64");
         fs53.writeFileSync(file, bytes, { mode: 384 });
         env[variable] = file;
@@ -11433,15 +11511,16 @@ async function runWith(caller, args, signal) {
         hidden.push({ item: item.name, value });
       }
     }
-    for (const id of allowed.keys())
-      noteUsed(id);
     for (const [id, how] of allowed) {
-      const item = wanted.find((each) => each.item.id === id).item;
-      noteUse(item, caller, { program, why }, how);
+      noteUsed(id);
+      noteUse(wanted.find((each) => each.item.id === id).item, caller, { program, why }, how);
     }
-    const seconds = Math.min(1800, Math.max(1, Number(args.timeout) || 300));
-    const { output, code, timedOut } = await run(command, folder, env, seconds * 1000, signal);
-    const shown = maskValues(output, hidden);
+    const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
+    const seconds = Math.max(1, Math.min(600, left, Number(args.timeout) || 300));
+    const { output, code, timedOut } = await run(command, folder, env, seconds * 1000, scratch, signal);
+    let shown = maskValues(output, hidden);
+    if (shown.length > MOST_OUTPUT2)
+      shown = "…" + shown.slice(-MOST_OUTPUT2).replace(/^[^\n]*\n/, "");
     const ended = timedOut ? `It was stopped after ${seconds} seconds.` : `It ended with ${code}.`;
     return { text: `${shown.trim() ? shown.trimEnd() + `
 
@@ -11452,15 +11531,17 @@ async function runWith(caller, args, signal) {
     fs53.rmSync(scratch, { recursive: true, force: true });
   }
 }
-function run(command, folder, env, timeout, signal) {
+function run(command, folder, env, timeout, scratch, signal) {
   return new Promise((resolve) => {
     const shell = env.SHELL && fs53.existsSync(env.SHELL) ? env.SHELL : "/bin/sh";
     const child = spawn5(shell, ["-lc", command], { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    if (child.pid)
+      running.set(scratch, child.pid);
     let output = Buffer.alloc(0);
     const take = (chunk) => {
       output = Buffer.concat([output, chunk]);
-      if (output.length > MOST_OUTPUT2 * 2)
-        output = output.subarray(output.length - MOST_OUTPUT2);
+      if (output.length > MOST_KEPT2)
+        output = output.subarray(output.length - MOST_KEPT2);
     };
     child.stdout.on("data", take);
     child.stderr.on("data", take);
@@ -11488,10 +11569,8 @@ function run(command, folder, env, timeout, signal) {
     child.on("close", (code) => {
       clearTimeout(timer);
       signal?.removeEventListener("abort", stop);
-      let text = output.toString("utf8");
-      if (output.length > MOST_OUTPUT2)
-        text = "…" + text.slice(-MOST_OUTPUT2);
-      resolve({ output: text, code, timedOut });
+      running.delete(scratch);
+      resolve({ output: output.toString("utf8"), code, timedOut });
     });
   });
 }
@@ -11541,7 +11620,7 @@ function provedMac(given) {
   try {
     const key = crypto21.createPublicKey({ key: Buffer.concat([ED_SPKI2, Buffer.from(sign, "base64url")]), format: "der", type: "spki" });
     const signature = Buffer.from(given.proof, "base64url");
-    return signature.length === 64 && crypto21.verify(null, Buffer.from(`kuvo-vault-key\x00${at}`), key, signature);
+    return signature.length === 64 && typeof link?.id === "string" && crypto21.verify(null, Buffer.from(`kuvo-vault-key\x00${link.id}\x00${at}`), key, signature);
   } catch {
     return false;
   }
@@ -11585,6 +11664,8 @@ async function* answerVault(context) {
   if (route === "kuvo/vault/fill") {
     if (method !== "POST")
       return yield* json(405, {});
+    if (onHost() && !request.fromApp)
+      return yield* json(403, { message: CLIENTS_ONLY });
     if (isLocked())
       return yield* json(423, { message: LOCKED });
     const caller = await callerOf(given.session, readEngine, readBridge);

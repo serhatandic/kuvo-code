@@ -110,7 +110,7 @@ export async function askHost(host: HostAddress, call: string, body: unknown, mi
       headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json" },
       body: JSON.stringify(body),
       // Reading or saving one can wait on you (a Keychain prompt on this Mac): two minutes for those.
-      signal: AbortSignal.timeout(["keys/get", "keys/set", "link/identity"].includes(call) ? 120_000 : 15_000),
+      signal: AbortSignal.timeout(["keys/get", "keys/set", "link/identity", "vault/get", "vault/set"].includes(call) ? 120_000 : 15_000),
     });
   } catch {
     // Gone from there: proved again before anything more is sent there.

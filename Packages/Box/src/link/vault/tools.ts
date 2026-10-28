@@ -13,9 +13,9 @@ import type { VaultItem } from "../../shared/routes/vault";
 import { homeFolder, IS_MAC, RUN } from "../home";
 import { ask } from "./asks";
 import { type Hidden, maskValues } from "./mask";
-import { itemNamed, noteUsed, readItems, siteOf, valuesOf, VaultRefusal } from "./store";
+import { itemNamed, noteUsed, readItems, setGrant, siteOf, valuesOf, VaultRefusal } from "./store";
 import { type Caller, grantFor } from "./who";
-import { mayUse, noteUse } from "./use";
+import { allowOnce, alwaysFor, mayUse, noteUse } from "./use";
 import { note } from "./activity";
 
 /** What a tool answers: words for the agent, and whether it failed. */
@@ -56,7 +56,7 @@ export const VAULT_TOOLS = [
         command: { type: "string", description: "The command, run with the user's shell." },
         variables: { type: "object", additionalProperties: { type: "string" }, description: "Each environment variable, and the item (or `Item.field`) whose value it gets." },
         why: { type: "string", description: "Why you need these, in one sentence the user reads." },
-        timeout: { type: "number", description: "How long it may run, in seconds (300 unless you say; at most 1800)." },
+        timeout: { type: "number", description: "How long it may run, in seconds (300 unless you say; at most 600)." },
       },
       required: ["command", "variables", "why"],
       additionalProperties: false,
@@ -111,16 +111,38 @@ async function askForItem(caller: Caller, args: Record<string, unknown>, signal?
   }, signal);
   const item = answered.item ? readItems().find(each => each.id === answered.item) : undefined;
   if (answered.answer === "no" || !item) return { text: "The user didn't give you anything for this. Go on without it, or say what's missing in your report.", isError: false };
-  const once = answered.answer === "once";
+  // Given always: this bot's (or project's) to use on its own; given once: its next use goes ahead.
+  const always = answered.answer === "always" ? alwaysFor(caller) : null;
+  if (always) setGrant(item.id, always, "own");
+  else allowOnce(caller, item.id);
+  note({ what: always ? "granted" : "allowed", item: item.id, itemName: item.name, kind: item.kind, ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}), ...(caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}), how: always ? "own" : "once", ...(answered.client ? { client: answered.client } : {}) });
+  const once = !always;
   return { text: `The user gave you “${item.name}” (a ${KIND_WORDS[item.kind]}${item.sites.length ? ` for ${item.sites.join(", ")}` : ""})${once ? ", for this once" : ""}. Use it by that name${item.kind === "login" ? " with browser_sign_in" : " with vault_run or browser_fill"}.`, isError: false };
 }
 
 // ── vault_run ─────────────────────────────────────────────────────────────────────────────────
 
 const MOST_OUTPUT = 64 * 1024;
+// What's kept of a command's output before it's masked and cut to its last MOST_OUTPUT: masked
+// first, so a value the cut would split is still hidden.
+const MOST_KEPT = 4 * 1024 * 1024;
+// What a call may take, the asking included: a little under the tool servers' 16 minutes.
+const CALL_BUDGET = 15.5 * 60_000;
 const VARIABLE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 // What the box's own process has that no command it runs should.
-const PRIVATE = ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "KUVO_HOST_URL", "KUVO_HOST_PASSWORD"];
+const PRIVATE = ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "BUN_BE_BUN"];
+/** Where commands' copies of files go while they run: emptied as the vault is held, and as it ends. */
+export const RUN_FOLDER = path.join(RUN, "vault-run");
+
+// The commands running now, by their scratch folder: stopped, and their copies taken away, when
+// this process ends (a newer box taking over, an update).
+const running = new Map<string, number>();
+process.once("exit", () => {
+  for (const [scratch, pid] of running) {
+    try { process.kill(-pid, "SIGKILL"); } catch {}
+    try { fs.rmSync(scratch, { recursive: true, force: true }); } catch {}
+  }
+});
 
 /** The item and field a variable names: the whole as an item's name, else `Item.field`. */
 function namedValue(named: string): { item: VaultItem; field: string | null } | null {
@@ -147,6 +169,7 @@ async function runWith(caller: Caller, args: Record<string, unknown>, signal?: A
   if (!command) return failed("Give the command to run.");
   if (!why) return failed("Say why you need these values.");
   if (!isObject(args.variables) || !Object.keys(args.variables).length) return failed("Name at least one variable and the item it gets.");
+  const started = Date.now();
   const program = path.basename(command.split(/\s+/)[0] ?? "");
   const folder = caller.folder && fs.existsSync(caller.folder) ? caller.folder : homeFolder();
   const wanted: { variable: string; item: VaultItem; field: string }[] = [];
@@ -167,7 +190,7 @@ async function runWith(caller: Caller, args: Record<string, unknown>, signal?: A
     if (!may.ok) return failed(may.message);
     allowed.set(item.id, may.how);
   }
-  const scratch = path.join(RUN, "vault-run", crypto.randomBytes(8).toString("hex"));
+  const scratch = path.join(RUN_FOLDER, crypto.randomBytes(8).toString("hex"));
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(process.env)) if (value !== undefined && !PRIVATE.includes(name)) env[name] = value;
   const hidden: Hidden[] = [];
@@ -177,7 +200,10 @@ async function runWith(caller: Caller, args: Record<string, unknown>, signal?: A
       const value = (await valuesOf(item.id))[field];
       if (value === undefined) return failed(`“${item.name}” has no ${field} kept.`);
       if (item.kind === "file" && field === "file") {
-        const file = path.join(scratch, item.fileName || `${variable.toLowerCase()}`);
+        // A folder for each variable, so two files of one name don't meet; the file under its own name.
+        const name = path.basename(item.fileName ?? "");
+        const file = path.join(scratch, variable, name && name !== "." && name !== ".." ? name : variable.toLowerCase());
+        fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
         const bytes = Buffer.from(value, "base64");
         fs.writeFileSync(file, bytes, { mode: 0o600 });
         env[variable] = file;
@@ -187,14 +213,17 @@ async function runWith(caller: Caller, args: Record<string, unknown>, signal?: A
         hidden.push({ item: item.name, value });
       }
     }
-    for (const id of allowed.keys()) noteUsed(id);
     for (const [id, how] of allowed) {
-      const item = wanted.find(each => each.item.id === id)!.item;
-      noteUse(item, caller, { program, why }, how);
+      noteUsed(id);
+      noteUse(wanted.find(each => each.item.id === id)!.item, caller, { program, why }, how);
     }
-    const seconds = Math.min(1800, Math.max(1, Number(args.timeout) || 300));
-    const { output, code, timedOut } = await run(command, folder, env, seconds * 1000, signal);
-    const shown = maskValues(output, hidden);
+    // Within what a tool call may take altogether (the tool servers' 16 minutes), however long you took to answer.
+    const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
+    const seconds = Math.max(1, Math.min(600, left, Number(args.timeout) || 300));
+    const { output, code, timedOut } = await run(command, folder, env, seconds * 1000, scratch, signal);
+    let shown = maskValues(output, hidden);
+    // Its last part when there's a lot, from a line's start.
+    if (shown.length > MOST_OUTPUT) shown = "…" + shown.slice(-MOST_OUTPUT).replace(/^[^\n]*\n/, "");
     const ended = timedOut ? `It was stopped after ${seconds} seconds.` : `It ended with ${code}.`;
     return { text: `${shown.trim() ? shown.trimEnd() + "\n\n" : "It printed nothing.\n\n"}${ended} (Values from the vault are shown as [vault: <item>].)`, isError: timedOut || code !== 0 };
   } finally {
@@ -202,15 +231,16 @@ async function runWith(caller: Caller, args: Record<string, unknown>, signal?: A
   }
 }
 
-/** Runs `command` with the user's shell in `folder`: its output (the last of it when there's a lot), its exit code, and whether it ran out of time. */
-function run(command: string, folder: string, env: Record<string, string>, timeout: number, signal?: AbortSignal): Promise<{ output: string; code: number | null; timedOut: boolean }> {
+/** Runs `command` with the user's shell in `folder`: its output (the last few megabytes of it), its exit code, and whether it ran out of time. */
+function run(command: string, folder: string, env: Record<string, string>, timeout: number, scratch: string, signal?: AbortSignal): Promise<{ output: string; code: number | null; timedOut: boolean }> {
   return new Promise(resolve => {
     const shell = env.SHELL && fs.existsSync(env.SHELL) ? env.SHELL : "/bin/sh";
     const child = spawn(shell, ["-lc", command], { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    if (child.pid) running.set(scratch, child.pid);
     let output = Buffer.alloc(0);
     const take = (chunk: Buffer) => {
       output = Buffer.concat([output, chunk]);
-      if (output.length > MOST_OUTPUT * 2) output = output.subarray(output.length - MOST_OUTPUT);
+      if (output.length > MOST_KEPT) output = output.subarray(output.length - MOST_KEPT);
     };
     child.stdout.on("data", take);
     child.stderr.on("data", take);
@@ -225,9 +255,8 @@ function run(command: string, folder: string, env: Record<string, string>, timeo
     child.on("close", code => {
       clearTimeout(timer);
       signal?.removeEventListener("abort", stop);
-      let text = output.toString("utf8");
-      if (output.length > MOST_OUTPUT) text = "…" + text.slice(-MOST_OUTPUT);
-      resolve({ output: text, code, timedOut });
+      running.delete(scratch);
+      resolve({ output: output.toString("utf8"), code, timedOut });
     });
   });
 }

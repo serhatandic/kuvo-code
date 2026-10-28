@@ -8,7 +8,7 @@ import { oneLine } from "../../shared/text";
 import type { VaultFill, VaultItem } from "../../shared/routes/vault";
 import { itemNamed, noteUsed, readItems, siteOf, usableOn, valuesOf } from "./store";
 import { type Caller, grantFor } from "./who";
-import { mayUse, noteUse, tripwire } from "./use";
+import { hasOnce, mayUse, noteUse, tripwire } from "./use";
 
 /** What a fill comes to: the values, or why not (`status` 403 refused, 404 nothing to fill). */
 export type FillOutcome = { status: 200; value: VaultFill } | { status: 403 | 404 | 400; value: { message: string } };
@@ -46,7 +46,7 @@ export async function fill(given: unknown, caller: Caller, signal?: AbortSignal)
     if (!usableOn(item, site)) return refused(403, tripwire(item, caller, site));
   } else {
     if (purpose === "field") return refused(400, "Name the item to fill from.");
-    const own = readItems().filter(each => each.kind === "login" && usableOn(each, site) && grantFor(each, caller) === "own");
+    const own = readItems().filter(each => each.kind === "login" && usableOn(each, site) && (grantFor(each, caller) === "own" || hasOnce(caller, each.id)));
     if (own.length !== 1) return refused(404, own.length ? "More than one sign-in fits this site." : "No sign-in in the vault is yours to use on this site.");
     item = own[0];
   }

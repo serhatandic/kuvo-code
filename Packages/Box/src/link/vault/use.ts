@@ -3,7 +3,7 @@
 
 import os from "node:os";
 import type { VaultItem } from "../../shared/routes/vault";
-import { IS_MAC } from "../home";
+import { homeFolder, IS_MAC } from "../home";
 import type { Notice } from "../notices/notice";
 import { note } from "./activity";
 import { ask } from "./asks";
@@ -39,6 +39,37 @@ const whoOf = (caller: Caller) => ({
 
 const itemOf = (item: VaultItem) => ({ item: item.id, itemName: item.name, kind: item.kind });
 
+// What you allowed once (an item given for this once, through vault_ask), by the conversation it's
+// for and the item: its next use goes ahead without asking again, within a while.
+const ONCE_FOR = 30 * 60_000;
+const once = new Map<string, number>();
+const onceKey = (caller: Caller, item: string) => `${caller.root ?? caller.session ?? ""}\0${item}`;
+
+/** Lets `caller` use `item` once more without asking. */
+export function allowOnce(caller: Caller, item: string) {
+  once.set(onceKey(caller, item), Date.now() + ONCE_FOR);
+}
+
+/** Whether `caller` has a use of `item` you allowed once, still unused (`take`: using it up). */
+export function hasOnce(caller: Caller, item: string, take = false): boolean {
+  const key = onceKey(caller, item);
+  const until = once.get(key);
+  if (!until || until < Date.now()) {
+    once.delete(key);
+    return false;
+  }
+  if (take) once.delete(key);
+  return true;
+}
+
+/** Whom "always" grants for `caller`: its bot, or its project's folder (never a home folder or the
+ * whole disk, which would be every project); null for neither, when it's a once. */
+export function alwaysFor(caller: Caller): { bot: string } | { project: string } | null {
+  if (caller.bot) return { bot: caller.bot };
+  if (caller.folder && caller.folder !== "/" && caller.folder !== homeFolder()) return { project: caller.folder };
+  return null;
+}
+
 export async function mayUse(item: VaultItem, caller: Caller, use: Use): Promise<Allowed> {
   const where = { ...(use.site ? { site: use.site } : {}), ...(use.program ? { program: use.program } : {}), ...(use.why ? { why: use.why } : {}) };
   const paused = pausedFor(caller.bot);
@@ -48,6 +79,7 @@ export async function mayUse(item: VaultItem, caller: Caller, use: Use): Promise
   }
   const how = grantFor(item, caller);
   if (how === "own") return { ok: true, how: "own" };
+  if (hasOnce(caller, item.id, true)) return { ok: true, how: "once" };
   if (how === null && !use.askWithout) {
     note({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: "no grant" });
     return { ok: false, message: `You may not use “${item.name}”. Ask the user for it with vault_ask.` };
@@ -58,15 +90,15 @@ export async function mayUse(item: VaultItem, caller: Caller, use: Use): Promise
     note({ what: "declined", ...itemOf(item), ...whoOf(caller), ...where, ...(answered.client ? { client: answered.client } : {}) });
     return { ok: false, message: `The user didn't let you use “${item.name}”.` };
   }
-  if (answered.answer === "always") {
-    const who = caller.bot ? { bot: caller.bot } : caller.folder ? { project: caller.folder } : null;
-    if (who) {
-      setGrant(item.id, who, "own");
-      note({ what: "granted", ...itemOf(item), ...whoOf(caller), how: "own", ...(answered.client ? { client: answered.client } : {}) });
-    }
+  const always = answered.answer === "always" ? alwaysFor(caller) : null;
+  if (always) {
+    setGrant(item.id, always, "own");
+    note({ what: "granted", ...itemOf(item), ...whoOf(caller), how: "own", ...(answered.client ? { client: answered.client } : {}) });
   }
-  note({ what: "allowed", ...itemOf(item), ...whoOf(caller), ...where, how: answered.answer, ...(answered.client ? { client: answered.client } : {}) });
-  return { ok: true, how: answered.answer };
+  // ("Always" for a conversation with neither a bot nor a project of its own is this once.)
+  const allowed = always ? "always" : "once";
+  note({ what: "allowed", ...itemOf(item), ...whoOf(caller), ...where, how: allowed, ...(answered.client ? { client: answered.client } : {}) });
+  return { ok: true, how: allowed };
 }
 
 /** A fill refused because the page isn't one of the item's sites: the strongest sign a page is

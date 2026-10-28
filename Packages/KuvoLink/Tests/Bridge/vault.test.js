@@ -29,7 +29,8 @@ const P8 = "-----BEGIN PRIVATE KEY-----\nMIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHk
 const macKey = crypto.randomBytes(32).toString("base64url");
 const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
 const macSign = publicKey.export({ format: "der", type: "spki" }).subarray(12).toString("base64url");
-const proof = (at = Date.now()) => ({ mac: macKey, at, proof: crypto.sign(null, Buffer.from(`kuvo-vault-key\0${at}`), privateKey).toString("base64url") });
+// (Signed for this machine, by its id on the Mac: a proof for another of the Mac's machines is no proof here.)
+const proof = (at = Date.now(), machine = "lokum") => ({ mac: macKey, at, proof: crypto.sign(null, Buffer.from(`kuvo-vault-key\0${machine}\0${at}`), privateKey).toString("base64url") });
 
 // The engine, as far as the vault asks it: who a session is, and its folder.
 const project = path.join(root, "projects", "shop");
@@ -44,7 +45,7 @@ let engine;
 before(async () => {
   fs.mkdirSync(path.join(home, "run"), { recursive: true });
   fs.mkdirSync(project, { recursive: true });
-  fs.writeFileSync(path.join(home, "run", "link.json"), JSON.stringify({ macs: [macKey], mac: macKey, macSigns: { [macKey]: macSign } }));
+  fs.writeFileSync(path.join(home, "run", "link.json"), JSON.stringify({ id: "lokum", macs: [macKey], mac: macKey, macSigns: { [macKey]: macSign } }));
   for (const [id, name, session] of [["bot_ship", "Ship", "ses_ship"], ["bot_scout", "Scout", "ses_scout"]]) {
     fs.mkdirSync(path.join(home, "bots", id, "workspace"), { recursive: true });
     fs.writeFileSync(path.join(home, "bots", id, "bot.json"), JSON.stringify({ kuvo: 1, id, name }));
@@ -114,6 +115,7 @@ test("your Mac sets up a machine's vault over SSH, proving it's the Mac that set
   box = await start();
   assert.equal((await fromMac("POST", "kuvo/vault/key", proof(Date.now() - 10 * 60_000))).status, 403, "an old proof");
   assert.equal((await fromMac("POST", "kuvo/vault/key", { ...proof(), proof: crypto.randomBytes(64).toString("base64url") })).status, 403, "another key's signature");
+  assert.equal((await fromMac("POST", "kuvo/vault/key", proof(Date.now(), "another-machine"))).status, 403, "a proof made for another machine");
   const made = await fromMac("POST", "kuvo/vault/key", proof());
   assert.equal(made.status, 200);
   key = made.value.key;
@@ -228,6 +230,36 @@ test("an agent that needs something asks you for it, and gets its name, never it
   const answer = (await asking).value.text;
   assert.match(answer, /The user gave you “GitHub token”/);
   assert.ok(!answer.includes(TOKEN));
+  // Given always: its project's to use on its own, so it isn't asked again.
+  const grants = (await fromMac("GET", "kuvo/vault/grants", undefined, key)).value.grants;
+  assert.ok(grants.some(grant => grant.item === items["GitHub token"].id && grant.who.project === project && grant.how === "own"));
+  assert.equal((await tool("ses_shop", "vault_run", { command: "true", variables: { T: "GitHub token" }, why: "To open it." })).value.isError, false);
+});
+
+test("an item given once is used once without asking again; the next use asks", async () => {
+  const asking = tool("ses_scout", "vault_ask", { need: "the App Store Connect key", why: "To upload a build." });
+  let asks = [];
+  for (let tries = 0; tries < 100 && !asks.length; tries++) asks = (await fromMac("GET", "kuvo/vault/asks", undefined, key)).value.asks;
+  assert.equal((await fromMac("POST", `kuvo/vault/asks/${asks[0].id}`, { answer: "once", item: items["App Store Connect key"].id }, key)).status, 200);
+  assert.match((await asking).value.text, /for this once/);
+  assert.equal((await tool("ses_scout", "vault_run", { command: "true", variables: { K: "App Store Connect key" }, why: "Upload." })).value.isError, false, "its one use");
+  const again = tool("ses_scout", "vault_run", { command: "true", variables: { K: "App Store Connect key" }, why: "Upload again." });
+  let next = [];
+  for (let tries = 0; tries < 100 && !next.length; tries++) next = (await fromMac("GET", "kuvo/vault/asks", undefined, key)).value.asks;
+  assert.equal(next[0].kind, "use", "asked again");
+  await fromMac("POST", `kuvo/vault/asks/${next[0].id}`, { answer: "no" }, key);
+  assert.equal((await again).value.isError, true);
+});
+
+test("a value stays hidden whatever its item's name, and a key file's strings each hide on their own", async () => {
+  const json = JSON.stringify({ type: "service_account", client_email: "ship@example.iam", private_key: "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----\n", client_secret: "GOCSPX-abcdefghijklmnop" });
+  const added = await fromMac("POST", "kuvo/vault/items", { kind: "file", name: "Cost $& key", fileName: "service.json", values: { file: Buffer.from(json).toString("base64") } }, key);
+  assert.equal(added.status, 200);
+  await fromMac("POST", "kuvo/vault/grants", { item: added.value.item.id, who: { bot: "bot_ship" }, how: "own" }, key);
+  const ran = await tool("ses_ship", "vault_run", { command: "grep -o '\"client_secret\": *\"[^\"]*\"' \"$F\" || sed -n 's/.*client_secret\":\"\\([^\"]*\\).*/\\1/p' \"$F\"; tr ',' '\\n' < \"$F\" | grep private_key", variables: { F: "Cost $& key" }, why: "To read its secret." });
+  const output = ran.value.text;
+  for (const secret of ["GOCSPX-abcdefghijklmnop", "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"]) assert.ok(!output.includes(secret), output);
+  assert.match(output, /\[vault: Cost \$& key\]/);
 });
 
 test("every use, ask and answer is noted, without a value", async () => {
@@ -251,15 +283,19 @@ test("Pause stops every agent's use at once", async () => {
 
 test("after the box starts again the vault is locked, until a client's key unlocks it", async () => {
   await box.stop();
+  // A command's copy a box killed mid-command left behind.
+  fs.mkdirSync(path.join(home, "run", "vault-run", "left"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "vault-run", "left", "AuthKey.p8"), P8);
   box = await start();
   const locked = await box.local("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://github.com", purpose: "sign-in" });
   assert.equal(locked.status, 423);
   assert.match(locked.value.message, /locked/);
   assert.equal((await box.local("POST", "kuvo/vault/unlock", { key: crypto.randomBytes(32).toString("base64url") })).status, 403);
   // The Mac's next request carries its key, which unlocks it.
+  assert.equal(fs.existsSync(path.join(home, "run", "vault-run")), false, "a copy left behind is gone");
   const listed = await fromMac("GET", "kuvo/vault", undefined, key);
   assert.equal(listed.value.state.locked, false);
-  assert.equal(listed.value.items.length, 4);
+  assert.equal(listed.value.items.length, 5);
   assert.equal((await box.local("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://github.com", purpose: "sign-in" })).value.values.password, SECRET);
   await box.stop();
 });

@@ -36,6 +36,8 @@ const MOST = 8 * 1024 * 1024;
 export function holdVault(handle: LinkHandler): net.Server {
   holding = true;
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
+  // Copies a box that ended mid-command left (it was killed): gone.
+  try { fs.rmSync(path.join(RUN, "vault-run"), { recursive: true, force: true }); } catch {}
   try { fs.rmSync(VAULT_SOCKET, { force: true }); } catch {}
   const server = net.createServer(socket => {
     let given = "";
@@ -92,7 +94,8 @@ export function holdVault(handle: LinkHandler): net.Server {
   } finally {
     process.umask(old);
   }
-  server.on("error", () => {});
+  // Without its socket, `box route` (the Mac over SSH, the browser here) can't reach the vault: said where it's seen.
+  server.on("error", error => console.error(`The vault's socket (${VAULT_SOCKET}) couldn't listen: ${error.message}`));
   server.unref();
   return server;
 }

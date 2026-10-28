@@ -2222,6 +2222,55 @@ function boxRoute(request) {
   });
 }
 
+/// One of the vault's routes on this machine's box (PROTOCOL.md, "Vault"): `{status, value}`, or
+/// null when its script didn't answer. Its process stops with the tool call, and waits as long as
+/// the box may (one that asks you waits for you).
+function vaultRoute(request, call, timeout = 60_000) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [path.join(K, "bin", "kuvo-link.js"), "box", "route"], {
+      cwd: K,
+      env: { ...process.env, KUVO_HOME: K, BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    let output = "";
+    const stopNow = () => child.kill("SIGTERM");
+    call?.stops.add(stopNow);
+    child.stdout.on("data", (chunk) => (output += chunk));
+    const stop = setTimeout(stopNow, timeout);
+    const done = (answer) => {
+      clearTimeout(stop);
+      call?.stops.delete(stopNow);
+      resolve(answer);
+    };
+    child.on("error", () => done(null));
+    child.on("close", () => {
+      try {
+        const answer = JSON.parse(output.trim().split("\n").pop() || "null");
+        if (!answer || typeof answer.status !== "number") return done(null);
+        let value = {};
+        try { value = JSON.parse(answer.body || "{}"); } catch {}
+        done({ status: answer.status, value });
+      } catch {
+        done(null);
+      }
+    });
+    child.stdin.end(JSON.stringify(request));
+  });
+}
+
+/// The vault's tools, as this machine's box lists them: kept once it's said.
+let vaultToolList = null;
+async function vaultTools() {
+  if (vaultToolList) return vaultToolList;
+  const answer = await vaultRoute({ method: "GET", path: "kuvo/vault/tools" }, null, 15_000);
+  if (answer?.status === 200 && Array.isArray(answer.value?.tools)) vaultToolList = answer.value.tools;
+  return vaultToolList ?? [];
+}
+
+/// What the vault fills on the page at `origin` for this conversation: `{status, value}` (200 with
+/// `values`; 403 refused, 404 nothing yours, 423 locked), or null without a vault to ask.
+const vaultFill = (body) => vaultRoute({ method: "POST", path: "kuvo/vault/fill", body: { session: caller, ...body } }, current, 16 * 60_000);
+
 const startedSessions = new Map();
 
 /// A new session on this machine, from the conversation `from`: an agent of its own, in the caller's
@@ -2654,14 +2703,32 @@ async function tool(name, args) {
     case "browser_sign_in": {
       const username = integer("username");
       const password = integer("password");
+      const item = string("item");
       if (username === null && password === null) return text("Name the username field, the password field, or both, by number.", true);
-      const host = hostOf(await address(p));
-      if (!host || isEmpty(await address(p))) return text(note() + "Open the sign-in page first.");
+      const url = await address(p);
+      const host = hostOf(url);
+      if (!host || isEmpty(url)) return text(note() + "Open the sign-in page first.");
       for (const [index, wanted] of [[password, "password"], [username, "text"]]) {
         if (index === null) continue;
         const problem = await checkField(p, index, wanted);
         if (problem) return text(note() + problem);
       }
+      // From the vault, when this conversation may use one of its sign-ins here (or the one named):
+      // only on that sign-in's own site. Without one, you're asked, as always.
+      const vault = await vaultFill({ origin: url, purpose: "sign-in", ...(item ? { item } : {}) });
+      if (vault?.status === 200) {
+        const fields = [[username, vault.value.username, "the username", "text"], [password, vault.value.values?.password, "the password", "password"]].filter(([index, value]) => index !== null && value);
+        if (!fields.length) return text(note() + `“${vault.value.item.name}” has nothing for those fields.`);
+        const filled = [];
+        for (const [index, value, what, wanted] of fields) {
+          const outcome = await run(p, scripts.find + scripts.fill, { index, value, wanted, site: siteOf(host) });
+          if (outcome !== "ok") return text(note() + outcome);
+          filled.push(what);
+        }
+        await sleep(300);
+        return withNote(snapshot(p).then((page) => `Filled ${filled.join(" and ")} for ${host} from the vault's “${vault.value.item.name}” (you can't see them). Submit the form to sign in.\n\n` + page));
+      }
+      if (vault && (vault.status === 403 || (item && vault.status !== 423))) return text(note() + (vault.value?.message || "The vault didn't fill that."), vault.status !== 403);
       const answer = await askUser({ kind: "signIn", host, targetId: p.target, username: username !== null, password: password !== null });
       if (answer.type !== "signIn") return text(note() + noAnswer(answer, "sign in"));
       const fields = [[username, answer.username, "the username", "text"], [password, answer.password, "the password", "password"]].filter(([index, value]) => index !== null && value);
@@ -2678,6 +2745,27 @@ async function tool(name, args) {
       }
       await sleep(300);
       return withNote(snapshot(p).then((page) => `Filled ${filled.join(" and ")} for ${host} (you can't see them). Submit the form to sign in.\n\n` + page));
+    }
+    case "browser_fill": {
+      const index = integer("index");
+      const item = string("item");
+      if (index === null || !item) return text("Name the field by its number and the vault item to fill it from.", true);
+      const url = await address(p);
+      const host = hostOf(url);
+      if (!host || isEmpty(url)) return text(note() + "Open the page first.");
+      const kind = await run(p, scripts.find + scripts.fieldKind, { index });
+      if (kind === "missing") return text(note() + `There's no element [${index}] on the page now. Take a fresh browser_snapshot.`);
+      if (kind !== "text" && kind !== "password") return text(note() + `[${index}] isn't a field to fill.`);
+      const vault = await vaultFill({ origin: url, purpose: "field", item, ...(string("field") ? { field: string("field") } : {}), ...(string("why") ? { why: string("why") } : {}) });
+      if (!vault) return text(note() + "This machine's vault can't be reached now. Try again in a moment.", true);
+      if (vault.status !== 200) return text(note() + (vault.value?.message || `The vault didn't fill that (${vault.status}).`), vault.status !== 403);
+      const [field, value] = Object.entries(vault.value.values ?? {})[0] ?? [];
+      if (value === undefined) return text(note() + `“${vault.value.item.name}” has nothing to fill there.`);
+      // A password only into a password field; anything else into either.
+      const outcome = await run(p, scripts.find + scripts.fill, { index, value, wanted: field === "password" ? "password" : "code", site: siteOf(host) });
+      if (outcome !== "ok") return text(note() + outcome);
+      await sleep(300);
+      return withNote(snapshot(p).then((page) => `Filled [${index}] with “${vault.value.item.name}”'s ${field} (you can't see it).\n\n` + page));
     }
     case "browser_ask_code": {
       const index = integer("index");
@@ -2779,7 +2867,8 @@ async function mcp() {
       case "ping":
         return reply({});
       case "tools/list":
-        return reply({ tools: CONFIG.tools });
+        // With the vault's, in this machine's box's own words (none from a box without one).
+        return vaultTools().then((more) => reply({ tools: [...CONFIG.tools, ...more] }));
       case "tools/call": {
         // The session it's for: the engine says so with each call; an agent of the agents bridge
         // starts this for one session, named in KUVO_SESSION.
@@ -2789,6 +2878,12 @@ async function mcp() {
         // Nor does writing to another agent.
         if (WAKE_TOOLS.has(params.name)) {
           wake(params.name, params.arguments || {}, params._meta?.["ai.opencode/sessionID"] ?? null).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
+          return;
+        }
+        if (typeof params.name === "string" && params.name.startsWith("vault_")) {
+          const asked = call;
+          vaultRoute({ method: "POST", path: "kuvo/vault/tools", body: { name: params.name, arguments: params.arguments || {}, session: asked.session } }, asked, 16 * 60_000)
+            .then((answer) => reply(answer?.status === 200 && typeof answer.value?.text === "string" ? text(answer.value.text, answer.value.isError === true) : text(answer?.value?.message || "This machine's vault can't be reached now. Try again in a moment.", true)));
           return;
         }
         if (params.name === "set_job") {

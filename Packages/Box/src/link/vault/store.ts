@@ -11,7 +11,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { newID, oneLine } from "../../shared/text";
 import { GRANT_HOWS, ITEM_KINDS, type VaultGrant, type VaultItem, type VaultState, type VaultWho } from "../../shared/routes/vault";
-import { listOf, locked, textOf, writePrivate } from "../files";
+import { locked, textOf, writePrivate } from "../files";
 import { BOX, KEYS_ON_HOST, RUN } from "../home";
 import { appHost, askHost, KeysUnavailable, NOT_ANSWERING } from "../host-interface";
 
@@ -262,8 +262,23 @@ const cleanName = (given: unknown): string => {
   return name;
 };
 
+// Changes to items, one at a time: each reads the item and its values, waits on the Keychain or
+// the disk, then writes; two at once would each write over the other's.
+let itemQueue: Promise<unknown> = Promise.resolve();
+const oneAtATime = <T>(work: () => Promise<T>): Promise<T> => {
+  const run = itemQueue.then(work, work);
+  itemQueue = run.catch(() => {});
+  return run;
+};
+
 /** A new item, kept with its values. */
-export async function addItem(given: GivenItem): Promise<VaultItem> {
+export const addItem = (given: GivenItem) => oneAtATime(() => addOne(given));
+/** An item changed: what's given, its values merged (null takes one away). */
+export const changeItem = (id: string, given: GivenItem) => oneAtATime(() => changeOne(id, given));
+/** An item gone, with its values and grants. */
+export const removeItem = (id: string) => oneAtATime(() => removeOne(id));
+
+async function addOne(given: GivenItem): Promise<VaultItem> {
   if (!ITEM_KINDS.includes(given.kind as never)) throw new VaultRefusal(400, `An item is one of: ${ITEM_KINDS.join(", ")}.`);
   const kind = given.kind as VaultItem["kind"];
   const name = cleanName(given.name);
@@ -289,8 +304,7 @@ export async function addItem(given: GivenItem): Promise<VaultItem> {
   return item;
 }
 
-/** An item changed: what's given, its values merged (null takes one away). */
-export async function changeItem(id: string, given: GivenItem): Promise<VaultItem> {
+async function changeOne(id: string, given: GivenItem): Promise<VaultItem> {
   checkedID(id);
   const before = itemByID(id);
   if (!before) throw new VaultRefusal(404, "That item isn't in this vault.");
@@ -325,12 +339,11 @@ export async function changeItem(id: string, given: GivenItem): Promise<VaultIte
     await keepValues(id, values);
     item.fields = Object.keys(values).sort();
   }
-  vaultWork(() => keepItems(readItems().map(each => (each.id === id ? item : each))));
+  vaultWork(() => keepItems(readItems().map(each => (each.id === id ? { ...item, ...(each.used ? { used: each.used } : {}) } : each))));
   return item;
 }
 
-/** An item gone, with its values and grants. */
-export async function removeItem(id: string): Promise<VaultItem> {
+async function removeOne(id: string): Promise<VaultItem> {
   checkedID(id);
   const item = itemByID(id);
   if (!item) throw new VaultRefusal(404, "That item isn't in this vault.");
@@ -417,6 +430,3 @@ export function vaultState(): VaultState {
   };
 }
 
-/** The items whose values are kept but that the list doesn't know (a crash between the two): none
- * on this Mac, which keeps no files of values. */
-export const strayValues = (): string[] => (onHost() ? [] : listOf(VALUES).filter(id => !itemByID(id)));

@@ -2101,7 +2101,8 @@ carries the unlock key in `x-kuvo-vault-key`, which also unlocks a locked vault.
 - `POST kuvo/vault/key` → `{"key"}`, the unlock key (32 bytes, base64url), for a client to keep:
   answered to a phone, this Mac's app, or the Mac over SSH proving it set the machine up:
   `{"mac", "at", "proof"}`, its link key, the time (ms), and its signing key's (link.json's
-  `macSigns`) Ed25519 signature of `kuvo-vault-key\0<at>`, within five minutes. It makes the vault
+  `macSigns`) Ed25519 signature of `kuvo-vault-key\0<the machine's id on its Macs>\0<at>` (link.json's
+  `id`), within five minutes. It makes the vault
   if there isn't one yet. `409` on this Mac (its Keychain needs no key), `423` while locked.
 - `POST kuvo/vault/unlock {"key"}` → the state; `403` for a key that isn't this vault's.
 - `GET kuvo/vault` → `{state, items, grants}`. `state` is `{made, locked, paused, pausedBots:
@@ -2142,14 +2143,19 @@ carries the unlock key in `x-kuvo-vault-key`, which also unlocks a locked vault.
   each value, raw, base64, hex, URL- and JSON-escaped, or a key file's lines, shown as
   `[vault: <item>]`.
 - `POST kuvo/vault/fill {session, origin, purpose: "sign-in" | "field", item?, field?, why?}` →
-  `{item: {id, name}, username?, values}` for the browser's own process to fill: only on an `https`
+  `{item: {id, name}, username?, values}` for the browser's own process to fill (on this Mac, only
+  to its app, `403` otherwise; a machine's browser runs as you, as everything you run there does,
+  so there it's answered to anything on the machine, under the same grants): only on an `https`
   page (`400`), only on one of the item's sites. A sign-in without an item takes the one sign-in
   for the site the caller may use on its own (`404` for none or more, and the browser asks you as
   before). An item named for another site is refused (`403`) and pauses that bot's use of the
   vault, telling your phones.
 
 Every use first checks Pause, then the grant: `own` goes ahead, `ask` (or no grant, for an item
-named) asks you and waits.
+named) asks you and waits. An item you give through `vault_ask` "always" is granted on its own
+(to the bot, or the conversation's project, never a home folder); "once", its next use within
+half an hour goes ahead. A command's copies (`run/vault-run/`) go when it ends, when the box ends,
+and as a box starts.
 
 ### Paired phones
 

@@ -70,7 +70,9 @@ test("an item added on this Mac keeps its values in the Keychain, through its ap
 test("its values come back from the Keychain for a client, and for a bot's fill on the item's site", async () => {
   assert.equal((await box.route("GET", `kuvo/vault/items/${item.id}/values`)).value.values.password, SECRET);
   assert.equal((await box.route("POST", "kuvo/vault/grants", { item: item.id, who: { bot: "bot_ship" }, how: "own" })).status, 200);
-  const filled = await box.route("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://admin.shop.example", purpose: "sign-in" }, false);
+  // Only for the app's own browser: anything else on this Mac is turned away.
+  assert.equal((await box.route("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://admin.shop.example", purpose: "sign-in" }, false)).status, 403);
+  const filled = await box.route("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://admin.shop.example", purpose: "sign-in" });
   assert.equal(filled.status, 200);
   assert.equal(filled.value.values.password, SECRET);
 });
