@@ -1,0 +1,148 @@
+// The tools a conversation runs its sessions with (PROTOCOL.md, "Work"): list_sessions, where each
+// it started stands; stop_session, one of them stopped; answer_ask, what one asks, answered within
+// what the asker may do itself; list_models, what a session can be started on. Every box answers
+// them alike, through `POST kuvo/agent-tools`.
+
+import { call } from "../engine/client";
+import { stopSession } from "../engine/queue";
+import { holdArchived } from "../areas/wakes";
+import { noteWorkChanged } from "./changes";
+import { alwaysYours, keepAnswer, pendingAsk, permissionWords, withinLevel } from "./answers";
+import { describeModels, usableModels } from "./models";
+import { botOfConversation, describeWork, placeWords, under, workingNow, workSessions, worksFor } from "./tree";
+import type { Target } from "../../shared/records";
+import type { KitRule } from "../bots/kit";
+import type { SessionPlace } from "../letters/letter";
+import type { ToolAnswer } from "../letters/tools";
+import type { Listed } from "./tree";
+
+/** The conversation calling: its root's address and place, and its name as the others know it. */
+export interface Caller {
+  session: string;
+  place: SessionPlace;
+  name: string;
+}
+
+const said = (text: string): ToolAnswer => ({ text, isError: false });
+const refused = (text: string): ToolAnswer => ({ text, isError: true });
+const why = (error: unknown) => String((error as Error | null)?.message ?? error);
+// A change to the work of the bot a session works for, for clients to read it again.
+const changed = (data: Listed["data"]) => {
+  const bot = worksFor(data)?.bot;
+  if (bot) noteWorkChanged(bot);
+};
+
+// The caller's sessions (the ones it started, and theirs), the latest first.
+const mine = async (caller: Caller, targets: Target[], signal?: AbortSignal) => under(caller.session, await workSessions(targets, signal));
+
+// One of the caller's sessions by its address, or what to say when it isn't one.
+async function oneOfMine(caller: Caller, session: unknown, targets: Target[], doing: string, signal?: AbortSignal): Promise<{ listed: Listed } | { error: ToolAnswer }> {
+  if (typeof session !== "string" || !session.trim()) return { error: refused("Say which session (session), by its address from list_sessions.") };
+  const listed = (await mine(caller, targets, signal)).find(each => each.data.id === session.trim());
+  if (listed) return { listed };
+  const any = (await workSessions(targets, signal)).find(each => each.data.id === session.trim());
+  let title: string | null = any?.data.title ?? null;
+  if (!any) {
+    for (const target of targets) {
+      const found = await call(target, "GET", `/api/session/${encodeURIComponent(session.trim())}`, undefined, signal).catch(() => null) as { title?: string } | null;
+      if (found) {
+        title = found.title || "New Session";
+        break;
+      }
+    }
+  }
+  if (title === null) return { error: refused(`There's no session ${session.trim()} here. Use list_sessions to see yours.`) };
+  return { error: refused(doing === "stop" ? `"${title}" isn't yours to stop: ask the user.` : `"${title}" isn't one of your sessions: only the user answers what it asks.`) };
+}
+
+/** list_sessions: the caller's sessions, where each stands, the latest first. */
+export async function listSessionsTool(caller: Caller, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
+  const listed = await mine(caller, targets, signal);
+  if (!listed.length) return said("You haven't started any sessions (or they're archived). Start one with start_session.");
+  const working = await workingNow(targets, signal);
+  const lines: string[] = [];
+  for (const each of listed.slice(0, 40)) {
+    const work = await describeWork(each, working, { replies: true, signal });
+    const model = work.model ? ` · ${work.model.providerID}/${work.model.id}${work.model.variant ? ` (${work.model.variant})` : ""}` : "";
+    const state = work.state === "asking" ? `asks to ${work.asks!.replace(/^Wants to /, "").replace(/\.$/, "")} (ask ${work.askID})` : work.state;
+    const under = work.depth > 1 ? `, started by ${work.startedBy}` : "";
+    const reply = work.lastReply && work.state !== "asking" ? `\n  Last reply: ${work.lastReply}` : "";
+    lines.push(`- ${work.title} (address ${work.session}), ${placeWords(work)}: ${state}${model}${under}${work.tokens ? ` · ${work.tokens.toLocaleString("en-US")} tokens` : ""}${reply}`);
+  }
+  return said(`Your sessions, the latest first:\n${lines.join("\n")}`);
+}
+
+/** stop_session: one of the caller's sessions stopped (what waits for it held), and put away if
+ * it says so. */
+export async function stopSessionTool(caller: Caller, args: Record<string, unknown>, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
+  const found = await oneOfMine(caller, args.session, targets, "stop", signal);
+  if ("error" in found) return found.error;
+  const { target, data } = found.listed;
+  try {
+    await stopSession(target, data.id);
+  } catch (error) {
+    return refused(`Couldn't stop "${data.title || "New Session"}": ${why(error)}`);
+  }
+  changed(data);
+  if (args.archive === true) {
+    const at = `/api/session/${encodeURIComponent(data.id)}`;
+    const now = await call(target, "GET", at, undefined, signal).catch(() => null) as { metadata?: Record<string, unknown> } | null;
+    await call(target, "PATCH", at, { metadata: { ...(now?.metadata ?? {}), "kuvo.archived": true } }, signal).then(() => holdArchived(data.id, true)).catch(() => {});
+    return said(`Stopped and archived "${data.title || "New Session"}".`);
+  }
+  return said(`Stopped "${data.title || "New Session"}".`);
+}
+
+/** answer_ask: what one of the caller's sessions asks, answered. A permission it may allow only
+ * where it could go ahead itself and never what always comes to the user; it may always say no. A
+ * question it answers in words. Kept on the session, with why. */
+export async function answerAskTool(caller: Caller, args: Record<string, unknown>, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
+  const found = await oneOfMine(caller, args.session, targets, "answer", signal);
+  if ("error" in found) return found.error;
+  const { target, data } = found.listed;
+  const title = data.title || "New Session";
+  if (typeof args.ask !== "string" || !args.ask.trim()) return refused("Say which ask (ask), by its id from the [Session asks] message or list_sessions.");
+  const reason = typeof args.reason === "string" ? args.reason.trim() : "";
+  if (!reason) return refused("Say why, in a line (reason): the user sees it with your answer.");
+  const ask = await pendingAsk(target, data.id, args.ask.trim());
+  if (!ask) return refused(`"${title}" doesn't ask ${args.ask.trim()} now: it was answered, or it moved on.`);
+  const bot = botOfConversation(caller.session);
+  const by = bot ?? { name: caller.name };
+  const at = `/api/session/${encodeURIComponent(data.id)}`;
+  if ("question" in ask) {
+    const answer = typeof args.answer === "string" ? args.answer.trim() : "";
+    if (!answer) return refused(`"${title}" asks: ${ask.question.text} Answer it in words (answer).`);
+    if (!ask.question.key) return refused(`"${title}"'s question has more than one part: tell the user, who answers it in the session.`);
+    try {
+      await call(target, "POST", `${at}/form/${encodeURIComponent(ask.question.id)}/reply`, { answer: { [ask.question.key]: answer } }, signal);
+    } catch (error) {
+      return refused(`Couldn't answer it: ${why(error)}`);
+    }
+    await keepAnswer(target, data.id, { ask: ask.question.id, what: `Asks: ${ask.question.text}`, decision: "answer", reason: `${answer}${reason ? ` (${reason})` : ""}`, by, at: Date.now() }).catch(() => {});
+    changed(data);
+    return said(`Answered "${title}".`);
+  }
+  const { permission } = ask;
+  const what = permissionWords(permission);
+  const shown = permission.resources.filter(each => each !== "*").join(", ") || permission.action;
+  if (args.decision !== "allow" && args.decision !== "deny") return refused("Say allow or deny (decision).");
+  if (args.decision === "allow") {
+    const yours = alwaysYours(permission.resources);
+    if (yours) return refused(`That's ${yours}, which always comes to the user: you can't allow it. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
+    const rules = (caller.place.data.permissions ?? []) as KitRule[];
+    if (!withinLevel(rules, permission.action, permission.resources)) return refused(`You can't allow that: you'd have to ask the user about it yourself. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
+  }
+  try {
+    await call(target, "POST", `${at}/permission/${encodeURIComponent(permission.id)}/reply`, args.decision === "allow" ? { decision: "once" } : { decision: "reject", message: `${by.name}: ${reason}` }, signal);
+  } catch (error) {
+    return refused(`Couldn't answer it: ${why(error)}`);
+  }
+  await keepAnswer(target, data.id, { ask: permission.id, ...(permission.call ? { call: permission.call } : {}), what, decision: args.decision, reason, by, at: Date.now() }).catch(() => {});
+  changed(data);
+  return said(args.decision === "allow" ? `Allowed: ${shown}.` : `Denied: ${shown}. "${title}" is told why.`);
+}
+
+/** list_models: the models there's an account for here. */
+export async function listModelsTool(engine: Target | null, bridge: Target | null, signal?: AbortSignal): Promise<ToolAnswer> {
+  return said(describeModels(await usableModels(engine, bridge, signal)));
+}

@@ -33,6 +33,7 @@ import { settingsRoute } from "../areas/settings";
 import { skillsRoute } from "../areas/skills";
 import { sessionWakesRoute, wakeEventsRoute, wakesRoute } from "../areas/wakes";
 import { worktreeEventsRoute, worktreesRoute } from "../areas/worktrees";
+import { WORK_ROUTE, workRoute } from "../areas/work";
 import { phoneHere } from "../compat/leave-running";
 import { readBridgeFile, readEngineFile } from "../engine/client";
 import { linkRoute } from "../mac/routes";
@@ -95,6 +96,8 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/projects" || route === "kuvo/projects/events", answer: ({ request, readEngine, readBridge, signal }: RouteContext) => answerProjects(request, readEngine, readBridge, signal) },
   { when: route => route === "kuvo/worktrees/events", answer: worktreeEventsRoute },
   { when: route => /^kuvo\/worktrees(\/(remove|record|where))?$/.test(route), answer: worktreesRoute },
+  // A bot's work (PROTOCOL.md, "Work"), its stop-all before a bot's own route.
+  { when: route => route.match(WORK_ROUTE), answer: workRoute },
   // (Before the bot keys' route, which would take "keys" for a bot.)
   { when: route => route === "kuvo/bots/keys/refresh", answer: botKeysRefreshRoute },
   { when: route => /^kuvo\/bots\/[^/]+\/keys(\/[^/]+)?$/.test(route), answer: botKeysRoute },

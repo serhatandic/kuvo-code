@@ -88,6 +88,7 @@ export { BRIDGE_VERSION } from "./version";
 export { FEATURES } from "../shared/features";
 export { messageID } from "./engine/sessions";
 export { queueOf, queueWatcher, readQueues, scanQueues } from "./engine/queue";
+export { workWatcher } from "./work/wakes";
 export { macLink, readLink, updateLink, writeLink } from "./state";
 export { searchPlugins } from "./areas/plugins";
 export { listFolders, makeFolder } from "./areas/folders";

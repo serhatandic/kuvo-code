@@ -4,7 +4,7 @@
 
 import { isObject, parsed } from "../../shared/json";
 import { startSession } from "../letters/start";
-import { agentTool, everyone, isAgentTool, rootOf, targetsOf } from "../letters/tools";
+import { AGENT_TOOLS, agentTool, everyone, isAgentTool, rootOf, targetsOf } from "../letters/tools";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
 const ADDRESS = /^ses_[A-Za-z0-9]{1,60}$/;
@@ -16,7 +16,7 @@ export async function* agentToolsRoute(context: RouteContext): AsyncGenerator<An
   const { request, readEngine, bridge, signal, json } = context;
   if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
   const given = parsed(request.body);
-  if (!isObject(given) || !isAgentTool(given.name)) return yield* json(400, { message: "Send {name, arguments, session}: name one of list_agents, send_message, read_conversation, start_session." });
+  if (!isObject(given) || !isAgentTool(given.name)) return yield* json(400, { message: `Send {name, arguments, session}: name one of ${AGENT_TOOLS.join(", ")}.` });
   const args = isObject(given.arguments) ? given.arguments : {};
   const session = typeof given.session === "string" && ADDRESS.test(given.session) ? given.session : null;
   return yield* json(200, await agentTool(given.name, args, session, { readEngine, bridge, signal: signal ?? undefined }));
@@ -38,7 +38,7 @@ export async function* startRoute(context: RouteContext): AsyncGenerator<AnswerP
     const all = await everyone({ readEngine });
     by = { ...root, name: all.agents.find(agent => agent.session === root.session)?.name ?? "another agent" };
   }
-  const outcome = await startSession(given, by, { readEngine, signal: signal ?? undefined });
+  const outcome = await startSession(given, by, { readEngine, bridge, signal: signal ?? undefined });
   if ("refused" in outcome) {
     const { status, ...refusal } = outcome.refused;
     return yield* json(status, refusal);

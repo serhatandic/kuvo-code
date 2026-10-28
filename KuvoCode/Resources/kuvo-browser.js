@@ -1752,6 +1752,8 @@ const noAnswer = (answer, what) =>
 
 const text = (value, isError = false) => ({ content: [{ type: "text", text: value }], isError });
 
+// The tools answered by this machine's box: agents writing to each other and running their sessions.
+const MAIL_TOOLS = new Set(["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models"]);
 // Agents writing to each other (list_agents, send_message, read_conversation, start_session):
 // this machine's box answers them, as every box does (`POST kuvo/agent-tools`), so they're the same
 // on all your computers. A call that waits for an answer holds up to eleven minutes; stopped, the
@@ -2447,7 +2449,7 @@ async function mcp() {
           setJob(params.arguments || {}, call.session).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
           return;
         }
-        if (params.name === "list_agents" || params.name === "send_message" || params.name === "read_conversation" || params.name === "start_session") {
+        if (MAIL_TOOLS.has(params.name)) {
           mail(params.name, params.arguments || {}, call.session, () => call.cancelled).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
           return;
         }

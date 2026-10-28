@@ -202,14 +202,16 @@ test("start_session starts one where its conversation works, on its model and ap
   assert.equal(prompts[0].text, "[Message from Lead · ses_lead] (To answer, use send_message to ses_lead.)\n\nReview the docs.");
 });
 
-test("a bot starts its sessions in the chats, and six in ten minutes at most", async () => {
+test("a bot starts its sessions in the chats; another conversation, six in ten minutes at most", async () => {
   const first = await tool("start_session", { task: "Look into the flaky test." }, "ses_scout");
   assert.match(first.text, /^Started a new session, beside this conversation \(address ses_new1\)/);
   assert.equal(made[0].location.directory, path.join(home, "chats"));
-  for (let count = 1; count < 6; count++) assert.equal((await tool("start_session", { task: `Task ${count}` }, "ses_scout")).isError, false);
-  const refused = await tool("start_session", { task: "One more." }, "ses_scout");
+  for (let count = 0; count < 6; count++) assert.equal((await tool("start_session", { task: `Task ${count}` }, "ses_notes")).isError, false);
+  const refused = await tool("start_session", { task: "One more." }, "ses_notes");
   assert.deepEqual(refused, { text: "You've started several sessions in the last few minutes. Write to those (send_message), or ask the user before starting more.", isError: true });
-  assert.equal(made.length, 6);
+  assert.equal(made.length, 7);
+  // A bot's are its own to size (bots-work.test.js).
+  assert.equal((await tool("start_session", { task: "Another." }, "ses_scout")).isError, false);
 });
 
 test("a group chat's seat neither writes to agents nor starts sessions", async () => {

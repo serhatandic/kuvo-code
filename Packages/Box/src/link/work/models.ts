@@ -1,0 +1,73 @@
+// The models a session can be started on here (list_models, and start_session's `model`): the
+// engine's, from the providers there's an account for, and the coding agents', from the bridge.
+
+import { isObject } from "../../shared/json";
+import { call } from "../engine/client";
+import { HERE } from "../home";
+import type { Target } from "../../shared/records";
+
+/** A model a session can run on here: its provider and id, its name, its efforts (variants), and
+ * where it runs (the engine, or the coding agents' bridge). */
+export interface Usable {
+  providerID: string;
+  id: string;
+  name: string;
+  efforts: string[];
+  target: Target;
+  agents: boolean;
+}
+
+function modelsIn(listed: unknown, target: Target, agents: boolean, ready: Set<string> | null): Usable[] {
+  const models: Usable[] = [];
+  for (const each of Array.isArray(listed) ? listed : []) {
+    if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false) continue;
+    if (ready && !ready.has(each.providerID)) continue;
+    const efforts = Array.isArray(each.variants) ? each.variants.map(variant => (isObject(variant) ? variant.id : null)).filter((id): id is string => typeof id === "string") : [];
+    models.push({ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents });
+  }
+  return models;
+}
+
+/** Every model there's an account for here: the engine's first, then the coding agents'. */
+export async function usableModels(engine: Target | null, bridge: Target | null, signal?: AbortSignal): Promise<Usable[]> {
+  const models: Usable[] = [];
+  if (engine) {
+    const [providers, listed] = await Promise.all([call(engine, "GET", "/api/provider", undefined, signal).catch(() => null), call(engine, "GET", "/api/model", undefined, signal).catch(() => null)]);
+    const ready = new Set((Array.isArray(providers) ? providers : []).map(each => (isObject(each) ? each.id : null)).filter((id): id is string => typeof id === "string"));
+    models.push(...modelsIn(listed, engine, false, ready));
+  }
+  if (bridge) models.push(...modelsIn(await call(bridge, "GET", "/api/model", undefined, signal).catch(() => null), bridge, true, null));
+  return models;
+}
+
+/** The list, for an agent to read. */
+export function describeModels(models: Usable[]): string {
+  if (!models.length) return `There's no model with an account on ${HERE}. Ask the user to sign in to one in Settings › Accounts.`;
+  const line = (model: Usable) => `- ${model.providerID}/${model.id} (${model.name})${model.efforts.length ? `, efforts: ${model.efforts.join(", ")}` : ""}`;
+  return `Models you can start a session on, as provider/model (give it to start_session as model, and an effort as effort):\n${models.map(line).join("\n")}`;
+}
+
+/** The model `given` names ("provider/model", or {providerID, id}), with the effort it runs at, or
+ * why there's none to take. */
+export function pickModel(given: unknown, effort: unknown, models: Usable[]): { model: Usable; variant: string | null } | { refused: string } {
+  let providerID = "", id = "";
+  if (typeof given === "string") {
+    const at = given.trim().indexOf("/");
+    if (at > 0) [providerID, id] = [given.trim().slice(0, at), given.trim().slice(at + 1)];
+    else id = given.trim();
+  } else if (isObject(given) && typeof given.id === "string") {
+    id = given.id;
+    providerID = typeof given.providerID === "string" ? given.providerID : "";
+  }
+  if (!id) return { refused: "Name the model as provider/model, from list_models." };
+  const matches = models.filter(model => model.id === id && (!providerID || model.providerID === providerID));
+  if (!matches.length) {
+    const known = providerID && models.some(model => model.providerID === providerID);
+    return { refused: known ? `There's no ${id} among ${providerID}'s models here. Use list_models to see what there is.` : `There's no account for ${providerID || id} on ${HERE}. Use list_models to see the models you can use.` };
+  }
+  const model = matches[0];
+  if (effort === undefined || effort === null || effort === "") return { model, variant: null };
+  if (!model.efforts.length) return { refused: `${model.name} has no efforts to choose from: leave effort out.` };
+  if (typeof effort !== "string" || !model.efforts.includes(effort)) return { refused: `${model.name}'s efforts are ${model.efforts.join(", ")}.` };
+  return { model, variant: effort };
+}

@@ -18,6 +18,8 @@ import { NO_KIT, readKit, runsWithAgents } from "./kit";
 import { listBots } from "./list";
 import { fitsLook, signInRefusal } from "./make";
 import { tellBot, toldNow } from "./tell";
+import { noteWorkChanged } from "../work/changes";
+import { limitsFrom } from "../work/limits";
 import type { Target } from "../../shared/records";
 import type { BotLook } from "../../shared/routes/bots";
 import type { ChangedBot } from "../../shared/routes/bots";
@@ -26,8 +28,9 @@ import type { Job } from "./jobs";
 import type { GivenBot } from "./make";
 
 /** A change to a bot, as Edit Bot sends it (`PATCH kuvo/bots/<id>`): its name, look, personality,
- * job or model, each checked here (`personality` null for none). */
-export type BotChange = Pick<GivenBot, "name" | "look" | "personality" | "job" | "model">;
+ * job or model, and its work's settings (`work: {limits}`, the limits you set; null or {} for none),
+ * each checked here (`personality` null for none). */
+export type BotChange = Pick<GivenBot, "name" | "look" | "personality" | "job" | "model"> & { work?: unknown };
 
 /** What `changeBot` answers: the bot as it is after the change, or why not. */
 export type ChangedAnswer = JSONAnswer<ChangedBot | { message: string }>;
@@ -102,6 +105,31 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
     }
     changed.model = model;
   }
+  // The limits you set for its work: only what's kept, nothing else of it touched.
+  let limitsChanged = false;
+  if ("work" in given) {
+    if (given.work !== null && !isObject(given.work)) return no(400, "That isn’t a bot’s work settings.");
+    const work = isObject(described.work) ? { ...described.work } : {};
+    const limits = limitsFrom(isObject(given.work) ? given.work.limits : null);
+    if (limits) work.limits = limits;
+    else delete work.limits;
+    limitsChanged = JSON.stringify(limitsFrom((described.work as { limits?: unknown } | undefined)?.limits)) !== JSON.stringify(limits);
+    if (Object.keys(work).length) changed.work = work;
+    else delete changed.work;
+  }
+  // Only its work's settings changed: its description kept, nothing to tell it.
+  if (limitsChanged && !Object.keys(given).some(key => key !== "work")) {
+    try {
+      const file = path.join(here.folder, "bot.json");
+      fs.writeFileSync(`${file}.new`, JSON.stringify(changed, null, 2));
+      fs.renameSync(`${file}.new`, file);
+    } catch (error) {
+      return no(503, `The bot couldn’t be changed: ${(error as Error | null)?.message ?? error}`);
+    }
+    noteBotsChanged();
+    noteWorkChanged(id);
+    return { status: 200, value: { bot: listBots(machine).find(each => each.id === id) ?? null } satisfies ChangedBot };
+  }
   let target: Target | null | undefined;
   try {
     target = here.agents ? readBridge() : readEngine();
@@ -113,7 +141,7 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
   const retold = renamed || changed.personality !== described.personality || newJob;
   const switched = !sameModel(changed.model, described.model);
   const looks = (["color", "shape", "face"] as const).some(part => (changed.look as BotLook | undefined)?.[part] !== (described.look as BotLook | undefined)?.[part]);
-  if (retold || switched || looks) {
+  if (retold || switched || looks || limitsChanged) {
     // (Its job isn't an edit of its description's: the bot keeps it, and Edit Bot can too.)
     if (renamed || switched || looks || changed.personality !== described.personality) changed.updated = stamp();
     try {
@@ -134,6 +162,7 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
     if (switched && changed.model) await call(target, "POST", `/api/session/${session}/model`, { model: changed.model }, signal).catch(() => {});
     if (retold) await tellBot(target, here, here.session, toldNow(kit, here, changed), signal);
     noteBotsChanged();
+    if (limitsChanged) noteWorkChanged(id);
   }
   return { status: 200, value: { bot: listBots(machine).find(each => each.id === id) ?? null } satisfies ChangedBot };
 }

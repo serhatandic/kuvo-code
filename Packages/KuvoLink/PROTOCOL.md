@@ -393,7 +393,8 @@ its own, which a `SIGTERM` stops waiting.
   - An agent here gets the message straight from the box; one on another computer by a letter
     ("Peers"). Without a conversation to answer, or off the relay, a letter isn't waited for.
     `read_conversation` reads one here, or asks a peer with `letters-read` for it by letter.
-- **`POST kuvo/sessions`** `{task, title?, folder?, startedBy?, beside? = true, wait? = false}` →
+- **`POST kuvo/sessions`** `{task, title?, folder? | project? | chat?, worktree?, model?, effort?,
+  mode?, approval?, wake?, startedBy?, beside? = true, wait? = false}` →
   `{session, title, folder, project, beside, answer?}` (`project` null for a chat; `answer` with
   `wait`, its first answer in ten minutes, else null). `start_session` is this route, from the
   calling conversation.
@@ -408,10 +409,18 @@ its own, which a `SIGTERM` stops waiting.
   - 400 `{message}` (no task, not a folder here), 403 (a group chat's seat), 404 (`startedBy`
     isn't a conversation here), 429 (too many lately), 502 `{message, session?}` (not made, or
     made but its task didn't reach it), 503 (no engine).
+  - Where and how, each optional (bridge 0.9.106, "Work"): `project` (a project's name or folder
+    here) or `chat: true` instead of `folder`; `worktree: true`, a worktree of its project on a
+    branch of its own; `model` (`"provider/model"` or `{providerID, id}`, one there's an account for
+    here, on the engine or the coding agents' bridge as it runs) and `effort` (one of its variants);
+    `mode` `build` or `plan`; `approval` `ask` or `approveAll`, never above the starter's (a starter
+    that asks first starts one that does too); `wake` (`finished`, `asks`, `both`, `none`), what the
+    starter hears of it. `computer` other than this one: 400, for now.
   - Unknown fields are ignored, so a newer client can send more to an older box.
 - **Limits**: one table on the box (`letters/limits.ts`): a conversation sends 20 messages in ten
   minutes and starts 6 sessions in ten minutes at most, and letters from one peer count as one
-  sender. What each did lately is kept in `run/tool-limits.json`, so calls answered by separate
+  sender. A bot's work is its own to size: only the limits you set for it hold ("Work"), and a net
+  of 40 sessions in ten minutes, counted for the bot and every session under it, stops a runaway. What each did lately is kept in `run/tool-limits.json`, so calls answered by separate
   processes count together. A tool's call from no conversation this box has counts as one sender,
   `outside` (its session asks first, and its task can't be answered); a session started by a
   client (`kuvo/sessions` without `startedBy`) isn't counted.
@@ -448,6 +457,45 @@ the same for every client and with none connected, and keeps them in `run/queues
 - Clients show what's held and whether it's paused from these; the in-flight record of a message
   still on its way (and that Stop held it) stays with the client that sends it, which waits for its
   request before it asks the box to stop.
+
+### Work
+
+A bot runs sessions as you would (bridge 0.9.106): it starts them in your projects on the model,
+effort, mode and approval it picks, hears when they finish or ask, answers what they ask within
+what it may do itself, and stops them. Every box does this alike, with no client connected; every
+client shows it from the same routes.
+
+- **Marked as its work**: a session a bot starts, and every one under it, has metadata
+  `kuvo: {startedBy, beside, by: {bot, name}, depth, wake?}`: the bot it works for, how deep it is
+  (1 for one the bot started), and what its starter hears of it. Clients mark rows by `kuvo.by`.
+  Its task ends with the session's half of the playbook: review your work with reviewer subagents,
+  fix what they find, and end with a short report.
+- **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
+  `list_sessions` (each with where it stands: working, asking and what, with the ask's id,
+  finished, failed, stopped; its model, tokens and last reply's first lines), `stop_session`
+  (`{session, archive?}`; only one of its own), `answer_ask` (`{session, ask, decision: allow|deny,
+  reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
+  an account for here, `provider/model`, with their efforts).
+- **Answering asks**: a bot may allow what one of its sessions asks only where it could go ahead
+  itself (its own rules allow it: a bot that asks first can't allow what it would ask about), and
+  never what always comes to you: pushing, changing what's on GitHub, publishing, sending to a
+  store, deploying, deleting outside the project. It may always deny, with its reason passed on.
+  Each answer is kept on the session, `kuvo.answers: [{ask, call?, what, decision, reason, by:
+  {bot?, name}, at}]` (the latest 40), where clients show it on the ask's tool call ("Allowed by
+  Pixel") and in the bot's work.
+- **Limits you set** (Edit Bot › Work; `PATCH kuvo/bots/<id>` `{work: {limits}}`, null for none;
+  `limits` in `kuvo/bots`): `atOnce` (its sessions working at once), `perDay` (started since
+  midnight), `depth`, `tokensPerDay`. None until you set one; past one, `start_session` refuses
+  with words saying which.
+- **`GET kuvo/work?bot=<id>`** → `{bot, sessions: [{session, title, folder, project?, startedBy,
+  depth, model?, mode?, state, asks?, started, tokens, cost?, lastReply?}], answered: [answer with
+  its session], today: {started, working, tokens, cost?}, limits}`: its sessions the latest first,
+  archived ones left out. 400 without `bot`, 404 for no such bot here, 503 with no engine.
+- **`GET kuvo/work/events`** (ndjson): `{"changed": {<bot>: <ms>}}` now and at each change to a
+  bot's work (a session started, stopped, finished or asking, an ask answered, its limits); a
+  client reads that bot's work again when its time moves. Kept in `run/work/changes.json`.
+- **`POST kuvo/bots/<id>/stop-all`** → `{stopped}`: every session of its work that's working,
+  stopped (held and paused, as the queue's Stop). 404 for no such bot here, 503 with no engine.
 
 ### Updates
 
@@ -1697,6 +1745,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
+| `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |
 | `search` | `kuvo/search` |
 | `personalities` | `kuvo/personalities…` |
 | `personalities.events` | `kuvo/personalities/events` |

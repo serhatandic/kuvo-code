@@ -1,0 +1,76 @@
+// A bot's work (PROTOCOL.md, "Work"): the sessions it started and theirs, where each stands, the
+// asks it answered for them, what it started today, and the limits you set for it, if any; a
+// client stopping all of it; and what's asked of a bot by its sessions, answered on the box.
+
+import { type Infer, list, map, nullable, number, object, type RouteShape, string, words } from "../shape";
+
+/** Limits you set for a bot (Edit Bot › Work), each left out when you set none: sessions working
+ * at once, started in a day, how deep its sessions may start theirs, and tokens in a day. */
+export const LIMITS = object({ "atOnce?": number, "perDay?": number, "depth?": number, "tokensPerDay?": number });
+
+/** The bot a session works for, as every session under it is marked (`kuvo.by`). */
+export const WORKS_FOR = object({ bot: string, name: string });
+
+/** An ask one of a bot's sessions had, as the bot answered it: the ask, the tool call it was for
+ * (left out when the engine didn't say), what it asked in words, the answer and why, who answered
+ * (a bot by its id and name; a session that isn't a bot's, by its name) and when (ms since 1970). */
+export const ANSWER = object({
+  "session?": string,
+  ask: string,
+  "call?": string,
+  what: string,
+  decision: words("allow", "deny", "answer"),
+  reason: string,
+  by: object({ "bot?": string, name: string }),
+  at: number,
+});
+
+/** One of a bot's sessions: its address, title, folder and project (left out for a chat), the
+ * session that started it, how deep it is (1 for the bot's own), its model and mode (left out when
+ * the engine has none), where it stands (and, while it asks, what), when it started (ms), tokens
+ * and cost so far (cost where the engine prices it), and the first lines of its last reply. */
+export const WORK_SESSION = object({
+  session: string,
+  title: string,
+  folder: string,
+  "project?": string,
+  startedBy: string,
+  depth: number,
+  "model?": object({ id: string, providerID: string, "variant?": string }),
+  "mode?": string,
+  state: words("working", "asking", "finished", "failed", "stopped", "idle"),
+  "asks?": string,
+  started: number,
+  tokens: number,
+  "cost?": number,
+  "lastReply?": string,
+});
+
+/** A bot's work, as `GET kuvo/work?bot=` answers: its sessions (the latest first), the asks it
+ * answered for them (the latest first), what it started today and how many work now, and the
+ * limits you set (null for none). */
+export const WORK = object({
+  bot: string,
+  sessions: list(WORK_SESSION),
+  answered: list(ANSWER),
+  today: object({ started: number, working: number, tokens: number, "cost?": number }),
+  limits: nullable(LIMITS),
+});
+
+/** When each bot's work last changed (`kuvo/work/events`), in ms by its id: a client reads a bot's
+ * work again when its time moves. */
+export const WORK_CHANGED = object({ changed: map(number) });
+
+const REFUSED = object({ message: string });
+
+export type WorkLimits = Infer<typeof LIMITS>;
+export type WorksFor = Infer<typeof WORKS_FOR>;
+export type WorkAnswer = Infer<typeof ANSWER>;
+export type WorkSession = Infer<typeof WORK_SESSION>;
+export type BotWork = Infer<typeof WORK>;
+
+export const WORK_ROUTES: RouteShape[] = [
+  { route: "GET kuvo/work", answers: { 200: WORK, 400: REFUSED, 404: REFUSED, 503: REFUSED } },
+  { route: "GET kuvo/work/events", answers: { 200: WORK_CHANGED } },
+  { route: "POST kuvo/bots/:id/stop-all", answers: { 200: object({ stopped: number }), 404: REFUSED, 503: REFUSED } },
+];
