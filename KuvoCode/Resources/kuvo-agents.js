@@ -4268,7 +4268,12 @@ class Reviews {
     this.changed(review);
     return review;
   }
-  async partsFolder() {
+  partsFolder() {
+    this.settingUp ??= this.setUpPartsFolder().finally(() => this.settingUp = undefined);
+    return this.settingUp;
+  }
+  settingUp;
+  async setUpPartsFolder() {
     const folder = this.reviewersFolder;
     const git = (...args) => run("git", ["-C", folder, "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
       timeout: 30000,
@@ -4310,6 +4315,7 @@ class Reviews {
     });
   }
   leftReading = [];
+  making = 0;
   resume() {
     const reading2 = this.leftReading.splice(0);
     this.whenUp(async () => {
@@ -4320,14 +4326,17 @@ class Reviews {
   }
   async sweepParts() {
     const api = this.places.engine.api;
-    const known = new Set([...this.kept.values()].flatMap((review) => (review.parts ?? []).map((part) => part.session)).filter(Boolean));
+    const recorded = (id) => [...this.kept.values()].some((review) => (review.parts ?? []).some((part) => part.session === id));
     let query = `limit=100&order=desc&directory=${encodeURIComponent(this.reviewersFolder)}`;
     for (let pages2 = 0;pages2 < 20 && query; pages2++) {
       const listed = await api.request("GET", `/api/session?${query}`);
       const data = Array.isArray(listed?.data) ? listed.data : [];
       for (const session of data) {
-        if (session?.metadata?.kuvo?.reviewPart && typeof session.id === "string" && !known.has(session.id))
-          await api.request("DELETE", at(session.id)).catch(() => {});
+        if (!session?.metadata?.kuvo?.reviewPart || typeof session.id !== "string")
+          continue;
+        if (this.making > 0 || recorded(session.id))
+          continue;
+        await api.request("DELETE", at(session.id)).catch(() => {});
       }
       query = data.length && listed?.cursor?.next ? `limit=100&cursor=${encodeURIComponent(listed.cursor.next)}` : undefined;
     }
@@ -4346,23 +4355,31 @@ class Reviews {
   }
   async readInSession(review, info, part, prompt, going) {
     const { api, listen } = this.places.engine;
-    const made = await api.request("POST", "/api/session", {
-      title: `Review \xB7 part ${part.n} of ${part.of}`,
-      location: { directory: await this.partsFolder() },
-      ...review.model ? { model: review.model } : {},
-      agent: "plan",
-      parentID: info.id,
-      permissions: partPermissions(info.directory),
-      metadata: { kuvo: { reviewPart: { review: review.id, part: part.n, of: part.of }, messages: { via: "none", note: "A reviewer reads on its own: this is what it read, thought and found." } } }
-    });
-    const id = made?.data?.id;
-    if (!id)
-      throw new Error("The engine didn't start a session for the part.");
-    if (!going()) {
-      await api.request("DELETE", at(id)).catch(() => {});
-      throw new Error("The review was stopped.");
+    const folder = await this.partsFolder();
+    this.making += 1;
+    let made;
+    try {
+      const answer = await api.request("POST", "/api/session", {
+        title: `Review \xB7 part ${part.n} of ${part.of}`,
+        location: { directory: folder },
+        ...review.model ? { model: review.model } : {},
+        agent: "plan",
+        parentID: info.id,
+        permissions: partPermissions(info.directory),
+        metadata: { kuvo: { reviewPart: { review: review.id, part: part.n, of: part.of }, messages: { via: "none", note: "A reviewer reads on its own: this is what it read, thought and found." } } }
+      });
+      made = answer?.data?.id;
+      if (!made)
+        throw new Error("The engine didn't start a session for the part.");
+      if (!going()) {
+        await api.request("DELETE", at(made)).catch(() => {});
+        throw new Error("The review was stopped.");
+      }
+      part.session = made;
+    } finally {
+      this.making -= 1;
     }
-    part.session = id;
+    const id = made;
     this.changed(review);
     const tools = new Map;
     let unlisten = () => {};
@@ -4377,9 +4394,14 @@ class Reviews {
         resolve2(how);
       };
       let stopping = false;
-      const stopIfStopped = () => {
-        if (going() || stopping)
+      let again = false;
+      const stopIfStopped = (type) => {
+        if (going())
           return;
+        if (stopping && (again || type !== "session.execution.started"))
+          return;
+        if (stopping)
+          again = true;
         stopping = true;
         api.request("POST", at(id) + "/interrupt").catch(() => {});
       };
@@ -4387,7 +4409,7 @@ class Reviews {
         event: (type, data) => {
           if (data?.sessionID !== id)
             return;
-          stopIfStopped();
+          stopIfStopped(type);
           if (type === "session.execution.succeeded")
             return end("succeeded");
           if (type === "session.execution.failed" || type === "session.execution.interrupted")
@@ -4414,7 +4436,7 @@ class Reviews {
       const told = `${prompt}
 
 The project is in ${info.directory}: read more of its files there if you need to. You can read; you can't change anything.`;
-      api.request("POST", at(id) + "/prompt", { text: told }).then(stopIfStopped, (error) => end(`failed: ${error?.message ?? error}`));
+      api.request("POST", at(id) + "/prompt", { text: told }).then(() => stopIfStopped(), (error) => end(`failed: ${error?.message ?? error}`));
     });
     unlisten();
     if (outcome === "timed out")
@@ -20237,4 +20259,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 2428a2f2ea2201e7f895bfe8c75f3f93a8ec2eed94770f11edd74d95496895fd
+// Built from Packages/Box/src/agents 7d6cebd86cc5d6f139265463decbf9d55b5e0f5aca9856a77adf951f5e5ceddc

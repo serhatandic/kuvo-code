@@ -159,8 +159,10 @@ export class StandIn {
       }
       // Sessions made through it, a page (no cursor): those in `directory` when it's asked.
       if (url.pathname === "/api/session" && request.method === "GET") {
+        this.listings += 1
         const directory = url.searchParams.get("directory")
         const listed = this.made.filter((each) => this.conversations.has(each.id) && (!directory || each.location?.directory === directory))
+        for (const answer of this.heldMade.splice(0)) answer()
         return Response.json({ data: listed.map((each) => ({ id: each.id, ...(each.parentID ? { parentID: each.parentID } : {}), ...(each.metadata ? { metadata: each.metadata } : {}), location: each.location })) })
       }
       if (url.pathname === "/api/session" && request.method === "POST") {
@@ -170,6 +172,11 @@ export class StandIn {
         if (body?.title) this.titles.set(id, body.title)
         // As the engine says it: flat, with its parent.
         this.emit("session.created", { sessionID: id, ...(body?.parentID ? { parentID: body.parentID } : {}) })
+        // Made, its answer on its way back until sessions are next listed.
+        if (this.answersMadeOnListing && body?.metadata?.kuvo?.reviewPart) {
+          this.beat()
+          await new Promise<void>((resolve) => this.heldMade.push(resolve))
+        }
         return Response.json({ data: { id, ...body } })
       }
       const [, , session, what] = parts
@@ -226,7 +233,8 @@ export class StandIn {
             await new Promise<void>((resolve) => this.heldPrompts.push(resolve))
           }
           this.add(session, { type: "user", text: body.text })
-          void this.readPart(session, body.text, made.model)
+          if (this.turnsBeginLate) this.heldTurns.push(() => void this.readPart(session, body.text, made.model))
+          else void this.readPart(session, body.text, made.model)
           return Response.json({ data: {} })
         }
         if (this.promptsTakeTurns) {
@@ -277,6 +285,17 @@ export class StandIn {
   beginPrompts() {
     for (const begin of this.heldPrompts.splice(0)) begin()
   }
+  /** A part's prompt is answered before its turn begins, at `beginTurns`. */
+  turnsBeginLate = false
+  private heldTurns: (() => void)[] = []
+  beginTurns() {
+    for (const begin of this.heldTurns.splice(0)) begin()
+  }
+  /** A part's session, once made, is answered for only as sessions are next listed. */
+  answersMadeOnListing = false
+  private heldMade: (() => void)[] = []
+  /** Times sessions were listed (`GET /api/session`). */
+  listings = 0
   /** An interrupt ends a part's turn as interrupted (the engine's way); otherwise it's only counted. */
   interruptEndsParts = false
 

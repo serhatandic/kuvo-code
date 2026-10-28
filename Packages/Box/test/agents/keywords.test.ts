@@ -818,6 +818,62 @@ describe("a review with fresh eyes", () => {
     reviews.stopAll()
   })
 
+  test("stopped while a part's prompt is on its way and its turn begins only after it's answered, its turn is still stopped", async () => {
+    const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+    reviews.onEnded = beat
+    engine.holdingPrompts = true
+    engine.turnsBeginLate = true
+    engine.holdingChecks = true
+    engine.interruptEndsParts = true
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    await until(() => !!reviews.get("ses_work")?.parts?.[0]?.session && engine.prompts(reviews.get("ses_work")!.parts![0].session!).length === 1)
+    const reading = reviews.get("ses_work")!.parts![0].session!
+    reviews.stop("ses_work")
+    // Its prompt answered, its turn not yet begun: the interrupts so far find nothing to stop.
+    engine.beginPrompts()
+    await until(() => engine.interrupted.filter((each) => each === reading).length === 2)
+    engine.beginTurns()
+    await until(() => engine.conversations.get(reading)!.at(-1)?.type === "idle")
+    expect(engine.conversations.get(reading)!.at(-1)!.outcome).toBe("interrupted")
+    engine.answerChecks()
+    reviews.stopAll()
+  })
+
+  test("a review starting as the box starts again keeps its part's session, while one no review records is deleted", async () => {
+    const orphan = (await link.request("POST", "/api/session", { title: "Review · part", parentID: "ses_work", location: { directory: join(root, "reviewers") }, metadata: { kuvo: { reviewPart: { review: "rev_gone", part: 1, of: 1 } } } })).data.id
+    const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+    reviews.onEnded = beat
+    // Its part's session made, its answer back only once the box has listed the sessions.
+    engine.answersMadeOnListing = true
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    await until(() => engine.made.length === 2)
+    reviews.resume()
+    await until(() => reviews.get("ses_work")?.state !== "reviewing")
+    expect(reviews.get("ses_work")!.state).toBe("done")
+    const read = reviews.get("ses_work")!.parts![0].session!
+    expect(engine.deleted).not.toContain(read)
+    // Nothing being made any more: the next start deletes the one no review records.
+    reviews.resume()
+    await until(() => engine.deleted.includes(orphan))
+    expect(engine.deleted).toEqual([orphan])
+    reviews.stopAll()
+  })
+
+  test("reviews whose first parts start together both read them, from one project of their own", async () => {
+    engine.session("ses_other")
+    const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+    reviews.onEnded = beat
+    await Promise.all([reviews.start("ses_work", undefined, undefined, { kind: "project" }), reviews.start("ses_other", undefined, undefined, { kind: "project" })])
+    await until(() => reviews.get("ses_work")?.state !== "reviewing" && reviews.get("ses_other")?.state !== "reviewing")
+    expect([reviews.get("ses_work")!.state, reviews.get("ses_other")!.state]).toEqual(["done", "done"])
+    expect(engine.made.map((each) => each.location.directory)).toEqual([join(root, "reviewers"), join(root, "reviewers")])
+    expect((await run("git", ["-C", join(root, "reviewers"), "log", "--format=%s"])).stdout.trim()).toBe("Kuvo Code's reviewers read projects from here")
+    reviews.stopAll()
+  })
+
   test("the only part stopped from its own session leaves the review stopped, not failed", async () => {
     const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
     const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)

@@ -373,8 +373,16 @@ export class Reviews {
   /** Where parts' sessions are: a folder of the box's own beside its reviews, a git repository with
    * one empty commit, so it's a project of its own, which no "Always allow" was ever saved for.
    * One that can't be made so isn't used: without its commit the engine would file it with every
-   * folder outside a repository, where an "Always allow" may have been saved. */
-  private async partsFolder(): Promise<string> {
+   * folder outside a repository, where an "Always allow" may have been saved. Parts starting
+   * together share one setting up (two at once would trip over each other's git). */
+  private partsFolder(): Promise<string> {
+    this.settingUp ??= this.setUpPartsFolder().finally(() => (this.settingUp = undefined))
+    return this.settingUp
+  }
+
+  private settingUp?: Promise<string>
+
+  private async setUpPartsFolder(): Promise<string> {
     const folder = this.reviewersFolder
     const git = (...args: string[]) =>
       run("git", ["-C", folder, "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
@@ -417,6 +425,9 @@ export class Reviews {
   /** Parts' sessions that were reading when the box stopped. */
   private leftReading: string[] = []
 
+  /** Parts whose sessions are being made: the engine may list one before its review hears of it. */
+  private making = 0
+
   /** Once the engine's link is up: parts left reading when the box stopped are stopped, and parts'
    * sessions no review here records (made as the box stopped) are deleted. */
   resume() {
@@ -428,16 +439,19 @@ export class Reviews {
   }
 
   /** Deletes parts' sessions in the reviewers' folder that no review here records: made as the box
-   * stopped, before their review heard of them. */
+   * stopped, before their review heard of them. Never while a part's session is being made, which
+   * may be listed before its review hears of it. */
   private async sweepParts() {
     const api = this.places.engine.api
-    const known = new Set([...this.kept.values()].flatMap((review) => (review.parts ?? []).map((part) => part.session)).filter(Boolean))
+    const recorded = (id: string) => [...this.kept.values()].some((review) => (review.parts ?? []).some((part) => part.session === id))
     let query: string | undefined = `limit=100&order=desc&directory=${encodeURIComponent(this.reviewersFolder)}`
     for (let pages = 0; pages < 20 && query; pages++) {
-      const listed = await api.request<{ data?: any[]; cursor?: { next?: string } }>("GET", `/api/session?${query}`)
+      const listed: { data?: any[]; cursor?: { next?: string } } | undefined = await api.request("GET", `/api/session?${query}`)
       const data: any[] = Array.isArray(listed?.data) ? listed.data : []
       for (const session of data) {
-        if (session?.metadata?.kuvo?.reviewPart && typeof session.id === "string" && !known.has(session.id)) await api.request("DELETE", at(session.id)).catch(() => {})
+        if (!session?.metadata?.kuvo?.reviewPart || typeof session.id !== "string") continue
+        if (this.making > 0 || recorded(session.id)) continue
+        await api.request("DELETE", at(session.id)).catch(() => {})
       }
       query = data.length && listed?.cursor?.next ? `limit=100&cursor=${encodeURIComponent(listed.cursor.next)}` : undefined
     }
@@ -460,24 +474,33 @@ export class Reviews {
    * more. Its answer. */
   private async readInSession(review: Review, info: SessionInfo, part: ReviewPart, prompt: string, going: () => boolean): Promise<string> {
     const { api, listen } = this.places.engine
-    const made = await api.request<{ data?: { id?: string } }>("POST", "/api/session", {
-      title: `Review · part ${part.n} of ${part.of}`,
-      location: { directory: await this.partsFolder() },
-      ...(review.model ? { model: review.model } : {}),
-      agent: "plan",
-      parentID: info.id,
-      permissions: partPermissions(info.directory!),
-      // Watched, never written to: it reads on its own.
-      metadata: { kuvo: { reviewPart: { review: review.id, part: part.n, of: part.of }, messages: { via: "none", note: "A reviewer reads on its own: this is what it read, thought and found." } } },
-    })
-    const id = made?.data?.id
-    if (!id) throw new Error("The engine didn't start a session for the part.")
-    // Stopped or put away while it was made: it never reads.
-    if (!going()) {
-      await api.request("DELETE", at(id)).catch(() => {})
-      throw new Error("The review was stopped.")
+    const folder = await this.partsFolder()
+    // Counted as being made until its review records it (or it's deleted, stopped as it was made).
+    this.making += 1
+    let made: string | undefined
+    try {
+      const answer = await api.request<{ data?: { id?: string } }>("POST", "/api/session", {
+        title: `Review · part ${part.n} of ${part.of}`,
+        location: { directory: folder },
+        ...(review.model ? { model: review.model } : {}),
+        agent: "plan",
+        parentID: info.id,
+        permissions: partPermissions(info.directory!),
+        // Watched, never written to: it reads on its own.
+        metadata: { kuvo: { reviewPart: { review: review.id, part: part.n, of: part.of }, messages: { via: "none", note: "A reviewer reads on its own: this is what it read, thought and found." } } },
+      })
+      made = answer?.data?.id
+      if (!made) throw new Error("The engine didn't start a session for the part.")
+      // Stopped or put away while it was made: it never reads.
+      if (!going()) {
+        await api.request("DELETE", at(made)).catch(() => {})
+        throw new Error("The review was stopped.")
+      }
+      part.session = made
+    } finally {
+      this.making -= 1
     }
-    part.session = id
+    const id = made
     this.changed(review)
     const tools = new Map<string, string>()
     let unlisten = () => {}
@@ -493,17 +516,21 @@ export class Reviews {
       }
       // A session under the conversation is heard through the conversation's own feed (the engine's
       // link tells a child's events to its parent's listeners): its own events, picked out.
-      // Stopped before its turn began (its prompt on its way): stopped once it starts.
+      // Stopped before its turn began (its prompt on its way): stopped once it starts. Once more
+      // when the turn's start is heard, as an interrupt sent before it registered stops nothing.
       let stopping = false
-      const stopIfStopped = () => {
-        if (going() || stopping) return
+      let again = false
+      const stopIfStopped = (type?: string) => {
+        if (going()) return
+        if (stopping && (again || type !== "session.execution.started")) return
+        if (stopping) again = true
         stopping = true
         void api.request("POST", at(id) + "/interrupt").catch(() => {})
       }
       unlisten = listen(info.id, {
         event: (type, data) => {
           if (data?.sessionID !== id) return
-          stopIfStopped()
+          stopIfStopped(type)
           if (type === "session.execution.succeeded") return end("succeeded")
           if (type === "session.execution.failed" || type === "session.execution.interrupted") return end(type.split(".").at(-1)!)
           if (type === "session.tool.input.started" && data.id) tools.set(data.id, String(data.name ?? ""))
@@ -523,7 +550,7 @@ export class Reviews {
         },
       })
       const told = `${prompt}\n\nThe project is in ${info.directory}: read more of its files there if you need to. You can read; you can't change anything.`
-      api.request("POST", at(id) + "/prompt", { text: told }).then(stopIfStopped, (error: any) => end(`failed: ${error?.message ?? error}`))
+      api.request("POST", at(id) + "/prompt", { text: told }).then(() => stopIfStopped(), (error: any) => end(`failed: ${error?.message ?? error}`))
     })
     unlisten()
     if (outcome === "timed out") throw new Error("The part took too long to read.")
