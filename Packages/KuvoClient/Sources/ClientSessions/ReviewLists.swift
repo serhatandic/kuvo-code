@@ -265,7 +265,7 @@ public enum ReviewPartWords {
         switch (stopped, alone) {
         case (true, false): "This part was stopped. The review went on with the others."
         case (false, false): "This part couldn’t be read. The review went on with the others."
-        case (true, true): "The review was stopped here."
+        case (true, true): "Stopped."
         case (false, true): "The reviewer couldn’t read this, so the review couldn’t be done. Ask for it again."
         }
     }
