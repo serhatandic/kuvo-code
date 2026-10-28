@@ -1547,7 +1547,10 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
     session?, now?}]`, `files` the part's first 200, `found` what it found. On the engine each
     part reads in a session of its own, `session`: under the conversation (`parentID`), marked
     `kuvo.reviewPart: {review, part, of}` and kept out of lists like the box's other runs, its
-    agent `plan` with rules that let it read the project and nothing more. A client opens it as it
+    agent `plan` with rules that let it read the project and nothing more. Its folder is the box's
+    own (`reviewers` beside its reviews, a git repository with one empty commit), reading the
+    project from outside it, so no "Always allow" saved for the project reaches it; `kuvo.messages`
+    says it takes none. A client opens it as it
     opens a subagent's, to watch it read and to look at it after; it goes when the review is put
     away or another takes its place. `now` is what it's doing as it reads ("Reading src/a.ts",
     "Looking for “token”", "Thinking", "Writing what it found"), told as it changes (not kept),
