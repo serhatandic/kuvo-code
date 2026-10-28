@@ -870,10 +870,10 @@ struct SidebarView: View {
     /// in the same list (`branches`, by the one each came from).
     private func sessionRow(_ session: Session, in place: Place, branches: [String: [Session]]) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            sessionOnlyRow(session, in: place, branches: branches[session.id]?.count ?? 0)
+            sessionOnlyRow(session, in: place, branches: branches[session.id]?.count ?? 0, folded: folded(under: session.id, in: branches))
             if isUnfolded(session.id), !(branches[session.id] ?? []).isEmpty {
                 BranchRows(parent: session.id, branches: branches, titleInset: 10 + (place == .project ? SidebarMetrics.iconWidth + 10 : 0), isUnfolded: { isUnfolded($0) }) { child, inset in
-                    AnyView(sessionOnlyRow(child, in: place, branches: branches[child.id]?.count ?? 0, branchInset: inset))
+                    AnyView(sessionOnlyRow(child, in: place, branches: branches[child.id]?.count ?? 0, folded: folded(under: child.id, in: branches), branchInset: inset))
                 }
             }
         }
@@ -886,6 +886,12 @@ struct SidebarView: View {
     #else
     static let demoShowsAll = false
     #endif
+
+    /// What's out of view under a row while it's folded: its branches and the sessions its agent
+    /// started, and theirs.
+    private func folded(under id: String, in branches: [String: [Session]]) -> [Session] {
+        isUnfolded(id) ? [] : Branches.all(under: id, in: branches)
+    }
 
     private func isUnfolded(_ id: String) -> Bool {
         #if DEBUG
@@ -903,7 +909,8 @@ struct SidebarView: View {
 
     /// `branchInset`: a branch's, under the conversation it came from, its title that far in.
     /// `branches`: how many are under it.
-    private func sessionOnlyRow(_ session: Session, in place: Place, branches: Int, branchInset: CGFloat? = nil) -> some View {
+    /// `folded`: what's out of view under it, whose news and asks show on it.
+    private func sessionOnlyRow(_ session: Session, in place: Place, branches: Int, folded: [Session] = [], branchInset: CGFloat? = nil) -> some View {
         SidebarRow(isSelected: isHighlighted(session, in: place), indented: place == .project, branchInset: branchInset, isEditing: renaming == RenameTarget(id: session.id, place: place), action: {
             pickedIn[session.id] = place
             selection = session.id
@@ -943,22 +950,18 @@ struct SidebarView: View {
                             .foregroundStyle(.tertiary)
                             .help("Works in a worktree, on \(tree.branch)")
                     }
-                    if let count = workspace.agents(forFolder: session.location.directory)?.sideQuestionCounts[session.id], count > 0 {
-                        SideQuestionsButton(count: count) { showSideQuestion(nil, of: session, in: place) }
-                    }
                     if branches > 0 {
                         BranchesToggle(count: branches, isUnfolded: isUnfolded(session.id)) { toggleBranches(of: session.id) }
                     }
                     // A subagent that finished since you were here shows on it: what it found is
                     // in its conversation.
-                    SessionStatus(session: session, isUnread: session.isUnread || workspace.hasNewSubSessions(session.id))
+                    SessionStatus(session: session, isUnread: session.isUnread || workspace.hasNewSubSessions(session.id) || folded.contains(where: \.isUnread), folded: folded)
                 }
             }
         }
         .contextMenu { menu(for: session, in: place) }
         .modifier(BranchesAction(count: branches, isUnfolded: isUnfolded(session.id)) { toggleBranches(of: session.id) })
         .accessibilityHint(branchInset == nil ? "" : Self.origin(of: session, in: workspace))
-        .modifier(SideQuestionsAction(count: workspace.agents(forFolder: session.location.directory)?.sideQuestionCounts[session.id] ?? 0) { showSideQuestion(nil, of: session, in: place) })
     }
 
     /// A conversation's side threads ("/btw"), each opening it with the thread over the composer.
@@ -1805,7 +1808,8 @@ private struct MoveToComputerMenu: View {
 
 /// What a session's row and its tab show: one place decides, so the two always agree. A move to
 /// another computer is work; a machine that's getting there (connecting, installing) isn't away.
-@MainActor func statusMark(of session: Session, isNew: Bool, workspace: Workspace, app: AppModel) -> StatusMark.Kind? {
+/// `folded`: sessions out of view under its row, one waiting on you showing there too.
+@MainActor func statusMark(of session: Session, isNew: Bool, folded: [Session] = [], workspace: Workspace, app: AppModel) -> StatusMark.Kind? {
     #if DEBUG
     if DemoStates.shared.isOn { return DemoStates.shared.kind(of: session.id) }
     #endif
@@ -1813,7 +1817,7 @@ private struct MoveToComputerMenu: View {
     let moving = app.moves.underWay[id] != nil
     let working = workspace.isWorking(id) || moving
     return ConversationState.kind(
-        needsYou: workspace.needsAttention(id),
+        needsYou: workspace.needsAttention(id) || folded.contains { workspace.needsAttention($0.id) },
         working: working,
         subagentsOnly: !moving && working && !workspace.running.contains(id) && workspace.helpersAtWork(in: id) > 0,
         failed: session.outcome == .failed,
@@ -1840,9 +1844,11 @@ private struct SessionStatus: View {
     /// Finished and not seen: the session's own say, unless a row knows better (a sub-session's
     /// seen through the session above it; a folded session has a sub-session's news).
     var isUnread: Bool?
+    /// Out of view under its row: one waiting on you shows here.
+    var folded: [Session] = []
 
     var body: some View {
-        let kind = statusMark(of: session, isNew: isUnread ?? session.isUnread, workspace: workspace, app: app)
+        let kind = statusMark(of: session, isNew: isUnread ?? session.isUnread, folded: folded, workspace: workspace, app: app)
         StatusMark(showing: kind)
             .help(kind.map(help) ?? "")
     }
@@ -1966,45 +1972,6 @@ private struct BranchesToggle: View {
         .help(isUnfolded ? "Hide its branches" : "Show its \(count.counting("branch", "branches"))")
         // The row it's in says so, with its action (see `BranchesAction`).
         .accessibilityHidden(true)
-    }
-}
-
-/// A conversation's side questions on its row: how many, opening the latest over its composer
-/// (the others are a menu away there, and in the row's menu).
-private struct SideQuestionsButton: View {
-    let count: Int
-    let open: () -> Void
-
-    var body: some View {
-        Button(action: open) {
-            HStack(spacing: 2) {
-                Image(systemName: Keyword.btw.symbol)
-                Text("\(count)")
-                    .monospacedDigit()
-            }
-            .font(.system(size: 11))
-        }
-        .buttonStyle(TextButtonStyle())
-        .help("Open the latest of \(count.counting("side question"))")
-        // The row it's in says so, with its action (see `SideQuestionsAction`).
-        .accessibilityHidden(true)
-    }
-}
-
-/// A row with side questions, for VoiceOver: how many, and the action that opens the latest, as
-/// the count inside it does.
-private struct SideQuestionsAction: ViewModifier {
-    let count: Int
-    let open: () -> Void
-
-    func body(content: Content) -> some View {
-        if count > 0 {
-            content
-                .accessibilityCustomContent("Side questions", "\(count)", importance: .high)
-                .accessibilityAction(named: "Open Side Questions", open)
-        } else {
-            content
-        }
     }
 }
 

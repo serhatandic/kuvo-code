@@ -69,6 +69,20 @@ public enum Branches {
         return (top, under.mapValues { $0.sorted { $0.time.created > $1.time.created } })
     }
 
+    /// Everything under `id` in `under` (a tree's), its own and theirs: what a folded row stands
+    /// for, so one waiting on you or done while it's folded shows on that row.
+    public static func all(under id: String, in under: [String: [Session]]) -> [Session] {
+        var found: [Session] = []
+        var seen: Set<String> = [id]
+        var next = under[id] ?? []
+        while let session = next.popLast() {
+            guard seen.insert(session.id).inserted else { continue }
+            found.append(session)
+            next += under[session.id] ?? []
+        }
+        return found
+    }
+
     /// `tree(sessions)` for a list that shows the latest first, and maybe only the first few:
     /// those at the top by the latest of each and what's under it, so one at work under an older
     /// one keeps it in view.

@@ -101,6 +101,11 @@ struct SessionRulesTests {
         #expect(Branches.started(byStep: #"Started "Review project docs" in test project, beside this conversation (address ses_181e55e7c001jWyTnZQbZrCAfZ). It's on it now."#) == "ses_181e55e7c001jWyTnZQbZrCAfZ")
         #expect(Branches.started(byStep: "Started a new session on this machine, in a tab (address ses_m1). It's on it now.") == "ses_m1")
         #expect(Branches.started(byStep: "Couldn't start a session in /x: gone") == nil)
+        // Folded, the conversation stands for all of them, a branch's own too.
+        let deeper = try session("ses_deeper", metadata: #"{"kuvo": {"branchedFrom": "ses_docs"}}"#)
+        let folded = Branches.tree([tests, demo, docs, deeper])
+        #expect(Set(Branches.all(under: "ses_demo", in: folded.under).map(\.id)) == ["ses_tests", "ses_docs", "ses_deeper"])
+        #expect(Branches.all(under: "ses_tests", in: folded.under).isEmpty)
     }
 
     /// In a list of the latest, a conversation counts as new as its newest branch: one at work

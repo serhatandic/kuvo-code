@@ -1901,13 +1901,15 @@ async function mail(name, args, from, cancelled = () => false) {
   return text(answer ? `${target.name} answered:\n\n` + answer : `${target.name} hasn't answered yet. It may still write back with send_message.`);
 }
 
-/// The conversation a session works for: itself, or a subagent's, the one that started it.
+/// The conversation a session works for: itself, a subagent's, the one that started it, and a
+/// coding agent's engine run (Auto's), the conversation it runs for (`kuvo.engineFor`), as on the Mac.
 async function rootSession(session) {
   let id = session;
   for (let step = 0; id && step < 6; step++) {
     const found = (await findSession(id))?.data ?? null;
-    if (!found?.parentID) break;
-    id = found.parentID;
+    const above = found?.parentID ?? (typeof found?.metadata?.kuvo?.engineFor === "string" ? found.metadata.kuvo.engineFor : null);
+    if (!above) break;
+    id = above;
   }
   return id ?? session;
 }

@@ -130,10 +130,10 @@ import Testing
         #expect(try await bridge.api?.sideQuestions(of: id).map(\.question) == ["what does parseDuration match?"])
     }
 
-    /// Clicking a conversation's side questions in the sidebar: the latest one's answer over its
-    /// composer, though they were asked from the phone and the conversation wasn't open; one
-    /// picked from the row's menu shows instead, even after the bar was put away.
-    @Test func aConversationsSideQuestionsOpenFromItsRow() async throws {
+    /// A conversation's side questions from its row's menu in the sidebar: Open the Latest shows
+    /// the latest one's answer over its composer, though they were asked from the phone and the
+    /// conversation wasn't open; one picked shows instead, even after the bar was put away.
+    @Test func aConversationsSideQuestionsOpenFromItsRowsMenu() async throws {
         defer { clean() }
         serve(directory: "/tmp", answers: ["In `onBlur`.", "Every 25 minutes."])
         let model = try session()
