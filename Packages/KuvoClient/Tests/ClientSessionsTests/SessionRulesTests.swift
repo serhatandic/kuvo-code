@@ -16,6 +16,22 @@ struct SessionRulesTests {
         return try JSONDecoder().decode(Session.self, from: Data(json.utf8))
     }
 
+    /// Sub-sessions that come back round (one listed under itself, or under its own sub-session,
+    /// as a box can say of a coding agent's run): the row and reading it still finish, once each.
+    @Test func subSessionsInALoopAreReadOnce() throws {
+        var sessions = [try session("ses_timer", idle: 5, viewed: 5)]
+        var subs: [String: [Session]] = [
+            "ses_timer": [try session("ses_find", idle: 3)],
+            "ses_find": [try session("ses_timer", idle: 4), try session("ses_find", idle: 4)],
+        ]
+        #expect(!ReadState.hasNew(under: "ses_timer", in: subs) { _ in 5 })
+        subs["ses_find"]?.append(try session("ses_new", idle: 9))
+        #expect(ReadState.hasNew(under: "ses_timer", in: subs) { _ in 5 })
+        let read = ReadState.read("ses_timer", sessions: &sessions, subSessions: &subs) { _ in nil }
+        #expect(read.map(\.id).filter { $0 == "ses_new" }.count == 1)
+        #expect(!ReadState.hasNew(under: "ses_timer", in: subs) { _ in 5 })
+    }
+
     @Test func readingASessionReadsWhatItShowsAllTheWayDown() throws {
         var sessions = [try session("ses_timer", idle: 5, viewed: 5)]
         var subs: [String: [Session]] = [

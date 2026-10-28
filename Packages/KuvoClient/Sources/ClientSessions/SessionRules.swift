@@ -109,8 +109,16 @@ public enum ReadState {
 
     /// One of `id`'s sub-sessions, or theirs, is new. `subSessions`: each session's, by the one
     /// that started them; `rootViewed`: when a sub-session's top session was last read.
+    /// Each once, though a box lists them in a loop.
     public static func hasNew(under id: String, in subSessions: [String: [Session]], rootViewed: (Session) -> Milliseconds?) -> Bool {
-        (subSessions[id] ?? []).contains { isNew($0, rootViewed: rootViewed($0)) || hasNew(under: $0.id, in: subSessions, rootViewed: rootViewed) }
+        var seen: Set<String> = [id]
+        var next = subSessions[id] ?? []
+        while let sub = next.popLast() {
+            guard seen.insert(sub.id).inserted else { continue }
+            if isNew(sub, rootViewed: rootViewed(sub)) { return true }
+            next += subSessions[sub.id] ?? []
+        }
+        return false
     }
 
     /// Reads `id`: itself (one of `sessions`, or a sub-session, under `parent(id)`), and its
@@ -127,13 +135,15 @@ public enum ReadState {
             subSessions[above]?[index].time.viewed = idle
             if !read.contains(where: { $0.id == id }) { read.append((id, idle)) }
         }
+        // Each once, though a box lists them in a loop.
+        var seen: Set<String> = [id]
         func readUnder(_ id: String) {
             for (index, child) in (subSessions[id] ?? []).enumerated() {
                 if child.isUnread, let idle = child.time.idle {
                     subSessions[id]?[index].time.viewed = idle
-                    read.append((child.id, idle))
+                    if !read.contains(where: { $0.id == child.id }) { read.append((child.id, idle)) }
                 }
-                readUnder(child.id)
+                if seen.insert(child.id).inserted { readUnder(child.id) }
             }
         }
         readUnder(id)
