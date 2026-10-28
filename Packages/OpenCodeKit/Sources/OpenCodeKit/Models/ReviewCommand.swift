@@ -1,8 +1,11 @@
 import Foundation
 
-/// What follows "/review": who reads the changes ("with DeepSeek V4.1 Flash": one of the
-/// conversation's models by its name; its own model without it) and what to look at, written
-/// after. The composer's "Who reads it" writes the first part, and draws it with the keyword.
+/// What follows "/review": what it reads ("this branch", "since abc1234", "folder src/auth", "the
+/// whole project"; the changes not committed yet without), what to look for ("for security"), who
+/// reads it ("with DeepSeek V4.1 Flash": one of the conversation's models by its name; its own
+/// model without it), in any order, then anything else to look at, in your words. The composer's
+/// "What to review" and "Look for" write the first two, "with" looks for the third, and the
+/// keyword is drawn with all three.
 public struct ReviewCommand: Equatable, Sendable {
     /// A model it can be read by: its name as the lists show it.
     public struct Reader: Equatable, Sendable {
@@ -18,49 +21,208 @@ public struct ReviewCommand: Equatable, Sendable {
         }
     }
 
+    /// What "Look for" offers besides anything wrong, as the box knows them.
+    public enum Preset: String, CaseIterable, Sendable {
+        case security, performance, accessibility
+    }
+
+    /// Which of the composer's lists what's typed is answering, and what's typed in it so far.
+    public enum Asking: Equatable, Sendable {
+        /// "What to review".
+        case what(String)
+        /// A commit after "since ", to start with.
+        case commit(String)
+        /// A folder after "folder ".
+        case folder(String)
+        /// "Look for".
+        case lookFor(String)
+    }
+
+    /// What it reads; nil for the changes not committed yet.
+    public var scope: ReviewScope?
+    /// What it looks for, picked from "Look for".
+    public var preset: Preset?
     /// Who reads it, when "with" names one; nil for the conversation's own model.
     public var reader: Reader?
-    /// What to look at, as written after who reads it.
+    /// What to look at, in your words: what's written after the rest ("for " left off).
     public var focus: String
-    /// How much of what follows "/review" names who reads it, in UTF-16, spaces before it
-    /// included (0 without): the composer draws it as part of the keyword.
+    /// How much of what follows "/review" names what it reads, what it looks for and who reads
+    /// it, in UTF-16, spaces before it included (0 without): the composer draws it as part of
+    /// the keyword.
     public var readerLength = 0
-    /// "with" and words that name none of them yet, but could: those words, which "Who reads it"
+    /// "with" and words that name none of them yet, but could: those words, which the model list
     /// looks for. Words that can be no model's are what to look at ("with an eye on the tests").
     public var searching: String?
+    /// The list what's typed last is answering; nil once it's words of your own.
+    public var asking: Asking?
+    /// What follows "/review" before what `asking` answers: a pick is written after it.
+    public var head: String
+    /// A model's name that ends what's typed, as typed: longer names it starts may be meant.
+    var readerTyped: String?
+
+    /// What the box is asked to look at: the preset, your words, or both.
+    public var focusAsked: String? {
+        switch (preset, focus.isEmpty) {
+        case (nil, true): nil
+        case (nil, false): focus
+        case (let preset?, true): preset.rawValue
+        case (let preset?, false): preset.rawValue + ": " + focus
+        }
+    }
+
+    /// The scope's words as the composer writes them.
+    public static func phrase(_ scope: ReviewScope) -> String {
+        switch scope {
+        case .uncommitted: return uncommittedPhrase
+        case .branch: return branchPhrase
+        case .commits(let from, _): return "since " + (from.hasSuffix("^") ? String(from.dropLast()) : from)
+        case .folder(let path): return "folder " + (path.contains(where: \.isWhitespace) ? "\"\(path)\"" : path)
+        case .project: return projectPhrase
+        }
+    }
+
+    public static func phrase(_ preset: Preset) -> String { "for " + preset.rawValue }
+
+    static let uncommittedPhrase = "changes not committed yet"
+    static let branchPhrase = "this branch"
+    static let projectPhrase = "the whole project"
 
     /// What follows "/review", read against `readers`; of two with the same name, `preferred`.
     public init(_ rest: String, readers: [Reader], preferring preferred: ModelRef? = nil) {
-        let start = rest.firstIndex { !$0.isWhitespace } ?? rest.endIndex
-        let words = rest[start...]
-        guard words.lowercased().hasPrefix("with"), words.dropFirst(4).first?.isWhitespace != false else {
-            focus = rest.trimmingCharacters(in: .whitespacesAndNewlines)
-            return
-        }
-        let afterWith = words.dropFirst(4)
-        let name = afterWith.drop { $0.isWhitespace }
-        // The longest name it starts with, as a whole word: "Claude Sonnet 4.5", not "Claude".
-        let named = readers.filter { reader in
-            let length = reader.name.count
-            guard length > 0, name.count >= length, name.prefix(length).lowercased() == reader.name.lowercased() else { return false }
-            return name.dropFirst(length).first?.isWhitespace != false
-        }
-        guard let longest = named.map(\.name.count).max() else {
-            let query = String(name).trimmingCharacters(in: .whitespacesAndNewlines)
-            if query.isEmpty || !Self.search(query, in: readers).isEmpty {
-                focus = ""
-                searching = query
-            } else {
-                focus = rest.trimmingCharacters(in: .whitespacesAndNewlines)
+        focus = ""
+        head = ""
+        var at = rest.startIndex
+        // What's drawn with the keyword ends where the last thing it reads ends.
+        var drawn = rest.startIndex
+        // Where the thing a list is answering starts, when what's typed ends inside it.
+        var open: String.Index?
+        var scopeRead = false
+        reading: while true {
+            let start = rest[at...].firstIndex { !$0.isWhitespace } ?? rest.endIndex
+            guard start < rest.endIndex else { break }
+            let words = rest[start...]
+            if !scopeRead, let (scope, end, asking) = Self.scope(in: words) {
+                scopeRead = true
+                self.scope = scope
+                at = end
+                drawn = end
+                if let asking {
+                    self.asking = asking
+                    open = start
+                }
+                continue
             }
+            if preset == nil, let (preset, end) = Self.preset(in: words) {
+                self.preset = preset
+                at = end
+                drawn = end
+                continue
+            }
+            if reader == nil, searching == nil, Self.isWord("with", at: words) {
+                let name = words.dropFirst(4).drop { $0.isWhitespace }
+                // The longest name it starts with, as a whole word: "Claude Sonnet 4.5", not "Claude".
+                let named = readers.filter { reader in
+                    let length = reader.name.count
+                    guard length > 0, name.count >= length, name.prefix(length).lowercased() == reader.name.lowercased() else { return false }
+                    return name.dropFirst(length).first?.isWhitespace != false
+                }
+                if let longest = named.map(\.name.count).max() {
+                    let candidates = named.filter { $0.name.count == longest }
+                    reader = candidates.first { $0.ref == preferred } ?? candidates[0]
+                    let end = name.index(name.startIndex, offsetBy: longest)
+                    if end == rest.endIndex { readerTyped = String(name[..<end]) }
+                    at = end
+                    drawn = end
+                    continue
+                }
+                let query = String(name).trimmingCharacters(in: .whitespacesAndNewlines)
+                if query.isEmpty || !Self.search(query, in: readers).isEmpty {
+                    searching = query
+                    readerLength = rest[..<drawn].utf16.count
+                    head = String(rest[..<start])
+                    asking = nil
+                    return
+                }
+            }
+            break
+        }
+        readerLength = rest[..<drawn].utf16.count
+        if let open {
+            head = String(rest[..<open])
             return
         }
-        let candidates = named.filter { $0.name.count == longest }
-        let reader = candidates.first { $0.ref == preferred } ?? candidates[0]
-        self.reader = reader
-        let end = name.index(name.startIndex, offsetBy: longest)
-        readerLength = rest[..<end].utf16.count
-        focus = name[end...].trimmingCharacters(in: .whitespacesAndNewlines)
+        let tail = rest[at...].drop { $0.isWhitespace }
+        let typed = String(tail)
+        head = String(rest[..<tail.startIndex])
+        let written = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        focus = Self.isWord("for", at: Substring(written)) ? written.dropFirst(3).trimmingCharacters(in: .whitespaces) : written
+        // Nothing of your own yet, or the start of what a list offers: that list, for it.
+        let lower = typed.lowercased()
+        // (Something else… writes "for ", for words of your own after it.)
+        let ownWords = lower.hasPrefix("for ") && lower.dropFirst(4).allSatisfy(\.isWhitespace)
+        if scope == nil, Self.whatWords.contains(where: { $0.hasPrefix(lower) }) {
+            asking = .what(typed)
+        } else if preset == nil, !ownWords, lower.isEmpty || Self.lookForWords.contains(where: { $0.hasPrefix(lower) }) {
+            asking = .lookFor(typed)
+        }
+    }
+
+    /// The words "What to review"'s rows are written and found by.
+    static let whatWords = [uncommittedPhrase, "uncommitted", branchPhrase, "branch", "since ", "commits", "folder ", "a folder", projectPhrase, "whole project", "project"]
+    /// "Look for"'s, past the first "for " (Something else… writes that, to type after).
+    static let lookForWords = Preset.allCases.flatMap { [phrase($0), $0.rawValue] } + ["anything wrong", "something else"]
+
+    /// A scope `words` start with, where it ends, and the list it's still being typed in when
+    /// it ends what's typed (a commit or a folder, with what's typed of it; no scope yet while
+    /// nothing is).
+    static func scope(in words: Substring) -> (ReviewScope?, String.Index, Asking?)? {
+        for (phrase, scope) in [(uncommittedPhrase, ReviewScope.uncommitted), (branchPhrase, .branch(base: nil)), (projectPhrase, .project)] where isWord(phrase, at: words) {
+            return (scope, words.index(words.startIndex, offsetBy: phrase.count), nil)
+        }
+        if isWord("since", at: words) {
+            let after = words.dropFirst(5)
+            guard after.first?.isWhitespace == true else { return nil }
+            let ref = after.drop { $0.isWhitespace }.prefix { !$0.isWhitespace }
+            if ref.isEmpty { return (nil, words.endIndex, .commit("")) }
+            guard isRef(ref) else { return nil }
+            return (.commits(from: ref + "^", to: nil), ref.endIndex, ref.endIndex == words.endIndex ? .commit(String(ref)) : nil)
+        }
+        if isWord("folder", at: words) {
+            let after = words.dropFirst(6)
+            guard after.first?.isWhitespace == true else { return nil }
+            let path = after.drop { $0.isWhitespace }
+            if path.first == "\"" {
+                let inside = path.dropFirst()
+                guard let close = inside.firstIndex(of: "\"") else { return (inside.isEmpty ? nil : .folder(String(inside)), words.endIndex, .folder(String(inside))) }
+                return (.folder(String(inside[..<close])), inside.index(after: close), nil)
+            }
+            let word = path.prefix { !$0.isWhitespace }
+            if word.isEmpty { return (nil, words.endIndex, .folder("")) }
+            return (.folder(String(word)), word.endIndex, word.endIndex == words.endIndex ? .folder(String(word)) : nil)
+        }
+        return nil
+    }
+
+    static func preset(in words: Substring) -> (Preset, String.Index)? {
+        guard isWord("for", at: words) else { return nil }
+        let after = words.dropFirst(3).drop { $0.isWhitespace }
+        for preset in Preset.allCases where isWord(preset.rawValue, at: after) {
+            return (preset, after.index(after.startIndex, offsetBy: preset.rawValue.count))
+        }
+        return nil
+    }
+
+    /// `words` start with `word`, in any case, as a whole word.
+    static func isWord(_ word: String, at words: Substring) -> Bool {
+        guard words.count >= word.count, words.prefix(word.count).lowercased() == word else { return false }
+        return words.dropFirst(word.count).first?.isWhitespace != false
+    }
+
+    /// A commit, branch or tag as git names them (never an option, never a range), as the box
+    /// takes them.
+    static func isRef(_ ref: Substring) -> Bool {
+        guard (1...200).contains(ref.count), ref.first != "-", !ref.contains("..") else { return false }
+        return ref.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "._/~^@{}+-".contains($0)) }
     }
 
     /// Those whose name, or who serves them, has each of the words of `query`.
@@ -72,17 +234,14 @@ public struct ReviewCommand: Equatable, Sendable {
         }
     }
 
-    /// While a name is still being typed after "/review with " (nothing after it yet): the
-    /// longer names it's the start of ("Claude" of "Claude Sonnet 4.5"), still to be offered.
+    /// While a name is still being typed after "with " (nothing after it yet): the longer names
+    /// it's the start of ("Claude" of "Claude Sonnet 4.5"), still to be offered.
     public static func longer(than rest: String, readers: [Reader]) -> [Reader] {
-        guard rest.last?.isWhitespace == false else { return [] }
-        let words = rest.drop { $0.isWhitespace }
-        guard words.lowercased().hasPrefix("with"), words.dropFirst(4).first?.isWhitespace == true else { return [] }
-        let typed = words.dropFirst(4).drop { $0.isWhitespace }.lowercased()
+        guard let typed = ReviewCommand(rest, readers: readers).readerTyped?.lowercased() else { return [] }
         return readers.filter { $0.name.count > typed.count && $0.name.lowercased().hasPrefix(typed) }
     }
 
-    /// What "Who reads it" writes after "/review ", for `reader`.
+    /// What the model list writes after "/review ", for `reader`.
     public static func phrase(_ reader: Reader) -> String {
         "with " + reader.name
     }

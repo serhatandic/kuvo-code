@@ -204,12 +204,88 @@ public enum ReviewScope: Codable, Sendable, Hashable {
     }
 }
 
+extension ReviewScope {
+    /// As the review's line and its footnote say it: "The whole project", "Commits since abc1234".
+    public var title: String {
+        switch self {
+        case .uncommitted: "Changes not committed yet"
+        case .branch(let base): base.map { "This branch against \($0)" } ?? "This branch"
+        case .commits(let from, let to):
+            from.hasSuffix("^") && to == nil ? "Commits since \(from.dropLast())" : "Commits \(from)..\(to ?? "HEAD")"
+        case .folder(let path): path
+        case .project: "The whole project"
+        }
+    }
+}
+
+extension ReviewCommand.Preset {
+    /// As "Look for" lists it.
+    public var title: String {
+        switch self {
+        case .security: "Security"
+        case .performance: "Performance"
+        case .accessibility: "Accessibility"
+        }
+    }
+}
+
 /// How much a review of a scope would read: its files, and the parts it reads them in.
 public struct ReviewSize: Codable, Sendable, Hashable {
     public var files: Int
     public var parts: Int
     /// Files past what a review reads, left out.
     public var leftOut: Int
+    /// A branch's or a range's commits.
+    public var commits: Int?
+
+    public init(files: Int, parts: Int, leftOut: Int = 0, commits: Int? = nil) {
+        self.files = files
+        self.parts = parts
+        self.leftOut = leftOut
+        self.commits = commits
+    }
+}
+
+/// What "What to review" offers in a conversation's folder: the branch it's on (none on its base
+/// itself), its latest commits and its folders.
+public struct ReviewChoices: Codable, Sendable, Hashable {
+    public var repository: Bool
+    public var branch: Branch?
+    public var commits: [Commit]
+    public var folders: [Folder]
+
+    public struct Branch: Codable, Sendable, Hashable {
+        public var name: String
+        /// What it's compared with ("main").
+        public var base: String
+        /// Its own, since it left `base`.
+        public var commits: Int
+    }
+
+    public struct Commit: Codable, Sendable, Hashable, Identifiable {
+        public var id: String
+        public var short: String
+        public var title: String
+        /// In ms since 1970.
+        public var time: Double
+
+        public var date: Date { Date(timeIntervalSince1970: time / 1000) }
+    }
+
+    public struct Folder: Codable, Sendable, Hashable, Identifiable {
+        public var path: String
+        /// At any depth.
+        public var files: Int
+
+        public var id: String { path }
+    }
+
+    public init(repository: Bool, branch: Branch? = nil, commits: [Commit] = [], folders: [Folder] = []) {
+        self.repository = repository
+        self.branch = branch
+        self.commits = commits
+        self.folders = folders
+    }
 }
 
 /// A review of a conversation's changes with fresh eyes ("/review").
@@ -262,6 +338,8 @@ public struct Review: Codable, Sendable, Hashable, Identifiable {
     public var focus: String?
     /// How far along one read in parts is, while it's under way.
     public var progress: Progress?
+    /// Where Stop ended one read in parts.
+    public var stopped: Progress?
     public struct Progress: Codable, Sendable, Hashable {
         public var read: Int
         public var of: Int
@@ -336,6 +414,11 @@ extension OpenCodeAPI {
     public func measureReview(session: String, scope: ReviewScope) async throws -> ReviewSize {
         struct Body: Encodable { var scope: ReviewScope }
         return try await client.send(try client.request("POST", "api/kuvo/reviews/\(session.pathEscaped)/measure", body: Body(scope: scope)), as: DataEnvelope<ReviewSize>.self).data
+    }
+
+    /// What "What to review" offers in `session`'s folder.
+    public func reviewChoices(session: String) async throws -> ReviewChoices {
+        try await client.send(try client.request("GET", "api/kuvo/reviews/\(session.pathEscaped)/choices"), as: DataEnvelope<ReviewChoices>.self).data
     }
 
     /// Ends a review under way where it is, keeping what it found so far.
