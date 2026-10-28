@@ -6322,11 +6322,11 @@ async function changeBot(id, given, readEngine, readBridge, machine, signal) {
     }
     const session = encodeURIComponent(here.session);
     if (renamed)
-      await call(target, "PATCH", `/api/session/${session}`, { title: changed.name }, signal).catch(() => {});
+      await call(target, "PATCH", `/api/session/${session}`, { title: changed.name }, AbortSignal.timeout(BOT_STEP)).catch(() => {});
     if (switched && changed.model)
-      await call(target, "POST", `/api/session/${session}/model`, { model: changed.model }, signal).catch(() => {});
+      await call(target, "POST", `/api/session/${session}/model`, { model: changed.model }, AbortSignal.timeout(BOT_STEP)).catch(() => {});
     if (retold)
-      await tellBot(target, here, here.session, toldNow(kit, here, changed), signal);
+      await tellBot(target, here, here.session, toldNow(kit, here, changed), AbortSignal.timeout(BOT_STEP));
     noteBotsChanged();
   }
   return { status: 200, value: { bot: listBots(machine).find((each) => each.id === id) ?? null } };

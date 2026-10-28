@@ -554,6 +554,24 @@ test("with the Mac closed, a bot here is changed from a phone as Edit Bot change
   }
 });
 
+test("a bot changed from a phone that leaves mid-way has its conversation told all of it: its new name, model and words, not only its details", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  const folder = bot("bot_scout00001");
+  const gone = new AbortController();
+  // The phone goes once its details are saved, as its conversation is renamed.
+  const engine = await makingEngine(["opencode", "anthropic"], {}, request => { if (request.method === "PATCH" && request.body?.title) gone.abort(); });
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+    await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", { name: "Scout Prime", model: { id: "opus", providerID: "anthropic" } }, gone.signal);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).name, "Scout Prime");
+    const heard = told(engine.asked, "ses_bot_scout00001");
+    assert.deepEqual(heard.model, { id: "opus", providerID: "anthropic" }, "its conversation runs on the new model");
+    assert.match(heard.instructions ?? "", /^You are Scout Prime/, "and is told its new name");
+  } finally {
+    engine.close();
+  }
+});
+
 test("a change that can't be is said, and nothing changes", async () => {
   write(path.join(bots, "kit.json"), JSON.stringify(kit));
   const folder = bot("bot_scout00001");

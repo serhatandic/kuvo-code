@@ -128,11 +128,12 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
     } catch (error) {
       return no(503, `The bot couldn’t be changed: ${(error as Error | null)?.message ?? error}`);
     }
-    // Its conversation hears of a new name, personality or model, as from Edit Bot.
+    // Its conversation hears of a new name, personality or model, as from Edit Bot: all of it, once
+    // its details are saved, whatever becomes of the phone's request.
     const session = encodeURIComponent(here.session);
-    if (renamed) await call(target, "PATCH", `/api/session/${session}`, { title: changed.name }, signal).catch(() => {});
-    if (switched && changed.model) await call(target, "POST", `/api/session/${session}/model`, { model: changed.model }, signal).catch(() => {});
-    if (retold) await tellBot(target, here, here.session, toldNow(kit, here, changed), signal);
+    if (renamed) await call(target, "PATCH", `/api/session/${session}`, { title: changed.name }, AbortSignal.timeout(BOT_STEP)).catch(() => {});
+    if (switched && changed.model) await call(target, "POST", `/api/session/${session}/model`, { model: changed.model }, AbortSignal.timeout(BOT_STEP)).catch(() => {});
+    if (retold) await tellBot(target, here, here.session, toldNow(kit, here, changed), AbortSignal.timeout(BOT_STEP));
     noteBotsChanged();
   }
   return { status: 200, value: { bot: listBots(machine).find(each => each.id === id) ?? null } satisfies ChangedBot };
