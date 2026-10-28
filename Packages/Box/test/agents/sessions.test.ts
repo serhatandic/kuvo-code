@@ -1389,6 +1389,29 @@ describe("commands you run yourself", () => {
     expect(shells()[1].output.output.length).toBeLessThanOrEqual(50_000)
   })
 
+  test("one still running stops with its session: deleted, or the bridge closing", async () => {
+    const running = (pid: number) => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    for (const end of ["deleted", "closed"] as const) {
+      const folder = mkdtempSync(join(root, "project-"))
+      const id = sessions.create({ model: { providerID: "alpha", id: "one" }, location: { directory: folder } }).id
+      // A server you started, say: it runs on until it's stopped.
+      sessions.runShell(id, "sleep 60 & echo $! > pid; wait")
+      await until(() => existsSync(join(folder, "pid")) && readFileSync(join(folder, "pid"), "utf8").endsWith("\n"))
+      const pid = Number(readFileSync(join(folder, "pid"), "utf8"))
+      expect(running(pid)).toBe(true)
+      if (end === "deleted") await sessions.remove(id)
+      else sessions.closeAll()
+      await until(() => !running(pid))
+    }
+  })
+
   test("one run while the agent works reaches it with your next message", async () => {
     const folder = mkdtempSync(join(root, "project-"))
     a.script = works

@@ -159,7 +159,7 @@ const shellOutputLimit = 50_000
  * (its end, when there's a lot), kept as it comes; stopped whole when it runs too long. Its output
  * stops being waited for a moment after it ends (a job it left running may keep it open).
  */
-export function runCommand(command: string, directory: string): Promise<{ code: number; output: string; truncated: boolean; timedOut: boolean }> {
+export function runCommand(command: string, directory: string, started: (stop: () => void) => void = () => {}): Promise<{ code: number; output: string; truncated: boolean; timedOut: boolean }> {
   return new Promise((resolve) => {
     let output = ""
     let truncated = false
@@ -201,6 +201,7 @@ export function runCommand(command: string, directory: string): Promise<{ code: 
       group("SIGTERM")
       setTimeout(() => group("SIGKILL"), 5_000)
     }, shellTimeout)
+    started(() => group("SIGTERM"))
     child.stdout?.on("data", take)
     child.stderr?.on("data", take)
     child.on("error", (error) => {
@@ -741,6 +742,8 @@ function didWork(message: Message): boolean {
 
 export class Sessions {
   private live = new Map<string, Live>()
+  /** Your `!` commands still running, by session: each stops (its whole group) with its session. */
+  private shells = new Map<string, Set<() => void>>()
 
   constructor(
     private readonly store: Store,
@@ -1059,6 +1062,7 @@ export class Sessions {
     for (const child of this.list(undefined, id)) if (!this.shownElsewhere(child.id, id)) await this.remove(child.id)
     for (const thread of live.threads.values()) thread.close()
     for (const [provider, slot] of Object.entries(this.slots(record))) await this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {})
+    this.stopShells(id)
     this.store.remove(id)
     this.live.delete(id)
     emit("session.deleted", { sessionID: id }, record.session.location.directory)
@@ -1109,7 +1113,15 @@ export class Sessions {
     // Run while an agent works: it hasn't seen it when its turn ends, and gets it with your next message.
     if (this.atWork(id)) record.agent.lateShells = [...((record.agent.lateShells as string[] | undefined) ?? []), message.id]
     this.store.save(id, true)
-    void runCommand(text, directory).then((ran) => {
+    let stop = () => {}
+    const running = this.shells.get(id) ?? new Set<() => void>()
+    this.shells.set(id, running)
+    void runCommand(text, directory, (given) => {
+      stop = given
+      running.add(stop)
+    }).then((ran) => {
+      running.delete(stop)
+      if (!running.size && this.shells.get(id) === running) this.shells.delete(id)
       message.status = ran.code === 0 && !ran.timedOut ? "completed" : "failed"
       message.exit = ran.code
       message.output = { output: ran.timedOut ? `${ran.output}\n(Stopped: it ran past ${shellTimeout / 60_000} minutes.)`.trim() : ran.output, truncated: ran.truncated }
@@ -2467,8 +2479,16 @@ export class Sessions {
     emit(answer ? "form.replied" : "form.cancelled", { id: formID, sessionID: id }, this.record(id).session.location.directory)
   }
 
-  /** The bridge is stopping: every turn ends as stopped, and every agent's conversation closes. */
+  /** A session's `!` commands still running, stopped. */
+  private stopShells(id: string) {
+    for (const stop of this.shells.get(id) ?? []) stop()
+    this.shells.delete(id)
+  }
+
+  /** The bridge is stopping: every turn ends as stopped, every agent's conversation closes, and
+   * your `!` commands still running stop. */
   closeAll() {
+    for (const id of [...this.shells.keys()]) this.stopShells(id)
     for (const [id, live] of this.live) {
       live.go = false
       live.own = undefined

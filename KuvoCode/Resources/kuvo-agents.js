@@ -12583,7 +12583,7 @@ var timing = { stopGrace: 8000, idleClose: 15 * 60000, cutShort: 2 * 60000 };
 var changes2 = new Set(["edit", "write", "patch"]);
 var shellTimeout = 10 * 60000;
 var shellOutputLimit = 50000;
-function runCommand(command, directory) {
+function runCommand(command, directory, started = () => {}) {
   return new Promise((resolve6) => {
     let output = "";
     let truncated = false;
@@ -12627,6 +12627,7 @@ function runCommand(command, directory) {
       group("SIGTERM");
       setTimeout(() => group("SIGKILL"), 5000);
     }, shellTimeout);
+    started(() => group("SIGTERM"));
     child.stdout?.on("data", take);
     child.stderr?.on("data", take);
     child.on("error", (error) => {
@@ -13110,6 +13111,7 @@ class Sessions {
   snapshots;
   titleModel;
   live = new Map;
+  shells = new Map;
   constructor(store, roster, auto, engine, policies, agentInfo, snapshots, titleModel) {
     this.store = store;
     this.roster = roster;
@@ -13393,6 +13395,7 @@ class Sessions {
       thread.close();
     for (const [provider, slot] of Object.entries(this.slots(record2)))
       await this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {});
+    this.stopShells(id);
     this.store.remove(id);
     this.live.delete(id);
     emit("session.deleted", { sessionID: id }, record2.session.location.directory);
@@ -13439,7 +13442,16 @@ class Sessions {
     if (this.atWork(id))
       record2.agent.lateShells = [...record2.agent.lateShells ?? [], message.id];
     this.store.save(id, true);
-    runCommand(text2, directory).then((ran) => {
+    let stop = () => {};
+    const running = this.shells.get(id) ?? new Set;
+    this.shells.set(id, running);
+    runCommand(text2, directory, (given) => {
+      stop = given;
+      running.add(stop);
+    }).then((ran) => {
+      running.delete(stop);
+      if (!running.size && this.shells.get(id) === running)
+        this.shells.delete(id);
       message.status = ran.code === 0 && !ran.timedOut ? "completed" : "failed";
       message.exit = ran.code;
       message.output = { output: ran.timedOut ? `${ran.output}
@@ -14736,7 +14748,14 @@ ${live.agentPrompt}` : ""
     pending.resolve(answer);
     emit(answer ? "form.replied" : "form.cancelled", { id: formID, sessionID: id }, this.record(id).session.location.directory);
   }
+  stopShells(id) {
+    for (const stop of this.shells.get(id) ?? [])
+      stop();
+    this.shells.delete(id);
+  }
   closeAll() {
+    for (const id of [...this.shells.keys()])
+      this.stopShells(id);
     for (const [id, live] of this.live) {
       live.go = false;
       live.own = undefined;
@@ -19980,4 +19999,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 80ba8e4ab84b4b0827854bb583efcdf89889e4beec57ecd944a84fa822433a53
+// Built from Packages/Box/src/agents 50022ee741d7435934a88a3ca2ce0430ff3673831cd1f028645b6c94c433f47b
