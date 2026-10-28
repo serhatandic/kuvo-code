@@ -162,6 +162,8 @@ nonisolated enum RouteScenarios {
             ("asks before a push, never touches secrets", [PermissionRule(action: "shell", resource: "git push *", effect: .ask), PermissionRule(action: "edit", resource: "secrets/*", effect: .deny)]),
             ("allows every folder and npm test", [PermissionRule(action: "external_directory", effect: .allow), PermissionRule(action: "shell", resource: "npm test *", effect: .allow)]),
             ("a folder of its own, asks before fetching", [PermissionRule(action: "external_directory", resource: "/srv/data/*", effect: .allow), PermissionRule(action: "webfetch", effect: .ask)]),
+            // One a newer engine set, of a kind this app doesn't know: held back, and kept as it is.
+            ("a newer engine's rule, and asks before a push", [PermissionRule(action: "shell", resource: "rm *", effect: .unknown("deny-forever")), PermissionRule(action: "shell", resource: "git push *", effect: .ask), PermissionRule(action: "edit", resource: "secrets/*", effect: .deny)]),
         ]
         let currents: [(String, [PermissionRule])] = [
             ("asks first", ToolApproval.askFirst.rules(settings: []) + [folder]),
