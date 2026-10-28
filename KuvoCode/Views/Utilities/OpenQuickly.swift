@@ -80,7 +80,9 @@ struct OpenQuickly: View {
             return .handled
         }
         .onChange(of: query) { selected = 0 }
-        .onAppear { isFocused = true }
+        .onAppear {
+            DispatchQueue.main.async { isFocused = true }
+        }
         .task {
             let roots = roots.map(RemoteFolder.url)
             files = await Task.detached { ProjectFiles.newestFirst(ProjectFiles.list(roots, dated: true)) }.value

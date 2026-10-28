@@ -130,7 +130,7 @@ struct CommandPalette: View {
         .onChange(of: query) { selected = 0 }
         .onAppear {
             if query.isEmpty { query = initialQuery }
-            isFocused = true
+            DispatchQueue.main.async { isFocused = true }
         }
         .task {
             guard !roots.isEmpty else { return }
