@@ -1553,6 +1553,8 @@ private struct AgentSentRow: View {
         // As it may have been named: "&Mira".
         let to = input?["to"]?.string.map { $0.hasPrefix("&") ? String($0.dropFirst()) : $0 } ?? "another agent"
         let address = AgentMail.shared.directory().first { $0.session == to || $0.name.caseInsensitiveCompare(to) == .orderedSame }
+            // One the list leaves out (untitled, older than the latest it names): as this Mac has it.
+            ?? app.workspace.session(to).map { AgentMail.Agent(session: $0.id, name: $0.title.flatMap { $0.isEmpty ? nil : $0 } ?? "New session", kind: "session") }
         let text = input?["text"]?.string ?? ""
         let answer = said.flatMap { said in said.range(of: " answered:\n\n").map { String(said[$0.upperBound...]) } }
         FoldingCard(id: call.id, summary: text, startsOpen: FoldingCard<EmptyView, EmptyView, EmptyView>.isShort(text + (answer ?? "")), help: "A message this agent sent another") {

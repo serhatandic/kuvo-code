@@ -132,8 +132,8 @@ import Testing
 
     /// The letters an earlier Kuvo Code delivered itself go to this Mac's box as the app starts,
     /// before its link meets your other computers (a letter sent again isn't delivered twice), and
-    /// so do the messages it kept for a machine that was away: wired as the app wires them, before
-    /// its machines start.
+    /// so do the messages it kept for a machine that was away, once that machine is set up for
+    /// them: wired as the app wires them, before its machines start.
     @Test func lettersAnEarlierVersionDeliveredGoToTheBoxBeforeItsLinkMeetsAnyone() async throws {
         let seen = AgentMail.seenFile
         try FileManager.default.createDirectory(at: seen.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -161,6 +161,7 @@ import Testing
         // Its link up, trying the relay: what was kept went first.
         try await until { if case .failed(let reason) = link.status { reason.contains("relay") } else { false } }
         #expect(!FileManager.default.fileExists(atPath: seen.path), "handed to the box")
-        #expect(!FileManager.default.fileExists(atPath: waiting.path), "handed to the box too")
+        // Its machine isn't set up for your other computers (yet): it stays, for a later start.
+        #expect(JSONFile.read([AgentMail.Waiting].self, from: waiting) == [AgentMail.Waiting(from: "ses_here", name: "Here", to: "ses_there", machine: "gone.invalid", text: "Hi")])
     }
 }

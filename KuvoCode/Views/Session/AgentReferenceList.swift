@@ -14,12 +14,12 @@ import SwiftUI
     @ObservationIgnored fileprivate var typed: String?
 
     /// The agents the "&" being typed at the end of `text` matches, while its list is open; not
-    /// the conversation `excluding`, which the message is written in, nor one `reaching` says the
-    /// message can't name.
-    func matches(in text: String, excluding: String?, reaching: (AgentMail.Agent) -> Bool = { _ in true }) -> [AgentMail.Agent]? {
+    /// the conversation `excluding`, which the message is written in. `from`: those its message
+    /// can name, when not everyone this Mac's box names (a group chat's on a machine: its box's).
+    func matches(in text: String, excluding: String?, from list: [AgentMail.Agent]? = nil) -> [AgentMail.Agent]? {
         guard !text.hasPrefix("!"), let (query, start) = AgentReferences.query(in: text),
               text.distance(from: text.startIndex, to: start) != dismissed else { return nil }
-        let found = AgentReferences.matches(query, in: AgentReferences.candidates(excluding: excluding).filter(reaching))
+        let found = AgentReferences.matches(query, in: list?.filter { $0.session != excluding } ?? AgentReferences.candidates(excluding: excluding))
         return found.isEmpty ? nil : found
     }
 
@@ -47,8 +47,8 @@ import SwiftUI
     /// A key of a composer's field while its "&" list is open: ↑ and ↓ choose, Return and Tab name
     /// the one chosen, Escape closes it. False for the field's own keys. The composer asks this
     /// before its own keys.
-    func key(_ key: MessageField.Key, text: Binding<String>, excluding: String?, reaching: (AgentMail.Agent) -> Bool = { _ in true }) -> Bool {
-        guard let matches = matches(in: text.wrappedValue, excluding: excluding, reaching: reaching) else { return false }
+    func key(_ key: MessageField.Key, text: Binding<String>, excluding: String?, from list: [AgentMail.Agent]? = nil) -> Bool {
+        guard let matches = matches(in: text.wrappedValue, excluding: excluding, from: list) else { return false }
         switch key.name {
         case .return where key.modifiers.isEmpty, .tab:
             insert(matches[min(selected, matches.count - 1)], into: text)

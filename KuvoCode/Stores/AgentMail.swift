@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import KuvoLink
 import os
@@ -81,13 +82,13 @@ final class AgentMail {
     /// Everyone, as this Mac's box last said.
     func directory() -> [Agent] { agents }
 
-    /// Who there is now, as this Mac's box says (not waited for long: as it was a minute ago
-    /// otherwise).
-    func refresh() async {
+    /// Who there is now, as this Mac's box says (not waited for long, `within` seconds: as it was a
+    /// minute ago otherwise).
+    func refresh(within seconds: Double = 3) async {
         asked = .now
         guard let client = box() else { return }
         struct Named: Decodable { var agents: [Agent] }
-        guard let answer = await Self.within(3, { try? await client.send("GET", "kuvo/named") }), answer.status == 200,
+        guard let answer = await Self.within(seconds, { try? await client.send("GET", "kuvo/named") }), answer.status == 200,
               let named = try? JSONDecoder().decode(Named.self, from: answer.body) else { return }
         if named.agents != agents { agents = named.agents }
     }
@@ -116,15 +117,6 @@ final class AgentMail {
         return "\(agent.kind), \(place)" + (agent.project.map { ", in \($0)" } ?? "")
     }
 
-    /// Whether a group chat on `chat`'s computer (nil: this Mac) can name `agent`: its own, and the
-    /// agents of computers it meets at the relay.
-    func reachable(_ agent: Agent, fromChatOn chat: String?) -> Bool {
-        guard let link = app?.phoneLink else { return true }
-        if let chat, !link.talksToPeers(chat) { return true }
-        guard let machine = agent.machine, machine != chat else { return true }
-        return link.talksToPeers(machine)
-    }
-
     // MARK: The tools
 
     /// A tool's call from one of this Mac's conversations (`caller`; nil from outside one): this
@@ -151,8 +143,8 @@ final class AgentMail {
         }
         let failed = said?.isError ?? false
         if !failed { track(name, arguments) }
-        // A session started, or a message sent, names someone new: there as you name them.
-        if !failed, name == "start_session" { await refresh() }
+        // A session started: there as you name it.
+        if !failed, name == "start_session" { Task { await refresh() } }
         return (text, failed)
     }
 
@@ -200,7 +192,7 @@ extension AgentMail {
     // MARK: What an earlier Kuvo Code kept
 
     /// A message an earlier Kuvo Code kept for an agent whose machine was away, until it was back.
-    struct Waiting: Codable {
+    struct Waiting: Codable, Equatable {
         var from: String?
         var name: String
         var to: String
@@ -227,7 +219,8 @@ extension AgentMail {
     /// Its letters on their way, the messages it kept for a machine that was away, and the letters
     /// it delivered (so one sent again isn't twice), to this Mac's box (`client`), which sends and
     /// takes them now: before it meets your other computers (`PhoneLink.follow`). Its files go once
-    /// the box has them. What it was told of your other computers' agents just goes: they tell the
+    /// the box has them; a message for a machine not set up for your other computers yet stays
+    /// for a later start. What it was told of your other computers' agents just goes: they tell the
     /// box again.
     func handOver(to client: BoxClient) async {
         guard let app else { return }
@@ -243,10 +236,19 @@ extension AgentMail {
         let letters = mailing.compactMap { letter in
             app.phoneLink.key(of: letter.machine).map { Letter(id: letter.id, from: letter.from, to: letter.to, text: letter.text, peer: $0, at: letter.at, answers: letter.answers) }
         } + waiting.compactMap { message in
-            app.phoneLink.key(of: message.machine).map { Letter(id: "wtg_" + UUID().uuidString.replacingOccurrences(of: "-", with: ""), from: message.from, to: message.to, text: message.text, peer: $0, at: now) }
+            // The same each time it's handed over, so one the box has already isn't sent twice.
+            let id = "wtg_" + SHA256.hash(data: Data([message.from ?? "", message.to, message.text].joined(separator: "\u{0}").utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+            return app.phoneLink.key(of: message.machine).map { Letter(id: id, from: message.from, to: message.to, text: message.text, peer: $0, at: now) }
         }
         guard let (status, _) = try? await client.send("POST", "kuvo/link/letters/take", body: try? JSONEncoder().encode(Taken(letters: letters, seen: seen))),
               status == 200 else { return }
-        for file in [Self.mailingFile, Self.seenFile, Self.waitingFile] { try? FileManager.default.removeItem(at: file) }
+        for file in [Self.mailingFile, Self.seenFile] { try? FileManager.default.removeItem(at: file) }
+        let left = waiting.filter { app.phoneLink.key(of: $0.machine) == nil }
+        if left.isEmpty {
+            try? FileManager.default.removeItem(at: Self.waitingFile)
+        } else {
+            log.error("\(left.count, privacy: .public) messages for agents on machines not set up for your other computers yet wait for a later start")
+            JSONFile.write(left, to: Self.waitingFile)
+        }
     }
 }

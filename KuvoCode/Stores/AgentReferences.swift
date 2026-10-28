@@ -29,14 +29,12 @@ nonisolated enum AgentReferences {
         return (String(query), at)
     }
 
-    /// The agents "&" offers: every bot, and the recent sessions that have a name, but not the
-    /// conversation it's written in (nor its group chat's seats, which aren't listed).
+    /// The agents "&" offers: every bot, and the recent sessions that have a name, wherever they
+    /// are (as this Mac's box names them), but not the conversation it's written in (nor its group
+    /// chat's seats, which aren't listed).
     @MainActor static func candidates(excluding session: String?) -> [AgentMail.Agent] {
-        let workspace = AgentMail.shared.app?.workspace
         AgentMail.shared.refreshSoon()
-        return AgentMail.shared.directory().filter { agent in
-            agent.session != session && (agent.kind == "bot" || workspace?.session(agent.session)?.title?.isEmpty == false)
-        }
+        return AgentMail.shared.directory().filter { $0.session != session }
     }
 
     /// The best matches first: the name itself, then names starting with it, then a word in the

@@ -1,6 +1,7 @@
 import Foundation
 import KuvoLink
 import OpenCodeKit
+import os
 import Testing
 @testable import KuvoCode
 
@@ -47,7 +48,7 @@ import Testing
         let prompt = try #require(engine.requests("POST", "/api/session/ses_notes/prompt").last)
         #expect(prompt.body["text"] as? String == "[Message from Lead · ses_lead] (To answer, use send_message to ses_lead.)\n\nAdd the iPhone fixes.")
         // And who there is, for "&", as the box says.
-        await AgentMail.shared.refresh()
+        await AgentMail.shared.refresh(within: 60)
         let listed = AgentMail.shared.directory().filter { ["ses_lead", "ses_notes"].contains($0.session) }
         #expect(listed.map(\.name).sorted() == ["Lead", "Release notes"])
         #expect(listed.allSatisfy { $0.machine == nil && $0.kind == "session" })
@@ -68,11 +69,17 @@ import Testing
         #expect(task == "[Message from Lead · ses_lead] (To answer, use send_message to ses_lead.)\n\nReview the docs.")
     }
 
-    /// Without this Mac's box (it's starting), the agent's told to try again, not left waiting.
-    @Test func withoutTheBoxTheAgentIsToldToTryAgain() async {
+    /// This Mac's box not running (it's starting again): the agent's told so, to try again, not
+    /// left waiting.
+    @Test func withoutTheBoxTheAgentIsToldToTryAgain() async throws {
         defer { engine.stop() }
-        AgentMail.shared.box = { nil }
+        let before = PhoneLink.box.withLock { $0 }
+        PhoneLink.box.withLock { $0 = nil }
+        defer { PhoneLink.box.withLock { $0 = before } }
+        let base = try #require(URL(string: engine.url + "/"))
+        AgentMail.shared.box = { BoxClient(box: BoxClient.mac, transport: LocalBox { PhoneLink.respond(to: $0, link: nil, engine: base, password: "test", agents: nil) }) }
+        defer { AgentMail.shared.box = { nil } }
         let said = await AgentMail.shared.call("list_agents", arguments: [:], caller: "ses_lead")
-        #expect(said.isError)
+        #expect(said == (text: "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment.", isError: true))
     }
 }
