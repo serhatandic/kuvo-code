@@ -274,3 +274,20 @@ test("a move under way from one computer can't be taken over by another", async 
   assert.deepEqual((await ask("GET", "kuvo/moves")).json.moves.map(move => move.id), ["mov_one1"], "lab's move is as it was");
   await say({ op: "drop", id: "mov_one1" });
 });
+
+test("a copy on its way when this box starts again goes on from the parts it had", async () => {
+  const thing = "ses_restart1";
+  // Big enough for two parts (30,000 bytes each), as the box it comes from sends them.
+  const { bytes, hash } = bundleFor(thing, [{ info: { id: thing, title: "Notes" }, messages: [] }], { "notes.txt": crypto.randomBytes(40_000).toString("base64") });
+  assert.ok(bytes.length > 30_000 && bytes.length <= 60_000, `${bytes.length} bytes`);
+  const id = "mov_restart1";
+  const part = i => ({ op: "part", id, hash, i, of: 2, d: bytes.subarray(i * 30_000, (i + 1) * 30_000).toString("base64url") });
+  await say({ op: "offer", id, kind: "chat", thing, name: "“Notes”", size: bytes.length, hash, wasPaused: false, from: peerKey });
+  await say(part(0));
+  // This box starts again; the other sends the part it had no answer for.
+  link.forgetMovesInMemory();
+  await say(part(1));
+  await until(() => told.some(move => move.id === id && move.op === "arrived"));
+  assert.ok(engine.sessions.has(thing));
+  await say({ op: "drop", id });
+});

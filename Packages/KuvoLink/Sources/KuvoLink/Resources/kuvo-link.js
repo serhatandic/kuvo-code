@@ -7488,6 +7488,25 @@ async function restore(record, message) {
   ended(record.id, { ok: false, status: 409, message });
 }
 var incoming = new Map;
+function partsOf(id) {
+  let parts = incoming.get(id);
+  if (!parts) {
+    parts = new Set;
+    try {
+      for (const line of fs38.readFileSync(path38.join(bundleOf(id), "got"), "utf8").split(`
+`))
+        if (/^\d+$/.test(line))
+          parts.add(Number(line));
+    } catch {}
+    incoming.set(id, parts);
+  }
+  return parts;
+}
+function forgetMovesInMemory() {
+  incoming.clear();
+  outgoing.clear();
+  heard.clear();
+}
 async function takeOffer(sender, given) {
   const id = String(given.id);
   const answer = (move) => tell(sender.key, { id, ...move });
@@ -7583,8 +7602,7 @@ async function takePart(sender, given) {
   const expected = Math.ceil((record?.size ?? 0) / PART_BYTES);
   if (!record || record.role !== "to" || record.complete || record.peer !== sender.key || record.hash !== given.hash || !Number.isInteger(i) || of !== expected || i < 0 || i >= expected || typeof given.d !== "string" || given.d.length > Math.ceil(PART_BYTES * 4 / 3))
     return;
-  const parts = incoming.get(id) ?? new Set;
-  incoming.set(id, parts);
+  const parts = partsOf(id);
   const bytes = Buffer.from(given.d, "base64url");
   const file = path38.join(bundleOf(id), "bundle.tgz");
   const handle = fs38.openSync(file, fs38.existsSync(file) ? "r+" : "w", 384);
@@ -7593,7 +7611,11 @@ async function takePart(sender, given) {
   } finally {
     fs38.closeSync(handle);
   }
-  parts.add(i);
+  if (!parts.has(i)) {
+    parts.add(i);
+    fs38.appendFileSync(path38.join(bundleOf(id), "got"), `${i}
+`, { mode: 384 });
+  }
   tell(sender.key, { op: "got", id, i });
   if (parts.size % 32 === 0 || parts.size === of)
     changeMove(id, (each) => {
@@ -12508,6 +12530,7 @@ export {
   foldPhones,
   followed,
   forgetLeftKeys,
+  forgetMovesInMemory,
   forgetOldMacs,
   forgetPhones,
   forgetPlan,

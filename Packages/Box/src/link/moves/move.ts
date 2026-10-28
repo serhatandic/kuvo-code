@@ -433,8 +433,26 @@ async function restore(record: MoveRecord, message: string): Promise<void> {
 
 // ---- The box it goes to ----
 
-// What the box it goes to has of each bundle on its way: the parts written so far.
+// What the box it goes to has of each bundle on its way: the parts written so far (as its `got`
+// file says, after a restart).
 const incoming = new Map<string, Set<number>>();
+function partsOf(id: string): Set<number> {
+  let parts = incoming.get(id);
+  if (!parts) {
+    parts = new Set();
+    try { for (const line of fs.readFileSync(path.join(bundleOf(id), "got"), "utf8").split("\n")) if (/^\d+$/.test(line)) parts.add(Number(line)); } catch {}
+    incoming.set(id, parts);
+  }
+  return parts;
+}
+
+/** What this box keeps in memory of moves under way, gone, as it is when the bridge starts again
+ * (a test's restart). */
+export function forgetMovesInMemory(): void {
+  incoming.clear();
+  outgoing.clear();
+  heard.clear();
+}
 
 async function takeOffer(sender: MailSender, given: Record<string, unknown>): Promise<void> {
   const id = String(given.id);
@@ -508,13 +526,16 @@ async function takePart(sender: MailSender, given: Record<string, unknown>): Pro
   const expected = Math.ceil((record?.size ?? 0) / PART_BYTES);
   if (!record || record.role !== "to" || record.complete || record.peer !== sender.key || record.hash !== given.hash || !Number.isInteger(i) || of !== expected
     || (i as number) < 0 || (i as number) >= expected || typeof given.d !== "string" || given.d.length > Math.ceil(PART_BYTES * 4 / 3)) return;
-  const parts = incoming.get(id) ?? new Set<number>();
-  incoming.set(id, parts);
+  const parts = partsOf(id);
   const bytes = Buffer.from(given.d, "base64url");
   const file = path.join(bundleOf(id), "bundle.tgz");
   const handle = fs.openSync(file, fs.existsSync(file) ? "r+" : "w", 0o600);
   try { fs.writeSync(handle, bytes, 0, bytes.length, (i as number) * PART_BYTES); } finally { fs.closeSync(handle); }
-  parts.add(i as number);
+  if (!parts.has(i as number)) {
+    parts.add(i as number);
+    // Noted beside it too, so a restart here counts what came before.
+    fs.appendFileSync(path.join(bundleOf(id), "got"), `${i}\n`, { mode: 0o600 });
+  }
   tell(sender.key, { op: "got", id, i });
   if (parts.size % 32 === 0 || parts.size === of) changeMove(id, each => { each.sent = Math.min(each.size ?? 0, parts.size * PART_BYTES); });
   if (parts.size !== of) return;
