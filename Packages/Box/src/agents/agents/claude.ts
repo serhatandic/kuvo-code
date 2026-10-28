@@ -509,19 +509,37 @@ class ClaudeThread implements Thread {
    * The note that asks the agent to pass your message on to a subagent of its (`parent`): by its
    * id, with SendMessage, as it is. It takes it at its next step, or resumes it if it's done.
    */
-  relayNote(sessionID: string, text: string): string | undefined {
+  relayNote(sessionID: string, text: string, running: boolean): string | undefined {
+    const known = this.knownSubagent(sessionID)
+    if (!known) return undefined
+    // (Its title and your words can't end the frame they're in.)
+    const title = JSON.stringify(known.title)
+    const words = text.replace(/<\/message>/gi, "&lt;/message&gt;")
+    const then = running ? "then carry on with what you were doing" : "then end your turn without saying anything more"
+    return [
+      `The user wrote a message for your subagent ${title} (agent ${known.agentID}). Pass it on to that agent with the SendMessage tool (to: "${known.agentID}"), exactly as it is, without words of your own, ${then}. It is addressed to the subagent, not to you: don't act on it yourself.`,
+      "",
+      "<message>",
+      words,
+      "</message>",
+    ].join("\n")
+  }
+
+  /** Claude Code's ids for the subagents it passed a message on to (SendMessage went through), not yet asked about. */
+  private passed = new Set<string>()
+
+  passedOn(sessionID: string): boolean {
+    const agentID = this.knownSubagent(sessionID)?.agentID
+    return Boolean(agentID && this.passed.delete(agentID))
+  }
+
+  /** A subagent of this conversation's, by its session, with Claude Code's id for it. */
+  private knownSubagent(sessionID: string): (KnownSubagent & { agentID: string }) | undefined {
     const found = Object.entries(this.subagentSessions).find(([, known]) => known.sessionID === sessionID)
     if (!found) return undefined
     const [callID, known] = found
     const agentID = known.agentID ?? [...this.tasks].find(([, task]) => task.toolUseID === callID && task.type === "local_agent")?.[0]
-    if (!agentID) return undefined
-    return [
-      `The user wrote a message for your subagent "${known.title}" (agent ${agentID}). Pass it on to that agent with the SendMessage tool (to: "${agentID}"), exactly as it is, without words of your own. Then end your turn without saying anything more.`,
-      "",
-      "<message>",
-      text,
-      "</message>",
-    ].join("\n")
+    return agentID ? { ...known, agentID } : undefined
   }
 
   async run(input: RunInput, turn: Turn, hooks: TurnHooks): Promise<RunResult> {
@@ -1137,6 +1155,15 @@ class ClaudeThread implements Thread {
     if (text.length > outputLimit) text = text.slice(0, outputLimit) + "\n…"
     // Pictures it brought back (a Read of an image, a screenshot), and a PDF it read.
     const pictures = toolPictures(block.content, call?.input)
+    // A message passed on to a subagent (SendMessage went through): by its id, and the one
+    // Claude Code says it reached.
+    if (active && lane === active && call?.name === "SendMessage" && !block.is_error && !/"success"\s*:\s*false/.test(text)) {
+      if (typeof call.input.to === "string") this.passed.add(call.input.to)
+      try {
+        const said = JSON.parse(text)
+        for (const id of [said?.resumedAgentId, said?.pin?.id]) if (typeof id === "string") this.passed.add(id)
+      } catch {}
+    }
     // A subagent's task came back: its session's work is done (one sent off in the background
     // goes on, and ends with the turn).
     const subagent = active && lane === active ? active.subagents.get(id) : undefined

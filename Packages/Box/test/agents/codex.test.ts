@@ -466,10 +466,12 @@ describe("Codex's agents in the background", () => {
 
 /**
  * A Codex whose turn spawns an agent (thread t2) that goes on after it (or is done by the turn's
- * end, `done`), saying whether it takes your messages (`direct`): it answers one into its turn
- * ("Heard: …"), or a turn of its own once it's done ("Again: …"). What it's sent is kept.
+ * end, `done`), saying whether it takes your messages (`direct`; unsaid, an older Codex): it
+ * answers one into its turn ("Heard: …"), or a turn of its own once it's done ("Again: …"). With
+ * `racing`, its turn ends just as a message comes, which turn/steer then turns away. A new
+ * app-server (a restart) has to load t2 again before it takes a turn. What it's sent is kept.
  */
-function messagedCodex(folder: string, direct: boolean, done: boolean): string {
+function messagedCodex(folder: string, direct: boolean | undefined, done: boolean, racing = false): string {
   const script = join(folder, "app-server.js")
   writeFileSync(
     script,
@@ -477,6 +479,7 @@ function messagedCodex(folder: string, direct: boolean, done: boolean): string {
 const { appendFileSync } = require("node:fs")
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n")
 const said = (text, turnId) => send({ method: "item/completed", params: { threadId: "t2", turnId, item: { type: "agentMessage", id: "a" + Math.random(), text } } })
+const loaded = new Set()
 process.stdin.on("data", (chunk) => {
   buffer += chunk
   let at
@@ -487,7 +490,14 @@ process.stdin.on("data", (chunk) => {
     appendFileSync(${JSON.stringify(join(folder, "sent.jsonl"))}, line + "\\n")
     const message = JSON.parse(line)
     if (message.method === "thread/start") send({ id: message.id, result: { thread: { id: "t1" } } })
-    else if (message.method === "turn/start" && message.params.threadId === "t2") {
+    else if (message.method === "thread/resume" && message.params.threadId === "t2") {
+      loaded.add("t2")
+      send({ id: message.id, result: { thread: { id: "t2" } } })
+    } else if (message.method === "turn/start" && message.params.threadId === "t2") {
+      if (!loaded.has("t2")) {
+        send({ id: message.id, error: { code: -32600, message: "thread not found: t2" } })
+        continue
+      }
       send({ id: message.id, result: { turn: { id: "u3", status: "inProgress" } } })
       send({ method: "turn/started", params: { threadId: "t2", turn: { id: "u3" } } })
       said("Again: " + message.params.input[0].text, "u3")
@@ -495,7 +505,8 @@ process.stdin.on("data", (chunk) => {
     } else if (message.method === "turn/start") {
       send({ id: message.id, result: { turn: { id: "u1", status: "inProgress" } } })
       send({ method: "turn/started", params: { threadId: "t1", turn: { id: "u1" } } })
-      send({ method: "thread/started", params: { thread: { id: "t2", source: { subAgent: { thread_spawn: { parent_thread_id: "t1" } } }, canAcceptDirectInput: ${direct} } } })
+      loaded.add("t2")
+      send({ method: "thread/started", params: { thread: { id: "t2", source: { subAgent: { thread_spawn: { parent_thread_id: "t1" } } }${direct === undefined ? "" : `, canAcceptDirectInput: ${direct}`} } } })
       send({ method: "item/completed", params: { threadId: "t1", turnId: "u1", item: { type: "subAgentActivity", id: "sa1", kind: "started", agentThreadId: "t2", agentPath: "/root/worker" } } })
       send({ method: "turn/started", params: { threadId: "t2", turn: { id: "u2" } } })
       if (${done}) {
@@ -503,6 +514,9 @@ process.stdin.on("data", (chunk) => {
         send({ method: "turn/completed", params: { threadId: "t2", turn: { id: "u2", status: "completed" } } })
       }
       setTimeout(() => send({ method: "turn/completed", params: { threadId: "t1", turn: { id: "u1", status: "completed" } } }), 50)
+    } else if (message.method === "turn/steer" && message.params.threadId === "t2" && ${racing}) {
+      send({ id: message.id, error: { code: -32600, message: "no active turn to steer" } })
+      send({ method: "turn/completed", params: { threadId: "t2", turn: { id: "u2", status: "completed" } } })
     } else if (message.method === "turn/steer" && message.params.threadId === "t2") {
       send({ id: message.id, result: { turnId: "u2" } })
       said("Heard: " + message.params.input[0].text, "u2")
@@ -519,8 +533,8 @@ process.stdin.on("data", (chunk) => {
 }
 
 describe("Writing to an agent Codex spawned", () => {
-  async function spawn(direct: boolean, done: boolean) {
-    codex = new TestCodex(messagedCodex(root, direct, done), root)
+  async function spawn(direct: boolean | undefined, done: boolean, racing = false) {
+    codex = new TestCodex(messagedCodex(root, direct, done, racing), root)
     const agent = codex
     sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
     const id = sessions.create({ title: "Spawn", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: root } }).id
@@ -555,6 +569,35 @@ describe("Writing to an agent Codex spawned", () => {
     expect(idles(child).at(-1)).toMatchObject({ outcome: "succeeded" })
     expect(sent().find((message) => message.method === "turn/start" && message.params.threadId === "t2")).toBeTruthy()
     expect(idles(id)).toHaveLength(1)
+  })
+
+  test("its turn ending just as your message comes: a turn of its own takes it", async () => {
+    const { child } = await spawn(true, false, true)
+    sessions.prompt(child, { id: "msg_codex_child_04", text: "And the docs", files: [], delivery: "steer" })
+    await until(() => said(child).includes("Again: And the docs"))
+    expect(sessions.messages(child).some((message) => message.type === "synthetic")).toBe(false)
+  })
+
+  test("after the bridge starts again (Codex too), you still write to one that's done, in the same conversation", async () => {
+    const { child } = await spawn(true, true)
+    await until(() => idles(child).length === 1)
+    sessions.closeAll()
+    codex!.shutdown()
+    codex = new TestCodex(messagedCodex(root, true, true), root)
+    const agent = codex
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
+    expect(sessions.get(child).metadata?.kuvo).toMatchObject({ messages: { via: "direct" } })
+    sessions.prompt(child, { id: "msg_codex_child_05", text: "Still there?", files: [], delivery: "steer" })
+    await until(() => idles(child).length === 2)
+    expect(said(child).slice(-2)).toEqual(["Still there?", "Again: Still there?"])
+    // The new Codex loaded its thread first.
+    expect(sent().some((message) => message.method === "thread/resume" && message.params.threadId === "t2")).toBe(true)
+  })
+
+  test("a Codex that doesn't say whether its agents take messages: you're told to write to the conversation that started it", async () => {
+    const { child } = await spawn(undefined, false)
+    expect(sessions.get(child).metadata?.kuvo).toMatchObject({ messages: { via: "none" } })
+    expect(() => sessions.prompt(child, { id: "msg_codex_child_06", text: "hello", files: [], delivery: "steer" })).toThrow("write to the conversation that started it")
   })
 
   test("one that takes messages only from the agent that started it says so, and nothing is sent", async () => {

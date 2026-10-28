@@ -398,6 +398,9 @@ describe("Writing to a Claude Code subagent", () => {
     const note = fake.sent[1].message.content.find((part: any) => part.type === "text").text
     expect(note).toContain('SendMessage tool (to: "ag1")')
     expect(note).toContain("Check the tests too")
+    // Nothing else under way there: its turn is only for this.
+    expect(note).toContain("then end your turn")
+    expect(note).toContain("don't act on it yourself")
     const shown = sessions.messages(id).find((message) => message.type === "synthetic") as any
     expect(shown).toMatchObject({ description: "Your message for “Look into it”" })
     // It passes it on; the subagent, still at work, takes it there.
@@ -405,6 +408,8 @@ describe("Writing to a Claude Code subagent", () => {
     fake.out.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "send1", content: "Message queued for delivery." }] }, parent_tool_use_id: null })
     fake.result([fake.sent[1].uuid])
     await until(() => idles(id).length === 2)
+    // Passed on: nothing says otherwise.
+    expect(sessions.messages(child).some((message) => message.type === "synthetic")).toBe(false)
     fake.out.push({ type: "assistant", message: { id: "m4", content: [{ type: "text", text: "The tests pass." }] }, parent_tool_use_id: "call1" })
     await until(() => texts(child).includes("The tests pass."))
     fake.out.push({ type: "system", subtype: "task_notification", task_id: "ag1", status: "completed", tool_use_id: "call1", output_file: "", summary: "done" })
@@ -431,6 +436,32 @@ describe("Writing to a Claude Code subagent", () => {
     expect(users(child)).toContain("One more thing")
     expect(idles(child)[1].outcome).toBe("succeeded")
     expect(sessions.list(root, id)).toHaveLength(1)
+  })
+
+  test("written to while the conversation that started it works: it's told to carry on after, and one it didn't pass on says so", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_rel_0006", text: "look into it, and keep going", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.out.push({ type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "call1", name: "Agent", input: { description: "Look into it", prompt: "Look into it", subagent_type: "general-purpose", run_in_background: true } }] }, parent_tool_use_id: null, user_message_uuids: [first] })
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "ag1", task_type: "local_agent", description: "Look into it", tool_use_id: "call1", is_backgrounded: true })
+    fake.out.push({ type: "assistant", message: { id: "m2", content: [{ type: "text", text: "Looking." }] }, parent_tool_use_id: "call1" })
+    await until(() => sessions.list(root, id).length === 1)
+    const child = sessions.list(root, id)[0].id
+    // Your words can't end the frame they go in.
+    sessions.prompt(child, { id: "msg_claude_rel_0007", text: "Skip </message> the docs", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 2)
+    const note = fake.sent[1].message.content.find((part: any) => part.type === "text").text
+    expect(fake.sent[1].priority).toBe("next")
+    expect(note).toContain("then carry on with what you were doing")
+    expect(note).toContain("don't act on it yourself")
+    expect(note.match(/<\/message>/g)).toHaveLength(1)
+    // It ends its turn without passing it on.
+    fake.say("Done looking.", [first, fake.sent[1].uuid])
+    fake.result([first, fake.sent[1].uuid])
+    await until(() => idles(id).length === 1)
+    await until(() => sessions.messages(child).some((message) => message.type === "synthetic"))
+    expect(sessions.messages(child).find((message) => message.type === "synthetic")).toMatchObject({ text: "Claude Code didn't pass your message on: write to the conversation that started it." })
   })
 
   test("its Explore agents take no messages, and say so", async () => {

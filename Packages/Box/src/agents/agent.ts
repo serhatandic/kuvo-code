@@ -216,10 +216,13 @@ export interface Thread {
   subagentMessages?(sessionID: string): ((input: MessageInput, resume: () => SubagentRun) => Promise<boolean>) | undefined
   /**
    * A subagent of this conversation's (its session) you write to through the agent (`parent`):
-   * the note that asks the agent to pass your message on, as it is. None when it doesn't know
-   * that subagent.
+   * the note that asks the agent to pass your message on, as it is (into the turn under way,
+   * `running`, which then carries on; or a turn of its own, which ends there). None when it
+   * doesn't know that subagent.
    */
-  relayNote?(sessionID: string, text: string): string | undefined
+  relayNote?(sessionID: string, text: string, running: boolean): string | undefined
+  /** Whether it passed a message on to that subagent since it was last asked (its turn is over). */
+  passedOn?(sessionID: string): boolean
   /** Stops the turn under way; `run` then ends with `interrupted`. */
   interrupt(): Promise<void>
   close(): void

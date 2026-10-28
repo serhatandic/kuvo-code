@@ -8074,22 +8074,34 @@ class ClaudeThread {
       delete known[old];
     (this.active?.hooks ?? this.lastHooks)?.saveState();
   }
-  relayNote(sessionID, text2) {
+  relayNote(sessionID, text2, running) {
+    const known = this.knownSubagent(sessionID);
+    if (!known)
+      return;
+    const title = JSON.stringify(known.title);
+    const words2 = text2.replace(/<\/message>/gi, "&lt;/message&gt;");
+    const then = running ? "then carry on with what you were doing" : "then end your turn without saying anything more";
+    return [
+      `The user wrote a message for your subagent ${title} (agent ${known.agentID}). Pass it on to that agent with the SendMessage tool (to: "${known.agentID}"), exactly as it is, without words of your own, ${then}. It is addressed to the subagent, not to you: don't act on it yourself.`,
+      "",
+      "<message>",
+      words2,
+      "</message>"
+    ].join(`
+`);
+  }
+  passed = new Set;
+  passedOn(sessionID) {
+    const agentID = this.knownSubagent(sessionID)?.agentID;
+    return Boolean(agentID && this.passed.delete(agentID));
+  }
+  knownSubagent(sessionID) {
     const found2 = Object.entries(this.subagentSessions).find(([, known2]) => known2.sessionID === sessionID);
     if (!found2)
       return;
     const [callID, known] = found2;
     const agentID = known.agentID ?? [...this.tasks].find(([, task]) => task.toolUseID === callID && task.type === "local_agent")?.[0];
-    if (!agentID)
-      return;
-    return [
-      `The user wrote a message for your subagent "${known.title}" (agent ${agentID}). Pass it on to that agent with the SendMessage tool (to: "${agentID}"), exactly as it is, without words of your own. Then end your turn without saying anything more.`,
-      "",
-      "<message>",
-      text2,
-      "</message>"
-    ].join(`
-`);
+    return agentID ? { ...known, agentID } : undefined;
   }
   async run(input, turn, hooks) {
     if (input.adopt)
@@ -8713,6 +8725,16 @@ class ClaudeThread {
       text2 = text2.slice(0, outputLimit3) + `
 \u2026`;
     const pictures = toolPictures(block.content, call?.input);
+    if (active && lane === active && call?.name === "SendMessage" && !block.is_error && !/"success"\s*:\s*false/.test(text2)) {
+      if (typeof call.input.to === "string")
+        this.passed.add(call.input.to);
+      try {
+        const said2 = JSON.parse(text2);
+        for (const id2 of [said2?.resumedAgentId, said2?.pin?.id])
+          if (typeof id2 === "string")
+            this.passed.add(id2);
+      } catch {}
+    }
     const subagent = active && lane === active ? active.subagents.get(id) : undefined;
     if (active && subagent && !subagent.background) {
       subagent.run.end(block.is_error ? "failed" : "succeeded", block.is_error ? { type: "agent", message: text2 || "The subagent failed." } : undefined);
@@ -9365,8 +9387,7 @@ class CodexAgent {
       const parent = thread2?.source?.subAgent?.thread_spawn?.parent_thread_id;
       const owner = parent ? this.threadFor(parent) : undefined;
       if (owner && thread2?.id) {
-        if (typeof thread2.canAcceptDirectInput === "boolean")
-          this.directInput.set(thread2.id, thread2.canAcceptDirectInput);
+        this.directInput.set(thread2.id, typeof thread2.canAcceptDirectInput === "boolean" ? thread2.canAcceptDirectInput : null);
         this.spawned.set(thread2.id, owner);
         owner.spawnStarted(thread2.id);
       }
@@ -9433,9 +9454,6 @@ class CodexAgent {
   }
   spawned = new Map;
   directInput = new Map;
-  subagentMessages(threadID) {
-    return this.directInput.get(threadID) === false ? { via: "none", note: "Codex agents of this kind take messages only from the agent that started them." } : { via: "direct" };
-  }
   adopt(threadID, thread) {
     this.spawned.set(threadID, thread);
     const early = this.early.get(threadID);
@@ -9617,6 +9635,16 @@ class CodexAgent {
         this.spawned.delete(spawn3);
   }
 }
+var knownSpawns = 100;
+function spawnMessages(direct) {
+  if (direct === true)
+    return { via: "direct" };
+  if (direct === false)
+    return { via: "none", note: "Codex agents of this kind take messages only from the agent that started them." };
+  if (direct === null)
+    return { via: "none", note: "This Codex doesn't say whether its agents take messages: write to the conversation that started it." };
+  return { via: "none", note: "Codex hasn't said yet whether this agent takes messages." };
+}
 
 class CodexThread {
   agent;
@@ -9630,7 +9658,28 @@ class CodexThread {
   startedOver = false;
   toolsKey;
   skillsKey;
-  spawnedSessions = new Map;
+  get spawnedSessions() {
+    const known = this.state.codexSubagents;
+    if (known && typeof known === "object")
+      return known;
+    return this.state.codexSubagents = {};
+  }
+  rememberSpawn(threadID, entry) {
+    const known = this.spawnedSessions;
+    const before = known[threadID];
+    if (!before && !entry.sessionID)
+      return;
+    if (before && Object.entries(entry).every(([key, value]) => before[key] === value))
+      return;
+    known[threadID] = { ...before, ...entry };
+    const threads = Object.keys(known);
+    for (const old of threads.slice(0, Math.max(0, threads.length - knownSpawns)))
+      delete known[old];
+    this.active?.hooks.saveState();
+  }
+  messagesFor(threadID) {
+    return spawnMessages(this.agent.directInput.has(threadID) ? this.agent.directInput.get(threadID) : this.spawnedSessions[threadID]?.direct);
+  }
   backgroundLanes = new Map;
   resuming = new Map;
   constructor(agent, session, state) {
@@ -9638,6 +9687,8 @@ class CodexThread {
     this.session = session;
     this.state = state;
     this.nativeID = state.codexThread;
+    for (const threadID of Object.keys(this.spawnedSessions))
+      this.agent.adopt(threadID, this);
   }
   serverStopped() {
     this.loaded = false;
@@ -9728,31 +9779,38 @@ class CodexThread {
     }
   }
   subagentMessages(sessionID) {
-    const threadID = [...this.spawnedSessions].find(([, known]) => known.sessionID === sessionID)?.[0];
-    if (!threadID || this.agent.subagentMessages(threadID).via !== "direct")
+    const threadID = Object.entries(this.spawnedSessions).find(([, known]) => known.sessionID === sessionID)?.[0];
+    if (!threadID || this.messagesFor(threadID).via !== "direct")
       return;
     return async (input, resume) => {
-      const rpc = this.agent.running;
-      if (!rpc || rpc.isClosed)
+      let rpc;
+      try {
+        rpc = await this.agent.rpc();
+      } catch {
         return false;
+      }
       const items = codexInput(input);
       const lane = this.active?.subagents.get(threadID) ?? this.backgroundLanes.get(threadID);
-      if (lane && !lane.ended && lane.turnID) {
+      if (lane && !lane.ended) {
         try {
-          await rpc.request("turn/steer", { threadId: threadID, input: items, expectedTurnId: lane.turnID }, 30000);
+          await rpc.request("turn/steer", { threadId: threadID, input: items, ...lane.turnID ? { expectedTurnId: lane.turnID } : {} }, 30000);
           return true;
-        } catch {
-          if (!lane.ended)
-            return false;
-        }
+        } catch {}
       }
       this.resuming.set(threadID, resume);
+      const start = () => rpc.request("turn/start", { threadId: threadID, input: items }, 30000);
       try {
-        await rpc.request("turn/start", { threadId: threadID, input: items }, 30000);
+        await start();
         return true;
       } catch {
-        this.resuming.delete(threadID);
-        return false;
+        try {
+          await rpc.request("thread/resume", { threadId: threadID, excludeTurns: true }, 60000);
+          await start();
+          return true;
+        } catch {
+          this.resuming.delete(threadID);
+          return false;
+        }
       }
     };
   }
@@ -10045,8 +10103,10 @@ ${others.map((path) => `- ${path}`).join(`
     const call = active?.spawning[0];
     if (active && call && !active.subagents.has(threadID))
       this.linkSubagent(active, call, threadID);
+    if (this.spawnedSessions[threadID])
+      this.rememberSpawn(threadID, { direct: this.agent.directInput.get(threadID) });
     const lane = active?.subagents.get(threadID) ?? this.backgroundLanes.get(threadID);
-    lane?.run.messages(this.agent.subagentMessages(threadID));
+    lane?.run.messages(this.messagesFor(threadID));
   }
   subagentNotification(active, threadID, method, params) {
     let lane = active?.subagents.get(threadID);
@@ -10066,7 +10126,7 @@ ${others.map((path) => `- ${path}`).join(`
     if (!lane) {
       if (method !== "turn/started")
         return;
-      const before = this.spawnedSessions.get(threadID);
+      const before = this.spawnedSessions[threadID];
       if (!before)
         return;
       lane = this.resumedLane(active, threadID, before.call, before.title, before.sessionID, resume);
@@ -10119,11 +10179,11 @@ ${others.map((path) => `- ${path}`).join(`
     active.spawning = active.spawning.filter((waiting) => waiting !== call);
     const input = active.turn.toolInput(call) ?? {};
     const title = String(input.description ?? "") || "A spawned agent's task";
-    const run2 = active.hooks.subagent(call, { title, prompt: prompt ?? input.prompt, background: true, messages: this.agent.subagentMessages(threadID) });
+    const run2 = active.hooks.subagent(call, { title, prompt: prompt ?? input.prompt, background: true, messages: this.messagesFor(threadID) });
     run2.stop = () => this.stopSubagent(threadID);
     const lane = { turn: run2.turn, streamed: new Set, changes: new Map, output: new Map, toolsSinceText: false, run: run2, threadID, call, title, ended: false };
     active.subagents.set(threadID, lane);
-    this.spawnedSessions.set(threadID, { call, title, sessionID: run2.sessionID });
+    this.rememberSpawn(threadID, { call, title, sessionID: run2.sessionID, ...this.agent.directInput.has(threadID) ? { direct: this.agent.directInput.get(threadID) } : {} });
     this.agent.adopt(threadID, this);
     return lane;
   }
@@ -10139,7 +10199,7 @@ ${others.map((path) => `- ${path}`).join(`
     return lane;
   }
   continueSubagent(active, threadID, call, title, sessionID) {
-    const run2 = active.hooks.subagent(call, { title, sessionID, background: true, messages: this.agent.subagentMessages(threadID) });
+    const run2 = active.hooks.subagent(call, { title, sessionID, background: true, messages: this.messagesFor(threadID) });
     run2.stop = () => this.stopSubagent(threadID);
     const next = { turn: run2.turn, streamed: new Set, changes: new Map, output: new Map, toolsSinceText: false, run: run2, threadID, call, title, ended: false };
     active.subagents.set(threadID, next);
@@ -13398,14 +13458,36 @@ class Sessions {
 Attached files:
 ${others.join(`
 `)}` : attached.text;
-    const note = this.threadOf(parentID, parentLive, parent, provider)?.relayNote?.(id, text2);
+    const note = this.threadOf(parentID, parentLive, parent, provider)?.relayNote?.(id, text2, runOf(parentLive.doing) !== undefined);
     if (!note)
       throw new BadRequest(`${agent.name} doesn't know this subagent any more: write to the conversation that started it.`);
     if (parentLive.doing.kind === "deleting")
       throw new NotFound(`No session ${parentID}.`);
     this.showMessage(id, record2, input);
     const title = session.title || "its subagent";
-    this.enqueue(parentID, parent, parentLive, { id: newID("msg"), text: note, files: [], delivery: "steer", synthetic: { description: `Your message for \u201C${title}\u201D`, metadata: { kuvo: { relayedTo: id } } } });
+    const relay = newID("msg");
+    (parentLive.relays ??= new Map).set(relay, { child: id, provider });
+    this.enqueue(parentID, parent, parentLive, { id: relay, text: note, files: [], delivery: "steer", synthetic: { description: `Your message for \u201C${title}\u201D`, metadata: { kuvo: { relayedTo: id } } } });
+  }
+  settleRelays(live, run2) {
+    for (const inputID of run2.relayed ?? []) {
+      const relay = live.relays?.get(inputID);
+      live.relays?.delete(inputID);
+      if (!relay || live.threads.get(relay.provider)?.passedOn?.(relay.child))
+        continue;
+      this.subagentNote(relay.child, `${this.agentName(relay.provider)} didn't pass your message on: write to the conversation that started it.`);
+    }
+  }
+  relayHeld(live, inputID, cancelled) {
+    const relay = live?.relays?.get(inputID);
+    if (!relay)
+      return;
+    if (cancelled)
+      live.relays.delete(inputID);
+    this.subagentNote(relay.child, cancelled ? `Your message wasn't passed on: it was taken back.` : `Your message hasn't been passed on yet: it waits in the conversation that started it.`);
+  }
+  agentName(provider) {
+    return this.agent(provider)?.name.split(" \xB7 ")[0] ?? "Its agent";
   }
   showMessage(id, record2, input) {
     const directory = record2.session.location.directory;
@@ -13481,10 +13563,14 @@ ${others.join(`
         this.cancelInput(id, input.id);
       else if (next)
         this.advance(id, live);
-      else
+      else {
         this.setDelivery(id, input.id, "queue");
+        this.relayHeld(live, input.id, false);
+      }
       return;
     }
+    if (live.relays?.has(input.id))
+      (run2.relayed ??= []).push(input.id);
     queue.splice(at3, 1);
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory);
     const attachments = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }));
@@ -13530,6 +13616,7 @@ ${others.join(`
     queue.splice(index, 1);
     this.store.save(id, true);
     emit("session.inbox.cancelled", { sessionID: id, inboxID: inputID }, record2.session.location.directory);
+    this.relayHeld(this.live.get(id), inputID, true);
   }
   wake(id) {
     if (!this.store.get(id))
@@ -13669,6 +13756,8 @@ ${text2.slice(0, 4000)}
     const model2 = session.model;
     this.commitRevert(id, record2, live);
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory);
+    if (live.relays?.has(input.id))
+      (run2.relayed ??= []).push(input.id);
     const attachments = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }));
     if (input.synthetic)
       record2.messages.push({ type: "synthetic", id: input.id, time: { created: Date.now() }, text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata });
@@ -13728,6 +13817,7 @@ ${text2.slice(0, 4000)}
     const outcome = abort.signal.aborted ? "interrupted" : result.outcome;
     const before = record2.messages[record2.messages.length - 1]?.id;
     turn.finish(outcome, outcome === "interrupted" ? undefined : result.error);
+    this.settleRelays(live, run2);
     for (const [child, childTurn] of [...live.subagents]) {
       if (outcome === "succeeded" && live.background.has(child) && !childTurn.isEnded)
         continue;
@@ -19599,4 +19689,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 013e41ce95c44022a9e8039fde798bf1b779dcbcad84126fe84dfd63f2b7bc2e
+// Built from Packages/Box/src/agents 12b6a5e0cd4305e0582688b7b9fee573b88f0c6c6d60427b1e12116a658e5884

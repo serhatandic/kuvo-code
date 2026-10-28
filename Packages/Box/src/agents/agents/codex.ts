@@ -204,8 +204,9 @@ export class CodexAgent implements Agent {
       const parent = thread?.source?.subAgent?.thread_spawn?.parent_thread_id
       const owner = parent ? this.threadFor(parent) : undefined
       if (owner && thread?.id) {
-        // Whether it takes messages from you (multi-agent v1's do; v2's only from their parent).
-        if (typeof thread.canAcceptDirectInput === "boolean") this.directInput.set(thread.id, thread.canAcceptDirectInput)
+        // Whether it takes messages from you (multi-agent v1's do; v2's only from their parent),
+        // or that it didn't say (an older Codex).
+        this.directInput.set(thread.id, typeof thread.canAcceptDirectInput === "boolean" ? thread.canAcceptDirectInput : null)
         this.spawned.set(thread.id, owner)
         owner.spawnStarted(thread.id)
       }
@@ -272,13 +273,8 @@ export class CodexAgent implements Agent {
 
   /** Threads of agents a session's Codex spawned: their events and approvals go to that session. */
   private spawned = new Map<string, CodexThread>()
-  /** Whether each spawned agent's thread takes your messages, as it said when it started. */
-  private directInput = new Map<string, boolean>()
-
-  /** How you can write to a spawned agent: to it, unless its thread said it takes messages only from its parent. */
-  subagentMessages(threadID: string): SubagentMessages {
-    return this.directInput.get(threadID) === false ? { via: "none", note: "Codex agents of this kind take messages only from the agent that started them." } : { via: "direct" }
-  }
+  /** Whether each spawned agent's thread takes your messages, as it said when it started (null: it didn't say). */
+  readonly directInput = new Map<string, boolean | null>()
 
   adopt(threadID: string, thread: CodexThread) {
     this.spawned.set(threadID, thread)
@@ -480,6 +476,26 @@ export class CodexAgent implements Agent {
 
 // MARK: A session
 
+/** An agent a session's Codex spawned, as its conversation keeps it (across restarts too). */
+interface KnownSpawn {
+  call: string
+  title: string
+  sessionID: string
+  /** Whether its thread takes your messages, as it said (null: it didn't say; unset: not yet). */
+  direct?: boolean | null
+}
+
+/** How many spawned agents a conversation remembers, newest kept. */
+const knownSpawns = 100
+
+/** How you can write to a spawned agent, from what its thread said. */
+function spawnMessages(direct: boolean | null | undefined): SubagentMessages {
+  if (direct === true) return { via: "direct" }
+  if (direct === false) return { via: "none", note: "Codex agents of this kind take messages only from the agent that started them." }
+  if (direct === null) return { via: "none", note: "This Codex doesn't say whether its agents take messages: write to the conversation that started it." }
+  return { via: "none", note: "Codex hasn't said yet whether this agent takes messages." }
+}
+
 /** Where Codex's items are told: the turn's own, or a spawned agent's session. */
 interface Lane {
   turn: Turn
@@ -545,8 +561,28 @@ class CodexThread implements Thread {
   /** Where Kuvo Code's tools were when it was loaded. */
   private toolsKey?: string
   private skillsKey?: string
-  /** The agents it spawned, by their thread: their sessions, across turns. */
-  private spawnedSessions = new Map<string, { call: string; title: string; sessionID: string }>()
+  /** The agents it spawned, by their thread: their sessions, across turns, kept with the conversation. */
+  private get spawnedSessions(): Record<string, KnownSpawn> {
+    const known = this.state.codexSubagents
+    if (known && typeof known === "object") return known as Record<string, KnownSpawn>
+    return (this.state.codexSubagents = {}) as Record<string, KnownSpawn>
+  }
+
+  private rememberSpawn(threadID: string, entry: Partial<KnownSpawn>) {
+    const known = this.spawnedSessions
+    const before = known[threadID]
+    if (!before && !entry.sessionID) return
+    if (before && Object.entries(entry).every(([key, value]) => (before as any)[key] === value)) return
+    known[threadID] = { ...before, ...entry } as KnownSpawn
+    const threads = Object.keys(known)
+    for (const old of threads.slice(0, Math.max(0, threads.length - knownSpawns))) delete known[old]
+    this.active?.hooks.saveState()
+  }
+
+  /** How you can write to an agent it spawned: as its thread said (here, or before it was kept). */
+  private messagesFor(threadID: string): SubagentMessages {
+    return spawnMessages(this.agent.directInput.has(threadID) ? this.agent.directInput.get(threadID) : this.spawnedSessions[threadID]?.direct)
+  }
   /** Agents it spawned still at work after the turn that spawned them ended, by their thread. */
   private backgroundLanes = new Map<string, SubagentLane>()
   /** Agents you wrote to once they were done, by their thread: their next turn's run, when no turn here has it. */
@@ -558,6 +594,9 @@ class CodexThread implements Thread {
     private readonly state: Record<string, unknown>,
   ) {
     this.nativeID = state.codexThread as string | undefined
+    // The agents it spawned before (this conversation's Codex closed a while, or the bridge
+    // started again): what their threads say comes here now.
+    for (const threadID of Object.keys(this.spawnedSessions)) this.agent.adopt(threadID, this)
   }
 
   /** The app-server stopped: a thread must be loaded again, and a turn under way is over, and the agents it left at work. */
@@ -668,30 +707,41 @@ class CodexThread implements Thread {
    * that runs it does, and it hasn't let it go.
    */
   subagentMessages(sessionID: string) {
-    const threadID = [...this.spawnedSessions].find(([, known]) => known.sessionID === sessionID)?.[0]
-    if (!threadID || this.agent.subagentMessages(threadID).via !== "direct") return undefined
+    const threadID = Object.entries(this.spawnedSessions).find(([, known]) => known.sessionID === sessionID)?.[0]
+    if (!threadID || this.messagesFor(threadID).via !== "direct") return undefined
     return async (input: MessageInput, resume: () => SubagentRun): Promise<boolean> => {
-      const rpc = this.agent.running
-      if (!rpc || rpc.isClosed) return false
+      let rpc: RPC
+      try {
+        rpc = await this.agent.rpc()
+      } catch {
+        return false
+      }
       const items = codexInput(input)
       const lane = this.active?.subagents.get(threadID) ?? this.backgroundLanes.get(threadID)
-      if (lane && !lane.ended && lane.turnID) {
+      if (lane && !lane.ended) {
         try {
-          await rpc.request("turn/steer", { threadId: threadID, input: items, expectedTurnId: lane.turnID }, 30_000)
+          await rpc.request("turn/steer", { threadId: threadID, input: items, ...(lane.turnID ? { expectedTurnId: lane.turnID } : {}) }, 30_000)
           return true
         } catch {
-          // Its turn ended just then: a new one takes it.
-          if (!lane.ended) return false
+          // Its turn ended just then: a new one takes it (Codex turns that away while one runs).
         }
       }
       // Its next turn, with none of this conversation's under way, is a run of its own.
       this.resuming.set(threadID, resume)
+      const start = () => rpc.request("turn/start", { threadId: threadID, input: items }, 30_000)
       try {
-        await rpc.request("turn/start", { threadId: threadID, input: items }, 30_000)
+        await start()
         return true
       } catch {
-        this.resuming.delete(threadID)
-        return false
+        // Not loaded in this Codex (it started again since): loaded, then started.
+        try {
+          await rpc.request("thread/resume", { threadId: threadID, excludeTurns: true }, 60_000)
+          await start()
+          return true
+        } catch {
+          this.resuming.delete(threadID)
+          return false
+        }
       }
     }
   }
@@ -981,8 +1031,9 @@ class CodexThread implements Thread {
     const call = active?.spawning[0]
     if (active && call && !active.subagents.has(threadID)) this.linkSubagent(active, call, threadID)
     // Linked before its thread said whether it takes your messages: its session hears now.
+    if (this.spawnedSessions[threadID]) this.rememberSpawn(threadID, { direct: this.agent.directInput.get(threadID) })
     const lane = active?.subagents.get(threadID) ?? this.backgroundLanes.get(threadID)
-    lane?.run.messages(this.agent.subagentMessages(threadID))
+    lane?.run.messages(this.messagesFor(threadID))
   }
 
   /** What a spawned agent's thread says, in its session. */
@@ -1005,7 +1056,7 @@ class CodexThread implements Thread {
       // One spawned in an earlier turn, given more to do (a turn starts on its thread): its
       // session goes on. Anything else from it (closed, its usage) isn't news.
       if (method !== "turn/started") return
-      const before = this.spawnedSessions.get(threadID)
+      const before = this.spawnedSessions[threadID]
       if (!before) return
       lane = this.resumedLane(active, threadID, before.call, before.title, before.sessionID, resume)
       if (!lane) return
@@ -1058,11 +1109,11 @@ class CodexThread implements Thread {
     const input = (active.turn.toolInput(call) ?? {}) as Record<string, any>
     const title = String(input.description ?? "") || "A spawned agent's task"
     // It works on its own, past the turn that spawned it.
-    const run = active.hooks.subagent(call, { title, prompt: prompt ?? input.prompt, background: true, messages: this.agent.subagentMessages(threadID) })
+    const run = active.hooks.subagent(call, { title, prompt: prompt ?? input.prompt, background: true, messages: this.messagesFor(threadID) })
     run.stop = () => this.stopSubagent(threadID)
     const lane: SubagentLane = { turn: run.turn, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, run, threadID, call, title, ended: false }
     active.subagents.set(threadID, lane)
-    this.spawnedSessions.set(threadID, { call, title, sessionID: run.sessionID })
+    this.rememberSpawn(threadID, { call, title, sessionID: run.sessionID, ...(this.agent.directInput.has(threadID) ? { direct: this.agent.directInput.get(threadID) } : {}) })
     // Its approvals come to this session's.
     this.agent.adopt(threadID, this)
     return lane
@@ -1083,7 +1134,7 @@ class CodexThread implements Thread {
   }
 
   private continueSubagent(active: Active, threadID: string, call: string, title: string, sessionID: string): SubagentLane {
-    const run = active.hooks.subagent(call, { title, sessionID, background: true, messages: this.agent.subagentMessages(threadID) })
+    const run = active.hooks.subagent(call, { title, sessionID, background: true, messages: this.messagesFor(threadID) })
     run.stop = () => this.stopSubagent(threadID)
     const next: SubagentLane = { turn: run.turn, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, run, threadID, call, title, ended: false }
     active.subagents.set(threadID, next)

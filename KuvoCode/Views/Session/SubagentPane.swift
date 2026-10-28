@@ -237,14 +237,25 @@ private struct SubagentConversation: View {
                                 .modifier(ComposerSurface())
                         }
                         if !messages.takesMessages, let why = messages.line(parentTitle: parentTitle) {
-                            // Its agent takes nothing for it from elsewhere: why, in the composer's place.
-                            Label(why, systemImage: "info.circle")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 10)
-                                .modifier(ComposerSurface())
+                            // Its agent takes nothing for it from elsewhere: why, in the composer's
+                            // place, with Stop while it works, as the composer has.
+                            HStack(spacing: 10) {
+                                Label(why, systemImage: "info.circle")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                if isWorking {
+                                    Button("Stop", systemImage: "stop.circle", action: model.stop)
+                                        .buttonStyle(TextButtonStyle())
+                                        .font(.system(size: 13))
+                                        .fixedSize()
+                                        .disabled(isOffline)
+                                        .help("Stop it: the agent that started it hears it was stopped, and carries on")
+                                }
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .modifier(ComposerSurface())
                         } else {
                             composer
                         }

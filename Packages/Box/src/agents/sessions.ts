@@ -53,6 +53,8 @@ interface Run {
   last?: Slot
   /** What the files were before each message you sent partway through it, for Undo. */
   steered: SnapshotNote[]
+  /** Notes in it asking its agent to pass your message on to a subagent (by their input). */
+  relayed?: string[]
 }
 
 /**
@@ -94,6 +96,8 @@ interface Live {
   runs: Map<string, SubagentRun>
   /** Those sent off in the background: they go on after the turn that started them. */
   background: Set<string>
+  /** Notes asking its agent to pass your message on to a subagent, by their input: the subagent's session, and its agent. */
+  relays?: Map<string, { child: string; provider: string }>
   /** Settings › Permissions' Blocks as the turn began: what nothing allows (undefined: not known). */
   blocks?: PermissionRule[]
   /** The session's agent of yours (Settings › Agents), as the turn began: what it's told to be. */
@@ -1380,12 +1384,38 @@ export class Sessions {
     if (parent.session.model?.providerID !== provider) throw new BadRequest(`${agent.name} no longer runs the conversation that started this subagent: write to it there.`)
     const others = attached.files.filter((file) => file.path).map((file) => `- ${file.path}`)
     const text = others.length ? `${attached.text}\n\nAttached files:\n${others.join("\n")}` : attached.text
-    const note = this.threadOf(parentID, parentLive, parent, provider)?.relayNote?.(id, text)
+    const note = this.threadOf(parentID, parentLive, parent, provider)?.relayNote?.(id, text, runOf(parentLive.doing) !== undefined)
     if (!note) throw new BadRequest(`${agent.name} doesn't know this subagent any more: write to the conversation that started it.`)
     if (parentLive.doing.kind === "deleting") throw new NotFound(`No session ${parentID}.`)
     this.showMessage(id, record, input)
     const title = session.title || "its subagent"
-    this.enqueue(parentID, parent, parentLive, { id: newID("msg"), text: note, files: [], delivery: "steer", synthetic: { description: `Your message for “${title}”`, metadata: { kuvo: { relayedTo: id } } } })
+    const relay = newID("msg")
+    // Whether it was passed on is known once the turn that has the note is over.
+    ;(parentLive.relays ??= new Map()).set(relay, { child: id, provider })
+    this.enqueue(parentID, parent, parentLive, { id: relay, text: note, files: [], delivery: "steer", synthetic: { description: `Your message for “${title}”`, metadata: { kuvo: { relayedTo: id } } } })
+  }
+
+  /** A turn with notes asking its agent to pass your messages on is over: each one it didn't pass on says so, in its subagent's conversation. */
+  private settleRelays(live: Live, run: Run) {
+    for (const inputID of run.relayed ?? []) {
+      const relay = live.relays?.get(inputID)
+      live.relays?.delete(inputID)
+      if (!relay || live.threads.get(relay.provider)?.passedOn?.(relay.child)) continue
+      this.subagentNote(relay.child, `${this.agentName(relay.provider)} didn't pass your message on: write to the conversation that started it.`)
+    }
+  }
+
+  /** A note asking its agent to pass your message on that won't go (cancelled, or held after a Stop): its subagent's conversation says so. */
+  private relayHeld(live: Live | undefined, inputID: string, cancelled: boolean) {
+    const relay = live?.relays?.get(inputID)
+    if (!relay) return
+    if (cancelled) live!.relays!.delete(inputID)
+    this.subagentNote(relay.child, cancelled ? `Your message wasn't passed on: it was taken back.` : `Your message hasn't been passed on yet: it waits in the conversation that started it.`)
+  }
+
+  /** An agent's own name, not its account's ("Claude Code", not "Claude Code · Work"). */
+  private agentName(provider: string): string {
+    return this.agent(provider)?.name.split(" · ")[0] ?? "Its agent"
   }
 
   /** Your message, in a subagent's conversation as it's sent. */
@@ -1471,9 +1501,13 @@ export class Sessions {
     if (!taken) {
       if (handing.cancelled) this.cancelInput(id, input.id)
       else if (next) this.advance(id, live)
-      else this.setDelivery(id, input.id, "queue")
+      else {
+        this.setDelivery(id, input.id, "queue")
+        this.relayHeld(live, input.id, false)
+      }
       return
     }
+    if (live.relays?.has(input.id)) (run.relayed ??= []).push(input.id)
     queue.splice(at, 1)
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory)
     const attachments: Attachment[] = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }))
@@ -1518,6 +1552,7 @@ export class Sessions {
     queue.splice(index, 1)
     this.store.save(id, true)
     emit("session.inbox.cancelled", { sessionID: id, inboxID: inputID }, record.session.location.directory)
+    this.relayHeld(this.live.get(id), inputID, true)
   }
 
   /**
@@ -1666,6 +1701,7 @@ export class Sessions {
     // undone message on (this message too, were it there already).
     this.commitRevert(id, record, live)
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory)
+    if (live.relays?.has(input.id)) (run.relayed ??= []).push(input.id)
     const attachments: Attachment[] = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }))
     if (input.synthetic) record.messages.push({ type: "synthetic", id: input.id, time: { created: Date.now() }, text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata })
     else record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined })
@@ -1728,6 +1764,7 @@ export class Sessions {
     const outcome: Outcome = abort.signal.aborted ? "interrupted" : result.outcome
     const before = record.messages[record.messages.length - 1]?.id
     turn.finish(outcome, outcome === "interrupted" ? undefined : result.error)
+    this.settleRelays(live, run)
     // Subagents still at work end with it, but those it sent off in the background, which go on
     // in their sessions (when it went through: stopped or failed, their agent stops them too, and
     // what they asked goes with them).
