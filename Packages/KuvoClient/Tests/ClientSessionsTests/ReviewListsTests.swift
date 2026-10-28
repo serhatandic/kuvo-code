@@ -62,35 +62,20 @@ struct ReviewListsTests {
         #expect(ReviewList.make(.lookFor("for sec"), known: known)?.rows.map(\.id) == ["security"])
     }
 
-    // Something else…: what to review in your own words, picked once said; then, while you pick
-    // what to look for, what the box found for it, or why it found nothing.
+    // Something else…: the list closes for what to review in your own words, which go as they are.
     @Test func somethingElseReviewsWhatYouSay() throws {
         #expect(ReviewList.make(.what("some"), known: known)?.rows.map(\.id) == ["described"])
-        #expect(ReviewList.make(.what(""), known: known)?.rows.last?.pick == .write("about "))
+        #expect(ReviewList.make(.what(""), known: known)?.rows.last?.pick == .ownWords)
         // A box from before doesn't offer it.
         var older = known
         older.choices?.describes = nil
         #expect(ReviewList.make(.what(""), known: older)?.rows.map(\.id).contains("described") == false)
 
-        #expect(ReviewList.make(.described(" "), known: known) == nil)
-        let saying = try #require(ReviewList.make(.described("the auth module and its tests"), known: known))
-        #expect(saying.rows.map(\.title) == ["“the auth module and its tests”"])
-        #expect(saying.rows[0].pick == .write(#"about "the auth module and its tests" "#))
-        #expect(ReviewList.unfinished(ReviewCommand(" about ", readers: [])) == "Write what to review after “about”.")
-
-        let command = ReviewCommand(#" about "the auth module" "#, readers: [])
-        var found = ReviewList.Described(words: "the auth module")
-        #expect(ReviewList.described(command) == "the auth module")
-        #expect(ReviewList.described(ReviewCommand(" about the auth", readers: [])) == nil)
-        #expect(ReviewList.found(command, described: found)?.text == "Finding the files for that…")
-        found.size = ReviewSize(files: 4, parts: 1, found: ["src/auth/login.ts", "src/auth/session.ts", "tests/login.test.ts", "tests/session.test.ts"])
-        #expect(ReviewList.found(command, described: found)?.text == "Found 4 files: login.ts, session.ts, login.test.ts, …")
-        found = .init(words: "the auth module", problem: "No files in this project fit that. Say it another way, or pick a folder.")
-        #expect(ReviewList.found(command, described: found)! == ("No files in this project fit that. Say it another way, or pick a folder.", true))
-        // Other words, or another scope: nothing of it.
-        #expect(ReviewList.found(ReviewCommand(#" about "billing" "#, readers: []), described: found) == nil)
-        #expect(ReviewList.found(ReviewCommand(" this branch ", readers: []), described: found) == nil)
-        #expect(ReviewList.summary(command, reader: "Claude") == "Claude reads the files it finds for “the auth module” with fresh eyes, without this conversation, and lists what it finds.")
+        // Closed, nothing written yet: what to write; then what it will do.
+        #expect(ReviewList.hint(ReviewCommand(" ", readers: []), listed: false, reader: "Claude", isAgent: false) == "Say what to review, like “the sign-in and its tests” or “what I changed today”.")
+        let command = ReviewCommand(" the new changes to the sign-in", readers: [])
+        #expect(ReviewList.hint(command, listed: false, reader: "Claude", isAgent: false) == nil)
+        #expect(ReviewList.summary(command, reader: "Claude") == "Claude finds the files that fit and reviews them with fresh eyes.")
     }
 
     @Test func theLineUnderAReviewSaysWhatItCoveredAndWhoReadIt() throws {

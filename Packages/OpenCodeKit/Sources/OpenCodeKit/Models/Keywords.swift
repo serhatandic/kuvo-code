@@ -269,7 +269,7 @@ extension ReviewScope {
             from.hasSuffix("^") && to == nil ? "the commits since \(from.dropLast())" : "the commits \(from)..\(to ?? "HEAD")"
         case .folder(let path): "the files in \(path)"
         case .project: "the whole project"
-        case .described(let words, _): "the files it finds for “\(words)”"
+        case .described: "the files that fit what you wrote"
         }
     }
 }
@@ -293,15 +293,12 @@ public struct ReviewSize: Codable, Sendable, Hashable {
     public var leftOut: Int
     /// A branch's or a range's commits.
     public var commits: Int?
-    /// The first few files found for described words.
-    public var found: [String]?
 
-    public init(files: Int, parts: Int, leftOut: Int = 0, commits: Int? = nil, found: [String]? = nil) {
+    public init(files: Int, parts: Int, leftOut: Int = 0, commits: Int? = nil) {
         self.files = files
         self.parts = parts
         self.leftOut = leftOut
         self.commits = commits
-        self.found = found
     }
 }
 
@@ -500,7 +497,14 @@ extension OpenCodeAPI {
     /// when left out), read by `model` (its own when left out), looking especially at `focus`.
     public func startReview(session: String, model: ModelRef? = nil, focus: String? = nil, scope: ReviewScope? = nil) async throws -> Review {
         struct Body: Encodable { var model: ModelRef?; var focus: String?; var scope: ReviewScope? }
-        return try await client.send(try client.request("POST", "api/kuvo/reviews/\(session.pathEscaped)", body: Body(model: model, focus: focus.flatMap { $0.isEmpty ? nil : $0 }, scope: scope)), as: DataEnvelope<Review>.self).data
+        do {
+            return try await client.send(try client.request("POST", "api/kuvo/reviews/\(session.pathEscaped)", body: Body(model: model, focus: focus.flatMap { $0.isEmpty ? nil : $0 }, scope: scope)), as: DataEnvelope<Review>.self).data
+        } catch let error as ServerError where error.status == 400 {
+            // A box from before described scopes: your words are what it looks at in the changes
+            // not committed yet, as they were.
+            guard case .described(let words, _)? = scope else { throw error }
+            return try await startReview(session: session, model: model, focus: [focus, words].compactMap { $0 }.joined(separator: ": "), scope: nil)
+        }
     }
 
     /// How much a review of `scope` would read, to show before starting a big one.

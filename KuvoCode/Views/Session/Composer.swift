@@ -135,10 +135,6 @@ struct Composer: View {
     @State private var dismissedReviewList: String?
     /// What the box said of this folder for "/review"'s lists: what it offers, and how much each reads.
     @State private var reviewKnown = ReviewList.Known()
-    /// What the box found for the words "/review about" says to review, and for which conversation
-    /// and words (`describedReview`).
-    @State private var reviewFound: ReviewList.Described?
-    @State private var reviewFoundFor: [String]?
     /// The model picked last there (`Model.key`), offered first next time.
     @AppStorage(Catalog.lastReviewerKey) private var lastReviewer = ""
     /// Your starred models (the model picker's), offered there after it.
@@ -275,8 +271,6 @@ struct Composer: View {
                 .onChange(of: session) { agents.reset() }
                 // Each time "/review" is written: what its lists offer here, and how much each reads.
                 .task(id: reviewListSession) { await loadReviewKnown() }
-                // Words said to review: the files they mean, found once they're picked.
-                .task(id: describedReview) { await findDescribed() }
                 // Another of its lists: from its first row again.
                 .onChange(of: reviewList?.title) { reviewerIndex = 0 }
                 // Listening ("In the Composer"): what's written, then what you're saying, as it comes,
@@ -726,10 +720,8 @@ struct Composer: View {
                 return (searching.isEmpty ? "Write a model’s name after “with”." : "Finish the model’s name, or pick it from the list.", false)
             }
             let reader = command.reader?.name ?? currentModel?.name ?? "The conversation’s model"
-            let hint = ReviewList.hint(command, listed: reviewList != nil, reader: reader, isAgent: isAgentConversation) ?? ReviewList.summary(command, reader: reader)
-            // What it found for your words first, or why it found nothing.
-            if let found = ReviewList.found(command, described: reviewFoundFor == describedReview ? reviewFound : nil) { return found.isProblem ? found : (found.text + " " + hint, false) }
-            return (hint, false)
+            if let hint = ReviewList.hint(command, listed: reviewList != nil, reader: reader, isAgent: isAgentConversation) { return (hint, false) }
+            return (ReviewList.summary(command, reader: reader), false)
         default:
             return (keyword.hint, false)
         }
@@ -798,31 +790,6 @@ struct Composer: View {
         await ReviewList.Known.load(session: session, api: api) { reviewKnown = $0 }
     }
 
-    /// The words "/review" says to review, once picked, with the conversation they're in.
-    private var describedReview: [String]? {
-        guard let session, let (keyword, rest) = typedKeyword, keyword == .review, let words = ReviewList.described(reviewCommand(rest)) else { return nil }
-        return [session, words]
-    }
-
-    private func findDescribed() async {
-        // Found already for these: kept (a problem is asked about again).
-        guard let described = describedReview, reviewFoundFor != described || reviewFound?.size == nil else { return }
-        let words = described[1]
-        reviewFoundFor = described
-        reviewFound = ReviewList.Described(words: words)
-        guard let directory = workspace.session(described[0])?.location.directory, let api = workspace.agents(forFolder: directory)?.api else {
-            reviewFound = ReviewList.Described(words: words, problem: "This conversation’s computer can’t be reached now.")
-            return
-        }
-        let found = await ReviewList.Described.find(words, session: described[0], api: api)
-        // Left before it answered: nothing is kept, so it's asked again next time.
-        guard !Task.isCancelled else {
-            if reviewFoundFor == described, reviewFound == ReviewList.Described(words: words) { reviewFoundFor = nil; reviewFound = nil }
-            return
-        }
-        reviewFound = found
-    }
-
     /// Picked from a "/review" list: its words written after what's there, for the next one; or,
     /// from Look for, the review starts (Tab only writes them).
     private func pickReview(_ row: ReviewList.Row, starts: Bool = true) {
@@ -840,6 +807,11 @@ struct Composer: View {
         case .start(let words):
             text = (head + words).trimmingCharacters(in: .whitespaces)
             send()
+        case .ownWords:
+            // Something else…: what to review, in your own words, after what's there.
+            text = head
+            dismissedReviewList = "What to review"
+            focusAtEnd()
         }
     }
 

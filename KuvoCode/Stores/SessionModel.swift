@@ -1246,7 +1246,7 @@ final class SessionModel {
         let session = id
         Task {
             do {
-                bridge.took(try await api.startReview(session: session, model: command.reader?.ref, focus: command.focusAsked, scope: command.scope == .uncommitted ? nil : command.scope))
+                bridge.took(try await api.startReview(session: session, model: command.reader?.ref, focus: command.focusAsked, scope: command.scopeAsked == .uncommitted ? nil : command.scopeAsked))
             } catch {
                 restore(text: written)
                 fail(error)

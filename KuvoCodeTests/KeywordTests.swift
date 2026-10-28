@@ -217,8 +217,8 @@ import Testing
         #expect(try await bridge.api?.reviews().isEmpty == true)
     }
 
-    // "/review about …": what to review said in your own words (What to review › Something else…);
-    // the box finds the files they mean and reads those, and the review says which.
+    // "/review" and what to review in your own words (What to review › Something else…), sent as
+    // written: the box finds the files they mean and reads those, and the review says which.
     @Test func aReviewOfWhatYouDescribeReadsTheFilesFoundForIt() async throws {
         defer { clean() }
         let repository = try TestRepository()
@@ -232,14 +232,14 @@ import Testing
         let bridge = try await start(model)
         defer { bridge.stop() }
 
-        model.draftText = #"/review about "the timer and its tests" for security"#
+        model.draftText = "/review the timer and its tests"
         model.submitDraft(for: nil, queue: false, commands: [])
         try await until { model.review?.state == .done }
         let review = try #require(model.review)
         #expect(review.scope == .described("the timer and its tests", paths: ["src/timer.ts", "test/timer.test.ts"]))
-        #expect(review.focus == "security")
+        #expect(review.focus == nil)
         #expect(review.summary == "Fine.")
-        #expect(ReviewList.footnote(review, readerName: nil) == "“the timer and its tests” · security")
+        #expect(ReviewList.footnote(review, readerName: nil) == "“the timer and its tests”")
     }
 
     @Test func aReviewPutAwayCanBeBroughtBackAndOneFindingCanBeFixedAlone() async throws {
