@@ -241,6 +241,8 @@ struct ConversationScroll<Rows: View>: View {
         // Messages scroll on under the card's header, blurring away there instead of being cut at
         // an edge. (Under the composer they fade out in the card's color: `conversationBar`.)
         .scrollEdgeEffectStyle(Self.edgeStyle, for: .all)
+        // Fading out above the composer, under the scroll-to-end button.
+        .overlay(alignment: .bottom) { ConversationEndFade() }
         .overlay(alignment: .bottom) {
             // Scrolled up: a way back to the newest, which also follows it again.
             if !scroller.followsEnd {
