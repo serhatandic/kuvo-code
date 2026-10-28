@@ -129,3 +129,26 @@ public struct VoiceWave: View {
         .accessibilityHidden(true)
     }
 }
+
+/// The one word, after someone's first dictation and never before it, that voice input can be
+/// more accurate: shown once, from the mic, while that's off on a device that can run it.
+public enum VoiceTip {
+    static let key = "voice.tip.shown"
+
+    public static let title = "More accurate voice input"
+
+    /// What it is, in plain words: `device` is "Mac" or "iPhone".
+    public static func line(device: String) -> String { "Uses a more capable model that runs on this \(device)." }
+
+    /// After Not Now, where it is: `settings` is the page's path.
+    public static func later(settings: String) -> String { "You can turn it on anytime in \(settings)." }
+
+    /// A dictation just wrote something: whether to show the tip now. Its turn is taken as it's
+    /// shown, so it never shows again, however it's closed.
+    @MainActor
+    public static func takeTurn(model: SpeechModel = .shared, defaults: UserDefaults = .standard) -> Bool {
+        guard !defaults.bool(forKey: key), !model.isOn, model.state != .unsupported else { return false }
+        defaults.set(true, forKey: key)
+        return true
+    }
+}

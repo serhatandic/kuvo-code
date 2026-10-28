@@ -26,11 +26,20 @@ struct VoiceComposerRow: View {
     var body: some View {
         HStack(spacing: 10) {
             switch voice.phase {
-            case .preparing:
-                // Asking for the microphone, the first time.
-                Spinner(size: 13)
-                Text("Getting voice ready…")
-                    .foregroundStyle(.secondary)
+            case .preparing(let progress):
+                // Downloading Apple's speech model for your language, when it says how far;
+                // asking for the microphone, or loading Whisper, not.
+                if let progress {
+                    Text("Getting voice ready…")
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                    ProgressLine("Downloading the speech model", fraction: progress, layout: .inline)
+                        .frame(maxWidth: 260)
+                } else {
+                    Spinner(size: 13)
+                    Text("Getting voice ready…")
+                        .foregroundStyle(.secondary)
+                }
                 Spacer(minLength: 8)
             case .failed(let failure):
                 Image(systemName: "mic.slash")
@@ -178,7 +187,7 @@ struct VoiceField: View {
 
     private var status: String {
         switch voice.phase {
-        case .preparing: "Getting voice ready…"
+        case .preparing(let progress): progress.map { "Getting voice ready… \(Int(($0 * 100).rounded()))%" } ?? "Getting voice ready…"
         case .finishing: "Finishing…"
         case .failed: "Voice input stopped"
         default: "Listening"
@@ -194,7 +203,7 @@ struct VoiceFieldCover: View {
 
     var body: some View {
         if let voice = app.dictation.voice, app.dictation.style == .field {
-            VoiceField(voice: voice, cancel: { app.dictation.cancel() }, done: { app.dictation.finish() }, openSettings: Composer.openMicrophoneSettings)
+            VoiceField(voice: voice, cancel: { app.dictation.cancel() }, done: { app.dictation.finish() }, openSettings: { Composer.openPrivacySettings(for: voice.phase) })
                 .background {
                     Rectangle()
                         .fill(.ultraThinMaterial)

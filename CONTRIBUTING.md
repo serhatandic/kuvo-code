@@ -411,8 +411,8 @@ when you're there to answer.
 | `KUVO_DEMO_MAKE_HOME` | `<machine>`, with `KUVO_DEMO_SETTINGS=machines`: once it's connected, makes this Mac its home, as Make This Mac Its Home… does (to try a move between two demo copies) |
 | `KUVO_DEMO_MACHINE_ROOT` | A folder of its own in machines' home folders (like `.kuvo-code-demo`), so the demo copy's engine and browser there never touch your own copy's. What it starts there stops when it quits, except in `.kuvo-code-demo` while its phone link is on, so a phone tried with it reaches its bots with the Mac shut |
 | `KUVO_DEMO_COMMENT` | Add a review comment to the session in view, as `<path in the project>:<line>:<text>` |
-| `KUVO_DEMO_VOICE` | With `KUVO_DEMO_SESSION`: voice input listening for it with sample words, `composer` (in the composer) or `field` (the voice field), without the microphone; `model`, its mic's popover while the voice model comes (with `KUVO_DEMO_WHISPER`) |
-| `KUVO_DEMO_WHISPER` | Whisper's download as if it were `downloading`, `paused`, `waiting`, `failed`, `space`, `preparing` or `ready`, without the network (the ring on the mic and its popover, Settings › General › Speech model); `download` starts the real download, into the copy's own folder |
+| `KUVO_DEMO_VOICE` | With `KUVO_DEMO_SESSION`: voice input listening for it with sample words, `composer` (in the composer) or `field` (the voice field), without the microphone; `tip`, the one-time tip about more accurate voice input, from the mic |
+| `KUVO_DEMO_WHISPER` | Whisper's download as if it were `downloading`, `paused`, `waiting`, `failed`, `space`, `preparing` or `ready`, without the network (the ring on the mic, Settings › General › Voice Input); `download` starts the real download, into the copy's own folder |
 | `KUVO_DEMO_QUOTES` | With `KUVO_DEMO_SESSION`: that many quotes to answer in its composer (a session's or a group chat's, as `group:<id>`) |
 | `KUVO_DEMO_FIND` | With `KUVO_DEMO_SESSION`: Find in it, looking for these words |
 | `KUVO_DEMO_CONNECTED` | With `KUVO_DEMO_SETTINGS=integrations`: that integration's sign-in sheet, on its last step |

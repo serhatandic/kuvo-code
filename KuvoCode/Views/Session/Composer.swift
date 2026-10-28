@@ -303,7 +303,7 @@ struct Composer: View {
 
             if let voice = listening {
                 // The chips make way for the voice: how long, how loud, Cancel and Done.
-                VoiceComposerRow(voice: voice, cancel: { app.dictation.cancel(); focusAtEnd() }, done: { app.dictation.finish() }, openSettings: Self.openMicrophoneSettings)
+                VoiceComposerRow(voice: voice, cancel: { app.dictation.cancel(); focusAtEnd() }, done: { app.dictation.finish() }, openSettings: { Self.openPrivacySettings(for: voice.phase) })
                     .transition(.opacity)
             } else {
                 HStack(spacing: 4) {
@@ -596,9 +596,10 @@ struct Composer: View {
         }
     }
 
-    /// Privacy & Security › Microphone, when it wasn't allowed.
-    static func openMicrophoneSettings() {
-        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
+    /// Privacy & Security, on what wasn't allowed: the microphone, or speech recognition.
+    static func openPrivacySettings(for phase: VoiceInput.Phase) {
+        let pane = phase == .failed(.speechDenied) ? "Privacy_SpeechRecognition" : "Privacy_Microphone"
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?" + pane)!)
     }
 
     private var actionButton: some View {

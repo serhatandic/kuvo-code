@@ -7,9 +7,8 @@ import Speech
 /// it listens on this device's microphone, writes what you say as you say it (`transcript`), says
 /// how loud you are (`level`, for the motion), and goes on, through any silence, until you say
 /// done. Then `ended` gets the words, for the composer to take. Speech is recognized on the
-/// device, by Whisper (`SpeechModel`), and only once it's here: until then voice input doesn't
-/// start. A device that can't run Whisper listens with Apple's dictation. Each is told the words
-/// you're likely to say (the project's names).
+/// device: by Apple's dictation, or by Whisper once it's turned on and ready (`SpeechModel`),
+/// each told the words you're likely to say (the project's names).
 @MainActor
 @Observable
 public final class VoiceInput {
@@ -97,16 +96,16 @@ public final class VoiceInput {
     }
 
     /// Starts listening in `locale`'s language, for `words` (the project's names, which it's told
-    /// to expect), asking for the microphone the first time. Nothing starts while the model
-    /// can't listen yet: the mic brings it in first (`SpeechModel.micPressed`).
+    /// to expect), asking for the microphone the first time: with Whisper if it's on and ready,
+    /// otherwise with Apple's dictation (which never waits on Whisper's download).
     public func start(locale: Locale = .current, words: @escaping @Sendable () async -> [String] = { [] }) {
         start(locale: locale, words: words, clip: nil)
     }
 
-    /// As `start`, with Whisper hearing `clip` rather than the microphone: for tests, which play
-    /// it a recording.
+    /// As `start`, with Whisper (on and ready) hearing `clip` rather than the microphone: for
+    /// tests, which play it a recording.
     func start(locale: Locale = .current, words: @escaping @Sendable () async -> [String] = { [] }, clip: AsyncStream<[Float]>?) {
-        guard !isActive, model.canListen else { return }
+        guard !isActive else { return }
         run += 1
         let run = run
         transcript = VoiceTranscript()
@@ -116,7 +115,7 @@ public final class VoiceInput {
         listeningSince = nil
         meter = VoiceLevel()
         phase = .preparing(progress: nil)
-        if model.isReady, let folder = model.modelFolder {
+        if model.listensWithWhisper, let folder = model.modelFolder {
             usesWhisper = true
             listening = Task { await listenWithWhisper(folder: folder, locale: locale, words: words, clip: clip, run: run) }
         } else {
@@ -172,7 +171,7 @@ public final class VoiceInput {
     /// a demo copy's screenshots, which mustn't ask for it.
     public func showSample(confirmed: String, guess: String, level: Double = 0.5) {
         run += 1
-        usesWhisper = model.isReady
+        usesWhisper = model.listensWithWhisper
         transcript = VoiceTranscript()
         transcript.take(confirmed, start: 0, isFinal: true)
         if !guess.isEmpty { transcript.take(guess, start: 1, isFinal: false) }

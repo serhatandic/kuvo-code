@@ -26,9 +26,9 @@ struct MicRing: View {
 
 }
 
-/// The composer's mic: it listens once the voice model can; until then a press brings the model
-/// in, and its popover says how far it's come. Its own view, so the composer isn't drawn again
-/// with each piece of the download.
+/// The composer's mic, with Whisper's ring while it comes (Apple's dictation listens meanwhile),
+/// and, once after the first dictation, the tip that voice input can be more accurate. Its own
+/// view, so the composer isn't drawn again with each piece of the download.
 struct MicButton: View {
     @Environment(AppModel.self) private var app
     /// The composer it's for.
@@ -37,152 +37,133 @@ struct MicButton: View {
     private var model: SpeechModel { .shared }
 
     var body: some View {
-        // Where the model is, once there's something to say: while it comes, or stopped.
-        let words = model.canListen || model.state == .absent ? nil : model.micWords.title
-        let shown = app.dictation.waitsForModel == owner && !model.canListen
+        let progress = model.progressWords
+        let tip = app.dictation.tipFor == owner
         Button(action: start) {
             Image(systemName: "mic")
                 .font(.system(size: 14, weight: .medium))
                 .frame(width: 30, height: 28)
                 .overlay { MicRing(model: model) }
-                .hoverHighlight(in: Capsule(), selected: shown, mutesInk: true)
+                .hoverHighlight(in: Capsule(), mutesInk: true)
         }
         .buttonStyle(.plain)
         .clickablePointer()
-        .help(words ?? "Talk Instead of Typing (⇧⌘Space)")
+        .help(["Talk Instead of Typing (⇧⌘Space)", progress].compactMap(\.self).joined(separator: "\n"))
         .accessibilityLabel("Voice Input")
-        .accessibilityValue(words ?? "")
-        .accessibilityHint(model.canListen ? "Talk instead of typing" : model.state == .absent ? "Downloads the voice model first" : "Says how far the voice model has come")
-        // Pressed while the voice model comes (or by the shortcut): how far it's come.
-        .popover(isPresented: Binding { shown } set: { if !$0 { app.dictation.stopWaiting(for: owner) } }, arrowEdge: .bottom) {
-            VoiceModelPopover(model: model) { app.dictation.stopWaiting(for: owner) }
-                .popoverContent()
+        .accessibilityValue(progress ?? "")
+        .accessibilityHint("Talk instead of typing")
+        .popover(isPresented: Binding { tip } set: { if !$0 { closeTip() } }, arrowEdge: .bottom) {
+            VoiceTipPopover(turnOn: {
+                closeTip()
+                app.openSettings(.general)
+            }, close: closeTip)
+            .popoverContent()
         }
-        // VoiceOver doesn't go into a popover by itself: it hears where the model is, and when it's ready.
-        .onChange(of: shown) { _, shown in
-            if shown { AccessibilityNotification.Announcement(model.micWords.title).post() }
+        // VoiceOver doesn't go into a popover by itself: it hears the tip.
+        .onChange(of: tip) { _, tip in
+            if tip { AccessibilityNotification.Announcement("\(VoiceTip.title). \(VoiceTip.line(device: "Mac"))").post() }
         }
-        .onChange(of: model.canListen) { _, canListen in
-            guard canListen, app.dictation.waitsForModel == owner else { return }
-            app.dictation.stopWaiting(for: owner)
-            AccessibilityNotification.Announcement("Voice input is ready").post()
-        }
-        // Another conversation in this composer, or none: the popover was that one's.
-        .onChange(of: owner) { old, _ in app.dictation.stopWaiting(for: old) }
-        .onDisappear { app.dictation.stopWaiting(for: owner) }
+        .onDisappear(perform: closeTip)
+    }
+
+    private func closeTip() {
+        if app.dictation.tipFor == owner { app.dictation.tipFor = nil }
     }
 }
 
-/// From the mic, pressed while the voice model is still coming: how far it's come, plainly, and
-/// Cancel; the first time it's made ready, that it takes a while. It closes once voice input can listen.
-struct VoiceModelPopover: View {
-    let model: SpeechModel
+/// The tip, once, after the first dictation: more accurate voice input, with Turn On… (its
+/// setting) and Not Now, which says where it is and then closes.
+struct VoiceTipPopover: View {
+    let turnOn: () -> Void
     let close: () -> Void
+    @State private var later = false
 
     var body: some View {
-        let words = model.micWords
         VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(words.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .monospacedDigit()
-                if let detail = words.detail {
-                    Text(detail)
+            if later {
+                Text(VoiceTip.later(settings: "Settings › General"))
+                    .font(.system(size: 13))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .task {
+                        try? await Task.sleep(for: .seconds(4))
+                        close()
+                    }
+            } else {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(VoiceTip.title)
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(VoiceTip.line(device: "Mac"))
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-            }
-            if let action {
                 HStack {
                     Spacer()
-                    action
+                    Button("Not Now") { withAnimation(.ui) { later = true } }
+                    Button("Turn On…", action: turnOn)
+                        .keyboardShortcut(.defaultAction)
                 }
             }
         }
         .padding(14)
         .frame(width: 280, alignment: .leading)
-        .accessibilityElement(children: .contain)
-    }
-
-    /// Cancel while it comes (what's come is kept, for the next press); Try Again once it stopped.
-    private var action: AnyView? {
-        switch model.state {
-        case .downloading, .waiting, .askingCellular:
-            AnyView(Button("Cancel") {
-                model.pause()
-                close()
-            })
-        case .lowSpace:
-            AnyView(Button("Manage Storage…") { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.settings.Storage")!) })
-        case .failed, .paused:
-            AnyView(Button(model.state == .paused ? "Resume" : "Try Again") { model.download() }
-                .keyboardShortcut(.defaultAction))
-        default:
-            nil
-        }
     }
 }
 
-/// Settings › Voice Input › Speech model: Whisper's download, and taking it away.
+/// Settings › General › Voice Input: more accurate voice input (Whisper), turned on or off; its
+/// download while it comes, and taking it away.
 struct SpeechModelRow: View {
     let model: SpeechModel
     @State private var confirmsRemoving = false
 
-    /// Stopped with part of it here.
-    private var canRemovePart: Bool {
-        guard model.received > 0 else { return false }
-        switch model.state {
-        case .paused, .failed, .lowSpace: return true
-        default: return false
-        }
-    }
-
     /// On its way: a bar with how much has come.
-    private var showsBar: Bool { [.downloading, .paused, .waiting(.network), .waiting(.wifi), .askingCellular].contains(model.state) }
+    private var showsBar: Bool { model.isOn && [.downloading, .paused, .waiting(.network), .waiting(.wifi), .askingCellular].contains(model.state) }
 
     var body: some View {
-        LabeledContent {
+        Toggle(isOn: Binding { model.isOn } set: { model.isOn = $0 }) {
+            Text("More accurate voice input")
+            Text(model.status(device: "Mac", amount: !showsBar))
+        }
+        .disabled(model.state == .unsupported)
+        // Back from freeing space: it goes on.
+        .onAppear { if model.isOn, case .lowSpace = model.state { model.download() } }
+        .confirmationDialog("Remove Whisper from this Mac?", isPresented: $confirmsRemoving) {
+            Button("Remove Download", role: .destructive) { model.remove() }
+        } message: {
+            Text("Voice input goes back to Apple’s dictation. You can download Whisper again here.")
+        }
+        if showsBar || hasActions {
             HStack(spacing: 8) {
-                switch model.state {
-                case .absent:
-                    Button("Download") { model.download() }
-                case .downloading, .waiting, .askingCellular:
-                    Button("Pause") { model.pause() }
-                case .paused:
-                    Button("Resume") { model.download() }
-                case .failed:
-                    Button("Try Again") { model.download() }
-                case .lowSpace:
-                    Button("Manage Storage…") { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.settings.Storage")!) }
-                case .ready:
-                    Button("Remove Download…") { confirmsRemoving = true }
-                case .preparing:
-                    Spinner(size: 13)
-                case .unsupported:
-                    EmptyView()
-                }
-                // Part of it here, stopped: that can go too.
-                if canRemovePart {
-                    Button("Remove") { model.remove() }
-                }
-            }
-        } label: {
-            Text("Whisper")
-            VStack(alignment: .leading, spacing: 6) {
-                Text(model.status(device: "Mac", amount: !showsBar))
                 if showsBar {
                     ProgressLine("Downloading Whisper", bytes: model.received, of: model.size)
                         .frame(maxWidth: 360)
                 }
+                Spacer(minLength: 8)
+                actions
             }
         }
-        // Back from freeing space: it goes on.
-        .onAppear { if case .lowSpace = model.state { model.download() } }
-        .confirmationDialog("Remove Whisper from this Mac?", isPresented: $confirmsRemoving) {
-            Button("Remove Download", role: .destructive) { model.remove() }
-        } message: {
-            Text("Voice input needs it: it’s downloaded again the next time you click the microphone, or here.")
+    }
+
+    private var hasActions: Bool {
+        canRemove || (model.isOn && model.state != .absent && model.state != .ready && model.state != .unsupported)
+    }
+
+    /// What's here of it can go once it isn't coming or being made ready.
+    private var canRemove: Bool { model.received > 0 && !model.isUnderway && model.state != .preparing }
+
+    @ViewBuilder private var actions: some View {
+        if model.isOn {
+            switch model.state {
+            case .downloading, .waiting, .askingCellular: Button("Pause") { model.pause() }
+            case .paused: Button("Resume") { model.download() }
+            case .failed: Button("Try Again") { model.download() }
+            case .lowSpace: Button("Manage Storage…") { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.settings.Storage")!) }
+            case .preparing: Spinner(size: 13)
+            case .absent, .ready, .unsupported: EmptyView()
+            }
+        }
+        if canRemove {
+            Button("Remove Download…") { confirmsRemoving = true }
         }
     }
 }
