@@ -170,6 +170,9 @@ struct SideThreadBar: View {
     @FocusState private var followUpFocused: Bool
     @State private var follows = FollowsEnd()
 
+    /// KUVO_DEMO_SIDE_THREAD_HOVER: the answer's Copy shown as with the pointer over it.
+    private static let copyHovered = ProcessInfo.processInfo.environment["KUVO_DEMO_SIDE_THREAD_HOVER"] != nil
+
     private var latest: SideQuestion { thread.latest }
     private var isAnswering: Bool { latest.state == .answering }
 
@@ -215,9 +218,13 @@ struct SideThreadBar: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // Room inside the scroll view, which clips, for Copy's fill reaching past the
+                // answer's edge, as under a message; the turns stay where they were.
+                .padding(.leading, 6)
             }
             .frame(maxHeight: 260)
             .fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, -6)
             .defaultScrollAnchor(.bottom, for: .initialOffset)
             // Where you stopped scrolling: only then, as its height settles in more than one pass.
             .onScrollPhaseChange { _, phase, context in
@@ -259,8 +266,9 @@ struct SideThreadBar: View {
                     .fixedSize(horizontal: false, vertical: true)
                 if isLatest, let answer = question.answer {
                     // A reply's own Copy and Reply, the same buttons and the same tick once copied.
-                    HStack(spacing: 6) {
+                    HStack(spacing: 0) {
                         CopyButton(text: answer, help: "Copy the Answer")
+                            .environment(\.showsHover, Self.copyHovered)
                         MessageActionButton(symbol: "arrowshape.turn.up.left", help: "Reply: quotes this answer in the composer") { addToChat(answer) }
                     }
                     // The copy glyph under the answer's first letter.
