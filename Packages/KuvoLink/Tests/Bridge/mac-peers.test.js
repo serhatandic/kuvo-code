@@ -135,9 +135,8 @@ async function bridgeWith() {
   return { port, password: "pw", pid: process.pid, seen, give: line => { for (const stream of seen.streams) stream.write(JSON.stringify(line) + "\n"); } };
 }
 
-// The app, as its host interface answers this Mac's box: its keys, and which conversations are
-// moving to or from another computer now (it runs the moves).
-const app = { keys: null, moving: new Set(), askedMoving: [] };
+// The app, as its host interface answers this Mac's box: its keys.
+const app = { keys: null };
 const appHost = http.createServer(async (request, response) => {
   const given = await body(request);
   if (request.url === "/hello") {
@@ -146,11 +145,6 @@ const appHost = http.createServer(async (request, response) => {
   }
   if (request.headers.authorization !== "Bearer host-password") return response.writeHead(401).end();
   if (request.url === "/link/identity") return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(app.keys));
-  if (request.url === "/link/moving") {
-    app.askedMoving.push(given.session);
-    poke();
-    return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ moving: app.moving.has(given.session) }));
-  }
   if (request.url === "/link/route") return response.writeHead(404, { "content-type": "application/json", "x-kuvo-answer": "1" }).end("{}");
   response.writeHead(404).end();
 });
@@ -339,11 +333,13 @@ test("letters an earlier Kuvo Code had on their way go on from this Mac's box, a
 
 test("a letter for this Mac's conversation while it moves to another computer isn't delivered: it comes again", { timeout: 60_000 }, async t => {
   signal = t.signal;
-  app.moving.add("ses_mac1");
-  t.after(() => app.moving.delete("ses_mac1"));
-  const asked = app.askedMoving.length;
+  // Moving to another computer, as this Mac's box notes its moves (`kuvo/moves`).
+  const record = path.join(macHome, "run", "moves", "mov_letter1.json");
+  fs.mkdirSync(path.dirname(record), { recursive: true });
+  write(record, { id: "mov_letter1", kind: "chat", thing: "ses_mac1", name: "Release notes", from: mac, to: lab.key, role: "from", stage: "switching",
+    step: "switch", sentAt: Date.now() + 3_600_000, sessions: ["ses_mac1"], peer: lab.key, wasPaused: true, tries: 0, started: Date.now() });
+  t.after(() => fs.rmSync(record, { force: true }));
   write(run("outbox/sending/ltr_moving1.json"), { from: "ses_lab1", to: "ses_mac1", text: "Are you there yet?", wait: false, at: Date.now() });
-  await arrived(() => app.askedMoving.slice(asked).includes("ses_mac1"));
   // Said not now: still the machine's to send again, and nothing reached the conversation.
   await eventually(() => read(run("outbox/sending/ltr_moving1.json"))?.sentTo === mac);
   assert.ok(!macEngine.seen.prompts.some(each => each.text.includes("Are you there yet?")));

@@ -5,10 +5,10 @@
 import { isObject } from "../../shared/json";
 import { receiveDocs } from "../documents/exchange";
 import { readEngineFile } from "../engine/client";
-import { IS_MAC } from "../home";
-import { macMoving } from "../host-interface";
 import { leaveAnswer, letterWent } from "../letters/outbox";
 import { takeLetter } from "../letters/take";
+import { takeMoveMail } from "../moves/move";
+import { frozen } from "../moves/records";
 import { attentionGiven } from "../notices/hold";
 import { macSign, readLink, updateLink } from "../state";
 import { announce, toldPeers, writeAgents } from "./agents";
@@ -27,7 +27,7 @@ import type { MailSender } from "./known";
 let answeringAsk: Promise<void> | null = null;
 const asksFrom = new Map<string, number>();
 
-// What peers tell each other: their agents, letters, and how letters went (PROTOCOL.md, "Peers").
+// What peers tell each other: their agents, letters, how letters went, and moves (PROTOCOL.md, "Peers").
 export function peerMail(sender: MailSender, payload: Record<string, unknown>, host: LinkHost | null | undefined, targets: () => Target[] = () => []): void {
   const send = (peer: LetterSender, message: { delivered: Delivered }) => {
     const link = readLink();
@@ -50,7 +50,9 @@ export function peerMail(sender: MailSender, payload: Record<string, unknown>, h
       answeringAsk = announce(host, readEngineFile).catch(() => {}).finally(() => { answeringAsk = null; });
     }
   }
-  if (isObject(payload.letter)) takeLetter(sender, payload.letter, { send, targets: targets(), answer: leaveAnswer, ...(IS_MAC ? { moving: macMoving } : {}) }).catch(() => {});
+  if (isObject(payload.letter)) takeLetter(sender, payload.letter, { send, targets: targets(), answer: leaveAnswer, moving: async session => frozen().has(session) }).catch(() => {});
+  // A move between this box and that one (PROTOCOL.md, `kuvo/moves`).
+  if (isObject(payload.move)) takeMoveMail(sender, payload.move).catch(() => {});
   // Group chats across your computers: to the coding agents' bridge here.
   if (isObject(payload.seat) || isObject(payload.seatPart)) takeSeat(sender, payload, send).catch(() => {});
   if (isObject(payload.delivered) && typeof payload.delivered.id === "string") letterWent(sender, payload.delivered as unknown as Delivered);

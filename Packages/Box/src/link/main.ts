@@ -44,6 +44,7 @@ import { docsWork, ownDocs, pruneDocs } from "./documents/work";
 import { peerTargets, readBridgeFile, readEngineFile } from "./engine/client";
 import { engineConfigContent } from "./engine/compatibility";
 import { watchBox } from "./engine/watch";
+import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
 import { IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, VERSION_FILE, homeFolder } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
@@ -283,6 +284,8 @@ async function run(): Promise<void> {
   watchBox({ tell, hold });
   // What its group chats send your other computers, carried on the relay connection that's up.
   watchSeats(() => current);
+  // Moves to and from your other computers, carried on the same connection.
+  watchMoves(() => current);
   watchAsks(tell, { answered });
   // Your other computers: this box's agents told to them while the relay connection is up (and
   // listed here, relay or not), and its agents' letters sent; without the relay a while, those

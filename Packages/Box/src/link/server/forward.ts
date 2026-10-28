@@ -4,6 +4,8 @@
 
 import { engineDown, stopShell } from "../areas/engine";
 import { holdArchived } from "../areas/wakes";
+import { MOVING } from "../bots/here";
+import { frozen } from "../moves/records";
 import { attachedIn } from "./attached";
 import type { ModelInput } from "./attached";
 import { namedIn, namingHere } from "./naming";
@@ -71,6 +73,14 @@ export async function* forward(target: Target, path: string, request: LinkReques
   // (`naming`), and that it's from the phone.
   const sending = method === "POST" && /^\/api\/session\/([^/]+)\/(prompt|command)$/.exec(url.pathname);
   const prompt = sending && sending[2] === "prompt" && !request.fromMac ? sending : null;
+  // One moving to or from another computer now takes nothing until it's there.
+  let moving = false;
+  try { moving = Boolean(sending) && frozen().has(decodeURIComponent(sending ? sending[1]! : "")); } catch {}
+  if (moving) {
+    yield { head: { status: 409, headers: { "content-type": "application/json" } } };
+    yield { body: Buffer.from(JSON.stringify({ message: MOVING })) };
+    return;
+  }
   // A session's metadata changed: whether it was archived before, as the engine has it (null when
   // it can't say). A phone sends all of it with any change (a pin, say), the flag as it was too.
   const changed = method === "PATCH" && /^\/api\/session\/([^/]+)$/.exec(url.pathname);

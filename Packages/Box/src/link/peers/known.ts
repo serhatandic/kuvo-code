@@ -10,7 +10,10 @@ import { plainName } from "../../shared/text";
 import { publicOf } from "../crypto/keys";
 import { openOneWay, sealOneWay } from "../crypto/noise";
 import { docKey, held, SIGN } from "../documents/format";
-import { IS_MAC } from "../home";
+import fs from "node:fs";
+import path from "node:path";
+import { IS_MAC, RUN } from "../home";
+import { movedAway } from "../moves/records";
 import { Frame, frame, relaySend } from "../relay/frames";
 import { macSign } from "../state";
 import type { LinkState } from "../state";
@@ -132,12 +135,18 @@ function macWords(link: LinkState | null | undefined): MacWord[] {
 // box it left may still list it, until it's back to let it go.
 export function movedOf(link: LinkState | null | undefined): Map<string, string> {
   const moved = new Map<string, string>();
-  // This Mac's own word: what its app says (`kuvo/link/peers`).
-  if (IS_MAC) {
-    for (const { session, key } of cleanMoved(link?.macMoved)) moved.set(session, key);
-    return moved;
-  }
-  for (const word of macWords(link)) for (const { session, key } of cleanMoved(word.moved)) moved.set(session, key);
+  // COMPAT(beta.1 mac-moves): a Mac's word, from an app that ran moves before its boxes did. Goes when 0.8.0 ships.
+  // A Mac's word: what this Mac's app says (`kuvo/link/peers`), or a Mac's peers document.
+  if (IS_MAC) for (const { session, key } of cleanMoved(link?.macMoved)) moved.set(session, key);
+  else for (const word of macWords(link)) for (const { session, key } of cleanMoved(word.moved)) moved.set(session, key);
+  // Over it, the word of the box that moved each: this one's, and what its peers say they moved,
+  // the newest last.
+  const words: { session: string; key: string; at: number }[] = movedAway();
+  try {
+    const told = JSON.parse(fs.readFileSync(path.join(RUN, "peer-agents.json"), "utf8")) as Record<string, { moved?: unknown }>;
+    for (const each of Object.values(told ?? {})) if (Array.isArray(each?.moved)) words.push(...each.moved.filter((one): one is { session: string; key: string; at: number } => isObject(one) && typeof one.session === "string" && typeof one.key === "string" && typeof one.at === "number"));
+  } catch {}
+  for (const { session, key } of words.sort((one, other) => one.at - other.at)) moved.set(session, key);
   return moved;
 }
 

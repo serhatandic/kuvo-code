@@ -207,9 +207,7 @@ connection.
 - **Who**: each of a box's Macs' peers documents ("Documents") names its boxes: that Mac, and its
   machines whose bridge signs (`id`, the machine's name on that Mac). A box's peers are every box
   they name, itself left out, whoever passed the document on. Only a Mac says who a box's peers
-  are. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`, and the
-  peers document carries `moved`: conversations being moved, by the key of the computer each lives
-  on now (the one it left may still list it until it's let go).
+  are. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`.
 - **Mail**: a box opens mail from its Macs and its peers, and drops the rest. Every mail has `at`
   (milliseconds). A sealed mail frame is at most 65,600 bytes, and one larger isn't sent: letters'
   words and lists are cut to fit.
@@ -229,8 +227,11 @@ connection.
     app did before): its own agents are its bots and its engine's and coding agents' sessions, its
     `features` as its app gives them (`kuvo/link/config`), and it writes `box/run/agents.json`
     (what its group chats name with `&`).
-  - A moved session is the computer's a Mac says it lives on. A session listed by more than one
-    peer is the Mac's when a Mac lists it, and otherwise nobody's.
+  - Each box leaves out what doesn't live there (`kuvo/moves`' `away`), and its mail says what it
+    moved away in the last two days: `agents.moved: [{session, key, at}]`, `key` the box each lives
+    on now. A moved session is the box's that the box that moved it names (the newest word, this
+    box's own too); then the one a Mac's peers document says (`moved`, for 0.8.0-beta.1). A session
+    listed by more than one peer is the Mac's when a Mac lists it, and otherwise nobody's.
   - A Mac connected over SSH writes its list to `run/mac-agents.json` (`{key, at, list}`), which
     the bridge takes when it's newer than the Mac's mail. That list also names the agents of its
     machines whose bridge doesn't talk to peers, each with its `machine`, whose letters the Mac
@@ -244,8 +245,8 @@ connection.
     to a conversation an agent could be. A subagent's, a group chat's seat or one put away doesn't
     take letters. One it can't look up now (its engine starting) is answered `retry`, and so is one
     for a conversation moving to or from another computer now, or that lives on another one now
-    (`moved`): it reaches it where it lives once the move is over (bridge 0.9.63). This Mac's box
-    asks its app whether one of its conversations is moving (`link/moving`).
+    (`moved`): it reaches it where it lives once the move is over (bridge 0.9.63). A box knows by
+    its own moves (`kuvo/moves`; bridge 0.9.100, before which this Mac's box asked its app).
   - **Sender**: it names the sender as the sending box named that agent, when that box alone
     lists `from` and it isn't one of the receiver's own conversations. Otherwise the letter is from
     "an agent on <box>", with no address to answer.
@@ -257,8 +258,8 @@ connection.
     tool; otherwise it reaches the sender's conversation as a message.
   - **Sender side**: a sender takes `delivered` only from the box it sent to, and an answer for a
     waiting tool only from that box. Until `delivered` comes, it sends again each minute, for two
-    days, oldest first, and a letter whose agent no box lists now waits. One for a conversation a
-    Mac says moved (`moved`) goes where it lives now, whichever box it was left for. Before a
+    days, oldest first, and a letter whose agent no box lists now waits. One for a conversation that
+    moved (`moved`) goes where it lives now, whichever box it was left for. Before a
     letter goes, its sender is told of to that box, if it wasn't. Its words are cut on a character's
     boundary.
 - **On this Mac**: its app's conversations' letters for an agent on another computer go to its box
@@ -367,6 +368,69 @@ connection.
   forgets its documents, the peers only it named and what they told it, and leaves other Macs'
   alone. A Mac that can't reach the machine names it in its peers document's `left`, and mails it
   that document once; one that never gets it lets that Mac go after 30 days ("Paired phones").
+
+### kuvo/moves
+
+Move to Computer (bridge 0.9.100, feature `moves`): a bot, a chat or a group chat goes whole to
+another of your computers, the boxes doing it between themselves over peer mail ("Peers", `move`).
+A client asks the box it lives on once, and watches; the move goes on with no client there.
+
+- `GET kuvo/moves/places?kind=bot|chat|group&id=…` → `200 {places: [{key, name, kind, ok, why?}]}`:
+  each of your other computers (its box's key, its name, `mac` or `machine`), and whether it can go
+  there now, with why not in words to show (it works in a project, talks with a coding agent, is in
+  a group chat that lives here with its bots, is moving already). `404 {message}` when it isn't here.
+  A group chat's places say `ok` for every computer: the one it goes to checks its bots live there.
+- `POST kuvo/moves {kind, id, to}` (`to`: the box's key, as `places` gives it) answers once the move
+  ends: `200 {move}` (it lives there now); `409 {message}` refused or taken back, as it was (working,
+  messages still on their way, kept getting messages while it moved, too big, refused there);
+  `503 {message}` the other computer didn't answer; `404 {message}` it isn't here, or that isn't one
+  of your computers. A client that goes doesn't stop it.
+- `GET kuvo/moves` → `200 {moves: [Move], away: [session]}`, and `GET kuvo/moves/events`, the same
+  as a line now and each time it changes. `Move = {id, kind, thing, name, from, to, role, stage,
+  sessions, sent?, size?}`: `from` and `to` are boxes' keys; `role`, whether this box is where it
+  was (`from`) or where it's going (`to`); `stage`: `holding`, `copying`, `switching`,
+  `finishing`; `sessions`, its conversations, root first; `sent` and `size`, bytes, while its copy
+  is on its way. `away`: conversations this box's engine lists that don't live here (a copy not
+  switched to yet, an original still going): clients leave them out.
+- While it moves, nothing reaches it: a prompt to one of its conversations through the link answers
+  `409 {message}`, a letter `retry`, its wake-ups and watches are held (`paused` says `moving`), and
+  changing or deleting the bot answers `409`. A client shows it as moving.
+
+Between the boxes, each `{"move": {op, id, …}}` (`id`: `mov_…`), each step sent again each minute
+until it's answered:
+
+1. The box it leaves holds it, waits until its conversations are settled (no turn running, nothing
+   in their inbox; a minute at most), and packs one file: `move.json` (its conversations as the
+   engine exports them, root first; a bot's own keys; a group chat as its bridge held it, `POST
+   api/kuvo/groups/<id>/hold`) and its folder (a bot's; a chat's wake-ups'), tar, gzip; at most 1 GB.
+2. `offer {kind, thing, name, size, hash, wasPaused, from}` → `ready`, or `refused {message}` (its
+   engine or group chats aren't running, too big, moving the other way). A first offer unanswered
+   for 30 seconds: the other computer isn't there (503).
+3. `part {hash, i, of, d}` (30,000 bytes each, base64url), 16 on their way at once, each answered
+   `got {i}`; one unanswered for 20 seconds goes again.
+4. Once all are there and its SHA-256 matches, the box it goes to puts it in place, held: the
+   folder where it keeps them (one left by a move cut short goes to its trash first), `paused`
+   saying `moving` unless it was paused already, a chat's `directory` its chats folder; each
+   conversation imported under its own ID (one there already gives way); a bot's keys given; a group
+   chat put there held (`PUT api/kuvo/groups/<id>`, `status: "held"`). → `arrived`, or `failed
+   {message}`.
+5. The box it leaves settles and reads it again. Anything new, and it all goes again (from 1, three
+   tries; then 409, `busy`).
+6. It notes the switch, and sends `switch` → `switched`: the box it went to lets its wake-ups go (as
+   they were), starts a group chat (`activate`), and tells a bot what it is (as
+   `kuvo/bots/<id>/arrived` does).
+7. Then the box it left lets the original go: its conversation saved in its folder (or
+   `moved-<id>` in the box's folder) as `conversation.json`, its conversations deleted, a bot's own
+   keys removed, the folder to Kuvo Code's trash (on a Mac, on to the Finder's Trash), a group chat
+   released. It says for two days where those conversations live now ("Peers", `moved`).
+
+Before the switch, anything that goes wrong takes it back: the box it leaves sends `drop` →
+`dropped` (the copy there goes: its conversations, keys and folder, a group chat released) and
+goes on as it was. After it, only forward. Each box keeps its moves in `run/moves/<id>.json` (and
+the bundle beside it), so a move cut short by a restart carries on: one that switched finishes, one
+that didn't is taken back. A held copy no box asks about for a week goes. A peer removed ends its
+moves (what's here goes back as it was). As a box starts, a `moving` hold no move of its own made
+(a released Mac's move cut short) is lifted.
 
 ### Updates
 
@@ -1763,10 +1827,7 @@ application/json`:
     `content-type` and `cache-control`, `x-kuvo-answer: 1` (the app's own answer, whatever its
     status), and its body as it comes, chunked (a followed route streams). One cut off partway
     (the engine went) ends without its last chunk, so the box tells the phone it was cut off. The
-    box closing the request (the phone went) stops what it asked, before any answer too;
-  - `link/moving {"session"}` → `{"moving": bool}`: whether one of this Mac's conversations is
-    moving to or from another computer now (bridge 0.9.63; the app runs the move). Before, mail
-    the box didn't take itself went to the app (`link/mailed`, 0.9.61 and 0.9.62).
+    box closing the request (the phone went) stops what it asked, before any answer too. Before bridge 0.9.63, mail the box didn't take itself went to the app (`link/mailed`, 0.9.61 and 0.9.62).
 
 Names are `KUVO_KEY_*` only (`^KUVO_KEY_[A-Z0-9_]+$`): the box never asks for another, and the app
 answers no other. The app keeps the files the engine reads (`KUVO_KEYS`) in step as it
@@ -2224,6 +2285,12 @@ can go three months after 0.8.0 ships.
 - The letters it sent its agents' way and those it had delivered (`agent-letters.json`,
   `agent-letters-seen.json`, 0.8.0-beta.1), handed to the box's outbox (`kuvo/link/letters/take`).
   <!-- compat: beta.1 mac-letters -->
+- What it learned of GitHub Copilot's Claude models (`copilotClaudeModels` in its preferences),
+  which each box learns now ("Settings per box"): removed as the engine starts.
+  <!-- compat: 0.7 provider-compatibility -->
+- Moves it ran itself (`movesUnderWay` in its preferences), which each box runs now
+  (`kuvo/moves`): forgotten. A `moving` hold one cut short left in a folder is lifted by its box
+  as it starts. <!-- compat: 0.7 mac-moves-under-way -->
 
 **Kuvo Code 0.8.0-beta.1.** It can go once 0.8.0 is out (a beta copy is offered the release).
 - It signs no documents: its setup and mail give its peers as a list (`peers`, with `peersAt` or
@@ -2247,6 +2314,9 @@ can go three months after 0.8.0 ships.
 - It reads and changes a machine's settings with `kuvo-link.js box read` and `box change` over SSH
   ("Settings per box"), which `box route` does for later Macs.
   <!-- compat: beta.1 box-read-change -->
+- It runs moves itself, over SSH, and its peers document's `moved` says where each conversation it
+  moves lives now. A box takes that word under its own boxes' ("Peers", `moved`).
+  <!-- compat: beta.1 mac-moves -->
 - It asks a machine to rename a worktree's branch (`POST kuvo/worktrees/rename`, through `box
   route`), which the box names itself now: it's refused, and that Mac reads the machine's records
   again.

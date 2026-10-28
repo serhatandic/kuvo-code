@@ -1,0 +1,357 @@
+// Move to Computer, box to box (PROTOCOL.md, `kuvo/moves`): this Mac's box and one of its machines
+// move a chat and a bot between them over the relay, with no client in the middle. A chat goes from
+// this Mac to the machine with its wake-ups; a bot goes from the machine to this Mac, asked as this
+// Mac asks a machine (`box route`, a process of its own, which the machine's running link moves it
+// for); one the machine can't take now stays where it was, as it was. This Mac's box is `serve`'s
+// link, here; the machine is `kuvo-link.js run`, a process of its own, set up as the app sets one up
+// over SSH. Only the relay, the app, the engines and the coding agents' bridges are stand-ins.
+//
+// Run with `node --test Packages/KuvoLink/Tests/Bridge/moves.test.js`.
+import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { after, before, test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { relayStandIn } from "./relay-stand-in.js";
+
+const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-moves-")));
+const macHome = path.join(support, "mac");
+const machineHome = path.join(support, "machine");
+for (const home of [macHome, machineHome]) fs.mkdirSync(path.join(home, "run"), { recursive: true });
+// Where each keeps its chats, its bots and their wake-ups.
+const macChats = path.join(support, "Chats"), macBots = path.join(support, "bots"), macWakes = path.join(support, "wakes");
+const labChats = path.join(machineHome, "chats"), labBots = path.join(machineHome, "bots"), labWakes = path.join(machineHome, "wakes");
+
+// What a box wrote (the machine is another process): looked at again every few milliseconds until
+// it's there, or the test runs out of time (`signal`).
+let signal;
+function eventually(found) {
+  return new Promise((resolve, reject) => {
+    const look = () => {
+      const value = found();
+      if (!value) return;
+      clearInterval(timer);
+      resolve(value);
+    };
+    const timer = setInterval(look, 20);
+    signal?.addEventListener("abort", () => {
+      clearInterval(timer);
+      reject(new Error(`it never got there: ${found}`));
+    }, { once: true });
+    look();
+  });
+}
+
+const authorized = request => request.headers.authorization === `Basic ${Buffer.from("opencode:pw").toString("base64")}`;
+function listening(server) {
+  return new Promise(resolve => server.listen(0, "127.0.0.1", () => resolve(server.address().port)));
+}
+function body(request) {
+  return new Promise(resolve => {
+    const chunks = [];
+    request.on("data", chunk => chunks.push(chunk));
+    request.on("end", () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); } catch { resolve({}); }
+    });
+  });
+}
+
+// An engine with its conversations (`{id, title, directory, messages}`), as its API exports, imports
+// and deletes them.
+async function engineWith(sessions) {
+  const engine = { sessions: new Map(sessions.map(each => [each.id, each])), prompts: [] };
+  const server = http.createServer(async (request, response) => {
+    const given = await body(request);
+    const url = new URL(request.url, "http://x");
+    const send = (status, data) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify({ data }));
+    if (!authorized(request)) return response.writeHead(401).end();
+    const listed = each => ({ id: each.id, title: each.title, directory: each.directory, location: { directory: each.directory }, time: { updated: 1 } });
+    if (url.pathname === "/api/session" && request.method === "GET") {
+      // Subagents' (none here), or the latest.
+      if (url.searchParams.get("parentID") && url.searchParams.get("parentID") !== "null") return send(200, []);
+      return send(200, [...engine.sessions.values()].map(listed));
+    }
+    if (url.pathname === "/api/session/active") return send(200, {});
+    if (url.pathname === "/api/model") return send(200, []);
+    if (url.pathname === "/api/experimental/session/import" && request.method === "POST") {
+      if (engine.sessions.has(given.info?.id)) return response.writeHead(409, { "content-type": "application/json" }).end(JSON.stringify({ message: "It's there already." }));
+      engine.sessions.set(given.info.id, { id: given.info.id, title: given.info.title, directory: given.location.directory, messages: given.messages });
+      return send(200, listed(engine.sessions.get(given.info.id)));
+    }
+    const exported = url.pathname.match(/^\/api\/experimental\/session\/([^/]+)\/export$/);
+    if (exported) {
+      const session = engine.sessions.get(exported[1]);
+      return session ? send(200, { info: { id: session.id, title: session.title }, messages: session.messages }) : send(404, null);
+    }
+    const match = url.pathname.match(/^\/api\/session\/([^/]+)(\/inbox|\/prompt|\/instructions\/entries)?$/);
+    const session = match && engine.sessions.get(match[1]);
+    if (!session) return send(404, null);
+    if (match[2] === "/inbox") return send(200, []);
+    if (match[2] === "/instructions/entries") return send(200, []);
+    if (match[2] === "/prompt") {
+      engine.prompts.push({ session: session.id, text: given.text });
+      return send(200, {});
+    }
+    if (request.method === "DELETE") {
+      engine.sessions.delete(session.id);
+      return send(200, true);
+    }
+    return send(200, listed(session));
+  });
+  const port = await listening(server);
+  after(() => { server.closeAllConnections(); server.close(); });
+  return Object.assign(engine, { port, password: "pw" });
+}
+
+// A coding agents' bridge with its group chats (`{group, messages, status}` by ID), as the link
+// holds, brings in, starts and lets go of one (`api/kuvo/groups`).
+async function bridgeWith(groups = new Map()) {
+  const server = http.createServer(async (request, response) => {
+    const given = await body(request);
+    if (!authorized(request)) return response.writeHead(401).end();
+    const send = (status, value) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(value));
+    if (request.method === "GET" && request.url === "/api/kuvo/peers/mail") {
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+      response.flushHeaders();
+      return;
+    }
+    if (request.method === "GET" && request.url === "/api/kuvo/groups") return send(200, { data: [...groups.values()].map(({ group, status }) => ({ group, status })) });
+    const match = request.url.match(/^\/api\/kuvo\/groups\/([^/]+)(?:\/(hold|activate|release))?$/);
+    if (match) {
+      const chat = groups.get(match[1]);
+      if (request.method === "PUT") {
+        groups.set(match[1], { group: given.group, messages: given.messages, status: given.status });
+        return send(200, { data: true });
+      }
+      if (!chat) return send(404, { message: "No such chat." });
+      if (request.method === "GET") return send(200, { data: chat });
+      if (match[2] === "hold") chat.status = "held";
+      if (match[2] === "activate") chat.status = "active";
+      if (match[2] === "release") groups.delete(match[1]);
+      return send(200, { data: match[2] === "hold" ? { group: chat.group, messages: chat.messages } : true });
+    }
+    return send(200, {});
+  });
+  const port = await listening(server);
+  after(() => { server.closeAllConnections(); server.close(); });
+  return { port, password: "pw", pid: process.pid, groups };
+}
+
+// The app, as its host interface answers this Mac's box: its keys.
+const app = { keys: null };
+const appHost = http.createServer(async (request, response) => {
+  const given = await body(request);
+  if (request.url === "/hello") {
+    const proof = crypto.createHmac("sha256", "host-password").update(`kuvo-host-hello\u0000${given.nonce}\u0000127.0.0.1:${appHost.address().port}`).digest("hex");
+    return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ proof }));
+  }
+  if (request.headers.authorization !== "Bearer host-password") return response.writeHead(401).end();
+  if (request.url === "/link/identity") return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(app.keys));
+  if (request.url === "/link/route") return response.writeHead(404, { "content-type": "application/json", "x-kuvo-answer": "1" }).end("{}");
+  response.writeHead(404).end();
+});
+await listening(appHost);
+
+Object.assign(process.env, {
+  KUVO_HOME: macHome,
+  KUVO_BOTS: macBots,
+  KUVO_WAKES: macWakes,
+  KUVO_BOX: "mac",
+  KUVO_ENGINE_CONFIG: path.join(support, "opencode"),
+  KUVO_KEYS: path.join(support, "keys"),
+  KUVO_HOST_URL: `http://127.0.0.1:${appHost.address().port}`,
+  KUVO_HOST_PASSWORD: "host-password",
+});
+const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const relay = await relayStandIn(link, { changed: () => {} });
+
+// A chat on this Mac, with a wake-up; a bot on the machine, in its own folder.
+const messages = text => [{ info: { id: `msg_${crypto.randomBytes(4).toString("hex")}`, role: "user" }, parts: [{ type: "text", text }] }];
+const macEngine = await engineWith([
+  { id: "ses_chat1", title: "Trip plans", directory: macChats, messages: messages("Where to in May?") },
+  { id: "ses_chat2", title: "Groceries", directory: macChats, messages: messages("Milk") },
+]);
+const labEngine = await engineWith([{ id: "ses_bot1", title: "Ada", directory: path.join(labBots, "bot_ada", "workspace"), messages: messages("Remember the deploy.") }]);
+const write = (file, value) => {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, typeof value === "string" ? value : JSON.stringify(value), { mode: 0o600 });
+};
+write(path.join(macHome, "run", "engine.json"), { port: macEngine.port, password: "pw" });
+// A group chat of the machine's bots, and one with a bot of this Mac's, on this Mac.
+const said = [{ id: "gmsg_1", from: "you", text: "Morning." }];
+const macBridge = await bridgeWith(new Map([
+  ["grp_lab", { group: { id: "grp_lab", name: "Lab crew", members: ["bot_lin"] }, messages: said, status: "active" }],
+  ["grp_mix", { group: { id: "grp_mix", name: "Mixed", members: ["bot_lin", "bot_mac"] }, messages: said, status: "active" }],
+]));
+const labBridge = await bridgeWith();
+const { groups: _mac, ...macBridgeRecord } = macBridge;
+const { groups: _lab, ...labBridgeRecord } = labBridge;
+write(path.join(macHome, "run", "bridge.json"), macBridgeRecord);
+write(path.join(machineHome, "run", "engine.json"), { port: labEngine.port, password: "pw" });
+write(path.join(machineHome, "run", "bridge.json"), labBridgeRecord);
+write(path.join(labBots, "bot_lin", "bot.json"), { kuvo: 1, id: "bot_lin", name: "Lin" });
+write(path.join(labBots, "bot_lin", "session"), "ses_lin\n");
+write(path.join(macWakes, "ses_chat1", "wakes.json"), [{ id: "wak_1", due: 1, note: "Book the train" }]);
+write(path.join(labBots, "bot_ada", "bot.json"), { kuvo: 1, id: "bot_ada", name: "Ada", look: { color: "graphite", shape: "round", face: "calm" } });
+write(path.join(labBots, "bot_ada", "session"), "ses_bot1\n");
+write(path.join(labBots, "bot_ada", "MEMORY.md"), "The deploy is on Fridays.\n");
+
+// This Mac's keys, as your Keychain keeps them.
+const macKey = link.newKey();
+const macSecret = crypto.randomBytes(32);
+const mac = link.publicOf(macKey).toString("base64url");
+app.keys = { key: macKey.toString("base64url"), secret: macSecret.toString("base64url"), sign: link.newSigningSeed() };
+
+link.macLink.hold = link.macNoticeHold();
+const handle = link.engineHandler(link.readEngineFile, { name: "Mac" }, link.readBridgeFile, () => {}, link.macLink.hold);
+async function ask(method, p, given) {
+  const parts = [];
+  for await (const part of handle({ method, path: p, headers: {}, body: given ? Buffer.from(JSON.stringify(given)) : Buffer.alloc(0), fromApp: true }, {}, undefined)) parts.push(part);
+  const text = Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString();
+  let json;
+  try { json = JSON.parse(text); } catch {}
+  return { status: parts[0].head.status, json };
+}
+
+// What the machine's box answers this Mac over SSH (`box route`), a process of its own.
+async function askMachine(method, p, given) {
+  const child = spawn(process.execPath, [script, "box", "route"], { env: { PATH: process.env.PATH, HOME: support, KUVO_HOME: machineHome, ...(process.env.BUN_BE_BUN ? { BUN_BE_BUN: "1" } : {}) }, stdio: ["pipe", "pipe", "inherit"] });
+  child.stdin.end(JSON.stringify({ method, path: p, ...(given ? { body: given } : {}) }));
+  let out = "";
+  child.stdout.setEncoding("utf8");
+  for await (const chunk of child.stdout) out += chunk;
+  const answer = JSON.parse(out.trim().split("\n").at(-1));
+  return { status: answer.status, json: JSON.parse(answer.body) };
+}
+
+let lab = null;
+
+before(async () => {
+  assert.notEqual((await ask("PUT", "kuvo/link/config", { phones: false, machines: true, relay: relay.url, name: "Studio Mac", app: "0.9.0", features: ["mac"] })).json?.state, "failed");
+  const setup = await ask("GET", "kuvo/link/setup");
+  assert.equal(setup.status, 200);
+  const result = spawnSync(process.execPath, [script, "setup"], {
+    input: JSON.stringify({ relay: relay.url, name: "lab", mac, macSign: setup.json.macSign, docs: setup.json.docs, id: "lab" }),
+    env: { PATH: process.env.PATH, HOME: support, KUVO_HOME: machineHome, ...(process.env.BUN_BE_BUN ? { BUN_BE_BUN: "1" } : {}) },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  lab = JSON.parse(result.stdout.trim().split("\n").at(-1));
+  assert.equal((await ask("PUT", "kuvo/link/peers", { peers: [{ key: lab.key, sign: lab.sign, address: lab.address, name: "lab", id: "lab" }], moved: [] })).status, 200);
+  link.runMacLink();
+  link.runMacPeers();
+  // Both on the relay, as they are once they've started.
+  await eventually(() => relay.has(link.addressOf(macSecret)) && relay.has(Buffer.from(lab.address, "base64url")));
+});
+
+after(async () => {
+  link.stopMacPeers();
+  link.stopMacLink();
+  let pid = 0;
+  try { pid = Number(fs.readFileSync(path.join(machineHome, "run", "link.pid"), "utf8")); } catch {}
+  if (pid > 0) {
+    try { process.kill(pid, "SIGTERM"); } catch {}
+    for (let tries = 0; tries < 100; tries++) {
+      try { process.kill(pid, 0); } catch { break; }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  }
+  await relay.close();
+  appHost.close();
+  fs.rmSync(support, { recursive: true, force: true });
+});
+
+// What's in a box's trash: each thing it holds, by its name.
+const trashed = home => {
+  try { return fs.readdirSync(path.join(home, "trash")).flatMap(when => fs.readdirSync(path.join(home, "trash", when)).map(name => path.join(home, "trash", when, name))); } catch { return []; }
+};
+
+test("where something can go: each of your other computers", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  const places = await ask("GET", "kuvo/moves/places?kind=chat&id=ses_chat1");
+  assert.equal(places.status, 200);
+  assert.deepEqual(places.json.places, [{ key: lab.key, name: "lab", kind: "machine", ok: true }]);
+  assert.equal((await ask("GET", "kuvo/moves/places?kind=chat&id=ses_nothing")).status, 404);
+});
+
+test("a chat moves from this Mac to the machine, with its wake-ups; here it's gone, kept in the trash", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  const said = macEngine.sessions.get("ses_chat1").messages;
+  const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_chat1", to: lab.key });
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  assert.equal(moved.json.move.thing, "ses_chat1");
+  assert.deepEqual(moved.json.move.sessions, ["ses_chat1"]);
+  // There: its conversation, word for word, in the machine's chats, and its wake-ups going.
+  const there = labEngine.sessions.get("ses_chat1");
+  assert.equal(there?.directory, labChats);
+  assert.deepEqual(there.messages, said);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(labWakes, "ses_chat1", "wakes.json"), "utf8"))[0].note, "Book the train");
+  assert.equal(fs.readFileSync(path.join(labWakes, "ses_chat1", "directory"), "utf8"), labChats);
+  assert.ok(!fs.existsSync(path.join(labWakes, "ses_chat1", "paused")), "its wake-ups go on there");
+  // Here: gone, its conversation kept with its wake-ups in the trash.
+  assert.ok(!macEngine.sessions.has("ses_chat1"));
+  assert.ok(!fs.existsSync(path.join(macWakes, "ses_chat1")));
+  const kept = trashed(macHome).find(each => path.basename(each) === "ses_chat1");
+  assert.ok(kept && JSON.parse(fs.readFileSync(path.join(kept, "conversation.json"), "utf8"))[0].info.id === "ses_chat1");
+  // Nothing under way on either box, and nothing listed where it doesn't live.
+  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+  assert.deepEqual((await askMachine("GET", "kuvo/moves")).json, { moves: [], away: [] });
+});
+
+test("the chat that moved takes messages where it lives now", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  const sent = await ask("POST", "kuvo/link/letters", { peer: lab.key, from: "ses_chat2", to: "ses_chat1", text: "Did you book it?", wait: false });
+  assert.equal(sent.status, 200);
+  const prompt = await eventually(() => labEngine.prompts.find(each => each.session === "ses_chat1"));
+  assert.match(prompt.text, /Did you book it\?$/);
+});
+
+test("a bot moves from the machine to this Mac, asked as this Mac asks a machine", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  const moved = await askMachine("POST", "kuvo/moves", { kind: "bot", id: "bot_ada", to: mac });
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  // Here: its folder, its memory, its conversation working in it, and nothing holding it.
+  assert.equal(fs.readFileSync(path.join(macBots, "bot_ada", "MEMORY.md"), "utf8"), "The deploy is on Fridays.\n");
+  assert.ok(!fs.existsSync(path.join(macBots, "bot_ada", "paused")));
+  assert.equal(macEngine.sessions.get("ses_bot1")?.directory, path.join(macBots, "bot_ada", "workspace"));
+  // There: gone, to the machine's trash with its conversation.
+  assert.ok(!labEngine.sessions.has("ses_bot1"));
+  assert.ok(!fs.existsSync(path.join(labBots, "bot_ada")));
+  const kept = trashed(machineHome).find(each => path.basename(each) === "bot_ada");
+  assert.ok(kept && fs.existsSync(path.join(kept, "conversation.json")));
+});
+
+test("a computer that can't take it now: it stays where it was, as it was", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  // The machine's engine down.
+  const record = path.join(machineHome, "run", "engine.json");
+  const was = fs.readFileSync(record, "utf8");
+  write(record, { port: 9, password: "pw" });
+  t.after(() => write(record, was));
+  const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_chat2", to: lab.key });
+  assert.equal(moved.status, 409);
+  assert.match(moved.json.message, /engine on lab isn’t running/);
+  assert.ok(macEngine.sessions.has("ses_chat2"));
+  assert.ok(!labEngine.sessions.has("ses_chat2"));
+  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+});
+
+test("a group chat goes to the machine its bots live on, held there until the switch; one whose bots don't all live there stays", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  const moved = await ask("POST", "kuvo/moves", { kind: "group", id: "grp_lab", to: lab.key });
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  assert.equal(labBridge.groups.get("grp_lab")?.status, "active");
+  assert.deepEqual(labBridge.groups.get("grp_lab").messages, said);
+  assert.ok(!macBridge.groups.has("grp_lab"), "let go here");
+
+  const mixed = await ask("POST", "kuvo/moves", { kind: "group", id: "grp_mix", to: lab.key });
+  assert.equal(mixed.status, 409);
+  assert.match(mixed.json.message, /Mixed.*bots live on different computers/);
+  assert.equal(macBridge.groups.get("grp_mix")?.status, "active", "it goes on here as it was");
+  assert.ok(!labBridge.groups.has("grp_mix"));
+});
