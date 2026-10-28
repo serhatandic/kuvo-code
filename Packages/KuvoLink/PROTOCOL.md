@@ -1456,19 +1456,26 @@ conversation, or nothing of it), `409` and `503` with `{message}` to show. Times
 A conversation deleted takes its side questions and its review with it (`kuvo.btw.removed`
 `{sessionID}`, `kuvo.review.updated` with `review: null`), also one deleted while the box was stopped.
 
-- **Side questions** (`btw`, "/btw <question>"): a question about a conversation, answered from
-  what it knows (on the engine, from inside its context; with the coding agents, the conversation
-  goes with the question), and kept out of it: the conversation is told nothing. Each conversation
-  keeps its own list (the newest 100), which a client shows apart from the conversation (the
-  Mac's sidebar has them under it).
-  - `POST …/kuvo/btw/<session>` with `{"question"}` (at most 4,000 characters) → `{data:
-    question}`, `state` `answering`; it's answered in a moment. A question: `{id, session, question,
-    state: "answering" | "answered" | "failed", answer?, error?, asked, answered?}`.
+- **Side questions** (`btw`, "/btw <question>"; threads `btw.threads`): a question about a
+  conversation, answered from what it knows (on the engine, from inside its context; with the
+  coding agents, the conversation goes with the question), and kept out of it: the conversation
+  is told nothing. A question can be followed up, in a side thread: each follow-up is answered
+  with its thread so far (the latest dozen answers), and a new "/btw" starts a thread of its own,
+  afresh. Each conversation keeps its own list (the newest 100), which a client shows apart from
+  the conversation (the Mac's sidebar has them under it).
+  - `POST …/kuvo/btw/<session>` with `{"question", "thread"?}` (at most 4,000 characters) →
+    `{data: question}`, `state` `answering`; it's answered in a moment. `thread` asks it as a
+    follow-up in that thread (`404` when there's no such thread); without it, it starts one. A
+    question: `{id, session, thread?, question, state: "answering" | "answered" | "failed",
+    answer?, error?, asked, answered?}`; `thread` is the id of the question that started its
+    thread (its own for the first; one from before threads has none: a thread of its own).
   - `GET …/kuvo/btw/<session>` → `{data: [question]}`, oldest first; `GET …/kuvo/btw` → `{data:
-    [{session, count, latest}]}`, every conversation that has some.
-  - `DELETE …/kuvo/btw/<session>/<id>` takes one away, `DELETE …/kuvo/btw/<session>` all of them.
+    [{session, count, threads, latest}]}`, every conversation that has some (`threads`: how
+    many side threads its `count` questions are in).
+  - `DELETE …/kuvo/btw/<session>/<id>` takes one away, `DELETE …/kuvo/btw/<session>/threads/<thread>`
+    a side thread, all of it, and `DELETE …/kuvo/btw/<session>` all of them.
   - Events: `kuvo.btw.updated` `{sessionID, question}` as one is asked and answered;
-    `kuvo.btw.removed` `{sessionID, id?}`.
+    `kuvo.btw.removed` `{sessionID, id?}` (a thread's, one for each of its questions).
 - **Handoffs** (`handoff`, "/handoff [what to do next]"): a conversation carried on in a fresh one.
   Its model writes a handoff note from inside it, and a new conversation in the same folder, on
   the same model, effort, agent and permissions, titled "<title> (continued)", starts on that note
@@ -1589,6 +1596,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `git` | `kuvo/git/…`: Changes (bridge 0.9.94) |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
+| `btw.threads` | a side question's `thread`, follow-ups and a thread's removal (bridge 0.9.98) |
 | `handoff` | `kuvo/agents/api/kuvo/handoff…`: handoffs |
 | `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
 | `reviews` | `kuvo/agents/api/kuvo/reviews…`: reviews with fresh eyes |

@@ -3676,6 +3676,10 @@ async function goalRoutes(goals, method, parts, body) {
 import { readFileSync as readFileSync10, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "fs";
 var questionLimit = 4000;
 var keptLimit = 100;
+var threadContext = 12;
+function threadOf(question) {
+  return question.thread ?? question.id;
+}
 
 class SideQuestionError extends Error {
   status;
@@ -3743,19 +3747,22 @@ class SideQuestions {
     return this.kept.get(session) ?? [];
   }
   summary() {
-    return [...this.kept].filter(([, list]) => list.length).map(([session, list]) => ({ session, count: list.length, latest: list.at(-1) }));
+    return [...this.kept].filter(([, list]) => list.length).map(([session, list]) => ({ session, count: list.length, threads: new Set(list.map(threadOf)).size, latest: list.at(-1) }));
   }
-  async ask(session, question) {
+  async ask(session, question, thread) {
     const text2 = question.trim();
     if (!text2)
       throw new SideQuestionError(400, "Say what you'd like to know.");
     if (text2.length > questionLimit)
       throw new SideQuestionError(400, `A side question can be at most ${questionLimit.toLocaleString("en-US")} characters.`);
+    if (thread !== undefined && !this.list(session).some((each) => threadOf(each) === thread))
+      throw new SideQuestionError(404, "There's no such side thread.");
     const place = this.place(session);
     await sessionInfo(place.api, session).catch((error) => {
       throw new SideQuestionError(error?.status === 404 ? 404 : 503, error?.status === 404 ? "There's no such conversation here." : "The conversation can't be reached now.");
     });
-    const asked = { id: newID("btw"), session, question: text2, state: "answering", asked: this.now() };
+    const id = newID("btw");
+    const asked = { id, session, thread: thread ?? id, question: text2, state: "answering", asked: this.now() };
     const list = [...this.kept.get(session) ?? [], asked].slice(-keptLimit);
     this.kept.set(session, list);
     this.follow(session);
@@ -3763,11 +3770,11 @@ class SideQuestions {
     this.answer(asked);
     return asked;
   }
-  remove(session, id) {
+  remove(session, id, { thread } = {}) {
     const list = this.kept.get(session) ?? [];
-    const left = id ? list.filter((question) => question.id !== id) : [];
+    const left = thread ? list.filter((question) => threadOf(question) !== thread) : id ? list.filter((question) => question.id !== id) : [];
     if (left.length === list.length)
-      throw new SideQuestionError(404, id ? "There's no such side question." : "That conversation has no side questions.");
+      throw new SideQuestionError(404, thread ? "There's no such side thread." : id ? "There's no such side question." : "That conversation has no side questions.");
     if (left.length)
       this.kept.set(session, left);
     else {
@@ -3776,7 +3783,11 @@ class SideQuestions {
       this.stops.delete(session);
     }
     this.save();
-    emit("kuvo.btw.removed", { sessionID: session, ...id ? { id } : {} });
+    if (thread)
+      for (const gone of list.filter((question) => threadOf(question) === thread))
+        emit("kuvo.btw.removed", { sessionID: session, id: gone.id });
+    else
+      emit("kuvo.btw.removed", { sessionID: session, ...id ? { id } : {} });
   }
   forget(session) {
     if (this.kept.has(session))
@@ -3784,10 +3795,12 @@ class SideQuestions {
   }
   async answer(question) {
     const place = this.place(question.session);
-    const earlier = this.list(question.session).filter((each) => each !== question && each.state === "answered").slice(-3);
+    const list = this.list(question.session);
+    const before = list.slice(0, Math.max(0, list.indexOf(question)));
+    const earlier = before.filter((each) => threadOf(each) === threadOf(question) && each.state === "answered").slice(-threadContext);
     const prompt = `Someone working with you in this conversation asks a side question. Answer it briefly and plainly, from what this conversation shows and what you know. Don't run anything or change anything: this answer isn't added to the conversation, and the work in it carries on as it was.
 ${earlier.length ? `
-Their side questions before this one, with your answers:
+It follows on from their side thread so far, with your answers:
 ${earlier.map((each) => `Q: ${each.question}
 A: ${each.answer}`).join(`
 
@@ -3841,10 +3854,19 @@ async function sideQuestionRoutes(questions, method, parts, body) {
     if (method === "GET" && !id)
       return json2({ data: questions.list(session) });
     if (method === "POST" && !id) {
-      const { question } = await body() ?? {};
+      const { question, thread } = await body() ?? {};
       if (typeof question !== "string")
         return json2({ message: "Say what you'd like to know." }, 400);
-      return json2({ data: await questions.ask(session, question) });
+      if (thread !== undefined && thread !== null && typeof thread !== "string")
+        return json2({ message: "There's no such side thread." }, 404);
+      return json2({ data: await questions.ask(session, question, thread ?? undefined) });
+    }
+    if (method === "DELETE" && id === "threads") {
+      const thread = parts[2];
+      if (!thread)
+        return json2({ message: "There's no such side thread." }, 404);
+      questions.remove(session, undefined, { thread });
+      return json2({});
     }
     if (method === "DELETE") {
       questions.remove(session, id);
@@ -19773,4 +19795,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents d5c2555e47b80ddf6e51463121fae8188ca2c1385d8701f74df272f4e346fba3
+// Built from Packages/Box/src/agents 2028c868da7482ae043843fd01831a2734fb5965a585faff80cf872a0b51212b

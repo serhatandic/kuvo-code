@@ -3889,6 +3889,7 @@ var FEATURES = [
   "bots.make",
   "branch",
   "btw",
+  "btw.threads",
   "config",
   "config.apply",
   "engine.restart",
@@ -9080,7 +9081,7 @@ import fs44 from "node:fs";
 import path44 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.97";
+var BRIDGE_VERSION = "0.9.98";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

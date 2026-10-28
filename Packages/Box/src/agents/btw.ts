@@ -1,5 +1,6 @@
 // Side questions ("/btw what does this regex match?"): asked about a conversation, answered from
-// what it knows, and kept out of it, so the agent's work and context stay as they are. Each
+// what it knows, and kept out of it, so the agent's work and context stay as they are. One can be
+// followed up, as a short side thread: each follow-up is answered with the thread so far. Each
 // conversation keeps its own, in a list of its own that a client shows apart from it (the
 // sidebar's side questions under the conversation). The box answers them and keeps them, here
 // beside the engine, for the engine's sessions and the coding agents' alike (PROTOCOL.md, "Side
@@ -16,6 +17,8 @@ export interface SideQuestion {
   id: string
   /** The conversation it's about. */
   session: string
+  /** The side thread it's in: the id of the question that started it (its own, for one). */
+  thread?: string
   question: string
   state: "answering" | "answered" | "failed"
   answer?: string
@@ -30,6 +33,13 @@ export interface SideQuestion {
 export const questionLimit = 4_000
 /** A conversation keeps this many, the oldest going first. */
 export const keptLimit = 100
+/** A follow-up is answered with this many of its thread's answers before it, the latest. */
+const threadContext = 12
+
+/** The side thread `question` is in (one from before threads is a thread of its own). */
+export function threadOf(question: SideQuestion): string {
+  return question.thread ?? question.id
+}
 
 export class SideQuestionError extends Error {
   constructor(
@@ -101,21 +111,26 @@ export class SideQuestions {
     return this.kept.get(session) ?? []
   }
 
-  /** Every conversation that has some: how many, and the latest, for a list beside them. */
-  summary(): { session: string; count: number; latest: SideQuestion }[] {
-    return [...this.kept].filter(([, list]) => list.length).map(([session, list]) => ({ session, count: list.length, latest: list.at(-1)! }))
+  /** Every conversation that has some: how many, in how many threads, and the latest, for a list beside them. */
+  summary(): { session: string; count: number; threads: number; latest: SideQuestion }[] {
+    return [...this.kept]
+      .filter(([, list]) => list.length)
+      .map(([session, list]) => ({ session, count: list.length, threads: new Set(list.map(threadOf)).size, latest: list.at(-1)! }))
   }
 
-  /** Asks one about `session`: answered in a moment (`kuvo.btw.updated`). */
-  async ask(session: string, question: string): Promise<SideQuestion> {
+  /** Asks one about `session`, a new side thread, or a follow-up in `thread`: answered in a
+   * moment (`kuvo.btw.updated`). */
+  async ask(session: string, question: string, thread?: string): Promise<SideQuestion> {
     const text = question.trim()
     if (!text) throw new SideQuestionError(400, "Say what you'd like to know.")
     if (text.length > questionLimit) throw new SideQuestionError(400, `A side question can be at most ${questionLimit.toLocaleString("en-US")} characters.`)
+    if (thread !== undefined && !this.list(session).some((each) => threadOf(each) === thread)) throw new SideQuestionError(404, "There's no such side thread.")
     const place = this.place(session)
     await sessionInfo(place.api, session).catch((error: any) => {
       throw new SideQuestionError(error?.status === 404 ? 404 : 503, error?.status === 404 ? "There's no such conversation here." : "The conversation can't be reached now.")
     })
-    const asked: SideQuestion = { id: newID("btw"), session, question: text, state: "answering", asked: this.now() }
+    const id = newID("btw")
+    const asked: SideQuestion = { id, session, thread: thread ?? id, question: text, state: "answering", asked: this.now() }
     const list = [...(this.kept.get(session) ?? []), asked].slice(-keptLimit)
     this.kept.set(session, list)
     this.follow(session)
@@ -124,11 +139,11 @@ export class SideQuestions {
     return asked
   }
 
-  /** Takes one away, or all of a conversation's (`id` left out). */
-  remove(session: string, id?: string) {
+  /** Takes one away, a side thread's all (`thread`), or all of a conversation's (both left out). */
+  remove(session: string, id?: string, { thread }: { thread?: string } = {}) {
     const list = this.kept.get(session) ?? []
-    const left = id ? list.filter((question) => question.id !== id) : []
-    if (left.length === list.length) throw new SideQuestionError(404, id ? "There's no such side question." : "That conversation has no side questions.")
+    const left = thread ? list.filter((question) => threadOf(question) !== thread) : id ? list.filter((question) => question.id !== id) : []
+    if (left.length === list.length) throw new SideQuestionError(404, thread ? "There's no such side thread." : id ? "There's no such side question." : "That conversation has no side questions.")
     if (left.length) this.kept.set(session, left)
     else {
       this.kept.delete(session)
@@ -136,7 +151,9 @@ export class SideQuestions {
       this.stops.delete(session)
     }
     this.save()
-    emit("kuvo.btw.removed", { sessionID: session, ...(id ? { id } : {}) })
+    // A thread's, one by one: a client from before threads reads each as it always has.
+    if (thread) for (const gone of list.filter((question) => threadOf(question) === thread)) emit("kuvo.btw.removed", { sessionID: session, id: gone.id })
+    else emit("kuvo.btw.removed", { sessionID: session, ...(id ? { id } : {}) })
   }
 
   /** A conversation deleted: its side questions go with it. */
@@ -146,10 +163,12 @@ export class SideQuestions {
 
   private async answer(question: SideQuestion) {
     const place = this.place(question.session)
-    // What was asked before, so one can follow on from another.
-    const earlier = this.list(question.session).filter((each) => each !== question && each.state === "answered").slice(-3)
+    // Its thread so far, so a follow-up follows on from it; a new thread starts afresh.
+    const list = this.list(question.session)
+    const before = list.slice(0, Math.max(0, list.indexOf(question)))
+    const earlier = before.filter((each) => threadOf(each) === threadOf(question) && each.state === "answered").slice(-threadContext)
     const prompt = `Someone working with you in this conversation asks a side question. Answer it briefly and plainly, from what this conversation shows and what you know. Don't run anything or change anything: this answer isn't added to the conversation, and the work in it carries on as it was.
-${earlier.length ? `\nTheir side questions before this one, with your answers:\n${earlier.map((each) => `Q: ${each.question}\nA: ${each.answer}`).join("\n\n")}\n` : ""}
+${earlier.length ? `\nIt follows on from their side thread so far, with your answers:\n${earlier.map((each) => `Q: ${each.question}\nA: ${each.answer}`).join("\n\n")}\n` : ""}
 <question>
 ${question.question}
 </question>`
@@ -199,9 +218,17 @@ export async function sideQuestionRoutes(questions: SideQuestions | undefined, m
     if (!/^ses_[A-Za-z0-9_]+$/.test(session)) return json({ message: "There's no such conversation here." }, 404)
     if (method === "GET" && !id) return json({ data: questions.list(session) })
     if (method === "POST" && !id) {
-      const { question } = (await body()) ?? {}
+      const { question, thread } = (await body()) ?? {}
       if (typeof question !== "string") return json({ message: "Say what you'd like to know." }, 400)
-      return json({ data: await questions.ask(session, question) })
+      if (thread !== undefined && thread !== null && typeof thread !== "string") return json({ message: "There's no such side thread." }, 404)
+      return json({ data: await questions.ask(session, question, thread ?? undefined) })
+    }
+    if (method === "DELETE" && id === "threads") {
+      // A side thread, all of it.
+      const thread = parts[2]
+      if (!thread) return json({ message: "There's no such side thread." }, 404)
+      questions.remove(session, undefined, { thread })
+      return json({})
     }
     if (method === "DELETE") {
       questions.remove(session, id)

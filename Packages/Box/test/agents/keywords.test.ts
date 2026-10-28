@@ -103,15 +103,28 @@ describe("a side question", () => {
     expect(questions.summary()).toMatchObject([{ session: "ses_work", count: 1, latest: { answer: "It uses the visibilitychange event." } }])
   })
 
-  test("follows on from the ones before it", async () => {
+  test("a follow-up follows on from its side thread; a new one starts afresh; a thread goes whole", async () => {
     const questions = new SideQuestions(join(root, "btw.json"), places())
     questions.onAnswered = beat
-    engine.answers = ["visibilitychange.", "Safari 14 and later."]
-    await questions.ask("ses_work", "Which event?")
+    engine.answers = ["visibilitychange.", "Safari 14 and later.", "A regex for durations."]
+    const first = await questions.ask("ses_work", "Which event?")
+    expect(first.thread).toBe(first.id)
     await until(() => questions.list("ses_work")[0]?.state === "answered")
-    await questions.ask("ses_work", "Which browsers have it?")
+    const followUp = (await (await sideQuestionRoutes(questions, "POST", ["ses_work"], async () => ({ question: "Which browsers have it?", thread: first.id }))).json() as any).data
+    expect(followUp.thread).toBe(first.id)
     await until(() => questions.list("ses_work")[1]?.state === "answered")
     expect(engine.checks[1].prompt).toContain("Q: Which event?\nA: visibilitychange.")
+    // Another /btw: a thread of its own, told nothing of the first.
+    const other = await questions.ask("ses_work", "What does parseDuration match?")
+    await until(() => questions.list("ses_work")[2]?.state === "answered")
+    expect(other.thread).toBe(other.id)
+    expect(engine.checks[2].prompt).not.toContain("visibilitychange")
+    expect(questions.summary()).toEqual([expect.objectContaining({ session: "ses_work", count: 3, threads: 2 })])
+    // A thread that isn't there, and a whole one taken away.
+    expect((await sideQuestionRoutes(questions, "POST", ["ses_work"], async () => ({ question: "And?", thread: "btw_gone" }))).status).toBe(404)
+    expect((await sideQuestionRoutes(questions, "DELETE", ["ses_work", "threads", first.id], async () => ({}))).status).toBe(200)
+    expect(questions.list("ses_work").map((each) => each.question)).toEqual(["What does parseDuration match?"])
+    expect((await sideQuestionRoutes(questions, "DELETE", ["ses_work", "threads", first.id], async () => ({}))).status).toBe(404)
   })
 
   test("about a coding agent's conversation is answered with the conversation in the question", async () => {
