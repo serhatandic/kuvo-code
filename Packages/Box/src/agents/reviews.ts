@@ -571,6 +571,38 @@ async function listFiles(top: string, path?: string): Promise<string[]> {
   return walk(top, path ?? "")
 }
 
+/** The files in `directory`, for a goal's check: in a repository, those changed or new since the
+ * last commit first (git's own, all of them), then the rest git keeps or would, by path; out of
+ * one, only what's in the folder itself (never a walk through a home folder). At most `limit`;
+ * nil when it can't be read. */
+export async function folderFiles(directory: string, limit = 300): Promise<{ names: string[]; more: number } | undefined> {
+  try {
+    const top = realpathSync(directory)
+    const git = gitIn(top)
+    const status = await git(["status", "--porcelain", "-uall", "-z"]).catch(() => undefined)
+    if (status?.code === 0) {
+      // "XY path" (a rename's "XY new\0old").
+      const entries = status.stdout.split("\0").filter(Boolean)
+      const changed: string[] = []
+      for (let index = 0; index < entries.length; index++) {
+        const entry = entries[index]
+        if (entry.length > 3) changed.push(entry.slice(3))
+        if (entry[0] === "R" || entry[0] === "C") index++
+      }
+      const kept = await listFiles(top)
+      const names = [...new Set([...changed, ...kept])]
+      return { names: names.slice(0, limit), more: Math.max(0, names.length - limit) }
+    }
+    const names = readdirSync(top, { withFileTypes: true })
+      .filter((entry) => !entry.name.startsWith(".") && entry.name !== "node_modules")
+      .map((entry) => (entry.isDirectory() ? entry.name + "/" : entry.name))
+      .sort()
+    return { names: names.slice(0, limit), more: Math.max(0, names.length - limit) }
+  } catch {
+    return undefined
+  }
+}
+
 /** The files under `under` in `top`, out of a repository: all but hidden ones and `node_modules`. */
 function walk(top: string, under: string): string[] {
   const found: string[] = []

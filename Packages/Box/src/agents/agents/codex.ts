@@ -546,6 +546,8 @@ interface Active extends Lane {
   stoppedForLimit?: boolean
   model: string
   problem?: string
+  /** In Plan: it looks and plans, and changes nothing. */
+  planning?: boolean
 }
 
 class CodexThread implements Thread {
@@ -558,6 +560,10 @@ class CodexThread implements Thread {
   private inTurn = false
   /** The thread it had was gone: a new one took its place. */
   private startedOver = false
+  /** What Codex asked as its turn ended (its request_user_input_async): your next message answers it. */
+  private asked?: { title: string; options?: string[] | null }[]
+  /** Its card, while it waits: a message you send meanwhile answers it instead. */
+  private waiting?: { abort: AbortController; typed?: MessageInput }
   /** Where Kuvo Code's tools were when it was loaded. */
   private toolsKey?: string
   private skillsKey?: string
@@ -612,7 +618,9 @@ class CodexThread implements Thread {
 
   private policy(hooks: TurnHooks, plan: boolean) {
     if (plan) return { approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly", networkAccess: true } }
-    if (hooks.approvesAll()) return { approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" } }
+    // Approve All: what Codex's own rules ask about (rm -f) is asked too, and your rules let it
+    // through without a card; with "never", Codex refuses it itself.
+    if (hooks.approvesAll()) return { approvalPolicy: "on-request", sandboxPolicy: { type: "dangerFullAccess" } }
     // Ask First: it asks before any command but a look and before every edit ("untrusted"), and
     // what it runs can write in the project and where Kuvo Code keeps wake-ups (kuvo-wake, whose
     // scheduling your rules allow), as the engine's commands can.
@@ -690,6 +698,13 @@ class CodexThread implements Thread {
 
   /** Your message, into the turn under way (Codex's turn/steer). */
   async steer(input: MessageInput): Promise<boolean> {
+    // Codex's question waits for your answer: this is it (a note of the app's isn't).
+    const waiting = this.waiting
+    if (waiting && !waiting.typed && !input.synthetic) {
+      waiting.typed = input
+      waiting.abort.abort()
+      return true
+    }
     const active = this.active
     if (!active?.turnID || !this.nativeID) return false
     try {
@@ -761,13 +776,52 @@ class CodexThread implements Thread {
   async run(input: RunInput, turn: Turn, hooks: TurnHooks): Promise<RunResult> {
     this.inTurn = true
     try {
-      return await this.runTurn(input, turn, hooks)
+      let result = await this.runTurn(input, turn, hooks)
+      // Codex asked you something as it ended (outside Plan its question doesn't wait for you, the
+      // way the engine's and Claude's do): its card asks it in this turn, and Codex goes on with
+      // your answer.
+      while (result.outcome === "succeeded" && this.asked?.length && !hooks.signal.aborted) {
+        const answer = await this.answer(this.asked, hooks)
+        if (!answer) break
+        result = await this.runTurn({ ...input, ...answer, adopt: false }, turn, hooks)
+      }
+      return hooks.signal.aborted && result.outcome === "succeeded" ? { outcome: "interrupted" } : result
     } finally {
+      this.asked = undefined
       this.inTurn = false
     }
   }
 
+  /** What you answered Codex's question with (the card, or a message you sent meanwhile), or nothing (dismissed). */
+  private async answer(questions: NonNullable<CodexThread["asked"]>, hooks: TurnHooks): Promise<{ text: string; files: PromptFile[] } | undefined> {
+    this.asked = undefined
+    const waiting: NonNullable<CodexThread["waiting"]> = { abort: new AbortController() }
+    this.waiting = waiting
+    try {
+      const fields: FormField[] = questions.map((question, index) => ({
+        key: `q${index}`,
+        title: "Question",
+        description: question.title,
+        required: true,
+        type: "string",
+        options: (question.options ?? []).map((option) => ({ value: option, label: option })),
+        custom: true,
+      }))
+      const answer = await hooks.question({ title: questions.length === 1 ? "Question" : "Questions", fields, signal: waiting.abort.signal })
+      if (waiting.typed) return { text: waiting.typed.text, files: waiting.typed.files }
+      if (!answer) return undefined
+      const said = (index: number) => {
+        const value = answer[`q${index}`]
+        return Array.isArray(value) ? value.join(", ") : String(value ?? "")
+      }
+      return { text: questions.length === 1 ? said(0) : questions.map((question, index) => `${question.title}\n${said(index)}`).join("\n\n"), files: [] }
+    } finally {
+      this.waiting = undefined
+    }
+  }
+
   private async runTurn(input: RunInput, turn: Turn, hooks: TurnHooks): Promise<RunResult> {
+    this.asked = undefined
     const rpc = await this.ensureThread(input, hooks)
     // Stopped while Codex was starting.
     if (hooks.signal.aborted) return { outcome: "interrupted" }
@@ -795,7 +849,7 @@ class CodexThread implements Thread {
       collaborationMode: { mode: input.plan ? "plan" : "default", settings: { model: input.model.id, reasoning_effort: effort ?? null, developer_instructions: null } },
     }
     return new Promise<RunResult>((resolve) => {
-      const active: Active = { turn, hooks, resolve, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, subagents: new Map(), spawning: [], auto: input.auto, model: input.model.id }
+      const active: Active = { turn, hooks, resolve, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, subagents: new Map(), spawning: [], auto: input.auto, model: input.model.id, planning: input.plan }
       // As it ends, the agents it spawned that are still at work go on in their sessions (a turn
       // stopped or failed stops them: the session ends them with it).
       active.resolve = (result) => {
@@ -841,6 +895,13 @@ class CodexThread implements Thread {
     // Another turn's (one stopped before, ending late).
     const turnID = params?.turnId ?? params?.turn?.id
     if (active.turnID && turnID && turnID !== active.turnID) return
+    // A question for you at its end, its words shown as they are: asked once the turn's done. One
+    // it went on from (a step after it, more words) isn't asked.
+    if (method === "item/completed" && params?.item?.type === "agentMessage" && Array.isArray(params.item.questions) && params.item.questions.length) {
+      this.asked = params.item.questions.filter((question: any) => typeof question?.title === "string" && question.title)
+    } else if ((method === "item/started" && params?.item?.type !== "agentMessage") || (method === "item/completed" && params?.item?.type === "agentMessage" && params.item.text)) {
+      this.asked = undefined
+    }
     switch (method) {
       case "turn/started":
         active.turnID ??= params.turn?.id
@@ -1486,6 +1547,15 @@ class CodexThread implements Thread {
         return { answers }
       }
       case "mcpServer/elicitation/request": {
+        // Codex asking before an MCP tool runs: your permissions answer it, as any agent's tool
+        // (Approve All, or Kuvo Code's own tools: no card; another server's under Ask First asks).
+        // In Plan, another server's tool, which may change things, is still asked about below.
+        if (params._meta?.codex_approval_kind === "mcp_tool_call" && (!active?.planning || params.serverName === toolServerName)) {
+          const server = String(params.serverName ?? "mcp")
+          const tool = String(params._meta.tool_name ?? /tool "([^"]+)"/.exec(String(params.message ?? ""))?.[1] ?? "tool")
+          const decision = await hooks.permission({ action: `${server}_${tool}`, resources: ["*"], message: params.message ?? undefined, unclassified: server !== toolServerName })
+          return decision === "reject" ? { action: "decline", content: null } : { action: "accept", content: null }
+        }
         // An MCP server asks you something (a form), or to open a page (a sign-in).
         const title = `${params.serverName ?? "A tool"} asks`
         if (params.mode === "url") {

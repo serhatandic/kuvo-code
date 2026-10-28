@@ -1481,7 +1481,7 @@ export class Sessions {
       const attached = withTextFiles(input.text, input.files.map(promptFile))
       // Still that turn, at work (not stopped) with that agent, and not cancelled meanwhile.
       if (live.doing.kind === "running" && live.doing.run === run && run.agent === agent && !handing.cancelled) {
-        taken = await agent.thread.steer({ id: input.id, text: attached.text, files: attached.files }).catch(() => false)
+        taken = await agent.thread.steer({ id: input.id, text: attached.text, files: attached.files, synthetic: Boolean(input.synthetic) }).catch(() => false)
       }
     } finally {
       live.steering.delete(input.id)
