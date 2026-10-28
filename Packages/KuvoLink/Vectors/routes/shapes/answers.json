@@ -2198,6 +2198,9 @@
             "literal": "reviews"
            },
            {
+            "literal": "reviews.parts"
+           },
+           {
             "literal": "reviews.scopes"
            },
            {
@@ -2420,6 +2423,9 @@
            },
            {
             "literal": "reviews"
+           },
+           {
+            "literal": "reviews.parts"
            },
            {
             "literal": "reviews.scopes"

@@ -2540,6 +2540,7 @@ final class Workspace {
         guard let session = try? await api(forSession: id)?.session(id) else { return }
         // Only root sessions get a row; subagent sessions show inside their parent, and under it.
         if let parent = session.parentID {
+            if isHidden(session) { hiddenRuns.insert(session.id) }
             parents[session.id] = parent
             if !isHidden(session) { keepSubSession(session, of: parent) }
             // A subagent's subagent: whose that one is, up to the session with a row.
@@ -2598,7 +2599,23 @@ final class Workspace {
         // The latest ones are enough: tabs come and go.
         if openedSubSessions.count > 200 { openedSubSessions = Dictionary(uniqueKeysWithValues: openedSubSessions.shuffled().prefix(150).map { ($0.key, $0.value) }) }
         UserDefaults.standard.set(openedSubSessions, forKey: "openedSubSessions")
+        if reviewParts.contains(where: { openedSubSessions[$0] == nil }) { reviewParts = reviewParts.filter { openedSubSessions[$0] != nil } }
+        UserDefaults.standard.set(Array(reviewParts), forKey: "openedReviewParts")
     }
+
+    /// A review's part, opened from its card: it opens as a sub-session of `parent` (the
+    /// conversation reviewed), whose list leaves it out as it does the box's other runs.
+    func rememberReviewPart(_ id: String, of parent: String) {
+        parents[id] = parent
+        reviewParts.insert(id)
+        rememberOpened(id)
+        UserDefaults.standard.set(Array(reviewParts), forKey: "openedReviewParts")
+    }
+
+    /// A review's part, opened: once its review is put away, it's gone, not a subagent missing
+    /// (kept, as its tab is, as Kuvo Code opens again).
+    func isReviewPart(_ id: String) -> Bool { reviewParts.contains(id) }
+    @ObservationIgnored private var reviewParts = Set(UserDefaults.standard.stringArray(forKey: "openedReviewParts") ?? [])
 
     /// Learns whose sub-session `id` is, when it has no row and that isn't known yet.
     func findParent(of id: String) async {
@@ -2643,8 +2660,12 @@ final class Workspace {
     /// Subagents a session handed work to that are at it now (through subagents of subagents),
     /// such as those it sent off in the background, which go on after its own turn ends.
     func helpersAtWork(in id: String) -> Int {
-        running.count { $0 != id && root(of: $0) == id }
+        running.count { $0 != id && !hiddenRuns.contains($0) && !reviewParts.contains($0) && root(of: $0) == id }
     }
+
+    /// Sessions under another that are kept out of sight (a review's parts, which their review
+    /// shows): never counted as its subagents at work.
+    private var hiddenRuns: Set<String> = []
 
     /// The session works, itself, through subagents still at it, or with a command it left
     /// running in the background: what its row, tab and bot show.

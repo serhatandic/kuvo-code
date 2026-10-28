@@ -74,6 +74,28 @@ import Testing
         #expect(tabs.selection == .session("ses_timer"))
     }
 
+    // A review's part reads in a session of its own under the conversation: never listed (its
+    // review shows it), it opens from the review's card in the conversation's place, as a
+    // subagent does, with the way back to the conversation.
+    @Test func aReviewsPartOpensInPlaceOfItsConversationButIsNeverListed() async {
+        defer { done() }
+        engine.list([
+            StubEngine.session("ses_timer", title: "Timer cycle", directory: folder),
+            StubEngine.session("ses_part", title: "Review · part 2 of 4", directory: folder,
+                               extra: ["parentID": "ses_timer", "metadata": ["kuvo": ["reviewPart": ["review": "rev_1", "part": 2, "of": 4]]]]),
+        ])
+        await app.workspace.refresh()
+        #expect(app.workspace.subSessions["ses_timer"]?.map(\.id) ?? [] == [], "not one of its subagents")
+        tabs.open(.session("ses_timer"))
+
+        app.workspace.rememberReviewPart("ses_part", of: "ses_timer")
+        tabs.openInPlace("ses_part")
+        #expect(keys == ["ses_part"], "in its conversation's tab")
+        #expect(app.workspace.parent(of: "ses_part") == "ses_timer", "its way back")
+        tabs.openInPlace("ses_timer")
+        #expect(keys == ["ses_timer"])
+    }
+
     @Test func aTabOpensBesideTheOneInViewAndComesBackWhereItWasClosed() async {
         defer { done() }
         await sessions(["ses_a", "ses_b", "ses_c"])

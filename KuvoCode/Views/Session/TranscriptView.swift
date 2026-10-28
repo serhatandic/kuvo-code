@@ -681,6 +681,7 @@ private struct RowView: View, Equatable {
     let reply: (String) -> Void
     @Environment(\.answerAgent) private var answerAgent
     @Environment(\.isOffline) private var isOffline
+    @Environment(\.takesNoMessages) private var takesNoMessages
     @Environment(\.subagentStarter) private var subagentStarter
 
     static func sentAt(_ created: Milliseconds) -> String {
@@ -751,7 +752,7 @@ private struct RowView: View, Equatable {
         case .subagent(let call):
             SubagentRow(call: call, directory: directory)
         case .turnEnd(let idle, let stats, let isLast):
-            TurnEndView(idle: idle, stats: stats, directory: directory, retry: isLast && !isOffline ? stats.message.map { message in { retry(message) } } : nil,
+            TurnEndView(idle: idle, stats: stats, directory: directory, retry: isLast && !isOffline && !takesNoMessages ? stats.message.map { message in { retry(message) } } : nil,
                         build: isLast && stats.agent == "plan" ? buildPlan : nil, reply: reply)
         case .shell(let shell):
             ShellRow(shell: shell)

@@ -6,13 +6,13 @@
 // does it, here beside the engine, with the folder's git, for the engine's sessions and the
 // coding agents' alike (PROTOCOL.md, "Reviews").
 
-import { lstatSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync, type Dirent } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync, type Dirent } from "node:fs"
 import { lstat, readFile } from "node:fs/promises"
-import { join, sep } from "node:path"
+import { dirname, join, sep } from "node:path"
 import { emit } from "./events"
 import type { GoalPlaces } from "./goals"
 import { newID } from "./ids"
-import { at, freshAnswer, sessionInfo, type SessionInfo } from "./oneoff"
+import { at, freshAnswer, messages, sessionInfo, type SessionInfo } from "./oneoff"
 import { run } from "./proc"
 
 export type Severity = "bug" | "risk" | "nit"
@@ -50,6 +50,9 @@ export interface Review {
   progress?: { read: number; of: number }
   /** Where one read in parts was stopped with what it found so far. */
   stopped?: { read: number; of: number }
+  /** Its parts, each read by a reviewer of its own: what each reads, how it's going, and, on the
+   * engine, the session it reads in, to watch it as it reads and look at it after. */
+  parts?: ReviewPart[]
   /** In a sentence: how it looks. */
   summary?: string
   findings: Finding[]
@@ -60,6 +63,24 @@ export interface Review {
   /** In ms since 1970. */
   started: number
   ended?: number
+}
+
+/** One part of a review, read by a reviewer of its own. */
+export interface ReviewPart {
+  n: number
+  of: number
+  /** The files it reads (its first ones, for a part with very many). */
+  files: string[]
+  /** How many files it reads, all of them. */
+  fileCount: number
+  /** `stopped`: Stop ended the review while it read; `waiting` ones then are never read. */
+  state: "waiting" | "reading" | "done" | "failed" | "stopped"
+  /** What it found. */
+  found: number
+  /** The session it reads in, under the conversation (on the engine; none with the coding agents). */
+  session?: string
+  /** What it's doing now, while it reads ("Reading src/a.ts"): replaced as it goes, gone once it's done. */
+  now?: string
 }
 
 /**
@@ -100,10 +121,34 @@ const partLimit = 80_000
 const partsLimit = 30
 /** The changes not committed yet read, at most, in all its parts. */
 const readLimit = partLimit * partsLimit
+/** The files a part names, at most. */
+const partFilesShown = 200
+/** How long a part's reviewer has to read it. */
+const partTime = 10 * 60_000
+/** What a part's reviewer may do: read the project, from outside it, and nothing more (the last
+ * rule that matches wins). Its session is in a folder of its own (`partsFolder`), so no "Always
+ * allow" saved for the project (saved by project, and checked after these) reaches it. */
+function partPermissions(project: string) {
+  return [
+    { action: "*", resource: "*", effect: "deny" },
+    ...["read", "grep", "glob", "list"].map((action) => ({ action, resource: "*", effect: "allow" })),
+    { action: "external_directory", resource: project, effect: "allow" },
+    { action: "external_directory", resource: join(project, "*"), effect: "allow" },
+    { action: "read", resource: "*.env", effect: "deny" },
+    { action: "read", resource: "*.env.*", effect: "deny" },
+  ]
+}
 /** A file bigger than this isn't read (a dump, a video): it's named, not shown. */
 const newFileLimit = 256_000
 /** Files that are written by tools, not people: not read when reading files. */
 const madeByTools = /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|Gemfile\.lock|poetry\.lock|composer\.lock|Package\.resolved|go\.sum)$|\.min\.(js|css)$|\.map$/
+
+/** A part stopped from its own session. */
+class PartStopped extends Error {
+  constructor() {
+    super("The part was stopped.")
+  }
+}
 
 export class ReviewError extends Error {
   constructor(
@@ -141,7 +186,14 @@ export class Reviews {
       for (const review of Array.isArray(saved) ? saved : []) {
         if (typeof review?.session !== "string") continue
         // One under way as the box stopped: said, to be asked again.
-        if (review.state === "reviewing") Object.assign(review, { state: "failed", error: "The computer stopped before the review was done. Ask for it again." })
+        if (review.state === "reviewing") {
+          Object.assign(review, { state: "failed", error: "The computer stopped before the review was done. Ask for it again." })
+          for (const part of review.parts ?? []) {
+            // The part reading then still reads on the engine: stopped (`resume`), as nothing waits for it now.
+            if (part.state === "reading" && part.session) this.leftReading.push(part.session)
+            if (part.state === "reading" || part.state === "waiting") Object.assign(part, { state: "failed", now: undefined })
+          }
+        }
         // One kept in the first shape (a file and a note each): in this one, kept so, so each
         // finding stays the same one (its id) the next time too.
         if (Array.isArray(review.findings) && review.findings.some((each: any) => typeof each?.id !== "string")) reshaped = true
@@ -160,6 +212,10 @@ export class Reviews {
     this.stopped = true
     for (const stop of this.stops.values()) stop()
     this.stops.clear()
+    // A part reading stops with the box: nothing would read what it found.
+    for (const review of this.kept.values()) {
+      for (const part of review.parts ?? []) if (part.state === "reading" && part.session) void this.places.engine.api.request("POST", at(part.session) + "/interrupt").catch(() => {})
+    }
   }
 
   /** A conversation deleted: its review goes with it. */
@@ -199,7 +255,9 @@ export class Reviews {
     // A coding agent's conversation is reviewed by its own agent (another you're signed in to
     // when it can't answer so): another model isn't one it can pick.
     const onEngine = place === this.places.engine
-    const review: Review = { id: newID("rev"), session, state: "reviewing", model: onEngine ? model ?? info.model : info.model, ...(scope && scope.kind !== "uncommitted" ? { scope } : {}), ...(focus ? { focus } : {}), findings: [], started: this.now() }
+    const before = this.kept.get(session)
+    if (before) this.forgetParts(before)
+    const review: Review = { id: newID("rev"), session, state: "reviewing", model: onEngine ? model ?? info.model : info.model, ...(scope && scope.kind !== "uncommitted" ? { scope } : {}), ...(focus ? { focus } : {}), findings: [], parts: [], started: this.now() }
     this.kept.set(session, review)
     this.follow(session)
     this.changed(review)
@@ -283,7 +341,9 @@ export class Reviews {
 
   /** Puts a conversation's review away. */
   dismiss(session: string) {
-    if (!this.kept.delete(session)) throw new ReviewError(404, "That conversation has no review.")
+    const review = this.kept.get(session)
+    if (!review || !this.kept.delete(session)) throw new ReviewError(404, "That conversation has no review.")
+    this.forgetParts(review)
     this.stops.get(session)?.()
     this.stops.delete(session)
     this.save()
@@ -300,9 +360,209 @@ export class Reviews {
     const summary = read === 0 && !review.findings.length ? "Stopped before it read anything." : `Stopped after ${of ? `${read} of ${of} parts` : "starting"}. ${found(review.findings.length)}`
     Object.assign(review, { state: "done", summary, ended: this.now(), ...(of ? { stopped: { read, of } } : {}) })
     delete review.progress
+    // The part reading stops where it is; those after it are never read.
+    for (const part of review.parts ?? []) {
+      if (part.state === "reading" && part.session) void this.places.engine.api.request("POST", at(part.session) + "/interrupt").catch(() => {})
+      if (part.state === "reading") Object.assign(part, { state: "stopped", now: undefined })
+    }
     if (review.findings.length) review.fix = fixMessage(review)
     this.changed(review)
     return review
+  }
+
+  /** Where parts' sessions are: a folder of the box's own beside its reviews, a git repository with
+   * one empty commit, so it's a project of its own, which no "Always allow" was ever saved for.
+   * One that can't be made so isn't used: without its commit the engine would file it with every
+   * folder outside a repository, where an "Always allow" may have been saved. Parts starting
+   * together share one setting up (two at once would trip over each other's git). */
+  private partsFolder(): Promise<string> {
+    this.settingUp ??= this.setUpPartsFolder().finally(() => (this.settingUp = undefined))
+    return this.settingUp
+  }
+
+  private settingUp?: Promise<string>
+
+  private async setUpPartsFolder(): Promise<string> {
+    const folder = this.reviewersFolder
+    const git = (...args: string[]) =>
+      run("git", ["-C", folder, "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
+        timeout: 30_000,
+        env: { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "reviewers@kuvo.run", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "reviewers@kuvo.run" },
+      }).catch(() => undefined)
+    // A repository of its own with its commit (not one it happens to sit in).
+    const made = async () => {
+      const ran = await git("rev-parse", "--show-toplevel", "--verify", "-q", "HEAD")
+      if (ran?.code !== 0) return false
+      try {
+        return realpathSync(ran.stdout.split("\n")[0].trim()) === realpathSync(folder)
+      } catch {
+        return false
+      }
+    }
+    if (await made()) return folder
+    try {
+      mkdirSync(folder, { recursive: true })
+    } catch {}
+    await git("init", "-q")
+    await git("commit", "-q", "--allow-empty", "-m", "Kuvo Code's reviewers read projects from here")
+    if (!(await made())) throw new Error("Kuvo Code couldn't set up the folder its reviewers read from (it needs git), so it can't make sure they only read.")
+    return folder
+  }
+
+  private get reviewersFolder() {
+    return join(dirname(this.file), "reviewers")
+  }
+
+  /** Runs `task`, trying again a while if the engine doesn't answer yet (it may still be starting). */
+  private whenUp(task: () => Promise<void>, tries = 60) {
+    task().catch(() => {
+      if (this.stopped || tries <= 1) return
+      const timer = setTimeout(() => this.whenUp(task, tries - 1), 3_000)
+      timer.unref?.()
+    })
+  }
+
+  /** Parts' sessions that were reading when the box stopped. */
+  private leftReading: string[] = []
+
+  /** Parts whose sessions are being made: the engine may list one before its review hears of it. */
+  private making = 0
+
+  /** Once the engine's link is up: parts left reading when the box stopped are stopped, and parts'
+   * sessions no review here records (made as the box stopped) are deleted. */
+  resume() {
+    const reading = this.leftReading.splice(0)
+    this.whenUp(async () => {
+      for (const session of reading) await this.places.engine.api.request("POST", at(session) + "/interrupt").catch(() => {})
+      await this.sweepParts()
+    })
+  }
+
+  /** Deletes parts' sessions in the reviewers' folder that no review here records: made as the box
+   * stopped, before their review heard of them. Never while a part's session is being made, which
+   * may be listed before its review hears of it. */
+  private async sweepParts() {
+    const api = this.places.engine.api
+    const recorded = (id: string) => [...this.kept.values()].some((review) => (review.parts ?? []).some((part) => part.session === id))
+    let query: string | undefined = `limit=100&order=desc&directory=${encodeURIComponent(this.reviewersFolder)}`
+    for (let pages = 0; pages < 20 && query; pages++) {
+      const listed: { data?: any[]; cursor?: { next?: string } } | undefined = await api.request("GET", `/api/session?${query}`)
+      const data: any[] = Array.isArray(listed?.data) ? listed.data : []
+      for (const session of data) {
+        if (!session?.metadata?.kuvo?.reviewPart || typeof session.id !== "string") continue
+        if (this.making > 0 || recorded(session.id)) continue
+        await api.request("DELETE", at(session.id)).catch(() => {})
+      }
+      query = data.length && listed?.cursor?.next ? `limit=100&cursor=${encodeURIComponent(listed.cursor.next)}` : undefined
+    }
+  }
+
+  /** A review put away or replaced: the sessions its parts were read in go with it. */
+  private forgetParts(review: Review) {
+    for (const part of review.parts ?? []) {
+      if (!part.session) continue
+      const api = this.places.engine.api
+      void (async () => {
+        if (part.state === "reading") await api.request("POST", at(part.session!) + "/interrupt").catch(() => {})
+        await api.request("DELETE", at(part.session!)).catch(() => {})
+      })()
+    }
+  }
+
+  /** A part read in a session of its own under the conversation, on the engine, kept so it can be
+   * watched as it reads (`now`) and looked at after: its reviewer reads the project, nothing
+   * more. Its answer. */
+  private async readInSession(review: Review, info: SessionInfo, part: ReviewPart, prompt: string, going: () => boolean): Promise<string> {
+    const { api, listen } = this.places.engine
+    const folder = await this.partsFolder()
+    // Counted as being made until its review records it (or it's deleted, stopped as it was made).
+    this.making += 1
+    let made: string | undefined
+    try {
+      const answer = await api.request<{ data?: { id?: string } }>("POST", "/api/session", {
+        title: `Review · part ${part.n} of ${part.of}`,
+        location: { directory: folder },
+        ...(review.model ? { model: review.model } : {}),
+        agent: "plan",
+        parentID: info.id,
+        permissions: partPermissions(info.directory!),
+        // Watched, never written to: it reads on its own.
+        metadata: { kuvo: { reviewPart: { review: review.id, part: part.n, of: part.of }, messages: { via: "none", note: "A reviewer reads on its own: this is what it read, thought and found." } } },
+      })
+      made = answer?.data?.id
+      if (!made) throw new Error("The engine didn't start a session for the part.")
+      // Stopped or put away while it was made: it never reads.
+      if (!going()) {
+        await api.request("DELETE", at(made)).catch(() => {})
+        throw new Error("The review was stopped.")
+      }
+      part.session = made
+    } finally {
+      this.making -= 1
+    }
+    const id = made
+    this.changed(review)
+    const tools = new Map<string, string>()
+    let unlisten = () => {}
+    const outcome = await new Promise<string>((resolve) => {
+      const timer = setTimeout(() => {
+        void api.request("POST", at(id) + "/interrupt").catch(() => {})
+        resolve("timed out")
+      }, partTime)
+      timer.unref?.()
+      const end = (how: string) => {
+        clearTimeout(timer)
+        resolve(how)
+      }
+      // A session under the conversation is heard through the conversation's own feed (the engine's
+      // link tells a child's events to its parent's listeners): its own events, picked out.
+      // Stopped before its turn began (its prompt on its way): stopped once it starts. Once more
+      // when the turn's start is heard, as an interrupt sent before it registered stops nothing.
+      let stopping = false
+      let again = false
+      const stopIfStopped = (type?: string) => {
+        if (going()) return
+        if (stopping && (again || type !== "session.execution.started")) return
+        if (stopping) again = true
+        stopping = true
+        void api.request("POST", at(id) + "/interrupt").catch(() => {})
+      }
+      unlisten = listen(info.id, {
+        event: (type, data) => {
+          if (data?.sessionID !== id) return
+          stopIfStopped(type)
+          if (type === "session.execution.succeeded") return end("succeeded")
+          if (type === "session.execution.failed" || type === "session.execution.interrupted") return end(type.split(".").at(-1)!)
+          if (type === "session.tool.input.started" && data.id) tools.set(data.id, String(data.name ?? ""))
+          const now = nowOf(type, data, tools, info.directory!)
+          if (now && now !== part.now && part.state === "reading") {
+            part.now = now
+            this.changedLive(review)
+          }
+        },
+        // Events may have been missed: whether it's still at it, and if not, how it ended.
+        reconnected: async () => {
+          const active = await api.request<{ data?: Record<string, unknown> }>("GET", "/api/session/active").catch(() => undefined)
+          if (!active || active.data?.[id]) return
+          // No turn ended yet (its prompt only just went): still to come, waited for.
+          const idle = (await messages(api, id, 20).catch(() => [])).findLast((message) => message?.type === "idle")
+          if (idle) end(String(idle.outcome ?? "failed"))
+        },
+      })
+      const told = `${prompt}\n\nThe project is in ${info.directory}: read more of its files there if you need to. You can read; you can't change anything.`
+      api.request("POST", at(id) + "/prompt", { text: told }).then(() => stopIfStopped(), (error: any) => end(`failed: ${error?.message ?? error}`))
+    })
+    unlisten()
+    if (outcome === "timed out") throw new Error("The part took too long to read.")
+    if (outcome === "interrupted") throw new PartStopped()
+    if (outcome !== "succeeded") throw new Error(outcome.startsWith("failed: ") ? outcome.slice(8) : "The part's reading failed.")
+    // What it found: what it wrote last (its JSON), from the last step that wrote anything.
+    const written = (await messages(api, id, 50))
+      .filter((message) => message?.type === "assistant")
+      .map((message) => (message.content ?? []).filter((content: any) => content?.type === "text").map((content: any) => String(content.text ?? "")).join("\n").trim())
+      .filter(Boolean)
+    if (!written.length) throw new Error("The part's reviewer gave no answer.")
+    return written.at(-1)!
   }
 
   private async review(review: Review, info: SessionInfo) {
@@ -336,20 +596,37 @@ export class Reviews {
         let summary = ""
         let failed = 0
         let lastError: any
-        if (many) {
-          review.progress = { read: 0, of: parts.length }
-          this.changed(review)
-        }
+        if (many) review.progress = { read: 0, of: parts.length }
+        // The plan: each part, with what it reads.
+        review.parts = parts.map((part, index) => {
+          const named = filesIn([part], files)
+          return { n: index + 1, of: parts.length, files: named.slice(0, partFilesShown), fileCount: named.length, state: "waiting", found: 0 }
+        })
+        this.changed(review)
+        const onEngine = place === this.places.engine
         for (const [index, part] of parts.entries()) {
           const prompt = reviewPrompt(part, review.focus, { files, part: many ? { n: index + 1, of: parts.length } : undefined })
+          const shown = review.parts[index]
+          shown.state = "reading"
+          this.changed(review)
           try {
-            const answer = await freshAnswer(place.api, place === this.places.engine, info, prompt, review.model)
+            // On the engine, in a session of its own to watch; with the coding agents, their one-off answer.
+            const answer = onEngine ? await this.readInSession(review, info, shown, prompt, going) : await freshAnswer(place.api, false, info, prompt, review.model)
             if (!going()) return
             const parsed = parseReview(answer)
             summary = parsed.summary
             review.findings = sortFindings([...review.findings, ...parsed.findings])
+            Object.assign(shown, { state: "done", found: parsed.findings.length, now: undefined })
           } catch (error) {
             if (!going()) return
+            // Stopped from its own session (its Stop): stopped, not failed; the others go on.
+            Object.assign(shown, { state: error instanceof PartStopped ? "stopped" : "failed", now: undefined })
+            // The only part stopped: the review stopped, as its own Stop has it.
+            if (!many && error instanceof PartStopped) {
+              Object.assign(review, { state: "done", summary: "Stopped before it read anything.", ended: this.now() })
+              this.changed(review)
+              return
+            }
             if (!many) throw error
             failed += 1
             lastError = error
@@ -386,6 +663,12 @@ export class Reviews {
   private changed(review: Review) {
     if (this.stopped || this.kept.get(review.session) !== review) return
     this.save()
+    emit("kuvo.review.updated", { sessionID: review.session, review: { ...review } })
+  }
+
+  /** What a part is doing now, told as it changes, kept with the next change (often: not saved each time). */
+  private changedLive(review: Review) {
+    if (this.stopped || this.kept.get(review.session) !== review) return
     emit("kuvo.review.updated", { sessionID: review.session, review: { ...review } })
   }
 
@@ -705,6 +988,31 @@ export function inParts(units: string[]): { parts: string[]; leftOut: number } {
 }
 
 /** How many files a review read: `=== path ===` lines, or a diff's files. */
+/** What a part's reviewer is doing now, from one of its session's events: the file it reads (by its
+ * path in the project), what it looks for, or that it thinks or writes what it found. */
+export function nowOf(type: string, data: any, tools: Map<string, string>, directory: string): string | undefined {
+  if (type === "session.reasoning.started") return "Thinking"
+  if (type === "session.text.started") return "Writing what it found"
+  if (type !== "session.tool.called") return undefined
+  const input = data?.input ?? {}
+  const inProject = (path: unknown) => {
+    const text = String(path ?? "")
+    return text.startsWith(directory + "/") ? text.slice(directory.length + 1) : text
+  }
+  switch (tools.get(data?.id) ?? "") {
+    case "read":
+      return input.filePath ? `Reading ${inProject(input.filePath)}` : "Reading"
+    case "grep":
+      return input.pattern ? `Looking for “${String(input.pattern).slice(0, 60)}”` : "Searching"
+    case "glob":
+      return input.pattern ? `Finding ${String(input.pattern).slice(0, 60)}` : "Finding files"
+    case "list":
+      return input.path ? `Looking in ${inProject(input.path) || "the project"}` : "Looking around the project"
+    default:
+      return "Looking around the project"
+  }
+}
+
 function countFiles(parts: string[], files: boolean): number {
   return filesIn(parts, files).length
 }

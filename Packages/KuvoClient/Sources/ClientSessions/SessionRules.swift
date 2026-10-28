@@ -7,10 +7,11 @@ import OpenCodeKit
 
 /// Sessions a client keeps out of sight.
 public enum HiddenSessions {
-    /// A group chat's seat (its chat shows what matters), or a run the engine keeps for a coding
-    /// agents' session (that session shows what it does).
+    /// A group chat's seat (its chat shows what matters), a run the engine keeps for a coding
+    /// agents' session (that session shows what it does), or a review's part, read in a session of
+    /// its own (its review shows it, and opens it).
     public static func isHidden(_ session: Session) -> Bool {
-        session.metadata?["kuvo"]?["seat"] != nil || session.metadata?["kuvo"]?["engineFor"] != nil
+        session.metadata?["kuvo"]?["seat"] != nil || session.metadata?["kuvo"]?["engineFor"] != nil || session.metadata?["kuvo"]?["reviewPart"] != nil
     }
 }
 

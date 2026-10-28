@@ -120,6 +120,9 @@ struct FailureBar: View {
 extension EnvironmentValues {
     /// The conversation's machine is out of reach: what needs its engine (undo, try again) waits.
     @Entry var isOffline = false
+    /// The conversation shown takes no messages (a review's part, watched, not steered): nothing
+    /// offers to send one, Try Again included.
+    @Entry var takesNoMessages = false
 }
 
 /// What's over the conversation's end: questions and permission requests as solid cards, then

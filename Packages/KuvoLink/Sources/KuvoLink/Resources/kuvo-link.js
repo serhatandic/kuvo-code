@@ -2646,7 +2646,7 @@ import path16 from "node:path";
 
 // Packages/Box/src/link/engine/sessions.ts
 import crypto6 from "node:crypto";
-var isHiddenRun = (session) => Boolean(session?.metadata?.kuvo?.engineFor || session?.metadata?.kuvo?.seat);
+var isHiddenRun = (session) => Boolean(session?.metadata?.kuvo?.engineFor || session?.metadata?.kuvo?.seat || session?.metadata?.kuvo?.reviewPart);
 var lastMessage = { time: 0, counter: 0 };
 function messageID(now = Date.now()) {
   lastMessage = lastMessage.time === now ? { time: now, counter: lastMessage.counter + 1 } : { time: now, counter: 1 };
@@ -4458,6 +4458,7 @@ var FEATURES = [
   "phones.pair",
   "projects",
   "reviews",
+  "reviews.parts",
   "reviews.scopes",
   "search",
   "sessions.agents",
@@ -9681,7 +9682,7 @@ import fs45 from "node:fs";
 import path45 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.103";
+var BRIDGE_VERSION = "0.9.105";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
