@@ -73,10 +73,20 @@ enum DemoLoaders {
                     Text("Searching lokum").font(.system(size: 13))
                     AskingDots()
                 }
+                // The ring in a button takes its label's colour: white on a filled one, grey once
+                // it's disabled; the app's own icon buttons dim it whole.
                 HStack(spacing: 10) {
                     Spinner(size: 14)
-                    Button {} label: { HStack(spacing: 6) { Spinner(size: 12); Text("Signing In") } }
-                        .buttonStyle(.borderedProminent)
+                    Button {} label: { Spinner(size: 11).frame(width: 44) }
+                        .keyboardShortcut(.defaultAction).controlSize(.small).markInk(.onFill)
+                    Button {} label: { Spinner(size: 11).frame(width: 44) }
+                        .keyboardShortcut(.defaultAction).controlSize(.small).markInk(.onFill).disabled(true)
+                    Button {} label: { Spinner(size: 13) }
+                        .buttonStyle(IconButtonStyle(width: 28, height: 26)).disabled(true)
+                }
+                ForEach([false, true], id: \.self) { disabled in
+                    Button {} label: { HStack(spacing: 8) { Spinner(size: 14); Text("Sign In with ChatGPT") }.frame(maxWidth: .infinity) }
+                        .buttonStyle(.glassProminent).controlSize(.extraLarge).markInk(.onFill).disabled(disabled)
                 }
             }
             .padding(16)
@@ -85,6 +95,8 @@ enum DemoLoaders {
             .background(scheme == .dark ? Color(white: 0.12) : Color.white)
             .environment(\.colorScheme, scheme)
             .environment(\._accessibilityReduceMotion, still)
+            // Drawn as in the window in front, though it's behind.
+            .environment(\.appearsActive, true)
         }
     }
 }

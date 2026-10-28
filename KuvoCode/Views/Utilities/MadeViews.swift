@@ -1195,6 +1195,7 @@ struct ArtifactDetail: View {
                     if isRestoring { Spinner(size: 11) } else { Text("Restore") }
                 }
                 .keyboardShortcut(.defaultAction)
+                .markInk(.onFill)
                 .disabled(isRestoring)
             }
             .controlSize(.small)

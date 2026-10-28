@@ -168,6 +168,7 @@ struct ConnectView: View {
                     }
                 }
                 .buttonStyle(index == 0 ? AnyPrimitiveButtonStyle(.glassProminent) : AnyPrimitiveButtonStyle(.glass))
+                .markInk(index == 0 ? .onFill : .automatic)
                 .controlSize(.extraLarge)
                 .disabled(isWorking)
             }

@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// How the app's small, chrome-less controls show they can be clicked: a clear shade at rest
@@ -75,6 +76,8 @@ private struct PressableLabel<Label: View>: View {
             .background(fill, in: .rect(cornerRadius: cornerRadius))
             .contentShape(.rect(cornerRadius: cornerRadius))
             .opacity(isEnabled ? 1 : 0.45)
+            // That dims a mark in it too, so it keeps its own ink rather than going grey as well.
+            .markInk(.unchanged)
             .onHover { isHovering = $0 }
             .clickablePointer()
             .animation(.easeOut(duration: 0.12), value: isHovering)
