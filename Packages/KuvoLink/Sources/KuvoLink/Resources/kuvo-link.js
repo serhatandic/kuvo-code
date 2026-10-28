@@ -8303,22 +8303,27 @@ async function* searchRoute(context) {
   const conversations = lists.flatMap(({ place, sessions }) => byConversation(sessions ?? []).map((conversation) => ({ ...conversation, place }))).sort((one, other) => other.top.time.updated - one.top.time.updated);
   const wanted = fold(words);
   const results = [];
-  for (let start = 0;start < conversations.length && results.length < limit; start += 4) {
-    const batch = conversations.slice(start, start + 4);
-    const kept = await Promise.all(batch.map(({ top, subagents, place }) => Promise.all([top, ...subagents].map((session) => textOf2(place.name, place.target, session)))));
-    for (const [index, texts] of kept.entries()) {
-      if (results.length >= limit)
-        break;
-      const { top, subagents, place } = batch[index];
-      const which = texts.findIndex((found) => found !== null && found.folded.includes(wanted));
+  const findIn = async ({ top, subagents, place }) => {
+    const sessions = [top, ...subagents];
+    for (let start = 0;start < sessions.length; start += start === 0 ? 1 : 4) {
+      const some = sessions.slice(start, start === 0 ? 1 : start + 4);
+      const kept = await Promise.all(some.map((session) => textOf2(place.name, place.target, session)));
+      const which = kept.findIndex((found) => found !== null && found.folded.includes(wanted));
       if (which < 0)
         continue;
-      const found = texts[which];
-      const session = which === 0 ? top : subagents[which - 1];
+      const found = kept[which];
+      const session = some[which];
       const text = "text" in found ? found.text : fromDisk(key(place.name, session.id))?.text;
       if (text === undefined)
         continue;
-      results.push({ session: top.id, snippet: snippet(text, found.folded.indexOf(wanted), wanted.length), info: top, ...which === 0 ? {} : { subagent: session } });
+      return { session: top.id, snippet: snippet(text, found.folded.indexOf(wanted), wanted.length), info: top, ...session === top ? {} : { subagent: session } };
+    }
+    return null;
+  };
+  for (let start = 0;start < conversations.length && results.length < limit; start += 4) {
+    for (const found of await Promise.all(conversations.slice(start, start + 4).map(findIn))) {
+      if (found && results.length < limit)
+        results.push(found);
     }
   }
   const known = conversations.flatMap(({ top, subagents, place }) => [top, ...subagents].map((session) => key(place.name, session.id)));
@@ -8331,7 +8336,7 @@ function byConversation(sessions) {
     let at = session;
     for (let depth = 0;at.parentID && depth < 100; depth++) {
       const above = byID.get(at.parentID);
-      if (!above)
+      if (!above || isHiddenRun(above))
         return null;
       at = above;
     }

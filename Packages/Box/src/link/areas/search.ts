@@ -62,21 +62,27 @@ export async function* searchRoute(context: RouteContext): AsyncGenerator<Answer
     .sort((one, other) => other.top.time.updated - one.top.time.updated);
   const wanted = fold(words);
   const results: SearchFound["results"][number][] = [];
-  // The latest first, a few at a time, reading only what changed since; done once there are enough.
-  // In each, its own words first, then its subagents', the latest first.
-  for (let start = 0; start < conversations.length && results.length < limit; start += 4) {
-    const batch = conversations.slice(start, start + 4);
-    const kept = await Promise.all(batch.map(({ top, subagents, place }) => Promise.all([top, ...subagents].map(session => textOf(place.name, place.target, session)))));
-    for (const [index, texts] of kept.entries()) {
-      if (results.length >= limit) break;
-      const { top, subagents, place } = batch[index]!;
-      const which = texts.findIndex(found => found !== null && found.folded.includes(wanted));
+  // In a conversation, its own words first, then its subagents', the latest first, a few at a
+  // time, until one has them: the first that does is what it's found by.
+  const findIn = async ({ top, subagents, place }: (typeof conversations)[number]) => {
+    const sessions = [top, ...subagents];
+    for (let start = 0; start < sessions.length; start += start === 0 ? 1 : 4) {
+      const some = sessions.slice(start, start === 0 ? 1 : start + 4);
+      const kept = await Promise.all(some.map(session => textOf(place.name, place.target, session)));
+      const which = kept.findIndex(found => found !== null && found.folded.includes(wanted));
       if (which < 0) continue;
-      const found = texts[which]!;
-      const session = which === 0 ? top : subagents[which - 1]!;
+      const found = kept[which]!;
+      const session = some[which]!;
       const text = "text" in found ? found.text : fromDisk(key(place.name, session.id))?.text;
       if (text === undefined) continue;
-      results.push({ session: top.id, snippet: snippet(text, found.folded.indexOf(wanted), wanted.length), info: top, ...(which === 0 ? {} : { subagent: session }) });
+      return { session: top.id, snippet: snippet(text, found.folded.indexOf(wanted), wanted.length), info: top, ...(session === top ? {} : { subagent: session }) };
+    }
+    return null;
+  };
+  // The latest first, a few at a time, reading only what changed since; done once there are enough.
+  for (let start = 0; start < conversations.length && results.length < limit; start += 4) {
+    for (const found of await Promise.all(conversations.slice(start, start + 4).map(findIn))) {
+      if (found && results.length < limit) results.push(found);
     }
   }
   // Only where the list was read: one that couldn't be keeps what it had.
@@ -94,7 +100,7 @@ function byConversation(sessions: EngineSession[]): { top: EngineSession; subage
     let at = session;
     for (let depth = 0; at.parentID && depth < 100; depth++) {
       const above = byID.get(at.parentID);
-      if (!above) return null;
+      if (!above || isHiddenRun(above)) return null;
       at = above;
     }
     return at.parentID ? null : at;

@@ -100,7 +100,10 @@ import Testing
         let found = await workspace.searchConversations("cookie banner")
         #expect(found.map(\.session.id) == ["ses_login"])
         #expect(found.first?.snippet.contains("cookie banner") == true)
-        #expect(await self.found("form") == ["ses_login"], "its own words and its subagent's: found once")
+        #expect(found.first?.subagent == "ses_find", "said by its subagent: opened without Find, which has nothing to show")
+        let form = await workspace.searchConversations("form")
+        #expect(form.map(\.session.id) == ["ses_login"], "its own words and its subagent's: found once")
+        #expect(form.first?.subagent == nil, "by its own words first")
     }
 
     /// Words only the app adds when it writes a conversation out (who's speaking, its title) find

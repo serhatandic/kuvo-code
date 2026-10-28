@@ -151,6 +151,18 @@ test("a subagent's words find the conversation it works for, as that conversatio
   assert.equal(own.body.results[0].subagent, undefined);
 });
 
+test("a subagent's words, once it has said more, are found as it says them now", async t => {
+  const sessions = { list: [session("ses_top", "Top", 50), session("ses_sub", "Sub", 40, { parentID: "ses_top" })] };
+  const conversations = { ses_top: conversation("top", "Look into it", "On it."), ses_sub: conversation("sub", "Find the walrus", "Not yet.") };
+  const box = await engine(t, sessions, conversations);
+  assert.deepEqual((await box.search("narwhal")).found, []);
+  conversations.ses_sub = conversation("sub", "Find the walrus", "Found a narwhal instead.");
+  sessions.list = [session("ses_top", "Top", 50), session("ses_sub", "Sub", 41, { parentID: "ses_top" })];
+  const found = await box.search("narwhal");
+  assert.deepEqual(found.found, ["ses_top"]);
+  assert.equal(found.body.results[0].subagent?.id, "ses_sub");
+});
+
 test("a conversation is read again only once its session changed, and asking with nothing says so", async t => {
   const sessions = { list: [session("ses_again", "Login", 30)] };
   const conversations = { ses_again: conversation("again", "The sign-in form forgets the email", "Fixed.") };
