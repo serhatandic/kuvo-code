@@ -9944,11 +9944,7 @@ async function boxBusy(readEngine = readEngineFile, readBridge = readBridgeFile)
     if (Array.isArray(active) ? active.length : isObject(active) && Object.keys(active).length)
       return true;
   }
-  try {
-    if ((JSON.parse(fs49.readFileSync(ASKS_FILE, "utf8")) ?? []).length)
-      return true;
-  } catch {}
-  return false;
+  return readAsks().length > 0;
 }
 var hexSHA256 = (data) => crypto18.createHash("sha256").update(data).digest("hex");
 function ran(command, args, env = {}, timeout = 120000) {
