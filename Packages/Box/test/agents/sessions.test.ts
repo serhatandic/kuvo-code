@@ -11,7 +11,7 @@ import type { Agent, RunInput, RunResult, Thread, TurnHooks } from "../../src/ag
 import { Auto } from "../../src/agents/auto"
 import { subscribe } from "../../src/agents/events"
 import type { Roster } from "../../src/agents/roster"
-import { Sessions, timing } from "../../src/agents/sessions"
+import { Sessions, shellProcesses, timing } from "../../src/agents/sessions"
 import { Snapshots } from "../../src/agents/snapshots"
 import { Store } from "../../src/agents/store"
 import type { Turn } from "../../src/agents/turn"
@@ -1439,6 +1439,36 @@ describe("commands you run yourself", () => {
       if (end === "deleted") await sessions.remove(id)
       else sessions.closeAll()
       await until(() => !pids.some(running))
+    }
+  })
+
+  test("deleting a session never stops another's: a group of its whose number another command took since is left alone", async () => {
+    // Process group 4242, as the system would give its number: to one session's command, then,
+    // once that's gone, to another session's.
+    const group = 4242
+    const signalled: (NodeJS.Signals | 0)[] = []
+    const { spawn, kill } = shellProcesses
+    shellProcesses.spawn = ((...args: Parameters<typeof spawn>) => Object.defineProperty(spawn(...args), "pid", { value: group })) as typeof spawn
+    shellProcesses.kill = (pid, signal) => {
+      if (pid !== -group) return kill(pid, signal)
+      if (signal !== 0) signalled.push(signal)
+    }
+    try {
+      const folder = mkdtempSync(join(root, "project-"))
+      const first = sessions.create({ model: { providerID: "alpha", id: "one" }, location: { directory: folder } }).id
+      const second = sessions.create({ model: { providerID: "alpha", id: "one" }, location: { directory: folder } }).id
+      const ended = (id: string) => (sessions.messages(id).filter((message) => message.type === "shell") as any[]).every((shell) => shell.status !== "running")
+      // Its command left something running in its group…
+      sessions.runShell(first, "true")
+      await until(() => sessions.messages(first).some((message) => message.type === "shell") && ended(first))
+      // …which ended; then another session's command got the same number.
+      sessions.runShell(second, "true")
+      await until(() => sessions.messages(second).some((message) => message.type === "shell") && ended(second))
+      await sessions.remove(first)
+      expect(signalled).toEqual([])
+    } finally {
+      shellProcesses.spawn = spawn
+      shellProcesses.kill = kill
     }
   })
 

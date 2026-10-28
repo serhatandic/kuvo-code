@@ -150,10 +150,13 @@ export const timing = { stopGrace: 8_000, idleClose: 15 * 60_000, cutShort: 2 * 
 /** In plan mode, what changes files: refused, whatever your rules say. */
 const changes = new Set(["edit", "write", "patch"])
 
+/** How your `!` commands are started and signalled (a test's stand-ins instead). */
+export const shellProcesses = { spawn: spawnProcess, kill: (pid: number, signal: NodeJS.Signals | 0) => void process.kill(pid, signal) }
+
 /** Whether anything still runs in process group `group`. */
 function groupRuns(group: number): boolean {
   try {
-    process.kill(-group, 0)
+    shellProcesses.kill(-group, 0)
     return true
   } catch (error: any) {
     return error?.code === "EPERM"
@@ -162,7 +165,7 @@ function groupRuns(group: number): boolean {
 
 function signalGroup(group: number, signal: NodeJS.Signals) {
   try {
-    process.kill(-group, signal)
+    shellProcesses.kill(-group, signal)
   } catch {}
 }
 
@@ -195,14 +198,14 @@ export function runCommand(command: string, directory: string, started: (group: 
       const text = plain(output).trimEnd()
       resolve({ code, output: text.length > shellOutputLimit ? text.slice(-shellOutputLimit) : text, truncated: truncated || text.length > shellOutputLimit, timedOut })
     }
-    let child: ReturnType<typeof spawnProcess>
+    let child: ReturnType<typeof shellProcesses.spawn>
     try {
       // As in your terminal: on a machine, with its own folders, not Kuvo Code's (where gh and git
       // keep their settings).
       const env: Record<string, string | undefined> = { ...process.env, ...ownEnvironment() }
       for (const name of Object.keys(env)) if (env[name] === undefined) delete env[name]
       const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh")
-      child = spawnProcess(shell, ["-c", command], { cwd: directory, detached: true, env, stdio: ["ignore", "pipe", "pipe"] })
+      child = shellProcesses.spawn(shell, ["-c", command], { cwd: directory, detached: true, env, stdio: ["ignore", "pipe", "pipe"] })
     } catch (error: any) {
       output = String(error?.message ?? error)
       return finish(1)
@@ -759,8 +762,13 @@ function didWork(message: Message): boolean {
 export class Sessions {
   private live = new Map<string, Live>()
   /** Your `!` commands' process groups, by session, while anything in them runs (a server one left
-   * in the background too): each stops with its session. */
+   * in the background too): each stops with its session. A group's number the system gives
+   * another command once it's gone is that command's: it leaves the others' (`ownShell`), and
+   * gone groups are let go of every few seconds (`pruneShells`). */
   private shells = new Map<string, Set<number>>()
+  /** Groups asked to stop, by the token their making them stop waits with. */
+  private stopping = new Map<number, symbol>()
+  private pruning?: ReturnType<typeof setInterval>
 
   constructor(
     private readonly store: Store,
@@ -1130,16 +1138,14 @@ export class Sessions {
     // Run while an agent works: it hasn't seen it when its turn ends, and gets it with your next message.
     if (this.atWork(id)) record.agent.lateShells = [...((record.agent.lateShells as string[] | undefined) ?? []), message.id]
     this.store.save(id, true)
-    const groups = this.shells.get(id) ?? new Set<number>()
-    for (const group of groups) if (!groupRuns(group)) groups.delete(group)
-    this.shells.set(id, groups)
     let group: number | undefined
     void runCommand(text, directory, (started) => {
       group = started
-      groups.add(started)
+      this.ownShell(id, started)
     }).then((ran) => {
+      const groups = this.shells.get(id)
       // Kept while what it started runs on in its group.
-      if (group !== undefined && !groupRuns(group)) groups.delete(group)
+      if (group !== undefined && !groupRuns(group)) groups?.delete(group)
       message.status = ran.code === 0 && !ran.timedOut ? "completed" : "failed"
       message.exit = ran.code
       message.output = { output: ran.timedOut ? `${ran.output}\n(Stopped: it ran past ${shellTimeout / 60_000} minutes.)`.trim() : ran.output, truncated: ran.truncated }
@@ -2497,13 +2503,47 @@ export class Sessions {
     emit(answer ? "form.replied" : "form.cancelled", { id: formID, sessionID: id }, this.record(id).session.location.directory)
   }
 
-  /** A session's `!` commands still running, asked to stop, and made to a moment later (`now`: at
-   * once, as the bridge goes and won't be there to). */
+  /** A `!` command's group, just made: the session's, and no other's (its number may be one a
+   * gone group had). */
+  private ownShell(id: string, group: number) {
+    for (const groups of this.shells.values()) groups.delete(group)
+    this.stopping.delete(group)
+    const groups = this.shells.get(id) ?? new Set<number>()
+    groups.add(group)
+    this.shells.set(id, groups)
+    this.pruning ??= setInterval(() => this.pruneShells(), 3_000)
+    ;(this.pruning as any).unref?.()
+  }
+
+  /** Groups gone let go of, so a number the system gives out again is never taken for one. */
+  private pruneShells() {
+    for (const [id, groups] of this.shells) {
+      for (const group of groups) if (!groupRuns(group)) groups.delete(group)
+      if (!groups.size) this.shells.delete(id)
+    }
+    if (!this.shells.size) {
+      clearInterval(this.pruning)
+      this.pruning = undefined
+    }
+  }
+
+  /** A session's `!` commands still running, asked to stop, and made to a moment later unless
+   * another command has its group's number by then (`now`: at once, as the bridge goes and won't
+   * be there to). */
   private stopShells(id: string, now = false) {
     for (const group of this.shells.get(id) ?? []) {
       signalGroup(group, "SIGTERM")
-      if (now) signalGroup(group, "SIGKILL")
-      else setTimeout(() => signalGroup(group, "SIGKILL"), timing.shellGrace)
+      if (now) {
+        signalGroup(group, "SIGKILL")
+        continue
+      }
+      const token = Symbol(group)
+      this.stopping.set(group, token)
+      setTimeout(() => {
+        if (this.stopping.get(group) !== token) return
+        this.stopping.delete(group)
+        signalGroup(group, "SIGKILL")
+      }, timing.shellGrace)
     }
     this.shells.delete(id)
   }
@@ -2512,6 +2552,8 @@ export class Sessions {
    * your `!` commands still running stop. */
   closeAll() {
     for (const id of [...this.shells.keys()]) this.stopShells(id, true)
+    clearInterval(this.pruning)
+    this.pruning = undefined
     for (const [id, live] of this.live) {
       live.go = false
       live.own = undefined

@@ -12585,9 +12585,10 @@ var legacyKeys = ["claudeSession", "claudeStarted", "codexThread", "acpSession",
 var carryOn = "Carry on with my last message from where you left off: you're on another model now.";
 var timing = { stopGrace: 8000, idleClose: 15 * 60000, cutShort: 2 * 60000, shellGrace: 5000 };
 var changes2 = new Set(["edit", "write", "patch"]);
+var shellProcesses = { spawn: spawnProcess, kill: (pid, signal) => void process.kill(pid, signal) };
 function groupRuns(group) {
   try {
-    process.kill(-group, 0);
+    shellProcesses.kill(-group, 0);
     return true;
   } catch (error) {
     return error?.code === "EPERM";
@@ -12595,7 +12596,7 @@ function groupRuns(group) {
 }
 function signalGroup(group, signal) {
   try {
-    process.kill(-group, signal);
+    shellProcesses.kill(-group, signal);
   } catch {}
 }
 var shellTimeout = 10 * 60000;
@@ -12628,7 +12629,7 @@ function runCommand(command, directory, started = () => {}) {
         if (env[name] === undefined)
           delete env[name];
       const shell2 = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
-      child = spawnProcess(shell2, ["-c", command], { cwd: directory, detached: true, env, stdio: ["ignore", "pipe", "pipe"] });
+      child = shellProcesses.spawn(shell2, ["-c", command], { cwd: directory, detached: true, env, stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) {
       output = String(error?.message ?? error);
       return finish(1);
@@ -13130,6 +13131,8 @@ class Sessions {
   titleModel;
   live = new Map;
   shells = new Map;
+  stopping = new Map;
+  pruning;
   constructor(store, roster, auto, engine, policies, agentInfo, snapshots, titleModel) {
     this.store = store;
     this.roster = roster;
@@ -13460,18 +13463,14 @@ class Sessions {
     if (this.atWork(id))
       record2.agent.lateShells = [...record2.agent.lateShells ?? [], message.id];
     this.store.save(id, true);
-    const groups = this.shells.get(id) ?? new Set;
-    for (const group2 of groups)
-      if (!groupRuns(group2))
-        groups.delete(group2);
-    this.shells.set(id, groups);
     let group;
     runCommand(text2, directory, (started) => {
       group = started;
-      groups.add(started);
+      this.ownShell(id, started);
     }).then((ran) => {
+      const groups = this.shells.get(id);
       if (group !== undefined && !groupRuns(group))
-        groups.delete(group);
+        groups?.delete(group);
       message.status = ran.code === 0 && !ran.timedOut ? "completed" : "failed";
       message.exit = ran.code;
       message.output = { output: ran.timedOut ? `${ran.output}
@@ -14768,19 +14767,52 @@ ${live.agentPrompt}` : ""
     pending.resolve(answer);
     emit(answer ? "form.replied" : "form.cancelled", { id: formID, sessionID: id }, this.record(id).session.location.directory);
   }
+  ownShell(id, group) {
+    for (const groups2 of this.shells.values())
+      groups2.delete(group);
+    this.stopping.delete(group);
+    const groups = this.shells.get(id) ?? new Set;
+    groups.add(group);
+    this.shells.set(id, groups);
+    this.pruning ??= setInterval(() => this.pruneShells(), 3000);
+    this.pruning.unref?.();
+  }
+  pruneShells() {
+    for (const [id, groups] of this.shells) {
+      for (const group of groups)
+        if (!groupRuns(group))
+          groups.delete(group);
+      if (!groups.size)
+        this.shells.delete(id);
+    }
+    if (!this.shells.size) {
+      clearInterval(this.pruning);
+      this.pruning = undefined;
+    }
+  }
   stopShells(id, now = false) {
     for (const group of this.shells.get(id) ?? []) {
       signalGroup(group, "SIGTERM");
-      if (now)
+      if (now) {
         signalGroup(group, "SIGKILL");
-      else
-        setTimeout(() => signalGroup(group, "SIGKILL"), timing.shellGrace);
+        continue;
+      }
+      const token = Symbol(group);
+      this.stopping.set(group, token);
+      setTimeout(() => {
+        if (this.stopping.get(group) !== token)
+          return;
+        this.stopping.delete(group);
+        signalGroup(group, "SIGKILL");
+      }, timing.shellGrace);
     }
     this.shells.delete(id);
   }
   closeAll() {
     for (const id of [...this.shells.keys()])
       this.stopShells(id, true);
+    clearInterval(this.pruning);
+    this.pruning = undefined;
     for (const [id, live] of this.live) {
       live.go = false;
       live.own = undefined;
@@ -20024,4 +20056,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 8054a002f92909f456c64e41b81ce7090701b5d98dc9f0daf5c7cf64f3cc70e0
+// Built from Packages/Box/src/agents 72c76c812ffd8121fab3890ce7f2ed85982d1fbf78783116c05f9c3b812f69eb
