@@ -564,13 +564,7 @@ final class Bots {
     /// there makes it its own (`kuvo/bots/<id>/arrived`): what its folder says of where it is and
     /// the clock it goes by, its rules there (its folder, that computer's Settings › Permissions),
     /// and what it's told there. One that can't be asked now does so at the bot's next run there.
-    func moved(_ id: String, to machine: String?, folder: String, session: Session) async {
-        guard let index = known.firstIndex(where: { $0.id == id }) else { return }
-        known[index].machine = machine
-        known[index].folder = folder
-        save()
-        show()
-        app?.workspace.add(session)
+    func arrived(_ id: String, on machine: String?) async {
         let box = machine ?? BoxClient.mac
         guard let client = client(box) else { return }
         struct Answer: Decodable { var bot: ListedBot }

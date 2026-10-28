@@ -383,8 +383,8 @@ extension AppModel {
                 // COMPAT(0.7 mac-group-chats): seats the app's own group chats made before `GroupMigration`. Goes 3 months after 0.8.0.
                 // Seats an older version made there for its bots, which its group chats don't use.
                 if let api = engine.api { await GroupMigration.dropOrphanSeats(on: machine, api: api) }
-                // A move of a group chat to or from it cut short, now it's there to finish.
-                await self.moves.recover()
+                // What it says is moving to or from it.
+                await self.moves.reload(machine)
             }
         }
         // (Its watch ends with Disconnect and Remove.)
@@ -457,8 +457,8 @@ extension AppModel {
             { await self.bots.writeKit(on: machine) },
             // Its bots as its box keeps them, with what you changed of them while it was away.
             { await self.bots.refresh(machine) },
-            // A move to or from it cut short (the app quit, it went away) is finished or taken back.
-            { await self.moves.recover() },
+            // What it says is moving to or from it.
+            { await self.moves.reload(machine) },
             // What you signed in to here works there too, kept in step while it's connected.
             { await self.syncSignIns(with: engine) },
             { await self.syncSignInFiles(with: engine) },
@@ -511,7 +511,6 @@ extension AppModel {
         settingsTabs.closeTabs(notOn: Set(machines.list.map(\.id)), machines: machines)
         bots.fold(address, into: machine)
         AgentMail.shared.fold(address, into: machine)
-        moves.fold(address, into: machine)
         boxGroups.fold(address, into: machine)
         // Its sessions listed again, now under one name; not connected (its own address doesn't
         // answer): now, at whichever does.
@@ -547,7 +546,7 @@ extension AppModel {
         // Your others hear of it: one uninstalled stops being their peer (one only removed stays,
         // as your phones keep it); the last gone, no relay for it.
         phoneLink.machinesChanged()
-        Task { await moves.machineRemoved(id) }
+        moves.forget(id)
     }
 
     /// When the app quits: each machine runs on, as a box of its own. (A demo or test copy's
