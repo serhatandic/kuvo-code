@@ -25,20 +25,31 @@ struct WidgetCard: View {
     /// Sends what the page wrote back, as your message.
     let send: (String) -> Void
     @State private var height: CGFloat
+    /// Where the widget ends, from its left edge, and the reply's width: where its pill goes.
+    @State private var right: CGFloat?
+    @State private var width: CGFloat = 0
+
+    #if DEBUG
+    /// KUVO_DEMO_WIDGET_PILL: each widget's pill shown, as with the pointer over it.
+    private static let pillShown = ProcessInfo.processInfo.environment["KUVO_DEMO_WIDGET_PILL"] != nil
+    #else
+    private static let pillShown = false
+    #endif
 
     /// Each page's height when last drawn, by call. The conversation makes a row again when you
     /// scroll back to it, and a page coming back short, then growing, would push everything
     /// under it down as you scroll.
     private static var heights: [String: CGFloat] = [:]
+    /// And where it ended, for its pill.
+    private static var rights: [String: CGFloat] = [:]
 
     init(call: Message.ToolCall, send: @escaping (String) -> Void) {
         self.call = call
         self.send = send
         _height = State(initialValue: Self.heights[call.id] ?? 0)
+        _right = State(initialValue: Self.rights[call.id])
     }
     @State private var isHovering = false
-    /// The pointer's on its pill, which is outside the page.
-    @State private var isOnPill = false
     /// Its page didn't load, or stopped: one line in its place, and a way to try again.
     @State private var failed = false
     @State private var attempt = 0
@@ -159,13 +170,19 @@ struct WidgetCard: View {
             .font(.callout)
             .foregroundStyle(.secondary)
         } else {
-            WidgetPage(html: html, accent: NSColor.controlAccentColor, height: $height, isDraft: draft != nil,
+            WidgetPage(html: html, accent: NSColor.controlAccentColor, height: $height, right: $right, isDraft: draft != nil,
                        send: answer(from: title), failed: { failed = true })
                 .id(attempt)
                 .frame(height: max(height, 60))
                 .onChange(of: height) { if height > 0 { Self.heights[call.id] = height } }
+                .onChange(of: right) { if let right { Self.rights[call.id] = right } }
+                .onGeometryChange(for: CGFloat.self, of: \.size.width) { width = $0 }
                 .clipShape(Self.shape)
-                .overlay(alignment: .topTrailing) { corner(html: html, title: title, draft: draft) }
+                // At the widget's own corner, however narrow it is: never over the reply's words.
+                .overlay(alignment: .topLeading) {
+                    corner(html: html, title: title, draft: draft)
+                        .alignmentGuide(.leading) { pill in -Self.pillX(widgetRight: right, width: width, pill: pill.width) }
+                }
                 .onHover { hovering in withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering } }
                 // The page is read in it; its name and its actions are the widget's.
                 .accessibilityElement(children: .contain)
@@ -191,10 +208,25 @@ struct WidgetCard: View {
         }
     }
 
-    /// The pill just over the page's top corner, off the page, where a page keeps its own
-    /// controls: how much is written while it's made; then, on hover, Open Larger and Copy.
+    /// Where the pill starts, from the page's left edge: beside a widget narrower than the reply,
+    /// level with its top, so it covers neither the reply's words nor the widget's own controls;
+    /// inside the corner of one as wide as the reply. `widgetRight`: where the widget ends (nil
+    /// until measured: the reply's width).
+    static func pillX(widgetRight: CGFloat?, width: CGFloat, pill: CGFloat) -> CGFloat {
+        let edge = min(widgetRight.flatMap { $0 > 0 ? $0 : nil } ?? width, width)
+        if edge + gap + pill <= width { return edge + gap }
+        return max(0, width - pill - gap)
+    }
+
+    /// Between the pill and the widget's edge.
+    private static let gap: CGFloat = 6
+
+    /// The pill at the widget's top corner: how much is written while it's made; then, on hover,
+    /// Open Larger and Copy.
     @ViewBuilder private func corner(html: String, title: String?, draft: Int?) -> some View {
         let pill = Capsule()
+        // The pointer over the page holds it, the pill included: it's over the page's frame.
+        let shown = draft != nil || isHovering || Self.pillShown
         Group {
             if let draft {
                 HStack(spacing: 5) {
@@ -222,12 +254,10 @@ struct WidgetCard: View {
         .background(Surface.cardFill(scheme, focused: cardIsFocused), in: pill)
         .overlay(pill.strokeBorder(Color.primary.opacity(0.1), lineWidth: 1))
         .shadow(color: .black.opacity(scheme == .dark ? 0.3 : 0.08), radius: 4, y: 1)
-        .padding(.trailing, 6)
-        .alignmentGuide(.top) { $0[.bottom] + 4 }
-        .onHover { isOnPill = $0 }
-        .opacity(draft != nil || isHovering || isOnPill ? 1 : 0)
+        .padding(.top, Self.gap)
+        .opacity(shown ? 1 : 0)
         // Out of reach while they're hidden, Tab's too; VoiceOver has them as the widget's actions.
-        .disabled(draft == nil && !isHovering && !isOnPill)
+        .disabled(!shown)
         .accessibilityHidden(true)
     }
 }
@@ -372,10 +402,12 @@ private struct MakingWords: View {
 /// The page itself: a web view of its own, with nothing kept after it closes, reaching nothing
 /// but the usual places for libraries, its links opening in your browser. As tall as what's on
 /// it, up to a point, then it scrolls inside.
-private struct WidgetPage: NSViewRepresentable {
+struct WidgetPage: NSViewRepresentable {
     let html: String
     let accent: NSColor
     @Binding var height: CGFloat
+    /// Where its content ends, from its left edge, once drawn.
+    var right: Binding<CGFloat?> = .constant(nil)
     /// It has room of its own (larger, in a sheet): it always scrolls in itself.
     var scrollsInside = false
     /// Still being written: drawn without its scripts, a couple of times a second.
@@ -411,6 +443,7 @@ private struct WidgetPage: NSViewRepresentable {
     func updateNSView(_ view: WidgetWebView, context: Context) {
         let coordinator = context.coordinator
         coordinator.height = $height
+        coordinator.right = right
         coordinator.send = send
         coordinator.failed = failed
         coordinator.view = view
@@ -542,17 +575,36 @@ private struct WidgetPage: NSViewRepresentable {
     })();
     """
 
-    /// Its height, whenever it changes.
-    private static let measure = """
+    /// Its height, whenever it changes, and where its content ends (`right`, from its left
+    /// edge): a widget narrower than the reply has its own corner there.
+    static let measure = """
     (() => {
-      const report = () => window.webkit.messageHandlers.kuvo.postMessage({ type: "height", value: Math.ceil(document.documentElement.scrollHeight) });
-      new ResizeObserver(report).observe(document.documentElement);
+      const report = () => {
+        const page = document.documentElement;
+        let right = 0;
+        for (const element of document.body ? document.body.children : []) {
+          const box = element.getBoundingClientRect();
+          if (box.width > 0 && box.height > 0) right = Math.max(right, box.right);
+        }
+        // Words straight in the page, or nothing measured: its whole width.
+        if (right === 0 || document.body && [...document.body.childNodes].some((node) => node.nodeType === 3 && node.textContent.trim())) right = page.clientWidth;
+        window.webkit.messageHandlers.kuvo.postMessage({ type: "height", value: Math.ceil(page.scrollHeight), right: Math.ceil(Math.min(right, page.clientWidth)) });
+      };
+      // The page, and each of its parts: a part can grow wider while the page keeps its height.
+      const sizes = new ResizeObserver(report);
+      const watch = () => {
+        sizes.observe(document.documentElement);
+        for (const element of document.body ? document.body.children : []) sizes.observe(element);
+      };
+      if (document.body) new MutationObserver(watch).observe(document.body, { childList: true });
+      watch();
       report();
     })();
     """
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var height: Binding<CGFloat>?
+        var right: Binding<CGFloat?>?
         var send: (String) -> Void = { _ in }
         var failed: () -> Void = {}
         weak var view: WidgetWebView?
@@ -607,8 +659,12 @@ private struct WidgetPage: NSViewRepresentable {
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
             guard let body = message.body as? [String: Any] else { return }
             switch body["type"] as? String {
+            // Its height, and where its content ends (`right`).
             case "height":
                 guard let value = body["value"] as? Double else { return }
+                if let right = (body["right"] as? Double).map({ CGFloat($0) }), abs((self.right?.wrappedValue ?? -1) - right) > 0.5 {
+                    self.right?.wrappedValue = right
+                }
                 // Drawn again: a later stop gets its own reload.
                 restarted = false
                 let fits = CGFloat(value) <= WidgetPage.tallest

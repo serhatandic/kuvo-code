@@ -419,6 +419,7 @@ when you're there to answer.
 | `KUVO_DEMO_WIDGET_SNAPSHOTS` | A folder: each widget an agent made, once drawn, saved there as a picture (a background copy's window draws no web pages) |
 | `KUVO_DEMO_WHATS_NEW` | What's New's sheet over the window, with the newest highlights |
 | `KUVO_DEMO_WIDGET_LARGE` | The first widget shown opens larger, as Open Larger does |
+| `KUVO_DEMO_WIDGET_PILL` | Each widget's Open Larger and Copy pill shown, as with the pointer over it |
 | `KUVO_PERF_STILL_BOTS` | Every bot holds still, to compare what their motion costs |
 | `KUVO_ANALYTICS_URL` | Send anonymous usage to this collector, e.g. `http://127.0.0.1:8787/kuvo/code`; debug builds send none otherwise |
 | `KUVO_DEMO_AGENTS_FAILED` | This Mac's coding agents' bridge (and its group chats) as if it had stopped for good, with that reason |
