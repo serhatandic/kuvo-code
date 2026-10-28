@@ -7,7 +7,7 @@ Ollama, OpenCode, OpenRouter and Z.ai.
 
 **This is a fork of [OpenUsage](https://github.com/robinebers/openusage) by Robin Ebers (MIT),
 not the official OpenUsage, and isn't affiliated with or endorsed by it.** It was imported at
-upstream commit `05c7a87` and follows upstream up to `a7953bf`. The OpenUsage name and logo are Robin Ebers' trademarks and aren't used
+upstream commit `05c7a87` and follows upstream up to `abf472d`. The OpenUsage name and logo are Robin Ebers' trademarks and aren't used
 here.
 
 ## What's different from upstream
