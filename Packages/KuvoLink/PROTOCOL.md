@@ -268,24 +268,21 @@ connection.
     back the conversation as `read_conversation` words it (or the parts that mention `query`),
     about 20,000 characters at most, as an answer that also carries `read: {}`. An answer with
     `read` that no tool waits for any more is dropped, never delivered as a message.
-- **On this Mac**: its app's conversations' letters for an agent on another computer go to its box
-  (`kuvo/link/letters`), which leaves each in its own `run/outbox/sending` and sends it as below;
-  a waiting one is answered as the route's answer. The box never hands its letters to anyone over
-  SSH: without the relay, they wait for it.
-- **On a machine**: `send_message` leaves a letter for a peer's agent in
-  `run/outbox/sending/<id>.json`, which the bridge sends, and others in `run/outbox` for the Mac
-  to collect over SSH.
-  - A subagent writes as its conversation.
-  - A waiting tool reads `run/replies/<id>.json` (`{text}`, `{failed}` or `{note}`), and touches
-    `<id>.alive` as it looks. An answer that comes once it isn't is delivered as a message, and so
-    is one it was given but never took (its turn stopped as the answer came): once the tool's gone
-    (`<id>.gaveup`, or `<id>.alive` ten seconds old), once (bridge 0.9.63).
-  - After eleven minutes, or its turn stopped, the tool leaves `<id>.gaveup`, and its letter goes on
-    without waiting.
-  - With no relay for five minutes, letters not yet sent move to `run/outbox` for the Mac, marked
-    `handed`. Once the relay is back, those the Mac hasn't connected to take since come back.
-  - The Mac takes each letter in `run/outbox` by renaming it `.mac-<name>` before it reads it,
-    and puts back the ones it couldn't deliver, so a letter goes one way only.
+- **Leaving one**: an agent's `send_message` or `read_conversation` for an agent on another
+  computer ("Agents' tools") leaves a letter in `run/outbox/sending/<id>.json`, which the link
+  sends. Without the relay, letters wait for it: no box hands them to anyone over SSH (bridge
+  0.9.100; before, a machine handed them to its Mac after five minutes).
+  - On this Mac, the box answering the tool is the one on the relay: it waits for the answer in
+    memory, for as long as the tool's request is open.
+  - On a machine, the tool's call is answered by a process of its own (`box route`): it reads
+    `run/replies/<id>.json` (`{text}`, `{failed}` or `{note}`), and touches `<id>.alive` as it
+    looks. An answer that comes once it isn't is delivered as a message, and so is one it was given
+    but never took (its turn stopped as the answer came): once the tool's gone (`<id>.gaveup`, or
+    `<id>.alive` ten seconds old), once (bridge 0.9.63). After eleven minutes, or stopped, it leaves
+    `<id>.gaveup`, and its letter goes on without waiting. The link notes `run/relay-down` while
+    it's been off the relay half a minute, so a tool says so at once rather than wait.
+  - Letters an older Kuvo Code left in `run/outbox` for a Mac to collect over SSH are taken on by
+    the link as its own (not one a Mac renamed `.mac-<name>` to deliver).
 - **Group chats**: a chat lives on one box (its host) and runs there. A member that lives on
   another box (its home, a peer whose `features` say `groups.seats`) takes its turn there, in a
   seat of the home's own, and does its part of the work and remembers the chat in its own
@@ -1871,17 +1868,6 @@ For the app only (anyone else gets `403`):
 - `GET kuvo/link/phones` → `{"phones", "removed", "pairing"}`: its phones whole (with where each is),
   every removal, and whether Settings › Phone's pairing link is still waiting;
   `GET kuvo/link/phones/events` follows them.
-- `POST kuvo/link/letters {"peer", "from"?, "to", "text", "wait"?}` (bridge 0.9.63): a letter from
-  one of this Mac's conversations (`from`) for an agent on another of your computers (`peer`, its
-  key), left in the box's outbox and sent ("Peers": "Letters"). Answers `{"id"}` at once (with a
-  `note` when it was to be waited for but the box is off the relay now: it goes once the box is back
-  on it, and its answer comes as a message). With `wait` (and `from`), on the relay: lines
-  (`application/x-ndjson`), `{"id"}` once it's kept, so a request cut off after that knows it went,
-  then once its answer comes `{"text"}`, or `{"failed"}` or `{"note"}` when it didn't get there or
-  no answer can come, or `{"text": null}` after eleven minutes or the request closed (its turn
-  stopped), when it goes on without waiting and an answer that comes later reaches the
-  conversation as a message. The box keeps who waits in memory, and gives an answer to the
-  request only while it's still open. `404` for a `peer` that isn't one of this Mac's machines.
 - `POST kuvo/link/letters/take {"letters": [{id, from, to, text, peer, at, answers?}], "seen": {"<id>":
   <at>}}`: the letters an older Kuvo Code sent itself and had on their way (`agent-letters.json`),
   into the box's outbox, and those it delivered, remembered so one sent again isn't twice

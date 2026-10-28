@@ -75,7 +75,6 @@ export function macSendOutbox(): void {
 
 // How long one of this Mac's conversations waits for a letter's answer at most.
 export const LETTER_WAIT = 660_000;
-export const OFFLINE_LETTER = "Your other computers can't be reached through the relay now: it goes once this Mac's back on it, and its answer comes to you as a message.";
 
 // The answer to letter `id` (`macWaiting`): its words; or how it went, when it didn't get there or
 // its answer can't come; or `{text: null}` once it's waited `most`, or its asker went (`signal`).

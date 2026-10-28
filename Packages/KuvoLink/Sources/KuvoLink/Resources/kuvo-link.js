@@ -2,7 +2,7 @@
 
 // Packages/Box/src/link/main.ts
 import { spawn as spawn5 } from "node:child_process";
-import crypto21 from "node:crypto";
+import crypto20 from "node:crypto";
 import fs53 from "node:fs";
 import os8 from "node:os";
 import path53 from "node:path";
@@ -6941,7 +6941,6 @@ var introducing = new Map;
 var REPLIES = path35.join(RUN, "replies");
 var LETTER_BYTES = 24000;
 var ANSWER_TEXT = 8000;
-var RELAY_GONE_AFTER = 5 * 60000;
 var macWaiting = new Map;
 function reply(id, value) {
   if (IS_MAC)
@@ -7085,18 +7084,13 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
   const peers = peersOf(link);
   const told = readPeerAgents(undefined, undefined, link);
   const moved = movedOf(link);
-  if (!offline) {
-    for (const name of listOf(OUTBOX)) {
-      if (!name.endsWith(".json") || name.startsWith("."))
-        continue;
-      try {
-        const letter = JSON.parse(fs35.readFileSync(path35.join(OUTBOX, name), "utf8"));
-        if (typeof letter?.handed !== "number")
-          continue;
-        fs35.mkdirSync(SENDING, { recursive: true, mode: 448 });
-        fs35.renameSync(path35.join(OUTBOX, name), path35.join(SENDING, name));
-      } catch {}
-    }
+  for (const name of listOf(OUTBOX)) {
+    if (!name.endsWith(".json") || name.startsWith("."))
+      continue;
+    try {
+      fs35.mkdirSync(SENDING, { recursive: true, mode: 448 });
+      fs35.renameSync(path35.join(OUTBOX, name), path35.join(SENDING, name));
+    } catch {}
   }
   for (const name of listOf(REPLIES)) {
     if (!name.endsWith(".gaveup"))
@@ -7163,16 +7157,6 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
     }
     if (!peer)
       continue;
-    if (!IS_MAC && offline > RELAY_GONE_AFTER && !letter.sentTo && !letter.answers) {
-      try {
-        const { via, sentTo, peer: _, ...rest } = letter;
-        writePrivate(path35.join(OUTBOX, `${id}.json`), JSON.stringify({ ...rest, wait: false, handed: now }));
-        fs35.rmSync(file, { force: true });
-        if (letter.wait === true)
-          reply(id, { note: "Your other computers can't be reached through the relay now: it goes through your Mac instead, and its answer comes to you as a message." });
-      } catch {}
-      continue;
-    }
     if (offline || now - (letterTries.get(id) ?? 0) < 60000)
       continue;
     if (letter.from && !toldPeers.get(peer.key)?.sessions?.has(letter.from) && !introducing.has(id)) {
@@ -7421,7 +7405,6 @@ function macSendOutbox() {
   } catch {}
 }
 var LETTER_WAIT = 660000;
-var OFFLINE_LETTER = "Your other computers can't be reached through the relay now: it goes once this Mac's back on it, and its answer comes to you as a message.";
 function macLetterAnswer(id, signal, most = LETTER_WAIT, cut) {
   return new Promise((resolve) => {
     const waiter = { sentTo: null, gone: () => Boolean(signal?.aborted), done: (value) => finish(value), ...cut ? { most: cut } : {} };
@@ -10260,7 +10243,6 @@ async function* settingsRoute(context) {
 }
 
 // Packages/Box/src/link/mac/routes.ts
-import crypto18 from "node:crypto";
 import fs51 from "node:fs";
 import path51 from "node:path";
 var macPhones = () => {
@@ -10402,40 +10384,6 @@ async function* macLinkRoute(route, request, signal) {
       const link = readLink();
       return yield* json(200, { own: link?.own ?? {}, held: link?.docs ?? {}, views: link?.views ?? {}, left: link?.left ?? [], have: link?.sign ? digestOf(link) : [] });
     }
-    case "kuvo/link/letters": {
-      if (method !== "POST")
-        return yield* json(405, {});
-      const given = parsed(request.body);
-      const link = readLink();
-      const peer = peersOf(link).find((each) => each.key === given?.peer);
-      const from = typeof given?.from === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(given.from) ? given.from : null;
-      if (!isObject(given) || typeof given.to !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(given.to) || typeof given.text !== "string" || !given.text.trim()) {
-        return yield* json(400, { message: "Send {peer, to, text}, and from, wait." });
-      }
-      if (!peer)
-        return yield* json(404, { message: "That isn't one of this Mac's computers." });
-      const id = "ltr_" + crypto18.randomBytes(16).toString("base64url");
-      const online = Boolean(macLink.host?.welcomed);
-      const wait = given.wait === true && Boolean(from) && online;
-      try {
-        fs51.mkdirSync(SENDING, { recursive: true, mode: 448 });
-        writePrivate(path51.join(SENDING, `${id}.json`), JSON.stringify({ from, to: given.to, text: cutText(given.text), wait, at: Date.now(), peer: peer.key }));
-      } catch {
-        return yield* json(500, { message: "This Mac's box couldn't keep it." });
-      }
-      if (!wait) {
-        macSendOutbox();
-        return yield* json(200, given.wait === true && from && !online ? { id, note: OFFLINE_LETTER } : { id });
-      }
-      const answer = macLetterAnswer(id, signal);
-      macSendOutbox();
-      yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-      yield { body: Buffer.from(JSON.stringify({ id }) + `
-`) };
-      yield { body: Buffer.from(JSON.stringify(await answer) + `
-`) };
-      return;
-    }
     case "kuvo/link/letters/take": {
       if (method !== "POST")
         return yield* json(405, {});
@@ -10506,7 +10454,7 @@ async function* linkRoute(context) {
 
 // Packages/Box/src/link/updates/update.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
-import crypto19 from "node:crypto";
+import crypto18 from "node:crypto";
 import fs52 from "node:fs";
 import os5 from "node:os";
 import path52 from "node:path";
@@ -10550,8 +10498,8 @@ function verifyBoxes(text, keys = UPDATE_KEYS) {
   if (!key)
     throw new Error("It isn't signed with a key this machine trusts.");
   const bytes = Buffer.from(given.manifest, "base64");
-  const publicKey = crypto19.createPublicKey({ key: Buffer.concat([ED25519_SPKI, key]), format: "der", type: "spki" });
-  if (!crypto19.verify(null, Buffer.concat([Buffer.from(`kuvo-box v1
+  const publicKey = crypto18.createPublicKey({ key: Buffer.concat([ED25519_SPKI, key]), format: "der", type: "spki" });
+  if (!crypto18.verify(null, Buffer.concat([Buffer.from(`kuvo-box v1
 `), bytes]), publicKey, Buffer.from(given.signature, "base64")))
     throw new Error("Its signature doesn't match.");
   const manifest = JSON.parse(bytes.toString("utf8"));
@@ -10631,7 +10579,7 @@ async function boxBusy(readEngine = readEngineFile, readBridge = readBridgeFile)
   } catch {}
   return false;
 }
-var hexSHA256 = (data) => crypto19.createHash("sha256").update(data).digest("hex");
+var hexSHA256 = (data) => crypto18.createHash("sha256").update(data).digest("hex");
 function ran(command, args, env = {}, timeout = 120000) {
   const result = spawnSync2(command, args, { cwd: K, env: { ...process.env, ...env }, encoding: "utf8", timeout });
   return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() };
@@ -10813,7 +10761,7 @@ async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL, block
         throw new Error("The release has no engine for this machine.");
       step("downloading the engine");
       const tarball = await fetched(build.url, 400000000, 900000);
-      if (crypto19.createHash("sha512").update(tarball).digest("base64") !== build.integrity.slice(7))
+      if (crypto18.createHash("sha512").update(tarball).digest("base64") !== build.integrity.slice(7))
         throw new Error("The engine isn't what the release says.");
       fs52.writeFileSync(path52.join(stage, "engine.tgz"), tarball, { mode: 384 });
       fs52.mkdirSync(path52.join(stage, "engine"), { mode: 448 });
@@ -11274,14 +11222,14 @@ async function runMacLink() {
 }
 
 // Packages/Box/src/link/server/serve.ts
-import crypto20 from "node:crypto";
+import crypto19 from "node:crypto";
 import http from "node:http";
 import os7 from "node:os";
 function serveBox(password, handle = engineHandler(readEngineFile, { name: os7.hostname() })) {
   const expected = Buffer.from("Basic " + Buffer.from(`opencode:${password}`).toString("base64"));
   return http.createServer(async (request, response) => {
     const given = Buffer.from(request.headers.authorization ?? "");
-    if (given.length !== expected.length || !crypto20.timingSafeEqual(given, expected)) {
+    if (given.length !== expected.length || !crypto19.timingSafeEqual(given, expected)) {
       response.writeHead(401);
       return response.end();
     }
@@ -11677,7 +11625,7 @@ async function setup() {
   const before = readPersonalities();
   let link = null, work = null, library = before;
   updateLink((current) => {
-    const next = current ?? { secret: crypto21.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), phones: [] };
+    const next = current ?? { secret: crypto20.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), phones: [] };
     next.sign ??= newSigningSeed();
     if (mac) {
       next.mac = mac;
@@ -11766,7 +11714,7 @@ function leave(mac) {
 }
 function pair(relay) {
   const link = updateLink((current) => {
-    const next = current ?? { secret: crypto21.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os8.hostname(), phones: [] };
+    const next = current ?? { secret: crypto20.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os8.hostname(), phones: [] };
     next.sign ??= newSigningSeed();
     if (relay)
       next.relay = relay;

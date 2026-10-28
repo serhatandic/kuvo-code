@@ -2,7 +2,6 @@
 // Whether it's wanted and how it's doing, its phones and documents, your machines, and the letters
 // and agents of this Mac's conversations.
 
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
@@ -22,7 +21,7 @@ import { cleanMoved, cleanPeer, fitsPeer, KEY, MOST_PEERS, ownKey, peersOf } fro
 import { readPersonalities } from "../personalities/library";
 import { macLink, readLink, updateLink } from "../state";
 import { macKeys, macLinkCheck, tellGone } from "./link";
-import { OFFLINE_LETTER, macLetterAnswer, macSendOutbox } from "./peers";
+import { macSendOutbox } from "./peers";
 import type { SignedDoc } from "../../shared/documents";
 import type { Peer } from "../peers/known";
 import type { AnswerPiece, LinkRequest, RouteContext } from "../server/context";
@@ -178,42 +177,6 @@ export async function* macLinkRoute(route: string, request: LinkRequest, signal:
       });
       const link = readLink();
       return yield* json(200, { own: link?.own ?? {}, held: link?.docs ?? {}, views: link?.views ?? {}, left: link?.left ?? [], have: link?.sign ? digestOf(link) : [] });
-    }
-    case "kuvo/link/letters": {
-      // A letter from one of this Mac's conversations for an agent on another of your computers
-      // (`peer`, its key), left in the outbox as a machine's tool leaves one: sent now, and each
-      // minute until it's there; with `wait`, its answer, for as long as this is asked.
-      if (method !== "POST") return yield* json(405, {});
-      const given = parsed(request.body) as Body<"peer" | "from" | "to" | "text" | "wait">;
-      const link = readLink();
-      const peer = peersOf(link).find(each => each.key === given?.peer);
-      const from = typeof given?.from === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(given.from) ? given.from : null;
-      if (!isObject(given) || typeof given.to !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(given.to) || typeof given.text !== "string" || !given.text.trim()) {
-        return yield* json(400, { message: "Send {peer, to, text}, and from, wait." });
-      }
-      if (!peer) return yield* json(404, { message: "That isn't one of this Mac's computers." });
-      const id = "ltr_" + crypto.randomBytes(16).toString("base64url");
-      // Off the relay now: it goes once this Mac's back on it, and its answer can't be waited for.
-      const online = Boolean(macLink.host?.welcomed);
-      const wait = given.wait === true && Boolean(from) && online;
-      try {
-        fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
-        writePrivate(path.join(SENDING, `${id}.json`), JSON.stringify({ from, to: given.to, text: cutText(given.text), wait, at: Date.now(), peer: peer.key }));
-      } catch {
-        return yield* json(500, { message: "This Mac's box couldn't keep it." });
-      }
-      if (!wait) {
-        macSendOutbox();
-        return yield* json(200, given.wait === true && from && !online ? { id, note: OFFLINE_LETTER } : { id });
-      }
-      // Waited for: a line once it's kept (so a request cut off after it knows it went), then one
-      // with how it went.
-      const answer = macLetterAnswer(id, signal);
-      macSendOutbox();
-      yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-      yield { body: Buffer.from(JSON.stringify({ id }) + "\n") };
-      yield { body: Buffer.from(JSON.stringify(await answer) + "\n") };
-      return;
     }
     // COMPAT(beta.1 mac-letters): the letters an earlier Kuvo Code kept (`agent-letters.json`), into the outbox. Goes 3 months after 0.8.0.
     case "kuvo/link/letters/take": {
