@@ -141,6 +141,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Kuvo Code runs opencode 2.2.0: long conversations load and compact better, a busy provider is tried again instead of being reported as a full conversation, and HEIC, AVIF and QuickTime attachments are recognized.
 - Diagrams in replies and in a Markdown file's preview have a new look, with tidier layouts, square-cornered lines and soft shadows (Mermaid 12).
 - The conversation fades out more softly above the composer and the bars over it, rather than at a sharp edge.
+- The line above a reply says how long the agent's steps took, like "Worked for 40s" (how many while it works); click it to see what they were and each one. The time under the reply isn't said twice.
+- Fewer icons beside words in the conversation and the composer: buttons like Pause, Stop, Steer, Send Now, Build It and Try Again, the mode and Local/Worktree chips, notices and code blocks' Copy show their words alone. Icons stay where they say something the words don't, like a goal's state or a failed step.
+- The composer says "Ask anything…" in every mode, and "Add to the task…" while the agent works (⌘↩ to queue instead is in the send button's tooltip).
 
 ## 0.7.2
 

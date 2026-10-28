@@ -300,6 +300,7 @@ struct TranscriptView: View {
         }
         func flushSteps(live: Bool) {
             guard !steps.isEmpty else { return }
+            if !live, StepsRow.saysTime(steps, detail: stepsDetail) { turn.stepsSayTime = true }
             rows.append(.steps(stepsID, steps, isLive: live))
             steps = []
         }
@@ -472,6 +473,8 @@ struct TurnStats: Hashable {
     var cost: Double = 0
     var outputTokens = 0
     var steps = 0
+    /// A line of its steps says how long they took ("Worked for 40s"), so its end doesn't.
+    var stepsSayTime = false
     /// What the agent wrote, for copying the reply.
     var text: [String] = []
     /// The mode that answered: a plan can be built from its end.
@@ -1334,7 +1337,7 @@ private struct TurnEndView: View {
 
     private var parts: [String] {
         var parts: [String] = []
-        if let started = stats.started {
+        if let started = stats.started, !stats.stepsSayTime {
             let seconds = Int((idle.time.created - started) / 1000)
             if seconds >= 1 { parts.append("Worked for " + MessageTime.duration(seconds)) }
         }
