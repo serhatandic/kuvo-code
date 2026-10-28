@@ -9,7 +9,7 @@
         "codemode" : false,
         "command" : [
           "kuvo-npx",
-          "@softeria/ms-365-mcp-server@0.170.2",
+          "@softeria/ms-365-mcp-server@0.175.0",
           "--discovery"
         ],
         "environment" : {
@@ -70,7 +70,7 @@
         "codemode" : false,
         "command" : [
           "kuvo-npx",
-          "caldav-mcp@0.10.0"
+          "caldav-mcp@0.10.3"
         ],
         "environment" : {
           "CALDAV_BASE_URL" : "{file:~/.kuvo-code/box/keys/KUVO_KEY_CALDAV_CALDAV_BASE_URL}",
@@ -389,7 +389,7 @@
         "codemode" : false,
         "command" : [
           "kuvo-npx",
-          "@doist/todoist-mcp@13.6.1"
+          "@doist/todoist-mcp@13.7.1"
         ],
         "environment" : {
           "KUVO_NPX_APART" : "1",

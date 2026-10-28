@@ -40,7 +40,7 @@ import Testing
         #expect(environment[Integrations.apart] != nil)
     }
 
-    /// 1.9 is older than 1.11 (by number, not as text).
+    /// 1.9 is older than 1.12 (by number, not as text).
     @Test func anOlderVersionMovesUp() {
         added(["npx", "-y", "chrome-devtools-mcp@1.9.9"])
         MCPCatalog.upgrade(config)

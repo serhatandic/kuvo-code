@@ -130,6 +130,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - What an agent draws for you (a chart, a small app) is part of its reply, with no frame or caption: Open Larger and Copy show at its corner when you point at it, and one that can't show says so, with Try Again.
 - Popovers, like a session's wake-ups (All), list their rows on the popover itself, without a card inside it.
 - With VoiceOver, removing a message or putting a goal away takes you to its Undo line, which undoes it; stopping a goal says the messages waiting stay paused.
+- The servers behind Outlook and Microsoft 365, Todoist, CalDAV calendars, Apple Calendar and Reminders, and Chrome DevTools are updated to their latest versions, with their makers' fixes.
 
 ## 0.7.2
 

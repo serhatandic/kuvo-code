@@ -404,11 +404,11 @@ nonisolated enum Integrations {
     static let all: [Service] = [
         // Mail and calendar
         Service(id: "apple-calendar", title: "Apple Calendar and Reminders", summary: "Events and reminders in your Mac's Calendar and Reminders, with every account you have there", kind: .mail, symbol: "calendar", site: "https://www.icloud.com/calendar",
-                way: .package(command: ["mcp-server-apple-events@1.6.1"], keys: [], help: nil, by: "FradSer's mcp-server-apple-events", macOnly: true)),
+                way: .package(command: ["mcp-server-apple-events@1.6.2"], keys: [], help: nil, by: "FradSer's mcp-server-apple-events", macOnly: true)),
         Service(id: "microsoft-365", title: "Outlook and Microsoft 365", summary: "Mail, calendar, contacts and files; you sign in with a code the first time", kind: .mail, symbol: "envelope", site: "https://outlook.live.com",
-                // --discovery: its own way of keeping its 196 tools (about 280k tokens) out of every
+                // --discovery: its own way of keeping its many tools (well over 100k tokens) out of every
                 // request; the agent searches them and runs the one it needs.
-                way: .package(command: ["@softeria/ms-365-mcp-server@0.170.2", "--discovery"], keys: [], help: nil, by: "Softeria's ms-365-mcp-server", environment: [
+                way: .package(command: ["@softeria/ms-365-mcp-server@0.175.0", "--discovery"], keys: [], help: nil, by: "Softeria's ms-365-mcp-server", environment: [
                     // Its sign-in, chosen account and logs in a folder of its own, not the home folder or the keychain.
                     "MS365_MCP_TOKEN_CACHE_PATH": "{env:KUVO_INTEGRATIONS}/microsoft-365/token-cache.json",
                     "MS365_MCP_SELECTED_ACCOUNT_PATH": "{env:KUVO_INTEGRATIONS}/microsoft-365/selected-account.json",
@@ -418,7 +418,7 @@ nonisolated enum Integrations {
         Service(id: "fastmail", title: "Fastmail", summary: "Mail, contacts and calendars", kind: .mail, symbol: "envelope.badge", site: "https://app.fastmail.com",
                 way: .official(url: "https://api.fastmail.com/mcp")),
         Service(id: "caldav", title: "Other Calendars", summary: "iCloud, Nextcloud and other CalDAV calendars", kind: .mail, symbol: "calendar.badge.clock", site: "https://www.icloud.com/calendar",
-                way: .package(command: ["caldav-mcp@0.10.0"], keys: [
+                way: .package(command: ["caldav-mcp@0.10.3"], keys: [
                     Key(name: "CALDAV_BASE_URL", label: "Server", prompt: "https://caldav.icloud.com"),
                     Key(name: "CALDAV_USERNAME", label: "Username", prompt: "you@icloud.com"),
                     Key(name: "CALDAV_PASSWORD", label: "Password", prompt: "An app-specific password"),
@@ -451,7 +451,7 @@ nonisolated enum Integrations {
         Service(id: "atlassian", title: "Jira and Confluence", summary: "Issues and pages at Atlassian", kind: .work, symbol: "square.stack.3d.up", site: "https://www.atlassian.com",
                 way: .official(url: "https://mcp.atlassian.com/v2/mcp")),
         Service(id: "todoist", title: "Todoist", summary: "Tasks and projects", kind: .work, symbol: "checkmark.circle", site: "https://app.todoist.com",
-                way: .package(command: ["@doist/todoist-mcp@13.6.1"], keys: [Key(name: "TODOIST_API_KEY", label: "API token", prompt: "From Settings › Integrations › Developer")], help: "https://app.todoist.com/app/settings/integrations/developer", by: "Doist's own todoist-mcp")),
+                way: .package(command: ["@doist/todoist-mcp@13.7.1"], keys: [Key(name: "TODOIST_API_KEY", label: "API token", prompt: "From Settings › Integrations › Developer")], help: "https://app.todoist.com/app/settings/integrations/developer", by: "Doist's own todoist-mcp")),
         Service(id: "calendly", title: "Calendly", summary: "Your event types, bookings and availability", kind: .work, symbol: "calendar.badge.plus", site: "https://calendly.com/app",
                 way: .official(url: "https://mcp.calendly.com")),
         Service(id: "figma", title: "Figma", summary: "Files and frames, to build designs from", kind: .work, symbol: "paintbrush", site: "https://www.figma.com",

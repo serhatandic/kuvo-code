@@ -41,7 +41,7 @@ nonisolated enum MCPCatalog {
     /// Chrome DevTools' server, and how it's run: with a profile of its own for each copy, in the
     /// temporary folder and gone when it closes (not one in your home folder, which a second
     /// project's copy couldn't open), and nothing sent to Google about its use.
-    private static let chromeDevTools = ["chrome-devtools-mcp@1.11.0", "--isolated", "--no-usage-statistics"]
+    private static let chromeDevTools = ["chrome-devtools-mcp@1.12.0", "--isolated", "--no-usage-statistics"]
     /// Its package got apart from the project (its .npmrc, .env), run in it (where a screenshot it
     /// saves goes); no update checks or usage statistics, which it keeps in your home folder.
     private static let chromeDevToolsEnvironment = [

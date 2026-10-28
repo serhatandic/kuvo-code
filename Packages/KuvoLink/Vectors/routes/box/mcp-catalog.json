@@ -132,7 +132,7 @@
       "settings" : {
         "command" : [
           "kuvo-npx",
-          "chrome-devtools-mcp@1.11.0",
+          "chrome-devtools-mcp@1.12.0",
           "--isolated",
           "--no-usage-statistics"
         ],
