@@ -24,6 +24,7 @@ import { integrationsRoute } from "../areas/integrations";
 import { namedRoute } from "../areas/named";
 import { personalitiesDocumentRoute, personalityEventsRoute, personalityRoute } from "../areas/personalities";
 import { pairingRoute, phonesRemoveRoute, phonesRoute } from "../areas/phones";
+import { QUEUE_ROUTE, queueRoute } from "../areas/queue";
 import { pluginSearchRoute } from "../areas/plugins";
 import { programsRoute } from "../areas/programs";
 import { providerModelsRoute } from "../areas/providers";
@@ -73,6 +74,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/named", answer: namedRoute },
   { when: route => route === "kuvo/agent-tools", answer: agentToolsRoute },
   { when: route => route === "kuvo/sessions", answer: startRoute },
+  { when: route => route.match(QUEUE_ROUTE), answer: queueRoute },
   { when: route => route === "kuvo/search", answer: searchRoute },
   { when: route => route.startsWith("kuvo/git/"), answer: changesRoute },
   { when: route => route === "kuvo/asks" || route === "kuvo/asks/events", answer: asksRoute },

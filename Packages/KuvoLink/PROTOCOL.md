@@ -273,7 +273,7 @@ connection.
   sends. Without the relay, letters wait for it: no box hands them to anyone over SSH (bridge
   0.9.100; before, a machine handed them to its Mac after five minutes).
   - On this Mac, the box answering the tool is the one on the relay: it waits for the answer in
-    memory, for as long as the tool's request is open.
+    memory, up to eleven minutes, while the tool's request is open.
   - On a machine, the tool's call is answered by a process of its own (`box route`): it reads
     `run/replies/<id>.json` (`{text}`, `{failed}` or `{note}`), and touches `<id>.alive` as it
     looks. An answer that comes once it isn't is delivered as a message, and so is one it was given
@@ -412,7 +412,38 @@ its own, which a `SIGTERM` stops waiting.
 - **Limits**: one table on the box (`letters/limits.ts`): a conversation sends 20 messages in ten
   minutes and starts 6 sessions in ten minutes at most, and letters from one peer count as one
   sender. What each did lately is kept in `run/tool-limits.json`, so calls answered by separate
-  processes count together. A session started by a client isn't counted.
+  processes count together. A tool's call from no conversation this box has counts as one sender,
+  `outside` (its session asks first, and its task can't be answered); a session started by a
+  client (`kuvo/sessions` without `startedBy`) isn't counted.
+
+### The queue
+
+What you send a session waits in the engine's inbox (bridge 0.9.100): for the agent's next step
+(`steer`), or for the run to end (`queue`). The engine doesn't start the next one after every run,
+so every box carries its sessions' queues itself (the engine's and the coding agents' bridge's),
+the same for every client and with none connected, and keeps them in `run/queues.json`.
+
+- **Goes on**: a run that ends well, or a message queued while nothing runs, is followed a moment
+  later (1.5 s) by the next waiting message, unless the queue is paused: what Stop held, in its
+  order, then one for the next step (by resuming), then the queue, first queued first (by steering
+  it). A run the engine ended itself (`superseded`, `inactivity`) goes on the same way.
+- **Pauses**: Stop, from any client (the box's `stop`, or an interrupt a client sent the engine
+  itself: with no run started again a moment later, as Send Now's resume does at once); a run that
+  failed; and a queue found with nothing running once the engine started again (each engine looked
+  over once per process). Each holds what was for the next step in the queue, ahead of what was
+  queued, the latest first. A message you send to go now (`steer`) unpauses it. Once nothing waits,
+  nothing's paused.
+- `GET kuvo/sessions/<id>/queue` → `{paused, held: [inboxID…]}`; `GET kuvo/sessions/queues/events`
+  follows them all (ndjson: `{"queues": {<session>: {paused, held}}}` now and at each change; a
+  session neither paused nor holding anything is left out).
+- `POST kuvo/sessions/<id>/stop`: held and paused, then the run stopped. `POST …/queue/hold`: held
+  and paused without stopping (before an undo, or a move). `POST …/queue/resume`: unpaused, and the
+  next one goes now. `POST …/queue/<item>/now` (Send Now): unpaused, the item steered, and a run
+  under way stopped to go on with it; 404 when it isn't waiting. Each answers the queue as it is
+  now; 404 for no such session here, 503 with no engine, 502 when the engine refused.
+- Clients show what's held and whether it's paused from these; the in-flight record of a message
+  still on its way (and that Stop held it) stays with the client that sends it, which waits for its
+  request before it asks the box to stop.
 
 ### Updates
 
@@ -1661,6 +1692,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `agent-tools` | `POST kuvo/agent-tools`: the agents' tools, answered by the box (bridge 0.9.100) |
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
+| `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
 | `search` | `kuvo/search` |
 | `personalities` | `kuvo/personalities…` |
 | `personalities.events` | `kuvo/personalities/events` |

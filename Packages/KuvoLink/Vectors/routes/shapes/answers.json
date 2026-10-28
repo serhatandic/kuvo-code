@@ -2255,6 +2255,9 @@
             "literal": "letters-read"
            },
            {
+            "literal": "queue"
+           },
+           {
             "literal": "accounts.ended"
            },
            {
@@ -2486,6 +2489,9 @@
            },
            {
             "literal": "letters-read"
+           },
+           {
+            "literal": "queue"
            }
           ]
          }
@@ -4485,6 +4491,150 @@
      }
     },
     "400": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sessions/queues/events",
+   "answers": {
+    "200": {
+     "object": {
+      "queues": {
+       "map": {
+        "object": {
+         "paused": "bool",
+         "held": {
+          "list": "string"
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sessions/:id/queue",
+   "answers": {
+    "200": {
+     "object": {
+      "paused": "bool",
+      "held": {
+       "list": "string"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sessions/:id/stop",
+   "answers": {
+    "200": {
+     "object": {
+      "paused": "bool",
+      "held": {
+       "list": "string"
+      }
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "502": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sessions/:id/queue/hold",
+   "answers": {
+    "200": {
+     "object": {
+      "paused": "bool",
+      "held": {
+       "list": "string"
+      }
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "502": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sessions/:id/queue/resume",
+   "answers": {
+    "200": {
+     "object": {
+      "paused": "bool",
+      "held": {
+       "list": "string"
+      }
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "502": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sessions/:id/queue/:item/now",
+   "answers": {
+    "200": {
+     "object": {
+      "paused": "bool",
+      "held": {
+       "list": "string"
+      }
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "502": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
      "object": {
       "message": "string"
      }
