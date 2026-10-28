@@ -1752,11 +1752,19 @@ const noAnswer = (answer, what) =>
 
 const text = (value, isError = false) => ({ content: [{ type: "text", text: value }], isError });
 
-// Agents writing to each other (AgentMail in Kuvo Code): the list of everyone Kuvo Code leaves in
-// run/agents.json, messages to agents on this machine straight to its engine, and to agents
-// elsewhere left in run/outbox for the Mac to take on; the conversations of those on this machine
-// read from its engine. The same words as on the Mac.
-const mailSent = new Map();
+// Agents writing to each other (list_agents, send_message, read_conversation, start_session):
+// this machine's box answers them, as every box does (`POST kuvo/agent-tools`), so they're the same
+// on all your computers. A call that waits for an answer holds up to eleven minutes; stopped, the
+// box stops waiting, and an answer that comes later reaches the conversation as a message.
+async function mail(name, args, from, cancelled = () => false) {
+  const answer = await boxRoute({ method: "POST", path: "kuvo/agent-tools", body: { name, arguments: args, session: from } }, { timeout: 720_000, cancelled });
+  let said = null;
+  try {
+    said = JSON.parse(answer?.body || "null");
+  } catch {}
+  if (answer?.status === 200 && typeof said?.text === "string") return text(said.text, said.isError === true);
+  return text(said?.message || "Kuvo Code on this machine didn't answer. Try again in a moment.", true);
+}
 
 function readJSON(file) {
   try {
@@ -1764,18 +1772,6 @@ function readJSON(file) {
   } catch {
     return null;
   }
-}
-
-/// Like the engine's message IDs: time-ordered, so a reply comes after what it answers.
-let lastID = { ms: 0, counter: 0 };
-function messageID() {
-  const ms = Date.now();
-  lastID = lastID.ms === ms ? { ms, counter: lastID.counter + 1 } : { ms, counter: 1 };
-  const value = (BigInt(ms) * 4096n + BigInt(lastID.counter)) & 0xffffffffffffn;
-  const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-  let random = "";
-  for (let i = 0; i < 14; i++) random += alphabet[Math.floor(Math.random() * alphabet.length)];
-  return "msg_" + value.toString(16).padStart(12, "0") + random;
 }
 
 /// The machine's engine, or (`place` "bridge") the agents bridge beside it, whose sessions are
@@ -1805,285 +1801,6 @@ async function findSession(id) {
     return { place, data };
   }
   return null;
-}
-
-/// Where a session runs, as far as is known (the engine, when neither says).
-async function placeOf(id) {
-  return (await findSession(id))?.place ?? "engine";
-}
-
-/// What an agent is, for one on this machine to read: "bot, on the Mac", "session, here, in api".
-function whatAgent(agent, here) {
-  const place = (agent.machine ?? null) === here ? "here" : agent.machine ? `on ${agent.machine}` : "on the Mac";
-  return `${agent.kind}, ${place}${agent.project ? `, in ${agent.project}` : ""}`;
-}
-
-function describeAgents(agents, from, here) {
-  const others = agents.filter((agent) => agent.session !== from);
-  if (!others.length) return "No other agents yet.";
-  const lines = others.map((agent) => `- ${agent.name} (${whatAgent(agent, here)}) address: ${agent.session}${agent.about ? `: ${agent.about}` : ""}`);
-  return "Agents you can write to with send_message, or whose conversation you can read with read_conversation (by name or address):\n" + lines.join("\n");
-}
-
-/// The agent `wanted` names (an address, or a name with or without its "&"), or what to say back.
-function findAgent(wanted, agents, from, here) {
-  if (wanted.startsWith("&") && !agents.some((agent) => agent.name === wanted)) wanted = wanted.slice(1);
-  let matches = agents.filter((agent) => agent.session === wanted);
-  if (!matches.length) matches = agents.filter((agent) => agent.name.localeCompare(wanted, undefined, { sensitivity: "base" }) === 0);
-  // A session here not in the list (it started since): by its address.
-  if (!matches.length && wanted.startsWith("ses_")) matches = [{ session: wanted, name: "a session", kind: "session", machine: here }];
-  if (!matches.length) {
-    // Part of a name ("Release" for "Release notes"): those it could be.
-    const close = agents.filter((agent) => agent.name.toLowerCase().includes(wanted.toLowerCase())).slice(0, 8);
-    const hint = close.length ? "Did you mean one of these?\n" + describeAgents(close, from, here) : "Use list_agents to see who there is.";
-    return { error: text(`There's no agent called ${wanted}. ` + hint, true) };
-  }
-  if (matches.length > 1) return { error: text(`More than one agent is called ${wanted}: use one's address.\n` + describeAgents(matches, from, here), true) };
-  return { agent: matches[0] };
-}
-
-function composeMail(name, session, words, waits) {
-  const answer = waits ? "They're waiting for your reply: just answer, in your words." : session === "unknown" ? "It can't be answered: who sent it isn't known." : `To answer, use send_message to ${session}.`;
-  return `[Message from ${name} · ${session}] (${answer})\n\n${words}`;
-}
-
-async function mail(name, args, from, cancelled = () => false) {
-  // A subagent writes, reads and starts sessions as its conversation, as on the Mac.
-  from = await rootSession(from);
-  const directory = readJSON(path.join(K, "run", "agents.json")) ?? { machine: null, agents: [] };
-  const agents = directory.agents ?? [];
-  const here = directory.machine ?? null;
-  if (name === "start_session") return startSession(args, from, agents, here);
-  if (name === "read_conversation") return readConversation(args, from, agents, here);
-  if (name === "list_agents") {
-    if (!agents.length) return text("Kuvo Code on the Mac hasn't shared the list of agents with this machine yet. Write to a session here by its address (ses_…).");
-    return text(describeAgents(agents, from, here));
-  }
-  const to = typeof args.to === "string" ? args.to.trim() : "";
-  const words = typeof args.text === "string" ? args.text : "";
-  if (!to) return text("Say who to write to (to).", true);
-  if (!words.trim()) return text("Say what to write (text).", true);
-  const waits = args.wait === true;
-  const found = findAgent(to, agents, from, here);
-  if (found.error) return found.error;
-  const target = found.agent;
-  if (target.session === from) return text("That's you.", true);
-  const key = from ?? "outside";
-  const lately = (mailSent.get(key) ?? []).filter((at) => Date.now() - at < 600_000);
-  if (lately.length >= 20) return text("You've sent a lot of messages in the last few minutes. Wait a while, or ask the user how to go on.", true);
-  mailSent.set(key, [...lately, Date.now()]);
-  const sender = agents.find((agent) => agent.session === from)?.name ?? (here ? `an agent on ${here}` : "an agent on a machine");
-  if ((target.machine ?? null) !== here) {
-    // Elsewhere: this machine's link sends it to the computer its agent is on, when it knows
-    // that one (one of your other computers told it so); otherwise the Mac takes it on. Whose it
-    // is to send is decided once, here, by where it's left: the link's in `outbox/sending`, which
-    // no Mac collects, the Mac's in `outbox`.
-    const told = readJSON(path.join(K, "run", "peer-agents.json")) ?? {};
-    const byLink = Object.values(told).some((peer) => (peer?.list ?? []).some((agent) => agent.session === target.session));
-    const outbox = path.join(K, "run", "outbox", ...(byLink ? ["sending"] : []));
-    fs.mkdirSync(outbox, { recursive: true, mode: 0o700 });
-    const id = byLink ? "ltr_" + crypto.randomBytes(16).toString("base64url") : messageID();
-    const file = path.join(outbox, id + ".json");
-    fs.writeFileSync(file + ".new", JSON.stringify({ from, name: sender, to: target.session, text: words, wait: waits && byLink, at: Date.now(), ...(byLink ? { via: "link" } : {}) }), { mode: 0o600 });
-    fs.renameSync(file + ".new", file);
-    if (!byLink) return text(`Left for ${target.name}: it goes on as soon as Kuvo Code on the user's Mac is connected (at once, if it is)${waits ? "; across machines there's no waiting for the answer, which comes to you as a message" : ""}.`);
-    if (!waits) return text(`On its way to ${target.name}. Its answer, if it writes one, comes to you as a message.`);
-    const answer = await letterAnswer(id, cancelled);
-    if (answer?.failed) return text(`It didn't reach ${target.name}: ${answer.failed}`, true);
-    if (answer?.note) return text(answer.note);
-    return text(answer?.text ? `${target.name} answered:\n\n` + answer.text : `${target.name} hasn't answered yet. It may still write back with send_message.`);
-  }
-  const id = messageID();
-  const place = await placeOf(target.session);
-  await engine("POST", `api/session/${encodeURIComponent(target.session)}/prompt`, { id, text: composeMail(sender, from ?? "unknown", words, waits), delivery: "steer" }, place);
-  if (!waits) return text(`Sent to ${target.name}. Its answer, if it writes one, comes to you as a message.`);
-  const answer = await replyTo(target.session, id, place);
-  return text(answer ? `${target.name} answered:\n\n` + answer : `${target.name} hasn't answered yet. It may still write back with send_message.`);
-}
-
-/// The conversation a session works for: itself, a subagent's, the one that started it, and a
-/// coding agent's engine run (Auto's), the conversation it runs for (`kuvo.engineFor`), as on the Mac.
-async function rootSession(session) {
-  let id = session;
-  for (let step = 0; id && step < 6; step++) {
-    const found = (await findSession(id))?.data ?? null;
-    const above = found?.parentID ?? (typeof found?.metadata?.kuvo?.engineFor === "string" ? found.metadata.kuvo.engineFor : null);
-    if (!above) break;
-    id = above;
-  }
-  return id ?? session;
-}
-
-/// How a letter to another computer went, as this machine's link writes it (`run/replies/<id>.json`):
-/// its answer, why it didn't get there, or why no answer will come; null when nothing came in
-/// eleven minutes. Given up on, the letter goes on without waiting, and an answer that comes later
-/// reaches this conversation as a message (`<id>.gaveup`, for the link).
-async function letterAnswer(id, cancelled = () => false) {
-  const replies = path.join(K, "run", "replies");
-  const file = path.join(replies, id + ".json");
-  // Still waiting, as the link sees it: an answer that comes once this isn't (its turn stopped,
-  // this ended) comes as a message instead.
-  const alive = path.join(replies, id + ".alive");
-  const began = Date.now();
-  try {
-    fs.mkdirSync(replies, { recursive: true, mode: 0o700 });
-    while (Date.now() - began < 660_000 && !cancelled()) {
-      fs.writeFileSync(alive, "", { mode: 0o600 });
-      await sleep(2000);
-      // Stopped meanwhile: an answer there now is the link's to deliver as a message.
-      if (cancelled()) break;
-      const answer = readJSON(file);
-      if (!answer) continue;
-      fs.rmSync(file, { force: true });
-      return answer;
-    }
-    fs.writeFileSync(path.join(replies, id + ".gaveup"), "", { mode: 0o600 });
-  } catch {
-  } finally {
-    fs.rmSync(alive, { force: true });
-  }
-  return null;
-}
-
-/// Another agent's conversation, as read_conversation on the Mac gives it: one on this machine, from
-/// its engine; one elsewhere can't be read from here.
-async function readConversation(args, from, agents, here) {
-  const of = typeof args.of === "string" ? args.of.trim() : "";
-  if (!of) return text("Say whose conversation to read (of).", true);
-  const query = typeof args.query === "string" && args.query.trim() ? args.query.trim() : null;
-  const found = findAgent(of, agents, from, here);
-  if (found.error) return found.error;
-  const target = found.agent;
-  if (target.session === from) return text("That's this conversation: you have it already.", true);
-  if ((target.machine ?? null) !== here) {
-    return text(`${target.name} runs ${target.machine ? `on ${target.machine}` : "on the user's Mac"}, and from here only the conversations on this machine can be read. Ask it what you need with send_message.`, true);
-  }
-  const address = encodeURIComponent(target.session);
-  const located = await findSession(target.session);
-  const session = located?.data;
-  if (!session) return text(`Couldn't read ${target.name}'s conversation: there's no such session here.`, true);
-  // The whole of it, oldest first, as the Mac's export reads it.
-  let page = await engine("GET", `api/session/${address}/message?limit=200&order=desc`, undefined, located.place);
-  let messages = [...(page?.data ?? [])].reverse();
-  for (let count = 0; count < 100 && page?.data?.length; count++) {
-    const cursor = page.cursor?.next ?? page.cursor?.previous;
-    if (!cursor) break;
-    const older = await engine("GET", `api/session/${address}/message?limit=200&cursor=${encodeURIComponent(cursor)}`, undefined, located.place);
-    const data = [...(older?.data ?? [])].reverse();
-    if (!data.length || messages.some((message) => message.id === data[data.length - 1].id)) break;
-    messages = [...data, ...messages];
-    page = older;
-  }
-  const revert = session.revert?.messageID;
-  const cut = revert ? messages.findIndex((message) => message.id === revert) : -1;
-  if (cut >= 0) messages = messages.slice(0, cut);
-  const intro = `${target.name}'s conversation (${whatAgent(target, here)}, address ${target.session}), oldest first. What's under **User** is the user's; under **${target.name}**, its agent's.\n\n`;
-  return text(intro + excerpt(conversationMarkdown(target.name, messages, target.name), query, 24_000));
-}
-
-/// A message without the blocks Kuvo Code adds to its end (named agents, comments, attached files).
-function messageWords(written) {
-  let words = written.trim();
-  for (;;) {
-    const block = [["<attached-files>", "</attached-files>"], ["<review-comments>", "</review-comments>"], ["<named-agents>", "</named-agents>"]]
-      .find(([, end]) => words.endsWith("\n" + end));
-    const open = block ? words.lastIndexOf(block[0] + "\n") : -1;
-    if (open < 0 || (open > 0 && words[open - 1] !== "\n")) return words;
-    words = words.slice(0, open).trim();
-  }
-}
-
-/// A conversation as Markdown, as Kuvo Code's export words it, a step as its tool and what it
-/// worked on.
-function conversationMarkdown(title, messages, agent) {
-  const blocks = ["# " + title];
-  let speaker = null;
-  let steps = [];
-  const say = (who, words) => {
-    if (steps.length) {
-      const list = steps.map((step) => "- " + step).join("\n");
-      steps = [];
-      say(agent, list);
-    }
-    if (speaker !== who) blocks.push(`**${who}**`);
-    speaker = who;
-    blocks.push(words);
-  };
-  for (const message of messages) {
-    if (message.type === "user") {
-      const written = String(message.text ?? "");
-      const mail = /^\[Message from (.*) · (ses_\S+|unknown)\] \([^\n]*\)\n\n([\s\S]*)$/.exec(written);
-      const work = /^\[Work from (.*) · [^\]\n]+\]\n\n([\s\S]*?)(\n\n---\n[\s\S]*)?$/.exec(written);
-      if (mail) say(`Message from ${mail[1]}`, mail[3]);
-      else if (written.startsWith("[Wake-up] ")) say("Wake-up", written.slice("[Wake-up] ".length));
-      else if (work) say(`Work from ${work[1]}`, work[2].trim());
-      else {
-        const words = messageWords(written);
-        const files = (message.files ?? []).map((file) => file.name).filter(Boolean);
-        if (words || files.length) say("User", [words, files.length ? "Attached: " + files.join(", ") : ""].filter(Boolean).join("\n\n"));
-      }
-    } else if (message.type === "assistant") {
-      for (const part of message.content ?? []) {
-        if (part.type === "text" && part.text?.trim()) say(agent, part.text.trim());
-        else if (part.type === "tool") {
-          const input = part.state?.input ?? {};
-          const what = input.description ?? input.filePath ?? input.path ?? input.command ?? input.url ?? input.pattern ?? input.query ?? input.to ?? input.of;
-          steps.push(part.name.replace(/^kuvo-browser_/, "") + (typeof what === "string" && what ? `: ${what.split("\n")[0].slice(0, 120)}` : ""));
-        }
-      }
-    } else if (message.type === "shell") {
-      const output = String(message.output?.output ?? "").trim();
-      say("User", "Ran `" + message.command + "`" + (output ? "\n\n```\n" + output + "\n```" : ""));
-    } else if (message.type === "compaction") {
-      say(agent, "_Summarized the conversation so far._");
-    }
-  }
-  if (steps.length) say(agent, "");
-  return blocks.filter(Boolean).join("\n\n") + "\n";
-}
-
-/// As much of `markdown` as `limit` allows, as on the Mac: all of it; with `query`, the paragraphs
-/// around each mention of it; else how it began and its latest part.
-function excerpt(markdown, query, limit) {
-  const paragraphs = markdown.split("\n\n");
-  const fold = (value) => value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
-  if (query) {
-    const wanted = fold(query);
-    const hits = paragraphs.flatMap((paragraph, index) => (fold(paragraph).includes(wanted) ? [index] : []));
-    if (!hits.length) return `Nothing in it mentions "${query}". Read it without query for its latest part.`;
-    const shown = new Set();
-    let used = 0;
-    for (const hit of [...hits].reverse()) {
-      const around = [hit - 1, hit, hit + 1].filter((index) => index >= 0 && index < paragraphs.length && !shown.has(index));
-      const size = around.reduce((sum, index) => sum + paragraphs[index].length + 2, 0);
-      if (used + size > limit && shown.size) break;
-      around.forEach((index) => shown.add(index));
-      used += size;
-    }
-    const parts = [];
-    let last = null;
-    for (const index of [...shown].sort((a, b) => a - b)) {
-      if (last !== null && index > last + 1) parts.push("[…]");
-      parts.push(paragraphs[index].slice(0, limit));
-      last = index;
-    }
-    const where = hits.length === 1 ? "1 place mentions" : `${hits.length} places mention`;
-    return `${where} "${query}"` + (shown.size < paragraphs.length ? " (the rest left out as […])" : "") + ":\n\n" + parts.join("\n\n");
-  }
-  if (markdown.length <= limit) return markdown;
-  let head = paragraphs.slice(0, 3).join("\n\n");
-  if (head.length > limit / 4) head = head.slice(0, limit / 4) + "…";
-  const tail = [];
-  let used = head.length;
-  for (const paragraph of paragraphs.slice(3).reverse()) {
-    if (used + paragraph.length + 2 > limit) {
-      if (!tail.length) tail.push("…" + paragraph.slice(paragraph.length - (limit - used)));
-      break;
-    }
-    tail.unshift(paragraph);
-    used += paragraph.length + 2;
-  }
-  return head + "\n\n[… the middle is left out; read it with query, to find a part …]\n\n" + tail.join("\n\n");
 }
 
 // A conversation's wake-ups (WakeUps.call on the Mac): through this machine's kuvo-wake, for the
@@ -2194,8 +1911,8 @@ async function setJob(args, from) {
 }
 
 /// A route of this machine's box, answered once: `{status, body}`, or null when its script didn't
-/// answer (in time).
-function boxRoute(request) {
+/// answer (in `timeout` ms). Its call `cancelled`, it's told to stop (and answers at once).
+function boxRoute(request, { timeout = 30_000, cancelled = () => false } = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [path.join(K, "bin", "kuvo-link.js"), "box", "route"], {
       cwd: K,
@@ -2204,13 +1921,18 @@ function boxRoute(request) {
     });
     let output = "";
     child.stdout.on("data", (chunk) => (output += chunk));
-    const stop = setTimeout(() => child.kill("SIGTERM"), 30_000);
+    const stop = setTimeout(() => child.kill("SIGTERM"), timeout);
+    const watch = setInterval(() => {
+      if (cancelled()) child.kill("SIGTERM");
+    }, 500);
     child.on("error", () => {
       clearTimeout(stop);
+      clearInterval(watch);
       resolve(null);
     });
     child.on("close", () => {
       clearTimeout(stop);
+      clearInterval(watch);
       try {
         const answer = JSON.parse(output.trim().split("\n").pop() || "null");
         resolve(answer && typeof answer.status === "number" ? answer : null);
@@ -2220,76 +1942,6 @@ function boxRoute(request) {
     });
     child.stdin.end(JSON.stringify(request));
   });
-}
-
-const startedSessions = new Map();
-
-/// A new session on this machine, from the conversation `from`: an agent of its own, in the caller's
-/// folder (or the one given), with the caller's model and rules, given the task as a message from
-/// the caller. Its metadata says who started it, for Kuvo Code to show it beside them. The same as
-/// start_session on the Mac.
-async function startSession(args, from, agents, here) {
-  const task = typeof args.task === "string" ? args.task.trim() : "";
-  if (!task) return text("Say what it's to do (task).", true);
-  const parent = from ? (await findSession(from))?.data : null;
-  let folder = parent?.location?.directory ?? null;
-  if (typeof args.folder === "string" && args.folder.trim()) {
-    const given = args.folder.trim().replace(/^~(?=$|\/)/, os.homedir());
-    let isFolder = false;
-    try {
-      isFolder = fs.statSync(given).isDirectory();
-    } catch {}
-    if (!given.startsWith("/") || !isFolder) return text(`${args.folder} isn't a folder on this machine. Give a full path to one.`, true);
-    folder = given;
-  }
-  if (!folder) return text("Give the folder it works in (folder), as a full path.", true);
-  const key = from ?? "outside";
-  const lately = (startedSessions.get(key) ?? []).filter((at) => Date.now() - at < 600_000);
-  if (lately.length >= 6) return text("You've started several sessions in the last few minutes. Write to those (send_message), or ask the user before starting more.", true);
-  startedSessions.set(key, [...lately, Date.now()]);
-  const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : undefined;
-  const beside = args.beside !== false;
-  const created = await engine("POST", "api/session", {
-    location: { directory: folder },
-    ...(title ? { title } : {}),
-    ...(parent?.model ? { model: parent.model } : {}),
-    ...(parent?.permissions ? { permissions: parent.permissions } : {}),
-  });
-  const session = created?.data?.id;
-  if (!session) return text("Couldn't start a session here.", true);
-  await engine("PATCH", `api/session/${encodeURIComponent(session)}`, { metadata: { kuvo: { startedBy: from ?? "", beside } } }).catch(() => {});
-  const waits = args.wait === true;
-  const sender = agents.find((agent) => agent.session === from)?.name ?? (here ? `an agent on ${here}` : "an agent on a machine");
-  const id = messageID();
-  await engine("POST", `api/session/${encodeURIComponent(session)}/prompt`, { id, text: composeMail(sender, from ?? "unknown", task, waits), delivery: "steer" });
-  const name = title ? `"${title}"` : "a new session";
-  if (!waits) return text(`Started ${name} on this machine${beside ? ", beside this conversation" : ", in a tab"} (address ${session}). It's on it now. Write to it with send_message; it can write back to you the same way.`);
-  const answer = await replyTo(session, id);
-  return text(`Started ${name} (address ${session}). ` + (answer ? `It answered:\n\n${answer}` : "It hasn't answered yet; it may still write back with send_message."));
-}
-
-/// The words in `session` after the message `id`, once its agent is done with it: ten minutes at most.
-async function replyTo(session, id, place = "engine") {
-  const began = Date.now();
-  let started = false;
-  while (Date.now() - began < 600_000) {
-    await sleep(2000);
-    const active = (await engine("GET", "api/session/active", undefined, place).catch(() => null))?.data ?? {};
-    if (Array.isArray(active) ? active.includes(session) : active[session]) {
-      started = true;
-      continue;
-    }
-    if (!started && Date.now() - began < 6000) continue;
-    const page = await engine("GET", `api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`, undefined, place).catch(() => null);
-    const replies = (page?.data ?? [])
-      .filter((message) => message.type === "assistant" && message.id > id)
-      .reverse()
-      .map((message) => (message.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join("\n"))
-      .filter(Boolean);
-    if (replies.length) return replies.join("\n\n").slice(0, 8000);
-    if (started) break;
-  }
-  return null;
 }
 
 /// While you have the page a conversation works in, its tool call waits, up to ten minutes,

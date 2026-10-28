@@ -2246,6 +2246,15 @@
             "literal": "bots.job"
            },
            {
+            "literal": "agent-tools"
+           },
+           {
+            "literal": "sessions.start"
+           },
+           {
+            "literal": "letters-read"
+           },
+           {
             "literal": "accounts.ended"
            },
            {
@@ -2468,6 +2477,15 @@
            },
            {
             "literal": "bots.job"
+           },
+           {
+            "literal": "agent-tools"
+           },
+           {
+            "literal": "sessions.start"
+           },
+           {
+            "literal": "letters-read"
            }
           ]
          }
@@ -4392,6 +4410,83 @@
     "200": {
      "object": {
       "session": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sessions",
+   "answers": {
+    "200": {
+     "object": {
+      "session": "string",
+      "title": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "folder": "string",
+      "project": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "beside": "bool",
+      "answer?": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      }
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "403": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "429": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "502": {
+     "object": {
+      "message": "string",
+      "session?": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/agent-tools",
+   "answers": {
+    "200": {
+     "object": {
+      "text": "string",
+      "isError": "bool"
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
      }
     }
    }

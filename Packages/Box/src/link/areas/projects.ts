@@ -15,7 +15,7 @@ import type { AnswerPiece, LinkRequest } from "../server/context";
 import { holdArchived } from "./wakes";
 import { readWorktrees } from "./worktree-records";
 
-const PROJECTS_FILE = path.join(K, "box", "projects.json");
+export const PROJECTS_FILE = path.join(K, "box", "projects.json");
 const PROJECTS_LOCK = PROJECTS_FILE + ".lock";
 
 /** A project New Bot offers here: its folder and its name. */

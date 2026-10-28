@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
-import { sleep } from "../../shared/wait";
+import { pause } from "../../shared/wait";
 import { asked } from "../engine/client";
 import { messageID } from "../engine/sessions";
 import { locked, writePrivate } from "../files";
@@ -12,7 +12,9 @@ import { PEER_LOCK, isPutAway, peerOf, readPeerAgents } from "../peers/directory
 import { movedOf, ownKey, peersOf } from "../peers/known";
 import { readLink } from "../state";
 import { LETTERS_SEEN, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, composeLetter, cutText, placeOfSession } from "./letter";
-import { answered } from "./outbox";
+import { READ_BY_MAIL, excerpt, readConversation } from "./conversation";
+import { allowed } from "./limits";
+import { ANSWER_TEXT, answered } from "./outbox";
 import type { ListedAgent, Target, ToldAgents } from "../../shared/records";
 import type { EngineAnswer } from "../engine/client";
 import type { Peer } from "../peers/known";
@@ -69,22 +71,23 @@ function noteSeen(id: string, now = Date.now()) {
 // Letters being delivered now: one that comes again meanwhile waits for that one's answer.
 const delivering = new Set<string>();
 
-// Letters from each peer lately, a few at a time (as the Mac counts a machine's).
-const lettersFrom = new Map<string, number[]>();
-function tooMany(key: string, now = Date.now()) {
-  const lately = (lettersFrom.get(key) ?? []).filter(at => now - at < 600_000);
-  if (lately.length >= 20) return true;
-  lettersFrom.set(key, [...lately, now]);
-  return false;
+// Letters from each peer lately, a few at a time, as a conversation's messages are counted.
+const tooMany = (key: string, now = Date.now()) => allowed("messages", `peer:${key}`, now) === null;
+
+/** How `answerTo` waits: between looks (ms), and until its asker goes (`signal`). */
+export interface AnswerWait {
+  wait?: number;
+  signal?: AbortSignal;
 }
 
-// Its answer to message `id`, as kuvo-browser.js's replyTo waits for it: what it wrote after,
-// once it's done, ten minutes at most; null for none.
-async function answerTo(target: Target, session: string, id: string, wait = 2000): Promise<string | null> {
+// Its answer to message `id` (one this box made, so later ones sort after it): what it wrote after,
+// once it's done, ten minutes at most; null for none, or once its asker went.
+export async function answerTo(target: Target, session: string, id: string, { wait = 2000, signal }: AnswerWait = {}): Promise<string | null> {
   const began = Date.now();
   let started = false;
   while (Date.now() - began < 600_000) {
-    await sleep(wait);
+    await pause(wait, signal);
+    if (signal?.aborted) return null;
     // (As the engine and the agents' bridge answer it: the sessions at work, as a list or by id.)
     const active: string[] | Record<string, unknown> = (await asked(target, "GET", "api/session/active").catch(() => null) as EngineAnswer<string[] | Record<string, unknown>> | null)?.data ?? {};
     if (Array.isArray(active) ? active.includes(session) : active[session]) {
@@ -98,7 +101,7 @@ async function answerTo(target: Target, session: string, id: string, wait = 2000
       .reverse()
       .map(message => (message.content ?? []).filter(part => part.type === "text").map(part => part.text).join("\n"))
       .filter(Boolean);
-    if (replies.length) return replies.join("\n\n").slice(0, 8000);
+    if (replies.length) return cutText(replies.join("\n\n"), ANSWER_TEXT);
     if (started) break;
   }
   return null;
@@ -122,11 +125,13 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
   if (typeof letter.to !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(letter.to) || typeof letter.text !== "string" || !letter.text.trim()) return no("That isn't a letter.");
   if (delivering.has(id)) return;
   if (seenAlready(id, now)) return send(sender, { delivered: { id, ok: true } });
-  // An answer a tool here waits for (from the box its letter went to): to it.
-  if (typeof letter.answers === "string" && LETTER_ID.test(letter.answers) && answered(sender, letter as AnswerLetter, now)) {
+  // An answer a tool here waits for (from the box its letter went to): to it. A conversation read
+  // that nothing waits for now just goes: it isn't a message.
+  if (typeof letter.answers === "string" && LETTER_ID.test(letter.answers) && (answered(sender, letter as AnswerLetter, now) || isObject(letter.read))) {
     noteSeen(id, now);
     return send(sender, { delivered: { id, ok: true } });
   }
+  if (isObject(letter.read)) return readFor(sender, letter as ReadLetter, { send, targets, answer, now });
   if (tooMany(sender.key, now)) return no("It's sent a lot of messages in the last few minutes.", true);
   delivering.add(id);
   let place: SessionPlace | null, prompt: string, fromAgent: ListedAgent | null = null;
@@ -155,6 +160,37 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
   if (letter.wait === true && !fromAgent) return send(sender, { delivered: { id, ok: true, answer: false, why: "Its answer can't come back to you: it doesn't know who you are." } });
   send(sender, { delivered: { id, ok: true } });
   if (letter.wait !== true) return;
-  const text = await answerTo(place.target, letter.to, prompt, wait);
+  const text = await answerTo(place.target, letter.to, prompt, { wait });
   if (text) answer({ from: letter.to, to: letter.from as string, text, answers: id, peer: sender.key });
+}
+/** A letter asking for a conversation here (`read`), once `takeLetter` checked it. */
+type ReadLetter = { id: string; to: string; from?: unknown; read: { query?: unknown } };
+
+// A conversation here asked for from another computer (read_conversation there): said to be there,
+// then its words go back as the letter's answer, as much as fits in one. Any agent of your other
+// computers may read one here, as on this one, but only one an agent could be (not a subagent's, a
+// group chat's seat, nor one put away). Reading isn't writing to it: it isn't counted.
+async function readFor(sender: LetterSender, letter: ReadLetter, { send, targets, answer = () => {}, now = Date.now() }: Pick<TakeLetterOptions, "send" | "targets" | "answer" | "now">): Promise<void> {
+  const { id } = letter;
+  const no = (why: string, again = false) => send(sender, { delivered: { id, ok: false, why, ...(again ? { retry: true } : {}) } });
+  if (typeof letter.from !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(letter.from)) return no("Its answer has nowhere to go.");
+  if (delivering.has(id)) return;
+  delivering.add(id);
+  let words: string;
+  try {
+    const place = await placeOfSession(letter.to, targets);
+    if (!place) return no("There's no such conversation here.");
+    const kuvo = place.data?.metadata?.kuvo ?? {};
+    if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return no("That conversation can't be read.");
+    const markdown = await readConversation(place.target, letter.to, place.data ?? {}, String(place.data?.title || "New session"));
+    const query = typeof letter.read.query === "string" && letter.read.query.trim() ? letter.read.query.trim() : null;
+    words = excerpt(markdown, query, READ_BY_MAIL);
+  } catch (error) {
+    return no(`It couldn't be read: ${String((error as Error | null)?.message ?? error)}`, true);
+  } finally {
+    delivering.delete(id);
+  }
+  noteSeen(id, now);
+  send(sender, { delivered: { id, ok: true } });
+  answer({ from: letter.to, to: letter.from, text: words, answers: id, peer: sender.key, read: {} });
 }

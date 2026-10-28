@@ -81,9 +81,10 @@ export const OFFLINE_LETTER = "Your other computers can't be reached through the
 // its answer can't come; or `{text: null}` once it's waited `most`, or its asker went (`signal`).
 // Then it goes on without waiting, and an answer that comes later reaches the conversation as a
 // message.
-export function macLetterAnswer(id: string, signal?: AbortSignal | null, most = LETTER_WAIT): Promise<MacLetterAnswer> {
+// `cut`: how much of its answer it takes.
+export function macLetterAnswer(id: string, signal?: AbortSignal | null, most = LETTER_WAIT, cut?: number): Promise<MacLetterAnswer> {
   return new Promise<MacLetterAnswer>(resolve => {
-    const waiter: MacWaiter = { sentTo: null, gone: () => Boolean(signal?.aborted), done: value => finish(value) };
+    const waiter: MacWaiter = { sentTo: null, gone: () => Boolean(signal?.aborted), done: value => finish(value), ...(cut ? { most: cut } : {}) };
     const timer = setTimeout(() => finish(null), most);
     const abort = () => finish(null);
     signal?.addEventListener("abort", abort, { once: true });

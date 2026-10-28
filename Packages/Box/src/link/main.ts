@@ -46,6 +46,7 @@ import { watchBox } from "./engine/watch";
 import { writePrivate } from "./files";
 import { IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, VERSION_FILE, homeFolder } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
+import { noteRelay } from "./letters/leave";
 import { deliverLeftAnswers, sendOutbox } from "./letters/outbox";
 import { macLinkCheck } from "./mac/link";
 import { macNoticeHold, macTell } from "./mac/notices";
@@ -309,6 +310,7 @@ async function run(): Promise<void> {
   setInterval(() => {
     if (current?.welcomed && docsNoted()) try { docsChanged(current, { tell: true }); } catch {}
     if (current?.welcomed) lastWelcomed = Date.now();
+    noteRelay(Boolean(current?.welcomed), lastWelcomed);
     try { sendOutbox(current ?? { send() {} }, undefined, Date.now(), current?.welcomed ? 0 : Date.now() - lastWelcomed); } catch {}
     deliverLeftAnswers().catch(() => {});
   }, 3_000);
@@ -398,8 +400,10 @@ async function box(command: string): Promise<void> {
       let status = 502;
       let type = "";
       const chunks: Buffer[] = [];
-      // A route that follows something answers with what it says now: its first line.
+      // A route that follows something answers with what it says now: its first line. Stopped by
+      // its caller (an agent's tool call that waits, cancelled), it stops waiting and answers.
       const stop = new AbortController();
+      process.once("SIGTERM", () => stop.abort());
       for await (const part of handle(request, {}, stop.signal) as AsyncIterable<AnyPiece>) {
         if (part.head) {
           status = part.head.status;

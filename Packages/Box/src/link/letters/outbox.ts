@@ -16,6 +16,7 @@ import { isPutAway, peerOf, readPeerAgents } from "../peers/directory";
 import { mailFor, movedOf, peersOf } from "../peers/known";
 import { bridgeAsk, giveUpSeat, ONLINE_STEP, SEAT_LETTER_LIFE, seatAge, seatRounds, sendSeatLetter } from "../peers/seats";
 import { readLink } from "../state";
+import { READ_BY_MAIL } from "./conversation";
 import { composeLetter, cutText, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, letterTries, OUTBOX, placeOfSession, SENDING } from "./letter";
 import type { Target } from "../../shared/records";
 import type { PutAwayable } from "../peers/directory";
@@ -34,6 +35,14 @@ export interface MailedLetter {
   wait: boolean;
   at: number;
   answers?: string;
+  read?: LetterRead;
+}
+
+/** A letter that asks for a conversation instead of saying something (read_conversation from another
+ * computer): its answer is the conversation, or the parts that mention `query`. Only to a box whose
+ * agents' mail says it takes them (`letters-read`). */
+export interface LetterRead {
+  query?: string;
 }
 
 /** An answer as it comes (a letter with `answers`): the letter it answers, its words, and the
@@ -67,6 +76,7 @@ export interface OutboxLetter {
   sentTo?: string;
   via?: "link";
   handed?: number;
+  read?: LetterRead;
 }
 
 /** What waits in `outbox/sending/<id>.json`, as the outbox reads it: a letter, or with `seat`, a
@@ -92,6 +102,8 @@ export interface MacWaiter {
   sentTo: string | null;
   gone: () => boolean;
   done: (value: LetterReply) => void;
+  /** How much of its answer it takes (a conversation read is longer than an answer). */
+  most?: number;
 }
 
 // Senders being told of to their letters' boxes first (one made a moment ago, which those boxes
@@ -101,6 +113,8 @@ const introducing = new Map<string, number>();
 export const REPLIES = path.join(RUN, "replies");
 
 export const LETTER_BYTES = 24_000;
+// How much of an answer comes back to the agent waiting for it.
+export const ANSWER_TEXT = 8000;
 
 // Without the relay this long, this box's letters go to the Mac instead, which collects them
 // over SSH.
@@ -175,7 +189,7 @@ export function answered(sender: { key: string; name?: string }, { answers: id, 
   if (IS_MAC) {
     const waiter = macWaiting.get(id);
     if (!waiter || waiter.sentTo !== sender.key || waiter.gone()) return false;
-    waiter.done({ text: cutText(text, 8000) });
+    waiter.done({ text: cutText(text, waiter.most ?? ANSWER_TEXT) });
     return true;
   }
   const waiting = path.join(REPLIES, `${id}.wait`);
@@ -190,7 +204,7 @@ export function answered(sender: { key: string; name?: string }, { answers: id, 
   const told = readPeerAgents();
   const agent = peerOf(from, peersOf(readLink()), told)?.key === sender.key ? (told[sender.key]?.list ?? []).find(each => each.session === from) : null;
   // For the conversation that asked (as this box's letter has it, not as the answer says).
-  reply(id, { text: cutText(text, 8000), to: letter.from, from: agent ? from : "unknown", name: agent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}` });
+  reply(id, { text: cutText(text, letter.read ? READ_BY_MAIL : ANSWER_TEXT), to: letter.from, from: agent ? from : "unknown", name: agent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}` });
   return true;
 }
 
@@ -341,7 +355,7 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
     }
     letterTries.set(id, now);
     const bytes = letterMail(peer, { id, from: letter.from, to: letter.to, text: cutText(letter.text), wait: letter.wait === true, at: made,
-      ...(letter.answers ? { answers: letter.answers } : {}) }, link, now);
+      ...(letter.answers ? { answers: letter.answers } : {}), ...(isObject(letter.read) ? { read: typeof letter.read.query === "string" ? { query: letter.read.query } : {} } : {}) }, link, now);
     if (!bytes) {
       fs.rmSync(file, { force: true });
       if (letter.wait === true) reply(id, { failed: "It's too long to send." });

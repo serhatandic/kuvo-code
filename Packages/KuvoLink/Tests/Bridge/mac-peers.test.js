@@ -9,7 +9,7 @@
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/mac-peers.test.js`.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
@@ -385,4 +385,49 @@ test("the coding agents' bridge going and coming back: this Mac's box follows it
   await arrived(() => macBridge.seen.streams.size > 0 && macBridge.seen.peers.length > told);
   macBridge.give({ id: "seat_again1", to: lab.key, mail: { kind: "turn", chat: "grp_2", text: "Still there?" }, durable: true });
   await arrived(() => labBridge.seen.mail.find(each => each.mail.chat === "grp_2"));
+});
+
+// An agent's tool call as a machine's tools ask its box: a process of its own (`box route`).
+function machineTool(name, args, session) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [script, "box", "route"], { env: { PATH: process.env.PATH, HOME: support, KUVO_HOME: machineHome, TMPDIR: machineHome }, stdio: ["pipe", "pipe", "inherit"] });
+    let out = "";
+    child.stdout.on("data", chunk => { out += chunk; });
+    child.on("error", reject);
+    child.on("close", () => resolve(JSON.parse(JSON.parse(out.trim().split("\n").pop()).body)));
+    child.stdin.end(JSON.stringify({ method: "POST", path: "kuvo/agent-tools", body: { name, arguments: args, session } }));
+  });
+}
+
+test("a Mac conversation writes to the machine's agent by its name, and gets its answer", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  labEngine.seen.answers.set("ses_lab1", "Deployed at noon.");
+  const said = (await ask("POST", "kuvo/agent-tools", { name: "send_message", arguments: { to: "&api work", text: "When did it go out?", wait: true }, session: "ses_mac1" })).json;
+  assert.deepEqual(said, { text: "API work answered:\n\nDeployed at noon.", isError: false });
+  const prompt = labEngine.seen.prompts.findLast(each => each.session === "ses_lab1");
+  assert.match(prompt.text, /^\[Message from Release notes · ses_mac1\] \(They're waiting for your reply: just answer, in your words\.\)\n\nWhen did it go out\?$/);
+  const listed = (await ask("POST", "kuvo/agent-tools", { name: "list_agents", arguments: {}, session: "ses_mac1" })).json;
+  assert.match(listed.text, /- API work \(session, on lab, in work\) address: ses_lab1/);
+});
+
+test("a Mac conversation reads the machine's agent's conversation, which comes by mail", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  const prompted = labEngine.seen.prompts.length;
+  const said = (await ask("POST", "kuvo/agent-tools", { name: "read_conversation", arguments: { of: "API work" }, session: "ses_mac1" })).json;
+  assert.equal(said.isError, false, said.text);
+  assert.match(said.text, /^API work's conversation \(session, on lab, in work, address ses_lab1\), oldest first\./);
+  assert.match(said.text, /\n\n# API work\n\n\*\*API work\*\*\n\nDeployed at noon\.\n$/);
+  assert.equal(labEngine.seen.prompts.length, prompted, "reading it says nothing to it");
+});
+
+test("a machine's conversation writes to a Mac's agent with its tool, and gets its answer; one that can't share its conversations yet says so", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  macEngine.seen.answers.set("ses_mac1", "Notes are done.");
+  const said = await machineTool("send_message", { to: "Release notes", text: "Are the notes ready?", wait: true }, "ses_lab1");
+  assert.deepEqual(said, { text: "Release notes answered:\n\nNotes are done.", isError: false });
+  const prompt = macEngine.seen.prompts.findLast(each => each.session === "ses_mac1");
+  assert.match(prompt.text, /^\[Message from API work · ses_lab1\] \(They're waiting for your reply/);
+  // This Mac's app here doesn't say it shares them (an older one).
+  const read = await machineTool("read_conversation", { of: "Release notes" }, "ses_lab1");
+  assert.deepEqual(read, { text: "Release notes's computer doesn't share its conversations yet (it runs an older Kuvo Code). Ask it what you need with send_message.", isError: true });
 });

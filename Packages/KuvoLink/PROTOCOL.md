@@ -237,8 +237,8 @@ connection.
     takes on over SSH (by mail, before bridge 0.9.63, too).
 - **Personalities**: each box's view is a document ("Documents"); a box meets a peer's with its
   own, and its bots whose personality changed are told what they are now.
-- **Letters**: `{"letter": {id, from, to, text, wait, at, answers?}}` goes to the box that listed
-  `to`.
+- **Letters**: `{"letter": {id, from, to, text, wait, at, answers?, read?}}` goes to the box that
+  listed `to`.
   - **Checks**: the receiver drops a letter older than a day. It delivers each `id` once (ids
     remembered two days, noted once delivered), at most 20 in ten minutes from a box, and only
     to a conversation an agent could be. A subagent's, a group chat's seat or one put away doesn't
@@ -261,6 +261,13 @@ connection.
     Mac says moved (`moved`) goes where it lives now, whichever box it was left for. Before a
     letter goes, its sender is told of to that box, if it wasn't. Its words are cut on a character's
     boundary.
+  - **`read`** `{query?}` (bridge 0.9.100, to a peer whose `features` say `letters-read`): the
+    letter asks for `to`'s conversation instead of saying something (`read_conversation` from
+    another computer), with `wait` and a `from` to answer. The receiver checks it as any letter
+    (not a subagent's, a seat, or one put away) but doesn't count it, says it's there, and sends
+    back the conversation as `read_conversation` words it (or the parts that mention `query`),
+    about 20,000 characters at most, as an answer that also carries `read: {}`. An answer with
+    `read` that no tool waits for any more is dropped, never delivered as a message.
 - **On this Mac**: its app's conversations' letters for an agent on another computer go to its box
   (`kuvo/link/letters`), which leaves each in its own `run/outbox/sending` and sends it as below;
   a waiting one is answered as the route's answer. The box never hands its letters to anyone over
@@ -367,6 +374,48 @@ connection.
   forgets its documents, the peers only it named and what they told it, and leaves other Macs'
   alone. A Mac that can't reach the machine names it in its peers document's `left`, and mails it
   that document once; one that never gets it lets that Mac go after 30 days ("Paired phones").
+
+### Agents' tools
+
+Every box answers its agents' tools for writing to each other and starting sessions itself, the
+same on every computer (bridge 0.9.100). The tool servers (this Mac's app, a machine's
+`kuvo-browser.js`) only pass a call on; a machine's through `kuvo-link.js box route`, a process of
+its own, which a `SIGTERM` stops waiting.
+
+- **`POST kuvo/agent-tools`** `{name, arguments, session}` → `{text, isError}`: `name` is
+  `list_agents`, `send_message`, `read_conversation` or `start_session`, `arguments` the tool's,
+  `session` the conversation calling (as the engine names it; null outside one). The answer is the
+  tool's own words. One that waits for an answer holds the request up to eleven minutes; the
+  request going stops the wait, and an answer that comes later reaches the conversation as a
+  message. 400 for another `name`.
+  - A subagent, and a coding agent's engine run (`kuvo.engineFor`), act as their conversation: its
+    name, folder, model, approval, and where answers go. A group chat's seat may only list and read.
+  - Who there is: the box's own agents and its peers' (as `run/agents.json` has them), and any
+    conversation here named by its address. An agent is named by its address or its name (any case
+    or accents, with or without `&`).
+  - An agent here gets the message straight from the box; one on another computer by a letter
+    ("Peers"). Without a conversation to answer, or off the relay, a letter isn't waited for.
+    `read_conversation` reads one here, or asks a peer with `letters-read` for it by letter.
+- **`POST kuvo/sessions`** `{task, title?, folder?, startedBy?, beside? = true, wait? = false}` →
+  `{session, title, folder, project, beside, answer?}` (`project` null for a chat; `answer` with
+  `wait`, its first answer in ten minutes, else null). `start_session` is this route, from the
+  calling conversation.
+  - From a conversation (`startedBy`, its root found as above): in its folder unless `folder` names
+    another (a bot's own folder is its chats), on its model, on the engine or coding agents' bridge
+    it runs on, with its approval made again with this box's Settings › Permissions (Ask First isn't
+    got around), its metadata `kuvo: {startedBy, beside}`, and the task as a message from it.
+  - From a client (no `startedBy`): in `folder`, approved as Approve All with Settings ›
+    Permissions, the task as the user's own first message.
+  - Either way its project's other folders are allowed to it and named in its instructions, one in
+    a worktree is told so, and a folder that's no project yet becomes one.
+  - 400 `{message}` (no task, not a folder here), 403 (a group chat's seat), 404 (`startedBy`
+    isn't a conversation here), 429 (too many lately), 502 `{message, session?}` (not made, or
+    made but its task didn't reach it), 503 (no engine).
+  - Unknown fields are ignored, so a newer client can send more to an older box.
+- **Limits**: one table on the box (`letters/limits.ts`): a conversation sends 20 messages in ten
+  minutes and starts 6 sessions in ten minutes at most, and letters from one peer count as one
+  sender. What each did lately is kept in `run/tool-limits.json`, so calls answered by separate
+  processes count together. A session started by a client isn't counted.
 
 ### Updates
 
@@ -1612,6 +1661,9 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `groups.delete` | `DELETE kuvo/groups/<id>` |
 | `integrations` | `kuvo/integrations…` |
 | `named` | `kuvo/named` |
+| `agent-tools` | `POST kuvo/agent-tools`: the agents' tools, answered by the box (bridge 0.9.100) |
+| `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
+| `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
 | `search` | `kuvo/search` |
 | `personalities` | `kuvo/personalities…` |
 | `personalities.events` | `kuvo/personalities/events` |

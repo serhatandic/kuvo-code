@@ -5,6 +5,7 @@
 
 import { processRuns as runs } from "../../shared/platform";
 import { accountsRoute, credentialsRoute } from "../areas/accounts";
+import { agentToolsRoute, startRoute } from "../areas/agent-tools";
 import { foundRoute } from "../areas/found";
 import { searchRoute } from "../areas/search";
 import { changesRoute } from "../areas/changes";
@@ -70,6 +71,8 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/attention/notice" || route === "kuvo/attention/answered", answer: appNoticeRoute },
   { when: route => route === "kuvo/attention", answer: attentionRoute },
   { when: route => route === "kuvo/named", answer: namedRoute },
+  { when: route => route === "kuvo/agent-tools", answer: agentToolsRoute },
+  { when: route => route === "kuvo/sessions", answer: startRoute },
   { when: route => route === "kuvo/search", answer: searchRoute },
   { when: route => route.startsWith("kuvo/git/"), answer: changesRoute },
   { when: route => route === "kuvo/asks" || route === "kuvo/asks/events", answer: asksRoute },

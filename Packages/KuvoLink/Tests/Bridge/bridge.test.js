@@ -1172,6 +1172,11 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"], "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
     "sign-in.return": ["GET", "kuvo/sign-in/return"], skills: ["GET", "kuvo/skills"], "skills.trash": ["GET", "kuvo/skill-trash"], update: ["GET", "kuvo/update"], wakes: ["GET", "kuvo/wakes"],
     "wakes.edit": ["POST", "kuvo/wakes/ses_none/pause"], "wakes.events": ["POST", "kuvo/wakes/events"], worktrees: ["GET", "kuvo/worktrees"], "worktrees.events": ["POST", "kuvo/worktrees/events"], "worktrees.where": ["POST", "kuvo/worktrees/where"], folders: ["DELETE", "kuvo/folders"], "plugins.search": ["POST", "kuvo/plugins/search"], programs: ["POST", "kuvo/programs"], "providers.models": ["GET", "kuvo/providers/models"],
+    // What a side question's and a review's routes take besides, on the coding agents' bridge.
+    "btw.threads": ["GET", "kuvo/agents/api/kuvo/btw"], "reviews.scopes": ["GET", "kuvo/agents/api/kuvo/reviews"],
+    "agent-tools": ["POST", "kuvo/agent-tools"], "sessions.start": ["POST", "kuvo/sessions"],
+    // What its agents' mail says it takes (a letter that reads a conversation), on the agents' tools.
+    "letters-read": ["POST", "kuvo/agent-tools"],
   };
   const named = (await answer(handle, "GET", "kuvo/info")).json.features;
   assert.deepEqual([...named].sort(), Object.keys(routes).sort(), "every name has a route here, and every route here its name");
