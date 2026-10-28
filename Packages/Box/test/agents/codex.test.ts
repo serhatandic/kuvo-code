@@ -19,22 +19,25 @@ const untilStopped: [string, any] = ["(works until stopped)", {}]
 
 /**
  * A Codex whose turn sends `events` (each `[method, params]`, with the thread's id filled in): an
- * ask of Codex's (an approval) waits for its answer before the turn goes on. What Kuvo Code sends
- * it is kept in order (`sent`).
+ * ask of Codex's (an approval) waits for its answer before the turn goes on. Turns after the first
+ * send `later`, when given. What Kuvo Code sends it is kept in order (`sent`).
  */
-function fakeCodex(folder: string, events: [string, any][]): string {
+function fakeCodex(folder: string, events: [string, any][], later?: [string, any][]): string {
   const script = join(folder, "app-server.js")
   writeFileSync(
     script,
-    `const events = ${JSON.stringify(events)}
+    `const first = ${JSON.stringify(events)}
+const later = ${JSON.stringify(later ?? null)}
 const { appendFileSync } = require("node:fs")
 let buffer = ""
 let asked = 0
+let turns = 0
 const answered = new Map()
 let stopped
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n")
 const inTurn = (params) => ({ threadId: "t1", turnId: "u1", ...params })
 async function turn() {
+  const events = turns++ && later ? later : first
   send({ method: "turn/started", params: { threadId: "t1", turn: { id: "u1" } } })
   for (const [method, params] of events) {
     if (method === ${JSON.stringify(untilStopped[0])}) return new Promise((resolve) => (stopped = resolve))
@@ -129,8 +132,8 @@ async function until(condition: () => boolean, ms = 10_000) {
 }
 
 /** A session on a Codex whose turn sends `events`, with your message sent: Codex at work on it. */
-function start(events: [string, any][], session: { agent?: string; permissions?: PermissionRule[] } = {}) {
-  codex = new TestCodex(fakeCodex(root, events), root)
+function start(events: [string, any][], session: { agent?: string; permissions?: PermissionRule[] } = {}, later?: [string, any][]) {
+  codex = new TestCodex(fakeCodex(root, events, later), root)
   const agent = codex
   sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
   // (Titled: no title is asked of this Codex.)
@@ -343,6 +346,46 @@ describe("What Codex asks you", () => {
     const [made, declined] = tools(id)
     expect(made.state.status).toBe("completed")
     expect(declined.state).toMatchObject({ status: "error", content: [{ type: "text", text: "Declined." }] })
+  })
+})
+
+describe("A question Codex asks as it ends its turn (request_user_input_async)", () => {
+  // Codex 0.16x's question outside Plan: the tool says "accepted" at once, the turn ends with the
+  // question on its last message, and your next message is the answer.
+  const asking: [string, any][] = [
+    ["item/completed", { item: { type: "functionCall", id: "f1", name: "request_user_input_async", namespace: null, arguments: "{}" } }],
+    ["item/completed", { item: { type: "agentMessage", id: "m1", text: "Which language should the README use?", delivery: "async", questions: [{ title: "Which language should the README use?", options: ["English", "Turkish"] }] } }],
+  ]
+  const answered: [string, any][] = [["item/completed", { item: { type: "agentMessage", id: "m2", text: "Writing it in Turkish." } }]]
+  const starts = () => sent().filter((message) => message.method === "turn/start").map((message) => message.params.input[0].text)
+
+  test("its card shows above the composer with the choices, the session waits, and the choice goes back to Codex, which goes on", async () => {
+    const id = start(asking, {}, answered)
+    await until(() => sessions.forms(id).length === 1)
+    const [form] = sessions.forms(id)
+    expect(form.fields).toMatchObject([{ description: "Which language should the README use?", options: [{ value: "English" }, { value: "Turkish" }], custom: true }])
+    expect(ended(id)).toBe(false)
+    sessions.replyForm(id, form.id, { [form.fields[0].key]: "Turkish" })
+    await until(() => ended(id))
+    expect(starts()).toEqual(["go", "Turkish"])
+    expect(steps(id).flatMap((step) => step.content.filter((part: any) => part.type === "text").map((part: any) => part.text)).join("\n")).toContain("Writing it in Turkish.")
+  })
+
+  test("a message you type instead answers it: the card goes and Codex gets your words", async () => {
+    const id = start(asking, {}, answered)
+    await until(() => sessions.forms(id).length === 1)
+    sessions.prompt(id, { id: "msg_codex_test_002", text: "english please", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    expect(sessions.forms(id)).toEqual([])
+    expect(starts()).toEqual(["go", "english please"])
+  })
+
+  test("dismissing the card ends the turn there, with nothing sent to Codex", async () => {
+    const id = start(asking, {}, answered)
+    await until(() => sessions.forms(id).length === 1)
+    sessions.replyForm(id, sessions.forms(id)[0].id, null)
+    await until(() => ended(id))
+    expect(starts()).toEqual(["go"])
   })
 })
 

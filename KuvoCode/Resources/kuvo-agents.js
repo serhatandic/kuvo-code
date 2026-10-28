@@ -9765,6 +9765,8 @@ class CodexThread {
   active;
   inTurn = false;
   startedOver = false;
+  asked;
+  waiting;
   toolsKey;
   skillsKey;
   get spawnedSessions() {
@@ -9876,6 +9878,12 @@ class CodexThread {
     return this.backgroundLanes.size > 0;
   }
   async steer(input) {
+    const waiting = this.waiting;
+    if (waiting && !waiting.typed) {
+      waiting.typed = input;
+      waiting.abort.abort();
+      return true;
+    }
     const active = this.active;
     if (!active?.turnID || !this.nativeID)
       return false;
@@ -9937,12 +9945,52 @@ class CodexThread {
   async run(input, turn, hooks) {
     this.inTurn = true;
     try {
-      return await this.runTurn(input, turn, hooks);
+      let result = await this.runTurn(input, turn, hooks);
+      while (result.outcome === "succeeded" && this.asked?.length && !hooks.signal.aborted) {
+        const answer = await this.answer(this.asked, hooks);
+        if (!answer)
+          break;
+        result = await this.runTurn({ ...input, ...answer, adopt: false }, turn, hooks);
+      }
+      return hooks.signal.aborted && result.outcome === "succeeded" ? { outcome: "interrupted" } : result;
     } finally {
+      this.asked = undefined;
       this.inTurn = false;
     }
   }
+  async answer(questions, hooks) {
+    this.asked = undefined;
+    const waiting = { abort: new AbortController };
+    this.waiting = waiting;
+    try {
+      const fields = questions.map((question, index) => ({
+        key: `q${index}`,
+        title: "Question",
+        description: question.title,
+        required: true,
+        type: "string",
+        options: (question.options ?? []).map((option) => ({ value: option, label: option })),
+        custom: true
+      }));
+      const answer = await hooks.question({ title: questions.length === 1 ? "Question" : "Questions", fields, signal: waiting.abort.signal });
+      if (waiting.typed)
+        return { text: waiting.typed.text, files: waiting.typed.files };
+      if (!answer)
+        return;
+      const said2 = (index) => {
+        const value = answer[`q${index}`];
+        return Array.isArray(value) ? value.join(", ") : String(value ?? "");
+      };
+      return { text: questions.length === 1 ? said2(0) : questions.map((question, index) => `${question.title}
+${said2(index)}`).join(`
+
+`), files: [] };
+    } finally {
+      this.waiting = undefined;
+    }
+  }
   async runTurn(input, turn, hooks) {
+    this.asked = undefined;
     const rpc = await this.ensureThread(input, hooks);
     if (hooks.signal.aborted)
       return { outcome: "interrupted" };
@@ -10018,6 +10066,9 @@ ${others.map((path) => `- ${path}`).join(`
     const turnID = params?.turnId ?? params?.turn?.id;
     if (active.turnID && turnID && turnID !== active.turnID)
       return;
+    if (method === "item/completed" && params?.item?.type === "agentMessage" && Array.isArray(params.item.questions) && params.item.questions.length) {
+      this.asked = params.item.questions.filter((question) => typeof question?.title === "string" && question.title);
+    }
     switch (method) {
       case "turn/started":
         active.turnID ??= params.turn?.id;
@@ -19798,4 +19849,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents acf55e65ff2cacc9f60c16394ff6ac03bfc9f219f6f122a99bf174157b662ca4
+// Built from Packages/Box/src/agents 5b23e1d79b70648584b8276b8b9f6fe895189050ab9303f882b6b1ddb393b026
