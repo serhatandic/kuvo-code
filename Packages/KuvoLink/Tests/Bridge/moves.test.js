@@ -64,7 +64,7 @@ function body(request) {
 // An engine with its conversations (`{id, title, directory, messages}`), as its API exports, imports
 // and deletes them.
 async function engineWith(sessions) {
-  const engine = { sessions: new Map(sessions.map(each => [each.id, each])), prompts: [] };
+  const engine = { sessions: new Map(sessions.map(each => [each.id, each])), prompts: [], cursors: new Map() };
   const server = http.createServer(async (request, response) => {
     const given = await body(request);
     const url = new URL(request.url, "http://x");
@@ -72,21 +72,29 @@ async function engineWith(sessions) {
     if (!authorized(request)) return response.writeHead(401).end();
     const listed = each => ({ id: each.id, title: each.title, directory: each.directory, location: { directory: each.directory }, time: { updated: 1 } });
     if (url.pathname === "/api/session" && request.method === "GET") {
-      // Subagents' (none here), or the latest.
-      if (url.searchParams.get("parentID") && url.searchParams.get("parentID") !== "null") return send(200, []);
+      // A conversation's subagents', a hundred at a time, as the engine pages them; or the latest.
+      const parent = url.searchParams.get("parentID") ?? engine.cursors.get(url.searchParams.get("cursor"));
+      if (parent && parent !== "null") {
+        const children = [...engine.sessions.values()].filter(each => each.parent === parent);
+        const from = Number(url.searchParams.get("cursor")?.split(":")[1] ?? 0);
+        const page = children.slice(from, from + 100);
+        const next = from + 100 < children.length ? `${parent}:${from + 100}` : null;
+        if (next) engine.cursors.set(next, parent);
+        return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: page.map(listed), cursor: next ? { next } : {} }));
+      }
       return send(200, [...engine.sessions.values()].map(listed));
     }
     if (url.pathname === "/api/session/active") return send(200, {});
     if (url.pathname === "/api/model") return send(200, []);
     if (url.pathname === "/api/experimental/session/import" && request.method === "POST") {
       if (engine.sessions.has(given.info?.id)) return response.writeHead(409, { "content-type": "application/json" }).end(JSON.stringify({ message: "It's there already." }));
-      engine.sessions.set(given.info.id, { id: given.info.id, title: given.info.title, directory: given.location.directory, messages: given.messages });
+      engine.sessions.set(given.info.id, { id: given.info.id, title: given.info.title, directory: given.location.directory, messages: given.messages, parent: given.info.parentID });
       return send(200, listed(engine.sessions.get(given.info.id)));
     }
     const exported = url.pathname.match(/^\/api\/experimental\/session\/([^/]+)\/export$/);
     if (exported) {
       const session = engine.sessions.get(exported[1]);
-      return session ? send(200, { info: { id: session.id, title: session.title }, messages: session.messages }) : send(404, null);
+      return session ? send(200, { info: { id: session.id, title: session.title, ...(session.parent ? { parentID: session.parent } : {}) }, messages: session.messages }) : send(404, null);
     }
     const match = url.pathname.match(/^\/api\/session\/([^/]+)(\/inbox|\/prompt|\/instructions\/entries)?$/);
     const session = match && engine.sessions.get(match[1]);
@@ -354,4 +362,15 @@ test("a group chat goes to the machine its bots live on, held there until the sw
   assert.match(mixed.json.message, /Mixed.*bots live on different computers/);
   assert.equal(macBridge.groups.get("grp_mix")?.status, "active", "it goes on here as it was");
   assert.ok(!labBridge.groups.has("grp_mix"));
+});
+
+test("a chat with more subagents than the engine lists at once moves with every one", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  macEngine.sessions.set("ses_many", { id: "ses_many", title: "Research", directory: macChats, messages: messages("Look into it.") });
+  for (let i = 0; i < 130; i++) macEngine.sessions.set(`ses_sub${i}`, { id: `ses_sub${i}`, title: `Part ${i}`, directory: macChats, messages: messages(`Part ${i}`), parent: "ses_many" });
+  const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_many", to: lab.key });
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  assert.equal(moved.json.move.sessions.length, 131);
+  for (let i = 0; i < 130; i++) assert.equal(labEngine.sessions.get(`ses_sub${i}`)?.parent, "ses_many", `ses_sub${i} there`);
+  assert.ok(![...macEngine.sessions.keys()].some(id => id === "ses_many" || id.startsWith("ses_sub")), "and gone here");
 });

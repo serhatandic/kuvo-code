@@ -6905,7 +6905,7 @@ var folderOf = (kind, thing) => kind === "bot" ? path37.join(BOTS, thing) : kind
 var directoryOf = (kind, thing) => kind === "bot" ? path37.join(BOTS, thing, "workspace") : CHATS;
 function run(program, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn3(program, args, { stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn3(program, args, { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
     let said = "";
     child.stderr.on("data", (chunk) => {
       said += chunk;
@@ -6925,15 +6925,28 @@ async function exportAll(engine, root) {
   const next = [root];
   while (next.length) {
     const parent = next.pop();
-    const children = await call(engine, "GET", `/api/session?parentID=${encodeURIComponent(parent)}&limit=100&order=desc`);
-    for (const child of Array.isArray(children) ? children : []) {
-      if (!isObject(child) || typeof child.id !== "string")
-        continue;
+    for (const child of await childrenOf(engine, parent)) {
       exports.push(await call(engine, "GET", `/api/experimental/session/${encodeURIComponent(child.id)}/export`));
       next.push(child.id);
     }
   }
   return exports;
+}
+async function childrenOf(engine, parent) {
+  const all = [];
+  const seen = new Set;
+  let route = `api/session?parentID=${encodeURIComponent(parent)}&limit=100&order=desc`;
+  for (;; ) {
+    const page = await asked(engine, "GET", route);
+    const listed = (Array.isArray(page?.data) ? page.data : []).filter((one) => isObject(one) && typeof one.id === "string" && !seen.has(one.id));
+    for (const one of listed)
+      seen.add(one.id);
+    all.push(...listed);
+    const next = page?.cursor?.next;
+    if (listed.length === 0 || Array.isArray(page?.data) && page.data.length < 100 || typeof next !== "string")
+      return all;
+    route = `api/session?parentID=${encodeURIComponent(parent)}&limit=100&cursor=${encodeURIComponent(next)}`;
+  }
 }
 var idsOf = (exports) => exports.flatMap((each) => {
   const id = isObject(each) && isObject(each.info) ? each.info.id : null;
@@ -6967,7 +6980,7 @@ async function pack(id, contents) {
   fs37.mkdirSync(staging, { recursive: true, mode: 448 });
   fs37.writeFileSync(path37.join(staging, "move.json"), JSON.stringify(contents), { mode: 384 });
   const file = path37.join(folder, "bundle.tgz");
-  const args = ["-czf", file, "-C", staging, "move.json"];
+  const args = [...process.platform === "darwin" ? ["--no-mac-metadata", "--no-xattrs"] : [], "-czf", file, "-C", staging, "move.json"];
   const original = contents.folder ? folderOf(contents.kind, contents.thing) : null;
   if (original)
     args.push("-C", path37.dirname(original), path37.basename(original));

@@ -12,7 +12,7 @@ import type { Target } from "../../shared/records";
 import type { MoveKind } from "../../shared/routes/moves";
 import { answerBotKeys } from "../areas/bot-keys";
 import { askGroups } from "../areas/groups";
-import { call } from "../engine/client";
+import { asked, call } from "../engine/client";
 import { BOTS, IS_MAC, K, SESSION_WAKES } from "../home";
 import { hostTrash } from "../host-interface";
 import { bundleOf } from "./records";
@@ -48,7 +48,8 @@ export const directoryOf = (kind: MoveKind, thing: string): string => kind === "
 /** `program arguments`, run; its output, or why it failed. */
 function run(program: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(program, args, { stdio: ["ignore", "ignore", "pipe"] });
+    // A Mac's tar adds its own files (`._…`) and attributes, which a Linux machine has no use for.
+    const child = spawn(program, args, { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
     let said = "";
     child.stderr.on("data", chunk => { said += chunk; });
     child.once("error", reject);
@@ -68,14 +69,28 @@ export async function exportAll(engine: Target, root: string): Promise<unknown[]
   const next = [root];
   while (next.length) {
     const parent = next.pop()!;
-    const children = await call(engine, "GET", `/api/session?parentID=${encodeURIComponent(parent)}&limit=100&order=desc`);
-    for (const child of Array.isArray(children) ? children : []) {
-      if (!isObject(child) || typeof child.id !== "string") continue;
+    for (const child of await childrenOf(engine, parent)) {
       exports.push(await call(engine, "GET", `/api/experimental/session/${encodeURIComponent(child.id)}/export`));
       next.push(child.id);
     }
   }
   return exports;
+}
+
+/** Every subagent's conversation `parent` started, page after page (the engine gives 100 at a time). */
+async function childrenOf(engine: Target, parent: string): Promise<{ id: string }[]> {
+  const all: { id: string }[] = [];
+  const seen = new Set<string>();
+  let route = `api/session?parentID=${encodeURIComponent(parent)}&limit=100&order=desc`;
+  for (;;) {
+    const page = await asked(engine, "GET", route) as { data?: unknown; cursor?: { next?: unknown } } | null;
+    const listed = (Array.isArray(page?.data) ? page.data : []).filter((one): one is { id: string } => isObject(one) && typeof one.id === "string" && !seen.has(one.id));
+    for (const one of listed) seen.add(one.id);
+    all.push(...listed);
+    const next = page?.cursor?.next;
+    if (listed.length === 0 || (Array.isArray(page?.data) && page.data.length < 100) || typeof next !== "string") return all;
+    route = `api/session?parentID=${encodeURIComponent(parent)}&limit=100&cursor=${encodeURIComponent(next)}`;
+  }
 }
 
 /** Each export's session ID, root first. */
@@ -114,7 +129,7 @@ export async function pack(id: string, contents: Contents): Promise<{ file: stri
   fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(staging, "move.json"), JSON.stringify(contents), { mode: 0o600 });
   const file = path.join(folder, "bundle.tgz");
-  const args = ["-czf", file, "-C", staging, "move.json"];
+  const args = [...(process.platform === "darwin" ? ["--no-mac-metadata", "--no-xattrs"] : []), "-czf", file, "-C", staging, "move.json"];
   const original = contents.folder ? folderOf(contents.kind, contents.thing) : null;
   if (original) args.push("-C", path.dirname(original), path.basename(original));
   await run("tar", args);
