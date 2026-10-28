@@ -280,6 +280,8 @@ private final class Rig {
     nonisolated let free = Mutex<Int64>(10_000_000_000)
     /// Where Core ML would keep its copy made ready for the chip.
     var compiled: URL { folder.appending(path: "compiled") }
+    /// How large a copy Core ML keeps when it's made ready (nil: kept where the app can't see).
+    nonisolated let keeps = Mutex<Int64?>(nil)
     let defaults: UserDefaults
 
     init() {
@@ -301,7 +303,17 @@ private final class Rig {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubHub.self]
         let model = SpeechModel(files: files, defaults: defaults, session: configuration, supported: true, freeSpace: { [self] _ in self.free.withLock { $0 } },
-                                prepare: { [self] folder in prepared.withLock { $0.append(folder) } }, compiled: [compiled])
+                                prepare: { [self, compiled] folder in
+                                    prepared.withLock { $0.append(folder) }
+                                    // As Core ML would: its copy, without taking the room (a sparse file).
+                                    guard let size = keeps.withLock({ $0 }) else { return }
+                                    let copy = compiled.appending(path: "26A434/encoder.bundle")
+                                    try FileManager.default.createDirectory(at: copy.deletingLastPathComponent(), withIntermediateDirectories: true)
+                                    FileManager.default.createFile(atPath: copy.path, contents: nil)
+                                    let handle = try FileHandle(forWritingTo: copy)
+                                    try handle.truncate(atOffset: UInt64(size))
+                                    try handle.close()
+                                }, compiled: [compiled])
         model.use(folder: folder)
         return model
     }
@@ -398,6 +410,52 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
     #expect(rig.model().state == .ready)
 }
 
+// Core ML's copy for the chip is what makes loading take seconds: the system may clear it, and
+// then it's made ready again in the background; a copy Core ML couldn't keep (no room) is said
+// as such, rather than every press taking minutes.
+@MainActor
+@Test func aCopyForTheChipThatsGoneIsMadeAgainAndOneThatWasntKeptSaysWhatItNeeds() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.keeps.withLock { $0 = 600_000_000 }
+    let model = rig.model()
+    model.download()
+    #expect(await settled(model) == .ready)
+    #expect(model.status(device: "Mac").hasPrefix("Ready · uses about"))
+    // The system cleared caches: made ready again as the app opens.
+    try FileManager.default.removeItem(at: rig.compiled)
+    let reopened = rig.model()
+    #expect(reopened.state == .preparing)
+    #expect(await settled(reopened) == .ready)
+    #expect(rig.prepared.withLock { $0.count } == 2)
+    // Core ML ran out of room for it: not ready, and it says so.
+    rig.keeps.withLock { $0 = 1_000 }
+    try FileManager.default.removeItem(at: rig.compiled)
+    let full = rig.model()
+    guard case .lowSpace = await settled(full) else { Issue.record("not low on space: \(full.state)"); return }
+    #expect(full.micWords.title == "Not enough space to get voice input ready")
+    #expect(!full.canListen)
+}
+
+// Made ready before this version kept the size of Core ML's copy: with that copy still here,
+// it's made ready again in seconds, even without room for a new one.
+@MainActor
+@Test func aCopyMadeReadyBeforeIsUsedWithoutAskingForRoomAgain() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.keeps.withLock { $0 = 3_100_000_000 }
+    let model = rig.model()
+    model.download()
+    #expect(await settled(model) == .ready)
+    let mark = rig.folder.appending(path: "whisper-large-v3-turbo").appending(path: ".prepared")
+    try Data().write(to: mark)
+    rig.free.withLock { $0 = 1_000_000_000 }
+    let updated = rig.model()
+    #expect(updated.state == .preparing)
+    #expect(await settled(updated) == .ready)
+    #expect(updated.wasPrepared)
+}
+
 @MainActor
 @Test func aDownloadThatStoppedGoesOnFromWhereItWas() async throws {
     let rig = Rig()
@@ -460,8 +518,8 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
     #expect(model.state == .absent)
     #expect(model.received == 0)
     #expect(!FileManager.default.fileExists(atPath: rig.folder.appending(path: "whisper-large-v3-turbo").path))
-    // The copy made ready for the chip goes too: it's larger than the model.
-    #expect(!FileManager.default.fileExists(atPath: rig.compiled.path))
+    // The copy made ready for the chip goes too, once Whisper is let go: it's larger than the model.
+    while FileManager.default.fileExists(atPath: rig.compiled.path) { await Task.yield() }
     // It stays gone, and nothing listens without it; the mic brings it back.
     #expect(rig.model().state == .absent)
     #expect(!model.canListen)

@@ -128,8 +128,9 @@ public final class VoiceInput {
     /// You're done: what was said last is settled, and `ended` gets the words. Stopped by a
     /// failure, `ended` gets what was written before it.
     public func finish() {
-        // Still getting ready: nothing was heard, and the microphone mustn't come on after.
-        if isPreparing {
+        // Still getting ready, before the microphone came on: nothing was heard, and it mustn't
+        // come on after. (With it on, while Whisper loads, what you said is written once it has.)
+        if isPreparing, samples == nil {
             cancel()
             ended?("")
             return
@@ -140,7 +141,7 @@ public final class VoiceInput {
             ended?(words)
             return
         }
-        guard phase == .listening else { return }
+        guard phase == .listening || isPreparing else { return }
         phase = .finishing
         let run = run
         stopMicrophone()
@@ -259,14 +260,22 @@ public final class VoiceInput {
         }
     }
 
-    /// Listening with Whisper: loaded first (getting ready, which Cancel stops), and only then
-    /// the microphone (or `clip`), so nothing seems to listen before anything can be written.
-    /// Each phrase is written as it ends.
+    /// Listening with Whisper: the microphone comes on at once and what you say waits while
+    /// Whisper loads (a few seconds, since its copy for this chip is kept), getting ready until
+    /// then; or `clip` plays once it's loaded. Each phrase is written as it ends.
     private func listenWithWhisper(folder: URL, locale: Locale, words: @escaping @Sendable () async -> [String], clip: AsyncStream<[Float]>?, run: Int) async {
+        let (stream, continuation) = AsyncStream<[Float]>.makeStream()
         if clip == nil {
             guard await Self.microphoneAllowed() else { return fail(.microphoneDenied, run: run) }
+            guard self.run == run else { return }
+            do {
+                try startMicrophone(continuation, run: run)
+            } catch {
+                continuation.finish()
+                return fail(.other("Voice input couldn’t use the microphone. Try again."), run: run)
+            }
+            samples = continuation
         }
-        guard self.run == run else { return }
         let dictation = WhisperDictation(folder: folder, locale: locale, words: words) { [weak self] heard in
             Task { @MainActor in self?.take(heard, run: run) }
         }
@@ -274,40 +283,33 @@ public final class VoiceInput {
             try await dictation.prepare()
         } catch {
             await dictation.stop()
-            return fail(.other("Voice input couldn’t start: \(error.localizedDescription)"), run: run)
+            return fail(.other("Voice input couldn’t start. Try again; if it keeps stopping, remove the voice model in Settings and download it again."), run: run)
         }
         guard self.run == run else { return await dictation.stop() }
-        // A clip goes on until whoever plays it ends it, after Done.
-        if let clip {
+        // Done while it loaded: it's finishing, and writes what was said.
+        if isPreparing {
             phase = .listening
             listeningSince = .now
-            return await dictation.run(clip)
         }
-        let (stream, continuation) = AsyncStream<[Float]>.makeStream()
-        do {
-            try startSession()
-            let engine = AVAudioEngine()
-            let input = engine.inputNode
-            let natural = input.outputFormat(forBus: 0)
-            let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(PhraseCutter.rate), channels: 1, interleaved: false)!
-            self.engine = engine
-            Self.tap(input, natural: natural, format: format, deliver: { buffer in
-                guard let channel = buffer.floatChannelData?[0] else { return }
-                continuation.yield(Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))))
-            }) { [weak self] rms in
-                Task { @MainActor in self?.heard(rms: rms, run: run) }
-            }
-            engine.prepare()
-            try engine.start()
-        } catch {
-            continuation.finish()
-            await dictation.stop()
-            return fail(.other("Voice input couldn’t use the microphone: \(error.localizedDescription)"), run: run)
+        await dictation.run(clip ?? stream)
+    }
+
+    /// The microphone on, its samples (16 kHz, mono) into `continuation`.
+    private func startMicrophone(_ continuation: AsyncStream<[Float]>.Continuation, run: Int) throws {
+        try startSession()
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        let natural = input.outputFormat(forBus: 0)
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(PhraseCutter.rate), channels: 1, interleaved: false)!
+        self.engine = engine
+        Self.tap(input, natural: natural, format: format, deliver: { buffer in
+            guard let channel = buffer.floatChannelData?[0] else { return }
+            continuation.yield(Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))))
+        }) { [weak self] rms in
+            Task { @MainActor in self?.heard(rms: rms, run: run) }
         }
-        samples = continuation
-        phase = .listening
-        listeningSince = .now
-        await dictation.run(stream)
+        engine.prepare()
+        try engine.start()
     }
 
     private func take(_ heard: WhisperDictation.Heard, run: Int) {
@@ -315,9 +317,11 @@ public final class VoiceInput {
         switch heard {
         case .guess(let text, let start): transcript.take(text, start: start, isFinal: false)
         case .final(let text, let start): transcript.take(text, start: start, isFinal: true)
-        case .failed(let words):
-            // What was written stays, for Done to take.
-            fail(.other("Whisper couldn’t write what you said: \(words)"), run: run)
+        case .failed:
+            // After Done, it ends with what was written; before, it says so, and what was
+            // written stays for Done to take.
+            guard phase != .finishing else { return }
+            fail(.other(transcript.isEmpty ? "Voice input stopped before anything was written. Try again." : "Voice input stopped. What was written so far is kept."), run: run)
         }
     }
 

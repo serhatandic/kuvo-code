@@ -64,23 +64,29 @@ actor WhisperRuntime {
         release = Task {
             try? await Task.sleep(for: Self.keep)
             guard !Task.isCancelled else { return }
-            unload()
+            await unload()
         }
     }
 
-    func unload() {
+    /// Let go, and once a load under way has ended (it can't be stopped), nothing of it is written after.
+    func unload() async {
         release?.cancel()
+        let loading = loading
         users = 0
         loaded = nil
         folder = nil
-        loading = nil
+        self.loading = nil
+        _ = try? await loading?.value
     }
 
     /// The first load after the download: Core ML makes the model ready for this device's chip,
-    /// which takes a minute or more, once. Then it's let go until voice input needs it.
+    /// which takes minutes, once. Then it's let go at once, unless voice input is using it.
     func prepare(_ folder: URL) async throws {
         _ = try await kit(folder)
-        idle()
+        users = max(0, users - 1)
+        guard users == 0 else { return }
+        loaded = nil
+        self.folder = nil
     }
 
     private static func make(_ folder: URL) async throws -> LoadedWhisper {

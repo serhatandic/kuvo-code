@@ -388,7 +388,7 @@ struct Composer: View {
             // now, where you type.
             let left = old ?? "new:" + (folders.first ?? "")
             if app.dictation.isListening(for: left) {
-                if app.dictation.voice?.phase == .listening { app.dictation.finish() } else { app.dictation.cancel() }
+                if app.dictation.voice?.phase == .listening || app.dictation.voice?.keepsWords == true { app.dictation.finish() } else { app.dictation.cancel() }
             }
             app.dictation.withdraw(left)
             if fieldHasKeyboard { offerVoice() }

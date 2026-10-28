@@ -114,10 +114,16 @@ struct VoiceField: View {
             Spacer(minLength: 24)
             Group {
                 if case .failed(let failure) = voice.phase {
-                    Text(failure.message)
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
+                    VStack(spacing: 16) {
+                        // What was written before it stopped, for Done to take.
+                        if voice.keepsWords {
+                            VoiceWords(transcript: voice.transcript, font: .system(size: 30, weight: .medium), alignment: .center)
+                        }
+                        Text(failure.message)
+                            .font(voice.keepsWords ? .body : .title3)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
                 } else {
                     VoiceWords(transcript: voice.transcript, font: .system(size: 30, weight: .medium), placeholder: "Say what you’d like to ask", alignment: .center)
                 }
