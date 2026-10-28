@@ -124,32 +124,6 @@ import Testing
         #expect(trashed(named: "src").contains(precious), "the file named src should be in the Trash")
     }
 
-    /// On a machine the folders a file goes back into are checked in one go, by a script run
-    /// there: it names the first that's a file or a link now, and nothing when they're all
-    /// folders or one isn't there. Run here with a shell, as on the machine.
-    @Test func onAMachineTheFoldersAreCheckedInOneGo() throws {
-        let base = repo.path
-        try FileManager.default.createDirectory(at: repo.url.appending(path: "web/pages/app"), withIntermediateDirectories: true)
-        try repo.write("web/assets", "a file where a folder was")
-        try FileManager.default.createSymbolicLink(atPath: repo.url.appending(path: "web/pages/link").path(percentEncoded: false), withDestinationPath: "app")
-        func found(_ levels: [String]) throws -> String {
-            let shell = Process()
-            shell.executableURL = URL(filePath: "/bin/sh")
-            shell.arguments = ["-c", Git.fileInPlaceScript(base: base, levels: levels)]
-            let output = Pipe()
-            shell.standardOutput = output
-            try shell.run()
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            shell.waitUntilExit()
-            return String(decoding: data, as: UTF8.self)
-        }
-        #expect(try found(["web", "web/pages", "web/pages/app"]) == "")
-        #expect(try found(["web", "web/assets", "web/assets/logo"]) == "web/assets")
-        #expect(try found(["web", "web/pages", "web/pages/link"]) == "web/pages/link", "a link to a folder is in the way too")
-        #expect(try found(["gone", "gone/deeper"]) == "")
-        #expect(try found(["web", "web/it's here"]) == "", "quoted as it should be")
-    }
-
     /// What's in the Trash under `name`, each file's text.
     private func trashed(named name: String) -> [String] {
         let trash = AppInfo.testTrash

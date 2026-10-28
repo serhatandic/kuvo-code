@@ -853,7 +853,7 @@ private struct ImageDiff: View {
         await Task.detached {
             // A machine's file from disk comes from its box, as a phone reads it.
             func read(_ object: String?, disk: URL?) async -> NSImage? {
-                if let object, let root = file.root, let data = Git.data(["show", object], in: root) { return NSImage(data: data) }
+                if let object, let root = file.root, let data = await Git.shown(object, in: root) { return NSImage(data: data) }
                 if let disk, let (machine, path) = RemoteFolder.parse(disk) {
                     return (try? await BoxClient.machine(machine).file(path)).flatMap(NSImage.init(data:))
                 }

@@ -112,10 +112,11 @@ final class ProjectChanges {
             isLoaded = true
             return
         }
-        let (result, uncommitted) = await Task.detached {
-            (Git.changes(in: directory, scope: scope, base: base), scope != .branch || Git.hasUncommittedChanges(in: directory))
-        }.value
-        if let result {
+        let found = await Git.found(in: directory, scope: scope, base: base)
+        // A machine's box out of reach for a moment: what showed stays, rather than reading as no
+        // repository.
+        if case .unreachable = found, isLoaded { return }
+        if case .listed(let result, let uncommitted) = found {
             let read = await Git.readNew(result, known: machineReads)
             // Kept whichever list shows: what was read is the file as it is.
             machineReads = Git.kept(read)
@@ -138,8 +139,7 @@ final class ProjectChanges {
     /// A file git doesn't know yet goes to the Trash. Returns git's complaint, if any.
     func perform(_ action: Action, on file: ChangedFile) async -> String? {
         guard let root = file.root else { return nil }
-        let scope = scope
-        let failure = await Task.detached { Git.perform(action, on: file, root: root, scope: scope) }.value
+        let failure = await Git.performing(action, on: file, root: root, scope: scope)
         await refresh()
         return failure
     }
@@ -149,7 +149,7 @@ final class ProjectChanges {
     /// hooks, signing and pushing see what they do in Terminal.
     func commit(message: String, push: Bool, environment: [String: String]) async -> String? {
         let directory = directory
-        let failure = await Task.detached { Git.commit(message: message, push: push, in: directory, environment: environment) }.value
+        let failure = await Git.committing(message: message, push: push, in: directory, environment: environment)
         if failure == nil { Analytics.shared.track("changes_committed", ["pushed": push]) }
         await refresh()
         return failure
@@ -158,14 +158,14 @@ final class ProjectChanges {
     /// The diff a commit would take (what's staged, or everything with new files' names),
     /// cut to a size a model reads quickly.
     func commitDiff() async -> String {
-        let directory = directory
-        return await Task.detached { Git.commitDiff(in: directory) }.value
+        await Git.commitDiffing(in: directory).diff
     }
 
     /// Whether anything is staged, which is what a commit takes then.
     func hasStaged() async -> Bool {
         let directory = directory
-        return await Task.detached { Git.hasStaged(in: directory) }.value
+        guard RemoteFolder.parse(directory) != nil else { return await Task.detached { Git.hasStaged(in: directory) }.value }
+        return await Git.commitDiffing(in: directory).staged
     }
 
     /// Only publishes when something changed, so a refresh doesn't redraw the panel.
@@ -180,6 +180,103 @@ final class ProjectChanges {
 // MARK: - Git
 
 nonisolated enum Git {
+    // MARK: A machine's, from its box
+
+    enum Found {
+        /// The changed files, and whether anything isn't committed yet.
+        case listed([ChangedFile], Bool)
+        /// Not in a repository, or git couldn't say.
+        case notRepository
+        /// A machine's box couldn't be asked.
+        case unreachable
+    }
+
+    /// The changed files in `scope`. A machine's come from its box (`kuvo/git/changes`), as a
+    /// phone reads them; this Mac's from its git.
+    @concurrent static func found(in directory: String, scope: ProjectChanges.Scope, base: String?,
+                                  box: @Sendable (String) -> BoxClient = BoxClient.machine) async -> Found {
+        guard let (machine, path) = RemoteFolder.parse(directory) else {
+            guard let files = changes(in: directory, scope: scope, base: base) else { return .notRepository }
+            return .listed(files, scope != .branch || hasUncommittedChanges(in: directory))
+        }
+        struct Asked: Encodable { let directory: String, scope: String, base: String? }
+        struct Answer: Decodable {
+            let repository: Bool
+            let root, against, patch: String?
+            let untracked: [String]?
+            let hashes: [String: String]?
+            let uncommitted: Bool?
+        }
+        let asked = Asked(directory: path, scope: scope == .session ? "uncommitted" : scope.rawValue, base: base)
+        let found: Answer
+        do { found = try await box(machine).value(Answer.self, "POST", "kuvo/git/changes", body: asked) } catch { return .unreachable }
+        guard found.repository, let root = found.root, let against = found.against, let patch = found.patch else { return .notRepository }
+        let files = listed(patch: patch, root: RemoteFolder.folder(root, on: machine), base: against, scope: scope,
+                           untracked: found.untracked ?? [], hashes: found.hashes ?? [:])
+        return .listed(files, found.uncommitted ?? true)
+    }
+
+    /// Stages, unstages or discards one file's changes (`perform`): a machine's on its box.
+    @concurrent static func performing(_ action: ProjectChanges.Action, on file: ChangedFile, root: String, scope: ProjectChanges.Scope,
+                                       box: @Sendable (String) -> BoxClient = BoxClient.machine) async -> String? {
+        guard let (machine, path) = RemoteFolder.parse(root) else { return perform(action, on: file, root: root, scope: scope) }
+        struct Asked: Encodable { let root, path: String, oldPath: String?, status, scope: String }
+        let status = switch file.status {
+        case .added: "added"
+        case .deleted: "deleted"
+        case .modified: "modified"
+        case .renamed: "renamed"
+        }
+        let route = switch action {
+        case .stage: "stage"
+        case .unstage: "unstage"
+        case .discard: "discard"
+        }
+        let asked = Asked(root: path, path: file.path, oldPath: file.oldPath, status: status, scope: scope == .session ? "uncommitted" : scope.rawValue)
+        return await said { try await box(machine).send("POST", "kuvo/git/" + route, body: JSONEncoder().encode(asked)) }
+    }
+
+    /// Commits (`commit`): a machine's on its box, with only your shell's git author settings,
+    /// which mean the same there.
+    @concurrent static func committing(message: String, push: Bool, in directory: String, environment: [String: String],
+                                       box: @Sendable (String) -> BoxClient = BoxClient.machine) async -> String? {
+        guard let (machine, path) = RemoteFolder.parse(directory) else { return commit(message: message, push: push, in: directory, environment: environment) }
+        struct Asked: Encodable { let directory, message: String, push: Bool, author: [String: String] }
+        let author = environment.filter { ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"].contains($0.key) }
+        return await said { try await box(machine).send("POST", "kuvo/git/commit", body: JSONEncoder().encode(Asked(directory: path, message: message, push: push, author: author))) }
+    }
+
+    /// What a commit would take, and whether that's what's staged: a machine's from its box.
+    @concurrent static func commitDiffing(in directory: String, box: @Sendable (String) -> BoxClient = BoxClient.machine) async -> (diff: String, staged: Bool) {
+        guard let (machine, path) = RemoteFolder.parse(directory) else { return (commitDiff(in: directory), hasStaged(in: directory)) }
+        struct Asked: Encodable { let directory: String }
+        struct Answer: Decodable { let diff: String, staged: Bool }
+        let answer = try? await box(machine).value(Answer.self, "POST", "kuvo/git/commit-diff", body: Asked(directory: path))
+        return (answer?.diff ?? "", answer?.staged ?? false)
+    }
+
+    /// A file as git keeps it (`object`: "HEAD:path", ":path" for the index), a machine's from its box.
+    @concurrent static func shown(_ object: String, in root: String, box: @Sendable (String) -> BoxClient = BoxClient.machine) async -> Data? {
+        guard let (machine, path) = RemoteFolder.parse(root) else { return data(["show", object], in: root) }
+        var query = URLComponents()
+        query.queryItems = [URLQueryItem(name: "root", value: path), URLQueryItem(name: "object", value: object)]
+        guard let encoded = query.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B"),
+              let (status, data) = try? await box(machine).send("GET", "kuvo/git/show?" + encoded), status == 200 else { return nil }
+        return data
+    }
+
+    /// nil when the box did it, else what it said (or that it couldn't be reached).
+    private static func said(_ answer: () async throws -> (status: Int, body: Data)) async -> String? {
+        do {
+            let (status, data) = try await answer()
+            return (200..<300).contains(status) ? nil : BoxRefusal(status: status, data: data).message
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    // MARK: This Mac's
+
     /// The changed files in `scope`, or nil when `directory` isn't in a repository.
     static func changes(in directory: String, scope: ProjectChanges.Scope, base branch: String? = nil) -> [ChangedFile]? {
         guard let root = toplevel(of: directory) else { return nil }
@@ -202,6 +299,15 @@ nonisolated enum Git {
         }
         arguments += ["--", limit.isEmpty ? "." : limit]
         guard let patch = run(arguments, in: root) else { return nil }
+        let untracked = scope == .staged ? [] : (run(["-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard", "-z", "--", limit.isEmpty ? "." : limit], in: root) ?? "")
+            .split(separator: "\0").map(String.init)
+        return listed(patch: patch, root: root, base: base, scope: scope, untracked: untracked, hashes: [:])
+    }
+
+    /// The changed files from git's diff and its new files (`untracked`), wherever git ran: `root`
+    /// as this Mac names it, `base` what the diff compared with, `hashes` git's of a machine's new
+    /// files, by path.
+    static func listed(patch: String, root: String, base: String, scope: ProjectChanges.Scope, untracked: [String], hashes: [String: String]) -> [ChangedFile] {
         var files = DiffParser.files(from: patch, root: root).map { file in
             // Where each side lives, for showing pictures.
             var file = file
@@ -226,25 +332,11 @@ nonisolated enum Git {
             merged[i].newObject = merged[i].newObject ?? file.newObject
         }
         files = merged
-        if scope != .staged {
-            let untracked = run(["-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard", "-z", "--", limit.isEmpty ? "." : limit], in: root) ?? ""
-            for path in untracked.split(separator: "\0").map(String.init) where !files.contains(where: { $0.path == path }) {
-                files.append(newFile(path, root: root))
-            }
-            // A machine's: git's hash of each (as they are, no filters run), in one call, so they're
-            // read from its box only when they change. One git can't hash (a broken link) fails the
-            // call: then each on its own.
-            let unread = Array(files.indices.filter { files[$0].unread }.prefix(500))
-            func hashes(_ indices: [Int]) -> [Substring]? {
-                run(["hash-object", "--no-filters", "--"] + indices.map { files[$0].path }, in: root)?.split(separator: "\n")
-            }
-            if !unread.isEmpty {
-                if let all = hashes(unread), all.count == unread.count {
-                    for (index, hash) in zip(unread, all) { files[index].hash = String(hash) }
-                } else {
-                    for index in unread { files[index].hash = hashes([index])?.first.map(String.init) }
-                }
-            }
+        for path in untracked where !files.contains(where: { $0.path == path }) {
+            var file = newFile(path, root: root)
+            // A machine's: git's hash of it, so it's read from its box only when it changes.
+            file.hash = hashes[path]
+            files.append(file)
         }
         return files.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
     }
@@ -319,11 +411,9 @@ nonisolated enum Git {
         }
     }
 
-    /// A folder (not a link to one) is at `url`; on a machine that can't be asked, as if one were,
-    /// so nothing is deleted on a guess.
+    /// A folder (not a link to one) is at `url`.
     private static func isFolder(_ url: URL) -> Bool {
-        if url.isFileURL { return (try? FileManager.default.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType == .typeDirectory }
-        return RemoteShell.isFolder(url) ?? true
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType == .typeDirectory
     }
 
     /// The first of the folders `path` is in (in the repository at `root`) that is something else
@@ -331,15 +421,7 @@ nonisolated enum Git {
     private static func fileInPlace(ofFoldersOf path: String, in root: String) -> URL? {
         let folders = path.split(separator: "/").dropLast().map(String.init)
         guard !folders.isEmpty else { return nil }
-        var url = RemoteFolder.url(root)
-        // On a machine, every level in one go: something else there, or nothing (then nothing
-        // below it either).
-        if !url.isFileURL, let (machine, base) = RemoteFolder.parse(url) {
-            var levels: [String] = []
-            for folder in folders { levels.append((levels.last.map { $0 + "/" } ?? "") + folder) }
-            guard let data = RemoteShell.run(fileInPlaceScript(base: base, levels: levels), on: machine), !data.isEmpty else { return nil }
-            return url.appending(path: String(decoding: data, as: UTF8.self))
-        }
+        var url = URL(filePath: root)
         for folder in folders {
             url = url.appending(path: folder)
             guard let type = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType else { return nil }
@@ -348,22 +430,9 @@ nonisolated enum Git {
         return nil
     }
 
-    /// Of `levels` (folders in `base`, each inside the one before), the first that's a file or a
-    /// link now, as it says it; nothing when they're all folders, or one isn't there.
-    static func fileInPlaceScript(base: String, levels: [String]) -> String {
-        """
-        cd \(SSHConnection.quoted(base)) || exit 0
-        for d in \(levels.map(SSHConnection.quoted).joined(separator: " ")); do
-          if [ -L "$d" ] || { [ -e "$d" ] && [ ! -d "$d" ]; }; then printf '%s' "$d"; exit 0; fi
-          [ -d "$d" ] || exit 0
-        done
-        """
-    }
-
-    /// To the Trash on this Mac; on a machine, which has none, to `~/.kuvo-code/trash` there.
+    /// To the Trash.
     private static func trash(_ url: URL) throws {
-        if url.isFileURL { return try FileManager.default.moveToTrash(url) }
-        if let failure = RemoteShell.trash(url) { throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: failure]) }
+        try FileManager.default.moveToTrash(url)
     }
 
     static func commitDiff(in directory: String, limit: Int = 40_000) -> String {
