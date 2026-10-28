@@ -351,6 +351,20 @@ final class Bots {
         return client
     }
 
+    /// One New Bot, as its sheet keeps it: its own id, sent each time Create is clicked, so its box
+    /// makes one bot however often it's sent (an answer lost on the way back, and Create clicked
+    /// again). Another sheet is another New Bot.
+    struct NewBotRequest {
+        let id = "req_" + UUID().uuidString
+
+        @MainActor
+        func make(with bots: Bots, name: String, look: BotLook, personality: String? = nil, model: ModelRef?, machine: String?, project: String?,
+                  template: String? = nil, shared: (line: String, details: String)? = nil) async throws -> Made {
+            try await bots.make(name: name, look: look, personality: personality, model: model, machine: machine, project: project,
+                                template: template, shared: shared, request: id)
+        }
+    }
+
     /// A bot made, and what to type in its conversation for you (a template's or a shared bot's job;
     /// nil when it writes first).
     struct Made {
