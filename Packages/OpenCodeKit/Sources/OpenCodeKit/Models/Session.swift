@@ -41,6 +41,12 @@ public struct Session: Codable, Sendable, Hashable, Identifiable {
 
     public enum Outcome: String, Codable, Sendable {
         case succeeded, failed, interrupted
+
+        /// One a newer engine says that this app doesn't know: it stopped (rather than losing the
+        /// list it's in).
+        public init(from decoder: Decoder) throws {
+            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .interrupted
+        }
     }
 
     public var isUnread: Bool {
@@ -58,6 +64,11 @@ public struct PermissionRule: Codable, Sendable, Hashable {
 
     public enum Effect: String, Codable, Sendable {
         case allow, deny, ask
+
+        /// One a newer engine has that this app doesn't know: it asks you.
+        public init(from decoder: Decoder) throws {
+            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .ask
+        }
     }
 
     public init(action: String, resource: String = "*", effect: Effect) {
@@ -80,6 +91,11 @@ public struct InboxItem: Codable, Sendable, Hashable, Identifiable {
         case steer
         /// Waits until the run finishes.
         case queue
+
+        /// One a newer engine has that this app doesn't know: it waits its turn.
+        public init(from decoder: Decoder) throws {
+            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .queue
+        }
     }
 
     public var text: String? { payload["text"]?.string }
