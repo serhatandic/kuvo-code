@@ -571,6 +571,17 @@ async function listFiles(top: string, path?: string): Promise<string[]> {
   return walk(top, path ?? "")
 }
 
+/** The files in `directory` as a review would read them (git's, or all but hidden ones and
+ * `node_modules`), by path, at most `limit`; none for a folder that can't be read. */
+export async function folderFiles(directory: string, limit = 300): Promise<{ names: string[]; more: number }> {
+  try {
+    const names = await listFiles(realpathSync(directory))
+    return { names: names.slice(0, limit), more: Math.max(0, names.length - limit) }
+  } catch {
+    return { names: [], more: 0 }
+  }
+}
+
 /** The files under `under` in `top`, out of a repository: all but hidden ones and `node_modules`. */
 function walk(top: string, under: string): string[] {
   const found: string[] = []
