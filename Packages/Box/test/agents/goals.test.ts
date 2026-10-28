@@ -152,6 +152,26 @@ describe("a goal", () => {
     expect(goal()).toMatchObject({ turns: 1 })
   })
 
+  test("in a repository, the files changed since its last commit come first, past what a listing keeps", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "kuvo-goal-repo-"))
+    const git = (...args: string[]) => Bun.spawnSync(["git", "-C", folder, "-c", "user.email=t@example.com", "-c", "user.name=T", ...args])
+    git("init", "-q", "-b", "main")
+    for (let each = 0; each < 320; each++) writeFileSync(join(folder, `a${String(each).padStart(3, "0")}.ts`), "x\n")
+    git("add", "-A")
+    git("commit", "-qm", "first")
+    writeFileSync(join(folder, "zz-README.md"), "# Demo\n")
+    engine.directory = folder
+    engine.verdicts = [`{"verdict": "met", "reason": "zz-README.md is there."}`]
+    try {
+      await goals.set("ses_work", "a README in this folder")
+      await until(() => engine.checks.length === 1)
+      expect(engine.checks[0].prompt).toContain("<files>\nzz-README.md\n")
+      expect(engine.checks[0].prompt).toContain("(and 21 more)")
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
   test("a turn the check finds waiting on you isn't met or nudged: the goal waits for your answer", async () => {
     engine.turns = [{ text: "I'm paused for your selection." }]
     engine.verdicts = [`{"verdict": "waiting", "reason": "It asked which language the README should use."}`]
@@ -171,7 +191,7 @@ describe("a goal", () => {
       await goals.set("ses_work", "a README in this folder")
       await until(() => engine.checks.length === 1)
       expect(engine.checks[0].prompt).toContain("<files>\napp.ts\n</files>")
-      expect(engine.checks[0].prompt).toContain("only if it's in the files")
+      expect(engine.checks[0].prompt).toContain("only if it's in the files above or the conversation shows a command or edit that made it")
     } finally {
       rmSync(folder, { recursive: true, force: true })
     }

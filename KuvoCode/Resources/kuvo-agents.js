@@ -3631,10 +3631,29 @@ async function listFiles(top, path) {
 }
 async function folderFiles(directory, limit = 300) {
   try {
-    const names = await listFiles(realpathSync(directory));
+    const top = realpathSync(directory);
+    const git = gitIn(top);
+    const status = await git(["status", "--porcelain", "-uall", "-z"]).catch(() => {
+      return;
+    });
+    if (status?.code === 0) {
+      const entries = status.stdout.split("\x00").filter(Boolean);
+      const changed = [];
+      for (let index = 0;index < entries.length; index++) {
+        const entry = entries[index];
+        if (entry.length > 3)
+          changed.push(entry.slice(3));
+        if (entry[0] === "R" || entry[0] === "C")
+          index++;
+      }
+      const kept = await listFiles(top);
+      const names2 = [...new Set([...changed, ...kept])];
+      return { names: names2.slice(0, limit), more: Math.max(0, names2.length - limit) };
+    }
+    const names = readdirSync6(top, { withFileTypes: true }).filter((entry) => !entry.name.startsWith(".") && entry.name !== "node_modules").map((entry) => entry.isDirectory() ? entry.name + "/" : entry.name).sort();
     return { names: names.slice(0, limit), more: Math.max(0, names.length - limit) };
   } catch {
-    return { names: [], more: 0 };
+    return;
   }
 }
 function walk3(top, under) {
@@ -4173,6 +4192,8 @@ class Goals {
     goal.checking = false;
     if (!current())
       return void this.changed(goal);
+    if (verdict.verdict === "waiting" && resumed)
+      verdict = { verdict: "not_met", reason: `${verdict.reason} Carry on with a sensible choice of your own, and say which.` };
     if (verdict.verdict === "waiting") {
       settle();
       return void this.changed(goal);
@@ -4219,7 +4240,9 @@ class Goals {
   }
   async check(session, place, condition, messages2, since) {
     const info = await sessionInfo(place.api, session).catch(() => ({ id: session }));
-    const files = info.directory ? await folderFiles(info.directory) : undefined;
+    const files = info.directory ? await folderFiles(info.directory).catch(() => {
+      return;
+    }) : undefined;
     return parseVerdict(await freshAnswer(place.api, place === this.places.engine, info, checkPrompt(condition, transcript(messages2, since), files)));
   }
   async waitsOnYou(session, place) {
@@ -4321,7 +4344,7 @@ ${conversation.replaceAll("</conversation>", "</ conversation>")}
 </conversation>`;
   const listed = files ? `
 
-The files in its folder now, by path (what exists, whatever the conversation says):
+The files in its folder now, by path, those changed since its last commit first (what exists, whatever the conversation says):
 <files>
 ${files.names.length ? files.names.join(`
 `).replaceAll("</files>", "</ files>") : "(none)"}${files.more ? `
@@ -4334,8 +4357,8 @@ ${condition}
 </goal>
 
 Reply with JSON alone, no other words: {"verdict": "met" | "not_met" | "impossible" | "waiting", "reason": "<one short sentence>"}.
-- "met" only when what exists shows the goal holds: a file the goal asks for counts only if it's in the files above${files ? "" : " (or the conversation shows it made)"}, a test or command only if the conversation shows it run and passing after the work was done. A plan, a promise or the agent saying it's done isn't proof. The reason says what shows it.
-- "waiting" when the agent's last turn ends asking the person something, or paused for their answer, before it can go on. The reason says what it asked.
+- "met" only when what exists shows the goal holds: a file the goal asks for counts only if ${files ? "it's in the files above or " : ""}the conversation shows a command or edit that made it, a test or command only if the conversation shows it run and passing after the work was done. A plan, a promise or the agent saying it's done isn't proof. A goal that holds is met, even when the turn ends offering more. The reason says what shows it.
+- "waiting" when the agent can't go on without the person's answer: its last turn ends asking them something it needs, or paused for their reply. The reason says what it asked.
 - "not_met" otherwise. The reason says what's still left, as a next step for the agent.
 - "impossible" only when it can never be met as asked: it needs something only the person can give, or it contradicts itself. The reason says why.`;
 }
@@ -19837,4 +19860,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 7c378cb32e73bc10cf7c2ad5b4cc8c4a58c90e257b2c7ead206ab8419a4d749f
+// Built from Packages/Box/src/agents 321ca7360cb87e52b9e2d9b0d040985d6f09dd5245729a0834a3f0e5cc1636dc
