@@ -13,7 +13,7 @@ import { docKey, held, SIGN } from "../documents/format";
 import fs from "node:fs";
 import path from "node:path";
 import { IS_MAC, RUN } from "../home";
-import { movedAway } from "../moves/records";
+import { MOVED_FOR, movedAway } from "../moves/records";
 import { Frame, frame, relaySend } from "../relay/frames";
 import { macSign } from "../state";
 import type { LinkState } from "../state";
@@ -139,12 +139,24 @@ export function movedOf(link: LinkState | null | undefined): Map<string, string>
   // A Mac's word: what this Mac's app says (`kuvo/link/peers`), or a Mac's peers document.
   if (IS_MAC) for (const { session, key } of cleanMoved(link?.macMoved)) moved.set(session, key);
   else for (const word of macWords(link)) for (const { session, key } of cleanMoved(word.moved)) moved.set(session, key);
-  // Over it, the word of the box that moved each: this one's, and what its peers say they moved,
-  // the newest last.
-  const words: { session: string; key: string; at: number }[] = movedAway();
+  // Over it, the word of the box that moved each: this one's, and what its peers (those it has now)
+  // say they moved in the last two days, never of one of this box's own conversations; the newest
+  // last. (The files are `directory.ts`' PEER_AGENTS_FILE and AGENTS_FILE, which import this one.)
+  const now = Date.now();
+  const words: { session: string; key: string; at: number }[] = movedAway(now);
+  const peers = new Set(peersOf(link).map(peer => peer.key));
+  let own = new Set<string>();
+  try {
+    const listed = JSON.parse(fs.readFileSync(path.join(RUN, "agents.json"), "utf8")) as { machine?: unknown; agents?: { session?: unknown; machine?: unknown }[] };
+    own = new Set((listed?.agents ?? []).filter(agent => (agent?.machine ?? null) === (listed?.machine ?? null)).map(agent => String(agent?.session)));
+  } catch {}
   try {
     const told = JSON.parse(fs.readFileSync(path.join(RUN, "peer-agents.json"), "utf8")) as Record<string, { moved?: unknown }>;
-    for (const each of Object.values(told ?? {})) if (Array.isArray(each?.moved)) words.push(...each.moved.filter((one): one is { session: string; key: string; at: number } => isObject(one) && typeof one.session === "string" && typeof one.key === "string" && typeof one.at === "number"));
+    for (const [peer, each] of Object.entries(told ?? {})) {
+      if (!peers.has(peer) || !Array.isArray(each?.moved)) continue;
+      words.push(...each.moved.filter((one): one is { session: string; key: string; at: number } => isObject(one) && typeof one.session === "string" && typeof one.key === "string"
+        && typeof one.at === "number" && now - one.at < MOVED_FOR && !own.has(one.session)));
+    }
   } catch {}
   for (const { session, key } of words.sort((one, other) => one.at - other.at)) moved.set(session, key);
   return moved;

@@ -4369,12 +4369,21 @@ function movedOf(link) {
     for (const word of macWords(link))
       for (const { session, key } of cleanMoved(word.moved))
         moved.set(session, key);
-  const words = movedAway();
+  const now = Date.now();
+  const words = movedAway(now);
+  const peers = new Set(peersOf(link).map((peer) => peer.key));
+  let own = new Set;
+  try {
+    const listed = JSON.parse(fs26.readFileSync(path25.join(RUN, "agents.json"), "utf8"));
+    own = new Set((listed?.agents ?? []).filter((agent) => (agent?.machine ?? null) === (listed?.machine ?? null)).map((agent) => String(agent?.session)));
+  } catch {}
   try {
     const told = JSON.parse(fs26.readFileSync(path25.join(RUN, "peer-agents.json"), "utf8"));
-    for (const each of Object.values(told ?? {}))
-      if (Array.isArray(each?.moved))
-        words.push(...each.moved.filter((one) => isObject(one) && typeof one.session === "string" && typeof one.key === "string" && typeof one.at === "number"));
+    for (const [peer, each] of Object.entries(told ?? {})) {
+      if (!peers.has(peer) || !Array.isArray(each?.moved))
+        continue;
+      words.push(...each.moved.filter((one) => isObject(one) && typeof one.session === "string" && typeof one.key === "string" && typeof one.at === "number" && now - one.at < MOVED_FOR && !own.has(one.session)));
+    }
   } catch {}
   for (const { session, key } of words.sort((one, other) => one.at - other.at))
     moved.set(session, key);

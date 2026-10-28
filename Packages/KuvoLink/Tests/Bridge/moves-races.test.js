@@ -317,3 +317,24 @@ test("one that keeps getting messages while it moves goes again with them, and a
   assert.equal(engine.sessions.get("ses_busy1").messages.length, 4, "nothing lost here");
   await asItWas("ses_busy1");
 });
+
+test("where a moved conversation lives: by the computer that moved it, lately, and never one of this box's own", () => {
+  const run = path.join(home, "run");
+  // This box's own conversations, as it lists them.
+  fs.writeFileSync(path.join(run, "agents.json"), JSON.stringify({ machine: null, agents: [{ session: "ses_mine1", name: "Mine", kind: "session" }] }));
+  const now = Date.now();
+  fs.writeFileSync(path.join(run, "peer-agents.json"), JSON.stringify({
+    [peerKey]: { at: now, kind: "machine", list: [], moved: [
+      { session: "ses_went1", key: studio.key, at: now - 60_000 },
+      // One of this box's own, claimed: not taken.
+      { session: "ses_mine1", key: studio.key, at: now },
+      // Long ago: not any more.
+      { session: "ses_old1", key: studio.key, at: now - 3 * 24 * 3600_000 },
+    ] },
+    // A computer that isn't one of this box's any more.
+    [link.publicOf(link.newKey()).toString("base64url")]: { at: now, kind: "machine", list: [], moved: [{ session: "ses_gone1", key: peerKey, at: now }] },
+  }));
+  const moved = link.movedOf(link.readLink());
+  assert.equal(moved.get("ses_went1"), studio.key);
+  assert.ok(!moved.has("ses_mine1") && !moved.has("ses_old1") && !moved.has("ses_gone1"));
+});
