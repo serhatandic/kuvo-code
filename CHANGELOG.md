@@ -146,6 +146,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A goal keeps going after a very long turn (hundreds of steps): it's checked and nudged as after any other, instead of showing it's working while nothing happens.
 - A command you type with **!** in a Claude Code, Codex, Cursor, Grok or Antigravity session on a machine runs as in your terminal there, with your `gh` sign-in and git settings; one still running stops when you delete its session.
 - Removing an account while one of its sessions works ends that turn as stopped, instead of leaving it working until you press Stop.
+- A link to a web page whose icon declares a nonsense size no longer crashes Kuvo Code each time the link shows, on the Mac and the iPhone.
+- **Changes** keep every line in its place, and the line numbers your review comments use right: an unchanged blank line when your git settings hide blank lines, and a line that starts with an accent or a joining mark.
 
 ## 0.7.2
 
