@@ -6545,10 +6545,13 @@ function changeQueue(session, change, file = QUEUES_FILE) {
     changed = JSON.stringify(made) !== JSON.stringify(before);
     if (!changed)
       return made;
-    if (made.paused || made.held.length || made.resumed && Date.now() - made.resumed < RESUMED_FOR)
-      all[session] = made;
-    else
-      delete all[session];
+    all[session] = made;
+    for (const [id, state] of Object.entries(all)) {
+      if (state.resumed && Date.now() - state.resumed >= RESUMED_FOR)
+        delete state.resumed;
+      if (!state.paused && !state.held.length && !state.resumed)
+        delete all[id];
+    }
     try {
       writePrivate(file, JSON.stringify(all));
     } catch {}
@@ -6582,7 +6585,7 @@ async function drain(target, session) {
   if (queueOf(session).paused || await isRunning(target, session))
     return;
   const next = nextOf(await inboxOf(target, session), queueOf(session).held);
-  if (!next)
+  if (!next || queueOf(session).paused || await isRunning(target, session))
     return;
   if (next.delivery === "queue")
     await setDelivery(target, session, next.id, "steer");
@@ -6590,16 +6593,24 @@ async function drain(target, session) {
     await interrupt(target, session, true);
   changeQueue(session, (state) => ({ ...state, held: state.held.filter((id) => id !== next.id) }));
 }
-async function holdQueue(target, session, since) {
+async function holdQueue(target, session, since, items = []) {
   const resumedSince = () => since !== undefined && (queueOf(session).resumed ?? 0) >= since;
   const inbox = await inboxOf(target, session);
   if (resumedSince())
     return queueOf(session);
   const held = queueOf(session).held;
-  const steering = inbox.filter((item) => item.delivery === "steer" && !held.includes(item.id)).map((item) => item.id);
-  for (const id of steering)
-    await setDelivery(target, session, id, "queue").catch(() => {});
-  return changeQueue(session, (state) => since !== undefined && (state.resumed ?? 0) >= since ? state : { ...state, paused: state.paused || inbox.length > 0, held: [...steering, ...state.held] });
+  const named = items.filter((id) => inbox.some((item) => item.id === id));
+  const steering = inbox.filter((item) => item.delivery === "steer" && !held.includes(item.id) && !named.includes(item.id)).map((item) => item.id);
+  const moved = [];
+  for (const id of [...named, ...steering]) {
+    if (inbox.find((item) => item.id === id)?.delivery !== "steer")
+      moved.push(id);
+    else if (await setDelivery(target, session, id, "queue").then(() => true, () => false))
+      moved.push(id);
+  }
+  const waiting = await inboxOf(target, session).catch(() => inbox);
+  const there = (id) => waiting.some((item) => item.id === id);
+  return changeQueue(session, (state) => since !== undefined && (state.resumed ?? 0) >= since ? state : { ...state, paused: state.paused || waiting.length > 0, held: [...moved.filter(there), ...state.held.filter((id) => !moved.includes(id) && there(id))] });
 }
 async function stopSession(target, session) {
   const state = await holdQueue(target, session);
@@ -6623,6 +6634,8 @@ async function sendNow(target, session, item) {
     await interrupt(target, session, true);
   return true;
 }
+var NOT_YOURS = ["[Message from ", "[Wake-up]", "[Work from ", "[Session "];
+var isYours = (item) => item.type === "user" && !NOT_YOURS.some((start) => String(item.payload?.text ?? "").startsWith(start));
 function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, cancel = clearTimeout } = {}) {
   const drains = new Map;
   const stops = new Map;
@@ -6649,7 +6662,8 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
         forget(stops, session);
         break;
       case "session.execution.succeeded":
-        later(drains, session, () => drain(target, session));
+        forget(stops, session);
+        later(drains, session, () => drain(target, session).catch(() => drain(target, session)));
         break;
       case "session.execution.interrupted": {
         if (event.data?.reason === "superseded" || event.data?.reason === "inactivity") {
@@ -6657,17 +6671,21 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
           break;
         }
         const at = Date.now();
-        later(stops, session, async () => {
+        const look = (left) => later(stops, session, async () => {
           if (!await isRunning(target, session))
             await holdQueue(target, session, at);
+          else if (left > 0)
+            look(left - 1);
         });
+        look(10);
         break;
       }
       case "session.execution.failed":
+        forget(stops, session);
         holdQueue(target, session).catch(() => {});
         break;
       case "session.inbox.enqueued":
-        if (event.data?.item?.delivery === "steer")
+        if (event.data?.item?.delivery === "steer" && isYours(event.data.item))
           changeQueue(session, (state) => ({ ...state, paused: false }));
         else if (!queueOf(session).paused)
           later(drains, session, () => drain(target, session));
@@ -6678,6 +6696,7 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
         if (!queueOf(session).paused && !queueOf(session).held.length)
           break;
         inboxOf(target, session).then((inbox) => changeQueue(session, (state) => ({
+          ...state,
           paused: state.paused && inbox.length > 0,
           held: state.held.filter((id) => id !== gone && inbox.some((item) => item.id === id))
         }))).catch(() => {});
@@ -6686,11 +6705,23 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
     }
   };
 }
-var scanned = new Map;
+var SCANNED_FILE = path34.join(RUN, "queues-scanned.json");
 async function scanQueues(target) {
-  if (scanned.has(target.port) && scanned.get(target.port) === target.pid)
+  const known = locked(QUEUES_LOCK, () => {
+    let scanned = {};
+    try {
+      scanned = JSON.parse(fs34.readFileSync(SCANNED_FILE, "utf8")) ?? {};
+    } catch {}
+    if (target.pid !== undefined && scanned[target.port] === target.pid)
+      return true;
+    scanned[target.port] = target.pid;
+    try {
+      writePrivate(SCANNED_FILE, JSON.stringify(scanned));
+    } catch {}
+    return false;
+  });
+  if (known)
     return;
-  scanned.set(target.port, target.pid);
   const page = await asked(target, "GET", "api/session?parentID=null&limit=100&order=desc");
   const week = Date.now() - 7 * 86400000;
   for (const session of page?.data ?? []) {
@@ -10118,8 +10149,11 @@ async function* queueRoute(context, match) {
   try {
     if (action === "stop")
       return yield* json(200, shownQueue(await stopSession(place.target, session)));
-    if (step === "hold")
-      return yield* json(200, shownQueue(await holdQueue(place.target, session)));
+    if (step === "hold") {
+      const given = parsed(request.body);
+      const items = isObject(given) && Array.isArray(given.items) ? given.items.filter((id) => typeof id === "string") : [];
+      return yield* json(200, shownQueue(await holdQueue(place.target, session, undefined, items)));
+    }
     if (step === "resume")
       return yield* json(200, shownQueue(await resumeQueue(place.target, session)));
     if (!await sendNow(place.target, session, decodeURIComponent(item)))

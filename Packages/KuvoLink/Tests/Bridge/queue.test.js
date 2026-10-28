@@ -19,7 +19,7 @@ const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // The engine: each session's inbox and whether it runs; what was asked of it, each time a test
 // waits on it looking again.
-let inboxes, running, asked, unsure = false, waiting = [];
+let inboxes, running, asked, unsure = false, taken = new Set(), waiting = [];
 const heard = () => new Promise(resolve => waiting.push(resolve));
 const engine = http.createServer((request, response) => {
   let body = "";
@@ -36,6 +36,8 @@ const engine = http.createServer((request, response) => {
     else if (rest?.startsWith("/inbox/") && request.method === "PATCH") {
       const item = (inboxes[session] ?? []).find(each => each.id === decodeURIComponent(rest.slice(7)));
       const { delivery } = JSON.parse(body);
+      // Taken by the agent already: the engine has no such item.
+      if (!item || taken.has(item.id)) return reply({ message: "Not in the inbox." }, 404);
       if (item) item.delivery = delivery;
       asked.push(`${session} ${item?.id} ${delivery}`);
       answer = {};
@@ -59,6 +61,7 @@ beforeEach(() => {
   running = new Set();
   asked = [];
   unsure = false;
+  taken = new Set();
   fs.rmSync(path.join(home, "run", "queues.json"), { force: true });
 });
 
@@ -167,7 +170,7 @@ test("a failed run pauses the queue, holding what was for its next step; a messa
   assert.deepEqual(asked, ["ses_1 msg_s1 queue"], "it doesn't run the rest into the same error");
   // You write again, for now: no longer paused.
   inboxes.ses_1.push({ id: "msg_s2", delivery: "steer" });
-  b.hear("session.inbox.enqueued", { inboxID: "msg_s2", item: { delivery: "steer" } });
+  b.hear("session.inbox.enqueued", { inboxID: "msg_s2", item: { type: "user", delivery: "steer", payload: { text: "Try the other model." } } });
   assert.equal(link.queueOf("ses_1").paused, false);
 });
 
@@ -250,4 +253,24 @@ test("Resume pressed in the moment after a Stop keeps the queue going: the box's
   for (let turn = 0; turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
   assert.equal(link.queueOf("ses_1").paused, false);
   assert.ok(!asked.some(each => each.endsWith(" queue")), "nothing held");
+});
+
+test("after a Stop, another agent's letter or a wake-up reaching the conversation doesn't start the queue; your own message does", async () => {
+  inboxes.ses_1 = [{ id: "msg_q1", delivery: "queue" }];
+  fs.writeFileSync(path.join(home, "run", "queues.json"), JSON.stringify({ ses_1: { paused: true, held: [] } }));
+  const b = box();
+  for (const text of ["[Message from Scout · ses_scout] (To answer, use send_message to ses_scout.)\n\nBuild's green.", "[Wake-up] Check the deploy."]) {
+    b.hear("session.inbox.enqueued", { inboxID: "msg_x", item: { type: "user", delivery: "steer", payload: { text } } });
+    assert.equal(link.queueOf("ses_1").paused, true, text);
+  }
+  b.hear("session.inbox.enqueued", { inboxID: "msg_y", item: { type: "user", delivery: "steer", payload: { text: "Actually, skip the docs." } } });
+  assert.equal(link.queueOf("ses_1").paused, false);
+});
+
+test("a Stop as the agent takes a message for its next step holds only what's still waiting", async () => {
+  // msg_s1 is listed as the box reads the inbox, but the agent takes it before it's moved.
+  inboxes.ses_1 = [{ id: "msg_q1", delivery: "queue" }, { id: "msg_s1", delivery: "steer" }];
+  taken.add("msg_s1");
+  const stopped = await ask("POST", "kuvo/sessions/ses_1/queue/hold");
+  assert.deepEqual(stopped.json, { paused: true, held: [] }, "nothing held that isn't there to hold");
 });

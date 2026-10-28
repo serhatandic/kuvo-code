@@ -69,8 +69,12 @@ export function changeQueue(session: string, change: (state: QueueState) => Queu
     made.held = [...new Set(made.held)];
     changed = JSON.stringify(made) !== JSON.stringify(before);
     if (!changed) return made;
-    if (made.paused || made.held.length || (made.resumed && Date.now() - made.resumed < RESUMED_FOR)) all[session] = made;
-    else delete all[session];
+    all[session] = made;
+    // Kept while it's paused, holds something, or was resumed a moment ago.
+    for (const [id, state] of Object.entries(all)) {
+      if (state.resumed && Date.now() - state.resumed >= RESUMED_FOR) delete state.resumed;
+      if (!state.paused && !state.held.length && !state.resumed) delete all[id];
+    }
     try { writePrivate(file, JSON.stringify(all)); } catch {}
     return made;
   });
@@ -110,7 +114,8 @@ export function nextOf(inbox: InboxEntry[], held: string[]): InboxEntry | null {
 export async function drain(target: Target, session: string): Promise<void> {
   if (queueOf(session).paused || (await isRunning(target, session))) return;
   const next = nextOf(await inboxOf(target, session), queueOf(session).held);
-  if (!next) return;
+  // (Stopped, or started, while it looked: as it is now.)
+  if (!next || queueOf(session).paused || (await isRunning(target, session))) return;
   if (next.delivery === "queue") await setDelivery(target, session, next.id, "steer");
   else await interrupt(target, session, true);
   changeQueue(session, state => ({ ...state, held: state.held.filter(id => id !== next.id) }));
@@ -119,16 +124,25 @@ export async function drain(target: Target, session: string): Promise<void> {
 /** What waits for `session`'s next step held in its queue, ahead of what was queued (the latest
  * first), and the queue paused when anything waits: what Stop does before it stops the run, and a
  * failed run's. */
-// `since`: for an interrupt then (ms), unless Resume or Send Now went on with it after.
-export async function holdQueue(target: Target, session: string, since?: number): Promise<QueueState> {
+// `since`: for an interrupt then (ms), unless Resume or Send Now went on with it after. `items`:
+// messages a client held as they went (queued or not), put first, in that order.
+export async function holdQueue(target: Target, session: string, since?: number, items: string[] = []): Promise<QueueState> {
   const resumedSince = () => since !== undefined && (queueOf(session).resumed ?? 0) >= since;
   const inbox = await inboxOf(target, session);
   if (resumedSince()) return queueOf(session);
   const held = queueOf(session).held;
-  const steering = inbox.filter(item => item.delivery === "steer" && !held.includes(item.id)).map(item => item.id);
-  for (const id of steering) await setDelivery(target, session, id, "queue").catch(() => {});
+  const named = items.filter(id => inbox.some(item => item.id === id));
+  const steering = inbox.filter(item => item.delivery === "steer" && !held.includes(item.id) && !named.includes(item.id)).map(item => item.id);
+  // Held only once it's in the queue (the agent may take one first).
+  const moved: string[] = [];
+  for (const id of [...named, ...steering]) {
+    if (inbox.find(item => item.id === id)?.delivery !== "steer") moved.push(id);
+    else if (await setDelivery(target, session, id, "queue").then(() => true, () => false)) moved.push(id);
+  }
+  const waiting = await inboxOf(target, session).catch(() => inbox);
+  const there = (id: string) => waiting.some(item => item.id === id);
   return changeQueue(session, state => (since !== undefined && (state.resumed ?? 0) >= since ? state
-    : { ...state, paused: state.paused || inbox.length > 0, held: [...steering, ...state.held] }));
+    : { ...state, paused: state.paused || waiting.length > 0, held: [...moved.filter(there), ...state.held.filter(id => !moved.includes(id) && there(id))] }));
 }
 
 /** Stop: what waits held and paused, then the run stopped. */
@@ -161,8 +175,14 @@ export async function sendNow(target: Target, session: string, item: string): Pr
 /** An event, as far as the queue reads it. */
 export interface QueueEvent {
   type: string;
-  data?: { sessionID?: string; inboxID?: string; item?: { delivery?: string }; reason?: string };
+  data?: { sessionID?: string; inboxID?: string; item?: { type?: string; delivery?: string; payload?: { text?: unknown } }; reason?: string };
 }
+
+// A message you wrote, not one Kuvo Code sent the agent for you or another (an agent's letter, a
+// wake-up, a group chat's work, a note).
+const NOT_YOURS = ["[Message from ", "[Wake-up]", "[Work from ", "[Session "];
+const isYours = (item: NonNullable<NonNullable<QueueEvent["data"]>["item"]>) =>
+  item.type === "user" && !NOT_YOURS.some(start => String(item.payload?.text ?? "").startsWith(start));
 
 /** How the queue's watcher waits (a test's clock). */
 export interface QueueWatch {
@@ -201,7 +221,8 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
         forget(stops, session);
         break;
       case "session.execution.succeeded":
-        later(drains, session, () => drain(target, session));
+        forget(stops, session);
+        later(drains, session, () => drain(target, session).catch(() => drain(target, session)));
         break;
       case "session.execution.interrupted": {
         if (event.data?.reason === "superseded" || event.data?.reason === "inactivity") {
@@ -210,16 +231,22 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
         }
         // (Not when it was resumed since: Resume or Send Now goes on.)
         const at = Date.now();
-        later(stops, session, async () => {
+        // Still at work a moment later (the bridge keeping files after a turn): looked at again,
+        // a few times.
+        const look = (left: number): void => later(stops, session, async () => {
           if (!(await isRunning(target, session))) await holdQueue(target, session, at);
+          else if (left > 0) look(left - 1);
         });
+        look(10);
         break;
       }
       case "session.execution.failed":
+        forget(stops, session);
         holdQueue(target, session).catch(() => {});
         break;
       case "session.inbox.enqueued":
-        if (event.data?.item?.delivery === "steer") changeQueue(session, state => ({ ...state, paused: false }));
+        // You writing to it for now: it goes on. (Not a letter, a wake-up or a note.)
+        if (event.data?.item?.delivery === "steer" && isYours(event.data.item)) changeQueue(session, state => ({ ...state, paused: false }));
         else if (!queueOf(session).paused) later(drains, session, () => drain(target, session));
         break;
       case "session.inbox.delivered":
@@ -227,6 +254,7 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
         const gone = event.data?.inboxID;
         if (!queueOf(session).paused && !queueOf(session).held.length) break;
         inboxOf(target, session).then(inbox => changeQueue(session, state => ({
+          ...state,
           paused: state.paused && inbox.length > 0,
           held: state.held.filter(id => id !== gone && inbox.some(item => item.id === id)),
         }))).catch(() => {});
@@ -236,16 +264,23 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
   };
 }
 
-// The engine (or the agents' bridge) each queue was last looked over for, by its port: a queue left
-// with nothing running once it started again waits for Resume, rather than starting on its own.
-const scanned = new Map<number, number | undefined>();
+// The engine (or the agents' bridge) whose queues were last looked over, by its port, kept in
+// `run/` so a box that starts again beside the same engine doesn't take it for a new one.
+const SCANNED_FILE = path.join(RUN, "queues-scanned.json");
 
 /** Once for each engine started anew (its process changed): each of its latest sessions with
  * messages waiting and nothing running held and paused, as Stop holds them. A stream that only
  * dropped and came back carries on. */
 export async function scanQueues(target: Target & { pid?: number }): Promise<void> {
-  if (scanned.has(target.port) && scanned.get(target.port) === target.pid) return;
-  scanned.set(target.port, target.pid);
+  const known = locked(QUEUES_LOCK, () => {
+    let scanned: Record<string, unknown> = {};
+    try { scanned = JSON.parse(fs.readFileSync(SCANNED_FILE, "utf8")) ?? {}; } catch {}
+    if (target.pid !== undefined && scanned[target.port] === target.pid) return true;
+    scanned[target.port] = target.pid;
+    try { writePrivate(SCANNED_FILE, JSON.stringify(scanned)); } catch {}
+    return false;
+  });
+  if (known) return;
   const page = await asked(target, "GET", "api/session?parentID=null&limit=100&order=desc") as { data?: { id?: string; time?: { updated?: number } }[] } | null;
   const week = Date.now() - 7 * 86_400_000;
   for (const session of page?.data ?? []) {

@@ -1,6 +1,7 @@
 // A session's queue, as every client reads and changes it (PROTOCOL.md, "The queue"): whether it
 // waits for Resume and what Stop held, followed as it changes; Stop, Resume and Send Now.
 
+import { isObject, parsed } from "../../shared/json";
 import { followed } from "../follow";
 import { placeOfSession } from "../letters/letter";
 import { targetsOf } from "../letters/tools";
@@ -33,7 +34,12 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
   if (!place) return yield* json(404, { message: "There's no such conversation here." });
   try {
     if (action === "stop") return yield* json(200, shownQueue(await stopSession(place.target, session)));
-    if (step === "hold") return yield* json(200, shownQueue(await holdQueue(place.target, session)));
+    if (step === "hold") {
+      // (`{items}`: messages a client held as they went, first.)
+      const given = parsed(request.body);
+      const items = isObject(given) && Array.isArray(given.items) ? given.items.filter((id): id is string => typeof id === "string") : [];
+      return yield* json(200, shownQueue(await holdQueue(place.target, session, undefined, items)));
+    }
     if (step === "resume") return yield* json(200, shownQueue(await resumeQueue(place.target, session)));
     if (!(await sendNow(place.target, session, decodeURIComponent(item)))) return yield* json(404, { message: "That message isn't waiting any more." });
     return yield* json(200, shownQueue(queueOf(session)));

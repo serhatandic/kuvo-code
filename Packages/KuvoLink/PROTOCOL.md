@@ -428,16 +428,20 @@ the same for every client and with none connected, and keeps them in `run/queues
   order, then one for the next step (by resuming), then the queue, first queued first (by steering
   it). A run the engine ended itself (`superseded`, `inactivity`) goes on the same way.
 - **Pauses**: Stop, from any client (the box's `stop`, or an interrupt a client sent the engine
-  itself: with no run started again a moment later, as Send Now's resume does at once); a run that
-  failed; and a queue found with nothing running once the engine started again (each engine looked
-  over once per process). Each holds what was for the next step in the queue, ahead of what was
-  queued, the latest first. A message you send to go now (`steer`) unpauses it. Once nothing waits,
-  nothing's paused.
+  itself: with no run started again a moment later, as Send Now's resume does at once; while the
+  session still says it's at work, looked at again, a few times); a run that failed; and a queue
+  found with nothing running once the engine started anew (each engine process looked over once,
+  as `run/queues-scanned.json` keeps, so a box that starts again beside it doesn't). Each holds
+  what was for the next step in the queue, ahead of what was queued, the latest first: only what's
+  still waiting once it's moved there. A message you write to go now (`steer`) unpauses it;
+  another agent's letter, a wake-up or a note doesn't. A Resume or Send Now just after an interrupt
+  wins over the look at it. Once nothing waits, nothing's paused.
 - `GET kuvo/sessions/<id>/queue` → `{paused, held: [inboxID…]}`; `GET kuvo/sessions/queues/events`
   follows them all (ndjson: `{"queues": {<session>: {paused, held}}}` now and at each change; a
   session neither paused nor holding anything is left out).
-- `POST kuvo/sessions/<id>/stop`: held and paused, then the run stopped. `POST …/queue/hold`: held
-  and paused without stopping (before an undo, or a move). `POST …/queue/resume`: unpaused, and the
+- `POST kuvo/sessions/<id>/stop`: held and paused, then the run stopped. `POST …/queue/hold` (`{items?}`):
+  held and paused without stopping (before an undo, or a move); `items`, messages a client held
+  as they went to the engine, go first, in that order. `POST …/queue/resume`: unpaused, and the
   next one goes now. `POST …/queue/<item>/now` (Send Now): unpaused, the item steered, and a run
   under way stopped to go on with it; 404 when it isn't waiting. Each answers the queue as it is
   now; 404 for no such session here, 503 with no engine, 502 when the engine refused.
@@ -2278,8 +2282,13 @@ can go three months after 0.8.0 ships.
 - Machines' bots' keys of their own, which it kept in your Keychain: each given to its machine,
   then gone from the Keychain. <!-- compat: 0.7 bot-keys-keychain -->
 - The letters it sent its agents' way and those it had delivered (`agent-letters.json`,
-  `agent-letters-seen.json`, 0.8.0-beta.1), handed to the box's outbox (`kuvo/link/letters/take`).
+  `agent-letters-seen.json`, 0.8.0-beta.1), and the messages it kept for a machine that was away
+  (`agent-messages.json`), handed to the box's outbox (`kuvo/link/letters/take`).
   <!-- compat: beta.1 mac-letters -->
+- On a machine: letters its tools or link left in `run/outbox` for a Mac to collect over SSH,
+  sent by the link as its own. <!-- compat: beta.1 outbox -->
+- On a machine: `run/mac-agents.json`, the agents a Mac wrote there over SSH, no longer read, and
+  removed. <!-- compat: beta.1 mac-agents -->
 
 **Kuvo Code 0.8.0-beta.1.** It can go once 0.8.0 is out (a beta copy is offered the release).
 - It signs no documents: its setup and mail give its peers as a list (`peers`, with `peersAt` or
