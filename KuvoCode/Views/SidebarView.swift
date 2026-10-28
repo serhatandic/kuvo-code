@@ -914,6 +914,10 @@ struct SidebarView: View {
         SidebarRow(isSelected: isHighlighted(session, in: place), indented: place == .project, branchInset: branchInset, isEditing: renaming == RenameTarget(id: session.id, place: place), action: {
             pickedIn[session.id] = place
             selection = session.id
+            // Its mark was one under it: shown, so that one's row has it.
+            if folded.contains(where: { $0.isUnread || workspace.needsAttention($0.id) }) {
+                withAnimation(.ui) { _ = unfolded.insert(session.id) }
+            }
         }) {
             EmptyView()
         } title: {
@@ -955,7 +959,7 @@ struct SidebarView: View {
                     }
                     // A subagent that finished since you were here shows on it: what it found is
                     // in its conversation.
-                    SessionStatus(session: session, isUnread: session.isUnread || workspace.hasNewSubSessions(session.id) || folded.contains(where: \.isUnread), folded: folded)
+                    SessionStatus(session: session, isUnread: session.isUnread || workspace.hasNewSubSessions(session.id), folded: folded)
                 }
             }
         }
@@ -1821,7 +1825,7 @@ private struct MoveToComputerMenu: View {
         working: working,
         subagentsOnly: !moving && working && !workspace.running.contains(id) && workspace.helpersAtWork(in: id) > 0,
         failed: session.outcome == .failed,
-        isNew: isNew,
+        isNew: isNew || folded.contains(where: \.isUnread),
         offline: awayMachine(of: session, app: app) != nil,
         wakes: app.wakeUps.wakes[id]?.isEmpty == false,
         watching: app.wakeUps.watches[id]?.isEmpty == false)
@@ -1849,8 +1853,11 @@ private struct SessionStatus: View {
 
     var body: some View {
         let kind = statusMark(of: session, isNew: isUnread ?? session.isUnread, folded: folded, workspace: workspace, app: app)
+        // One under it, folded away, gave it the mark: said so.
+        let fromUnder = !folded.isEmpty && kind != statusMark(of: session, isNew: isUnread ?? session.isUnread, workspace: workspace, app: app)
         StatusMark(showing: kind)
-            .help(kind.map(help) ?? "")
+            .help(kind.map { fromUnder ? $0.wordsFromUnder : help($0) } ?? "")
+            .modifier(SpokenFromUnder(words: fromUnder ? kind?.wordsFromUnder : nil))
     }
 
     private func help(_ kind: StatusMark.Kind) -> String {
@@ -1865,6 +1872,15 @@ private struct SessionStatus: View {
             app.wakeUps.wakes[session.id]?.first.map { "Wakes up " + $0.due.formatted(Date.RelativeFormatStyle(presentation: .named, unitsStyle: .wide)) } ?? kind.words
         default: kind.words
         }
+    }
+}
+
+/// A mark's words for VoiceOver when one under its row gave it.
+private struct SpokenFromUnder: ViewModifier {
+    let words: String?
+
+    func body(content: Content) -> some View {
+        if let words { content.accessibilityLabel(words) } else { content }
     }
 }
 

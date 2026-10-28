@@ -34,6 +34,15 @@ public struct StatusMark: View {
         case offline
 
         /// What VoiceOver says for it, after the row's title.
+        /// On a folded row, a mark that comes from a conversation under it, in words.
+        public var wordsFromUnder: String {
+            switch self {
+            case .needsYou: "One under it needs you"
+            case .new: "One under it is done"
+            default: words
+            }
+        }
+
         public var words: String {
             switch self {
             case .working: "Working"
