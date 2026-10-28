@@ -418,7 +418,7 @@ struct Composer: View {
     /// The shortcut's voice input goes where you type: here.
     private func offerVoice() {
         let text = $text
-        app.dictation.offer(voiceOwner) { [focusAtEnd] words in
+        app.dictation.offer(voiceOwner, words: voiceWords) { [focusAtEnd] words in
             text.wrappedValue = VoiceStyle.adding(words, to: text.wrappedValue)
             focusAtEnd()
         }
@@ -539,6 +539,14 @@ struct Composer: View {
     /// Where what's said goes: this composer's session, or a new session's draft.
     private var voiceOwner: String { session ?? "new:" + (folders.first ?? "") }
 
+    /// The words voice input listens for here: the conversation's project's names, as its
+    /// computer's box gives them (none yet for a new session's draft).
+    private var voiceWords: Dictation.Words {
+        guard let session, let directory = workspace.session(session)?.location.directory,
+              let api = workspace.agents(forFolder: directory)?.api else { return { [] } }
+        return { (try? await api.voiceWords(for: session)) ?? [] }
+    }
+
     /// Listening for this composer, here or in the voice field.
     private var isDictating: Bool { app.dictation.isListening(for: voiceOwner) }
 
@@ -554,19 +562,21 @@ struct Composer: View {
             Image(systemName: "mic")
                 .font(.system(size: 14, weight: .medium))
                 .frame(width: 30, height: 28)
+                .overlay { MicRing(model: .shared) }
                 .hoverHighlight(in: Capsule(), mutesInk: true)
         }
         .buttonStyle(.plain)
         .clickablePointer()
-        .help("Talk Instead of Typing (⇧⌘Space)")
+        .help(["Talk Instead of Typing (⇧⌘Space)", MicRing.words(.shared)].compactMap(\.self).joined(separator: "\n"))
         .accessibilityLabel("Voice Input")
+        .accessibilityValue(MicRing.words(.shared) ?? "")
     }
 
     private func startVoice() {
         // The keyboard here: Return finishes, Escape cancels, nothing else types.
         focusAtEnd()
         let text = $text
-        app.dictation.start(for: voiceOwner) { [focusAtEnd] words in
+        app.dictation.start(for: voiceOwner, words: voiceWords) { [focusAtEnd] words in
             text.wrappedValue = VoiceStyle.adding(words, to: text.wrappedValue)
             focusAtEnd()
         }

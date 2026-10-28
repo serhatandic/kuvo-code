@@ -1,5 +1,6 @@
 import AppKit
 import ClientNews
+import KuvoVoice
 import OpenCodeKit
 import os
 
@@ -210,8 +211,12 @@ final class AppModel {
         // This Mac's box up (at the engine's start, late, or again): its settings read, and
         // brought up to date.
         box.onStarted = { [weak self] in Task { await self?.prepareSettings() } }
-        // Hold ⇧⌘Space to talk instead of typing.
+        // Hold ⇧⌘Space to talk instead of typing; Whisper, once it's downloaded, kept with the app's data.
         if !AppInfo.isHostingTests { dictation.installShortcut() }
+        SpeechModel.shared.use(folder: AppInfo.supportDirectory.appending(path: "Speech", directoryHint: .isDirectory))
+        #if DEBUG
+        if let sample = ProcessInfo.processInfo.environment["KUVO_DEMO_WHISPER"] { SpeechModel.shared.showSample(sample) }
+        #endif
     }
 
     /// Shows the main window, with `request` open in it.

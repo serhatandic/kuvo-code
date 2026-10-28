@@ -66,6 +66,7 @@ struct VoiceComposerRow: View {
                 VoiceTrace(levels: voice.recentLevels)
                     .frame(height: 22)
                     .frame(maxWidth: .infinity)
+                SpeechModelNote(voice: voice)
             }
             Button(action: cancel) {
                 HStack(spacing: 5) {
@@ -134,7 +135,11 @@ struct VoiceField: View {
             Spacer(minLength: 24)
             VoiceWave(level: voice.level)
                 .frame(height: 56)
-                .padding(.bottom, 28)
+                .padding(.bottom, 16)
+            // Whisper on its way, or listening the first time; the same room either way.
+            SpeechModelNote(voice: voice)
+                .frame(height: 16)
+                .padding(.bottom, 12)
             HStack(spacing: 14) {
                 Button(action: cancel) {
                     HStack(spacing: 6) {

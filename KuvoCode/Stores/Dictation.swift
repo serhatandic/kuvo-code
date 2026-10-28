@@ -15,10 +15,13 @@ final class Dictation {
     private(set) var style = VoiceStyle.composer
     @ObservationIgnored private var deliver: ((String) -> Void)?
     /// The composer in view, which the shortcut starts voice input for.
-    @ObservationIgnored private var focused: (owner: String, deliver: (String) -> Void)?
+    @ObservationIgnored private var focused: (owner: String, words: Words, deliver: (String) -> Void)?
 
-    /// Listens for the composer `owner`; `deliver` gets what was said once it's done.
-    func start(for owner: String, deliver: @escaping (String) -> Void) {
+    /// The words to listen for: the project's names, asked of its box.
+    typealias Words = @Sendable () async -> [String]
+
+    /// Listens for the composer `owner`, for `words`; `deliver` gets what was said once it's done.
+    func start(for owner: String, words: @escaping Words = { [] }, deliver: @escaping (String) -> Void) {
         cancel()
         let voice = VoiceInput()
         voice.ended = { [weak self, weak voice] words in
@@ -31,8 +34,8 @@ final class Dictation {
         self.voice = voice
         self.owner = owner
         self.deliver = deliver
-        voice.start()
-        Analytics.shared.track("voice_started", ["style": style.rawValue])
+        voice.start(words: words)
+        Analytics.shared.track("voice_started", ["style": style.rawValue, "model": voice.usesWhisper ? "whisper" : "apple"])
     }
 
     #if DEBUG
@@ -60,8 +63,8 @@ final class Dictation {
     func isListening(for owner: String?) -> Bool { voice != nil && self.owner == owner }
 
     /// The composer you're typing in says so (and where its words go), for the shortcut.
-    func offer(_ owner: String, deliver: @escaping (String) -> Void) {
-        focused = (owner, deliver)
+    func offer(_ owner: String, words: @escaping Words, deliver: @escaping (String) -> Void) {
+        focused = (owner, words, deliver)
     }
 
     /// It let the keyboard go: the shortcut has nowhere to start.
@@ -78,7 +81,7 @@ final class Dictation {
             return true
         }
         guard let focused else { return false }
-        start(for: focused.owner, deliver: focused.deliver)
+        start(for: focused.owner, words: focused.words, deliver: focused.deliver)
         return true
     }
 
