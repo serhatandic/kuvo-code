@@ -81,6 +81,56 @@ import Testing
         #expect(refused?.contains("nothing to commit") == true)
     }
 
+    /// A new file edited between two looks shows what it says now, not what was read before; one
+    /// unchanged since reads the same.
+    @Test func aMachinesNewFileEditedSinceShowsItsNewWords() async throws {
+        let box = try await MachineTestBox()
+        defer { box.stop() }
+        let client = box.client
+        try repo.write("notes/todo.txt", "one\n")
+        try repo.write("notes/done.txt", "shipped\n")
+        let first = try await newFiles(known: [:], client)
+        try repo.write("notes/todo.txt", "one\ntwo\n")
+        let again = try await newFiles(known: Git.kept(first), client)
+        #expect(again.first { $0.path == "notes/todo.txt" }?.lines.map(\.text) == ["one", "two"])
+        #expect(again.first { $0.path == "notes/done.txt" }?.lines.map(\.text) == ["shipped"])
+    }
+
+    /// Unstage and Discard on a machine's file, from the Mac: done there, in its repository.
+    @Test func aMachinesFileUnstagesAndDiscardsThere() async throws {
+        let box = try await MachineTestBox()
+        defer { box.stop() }
+        let client = box.client
+        try repo.write("README.md", "Hello\nWorld\n")
+        try repo.git("add", "README.md")
+
+        guard case .listed(let staged, _) = await Git.found(in: root, scope: .staged, base: nil, box: { _ in client }) else {
+            Issue.record("the box should list what's staged")
+            return
+        }
+        let readme = try #require(staged.first { $0.path == "README.md" })
+        #expect(await Git.performing(.unstage, on: readme, root: try #require(readme.root), scope: .staged) { _ in client } == nil)
+        #expect(try repo.status().contains(" M README.md"))
+
+        guard case .listed(let unstaged, _) = await Git.found(in: root, scope: .unstaged, base: nil, box: { _ in client }) else {
+            Issue.record("the box should list what's changed")
+            return
+        }
+        let edited = try #require(unstaged.first { $0.path == "README.md" })
+        #expect(await Git.performing(.discard, on: edited, root: try #require(edited.root), scope: .unstaged) { _ in client } == nil)
+        #expect(try repo.status().isEmpty)
+        #expect(try String(contentsOf: repo.url.appending(path: "README.md"), encoding: .utf8) == "Hello\n")
+    }
+
+    /// The new files' lines as the Mac shows them, read from the box (`known`: those read before).
+    private func newFiles(known: [String: ChangedFile], _ client: BoxClient) async throws -> [ChangedFile] {
+        guard case .listed(let files, _) = await Git.found(in: root, scope: .uncommitted, base: nil, box: { _ in client }) else {
+            Issue.record("the box should list the changes")
+            return []
+        }
+        return await Git.readNew(files, known: known) { _ in client }
+    }
+
     /// A machine whose box can't be reached for a moment isn't taken for a folder with no git: the
     /// list that showed stays.
     @Test func aMachineOutOfReachKeepsItsList() async throws {

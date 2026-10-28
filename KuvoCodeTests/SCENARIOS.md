@@ -22,7 +22,9 @@ for Linux's tools).
 | A6 Quit with work running, open again | DraftsTests, StoredFilesTests, QueueTests, LastSeenTests | |
 | B5 Review the changes, comment on a line, send the comments | SessionEditsTests, SentMessageTests, DraftsTests | |
 | B6 Undo a turn, then change your mind | ComposerReturnsTests, AttachmentsTests, UndoRedoTests | |
-| B7 Commit with a message, push, make a branch | ChangesCommitTests, ChangesDiscardTests, ChangesStagingTests, ChangesFileNamesTests; a machine's, from its box: MachineChangesTests, and the bridge's changes.test.js (Discard there, on Linux too) | |
+| B7 Commit with a message, push, make a branch | ChangesCommitTests, ChangesDiscardTests, ChangesStagingTests, ChangesFileNamesTests; a machine's, from its box (Unstage and Discard there, a new file edited since showing its new words): MachineChangesTests, and the bridge's changes.test.js (Discard there, on Linux too; Branch since its base; Commit and Push, a new branch tracked) | |
+| B23 The keywords run by a conversation's box: a side question (/btw) answered over the composer, counted in the sidebar (there when Kuvo Code opens again, down as they're removed elsewhere); a review with fresh eyes; /handoff; /plan; a /loop that can't be read | KeywordTests; the box's keywords.test.ts | the side question's bar and the review's card (UI) |
+| B24 What agents made: each file's versions with who made them; Keep holds every version past the budget for older ones and after the box starts again; a bot's Final; putting a version back | the box's artifacts.test.ts; KuvoLink's ArtifactsTests (how Kept, Final and the Shelf's sections read) | the popover itself (UI) |
 | B8 A session in a worktree, merged back; a machine's worktrees kept by the machine | WorktreeSessionTests, GitBranchesTests, the bridge's worktrees.test.js | making one on a machine from the Mac (by hand, on a test machine) |
 | B9 Plan first, then Build It | AgentAsksTests | |
 | B10 Ask First: allow once, always, deny | ComposerReturnsTests, ProjectFoldersTests, PermissionCardsTests, AlwaysAllowedTests | |

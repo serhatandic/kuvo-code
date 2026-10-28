@@ -583,6 +583,47 @@ describe("keeping versions", () => {
     expect(kept.versions.every((version: any) => version.kept)).toBe(true)
   })
 
+  test("what you keep keeps every version past the budget; once you stop keeping it, they go as the next version passes it", async () => {
+    // Two drafts, three versions each (10 bytes a version), over a budget of 15 for older ones.
+    store = new ArtifactStore(join(root, "artifacts"), { bots, budget: 15, disk: () => disk })
+    recorder = new Recorder(store, { bots })
+    session("ses_code", project)
+    const kept = join(project, "kept.txt")
+    const other = join(project, "other.txt")
+    writeFileSync(kept, "keep one!\n")
+    await hear(turn("ses_code", "m0", tool("ses_code", "c0", "write", { filePath: kept })))
+    expect((await route("POST", `kuvo/artifacts/${ArtifactStore.idOf(kept)}/pin`, { pinned: true })).value.pinned).toMatchObject({ by: "you" })
+    for (const [n, text] of ["keep two!\n", "keep 3!!!\n"].entries()) {
+      writeFileSync(kept, text)
+      await hear(turn("ses_code", `mk${n}`, tool("ses_code", `ck${n}`, "write", { filePath: kept })))
+    }
+    for (const [n, text] of ["other one\n", "other two\n", "other 3!!\n"].entries()) {
+      writeFileSync(other, text)
+      await hear(turn("ses_code", `mo${n}`, tool("ses_code", `co${n}`, "write", { filePath: other })))
+    }
+    const kepts = async (file: string) => (await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(file)}`)).value.versions.map((version: any) => version.kept)
+    expect(await kepts(kept)).toEqual([true, true, true])
+    expect(await kepts(other)).toEqual([false, true, true])
+    expect((await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(kept)}/versions/1`)).value).toBe("keep one!\n")
+
+    // Kept no more: past the budget again, its older versions are the oldest to go.
+    await route("POST", `kuvo/artifacts/${ArtifactStore.idOf(kept)}/pin`, { pinned: false })
+    writeFileSync(other, "other 4!!\n")
+    await hear(turn("ses_code", "mo3", tool("ses_code", "co3", "write", { filePath: other })))
+    expect(await kepts(kept)).toEqual([false, false, true])
+  })
+
+  test("what you keep is still kept after the box starts again", async () => {
+    session("ses_code", project)
+    const file = join(project, "plan.md")
+    writeFileSync(file, "plan\n")
+    await hear(turn("ses_code", "m1", tool("ses_code", "c1", "write", { filePath: file })))
+    await route("POST", `kuvo/artifacts/${ArtifactStore.idOf(file)}/pin`, { pinned: true, note: "The one we ship" })
+    store = new ArtifactStore(join(root, "artifacts"), { bots, disk: () => disk })
+    const { value } = await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(file)}`)
+    expect(value.pinned).toMatchObject({ by: "you", note: "The one we ship" })
+  })
+
   test("a deleted file stays listed as gone, with what it was", async () => {
     session("ses_code", project)
     const file = join(project, "old.md")
