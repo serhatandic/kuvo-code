@@ -7,6 +7,7 @@ import { EngineLink } from "../../src/agents/engine"
 import { subscribe } from "../../src/agents/events"
 import type { GoalPlaces } from "../../src/agents/goals"
 import { server } from "../../src/agents/groups/api"
+import { branchRoutes } from "../../src/agents/branch"
 import { handoffMarker, handoffRoutes, Handoffs } from "../../src/agents/handoff"
 import { run } from "../../src/agents/proc"
 import { gitChanges, readScope, reviewRoutes, Reviews, type Parts } from "../../src/agents/reviews"
@@ -254,6 +255,40 @@ describe("a handoff", () => {
     expect(engine.made).toHaveLength(0)
     expect((await handoffs.start("ses_work")).state).toBe("writing")
     await until(() => handoffs.get("ses_work")?.state !== "writing")
+  })
+})
+
+// "Branch from here": its place makes the copy, and the box marks where it came from, so every
+// client shows it under that conversation, as it does a handoff's.
+describe("a branch", () => {
+  const route = (session: string, before?: string, bridge = false) => branchRoutes(places(bridge), "POST", [session], async () => (before ? { before } : {}))
+
+  test("has the words before the message, and says where it came from, on the engine and with the coding agents alike", async () => {
+    for (const bridge of [false, true]) {
+      const answer = await route("ses_work", "msg_0002", bridge)
+      expect(answer.status).toBe(200)
+      const made = ((await answer.json()) as any).data
+      expect(engine.conversations.get(made.id)!.map((message) => message.id)).toEqual(["msg_0001"])
+      expect(made.metadata).toEqual({ kuvo: { branchedFrom: "ses_work" } })
+      expect(engine.metadata.get(made.id)).toEqual({ kuvo: { branchedFrom: "ses_work" } })
+    }
+  })
+
+  test("a branch of a pinned, handed-off conversation came from that one, and starts unpinned", async () => {
+    engine.metadata.set("ses_work", { "kuvo.pinned": true, color: "blue", kuvo: { handoffFrom: "ses_old", handoffTo: "ses_new", branchedFrom: "ses_older", kuvoAgent: "claude" } })
+    const made = ((await (await route("ses_work", "msg_0002", true)).json()) as any).data
+    expect(engine.metadata.get(made.id)).toEqual({ color: "blue", kuvo: { kuvoAgent: "claude", branchedFrom: "ses_work" } })
+    expect(engine.metadata.get("ses_work").kuvo.handoffTo).toBe("ses_new")
+  })
+
+  test("a subagent's, a message that isn't there, and no message at all are turned away", async () => {
+    engine.session("ses_sub", [{ id: "msg_0001", type: "user", text: "Find it.", time: { created: 1 } }])
+    engine.parents.set("ses_sub", "ses_work")
+    expect((await route("ses_sub", "msg_0001")).status).toBe(409)
+    expect((await route("ses_work", "msg_9999")).status).toBe(404)
+    expect((await route("ses_work")).status).toBe(400)
+    expect((await route("ses_gone", "msg_0001")).status).toBe(404)
+    expect([...engine.conversations.keys()].filter((id) => id.startsWith("ses_fork"))).toHaveLength(0)
   })
 })
 

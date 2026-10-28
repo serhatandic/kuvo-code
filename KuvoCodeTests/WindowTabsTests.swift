@@ -44,6 +44,35 @@ import Testing
 
     // MARK: Opening, closing, reopening
 
+    /// A subagent opens in place of the conversation it works for, in its tab; the way back (or
+    /// picking that conversation in the sidebar) brings the conversation back there, and a
+    /// subagent's own subagent opens in its place in turn. Nothing else gets a tab.
+    @Test func aSubagentOpensInPlaceOfItsConversation() async {
+        defer { done() }
+        engine.list([
+            StubEngine.session("ses_a", title: "ses_a", directory: folder),
+            StubEngine.session("ses_timer", title: "Timer cycle", directory: folder),
+            StubEngine.session("ses_find", title: "Find the timer", directory: folder, extra: ["parentID": "ses_timer"]),
+            StubEngine.session("ses_deep", title: "Read the slider", directory: folder, extra: ["parentID": "ses_find"]),
+        ])
+        await app.workspace.refresh()
+        tabs.open(.session("ses_a"))
+        tabs.open(.session("ses_timer"))
+
+        tabs.openInPlace("ses_find")
+        #expect(keys == ["ses_a", "ses_find"], "in its conversation's tab")
+        #expect(tabs.selection == .session("ses_find"))
+        tabs.openInPlace("ses_deep")
+        #expect(keys == ["ses_a", "ses_deep"], "its own subagent, in its place")
+        tabs.openInPlace("ses_find")
+        #expect(keys == ["ses_a", "ses_find"], "back up a step")
+
+        // The conversation picked in the sidebar comes back in that tab.
+        tabs.open(.session("ses_timer"))
+        #expect(keys == ["ses_a", "ses_timer"])
+        #expect(tabs.selection == .session("ses_timer"))
+    }
+
     @Test func aTabOpensBesideTheOneInViewAndComesBackWhereItWasClosed() async {
         defer { done() }
         await sessions(["ses_a", "ses_b", "ses_c"])
