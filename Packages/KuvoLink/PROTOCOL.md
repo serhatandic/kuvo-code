@@ -1572,7 +1572,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
 | `handoff` | `kuvo/agents/api/kuvo/handoff…`: handoffs |
 | `reviews` | `kuvo/agents/api/kuvo/reviews…`: reviews with fresh eyes |
-| `reviews.scopes` | a review's `scope`, `measure`, `choices` and `stop` (bridge 0.9.95); without it a box reads the changes not committed yet whatever the scope |
+| `reviews.scopes` | a review's `scope`, `measure`, `choices` and `stop` (bridge 0.9.96); without it a box reads the changes not committed yet whatever the scope |
 | `groups` | `kuvo/groups`, `…/events`, one chat's events, and writing, stopping, keep going, viewed, undo and start |
 | `groups.make` | `POST kuvo/groups` |
 | `groups.edit` | `PATCH kuvo/groups/<id>` |
