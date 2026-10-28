@@ -1542,6 +1542,17 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
     locations: [{file, line?, endLine?}]}`: what's wrong in a line, why and how to fix it (`""`
     when the title says it all), and every place it's in, none when it's about the change as a
     whole (a missing test). `fix` is what to send the agent, as your message, to fix them all.
+    `parts` (`reviews.parts`, bridge 0.9.102) are what it reads, each part by a reviewer of its
+    own: `[{n, of, files, state: "waiting" | "reading" | "done" | "failed" | "stopped", found,
+    session?, now?}]`, `files` the part's first 200, `found` what it found. On the engine each
+    part reads in a session of its own, `session`: under the conversation (`parentID`), marked
+    `kuvo.reviewPart: {review, part, of}` and kept out of lists like the box's other runs, its
+    agent `plan` with rules that let it read the project and nothing more. A client opens it as it
+    opens a subagent's, to watch it read and to look at it after; it goes when the review is put
+    away or another takes its place. `now` is what it's doing as it reads ("Reading src/a.ts",
+    "Looking for “token”", "Thinking", "Writing what it found"), told as it changes (not kept),
+    gone once it's done. Stop stops the part reading (`stopped`); those after it stay `waiting`.
+    With the coding agents a part has no `session`. A box from before `parts` leaves it out.
   - `POST …/kuvo/reviews/<session>/measure` with `{"scope"?}` → `{data: {files, parts, leftOut,
     commits?, found?}}`: how much a review of it would read, to show before asking for a big one
     (`commits` for a branch or a range of them, `found` the first 10 files found for described
@@ -1614,6 +1625,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
 | `reviews` | `kuvo/agents/api/kuvo/reviews…`: reviews with fresh eyes |
 | `reviews.scopes` | a review's `scope`, `measure`, `choices` and `stop` (bridge 0.9.97); without it a box reads the changes not committed yet whatever the scope |
+| `reviews.parts` | a review's `parts`, each on the engine read in a `session` a client can open (bridge 0.9.102) |
 | `groups` | `kuvo/groups`, `…/events`, one chat's events, and writing, stopping, keep going, viewed, undo and start |
 | `groups.make` | `POST kuvo/groups` |
 | `groups.edit` | `PATCH kuvo/groups/<id>` |

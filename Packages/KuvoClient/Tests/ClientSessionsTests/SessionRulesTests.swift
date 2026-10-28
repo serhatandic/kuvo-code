@@ -54,6 +54,7 @@ struct SessionRulesTests {
     @Test func seatsAndTheEnginesRunsAreKeptOutOfSight() throws {
         #expect(HiddenSessions.isHidden(try session("ses_seat", metadata: #"{"kuvo": {"seat": "grp_1"}}"#)))
         #expect(HiddenSessions.isHidden(try session("ses_run", metadata: #"{"kuvo": {"engineFor": "ses_x"}}"#)))
+        #expect(HiddenSessions.isHidden(try session("ses_part", metadata: #"{"kuvo": {"reviewPart": {"review": "rev_1", "part": 1, "of": 2}}}"#)))
         #expect(!HiddenSessions.isHidden(try session("ses_bot", metadata: #"{"kuvo": {"bot": "bot_1"}}"#)))
         #expect(!HiddenSessions.isHidden(try session("ses_plain")))
     }

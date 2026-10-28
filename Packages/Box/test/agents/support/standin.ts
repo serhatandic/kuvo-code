@@ -41,6 +41,12 @@ export class StandIn {
   readonly details = new Map<string, any>()
   /** Its events go out as the bridge's own (`emit`), not on its feed. */
   emitsAsBridge = false
+  /** A message sent as yours (`/prompt`) takes a turn, as `turns` script it. */
+  promptsTakeTurns = false
+  /** Sessions deleted (`DELETE /api/session/<id>`). */
+  readonly deleted: string[] = []
+  /** Sessions interrupted (`POST /api/session/<id>/interrupt`). */
+  readonly interrupted: string[] = []
   private held: (() => void)[] = []
   private heldChecks: (() => void)[] = []
   private queued = new Map<string, { text: string; description?: string }[]>()
@@ -93,7 +99,11 @@ export class StandIn {
     for (const answer of this.heldChecks.splice(0)) answer()
   }
 
+  /** Told each event it sends, as a place's `listen` would be. */
+  onEmit?: (type: string, data: any) => void
+
   emit(type: string, data: any) {
+    this.onEmit?.(type, data)
     if (this.emitsAsBridge) return void emit(type, data)
     const line = new TextEncoder().encode(`data: ${JSON.stringify({ id: `evt_${this.next++}`, type, data })}\n\n`)
     for (const feed of this.feeds) feed.enqueue(line)
@@ -158,6 +168,7 @@ export class StandIn {
       const conversation = this.conversations.get(session)
       if (!conversation) return Response.json({ message: "No such session." }, { status: 404 })
       if (!what && request.method === "DELETE") {
+        this.deleted.push(session)
         this.conversations.delete(session)
         return Response.json({ data: {} })
       }
@@ -198,6 +209,21 @@ export class StandIn {
       if (what === "generate") return await this.check("own", body.prompt, undefined, session)
       if (what === "prompt") {
         this.prompted.push({ session, text: body.text })
+        // A review's part: its reviewer answers as a one-off answer would, in a turn of its own.
+        const made = this.made.find((each) => each.id === session)
+        if (made?.metadata?.kuvo?.reviewPart) {
+          this.add(session, { type: "user", text: body.text })
+          void this.readPart(session, body.text, made.model)
+          return Response.json({ data: {} })
+        }
+        if (this.promptsTakeTurns) {
+          this.add(session, { type: "user", text: body.text })
+          this.turn(session)
+        }
+        return Response.json({ data: {} })
+      }
+      if (what === "interrupt") {
+        this.interrupted.push(session)
         return Response.json({ data: {} })
       }
       return Response.json({ data: {} })
@@ -208,6 +234,26 @@ export class StandIn {
 
   /** What a one-off answer says when it isn't a goal's check (a side question's answer, a handoff's note, a review), in turn. */
   answers: string[] = []
+
+  /** A review's part read in its session: counted with the checks, held with them, its answer the next one scripted. */
+  private async readPart(session: string, prompt: string, model?: any) {
+    this.checks.push({ kind: "fresh", prompt, ...(model ? { model } : {}), session })
+    this.busy.add(session)
+    this.emit("session.execution.started", { sessionID: session })
+    this.beat()
+    if (this.holdingChecks) await new Promise<void>((resolve) => this.heldChecks.push(resolve))
+    if (!this.conversations.has(session)) return
+    const failing = this.failingParts > 0
+    if (failing) this.failingParts -= 1
+    if (!failing) this.add(session, { type: "assistant", content: [{ type: "text", text: this.answers.shift() ?? `{"summary": "Fine.", "findings": []}` }] })
+    this.add(session, { type: "idle", outcome: failing ? "failed" : "succeeded" })
+    this.busy.delete(session)
+    this.emit(failing ? "session.execution.failed" : "session.execution.succeeded", { sessionID: session })
+    this.beat()
+  }
+
+  /** Parts whose reading fails, next. */
+  failingParts = 0
 
   private async check(kind: "fresh" | "own", prompt: string, model?: any, session?: string) {
     this.checks.push({ kind, prompt, ...(model ? { model } : {}), ...(session ? { session } : {}) })

@@ -63,6 +63,10 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "kuvo-keywords-"))
   following = []
   engine = new StandIn(beat)
+  // Its events reach those following them.
+  engine.onEmit = (type, data) => {
+    for (const each of following.filter((each) => each.session === data?.sessionID)) each.event(type, data)
+  }
   engine.session("ses_work", [
     { id: "msg_0001", type: "user", text: "Make the timer pause on blur.", time: { created: 1 } },
     { id: "msg_0002", type: "assistant", content: [{ type: "text", text: "Done: it pauses when the window loses focus." }], time: { created: 2 } },
@@ -448,7 +452,8 @@ describe("a review with fresh eyes", () => {
     expect(review.findings.map((each) => each.title)).toEqual(["Secret in a.ts", "Slow loop in c.ts"])
     for (const event of events.slice(seen)) {
       const told = (event.data as any)?.review?.progress
-      if (event.type === "kuvo.review.updated" && told) progress.push(`${told.read}/${told.of}`)
+      // (Told again as each part's state changes: each step once.)
+      if (event.type === "kuvo.review.updated" && told && progress.at(-1) !== `${told.read}/${told.of}`) progress.push(`${told.read}/${told.of}`)
     }
     expect(progress).toEqual(["0/3", "1/3", "2/3"])
     expect(review.progress).toBeUndefined()
@@ -501,15 +506,15 @@ describe("a review with fresh eyes", () => {
     expect(reviews.get("ses_work")).toBeUndefined()
   })
 
-  test("on a free model, in a session of the engine's own that's gone after", async () => {
+  test("on a free model, read in its part's session as on any other (no one-off answer, which free models don't give)", async () => {
     engine.freeModel = true
     const reviews = new Reviews(join(root, "reviews.json"), places(), changes("+x\n"))
     reviews.onEnded = beat
     engine.answers = [`{"summary": "Fine.", "findings": []}`]
     await reviews.start("ses_work")
     await until(() => reviews.get("ses_work")?.state === "done")
-    expect(engine.made[0]?.metadata).toEqual({ kuvo: { engineFor: "ses_work" } })
-    expect(engine.conversations.has(engine.made[0].id)).toBe(false)
+    expect(reviews.get("ses_work")!.summary).toBe("Fine.")
+    expect(engine.made.map((each) => Object.keys(each.metadata.kuvo))).toEqual([["reviewPart"]])
   })
 
   test("reads a folder's changes from its git: tracked files' diffs and new files whole", async () => {
@@ -682,6 +687,76 @@ describe("a review with fresh eyes", () => {
     expect(held.stop("ses_work").summary).toBe("Stopped before it read anything.")
     engine.answerChecks()
     held.stopAll()
+  })
+
+  test("each part is read in a session of its own under the conversation, which can be watched as it reads and looked at after", async () => {
+    const parts: Parts = { parts: ["=== src/a.ts ===\n1  a()\n", "=== src/b.ts ===\n1  b()\n=== src/c.ts ===\n1  c()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), places(), async () => parts)
+    reviews.onEnded = beat
+    engine.directory = "/tmp/project"
+    engine.holdingChecks = true
+    engine.answers = [
+      `{"summary": "One.", "findings": [{"title": "a() throws", "explanation": "", "severity": "bug", "locations": [{"file": "src/a.ts", "line": 1}]}]}`,
+      `{"summary": "Fine.", "findings": []}`,
+    ]
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    // The plan: each part, with the files it reads, waiting until its turn.
+    await until(() => !!reviews.get("ses_work")?.parts?.[0]?.session)
+    const first = reviews.get("ses_work")!.parts!
+    expect(first.map((part) => ({ n: part.n, of: part.of, files: part.files, state: part.state }))).toEqual([
+      { n: 1, of: 2, files: ["src/a.ts"], state: "reading" },
+      { n: 2, of: 2, files: ["src/b.ts", "src/c.ts"], state: "waiting" },
+    ])
+    // Its session: the conversation's, hidden from lists, read-only, and told the part.
+    const made = engine.made.find((each) => each.id === first[0].session)!
+    expect(made.parentID).toBe("ses_work")
+    expect(made.metadata.kuvo.reviewPart).toEqual({ review: reviews.get("ses_work")!.id, part: 1, of: 2 })
+    expect(made.agent).toBe("plan")
+    expect(made.permissions[0]).toEqual({ action: "*", resource: "*", effect: "deny" })
+    await until(() => engine.prompts(first[0].session!).length === 1)
+    expect(engine.prompts(first[0].session!)[0].text).toContain("=== src/a.ts ===")
+
+    // What it's doing now, as it goes: the file it reads, by its path in the project.
+    engine.emit("session.tool.input.started", { sessionID: first[0].session, id: "t1", name: "read" })
+    engine.emit("session.tool.called", { sessionID: first[0].session, id: "t1", input: { filePath: "/tmp/project/src/a.ts" } })
+    await until(() => reviews.get("ses_work")?.parts?.[0]?.now === "Reading src/a.ts")
+    engine.emit("session.reasoning.started", { sessionID: first[0].session })
+    await until(() => reviews.get("ses_work")?.parts?.[0]?.now === "Thinking")
+
+    // Done, the next one reads; what each found is counted, and its line is gone.
+    engine.answerChecks()
+    await until(() => !!reviews.get("ses_work")?.parts?.[1]?.session && engine.checks.length === 2)
+    engine.answerChecks()
+    await until(() => reviews.get("ses_work")?.state === "done")
+    const review = reviews.get("ses_work")!
+    expect(review.findings.map((each) => each.title)).toEqual(["a() throws"])
+    expect(review.parts!.map((part) => ({ state: part.state, found: part.found, now: part.now }))).toEqual([
+      { state: "done", found: 1, now: undefined },
+      { state: "done", found: 0, now: undefined },
+    ])
+    // Kept while the review is, gone with it.
+    const sessions = review.parts!.map((part) => part.session!)
+    expect(sessions.every((id) => engine.conversations.has(id))).toBe(true)
+    reviews.dismiss("ses_work")
+    await until(() => sessions.every((id) => engine.deleted.includes(id)))
+    engine.holdingChecks = false
+    reviews.stopAll()
+  })
+
+  test("stopped while a part reads, its session is stopped too; the parts after it are never read", async () => {
+    const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n", "=== b.ts ===\n1  b()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), places(), async () => parts)
+    reviews.onEnded = beat
+    engine.holdingChecks = true
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    await until(() => engine.checks.length === 1)
+    const reading = reviews.get("ses_work")!.parts![0].session!
+    reviews.stop("ses_work")
+    await until(() => engine.interrupted.includes(reading))
+    expect(reviews.get("ses_work")!.parts!.map((part) => part.state)).toEqual(["stopped", "waiting"])
+    engine.holdingChecks = false
+    engine.answerChecks()
+    reviews.stopAll()
   })
 
   test("out of a repository, What to review offers only the folders", async () => {
