@@ -50,16 +50,22 @@ public final class SpeechModel {
     /// It's coming (or was, and will go on): the ring on the mic shows it.
     public var isUnderway: Bool {
         switch state {
-        case .downloading, .waiting, .paused, .preparing, .askingCellular: true
+        case .downloading, .waiting, .preparing, .askingCellular: true
+        // Paused by you, it stays off the mic; stopped by quitting, it's still coming.
+        case .paused: !isPausedByYou
         default: false
         }
     }
+
+    /// You paused it (in Settings).
+    public var isPausedByYou: Bool { state == .paused && defaults.bool(forKey: Self.pausedKey) }
 
     public var cellular: Cellular {
         get { Cellular(rawValue: defaults.string(forKey: Self.cellularKey) ?? "") ?? .ask }
         set {
             defaults.set(newValue.rawValue, forKey: Self.cellularKey)
-            if state == .askingCellular { download() }
+            // Answered, or allowed while it waits for Wi-Fi: it goes on.
+            if state == .askingCellular || (state == .waiting(.wifi) && newValue == .allowed) { download() }
         }
     }
 
@@ -80,6 +86,8 @@ public final class SpeechModel {
 
     private static let cellularKey = "voice.whisper.cellular"
     private static let removedKey = "voice.whisper.removed"
+    /// You paused it: it waits for you, rather than going on the next time you talk.
+    private static let pausedKey = "voice.whisper.paused"
     static let name = "whisper-large-v3-turbo"
     /// In the model's folder once it's been made ready.
     static let preparedMark = ".prepared"
@@ -123,7 +131,7 @@ public final class SpeechModel {
             }
         } else {
             received = presentBytes
-            state = received > 0 ? .paused : .absent
+            state = received > 0 || defaults.bool(forKey: Self.pausedKey) ? .paused : .absent
         }
     }
 
@@ -131,6 +139,8 @@ public final class SpeechModel {
     public func voiceStarted() {
         switch state {
         case .absent where !defaults.bool(forKey: Self.removedKey): download()
+        // Stopped by quitting, not by you: it goes on.
+        case .paused where !defaults.bool(forKey: Self.pausedKey): download()
         case .failed, .lowSpace: download()
         default: break
         }
@@ -140,6 +150,7 @@ public final class SpeechModel {
     public func download() {
         guard let folder, supported else { return }
         defaults.set(false, forKey: Self.removedKey)
+        defaults.set(false, forKey: Self.pausedKey)
         guard state != .ready, state != .preparing else { return }
         cancelFetch()
         if isComplete { return makeReady() }
@@ -168,6 +179,7 @@ public final class SpeechModel {
         cancelFetch()
         received = presentBytes
         state = .paused
+        defaults.set(true, forKey: Self.pausedKey)
     }
 
     /// Takes it off this device. Voice input goes back to Apple's dictation, and it doesn't come
@@ -180,6 +192,7 @@ public final class SpeechModel {
         }
         Task { await WhisperRuntime.shared.unload() }
         defaults.set(true, forKey: Self.removedKey)
+        defaults.set(false, forKey: Self.pausedKey)
         received = 0
         isNewlyReady = false
         state = supported ? .absent : .unsupported
@@ -228,7 +241,10 @@ public final class SpeechModel {
                     }
                 }
                 guard self.fetch === fetch else { return }
-                guard try await Self.sha256(of: target) == file.sha256 else {
+                let matches = try await Self.sha256(of: target) == file.sha256
+                // Paused or removed while it was checked: what comes next isn't this run's.
+                guard self.fetch === fetch else { return }
+                guard matches else {
                     try? FileManager.default.removeItem(at: target)
                     throw Problem("A downloaded file didn’t match. Try again.")
                 }
@@ -239,11 +255,13 @@ public final class SpeechModel {
             }
             guard self.fetch === fetch else { return }
             try? FileManager.default.removeItem(at: partial)
+            fetch.close()
             self.fetch = nil
             received = size
             makeReady()
         } catch {
             guard self.fetch === fetch else { return }
+            fetch.close()
             self.fetch = nil
             received = presentBytes
             state = .failed((error as? Problem)?.words ?? Self.describe(error))
@@ -395,6 +413,8 @@ final class Fetch: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private var done: CheckedContinuation<Void, Error>?
     private var task: URLSessionDataTask?
     private var isCanceled = false
+    /// When it last said how far it was: a few times a second is enough for the ring and the bar.
+    private var told = Date.distantPast
 
     init(configuration: URLSessionConfiguration) {
         super.init()
@@ -407,34 +427,47 @@ final class Fetch: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     }
 
     /// Fetches `url` into `target`, after what's there; `progress` gets the bytes in it, and
-    /// whether it's waiting for a connection.
+    /// whether it's waiting for a connection. A file that's all there already isn't asked for.
     func get(_ url: URL, to target: URL, expected: Int64, progress: @escaping @Sendable (Int64, Bool) -> Void) async throws {
         if !FileManager.default.fileExists(atPath: target.path) { FileManager.default.createFile(atPath: target.path, contents: nil) }
         let handle = try FileHandle(forWritingTo: target)
-        let have = try handle.seekToEnd()
+        let have = Int64(try handle.seekToEnd())
+        guard have < expected else {
+            try? handle.close()
+            return progress(have, false)
+        }
         var request = URLRequest(url: url)
         if have > 0 { request.setValue("bytes=\(have)-", forHTTPHeaderField: "Range") }
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                lock.withLock {
-                    guard !isCanceled else { return continuation.resume(throwing: CancellationError()) }
+                let started = lock.withLock { () -> Bool in
+                    guard !isCanceled else { return false }
                     self.handle = handle
-                    self.written = Int64(have)
+                    self.written = have
                     self.expected = expected
                     self.progress = progress
                     self.done = continuation
                     let task = session.dataTask(with: request)
                     self.task = task
                     task.resume()
+                    return true
                 }
-                progress(Int64(have), false)
+                guard started else {
+                    try? handle.close()
+                    return continuation.resume(throwing: CancellationError())
+                }
+                progress(have, false)
             }
         } onCancel: { cancel() }
     }
 
+    /// Stops: the file is closed at once, and nothing that comes after is written to it.
     func cancel() {
         let (task, done) = lock.withLock {
             isCanceled = true
+            try? handle?.close()
+            handle = nil
+            progress = nil
             defer { self.done = nil }
             return (self.task, self.done)
         }
@@ -443,6 +476,9 @@ final class Fetch: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         session.invalidateAndCancel()
     }
 
+    /// Done with it: its connection goes.
+    func close() { session.finishTasksAndInvalidate() }
+
     func urlSession(_ session: URLSession, taskIsWaitingForConnectivity task: URLSessionTask) {
         let (written, progress) = lock.withLock { (self.written, self.progress) }
         progress?(written, true)
@@ -450,12 +486,18 @@ final class Fetch: NSObject, URLSessionDataDelegate, @unchecked Sendable {
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        lock.withLock {
+        let all = lock.withLock { () -> Bool in
             // The whole file again (the server ignored the range): start it over.
             if status == 200, written > 0 {
                 try? handle?.truncate(atOffset: 0)
                 written = 0
             }
+            return written >= expected
+        }
+        // Nothing past what's there: it was all there (its hash says whether it's right).
+        if status == 416, all {
+            completionHandler(.cancel)
+            return finish(with: nil)
         }
         guard status == 200 || status == 206 else {
             completionHandler(.cancel)
@@ -466,12 +508,15 @@ final class Fetch: NSObject, URLSessionDataDelegate, @unchecked Sendable {
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         let (written, progress) = lock.withLock { () -> (Int64, (@Sendable (Int64, Bool) -> Void)?) in
+            guard !isCanceled, let handle else { return (0, nil) }
             do {
-                try handle?.write(contentsOf: data)
+                try handle.write(contentsOf: data)
                 self.written += Int64(data.count)
             } catch {
                 return (-1, nil)
             }
+            guard Date().timeIntervalSince(told) > 0.1 || self.written >= expected else { return (self.written, nil) }
+            told = Date()
             return (self.written, self.progress)
         }
         if written < 0 { return finish(with: CocoaError(.fileWriteOutOfSpace)) }
@@ -529,5 +574,5 @@ extension SpeechModel {
         }
     }
 
-    static func megabytes(_ bytes: Int64) -> Int { Int((Double(bytes) / 1_000_000).rounded()) }
+    public static func megabytes(_ bytes: Int64) -> Int { Int((Double(bytes) / 1_000_000).rounded()) }
 }

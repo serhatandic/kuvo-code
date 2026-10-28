@@ -8,7 +8,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### Highlights
 
-- **Voice input**: click the microphone in the composer, or hold ⇧⌘Space, to talk instead of typing; nothing is sent until you send it. <!-- symbol: mic -->
+- **Voice input**: click the microphone in the composer, or hold ⇧⌘Space, to talk instead of typing; Whisper writes your words on your Mac, your project's names as they're written, and nothing is sent until you send it. <!-- symbol: mic -->
 - **Goals that keep going**: write `/goal all tests pass`, and the agent works turn after turn until a check says it's met. <!-- symbol: target -->
 - **What your agents made**: a bot's Shelf keeps its pages, pictures and memory, with every change on its Timeline. <!-- symbol: tray.full -->
 - **Answers you can try**: agents show charts, diagrams and things to click right in the conversation. <!-- symbol: chart.xyaxis.line -->
@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Voice input writes with Whisper, on your Mac, which gets your project's names right (`fetchUser`, `src/timer.ts`) and writes nothing while you pause to think. It downloads (about 650 MB) the first time you talk, with a ring on the microphone; until then macOS's dictation listens, told the same names. Pause or remove it in **Settings › General › Speech model**.
 - Waits look like what they wait for: a step at work shows its icon in a sweeping ring and how long it has run, and keeps how long it took; a download has one bar that says how much and how long is left; a file, list or preview on its way shows faint lines in its shape; a sign-in in your browser shows a dot handed over to it; a computer starting shows a line from this Mac to it that turns solid when it answers. Short waits in a button are a small turning ring.
 - The sidebar's marks are one quiet family: a turning ring while a session works, an orange dot that ripples when it needs you, and an accent dot that settles when it's done, plus still marks for a failed run, a wake-up, a watch and a machine that isn't connected. Your tabs show the same marks. The open session is a soft grey fill that starts at its title, so the lines of its subagents stay in view, and section headings stand out more.
 - Click the side questions count on a conversation in the sidebar to open the latest one, on the Mac and the iPhone.

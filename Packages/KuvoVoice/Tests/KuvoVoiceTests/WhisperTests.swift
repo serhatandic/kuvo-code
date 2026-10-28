@@ -48,6 +48,28 @@ private func cut(_ samples: [Float]) -> [PhraseCutter.Phrase] {
     #expect(phrases[1].seconds < 3.3)
 }
 
+/// A café or a fan: loud, steady noise (about -34 dBFS), with speech well over it.
+private func noisy(_ seconds: Double) -> [Float] {
+    var seed: UInt32 = 11
+    return (0..<Int(seconds * 16_000)).map { _ in
+        seed = seed &* 1_664_525 &+ 1_013_904_223
+        return (Float(seed >> 8) / Float(1 << 24) - 0.5) * 0.07
+    }
+}
+
+@Test func aNoisyRoomIsntSpeech() {
+    let room = noisy(36)
+    var clip = room
+    // Two sentences over it, 30 s apart.
+    for (at, speech) in [(1.0, speech(2)), (33.0, speech(2))] {
+        let start = Int(at * 16_000)
+        for (index, sample) in speech.enumerated() { clip[start + index] += sample }
+    }
+    let phrases = cut(clip)
+    #expect(phrases.count == 2)
+    #expect(phrases.allSatisfy { $0.seconds < 3 })
+}
+
 @Test func aBreathMidSentenceDoesntCutItButAPauseDoes() {
     let phrases = cut(speech(1.5) + quiet(0.3) + speech(1.5) + quiet(1.2) + speech(1))
     #expect(phrases.count == 2)
@@ -145,6 +167,11 @@ final class StubHub: URLProtocol, @unchecked Sendable {
             return client!.urlProtocolDidFinishLoading(self)
         }
         let from = range.flatMap { Int($0.dropFirst("bytes=".count).dropLast()) } ?? 0
+        // Past its end, as Hugging Face answers.
+        guard from < data.count else {
+            client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: 416, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+            return client!.urlProtocolDidFinishLoading(self)
+        }
         let response = HTTPURLResponse(url: url, statusCode: from > 0 ? 206 : 200, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data.subdata(in: from..<data.count))
@@ -240,7 +267,9 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
     let model = rig.model()
     #expect(model.state == .paused)
     #expect(model.received == 120_000)
-    model.download()
+    // Not paused by you: it's still coming, and goes on the next time you talk.
+    #expect(model.isUnderway)
+    model.voiceStarted()
     #expect(await settled(model) == .ready)
     #expect(rig.requests.first { $0.path.hasSuffix("weight.bin") }?.range == "bytes=120000-")
     #expect(FileManager.default.contents(atPath: rig.folder.appending(path: "whisper-large-v3-turbo").appending(path: path).path) == whole)
@@ -297,15 +326,37 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
 }
 
 @MainActor
-@Test func pausedItKeepsWhatCameAndTalkingDoesntResumeIt() async throws {
+@Test func pausedByYouItWaitsForYouEvenAfterARestart() async throws {
     let rig = Rig()
     defer { rig.done() }
     let model = rig.model()
     model.download()
     model.pause()
     #expect(model.state == .paused)
+    #expect(!model.isUnderway)
     model.voiceStarted()
     #expect(model.state == .paused)
+    let reopened = rig.model()
+    reopened.voiceStarted()
+    #expect(reopened.isPausedByYou)
+    reopened.download()
+    let end = await settled(reopened)
+    #expect(end == .ready)
+}
+
+@MainActor
+@Test func aFileThatCameWholeButWasntCheckedIsCheckedNotFetchedAgain() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    // The app quit while the weights were being checked.
+    let path = "Encoder.mlmodelc/weights/weight.bin"
+    let partial = rig.folder.appending(path: "partial").appending(path: path)
+    try FileManager.default.createDirectory(at: partial.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try rig.contents[path]!.write(to: partial)
+    let model = rig.model()
+    model.voiceStarted()
+    #expect(await settled(model) == .ready)
+    #expect(!rig.requests.contains { $0.path.hasSuffix("weight.bin") })
 }
 
 // MARK: The project's names

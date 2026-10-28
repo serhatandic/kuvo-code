@@ -266,7 +266,7 @@ public final class VoiceInput {
             phase = .listening
             listeningSince = .now
             try await dictation.prepare()
-            guard self.run == run else { return }
+            guard self.run == run else { return await dictation.stop() }
             await dictation.run(stream)
         } catch {
             guard self.run == run else { return }

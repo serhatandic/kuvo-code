@@ -54,6 +54,15 @@ struct SpeechModelRow: View {
     let model: SpeechModel
     @State private var confirmsRemoving = false
 
+    /// Stopped with part of it here.
+    private var canRemovePart: Bool {
+        guard model.received > 0 else { return false }
+        switch model.state {
+        case .paused, .failed, .lowSpace: return true
+        default: return false
+        }
+    }
+
     /// On its way: a bar with how much has come.
     private var showsBar: Bool { [.downloading, .paused, .waiting(.network), .waiting(.wifi), .askingCellular].contains(model.state) }
 
@@ -77,6 +86,10 @@ struct SpeechModelRow: View {
                     Spinner(size: 13)
                 case .unsupported:
                     EmptyView()
+                }
+                // Part of it here, stopped: that can go too.
+                if canRemovePart {
+                    Button("Remove") { model.remove() }
                 }
             }
         } label: {

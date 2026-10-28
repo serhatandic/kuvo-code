@@ -4,8 +4,9 @@ import Foundation
 /// Whisper to write one at a time: only what has speech in it, never the silence around it, so a
 /// long pause (minutes of thinking) gives Whisper nothing to make words up from.
 ///
-/// It tells speech from quiet by how loud each short stretch is against the room's own noise,
-/// which it learns as it goes.
+/// It tells speech from quiet by how loud each short stretch is against the room's own noise:
+/// the quietest of the last few seconds, so a fan or a café is learned within moments, and
+/// speech, which always has gaps between its words, doesn't become it.
 struct PhraseCutter {
     static let rate = 16_000
     /// Each stretch it weighs: 30 ms.
@@ -38,8 +39,9 @@ struct PhraseCutter {
     private var quietFrames = 0
     /// How many samples it's weighed in all, for where each phrase starts.
     private var heard = 0
-    /// The room's noise, as a level (RMS): it follows the quietest stretches, rising slowly.
-    private var floor: Float = 0.002
+    /// How loud the last few seconds were, frame by frame, for the room's noise.
+    private var recent: [Float] = []
+    private static let remembered = 100
 
     /// Whether a phrase is under way.
     var isSpeaking: Bool { !current.isEmpty }
@@ -69,9 +71,12 @@ struct PhraseCutter {
     private mutating func weigh(_ frame: [Float]) -> Phrase? {
         let rms = frame.withUnsafeBufferPointer(VoiceLevel.rms)
         heard += frame.count
+        recent.append(rms)
+        if recent.count > Self.remembered { recent.removeFirst() }
+        // The room's noise: the quietest stretches of the last 3 s (never louder than a loud room,
+        // so speech always stands out).
+        let floor = min(recent.sorted()[recent.count * 15 / 100], 0.03)
         let isSpeech = rms > max(floor * 3.5, 0.006)
-        // The noise follows the quiet quickly down, and slowly up (so speech doesn't become it).
-        floor = rms < floor ? floor * 0.7 + rms * 0.3 : min(floor * 1.002 + 0.000_001, max(rms, floor))
 
         guard isSpeaking else {
             if isSpeech {

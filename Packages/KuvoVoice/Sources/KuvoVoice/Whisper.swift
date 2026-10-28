@@ -24,15 +24,25 @@ actor WhisperRuntime {
     private var folder: URL?
     private var loading: Task<LoadedWhisper, Error>?
     private var release: Task<Void, Never>?
+    /// The dictations using it now: it's let go only once none is.
+    private var users = 0
     private static let keep: Duration = .seconds(300)
 
-    /// Whisper from `folder`, loaded if it isn't.
+    /// Whisper from `folder`, loaded if it isn't, for one more user (who calls `idle` when done).
     func kit(_ folder: URL) async throws -> LoadedWhisper {
+        users += 1
+        do { return try await load(folder) } catch {
+            users -= 1
+            throw error
+        }
+    }
+
+    private func load(_ folder: URL) async throws -> LoadedWhisper {
         release?.cancel()
         if let loaded, self.folder == folder { return loaded }
         if let loading, self.folder == folder { return try await loading.value }
         self.folder = folder
-        let loading = Task { try await Self.load(folder) }
+        let loading = Task { try await Self.make(folder) }
         self.loading = loading
         do {
             let loaded = try await loading.value
@@ -46,8 +56,10 @@ actor WhisperRuntime {
         }
     }
 
-    /// Done with it for now: it's let go after a while unless it's used again.
+    /// A user done with it for now: once none is, it's let go after a while unless it's used again.
     func idle() {
+        users = max(0, users - 1)
+        guard users == 0 else { return }
         release?.cancel()
         release = Task {
             try? await Task.sleep(for: Self.keep)
@@ -58,6 +70,7 @@ actor WhisperRuntime {
 
     func unload() {
         release?.cancel()
+        users = 0
         loaded = nil
         folder = nil
         loading = nil
@@ -70,7 +83,7 @@ actor WhisperRuntime {
         idle()
     }
 
-    private static func load(_ folder: URL) async throws -> LoadedWhisper {
+    private static func make(_ folder: URL) async throws -> LoadedWhisper {
         let config = WhisperKitConfig(modelFolder: folder.path, tokenizerFolder: folder, verbose: false, logLevel: .error,
                                       prewarm: false, load: true, download: false)
         return LoadedWhisper(kit: try await WhisperKit(config))
@@ -97,6 +110,10 @@ actor WhisperDictation {
     private var whisper: LoadedWhisper?
     private var prompt: [Int]?
     private var names = ProjectNames([])
+    private var asking: Task<Void, Never>?
+    /// When it started taking samples, and how much it's taken: behind the microphone, it doesn't guess.
+    private var since: ContinuousClock.Instant?
+    private var taken = 0.0
     /// How often it guesses at the phrase under way, in seconds of it.
     private static let guessEvery = 1.2
     /// Whisper's prompt holds at most 224 tokens; the words get most of it.
@@ -110,26 +127,57 @@ actor WhisperDictation {
         self.heard = heard
     }
 
-    /// Loads Whisper (if it isn't), and the words for its prompt.
+    /// Loads Whisper (if it isn't), and asks for the words for its prompt, which it uses from
+    /// when they come (a slow computer doesn't hold up what you say).
     func prepare() async throws {
-        let whisper = try await WhisperRuntime.shared.kit(folder)
-        self.whisper = whisper
-        let words = await words()
-        prompt = Self.prompt(words, kit: whisper.kit)
+        let words = words
+        asking = Task { [weak self] in
+            let names = await words()
+            await self?.take(names)
+        }
+        whisper = try await WhisperRuntime.shared.kit(folder)
+        if let pending { take(pending) }
+    }
+
+    private var pending: [String]?
+
+    private func take(_ words: [String]) {
+        guard let kit = whisper?.kit else { return pending = words }
+        prompt = Self.prompt(words, kit: kit)
         names = ProjectNames(words)
+        pending = nil
     }
 
     /// Writes all that `samples` gives, until it ends (you're done), then the phrase under way.
     func run(_ samples: AsyncStream<[Float]>) async {
         for await chunk in samples {
+            since = since ?? .now
+            taken += Double(chunk.count) / Double(PhraseCutter.rate)
             for phrase in cutter.take(chunk) { await write(phrase) }
-            if let partial = cutter.partial, partial.seconds - guessedAt >= Self.guessEvery {
+            // A guess at the phrase under way, unless it's behind what you've said.
+            if let partial = cutter.partial, partial.seconds - guessedAt >= Self.guessEvery, !isBehind {
                 guessedAt = partial.seconds
-                if let text = await transcribe(partial.samples) { heard(.guess(text, start: partial.start)) }
+                if let text = await transcribe(partial.samples, guess: true) { heard(.guess(text, start: partial.start)) }
             }
         }
-        if let last = cutter.flush() { await write(last) }
+        // Canceled: nothing more is written.
+        if !Task.isCancelled, let last = cutter.flush() { await write(last) }
+        await stop()
+    }
+
+    /// Done with Whisper: the app may let it go once no one else uses it.
+    func stop() async {
+        asking?.cancel()
+        guard whisper != nil else { return }
+        whisper = nil
         await WhisperRuntime.shared.idle()
+    }
+
+    /// More than half a second of what the microphone gave is still to take.
+    private var isBehind: Bool {
+        guard let since else { return false }
+        let elapsed = ContinuousClock.now - since
+        return Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18 - taken > 0.5
     }
 
     private func write(_ phrase: PhraseCutter.Phrase) async {
@@ -138,9 +186,11 @@ actor WhisperDictation {
         heard(.final(await transcribe(phrase.samples) ?? "", start: phrase.start))
     }
 
-    private func transcribe(_ samples: [Float]) async -> String? {
+    private func transcribe(_ samples: [Float], guess: Bool = false) async -> String? {
         guard let kit = whisper?.kit else { return nil }
-        let options = DecodingOptions(task: .transcribe, language: language, temperature: 0, usePrefillPrompt: true, detectLanguage: language == nil,
+        // A guess is tried once; what it settles on may try again, warmer, when it's unsure.
+        let options = DecodingOptions(task: .transcribe, language: language, temperature: 0, temperatureFallbackCount: guess ? 0 : 5,
+                                      usePrefillPrompt: true, detectLanguage: language == nil,
                                       skipSpecialTokens: true, withoutTimestamps: true, promptTokens: prompt, suppressBlank: true)
         guard let results = try? await kit.transcribe(audioArray: samples, decodeOptions: options) else { return nil }
         return names.fix(Self.clean(results.map(\.text).joined(separator: " ")))
