@@ -117,6 +117,60 @@ import Testing
         #expect(try await client.file(log.path).count == 3_000_000)
     }
 
+    /// Changes shows a machine's new file from that machine's box, as the panel does: its lines,
+    /// a picture as binary, and one too big to read through as too big (refused by its box, not
+    /// sent whole). The next look reads only a file whose bytes changed (git's hash says).
+    @Test func changesShowsAMachinesNewFileFromItsBox() async throws {
+        let box = try await SettingsBox(port: 47_968)
+        defer { box.stop(); try? FileManager.default.removeItem(at: folder) }
+        let engine = URL(string: box.engine.url + "/")!
+        let client = BoxClient(box: "test", transport: LocalBox { request in
+            PhoneLink.respond(to: request, link: nil, engine: engine, password: "test", agents: nil, asking: Data(repeating: 1, count: 32))
+        })
+        try Data("one\ntwo\n".utf8).write(to: folder.appending(path: "notes.md"))
+        try Data([0x89, 0x50, 0x4E, 0x47, 0, 1]).write(to: folder.appending(path: "chart.png"))
+        try Data(repeating: UInt8(ascii: "x"), count: 2_500_000).write(to: folder.appending(path: "big.log"))
+        let root = RemoteFolder.folder(folder.path, on: "test")
+        let names = ["notes.md", "chart.png", "big.log"]
+        func listed(_ hashes: [String]) -> [ChangedFile] {
+            zip(names, hashes).map { name, hash in
+                var file = ChangedFile(path: name, status: .added, url: RemoteFolder.url(root).appending(path: name))
+                file.root = root
+                file.unread = true
+                file.hash = hash
+                return file
+            }
+        }
+        let asked = Asked()
+        let read = await Git.readNew(listed(["a1", "b1", "c1"])) { machine in
+            asked.add(machine)
+            return client
+        }
+        #expect(asked.paths == ["test", "test", "test"])
+        #expect(read[0].lines.map(\.text) == ["one", "two"])
+        #expect(read[1].isBinary)
+        #expect(read[2].isTooBig && !read[2].isBinary)
+        #expect(read.allSatisfy { !$0.unread })
+
+        // The agent adds a line to the notes; the rest are as they were.
+        try Data("one\ntwo\nthree\n".utf8).write(to: folder.appending(path: "notes.md"))
+        let again = Asked()
+        let next = await Git.readNew(listed(["a2", "b1", "c1"]), known: Git.kept(read)) { machine in
+            again.add(machine)
+            return client
+        }
+        #expect(again.paths == ["test"], "only the changed file is read again")
+        #expect(next[0].lines.map(\.text) == ["one", "two", "three"])
+        #expect(next[1].isBinary && next[2].isTooBig)
+    }
+
+    /// The panel's Files shows a machine's code and text, whatever this Mac's apps call the kind
+    /// (`.ts` is a video to macOS), and doesn't fetch a PDF or an archive only to say it can't.
+    @Test func filesFetchesAMachinesCodeButNotItsArchives() {
+        #expect(["ts", "mts", "mod", "pem", "swift", "", "rst"].allSatisfy(MachineFiles.shows))
+        #expect(!["pdf", "zip", "MP4", "dmg"].contains(where: MachineFiles.shows))
+    }
+
     /// What a test's stand-in transport was asked.
     nonisolated private final class Asked: @unchecked Sendable {
         private let lock = NSLock()

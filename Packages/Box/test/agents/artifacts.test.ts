@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { unified } from "../../src/agents/diff"
 import { EngineLink } from "../../src/agents/engine"
@@ -337,6 +337,32 @@ describe("files a command made", () => {
     expect(names).toEqual(["summary.md"])
   })
 
+  test("in a Mac's home folder, the app's caches and logs that change meanwhile aren't the agent's", async () => {
+    recorder = record(store, { bots }).recorder
+    const home = join(root, "home")
+    const caches = join(home, "Library", "Caches", "run.kuvo.code")
+    const logs = join(home, "Library", "Logs", "Kuvo Code")
+    mkdirSync(caches, { recursive: true })
+    mkdirSync(logs, { recursive: true })
+    const was = process.env.KUVO_OWN_FOLDERS
+    const preferences = join(home, "Library", "Preferences", "run.kuvo.code.plist")
+    mkdirSync(dirname(preferences), { recursive: true })
+    process.env.KUVO_OWN_FOLDERS = JSON.stringify([caches, logs, preferences])
+    try {
+      session("ses_home", home)
+      await hear([{ type: "session.execution.started", data: { sessionID: "ses_home" } }])
+      writeFileSync(join(caches, "sessions.json"), "{}")
+      writeFileSync(join(logs, "usage.log"), "line\n")
+      writeFileSync(preferences, "plist")
+      writeFileSync(join(home, "notes.txt"), "made\n")
+      await hear([{ type: "session.execution.succeeded", data: { sessionID: "ses_home" } }])
+      expect((await route("GET", "kuvo/artifacts?session=ses_home")).value.artifacts.map((artifact: any) => artifact.name)).toEqual(["notes.txt"])
+    } finally {
+      if (was === undefined) delete process.env.KUVO_OWN_FOLDERS
+      else process.env.KUVO_OWN_FOLDERS = was
+    }
+  })
+
   test("in the home folder, what Kuvo Code keeps there (a file you sent with the message) isn't the agent's", async () => {
     recorder = record(store, { bots }).recorder
     const home = join(root, "home")
@@ -589,6 +615,20 @@ describe("what the record keeps a copy of", () => {
     // Nothing of it in the record's folder.
     const copies = spawnSync("grep", ["-rl", "TOKEN", join(root, "artifacts")]).stdout.toString()
     expect(copies).toBe("")
+  })
+
+  test("a file its name doesn't tell the kind of is served as text only when it is; a Pages document is served as one", async () => {
+    session("ses_code", project)
+    const weights = join(project, "model.pt"), notes = join(project, "notes.rst"), pages = join(project, "Plan.pages")
+    writeFileSync(weights, Buffer.from([0x80, 0x02, 0x00, 0x7d, 0x00, 0xff]))
+    writeFileSync(notes, "Title\n=====\n")
+    writeFileSync(pages, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00]))
+    await hear(turn("ses_code", "m1", [...tool("ses_code", "c1", "write", { filePath: weights }), ...tool("ses_code", "c2", "write", { filePath: notes }), ...tool("ses_code", "c3", "write", { filePath: pages })]))
+    const read = async (path: string) => (await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(path)}`)).value
+    expect([(await read(weights)).type, (await read(notes)).type, (await read(pages)).type]).toEqual(["application/octet-stream", "text/plain", "application/vnd.apple.pages"])
+    // Its bytes aren't shown as lines of text.
+    expect((await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(weights)}/versions/1/changes`)).value.style).toBe("none")
+    expect((await read(weights)).versions[0].lines).toBeUndefined()
   })
 
   test("in a git project, code keeps only its change (git has the rest); a document there gets copies; what git ignores gets none", async () => {

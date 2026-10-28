@@ -81,10 +81,15 @@ public struct ArtifactVersion: Codable, Hashable, Identifiable, Sendable {
 
     public var id: Int { n }
 
+    /// Whether a client may save or share this version as the file is now, when the box kept no
+    /// copy: never what looks like a secret (or a reason this app doesn't know yet); what git
+    /// ignores may go, since build outputs are often what you want.
+    public var mayLeave: Bool { reason != .secret && reason != .other }
+
     public enum NoCopy: String, Codable, Hashable, Sendable {
         /// It looks like it holds a secret: never copied, never sent.
         case secret
-        /// Git ignores it: never copied, never sent.
+        /// Git ignores it: never copied; saved or shared only as the file is now (`mayLeave`).
         case ignored
         /// Code git keeps: only its change.
         case git

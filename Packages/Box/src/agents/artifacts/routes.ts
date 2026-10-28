@@ -145,7 +145,7 @@ export async function artifactRoutes(store: ArtifactStore | undefined, method: s
       if (version.reason && privateReasons.has(version.reason)) return message(410, notKept(version))
       // Code git keeps: the change its tool call made.
       if (version.patch) return json({ style: "lines", patch: version.patch, added: version.lines?.added ?? 0, removed: version.lines?.removed ?? 0, from: from?.n ?? null, to: n })
-      if (!isText(artifact.path)) {
+      if (!isText(artifact.type)) {
         // Pictures and PDFs: shown side by side by the client, from each version's bytes.
         return json({ style: artifact.kind === "image" || artifact.type === "application/pdf" ? "pair" : "none", from: from?.n ?? null, to: n })
       }

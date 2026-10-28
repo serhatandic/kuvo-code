@@ -402,22 +402,31 @@ var types = {
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  zip: "application/zip"
+  zip: "application/zip",
+  doc: "application/msword",
+  xls: "application/vnd.ms-excel",
+  rtf: "application/rtf",
+  pages: "application/vnd.apple.pages",
+  numbers: "application/vnd.apple.numbers",
+  odt: "application/vnd.oasis.opendocument.text",
+  ods: "application/vnd.oasis.opendocument.spreadsheet"
 };
 var extension = (path) => extname(path).slice(1).toLowerCase();
-function typeOf(path) {
+function typeOf(path, binary = false) {
   const ext = extension(path);
   if (types[ext])
     return types[ext];
-  return binaries.has(ext) ? "application/octet-stream" : "text/plain";
+  return binaries.has(ext) || binary ? "application/octet-stream" : "text/plain";
+}
+function isBinary(bytes) {
+  return bytes.subarray(0, 8192).includes(0);
 }
 function isProse(path) {
   const ext = extension(path);
   return ext === "md" || ext === "markdown" || ext === "txt" || basename(path) === "job.json";
 }
-function isText(path) {
-  const type = typeOf(path);
-  return type.startsWith("text/") || type === "application/json" || type === "image/svg+xml";
+function isText(type) {
+  return type.startsWith("text/") || type === "application/rtf" || type === "application/json" || type === "image/svg+xml";
 }
 function kindOf(path, { bots, download = false } = {}) {
   if (download)
@@ -805,7 +814,7 @@ class ArtifactStore {
     }
     if (!artifact) {
       const kind = this.refine(kindOf(path, { bots: this.options.bots, download: made.download }), read.bytes);
-      artifact = { id: ArtifactStore.idOf(path), path, name: basename3(path), kind, type: typeOf(path), where: { bots: [], sessions: [], groups: [] }, pinned: null, gone: null, updated: stamp(now), versions: [], ...this.policy.inGit(path) ? { git: true } : {} };
+      artifact = { id: ArtifactStore.idOf(path), path, name: basename3(path), kind, type: typeOf(path, !!read.bytes && isBinary(read.bytes)), where: { bots: [], sessions: [], groups: [] }, pinned: null, gone: null, updated: stamp(now), versions: [], ...this.policy.inGit(path) ? { git: true } : {} };
       this.artifacts.set(artifact.id, artifact);
     }
     const latest = artifact.versions.at(-1);
@@ -860,7 +869,7 @@ class ArtifactStore {
       path,
       name: basename3(path),
       kind,
-      type: typeOf(path),
+      type: typeOf(path, isBinary(bytes)),
       where: { bots: where.bot ? [where.bot] : [], sessions: [], groups: [] },
       pinned: null,
       gone: null,
@@ -1114,7 +1123,7 @@ class ArtifactStore {
     if (replacing?.patch && change.patch)
       version.patch = (replacing.patch + `
 ` + hunksOf(change.patch)).slice(0, patchLimit);
-    const lines2 = version.patch ? fromPatch(artifact.path, version.patch) : bytes && previous ? this.lines(artifact.path, previous, bytes) : bytes && isText(artifact.path) && !previous && bytes.length <= lineLimit ? unified("", bytes.toString("utf8")) : undefined;
+    const lines2 = version.patch ? fromPatch(artifact.path, version.patch) : bytes && previous ? this.lines(artifact.type, previous, bytes) : bytes && isText(artifact.type) && !previous && bytes.length <= lineLimit ? unified("", bytes.toString("utf8")) : undefined;
     if (lines2)
       version.lines = { added: lines2.additions, removed: lines2.deletions };
     if (made.group && previous?.group?.id === made.group.id && previous.by.bot && made.by.bot && previous.by.bot !== made.by.bot)
@@ -1137,8 +1146,8 @@ class ArtifactStore {
     this.settle();
     return this.told(artifact);
   }
-  lines(path, previous, bytes) {
-    if (!isText(path) || !previous.kept || !previous.hash?.startsWith("sha256:") || bytes.length > lineLimit || previous.size > lineLimit)
+  lines(type, previous, bytes) {
+    if (!isText(type) || !previous.kept || !previous.hash?.startsWith("sha256:") || bytes.length > lineLimit || previous.size > lineLimit)
       return;
     try {
       return unified(readFileSync3(this.copyPath(previous.hash)).toString("utf8"), bytes.toString("utf8"));
@@ -1149,7 +1158,7 @@ class ArtifactStore {
   refine(kind, bytes) {
     if (kind !== "code" || !bytes)
       return kind;
-    return bytes.subarray(0, 8192).includes(0) ? "file" : kind;
+    return isBinary(bytes) ? "file" : kind;
   }
   read(path, seen = this.look(path)) {
     if (!seen)
@@ -1283,6 +1292,7 @@ class ArtifactStore {
       this.compact(months);
     for (const artifact of this.artifacts.values()) {
       artifact.versions.sort((a, b) => a.n - b.n);
+      artifact.type = typeOf(artifact.path, artifact.kind === "file" || artifact.type === "application/octet-stream");
       for (const version of artifact.versions) {
         if (!version.kept || !version.hash)
           continue;
@@ -1322,7 +1332,13 @@ var walkLimit = 20000;
 var fileLimit = 200;
 function ownFolders2() {
   const agents = process.env.KUVO_AGENTS_HOME;
-  return [process.env.KUVO_HOME, agents ? dirname2(agents) : undefined].filter((folder) => !!folder);
+  let named = [];
+  try {
+    const list = JSON.parse(process.env.KUVO_OWN_FOLDERS ?? "[]");
+    if (Array.isArray(list))
+      named = list.filter((each) => typeof each === "string");
+  } catch {}
+  return [process.env.KUVO_HOME, agents ? dirname2(agents) : undefined, ...named].filter((folder) => !!folder);
 }
 function repositoryOf(folder) {
   for (let at = folder;; at = dirname2(at)) {
@@ -1341,7 +1357,7 @@ function changedSince(folder, since, keep = () => true) {
     if (found.length >= fileLimit)
       break;
     const relative2 = path.slice(folder.length + 1);
-    if (!keep(relative2) || relative2.split(sep4).some((part) => skipped.has(part)) || own.some((inside) => path.startsWith(inside + sep4)))
+    if (!keep(relative2) || relative2.split(sep4).some((part) => skipped.has(part)) || own.some((inside) => path === inside || path.startsWith(inside + sep4)))
       continue;
     try {
       const stat = statSync3(path);
@@ -14345,7 +14361,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
         return message(410, notKept(version2));
       if (version2.patch)
         return json6({ style: "lines", patch: version2.patch, added: version2.lines?.added ?? 0, removed: version2.lines?.removed ?? 0, from: from?.n ?? null, to: n });
-      if (!isText(artifact.path)) {
+      if (!isText(artifact.type)) {
         return json6({ style: artifact.kind === "image" || artifact.type === "application/pdf" ? "pair" : "none", from: from?.n ?? null, to: n });
       }
       const after = version2.status === "deleted" ? "" : store.bytes(artifact.id, n);
@@ -19297,4 +19313,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 8ab8b8fa7079c394573e8cec6632dd09a03d3c382926c7f2e6e3205415fbc35d
+// Built from Packages/Box/src/agents b18cd12f9165998d430a7f068fdffbed71ef3b59e1be0f3fa638e6f4d8745165

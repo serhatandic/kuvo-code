@@ -14,6 +14,11 @@ struct BoxClient: Sendable {
 
     static let mac = "mac"
 
+    /// A machine's box, by the machine's id, through `kuvo-link.js box route` over its SSH connection.
+    nonisolated static func machine(_ id: String) -> BoxClient {
+        BoxClient(box: id, transport: MachineBoxTransport(connection: SSHConnection(destination: id)))
+    }
+
     /// What the box answered.
     func send(_ method: String, _ path: String, body: Data? = nil) async throws -> (status: Int, body: Data) {
         var status = 502

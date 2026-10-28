@@ -1844,7 +1844,9 @@ the bridge as it answers (`503 {"message"}` while it isn't running).
   - never the bytes of what's likely a secret (`.env*`, `*.pem`, `*.key`, `id_*`, anything under
     `.ssh`, `.gnupg` or a `keys` folder) or what git ignores: `kept: false`, `reason: "secret"` or
     `"ignored"`, its hash keyed so it says nothing of what it holds, and its bytes and changes are
-    never sent (`410`);
+    never sent (`410`). A client may still save or share what git ignores as the file is now,
+    from `kuvo/file`, but never what's likely a secret, nor a `reason` it doesn't know
+    (KuvoLink's `ArtifactVersion.mayLeave`);
   - code that git keeps: only the change its tool calls made (`reason: "git"`, `patch`), unless
     it's pinned;
   - with the disk's free space under its floor (whichever is less of 10 GB and a tenth of the

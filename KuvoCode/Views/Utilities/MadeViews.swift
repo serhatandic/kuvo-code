@@ -1016,9 +1016,10 @@ struct ArtifactDetail: View {
                     }
                 }
                 // A machine's, and this Mac's that's gone from its folder (there's no Finder for it).
-                // The newest with no copy comes from its box, which sends 25 MB at most.
+                // The newest with no copy comes from its box, which sends 25 MB at most, unless it
+                // looks like a secret (`mayLeave`, the phone's Share too).
                 let label = onMac ? "Save a Copy…" : "Save a Copy to This Mac…"
-                if known, let version, onMac ? !there && kept : kept || (there && version.n == artifact.versions.last?.n && version.size <= 25 * 1024 * 1024) {
+                if known, let version, onMac ? !there && kept : kept || (there && version.n == artifact.versions.last?.n && version.size <= 25 * 1024 * 1024 && version.mayLeave) {
                     Button {
                         saveCopy(artifact, version)
                     } label: {
@@ -1080,6 +1081,9 @@ struct ArtifactDetail: View {
                     ? try await things.bytes(of: artifact.id, version: version.n)
                     : try await things.box.file(artifact.path)
                 try data.write(to: url, options: .atomic)
+                // Done, which the popover may no longer be there to show: the Dock's Downloads
+                // stack bounces for it, as for a browser's download.
+                DistributedNotificationCenter.default().post(name: .init("com.apple.DownloadFileFinished"), object: url.resolvingSymlinksInPath().path)
             } catch {
                 let alert = NSAlert()
                 alert.messageText = "\(artifact.name) couldn’t be saved"

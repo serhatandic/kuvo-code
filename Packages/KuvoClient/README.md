@@ -19,7 +19,8 @@ The rules for what a message says, the same in both apps. Foundation only: no vi
 
 "Bring your subscriptions": what a computer has that Kuvo Code can use, as its box answers
 `kuvo/accounts/found` (`Found`), and the rows offered from it, each with the one thing it needs
-(`Offers`). The Mac's first launch and the phone's sheet after pairing a computer offer the same.
+(`Offers`). Only the Mac's first launch offers them now: a computer is set up on the Mac before a
+phone pairs with it, so the phone, which had a sheet of its own for this, doesn't use them.
 
 ## ClientSessions
 
