@@ -215,7 +215,10 @@ final class AppModel {
         if !AppInfo.isHostingTests { dictation.installShortcut() }
         SpeechModel.shared.use(folder: AppInfo.supportDirectory.appending(path: "Speech", directoryHint: .isDirectory))
         #if DEBUG
-        if let sample = ProcessInfo.processInfo.environment["KUVO_DEMO_WHISPER"] { SpeechModel.shared.showSample(sample) }
+        // `download` starts the real one, as voice input's first use does.
+        if let sample = ProcessInfo.processInfo.environment["KUVO_DEMO_WHISPER"] {
+            if sample == "download" { SpeechModel.shared.download() } else { SpeechModel.shared.showSample(sample) }
+        }
         #endif
     }
 
