@@ -43,9 +43,9 @@ beforeEach(() => {
 });
 
 // What the handler answers a phone's request, whole.
-async function ask(handle, method, p, body) {
+async function ask(handle, method, p, body, signal) {
   const parts = [];
-  for await (const part of handle({ method, path: p, headers: {}, body: body ? Buffer.from(JSON.stringify(body)) : Buffer.alloc(0) }, {}, undefined)) parts.push(part);
+  for await (const part of handle({ method, path: p, headers: {}, body: body ? Buffer.from(JSON.stringify(body)) : Buffer.alloc(0) }, {}, signal)) parts.push(part);
   const text = Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString();
   let json;
   try { json = JSON.parse(text); } catch {}
@@ -312,7 +312,8 @@ const kit = {
 
 // An engine and the agents' bridge as a new bot needs them: conversations made, what each was told,
 // its greeting; the providers ready; group chats there (`chats`), listed and changed.
-async function makingEngine(ready = ["opencode"], rules = {}) {
+// `heard`: told of each request as it comes, before it's answered.
+async function makingEngine(ready = ["opencode"], rules = {}, heard = () => {}) {
   const asked = [];
   const chats = new Map();
   let next = 1;
@@ -322,6 +323,7 @@ async function makingEngine(ready = ["opencode"], rules = {}) {
     request.on("end", () => {
       const given = body ? JSON.parse(body) : undefined;
       asked.push({ method: request.method, url: request.url, body: given });
+      heard(asked.at(-1));
       const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
       if (request.method === "GET" && request.url === "/api/provider") return reply({ data: ready.map(id => ({ id })) });
       if (request.method === "POST" && request.url === "/api/session") return reply({ data: { id: `ses_made${next++}` } });
@@ -427,6 +429,23 @@ test("what's missing or unknown is said, and nothing is made", async () => {
     }
     assert.deepEqual(link.listBots(), []);
     assert.equal(engine.asked.some(each => each.url === "/api/session"), false);
+  } finally {
+    engine.close();
+  }
+});
+
+test("a bot whose making the phone leaves mid-way (it cancels, or its connection drops) is made whole, not left as a conversation without its bot", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  const gone = new AbortController();
+  // The phone goes once its conversation is made.
+  const engine = await makingEngine(["opencode"], {}, request => { if (request.method === "PATCH") gone.abort(); });
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+    await ask(handle, "POST", "kuvo/bots", { name: "Scout" }, gone.signal);
+    const [made] = link.listBots();
+    assert.equal(made?.session, "ses_made1", "listed, with its conversation");
+    assert.ok(engine.asked.some(each => each.method === "PUT" && each.url === "/api/experimental/session/ses_made1/instructions/entries/kuvo.bot"), "its conversation told what it is");
+    assert.equal(engine.asked.some(each => each.method === "DELETE"), false);
   } finally {
     engine.close();
   }
@@ -623,6 +642,28 @@ test("with the Mac closed, a bot here is deleted from a phone as Delete Bot… d
     engine.close();
     fs.rmSync(path.join(home, "trash"), { recursive: true, force: true });
     fs.rmSync(keys, { recursive: true, force: true });
+  }
+});
+
+test("a bot deleted from a phone that leaves mid-way is deleted whole: its group chats go on without it, and its conversation goes", async t => {
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  bot("bot_scout00001", { name: "Scout" });
+  bot("bot_ada0000001", { name: "Ada" });
+  fs.rmSync(path.join(home, "trash"), { recursive: true, force: true });
+  const gone = new AbortController();
+  // The phone goes once its folder is in the trash, as the bot's group chats are looked up.
+  const engine = await makingEngine(["opencode"], {}, request => { if (request.url === "/api/kuvo/groups") gone.abort(); });
+  const agents = await runningAs("kuvo-agents", t);
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => ({ port: engine.port, password: "p", pid: agents }));
+    engine.chats.set("grp_release001", { group: { id: "grp_release001", name: "Release", members: ["bot_scout00001", "bot_ada0000001"] }, status: "active" });
+    await ask(handle, "DELETE", "kuvo/bots/bot_scout00001", undefined, gone.signal);
+    assert.deepEqual(link.listBots().map(each => each.id), ["bot_ada0000001"]);
+    assert.deepEqual(engine.chats.get("grp_release001").group.members, ["bot_ada0000001"], "its group chat goes on without it");
+    assert.ok(engine.asked.some(each => each.method === "DELETE" && each.url === "/api/session/ses_bot_scout00001"), "its conversation goes");
+  } finally {
+    engine.close();
+    fs.rmSync(path.join(home, "trash"), { recursive: true, force: true });
   }
 });
 

@@ -12,7 +12,7 @@ import { BOTS, HERE, IS_MAC, K, RUN } from "../home";
 import { hostTrash } from "../host-interface";
 import { botVariable, deleteKey, keyNames } from "../keys";
 import { botPersonalities } from "../personalities/library";
-import { botHere, botLook, botModel, isModel, isMoving, MOVING, noteBotsChanged, sameModel } from "./here";
+import { BOT_STEP, botHere, botLook, botModel, isModel, isMoving, MOVING, noteBotsChanged, sameModel } from "./here";
 import { givenJob, jobOf, writeJob } from "./jobs";
 import { NO_KIT, readKit, runsWithAgents } from "./kit";
 import { listBots } from "./list";
@@ -193,8 +193,9 @@ function noteDeleted(id: string): void {
 // `DELETE kuvo/bots/<id>`, as the Mac's Delete Bot…: a bot that lives here goes, its folder (its
 // memory, wake-ups and what it made) to Kuvo Code's trash here, then its keys of its own, its
 // place in the group chats here and its conversation. It's noted for the Mac (`noteDeleted`) first,
-// so it lets the bot go too.
-export async function deleteBot(id: string, readEngine: () => Target, readBridge: () => Target | null, signal?: AbortSignal): Promise<DeletedAnswer> {
+// so it lets the bot go too. Once its folder has gone, the rest is done whatever becomes of the
+// phone's request.
+export async function deleteBot(id: string, readEngine: () => Target, readBridge: () => Target | null): Promise<DeletedAnswer> {
   const no = (status: OtherStatus, message: string): DeletedAnswer => ({ status, value: { message } });
   const here = botHere(id);
   if (!here) return no(404, "That bot isn’t there any more.");
@@ -228,20 +229,21 @@ export async function deleteBot(id: string, readEngine: () => Target, readBridge
   try {
     agents = readBridge();
   } catch {}
-  // Its group chats here go on without it, as the Mac's leave it.
+  // Its group chats here go on without it, as the Mac's leave it. (Gone from its folder, it's
+  // deleted whole, whatever becomes of the phone's request.)
   if (agents) {
-    const listed = await askGroups<BridgeGroups>(agents, "GET", "", undefined, signal).catch(() => null);
+    const listed = await askGroups<BridgeGroups>(agents, "GET", "", undefined, AbortSignal.timeout(BOT_STEP)).catch(() => null);
     for (const chat of listed?.status === 200 && Array.isArray(listed.value?.data) ? listed.value.data : []) {
       const members = chat?.group?.members;
       if (!Array.isArray(members) || !members.includes(id)) continue;
-      await askGroups(agents, "PATCH", `/${encodeURIComponent(chat.group.id)}`, { members: members.filter(member => member !== id) }, signal).catch(() => {});
+      await askGroups(agents, "PATCH", `/${encodeURIComponent(chat.group.id)}`, { members: members.filter(member => member !== id) }, AbortSignal.timeout(BOT_STEP)).catch(() => {});
     }
   }
   let target: Target | null | undefined;
   try {
     target = here.agents ? agents : readEngine();
   } catch {}
-  if (target) await call(target, "DELETE", `/api/session/${encodeURIComponent(here.session)}`, undefined, signal).catch(() => {});
+  if (target) await call(target, "DELETE", `/api/session/${encodeURIComponent(here.session)}`, undefined, AbortSignal.timeout(BOT_STEP)).catch(() => {});
   noteBotsChanged();
   return { status: 200, value: {} };
 }

@@ -419,6 +419,7 @@ function botHere(id) {
 }
 var isMoving = (folder) => (textOf(path4.join(folder, "paused")) ?? "").trim() === "moving";
 var MOVING = "It’s moving to another computer. Try again once it’s there.";
+var BOT_STEP = 30000;
 var isModel = (model) => Boolean(model) && typeof model.id === "string" && typeof model.providerID === "string";
 var botLook = (look) => ({ color: look.color, shape: look.shape, face: look.face });
 var botModel = (model) => ({ id: model.id, providerID: model.providerID, ...typeof model.variant === "string" ? { variant: model.variant } : {} });
@@ -5656,9 +5657,9 @@ async function makeBot(given, readEngine, readBridge, machine, signal) {
     if (typeof made?.id !== "string" || !made.id)
       throw new Error("No conversation was made.");
     session = { id: made.id };
-    await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { kuvo: { bot: id } } }, signal).catch(() => {});
+    await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { kuvo: { bot: id } } }, AbortSignal.timeout(BOT_STEP)).catch(() => {});
     const told = botInstructions(kit, name, folder, personality?.instruction, project);
-    await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, signal);
+    await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, AbortSignal.timeout(BOT_STEP));
     fs30.writeFileSync(path29.join(folder, "session"), session.id);
     noteTold(folder, { session: session.id, instructions: toldDigest(told), rules: folder });
     fs30.writeFileSync(path29.join(folder, "directory"), directory);
@@ -5673,13 +5674,13 @@ async function makeBot(given, readEngine, readBridge, machine, signal) {
     fs30.writeFileSync(path29.join(folder, "bot.json"), JSON.stringify(described, null, 2));
   } catch (error) {
     if (session?.id)
-      await call(target, "DELETE", `/api/session/${encodeURIComponent(session.id)}`, undefined, signal).catch(() => {});
+      await call(target, "DELETE", `/api/session/${encodeURIComponent(session.id)}`, undefined, AbortSignal.timeout(BOT_STEP)).catch(() => {});
     discard();
     return no(503, `The bot couldn’t be made: ${error?.message ?? error}`);
   }
   const firstMessage = (template ? firstMessageOf(template.job, template.instructions) || null : null) ?? shared;
   if (!firstMessage)
-    await call(target, "POST", `/api/session/${encodeURIComponent(session.id)}/synthetic`, { text: kit.greeting, description: "A new bot's first message" }, signal).catch(() => {});
+    await call(target, "POST", `/api/session/${encodeURIComponent(session.id)}/synthetic`, { text: kit.greeting, description: "A new bot's first message" }, AbortSignal.timeout(BOT_STEP)).catch(() => {});
   noteBotsChanged();
   const bot = listBots(machine).find((each) => each.id === id);
   return { status: 201, value: { bot, firstMessage: firstMessage ?? null } };
@@ -5840,7 +5841,7 @@ function noteDeleted(id) {
   fs31.writeFileSync(`${DELETED_FILE}.new`, JSON.stringify({ deleted: [id, ...kept].slice(0, 500) }));
   fs31.renameSync(`${DELETED_FILE}.new`, DELETED_FILE);
 }
-async function deleteBot(id, readEngine, readBridge, signal) {
+async function deleteBot(id, readEngine, readBridge) {
   const no = (status, message) => ({ status, value: { message } });
   const here = botHere(id);
   if (!here)
@@ -5875,12 +5876,12 @@ async function deleteBot(id, readEngine, readBridge, signal) {
     agents = readBridge();
   } catch {}
   if (agents) {
-    const listed = await askGroups(agents, "GET", "", undefined, signal).catch(() => null);
+    const listed = await askGroups(agents, "GET", "", undefined, AbortSignal.timeout(BOT_STEP)).catch(() => null);
     for (const chat of listed?.status === 200 && Array.isArray(listed.value?.data) ? listed.value.data : []) {
       const members = chat?.group?.members;
       if (!Array.isArray(members) || !members.includes(id))
         continue;
-      await askGroups(agents, "PATCH", `/${encodeURIComponent(chat.group.id)}`, { members: members.filter((member) => member !== id) }, signal).catch(() => {});
+      await askGroups(agents, "PATCH", `/${encodeURIComponent(chat.group.id)}`, { members: members.filter((member) => member !== id) }, AbortSignal.timeout(BOT_STEP)).catch(() => {});
     }
   }
   let target;
@@ -5888,7 +5889,7 @@ async function deleteBot(id, readEngine, readBridge, signal) {
     target = here.agents ? agents : readEngine();
   } catch {}
   if (target)
-    await call(target, "DELETE", `/api/session/${encodeURIComponent(here.session)}`, undefined, signal).catch(() => {});
+    await call(target, "DELETE", `/api/session/${encodeURIComponent(here.session)}`, undefined, AbortSignal.timeout(BOT_STEP)).catch(() => {});
   noteBotsChanged();
   return { status: 200, value: {} };
 }
@@ -8940,7 +8941,7 @@ async function* botRoute(context, oneBot) {
   } catch {
     return yield* json(404, { message: "That bot isn’t there any more." });
   }
-  const { status, value } = request.method.toUpperCase() === "PATCH" ? await changeBot(id, parsed(request.body), readEngine, bridge, info.name, signal) : await deleteBot(id, readEngine, bridge, signal);
+  const { status, value } = request.method.toUpperCase() === "PATCH" ? await changeBot(id, parsed(request.body), readEngine, bridge, info.name, signal) : await deleteBot(id, readEngine, bridge);
   return yield* json(status, value);
 }
 async function* arrivedRoute(context, arrived) {
