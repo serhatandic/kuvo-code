@@ -696,10 +696,11 @@ struct Composer: View {
                 if loopChoices != nil || customLoop { return ("Pick how often, then write what to do each time.", false) }
                 return ("Can’t tell how often from that. Start with one like “every 30 min” or “weekdays at 9”.", true)
             }
-            let place = folders.first.flatMap(RemoteFolder.machine(of:)).map { "on \($0), with this Mac closed too" } ?? "on this Mac, also with the window closed"
+            // Where it runs only when it isn't this Mac.
+            let place = folders.first.flatMap(RemoteFolder.machine(of:)).map { " · on \($0)" } ?? ""
             // A wake-up sends words: what's attached goes with the first message, or stays.
             let attached = files.isEmpty ? "" : schedule.keepsTimeOfDay ? " · attachments stay here" : " · attachments go with the first one only"
-            return ("\(schedule.title) · \(schedule.firstPhrase(now: .now)) · \(place)\(attached)", false)
+            return ("\(schedule.title) · \(schedule.firstPhrase(now: .now))\(place)\(attached)", false)
         case .review:
             if reviewerChoices != nil { return ("Pick who reads the changes, then add what to look at if you like.", false) }
             let command = reviewCommand(rest)

@@ -53,7 +53,7 @@ public enum Keyword: String, CaseIterable, Sendable, Hashable {
     public var hint: String {
         switch self {
         case .goal: "Checked after each turn. The agent keeps going until it’s met."
-        case .loop: "Sends it on a schedule, also with the window closed."
+        case .loop: "Repeats on a schedule."
         case .plan: "Switches to Plan: the agent explores and plans, and changes no files."
         case .review: "Reads the changes not committed yet with fresh eyes, and lists what it finds."
         case .handoff: "Writes a handoff note, then carries on in a fresh conversation from it."

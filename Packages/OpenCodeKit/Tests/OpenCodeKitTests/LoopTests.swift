@@ -60,7 +60,7 @@ private let british = Locale(identifier: "en_GB")
 }
 
 @Test func theHintSaysWhenItFirstSends() {
-    #expect(LoopSchedule(every: .minutes(5)).firstPhrase(now: monday, calendar: calendar, locale: british) == "now, then every 5 minutes")
+    #expect(LoopSchedule(every: .minutes(5)).firstPhrase(now: monday, calendar: calendar, locale: british) == "starts now")
     // The time as the locale writes it (9:00 or 09:00, by the system's version of it).
     let nine = calendar.date(bySettingHour: 9, minute: 0, second: 0, of: monday)!
     var style = Date.FormatStyle(date: .omitted, time: .shortened, locale: british, calendar: calendar)
