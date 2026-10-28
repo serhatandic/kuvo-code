@@ -1051,6 +1051,35 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     checkout, not the project's folder in it; `~/` at the home folder. `canMake` (for one not there yet): it can be made; `inside`: it's in the repository's
     checkout, and `ignored` whether git ignores it there (if not, git lists each worktree as new
     files).
+- Changes (`git`, bridge 0.9.93): a project's changes as the Changes panel shows and works them,
+  by the box's own git in its own folders, so a machine's work with the Mac closed and from a
+  phone. A client parses the diff itself. Scopes: `uncommitted` (the default), `unstaged`,
+  `staged`, `branch`. `404 {"message"}` for a folder that isn't there, `400` for a scope or a
+  file that makes no sense (a file is a path in the repository, never absolute or climbing out).
+  - `POST kuvo/git/changes {"directory", "scope"?, "base"?}` → `{"repository": false}` outside a
+    repository, else `{"repository": true, root, against, patch, untracked, hashes, uncommitted}`:
+    `root` the repository's top folder; `against` what it was compared with (`HEAD`, where the
+    branch left `base` for `branch`, or git's empty tree before the first commit); `patch` git's
+    diff of the folder's files with each whole file as context (`a/` and `b/` prefixes, paths not
+    quoted, renames found); `untracked` the new files git doesn't know (not for `staged`; a
+    repository inside this one ends in `/`), and `hashes` git's hash of each, by path, so a client
+    reads one again (`kuvo/file`) only when it changed; `uncommitted`, anything not committed yet
+    (always true but for `branch`). `500 {"message"}` when git couldn't say.
+  - `POST kuvo/git/stage`, `…/unstage` or `…/discard` with `{"root", "path", "oldPath"?, "status":
+    "added|deleted|modified|renamed", "scope"?}` → `200 {}`, or `422 {"message"}` with what went
+    wrong. Discard follows the scope (in `unstaged` only what isn't staged, otherwise back to the
+    last commit); a new file, and anything in the way of one coming back (a folder where a file
+    was, a file where a folder was), goes to the Trash on a Mac and to `~/.kuvo-code/trash`
+    elsewhere, never deleted for good.
+  - `GET kuvo/git/show?root=<repository>&object=<HEAD:path | :path>`: a file as git keeps it (a
+    picture's old side), its bytes; `404` for one git doesn't have, `413` over 25 MB.
+  - `POST kuvo/git/commit {"directory", "message", "push"?, "author"?}` commits what's staged, or
+    everything in the folder when nothing is, and pushes when asked (a new branch is pushed and
+    tracked) → `200 {}`, or `422 {"message"}` with git's words (a failed push: committed, but the
+    push didn't go through). `author`: `GIT_AUTHOR_NAME`, `…_EMAIL`, `GIT_COMMITTER_NAME`,
+    `…_EMAIL` from your shell, the only settings taken along. `POST kuvo/git/commit-diff
+    {"directory"}` → `{"diff", "staged"}`: what a commit would take, cut short, for writing its
+    message.
 - `GET kuvo/folders[?path=<folder>&hidden=1]` (`folders`): the folders in one of this box's folders,
   for a client to choose one (Settings › Worktrees' folder) as a folder panel does → `{"path",
   "home", "parent", "folders": [{name, repository?}]}`, ordered as Finder orders names, without
@@ -1526,6 +1555,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `engine.restart` | `POST kuvo/engine/restart` |
 | `file` | `kuvo/file` |
 | `folders` | `kuvo/folders` |
+| `git` | `kuvo/git/…`: Changes (bridge 0.9.93) |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
 | `handoff` | `kuvo/agents/api/kuvo/handoff…`: handoffs |

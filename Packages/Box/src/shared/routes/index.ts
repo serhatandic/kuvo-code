@@ -7,6 +7,7 @@ import { ARTIFACT_ROUTES } from "./artifacts";
 import { ASK_ROUTES } from "./asks";
 import { BOT_ROUTES } from "./bots";
 import { BOX_ROUTES } from "./box";
+import { CHANGES_ROUTES } from "./changes";
 import { GROUP_ROUTES } from "./groups";
 import { INTEGRATION_ROUTES } from "./integrations";
 import { MAC_ROUTES } from "./mac";
@@ -33,6 +34,7 @@ export const ROUTES: RouteShape[] = [
   ...ASK_ROUTES,
   ...BOT_ROUTES,
   ...BOX_ROUTES,
+  ...CHANGES_ROUTES,
   ...MAC_ROUTES,
   ...GROUP_ROUTES,
   ...INTEGRATION_ROUTES,

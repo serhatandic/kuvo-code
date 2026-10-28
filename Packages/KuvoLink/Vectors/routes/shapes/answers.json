@@ -2126,6 +2126,9 @@
             "literal": "folders"
            },
            {
+            "literal": "git"
+           },
+           {
             "literal": "goals"
            },
            {
@@ -2336,6 +2339,9 @@
            },
            {
             "literal": "folders"
+           },
+           {
+            "literal": "git"
            },
            {
             "literal": "goals"
@@ -2932,6 +2938,88 @@
         }
        ]
       }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/changes",
+   "answers": {
+    "200": {
+     "oneOf": [
+      {
+       "object": {
+        "repository": {
+         "literal": false
+        }
+       }
+      },
+      {
+       "object": {
+        "repository": {
+         "literal": true
+        },
+        "root": "string",
+        "against": "string",
+        "patch": "string",
+        "untracked": {
+         "list": "string"
+        },
+        "hashes": {
+         "map": "string"
+        },
+        "uncommitted": "bool"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/stage",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/unstage",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/discard",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/git/show",
+   "answers": {
+    "200": "bytes"
+   }
+  },
+  {
+   "route": "POST kuvo/git/commit",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/commit-diff",
+   "answers": {
+    "200": {
+     "object": {
+      "diff": "string",
+      "staged": "bool"
      }
     }
    }
