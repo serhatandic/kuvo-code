@@ -76,10 +76,12 @@ function folderAt(value: unknown): string | null {
 }
 
 /** A file's path in a repository, as git names it: relative, never climbing out of it, and
- * never the repository itself ("." or "a//b" aren't one). */
+ * never the repository itself ("." or "a//b" aren't one). A repository inside this one is listed
+ * as a folder ("web/"), and named without its "/". */
 function inRepository(value: unknown): string | null {
-  if (typeof value !== "string" || !value || path.isAbsolute(value) || value.endsWith("/")) return null;
-  return value.split("/").every(part => part && part !== "." && part !== "..") ? value : null;
+  if (typeof value !== "string" || path.isAbsolute(value)) return null;
+  const name = value.endsWith("/") ? value.slice(0, -1) : value;
+  return name && name.split("/").every(part => part && part !== "." && part !== "..") ? name : null;
 }
 
 const realOr = (folder: string) => {

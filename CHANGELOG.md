@@ -27,6 +27,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Searching what was said finds what a subagent said too: its conversation comes up, with the words found, on the Mac and the iPhone.
 - A machine another Mac runs says which in **Settings › Machines** ("runs from Studio"), with **Make This Mac Its Home…** to run it from this Mac instead: its engine starts again with this Mac's accounts, and its sessions, bots and settings stay. Your phone can do the same from the machine's settings.
 - A session's subagents show under it in the sidebar, folded until you click the count beside it: on a line under the session, each with its status, opening its own conversation with the way back. A subagent you open no longer takes a tab in the side panel.
+- A subagent that another subagent started says, over its task, which one did, as its header does, rather than "From the main agent"; one a bot started names the bot.
 - In a session on a remote machine, the files you attach go to the machine with your message and stay there for two weeks for the agent to open, whatever the model can read; one over 50 MB stays on your Mac, and the message says so.
 - After an update with new features, **What's New** shows its highlights once, each with **Try It** where it opens something; **Help › What's New** shows them again. New keywords in the **/** list carry a small **New** until you use them.
 - Searching the sidebar finds a bot by its name, and shows a bot as it is in the sidebar, with its face and what it's doing; found by what was said to it, the words found show under its name.
@@ -133,6 +134,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - With VoiceOver, removing a message or putting a goal away takes you to its Undo line, which undoes it; stopping a goal says the messages waiting stay paused.
 - The servers behind Outlook and Microsoft 365, Todoist, CalDAV calendars, Apple Calendar and Reminders, and Chrome DevTools are updated to their latest versions, with their makers' fixes.
 - Kuvo Code runs opencode 2.2.0: long conversations load and compact better, a busy provider is tried again instead of being reported as a full conversation, and HEIC, AVIF and QuickTime attachments are recognized.
+- Diagrams in replies and in a Markdown file's preview have a new look, with tidier layouts, square-cornered lines and soft shadows (Mermaid 12).
 
 ## 0.7.2
 

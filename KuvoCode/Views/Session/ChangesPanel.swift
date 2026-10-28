@@ -1,4 +1,5 @@
 import AppKit
+import ClientChanges
 import ClientDesign
 import OpenCodeKit
 import SwiftUI
@@ -883,46 +884,6 @@ extension DiffLine {
 }
 
 // MARK: - Folding
-
-/// Shows each change with a few lines around it and folds the long unchanged stretches.
-enum DiffFolding {
-    static let context = 3
-
-    struct Row: Identifiable {
-        enum Kind { case line(Int), fold(Range<Int>), gap }
-        var id: String
-        var kind: Kind
-    }
-
-    static func rows(for lines: [DiffLine], expanded: Set<String>, file: String) -> [Row] {
-        var rows: [Row] = []
-        var index = 0
-        while index < lines.count {
-            if lines[index].gapBefore { rows.append(Row(id: "\(file)#gap\(index)", kind: .gap)) }
-            guard lines[index].kind == .context else {
-                rows.append(Row(id: "\(file)#\(index)", kind: .line(index)))
-                index += 1
-                continue
-            }
-            // A run of unchanged lines, up to the next change (or a gap git left).
-            var end = index + 1
-            while end < lines.count, lines[end].kind == .context, !lines[end].gapBefore { end += 1 }
-            let keepStart = index == 0 || lines[index].gapBefore ? 0 : context
-            let keepEnd = end == lines.count || lines[end].gapBefore ? 0 : context
-            let foldStart = index + keepStart, foldEnd = end - keepEnd
-            let foldID = "\(file)#fold\(foldStart)"
-            if foldEnd - foldStart > 3, !expanded.contains(foldID) {
-                rows += (index..<foldStart).map { Row(id: "\(file)#\($0)", kind: .line($0)) }
-                rows.append(Row(id: foldID, kind: .fold(foldStart..<foldEnd)))
-                rows += (foldEnd..<end).map { Row(id: "\(file)#\($0)", kind: .line($0)) }
-            } else {
-                rows += (index..<end).map { Row(id: "\(file)#\($0)", kind: .line($0)) }
-            }
-            index = end
-        }
-        return rows
-    }
-}
 
 private struct FoldRow: View {
     /// Nil for a gap that can't be opened (git left those lines out).

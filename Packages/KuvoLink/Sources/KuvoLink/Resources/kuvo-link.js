@@ -8608,9 +8608,10 @@ function folderAt(value) {
   }
 }
 function inRepository(value) {
-  if (typeof value !== "string" || !value || path42.isAbsolute(value) || value.endsWith("/"))
+  if (typeof value !== "string" || path42.isAbsolute(value))
     return null;
-  return value.split("/").every((part) => part && part !== "." && part !== "..") ? value : null;
+  const name = value.endsWith("/") ? value.slice(0, -1) : value;
+  return name && name.split("/").every((part) => part && part !== "." && part !== "..") ? name : null;
 }
 var realOr2 = (folder) => {
   try {

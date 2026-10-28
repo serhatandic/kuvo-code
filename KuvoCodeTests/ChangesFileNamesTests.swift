@@ -1,3 +1,4 @@
+import ClientChanges
 import Foundation
 import Testing
 @testable import KuvoCode
