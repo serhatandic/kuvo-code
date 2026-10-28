@@ -557,26 +557,6 @@ final class Bots {
         Task { _ = try? await client.send("POST", "kuvo/bots/retell") }
     }
 
-    // MARK: Moving
-
-    /// A bot that moved to another computer (`Moves`): it lives on `machine` (nil: this Mac) from
-    /// now on, in `folder`, with its conversation carried there (`session`, the same ID). Its box
-    /// there makes it its own (`kuvo/bots/<id>/arrived`): what its folder says of where it is and
-    /// the clock it goes by, its rules there (its folder, that computer's Settings › Permissions),
-    /// and what it's told there. One that can't be asked now does so at the bot's next run there.
-    func arrived(_ id: String, on machine: String?) async {
-        let box = machine ?? BoxClient.mac
-        guard let client = client(box) else { return }
-        struct Answer: Decodable { var bot: ListedBot }
-        let path = "kuvo/bots/" + (id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id) + "/arrived"
-        do {
-            let answer = try await client.value(Answer.self, "POST", path)
-            take(one: answer.bot, from: box)
-        } catch {
-            log.error("A moved bot wasn't made its box's yet: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
     // MARK: Words
 
     /// A name as one line of plain text, as a name field shows it: line breaks, control and

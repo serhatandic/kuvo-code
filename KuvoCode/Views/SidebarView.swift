@@ -572,8 +572,14 @@ struct SidebarView: View {
     private func newChat(on machine: String) {
         Task {
             struct Info: Decodable { var chats: String? }
-            guard let chats = try? await app.box(machine).value(Info.self, "GET", "kuvo/info").chats else { return }
-            newSession(RemoteFolder.folder(chats, on: machine))
+            do {
+                guard let chats = try await app.box(machine).value(Info.self, "GET", "kuvo/info").chats else {
+                    throw BoxRefusal(status: 404, message: "\(app.machines.engine(machine)?.machine.name ?? machine) needs a newer Kuvo Code to start chats there. It updates by itself overnight.")
+                }
+                newSession(RemoteFolder.folder(chats, on: machine))
+            } catch {
+                Modal.show(error)
+            }
         }
     }
 

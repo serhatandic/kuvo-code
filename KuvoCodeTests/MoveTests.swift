@@ -7,7 +7,8 @@ import Testing
 /// `moves.test.js`); the app asks once and goes by what each box says of its moves. While this
 /// Mac's box says one is under way, what it moves is held here: it shows as moving, nothing is sent
 /// to it, and a copy its box doesn't live on yet is left out of the list. Once the box says it's
-/// over, what waited goes, once. This Mac's box is the real one, its engine a stand-in.
+/// over, what waited goes, once, and what came here is listed, whoever asked for the move. This
+/// Mac's box is the real one, its engine a stand-in.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct MoveTests {
     let engine = StubEngine(port: 47908)
@@ -55,6 +56,8 @@ import Testing
         #expect(!Moves.isFrozen("ses_other"))
         #expect(app.moves.isPending("ses_trip"))
         #expect(app.workspace.movedAway["ses_copy"] == .some(nil), "the copy coming here isn't this Mac's yet")
+        await app.workspace.refresh()
+        #expect(app.workspace.session("ses_copy") == nil, "nor listed")
         #expect(app.workspace.movedAway["ses_trip"] == nil, "the one leaving lives here until it's switched")
 
         // A reply sent now waits for it, and goes once it's over.
@@ -65,6 +68,8 @@ import Testing
         #expect(try await reply.value)
         #expect(engine.requests("POST", "/api/session/ses_trip/prompt").count == 1)
         #expect(app.workspace.movedAway.isEmpty)
+        // The copy's this Mac's now, though a phone asked for the move: listed.
+        try await until { app.workspace.session("ses_copy") != nil }
         #expect(!app.moves.isPending("ses_trip"))
     }
 }
