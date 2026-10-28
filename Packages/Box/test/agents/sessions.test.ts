@@ -2324,17 +2324,17 @@ process.stdin.on("data", (chunk) => {
   })
 
   test("a limit hit while its file can't be written (a full disk) is still held, and stops nothing", () => {
-    const folder = mkdtempSync(join(root, "auto-"))
-    const held = new Auto(folder)
+    // Its folder where a file is: nothing can be written there, whoever runs it.
+    const blocked = join(mkdtempSync(join(root, "auto-")), "file")
+    writeFileSync(blocked, "")
+    const held = new Auto(join(blocked, "auto"))
     const error = console.error
-    chmodSync(folder, 0o500)
     console.error = () => {}
     try {
       held.hold({ providerID: "alpha", modelID: "one" }, { scope: "model", resetsAt: Date.now() + 60_000 })
       expect(held.isHeld({ providerID: "alpha", modelID: "one" })).toBeTruthy()
     } finally {
       console.error = error
-      chmodSync(folder, 0o700)
     }
   })
 

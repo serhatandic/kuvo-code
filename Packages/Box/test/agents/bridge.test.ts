@@ -173,20 +173,20 @@ describe("a session's files", () => {
       turn.startStep()
       turn.blockDelta("text-0", "text", "Done.")
       turn.endStep()
-      // Nothing more can be written there.
-      chmodSync(join(folder, "ses_full"), 0o500)
+      // Nothing more can be written there, whoever runs it: a file where its folder was.
+      rmSync(join(folder, "ses_full"), { recursive: true, force: true })
+      writeFileSync(join(folder, "ses_full"), "")
       console.error = () => {}
       turn.finish("succeeded")
       expect(turn.isEnded).toBe(true)
       // Room again: written.
-      chmodSync(join(folder, "ses_full"), 0o700)
+      rmSync(join(folder, "ses_full"))
       store.flush()
       const kept = JSON.parse(readFileSync(join(folder, "ses_full", "messages.json"), "utf8"))
       expect(kept.at(-1)).toMatchObject({ type: "idle", outcome: "succeeded" })
       expect(JSON.stringify(kept)).toContain("Done.")
     } finally {
       console.error = error
-      chmodSync(join(folder, "ses_full"), 0o700)
       rmSync(folder, { recursive: true, force: true })
     }
   })
