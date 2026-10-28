@@ -72,9 +72,9 @@ struct SidebarView: View {
     /// Sessions whose conversations have the search, with the words around it.
     /// What each box found in its conversations, by the box: one's earlier finds stay until it
     /// answers the newer search, as on the phone.
-    @State private var conversationFinds: [String: [(session: Session, snippet: String)]] = [:]
+    @State private var conversationFinds: [String: [Workspace.ConversationFind]] = [:]
     /// Everything found in conversations, the latest first.
-    private var conversationResults: [(session: Session, snippet: String)] {
+    private var conversationResults: [Workspace.ConversationFind] {
         Array(conversationFinds.values.flatMap(\.self).sorted { $0.session.time.updated > $1.session.time.updated }.prefix(20))
     }
     @State private var isSearchingConversations = false
@@ -517,7 +517,8 @@ struct SidebarView: View {
             ForEach(inConversations, id: \.found.id) { result in
                 let show = {
                     selection = result.found.id
-                    workspace.model(for: result.found.id)?.showFind(search.trimmingCharacters(in: .whitespaces))
+                    // A subagent's words aren't in the conversation itself: nothing there to find.
+                    if result.subagent == nil { workspace.model(for: result.found.id)?.showFind(search.trimmingCharacters(in: .whitespaces)) }
                 }
                 switch result.found {
                 case .bot(let bot):

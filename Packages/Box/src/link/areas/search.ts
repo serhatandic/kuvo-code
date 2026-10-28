@@ -1,6 +1,7 @@
 // What was said in this box's conversations, searched (`kuvo/search`), for a client's sidebar
-// search: every session's (archived ones too, the coding agents' too, not subagents'), the latest
-// first, each with the words around its first mention. Only what was said and worked on is
+// search: every session's (archived ones too, the coding agents' too), the latest first, each with
+// the words around its first mention. A subagent's words find the conversation it works for, which
+// shows what it found. Only what was said and worked on is
 // searched: no names of who's speaking, none of the app's words for a step.
 //
 // Each conversation's text is kept in the box's `search` folder until its session changes, so a
@@ -9,7 +10,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { conversationOf, rootSessions } from "../engine/conversations";
+import { conversationOf, everySession } from "../engine/conversations";
 import type { EngineMessage } from "../engine/conversations";
 import { isHiddenRun } from "../engine/sessions";
 import type { EngineSession } from "../engine/sessions";
@@ -53,30 +54,60 @@ export async function* searchRoute(context: RouteContext): AsyncGenerator<Answer
   }
   const agents = (() => { try { return bridge(); } catch { return null; } })();
   if (agents) places.push({ name: "agents", target: agents });
-  const lists = await Promise.all(places.map(place => rootSessions(place.target).then(sessions => ({ place, sessions }), () => ({ place, sessions: null }))));
+  const lists = await Promise.all(places.map(place => everySession(place.target).then(sessions => ({ place, sessions }), () => ({ place, sessions: null }))));
   // Its engine's list it must have: without it, nothing found would say what isn't so. (The coding
   // agents' bridge may be starting: its sessions are left out until it answers.)
   if (!lists[0]!.sessions) return yield* json(503, { message: "This computer's engine didn't answer. Search again in a moment." });
-  const listed = lists.flatMap(({ place, sessions }) => (sessions ?? []).map(session => ({ session, place })))
-    // Not one a group chat or the coding agents run for a seat or a turn: they show where they run.
-    .filter(({ session }) => !isHiddenRun(session))
-    .sort((one, other) => other.session.time.updated - one.session.time.updated);
+  const conversations = lists.flatMap(({ place, sessions }) => byConversation(sessions ?? []).map(conversation => ({ ...conversation, place })))
+    .sort((one, other) => other.top.time.updated - one.top.time.updated);
   const wanted = fold(words);
   const results: SearchFound["results"][number][] = [];
   // The latest first, a few at a time, reading only what changed since; done once there are enough.
-  for (let start = 0; start < listed.length && results.length < limit; start += 4) {
-    const kept = await Promise.all(listed.slice(start, start + 4).map(({ session, place }) => textOf(place.name, place.target, session)));
-    for (const [index, found] of kept.entries()) {
-      const at = found ? found.folded.indexOf(wanted) : -1;
-      if (!found || at < 0 || results.length >= limit) continue;
-      const { session, place } = listed[start + index]!;
+  // In each, its own words first, then its subagents', the latest first.
+  for (let start = 0; start < conversations.length && results.length < limit; start += 4) {
+    const batch = conversations.slice(start, start + 4);
+    const kept = await Promise.all(batch.map(({ top, subagents, place }) => Promise.all([top, ...subagents].map(session => textOf(place.name, place.target, session)))));
+    for (const [index, texts] of kept.entries()) {
+      if (results.length >= limit) break;
+      const { top, subagents, place } = batch[index]!;
+      const which = texts.findIndex(found => found !== null && found.folded.includes(wanted));
+      if (which < 0) continue;
+      const found = texts[which]!;
+      const session = which === 0 ? top : subagents[which - 1]!;
       const text = "text" in found ? found.text : fromDisk(key(place.name, session.id))?.text;
-      if (text !== undefined) results.push({ session: session.id, snippet: snippet(text, at, wanted.length), info: session });
+      if (text === undefined) continue;
+      results.push({ session: top.id, snippet: snippet(text, found.folded.indexOf(wanted), wanted.length), info: top, ...(which === 0 ? {} : { subagent: session }) });
     }
   }
   // Only where the list was read: one that couldn't be keeps what it had.
-  forgetGone(new Set(listed.map(({ session, place }) => key(place.name, session.id))), lists.filter(list => list.sessions).map(list => list.place.name));
+  const known = conversations.flatMap(({ top, subagents, place }) => [top, ...subagents].map(session => key(place.name, session.id)));
+  forgetGone(new Set(known), lists.filter(list => list.sessions).map(list => list.place.name));
   return yield* json(200, { results } satisfies SearchFound);
+}
+
+/** Each conversation of `sessions`: the session at the top, and the subagents working for it, or
+ * for them, the latest first. Not one a group chat or the coding agents run for a seat or a turn,
+ * nor theirs: they show where they run. A subagent whose conversation is gone has none. */
+function byConversation(sessions: EngineSession[]): { top: EngineSession; subagents: EngineSession[] }[] {
+  const byID = new Map(sessions.map(session => [session.id, session]));
+  const topOf = (session: EngineSession): EngineSession | null => {
+    let at = session;
+    for (let depth = 0; at.parentID && depth < 100; depth++) {
+      const above = byID.get(at.parentID);
+      if (!above) return null;
+      at = above;
+    }
+    return at.parentID ? null : at;
+  };
+  const conversations = new Map<string, { top: EngineSession; subagents: EngineSession[] }>();
+  for (const session of sessions) if (!session.parentID && !isHiddenRun(session)) conversations.set(session.id, { top: session, subagents: [] });
+  for (const session of sessions) {
+    if (!session.parentID || isHiddenRun(session)) continue;
+    const top = topOf(session);
+    if (top) conversations.get(top.id)?.subagents.push(session);
+  }
+  for (const conversation of conversations.values()) conversation.subagents.sort((one, other) => other.time.updated - one.time.updated);
+  return [...conversations.values()];
 }
 
 /** A conversation's text's key: where it's read (the engine, the coding agents' bridge), and its session. */

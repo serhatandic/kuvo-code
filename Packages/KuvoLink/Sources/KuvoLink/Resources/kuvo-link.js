@@ -3374,9 +3374,9 @@ async function repairRules(target, here, sessionID) {
 }
 
 // Packages/Box/src/link/engine/conversations.ts
-async function rootSessions(target) {
+async function everySession(target) {
   const all = [];
-  let page = await engineGet(target, "api/session?limit=100&order=desc&parentID=null");
+  let page = await engineGet(target, "api/session?limit=100&order=desc");
   for (let pages = 0;pages < 1000 && page?.data?.length; pages++) {
     all.push(...page.data);
     const cursor = page.cursor?.next;
@@ -8297,26 +8297,60 @@ async function* searchRoute(context) {
   })();
   if (agents)
     places.push({ name: "agents", target: agents });
-  const lists = await Promise.all(places.map((place) => rootSessions(place.target).then((sessions) => ({ place, sessions }), () => ({ place, sessions: null }))));
+  const lists = await Promise.all(places.map((place) => everySession(place.target).then((sessions) => ({ place, sessions }), () => ({ place, sessions: null }))));
   if (!lists[0].sessions)
     return yield* json(503, { message: "This computer's engine didn't answer. Search again in a moment." });
-  const listed = lists.flatMap(({ place, sessions }) => (sessions ?? []).map((session) => ({ session, place }))).filter(({ session }) => !isHiddenRun(session)).sort((one, other) => other.session.time.updated - one.session.time.updated);
+  const conversations = lists.flatMap(({ place, sessions }) => byConversation(sessions ?? []).map((conversation) => ({ ...conversation, place }))).sort((one, other) => other.top.time.updated - one.top.time.updated);
   const wanted = fold(words);
   const results = [];
-  for (let start = 0;start < listed.length && results.length < limit; start += 4) {
-    const kept = await Promise.all(listed.slice(start, start + 4).map(({ session, place }) => textOf2(place.name, place.target, session)));
-    for (const [index, found] of kept.entries()) {
-      const at = found ? found.folded.indexOf(wanted) : -1;
-      if (!found || at < 0 || results.length >= limit)
+  for (let start = 0;start < conversations.length && results.length < limit; start += 4) {
+    const batch = conversations.slice(start, start + 4);
+    const kept = await Promise.all(batch.map(({ top, subagents, place }) => Promise.all([top, ...subagents].map((session) => textOf2(place.name, place.target, session)))));
+    for (const [index, texts] of kept.entries()) {
+      if (results.length >= limit)
+        break;
+      const { top, subagents, place } = batch[index];
+      const which = texts.findIndex((found) => found !== null && found.folded.includes(wanted));
+      if (which < 0)
         continue;
-      const { session, place } = listed[start + index];
+      const found = texts[which];
+      const session = which === 0 ? top : subagents[which - 1];
       const text = "text" in found ? found.text : fromDisk(key(place.name, session.id))?.text;
-      if (text !== undefined)
-        results.push({ session: session.id, snippet: snippet(text, at, wanted.length), info: session });
+      if (text === undefined)
+        continue;
+      results.push({ session: top.id, snippet: snippet(text, found.folded.indexOf(wanted), wanted.length), info: top, ...which === 0 ? {} : { subagent: session } });
     }
   }
-  forgetGone(new Set(listed.map(({ session, place }) => key(place.name, session.id))), lists.filter((list) => list.sessions).map((list) => list.place.name));
+  const known = conversations.flatMap(({ top, subagents, place }) => [top, ...subagents].map((session) => key(place.name, session.id)));
+  forgetGone(new Set(known), lists.filter((list) => list.sessions).map((list) => list.place.name));
   return yield* json(200, { results });
+}
+function byConversation(sessions) {
+  const byID = new Map(sessions.map((session) => [session.id, session]));
+  const topOf = (session) => {
+    let at = session;
+    for (let depth = 0;at.parentID && depth < 100; depth++) {
+      const above = byID.get(at.parentID);
+      if (!above)
+        return null;
+      at = above;
+    }
+    return at.parentID ? null : at;
+  };
+  const conversations = new Map;
+  for (const session of sessions)
+    if (!session.parentID && !isHiddenRun(session))
+      conversations.set(session.id, { top: session, subagents: [] });
+  for (const session of sessions) {
+    if (!session.parentID || isHiddenRun(session))
+      continue;
+    const top = topOf(session);
+    if (top)
+      conversations.get(top.id)?.subagents.push(session);
+  }
+  for (const conversation of conversations.values())
+    conversation.subagents.sort((one, other) => other.time.updated - one.time.updated);
+  return [...conversations.values()];
 }
 var key = (place, id) => `${place}.${id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
 function textOf2(place, target, session) {
@@ -8731,7 +8765,7 @@ import fs43 from "node:fs";
 import path43 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.92";
+var BRIDGE_VERSION = "0.9.93";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

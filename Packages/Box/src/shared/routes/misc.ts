@@ -45,8 +45,10 @@ export type SignInReturned = Infer<typeof SIGN_IN_RETURNED>;
 
 /** Sessions whose conversation has what a search asked for, the latest first (`kuvo/search`):
  * each one's ID, the words around the first mention, and the session as the engine lists it
- * (`info`), for a client that doesn't list it (an older one, archived). */
-export const SEARCH_FOUND = object({ results: list(object({ session: string, snippet: string, info: any })) });
+ * (`info`), for a client that doesn't list it (an older one, archived). Words a subagent's
+ * conversation has find the one it works for, with that subagent's session as listed
+ * (`subagent`). */
+export const SEARCH_FOUND = object({ results: list(object({ session: string, snippet: string, info: any, "subagent?": any })) });
 
 export type SearchFound = Infer<typeof SEARCH_FOUND>;
 
