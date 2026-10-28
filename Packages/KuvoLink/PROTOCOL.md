@@ -1074,7 +1074,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     (always true but for `branch`). `500 {"message"}` when git couldn't say.
   - `POST kuvo/git/stage`, `…/unstage` or `…/discard` with `{"root", "path", "oldPath"?, "status":
     "added|deleted|modified|renamed", "scope"?}` → `200 {}`, or `422 {"message"}` with what went
-    wrong. Discard follows the scope (in `unstaged` only what isn't staged, otherwise back to the
+    wrong. `path` as `kuvo/git/changes` lists it: a repository inside this one may end in "/"
+    ("web/", bridge 0.9.95). Discard follows the scope (in `unstaged` only what isn't staged, otherwise back to the
     last commit); a new file, and anything in the way of one coming back (a folder where a file
     was, a file where a folder was), goes to the Trash on a Mac and to `~/.kuvo-code/trash`
     elsewhere, never deleted for good.

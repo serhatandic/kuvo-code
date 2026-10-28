@@ -143,3 +143,16 @@ public enum UnsearchedReason: Sendable, Equatable {
         }
     }
 }
+
+/// Who a subagent's task is from, as its conversation's first message says it: the agent that
+/// started it.
+public enum SubagentStarter {
+    /// `parent`: the session that started it, where it's known. A subagent's own subagent is from
+    /// that subagent, by its task, as the conversation's header names it; anything else from the
+    /// main agent.
+    public static func name(of parent: Session?) -> String {
+        guard let parent, parent.parentID != nil else { return "the main agent" }
+        let task = parent.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return task.isEmpty ? "a subagent" : task
+    }
+}

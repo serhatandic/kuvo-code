@@ -27,8 +27,8 @@ enum SubagentTask {
 
 extension EnvironmentValues {
     /// The conversation shown is a subagent's (in its tab): its first message is its task, from
-    /// the agent that started it.
-    @Entry var isSubagentConversation = false
+    /// the agent that started it, named here.
+    @Entry var subagentStarter: String?
 }
 
 extension SessionModel {
@@ -217,7 +217,8 @@ private struct SubagentConversation: View {
         VStack(spacing: 0) {
             header
             TranscriptView(model: model)
-                .environment(\.isSubagentConversation, true)
+                // A bot that started it, by its name, as the header says it.
+                .environment(\.subagentStarter, workspace.botName?(parent) ?? SubagentStarter.name(of: workspace.session(parent) ?? workspace.subSession(parent)))
                 .environment(\.isOffline, isOffline)
                 .frame(maxHeight: .infinity)
                 .conversationBar {

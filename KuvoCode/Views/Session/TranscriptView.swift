@@ -670,7 +670,7 @@ private struct RowView: View, Equatable {
     let reply: (String) -> Void
     @Environment(\.answerAgent) private var answerAgent
     @Environment(\.isOffline) private var isOffline
-    @Environment(\.isSubagentConversation) private var isSubagent
+    @Environment(\.subagentStarter) private var subagentStarter
 
     static func sentAt(_ created: Milliseconds) -> String {
         MessageTime.sentAt(Date(timeIntervalSince1970: created / 1000))
@@ -703,9 +703,9 @@ private struct RowView: View, Equatable {
             if let work = GroupWork.parse(CommandMessages.shared.text(of: message)) {
                 GroupWorkRow(id: message.id, chat: work.chat, chatID: work.id, task: work.task, at: message.time.created)
             }
-        case .user(let message) where isSubagent && SubagentTask.parse(CommandMessages.shared.text(of: message)) != nil:
-            // A subagent's task, in its own tab: the agent's words, not yours.
-            AgentMessageRow(id: message.id, from: "the main agent", session: "", text: SubagentTask.parse(CommandMessages.shared.text(of: message)) ?? "", at: message.time.created)
+        case .user(let message) where subagentStarter != nil && SubagentTask.parse(CommandMessages.shared.text(of: message)) != nil:
+            // A subagent's task, in its own tab: the words of the agent that started it, not yours.
+            AgentMessageRow(id: message.id, from: subagentStarter ?? "", session: "", text: SubagentTask.parse(CommandMessages.shared.text(of: message)) ?? "", at: message.time.created)
         case .user(let message) where CommandMessages.shared.text(of: message).hasPrefix(Wakes.marker):
             WakeRow(note: String(CommandMessages.shared.text(of: message).dropFirst(Wakes.marker.count)), at: message.time.created)
         case .user(let message):

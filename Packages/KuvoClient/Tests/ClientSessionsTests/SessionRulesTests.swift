@@ -93,4 +93,19 @@ struct SessionRulesTests {
         #expect(Branches.latestFirst([newer, busy, old]).top.map(\.id) == ["ses_old", "ses_newer"])
         #expect(Branches.latestFirst([newer, busy, old]).under["ses_old"]?.map(\.id) == ["ses_busy"])
     }
+
+    @Test func aSubagentsTaskIsFromTheAgentThatStartedIt() throws {
+        var main = try session("ses_timer")
+        main.title = "Check the settings screen"
+        var finder = try session("ses_find")
+        finder.parentID = "ses_timer"
+        finder.title = "Find where settings are read"
+        #expect(SubagentStarter.name(of: main) == "the main agent")
+        // One a subagent started is from that subagent, by its task, as its conversation's header says.
+        #expect(SubagentStarter.name(of: finder) == "Find where settings are read")
+        finder.title = nil
+        #expect(SubagentStarter.name(of: finder) == "a subagent")
+        // Its starter not known (yet): the main agent, which starts most.
+        #expect(SubagentStarter.name(of: nil) == "the main agent")
+    }
 }

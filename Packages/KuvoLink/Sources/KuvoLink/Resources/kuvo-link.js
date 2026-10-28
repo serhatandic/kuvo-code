@@ -8607,9 +8607,10 @@ function folderAt(value) {
   }
 }
 function inRepository(value) {
-  if (typeof value !== "string" || !value || path42.isAbsolute(value) || value.endsWith("/"))
+  if (typeof value !== "string" || path42.isAbsolute(value))
     return null;
-  return value.split("/").every((part) => part && part !== "." && part !== "..") ? value : null;
+  const name = value.endsWith("/") ? value.slice(0, -1) : value;
+  return name && name.split("/").every((part) => part && part !== "." && part !== "..") ? name : null;
 }
 var realOr2 = (folder) => {
   try {
@@ -9077,7 +9078,7 @@ import fs44 from "node:fs";
 import path44 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.94";
+var BRIDGE_VERSION = "0.9.95";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
