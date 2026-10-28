@@ -74,7 +74,7 @@ enum DemoLoaders {
                     AskingDots()
                 }
                 // The ring in a button takes its label's colour: white on a filled one, grey once
-                // it's disabled; the app's own icon buttons dim it whole.
+                // it's disabled; the app's own icon buttons dim it whole; a disabled row keeps it.
                 HStack(spacing: 10) {
                     Spinner(size: 14)
                     Button {} label: { Spinner(size: 11).frame(width: 44) }
@@ -83,6 +83,7 @@ enum DemoLoaders {
                         .keyboardShortcut(.defaultAction).controlSize(.small).markInk(.onFill).disabled(true)
                     Button {} label: { Spinner(size: 13) }
                         .buttonStyle(IconButtonStyle(width: 28, height: 26)).disabled(true)
+                    HStack(spacing: 4) { Spinner(size: 10); Text("Sending…").font(.system(size: 11)) }.disabled(true)
                 }
                 ForEach([false, true], id: \.self) { disabled in
                     Button {} label: { HStack(spacing: 8) { Spinner(size: 14); Text("Sign In with ChatGPT") }.frame(maxWidth: .infinity) }

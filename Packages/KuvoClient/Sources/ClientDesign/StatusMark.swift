@@ -73,9 +73,9 @@ public struct StatusMark: View {
     /// The label it sits in, for its ink: see `markInk(_:)`.
     private var label: StatusMarkInk.Label {
         switch markInk {
-        case .automatic: isEnabled ? .standard : .disabled
+        case .own: .standard
+        case .control: isEnabled ? .standard : .disabled
         case .onFill: isEnabled ? .onFill : .disabled
-        case .unchanged: .standard
         }
     }
 
@@ -112,28 +112,31 @@ public enum ConversationState {
 }
 
 extension StatusMark {
-    /// The colour a mark takes from the label it sits in, as a button's own words do.
+    /// The colour a mark takes from the control it sits in, as the control's own words do.
     public enum Ink: Sendable {
-        /// Its own ink, and a disabled control's grey while it's disabled.
-        case automatic
+        /// Its own ink, whatever is around it: a disabled container (a row while it sends) doesn't
+        /// dim it, nor its words.
+        case own
+        /// A control's label that greys when it's disabled (a system button, a card's action): the
+        /// same grey then.
+        case control
         /// A filled accent button's white: its grey once it's disabled (a default or glass prominent
         /// button's, which loses its fill then).
         case onFill
-        /// Its own ink always: for a button style that dims its whole label when it's disabled.
-        case unchanged
     }
 }
 
 extension View {
-    /// The colour the marks in this view (a `Spinner` in a button's label) take from it: on a
-    /// filled accent button, its white. A disabled control's are grey without this.
+    /// The colour the marks in this view (a `Spinner` in a button's label) take from the control:
+    /// grey with its words when it's disabled, or a filled accent button's white. Without it a
+    /// mark keeps its own ink.
     public func markInk(_ ink: StatusMark.Ink) -> some View {
         environment(\.markInk, ink)
     }
 }
 
 extension EnvironmentValues {
-    @Entry var markInk = StatusMark.Ink.automatic
+    @Entry var markInk = StatusMark.Ink.own
 }
 
 /// The colours a mark draws with, resolved for its appearance.
