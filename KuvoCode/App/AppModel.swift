@@ -514,6 +514,7 @@ final class AppModel {
                 if boxFollowed == nil, launch == self.launch {
                     boxFollowed = Task {
                         async let worktrees: Void = workspace.followWorktrees()
+                        async let queues: Void = workspace.followQueues()
                         async let wakes: Void = wakeUps.follow()
                         async let personalities: Void = Personalities.shared.follow()
                         async let bots: Void = bots.follow()
@@ -522,6 +523,7 @@ final class AppModel {
                         await Personalities.shared.takeFromOld()
                         await workspace.followProjects()
                         await worktrees
+                        await queues
                         await wakes
                         await personalities
                         await bots

@@ -41,7 +41,7 @@ final class AgentMail {
 
     /// Everyone, as this Mac's box last said (`kuvo/named`): its bots and named sessions, then
     /// those of your other computers.
-    private(set) var agents: [Agent] = []
+    var agents: [Agent] = []
     @ObservationIgnored private var asked = Date.distantPast
     @ObservationIgnored private let log = Logger(subsystem: "run.kuvo.code", category: "agents")
 

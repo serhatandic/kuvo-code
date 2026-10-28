@@ -25,6 +25,9 @@ import Testing
         func add(_ id: String, _ text: String, _ delivery: String) {
             lock.withLock { items.append(["id": id, "sessionID": "ses_queue", "type": "user", "delivery": delivery, "payload": ["text": text]]) }
         }
+        func remove(_ id: String) {
+            lock.withLock { items.removeAll { $0["id"] as? String == id } }
+        }
         func set(_ id: String, _ delivery: String) {
             lock.withLock { for index in items.indices where items[index]["id"] as? String == id { items[index]["delivery"] = delivery } }
         }
@@ -57,6 +60,10 @@ import Testing
             return StubWeb.json([:])
         }
         engine.on("POST", "/api/session/\(id)/interrupt", json: ["interrupted": true])
+        engine.on("DELETE", "/api/session/\(id)/inbox/*") { request in
+            kept.remove(String(request.path.split(separator: "/").last ?? ""))
+            return StubWeb.json([:])
+        }
         let box = try await TestBox(engine: engine.url)
         if let queues {
             try FileManager.default.createDirectory(at: BoxProcess.run, withIntermediateDirectories: true)
@@ -169,10 +176,60 @@ import Testing
         #expect(!model.isQueuePaused)
     }
 
+    /// After Stop, a message removed and brought back with Undo: it waits for Resume, ahead of
+    /// what was queued, as it was, rather than going once the queue has nothing else; Resume sends
+    /// it first.
+    @Test func aMessagePutBackAfterStopWaitsForResumeAheadOfTheQueue() async throws {
+        let (model, box, _) = try await open(running: false, inbox: [queued("msg_02", "Fix the docs"), queued("msg_03", "Then update the changelog")],
+                                             queues: #"{"ses_queue":{"paused":true,"held":[]}}"#)
+        defer { box.stop(); engine.stop() }
+        try await until { model.isQueuePaused }
+        let item = try #require(model.waiting.first)
+        model.cancelPending(item)
+        try await until { !engine.requests("DELETE", "/inbox/msg_02").isEmpty }
+        model.apply(try engine.event("session.inbox.cancelled", session: id, ["inboxID": "msg_02"]))
+
+        model.requeue(item, for: nil, paused: true)
+        try await until { !engine.requests("POST", "/prompt").isEmpty }
+        let back = try #require(engine.requests("POST", "/prompt").first?.body["id"] as? String)
+        #expect(engine.requests("POST", "/prompt").first?.body["delivery"] as? String == "queue")
+        model.apply(try engine.event("session.inbox.enqueued", session: id, ["inboxID": back, "item": ["type": "user", "delivery": "queue", "payload": ["text": "Fix the docs"]]]))
+        try await until { model.waiting.first?.id == back && model.waiting.first?.isLocal == false }
+        #expect(model.isQueuePaused)
+        #expect(model.waiting.map(\.text) == ["Fix the docs", "Then update the changelog"])
+
+        model.resumeQueue()
+        try await until { !deliveries(of: back).isEmpty }
+        #expect(deliveries(of: back) == ["steer"], "what was put back goes first")
+        #expect(deliveries(of: "msg_03").isEmpty)
+    }
+
+    /// Resume its box can't take (it's not running now): the queue shows Paused again, and why.
+    @Test func resumeTheBoxDidntTakeStaysPaused() async throws {
+        let (model, box, _) = try await open(running: false, inbox: [queued("msg_02", "Then update the docs")], queues: #"{"ses_queue":{"paused":true,"held":[]}}"#)
+        defer { engine.stop() }
+        try await until { model.isQueuePaused }
+        box.stop()
+        model.resumeQueue()
+        try await until { model.isQueuePaused && model.failure != nil }
+        #expect(deliveries(of: "msg_02").isEmpty)
+    }
+
+    /// A queue this Mac's box pauses after the session was read (it found it waiting as its engine
+    /// started): it shows Paused, as this Mac follows its box's queues.
+    @Test func aPauseTheBoxMakesLaterShows() async throws {
+        let (model, box, _) = try await open(running: false, inbox: [queued("msg_02", "Then update the docs")])
+        defer { box.stop(); engine.stop() }
+        let following = Task { await workspace.followQueues() }
+        defer { following.cancel() }
+        #expect(!model.isQueuePaused)
+        try Data(#"{"ses_queue":{"paused":true,"held":[]}}"#.utf8).write(to: BoxProcess.run.appending(path: "queues.json"))
+        try await until { model.isQueuePaused }
+    }
+
     /// A queued message removed by mistake: Undo puts it back in the queue, as it was, behind
     /// the run, rather than starting it.
     @Test func undoPutsARemovedMessageBackInTheQueue() async throws {
-        engine.on("DELETE", "/api/session/\(id)/inbox/*", json: [:])
         let (model, box, _) = try await open(running: true, inbox: [queued("msg_02", "Then update the docs")])
         defer { box.stop(); engine.stop() }
         let item = try #require(model.waiting.first)

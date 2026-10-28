@@ -40,6 +40,7 @@ import Testing
     let engine = StubEngine(port: 47913)
     /// Who "&" named before: put back after.
     private let mail = AgentMail.shared.app
+    private let named = AgentMail.shared.agents
     let app = AppModel()
     let model: SessionModel
     let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 720, height: 620), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -56,8 +57,9 @@ import Testing
         engine.conversation(id, [])
         await app.workspace.refresh()
         model = try #require(app.workspace.model(for: id))
-        // Who "&" names: this app's agents, as the running app sets when it starts.
+        // Who "&" names: this app's agents, as its box lists them.
         AgentMail.shared.app = app
+        AgentMail.shared.agents = [AgentMail.Agent(session: id, name: "Quotes", kind: "session"), AgentMail.Agent(session: id + "_other", name: "Lighthouse", kind: "session")]
         let view = Window(model: model, items: items)
             .environment(app)
             .environment(app.workspace)
@@ -72,6 +74,7 @@ import Testing
 
     private func done() {
         AgentMail.shared.app = mail
+        AgentMail.shared.agents = named
         Drafts.shared.remove(model.id)
         engine.stop()
         window.orderOut(nil)

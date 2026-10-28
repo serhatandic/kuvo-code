@@ -95,17 +95,14 @@ import Testing
         let engine = add(id, at: machine)
         await app.connect(engine).value
         try await until { clock.waits == [60, 600] }
-        #expect(clock.waits == [60, 600], "its agents' mail each minute, its sign-ins every ten")
+        #expect(clock.waits == [60, 600], "its wake-ups each minute, its sign-ins every ten")
         await app.reconnectNow(engine)?.value
         try await until { clock.waits == [60, 600] }
         #expect(clock.waits == [60, 600], "one set of syncs, not two")
-        // A minute on: one round, which collects what its agents left for others once.
-        let sent = ssh.scripts(to: id).count
-        let collected = { self.ssh.scripts(to: id).dropFirst(sent).filter { $0.contains("/run/outbox") }.count }
+        // A minute on: one round, then waiting for the next one, still one set.
         clock.pass(60)
-        try await until { clock.waits == [60, 600] && collected() >= 1 }
+        try await until { clock.waits == [60, 600] }
         #expect(clock.waits == [60, 600])
-        #expect(collected() == 1)
     }
 
     /// Your personalities changed, so each connected machine's round begins a moment later:

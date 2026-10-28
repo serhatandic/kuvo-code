@@ -916,6 +916,8 @@ final class SessionModel {
         let delivery: InboxItem.Delivery = holds || queue && (isBusy || hasQueue) ? .queue : .steer
         if delivery == .steer { isQueuePaused = false }
         outgoing[id] = Outgoing(state: .sending, isOurs: true, startsRun: delivery == .steer && !isBusy)
+        // To wait for Resume (put back after a Stop): the box holds it once it's there.
+        if holds { outgoing[id]?.heldAt = (outgoing.values.compactMap(\.heldAt).min() ?? 0) - 1 }
         editTranscript { $0.addLocal(id: id, text: text, delivery: delivery, files: files) }
         let previous = sending
         sending = Task {
@@ -964,8 +966,9 @@ final class SessionModel {
     private func requestDone(_ message: String) async {
         guard let asked = outgoing[message]?.request else { return }
         let state = outgoing[message]?.state
-        // Held as it went: the box holds it now (an older box, the queue here).
-        if asked == .steer, outgoing[message]?.heldAt != nil, state != .delivered, state != .cancelled, await !queueRoute("queue/hold") {
+        // Held as it went: the box holds it now, ahead of what was queued (not reached, it's in
+        // the queue at least).
+        if outgoing[message]?.heldAt != nil, state != .delivered, state != .cancelled, await !queueRoute("queue/hold", items: [message]), asked == .steer {
             try? await api.setDelivery(session: id, item: message, delivery: .queue)
         }
         if outgoing[message]?.state == .cancelled { try? await api.cancelInbox(session: id, item: message) }
@@ -1499,7 +1502,8 @@ final class SessionModel {
             for message in inFlight {
                 await wait(for: message, until: deadline) { $0.request != nil }
             }
-            // An older box (a machine's not updated yet): stopped here.
+            // Its box not reached: the run stopped here all the same, and the box, hearing it, holds
+            // what waits.
             if await !queueRoute("stop") { try? await api.interrupt(session: id) }
         }
     }
@@ -1544,21 +1548,28 @@ final class SessionModel {
     /// One of the queue's routes on the session's box (`kuvo/sessions/<id>/<action>`), and what it
     /// says the queue is now; false when the box can't take it (an older one, or not there now).
     @discardableResult
-    private func queueRoute(_ action: String, method: String = "POST") async -> Bool {
+    private func queueRoute(_ action: String, method: String = "POST", items: [String]? = nil) async -> Bool {
         // A change asked for: a read from before it says nothing now.
         if method != "GET" {
             queueChanges += 1
             queueRead?.cancel()
         }
         let asked = queueChanges
-        guard let box = box(), let state = try? await box.value(BoxQueue.self, method, "kuvo/sessions/\(id)/\(action)") else { return false }
+        struct Held: Encodable { var items: [String] }
+        guard let box = box(), let state = try? await box.value(BoxQueue.self, method, "kuvo/sessions/\(id)/\(action)", body: items.map { Held(items: $0) }) else { return false }
         // Another change asked for since: its answer is the one to show.
         guard asked == queueChanges else { return true }
-        isQueuePaused = state.paused
-        heldByBox = state.held
-        // Held by the box now: in its order.
-        for message in state.held where outgoing[message]?.heldAt != nil { outgoing[message]?.heldAt = nil }
+        takeQueue(paused: state.paused, held: state.held)
         return true
+    }
+
+    /// The queue as its box says it is now (a read, a change's answer, or this Mac's box following
+    /// its queues).
+    func takeQueue(paused: Bool, held: [String]) {
+        isQueuePaused = paused
+        heldByBox = held
+        // Held by the box now: in its order.
+        for message in held where outgoing[message]?.heldAt != nil { outgoing[message]?.heldAt = nil }
     }
 
     /// The queue read again from the box, `after` a moment (what it does on an event comes then).
@@ -1613,17 +1624,11 @@ final class SessionModel {
         Analytics.shared.track("message_sent_now")
         guard !item.isLocal else { return }
         isQueuePaused = false
-        let running = transcript.isRunning
         Task {
-            if await queueRoute("queue/\(item.id)/now") { return }
-            // An older box: here, as the box does it.
-            do {
-                // Steering wakes an idle session; a running one gets it once the step stops.
-                if item.delivery == .queue { try await api.setDelivery(session: id, item: item.id, delivery: .steer) }
-                if running || item.delivery == .steer { try await api.interrupt(session: id, resume: true) }
-            } catch {
-                fail(error)
-            }
+            guard await !queueRoute("queue/\(item.id)/now") else { return }
+            // Not reached (or it went meanwhile): as it was.
+            readQueue()
+            failure = "It couldn't be sent now. Try again in a moment."
         }
     }
 
@@ -1899,7 +1904,11 @@ final class SessionModel {
     func resumeQueue() {
         guard canReach else { return }
         isQueuePaused = false
-        Task { await queueRoute("queue/resume") }
+        Task {
+            guard await !queueRoute("queue/resume") else { return }
+            isQueuePaused = true
+            failure = "The queue couldn't be resumed: its computer didn't answer. Try again in a moment."
+        }
     }
 
     func selectModel(_ model: ModelRef) {

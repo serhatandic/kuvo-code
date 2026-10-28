@@ -1046,6 +1046,28 @@ final class Workspace {
         }
     }
 
+    /// This Mac's sessions' queues as its box carries them, from now on (one it paused as its engine
+    /// started, after a session here was read, shows Paused). A machine's session reads its own.
+    func followQueues() async {
+        struct Queue: Decodable { var paused: Bool; var held: [String] }
+        struct Listed: Decodable { var queues: [String: Queue] }
+        while !Task.isCancelled {
+            if let client = boxes?(BoxClient.mac) {
+                do {
+                    for try await line in client.follow("kuvo/sessions/queues/events") {
+                        guard let listed = try? JSONDecoder().decode(Listed.self, from: line) else { continue }
+                        for (id, model) in models where RemoteFolder.machine(of: model.session.location.directory) == nil {
+                            let queue = listed.queues[id]
+                            model.takeQueue(paused: queue?.paused ?? false, held: queue?.held ?? [])
+                        }
+                    }
+                } catch {}
+            }
+            // The box restarted, or isn't up yet: followed again in a moment.
+            try? await Task.sleep(for: .seconds(2))
+        }
+    }
+
     /// A worktree as a machine keeps it (its bridge's `kuvo/worktrees`), in its own paths; as it
     /// lists them for its Worktrees page, its root is `path` and `size` the room it takes.
     struct BoxWorktree: Decodable {
