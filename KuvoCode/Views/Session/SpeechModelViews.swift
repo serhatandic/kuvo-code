@@ -30,7 +30,7 @@ struct MicRing: View {
     }
 }
 
-/// Beside the trace while you talk: Whisper on its way ("Better model · 42%"), or listening now,
+/// Beside the trace while you talk: Whisper on its way ("Whisper · 42%"), or listening now,
 /// the first time ("Whisper, on this Mac").
 struct SpeechModelNote: View {
     let voice: VoiceInput
@@ -42,12 +42,15 @@ struct SpeechModelNote: View {
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
                 .fixedSize()
-                .help(voice.usesWhisper ? "Whisper writes what you say, on this Mac." : "Apple’s dictation listens until Whisper is downloaded. \(voice.model.status(device: "Mac")).")
+                .help(voice.usesWhisper ? "Whisper writes what you say, on this Mac." : "Apple’s dictation listens until Whisper is downloaded. " + sentence(voice.model.status(device: "Mac")))
                 // Said once: it's Whisper from now on.
                 .onDisappear { if voice.usesWhisper { voice.model.sawReady() } }
         }
     }
 }
+
+/// `words` ending in one full stop.
+private func sentence(_ words: String) -> String { words.hasSuffix(".") ? words : words + "." }
 
 /// Settings › Voice Input › Speech model: Whisper's download, and taking it away.
 struct SpeechModelRow: View {
