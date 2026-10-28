@@ -68,7 +68,9 @@ fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify({ port: s
 // lab says comes back as its mail would.
 const peerKey = link.publicOf(link.newKey()).toString("base64url");
 const lab = { key: peerKey, address: link.addressOf(crypto.randomBytes(32)).toString("base64url"), kind: "machine", name: "lab", id: "lab", sign: link.signingKeyOf(link.newSigningSeed()) };
-link.writeLink({ macPeers: [lab] });
+// And another computer, "studio".
+const studio = { key: link.publicOf(link.newKey()).toString("base64url"), address: link.addressOf(crypto.randomBytes(32)).toString("base64url"), kind: "machine", name: "studio", id: "studio" };
+link.writeLink({ macPeers: [lab, studio] });
 // Its keys, as its app gives them (kept in your Keychain, never in its files).
 link.macLink.overlay = { key: link.newKey().toString("base64url"), secret: crypto.randomBytes(32).toString("base64url"), relay: "wss://relay.test", name: "Studio Mac" };
 const told = [];
@@ -194,11 +196,12 @@ test("a step for a move this box doesn't have is answered dropped, never switche
 });
 
 // A bundle lab packs for a chat it moves here: its conversations, and its wake-ups' folder.
-function bundleFor(thing, exports, wakeFiles = {}) {
+function bundleFor(thing, exports, wakeFiles = {}, links = {}) {
   const packed = fs.mkdtempSync(path.join(support, "pack-"));
   fs.writeFileSync(path.join(packed, "move.json"), JSON.stringify({ kind: "chat", thing, name: "“Notes”", wasPaused: false, folder: thing, exports }));
   fs.mkdirSync(path.join(packed, thing));
   for (const [name, text] of Object.entries(wakeFiles)) fs.writeFileSync(path.join(packed, thing, name), text);
+  for (const [name, target] of Object.entries(links)) fs.symlinkSync(target, path.join(packed, thing, name));
   const file = path.join(packed, "bundle.tgz");
   assert.equal(spawnSync("tar", ["-czf", file, "-C", packed, "move.json", thing]).status, 0);
   const bytes = fs.readFileSync(file);
@@ -237,4 +240,37 @@ test("the other computer going quiet partway: it's taken back after a while, and
   assert.equal(records().length, 1);
   link.keepMoving(Date.now() + 25 * 3600_000);
   assert.deepEqual(records(), []);
+});
+
+test("what another computer offers over one that lives here is refused, and what lives here stays as it is", async () => {
+  chat("ses_here1");
+  const { bytes, hash } = bundleFor("ses_here1", [{ info: { id: "ses_here1", title: "Not yours" }, messages: [] }]);
+  await say({ op: "offer", id: "mov_over1", kind: "chat", thing: "ses_here1", name: "“Trip plans”", size: bytes.length, hash, wasPaused: false, from: peerKey });
+  const answer = told.find(move => move.id === "mov_over1");
+  assert.equal(answer.op, "refused");
+  assert.match(answer.message, /already/);
+  assert.equal(engine.sessions.get("ses_here1").title, "Trip plans");
+  await asItWas("ses_here1");
+});
+
+test("a copy that brings a link (to somewhere else on this computer) isn't set up", async () => {
+  const thing = "ses_link1";
+  const { bytes, hash } = bundleFor(thing, [{ info: { id: thing, title: "Notes" }, messages: [] }], { "wakes.json": "[]" }, { home: os.homedir() });
+  await say({ op: "offer", id: "mov_link1", kind: "chat", thing, name: "“Notes”", size: bytes.length, hash, wasPaused: false, from: peerKey });
+  await say({ op: "part", id: "mov_link1", hash, i: 0, of: 1, d: bytes.toString("base64url") });
+  await until(() => told.some(move => move.id === "mov_link1" && move.op === "failed"));
+  assert.match(told.find(move => move.id === "mov_link1" && move.op === "failed").message, /a link/);
+  assert.ok(!fs.existsSync(path.join(wakes, thing)) && !engine.sessions.has(thing));
+});
+
+test("a move under way from one computer can't be taken over by another", async () => {
+  const thing = "ses_one1";
+  const { bytes, hash } = bundleFor(thing, [{ info: { id: thing, title: "Notes" }, messages: [] }]);
+  await say({ op: "offer", id: "mov_one1", kind: "chat", thing, name: "“Notes”", size: bytes.length, hash, wasPaused: false, from: peerKey });
+  assert.equal(told.find(move => move.id === "mov_one1")?.op, "ready");
+  await link.takeMoveMail(studio, { op: "offer", id: "mov_one2", kind: "chat", thing, name: "“Notes”", size: bytes.length, hash, wasPaused: false, from: studio.key });
+  assert.equal(told.find(move => move.id === "mov_one2")?.op, "refused");
+  await link.takeMoveMail(studio, { op: "drop", id: "mov_one1" });
+  assert.deepEqual((await ask("GET", "kuvo/moves")).json.moves.map(move => move.id), ["mov_one1"], "lab's move is as it was");
+  await say({ op: "drop", id: "mov_one1" });
 });

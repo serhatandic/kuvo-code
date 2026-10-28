@@ -148,7 +148,18 @@ export async function unpack(id: string): Promise<{ contents: Contents; folder: 
   const contents: Contents = JSON.parse(fs.readFileSync(path.join(opened, "move.json"), "utf8"));
   if (!isObject(contents) || !Array.isArray(contents.exports)) throw new Error("What came isn't a move.");
   const brought = contents.folder && /^[A-Za-z0-9_]+$/.test(contents.folder) ? path.join(opened, contents.folder) : null;
+  // Only files and folders: never a link (to somewhere else on this computer) or anything else.
+  if (brought && fs.existsSync(brought)) plainOnly(brought);
   return { contents, folder: brought && fs.existsSync(brought) ? brought : null };
+}
+
+function plainOnly(folder: string): void {
+  for (const name of fs.readdirSync(folder)) {
+    const entry = path.join(folder, name);
+    const kind = fs.lstatSync(entry);
+    if (kind.isDirectory()) plainOnly(entry);
+    else if (!kind.isFile()) throw new Error(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a file"} (${path.basename(entry)}), which isn’t taken.`);
+  }
 }
 
 /** `folder` to Kuvo Code's trash here (on a Mac, on to the Finder's Trash), as a deleted bot goes. */
@@ -167,20 +178,12 @@ export async function toTrash(folder: string): Promise<void> {
   }
 }
 
-/** Each export into `engine` at `directory`, under its own ID; one there already (an earlier copy,
- * from a move cut short) gives way. */
+/** Each export into `engine` at `directory`, under its own ID. */
 export async function importAll(engine: Target, exports: unknown[], directory: string): Promise<void> {
   for (const exported of exports) {
     if (!isObject(exported)) continue;
-    const body = { info: exported.info, messages: exported.messages, location: { directory } };
-    try {
-      await call(engine, "POST", "/api/experimental/session/import", body);
-    } catch (error) {
-      const id = isObject(exported.info) ? exported.info.id : null;
-      if (typeof id !== "string") throw error;
-      await deleteSession(engine, id);
-      await call(engine, "POST", "/api/experimental/session/import", body);
-    }
+    // (One there already isn't replaced: what a move brought before goes first, `clearCopy`.)
+    await call(engine, "POST", "/api/experimental/session/import", { info: exported.info, messages: exported.messages, location: { directory } });
   }
 }
 

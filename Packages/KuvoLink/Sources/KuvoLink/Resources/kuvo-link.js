@@ -6998,7 +6998,19 @@ async function unpack(id) {
   if (!isObject(contents) || !Array.isArray(contents.exports))
     throw new Error("What came isn't a move.");
   const brought = contents.folder && /^[A-Za-z0-9_]+$/.test(contents.folder) ? path37.join(opened, contents.folder) : null;
+  if (brought && fs37.existsSync(brought))
+    plainOnly(brought);
   return { contents, folder: brought && fs37.existsSync(brought) ? brought : null };
+}
+function plainOnly(folder) {
+  for (const name of fs37.readdirSync(folder)) {
+    const entry = path37.join(folder, name);
+    const kind = fs37.lstatSync(entry);
+    if (kind.isDirectory())
+      plainOnly(entry);
+    else if (!kind.isFile())
+      throw new Error(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a file"} (${path37.basename(entry)}), which isn’t taken.`);
+  }
 }
 async function toTrash(folder) {
   if (!fs37.existsSync(folder))
@@ -7022,16 +7034,7 @@ async function importAll(engine, exports, directory) {
   for (const exported of exports) {
     if (!isObject(exported))
       continue;
-    const body = { info: exported.info, messages: exported.messages, location: { directory } };
-    try {
-      await call(engine, "POST", "/api/experimental/session/import", body);
-    } catch (error) {
-      const id = isObject(exported.info) ? exported.info.id : null;
-      if (typeof id !== "string")
-        throw error;
-      await deleteSession(engine, id);
-      await call(engine, "POST", "/api/experimental/session/import", body);
-    }
+    await call(engine, "POST", "/api/experimental/session/import", { info: exported.info, messages: exported.messages, location: { directory } });
   }
 }
 async function deleteSession(engine, id) {
@@ -7516,13 +7519,19 @@ async function takeOffer(sender, given) {
     }
   }
   const was = readMove(id);
-  if (was && was.role === "to" && was.hash === given.hash)
+  if (was && (was.role !== "to" || was.peer !== sender.key || was.thing !== thing))
+    return void answer({ op: "refused", message: say.moving });
+  if (was && was.hash === given.hash)
     return void answer({ op: "ready" });
+  if (was)
+    await clearCopy(was);
   const before = moveOf(thing);
-  if (before && before.id !== id && before.role === "to")
+  if (before && before.id !== id && before.role === "to" && before.peer === sender.key)
     await drop(before.id);
   else if (before && before.id !== id)
     return void answer({ op: "refused", message: say.moving });
+  if (!was && await livesHere(kind, thing))
+    return void answer({ op: "refused", message: `${name} is on ${place} already.` });
   fs38.rmSync(bundleOf(id), { recursive: true, force: true });
   fs38.mkdirSync(bundleOf(id), { recursive: true, mode: 448 });
   incoming.set(id, new Set);
@@ -7546,6 +7555,26 @@ async function takeOffer(sender, given) {
     started: was?.started ?? Date.now()
   });
   answer({ op: "ready" });
+}
+async function livesHere(kind, thing) {
+  if (kind === "group") {
+    let bridge = null;
+    try {
+      bridge = readBridgeFile();
+    } catch {}
+    return bridge ? (await askGroups(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, undefined).catch(() => null))?.status === 200 : false;
+  }
+  if (fs38.existsSync(folderOf(kind, thing)))
+    return true;
+  const root = kind === "bot" ? null : thing;
+  if (!root)
+    return false;
+  try {
+    await call(readEngineFile(), "GET", `/api/session/${encodeURIComponent(root)}`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 async function takePart(sender, given) {
   const id = String(given.id);
@@ -7648,7 +7677,11 @@ async function drop(id) {
   if (!record || record.role !== "to")
     return;
   noteEnded(id, "dropped");
-  incoming.delete(id);
+  await clearCopy(record);
+  forgetMove(id);
+}
+async function clearCopy(record) {
+  incoming.delete(record.id);
   if (record.kind === "group") {
     await groupAction(readBridgeFile(), record.thing, "release").catch(() => {});
   } else {
@@ -7666,7 +7699,6 @@ async function drop(id) {
       await toTrash(place).catch(() => {});
     }
   }
-  forgetMove(id);
 }
 async function takeMoveMail(sender, given) {
   if (!isObject(given) || typeof given.op !== "string" || typeof given.id !== "string" || !/^mov_[A-Za-z0-9]{1,40}$/.test(given.id))

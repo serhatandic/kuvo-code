@@ -462,11 +462,17 @@ async function takeOffer(sender: MailSender, given: Record<string, unknown>): Pr
     }
   }
   const was = readMove(id);
-  if (was && was.role === "to" && was.hash === given.hash) return void answer({ op: "ready" });
-  // A move of it this way already, cut short: this one takes its place.
+  if (was && (was.role !== "to" || was.peer !== sender.key || was.thing !== thing)) return void answer({ op: "refused", message: say.moving });
+  if (was && was.hash === given.hash) return void answer({ op: "ready" });
+  // Offered again, changed (it got more while it moved): what came of it before goes first.
+  if (was) await clearCopy(was);
+  // A move of it this way from the same computer, cut short: this one takes its place. Any other
+  // under way (from another computer, or away from here) stays.
   const before = moveOf(thing);
-  if (before && before.id !== id && before.role === "to") await drop(before.id);
+  if (before && before.id !== id && before.role === "to" && before.peer === sender.key) await drop(before.id);
   else if (before && before.id !== id) return void answer({ op: "refused", message: say.moving });
+  // Never over one that lives here: a copy only comes where there's none.
+  if (!was && await livesHere(kind, thing)) return void answer({ op: "refused", message: `${name} is on ${place} already.` });
   fs.rmSync(bundleOf(id), { recursive: true, force: true });
   fs.mkdirSync(bundleOf(id), { recursive: true, mode: 0o700 });
   incoming.set(id, new Set());
@@ -475,6 +481,24 @@ async function takeOffer(sender: MailSender, given: Record<string, unknown>): Pr
     peer: sender.key, wasPaused: given.wasPaused === true, ...(typeof given.pausedAs === "string" ? { pausedAs: given.pausedAs.slice(0, 2000) } : {}), hash: given.hash, size, sent: 0, tries: 0, started: was?.started ?? Date.now(),
   });
   answer({ op: "ready" });
+}
+
+/** Whether a bot, chat or group chat by that ID is on this box now. */
+async function livesHere(kind: MoveKind, thing: string): Promise<boolean> {
+  if (kind === "group") {
+    let bridge: Target | null = null;
+    try { bridge = readBridgeFile(); } catch {}
+    return bridge ? (await askGroups(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, undefined).catch(() => null))?.status === 200 : false;
+  }
+  if (fs.existsSync(folderOf(kind, thing)!)) return true;
+  const root = kind === "bot" ? null : thing;
+  if (!root) return false;
+  try {
+    await call(readEngineFile(), "GET", `/api/session/${encodeURIComponent(root)}`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function takePart(sender: MailSender, given: Record<string, unknown>): Promise<void> {
@@ -562,7 +586,14 @@ async function drop(id: string): Promise<void> {
   const record = readMove(id);
   if (!record || record.role !== "to") return;
   noteEnded(id, "dropped");
-  incoming.delete(id);
+  await clearCopy(record);
+  forgetMove(id);
+}
+
+/** What a move brought here, gone: its conversations, the folder it placed, a bot's keys, a group
+ * chat held for it. */
+async function clearCopy(record: MoveRecord): Promise<void> {
+  incoming.delete(record.id);
   if (record.kind === "group") {
     await groupAction(readBridgeFile(), record.thing, "release").catch(() => {});
   } else {
@@ -576,7 +607,6 @@ async function drop(id: string): Promise<void> {
       await toTrash(place).catch(() => {});
     }
   }
-  forgetMove(id);
 }
 
 // ---- Mail between them ----
