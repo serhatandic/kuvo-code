@@ -1121,24 +1121,61 @@ final class SessionModel {
 
     /// The side questions asked about it ("/btw"), oldest first, as its computer's box keeps them.
     var sideQuestions: [SideQuestion] { goalBridge()?.sideQuestions[id] ?? [] }
-    /// The one whose answer shows over the composer: the latest asked here, until it's put away.
+    /// Those as side threads, in the order they were started.
+    var sideThreads: [SideThread] { SideThread.threads(sideQuestions) }
+    /// A question of the side thread that shows over the composer: the latest asked here, until
+    /// it's put away.
     var shownSideQuestion: String?
 
-    private func askSideQuestion(_ question: String, written: String) {
-        guard let bridge = goalBridge(), let api = bridge.api else { return keywordUnavailable(written) }
+    /// The side thread that shows over the composer.
+    var shownSideThread: SideThread? {
+        guard let id = shownSideQuestion, let question = sideQuestions.first(where: { $0.id == id }) else { return nil }
+        return sideThreads.first { $0.id == question.threadID }
+    }
+
+    /// A side question: a new side thread, or a follow-up in `thread`. One that can't be asked
+    /// comes back where it was written (`written`; the follow-up field's when nil).
+    private func askSideQuestion(_ question: String, written: String?, thread: String? = nil) {
+        guard let bridge = goalBridge(), let api = bridge.api else {
+            if let written { keywordUnavailable(written) }
+            return
+        }
         let session = id
         Task {
             do {
                 // Its list read first if it isn't yet (the conversation just opened), so the answer's
                 // event, which can come at once, has it to go into.
                 if bridge.sideQuestions[session] == nil { await bridge.loadSideQuestions(of: session) }
-                let asked = try await api.askSideQuestion(question, about: session)
+                let asked = try await api.askSideQuestion(question, about: session, thread: thread)
                 bridge.took(asked)
                 shownSideQuestion = asked.id
             } catch {
-                restore(text: written)
+                if let written { restore(text: written) } else { unsentFollowUp = question }
                 fail(error)
             }
+        }
+    }
+
+    /// A follow-up in the side thread that shows: answered with the thread so far.
+    func askFollowUp(_ question: String) {
+        let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let thread = shownSideThread else { return }
+        askSideQuestion(text, written: nil, thread: thread.id)
+    }
+
+    /// A follow-up that couldn't be asked, for its field to show again.
+    var unsentFollowUp: String?
+
+    /// Takes a side thread away, all of it.
+    func removeSideThread(_ thread: SideThread) {
+        guard let bridge = goalBridge(), let api = bridge.api else { return }
+        let session = id
+        if shownSideThread?.id == thread.id { shownSideQuestion = nil }
+        Task {
+            do {
+                try await api.removeSideThread(thread.id, of: session)
+                for question in thread.questions { bridge.dropSideQuestion(question.id, of: session) }
+            } catch { fail(error) }
         }
     }
 
@@ -1151,23 +1188,10 @@ final class SessionModel {
         hidesSideQuestion = false
     }
 
-    /// The side question bar's Ask Another: "/btw " in the composer, ready to finish.
+    /// The side thread's New Side Thread: "/btw " in the composer, ready to finish.
     func askAnotherSideQuestion() {
         draftText = Keyword.btw.typed + " "
         composerFocus += 1
-    }
-
-    /// Takes a side question away, or all of them (`id` nil).
-    func removeSideQuestion(_ id: String?) {
-        guard let bridge = goalBridge(), let api = bridge.api else { return }
-        let session = self.id
-        if id == nil || id == shownSideQuestion { shownSideQuestion = nil }
-        Task {
-            do {
-                try await api.removeSideQuestion(id, of: session)
-                bridge.dropSideQuestion(id, of: session)
-            } catch { fail(error) }
-        }
     }
 
     /// Its handoff ("/handoff") while the note is written, or why it couldn't be.

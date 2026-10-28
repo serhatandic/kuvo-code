@@ -98,6 +98,38 @@ import Testing
         #expect(model.failure == nil)
     }
 
+    // A side thread: a follow-up asked in the thread over the composer is answered with the
+    // thread so far, stays in it, and joins nothing to the conversation; another /btw is a new
+    // thread; and a thread goes whole.
+    @Test func aSideQuestionsFollowUpIsAnsweredWithItsThread() async throws {
+        defer { clean() }
+        serve(directory: "/tmp", answers: ["In `onBlur`.", "Because blur fires before the tab hides.", "A duration like 25m."])
+        let model = try session()
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+
+        model.draftText = "/btw where does it pause?"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { model.sideQuestions.first?.state == .answered }
+        model.askFollowUp("why there?")
+        try await until { model.shownSideThread?.questions.count == 2 && model.shownSideThread?.latest.state == .answered }
+        let thread = try #require(model.shownSideThread)
+        #expect(thread.questions.map(\.question) == ["where does it pause?", "why there?"])
+        #expect(thread.latest.answer == "Because blur fires before the tab hides.")
+        let asked = engine.requests("POST", "/generate").map { "\($0.body)" }
+        #expect(asked.last?.contains("In `onBlur`.") == true)
+        #expect(told == 0)
+
+        model.draftText = "/btw what does parseDuration match?"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { model.sideThreads.count == 2 && model.shownSideThread?.latest.state == .answered }
+        #expect(model.shownSideThread?.questions.count == 1)
+
+        model.removeSideThread(thread)
+        try await until { model.sideThreads.count == 1 }
+        #expect(try await bridge.api?.sideQuestions(of: id).map(\.question) == ["what does parseDuration match?"])
+    }
+
     /// Clicking a conversation's side questions in the sidebar: the latest one's answer over its
     /// composer, though they were asked from the phone and the conversation wasn't open; one
     /// picked from the row's menu shows instead, even after the bar was put away.
