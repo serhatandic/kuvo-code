@@ -5368,7 +5368,7 @@ class Snapshots {
     return this.exclusive(repository, async () => {
       const files = [];
       for (const path of paths.slice(0, fileLimit3)) {
-        const ran = await this.git(repository, ["diff", "--no-color", "--no-renames", "--no-ext-diff", from, to, "--", path]).catch(() => {
+        const ran = await this.git(repository, ["-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-renames", "--no-ext-diff", "--no-textconv", from, to, "--", path]).catch(() => {
           return;
         });
         if (ran?.code !== 0)
@@ -20024,4 +20024,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 03df448a143dd2420bac2b0b47585cdaaf9d1735c67c697f600a5aa511f67fc0
+// Built from Packages/Box/src/agents 8054a002f92909f456c64e41b81ce7090701b5d98dc9f0daf5c7cf64f3cc70e0

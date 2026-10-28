@@ -765,6 +765,31 @@ describe("undo", () => {
   })
 })
 
+describe("what an undo would put back", () => {
+  test("is the files' own lines, whatever your git settings say about blank lines or converting files to text", async () => {
+    const folder = mkdtempSync(join(root, "repo-"))
+    const settings = join(root, "gitconfig")
+    // Unchanged blank lines written as nothing; .txt files shown through a converter.
+    writeFileSync(settings, "[diff]\n\tsuppressBlankEmpty = true\n[diff \"shout\"]\n\ttextconv = tr a-z A-Z <\n")
+    const was = process.env.GIT_CONFIG_GLOBAL
+    process.env.GIT_CONFIG_GLOBAL = settings
+    try {
+      Bun.spawnSync(["git", "-C", folder, "init", "-q"])
+      writeFileSync(join(folder, ".gitattributes"), "*.txt diff=shout\n")
+      writeFileSync(join(folder, "a.txt"), "one\n\ntwo\n")
+      const snapshots = new Snapshots(join(root, "snapshots"))
+      const before = await snapshots.take(folder)
+      writeFileSync(join(folder, "a.txt"), "one\n\nthree\n")
+      const after = await snapshots.take(folder)
+      const [diff] = await snapshots.changes(folder, before!, after!, ["a.txt"])
+      expect(diff.patch).toContain("\n one\n \n-two\n+three")
+    } finally {
+      if (was === undefined) delete process.env.GIT_CONFIG_GLOBAL
+      else process.env.GIT_CONFIG_GLOBAL = was
+    }
+  })
+})
+
 describe("titles and one-off answers", () => {
   test("a session is named from your first message: by the model for titles you picked, else the session's", async () => {
     const titler = new FakeAgent("zen", "Zen") as FakeAgent & { generate: (prompt: string, model?: { id: string }) => Promise<string> }
