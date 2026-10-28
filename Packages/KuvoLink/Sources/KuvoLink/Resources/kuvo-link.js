@@ -2096,6 +2096,7 @@ var engineDown = () => {
   }
   return "This machine's engine is starting. Try again in a moment.";
 };
+var ENGINE_UP_WHILE = ["checking", "downloading", "downloading the engine", "checking it"];
 async function engineControl(command) {
   const start = path14.join(K, "bin", "kuvo-start");
   if (!fs14.existsSync(start))
@@ -2103,8 +2104,9 @@ async function engineControl(command) {
   if (![path14.join(K, "bin", "kuvo-launch"), path14.join(RUN, "launch.env")].every((file) => fs14.existsSync(file))) {
     return { status: 409, message: "Start it once from Kuvo Code on your Mac." };
   }
-  if (isUpdating())
+  if (isUpdating() && !ENGINE_UP_WHILE.includes(updateState().running)) {
     return { status: 409, message: "This machine is updating. Its engine starts again once that's done." };
+  }
   const environment = { ...process.env };
   delete environment.BUN_BE_BUN;
   delete environment.BUN_RUNTIME_TRANSPILER_CACHE_PATH;
