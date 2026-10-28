@@ -261,6 +261,23 @@ import Testing
         #expect(told.contains("/home/tests/shared") && !told.contains("ssh://"))
     }
 
+    /// A machine's session waiting on you keeps counting while the machine is away and this Mac's
+    /// own engine is read again (the Mac waking up): it isn't dropped, to be told again as news once
+    /// the machine is back.
+    @Test func whatAMachinesSessionAsksStaysWhileTheMachineIsAway() async throws {
+        defer { done() }
+        let id = Self.name()
+        let asked: [String: Any] = ["id": "per_push", "sessionID": "ses_masks", "action": "shell", "resources": ["git push"]]
+        machine.list([StubEngine.session("ses_masks", title: "Release", directory: "/home/tests/project")], running: ["ses_masks"])
+        machine.on("GET", "/api/session/ses_masks/permission", json: ["data": [asked]])
+        machine.on("GET", "/api/session/ses_masks/form", json: ["data": []])
+        await app.connect(add(id, at: machine)).value
+        try await until { app.workspace.waitingCount == 1 }
+        app.workspace.forget(id)
+        await app.workspace.resync()
+        #expect(app.workspace.waitingCount == 1)
+    }
+
     /// `id` added, its engine `stub` once it connects.
     private func add(_ id: String, at stub: StubEngine) -> MachineEngine {
         reachable.apis[id] = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: stub.url)!, password: "test"), folderPrefix: RemoteFolder.prefix(for: id))

@@ -1951,8 +1951,12 @@ final class Workspace {
                 asking[request] = session
                 continue
             }
-            // On a machine not connected now: read again when it is.
-            guard sessionMachines[session].map(connectedMachines.contains) ?? true else { continue }
+            // On a machine not connected now: as it was, read again when it is (and not told
+            // again then as news).
+            guard sessionMachines[session].map(connectedMachines.contains) ?? true else {
+                asking[request] = session
+                continue
+            }
             // A closed session's: still asked (or not known), it stays; its notification goes otherwise.
             if sharedForms[request] == nil, let api = api(forSession: session) {
                 guard let asked = await Self.stillAsked(in: session, api: api), !asked.contains(request) else {
