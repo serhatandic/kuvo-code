@@ -32,12 +32,13 @@ extension EnvironmentValues {
 }
 
 extension SessionModel {
-    /// Its latest step, in a few words: "Ran a command", "Thinking…".
+    /// Its latest step, in a few words: what it's doing while that runs ("Sleeping", "Running a
+    /// command", "Thinking…"), what it did once it's done ("Ran a command").
     var currentStep: String {
         guard case .assistant(let step)? = transcript.messages.last(where: { if case .assistant = $0 { true } else { false } }),
               let block = step.content.last else { return "Working…" }
         switch block {
-        case .tool(let call): return StepsSummary.summary(of: [call])
+        case .tool(let call): return StepsRow.isUnfinished(block) ? StepsSummary.doing(call) : StepsSummary.summary(of: [call])
         case .reasoning: return "Thinking…"
         case .text: return "Writing…"
         default: return "Working…"

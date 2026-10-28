@@ -452,7 +452,12 @@ struct TranscriptView: View {
             case .synthetic(let notice)?, .system(let notice)?: quiet = notice.time.created
             default: break
             }
-            rows.append(.working(since: turn.started, quiet: quiet, followsHeard: followsHeard))
+            // A tool or a subagent at work shows it, moving: this line holds still meanwhile.
+            var stepWorks = false
+            if case .assistant(let step)? = messages.last {
+                stepWorks = step.content.contains { if case .tool(let call) = $0 { !call.state.isFinished } else { false } }
+            }
+            rows.append(.working(since: turn.started, quiet: quiet, followsHeard: followsHeard, holds: stepWorks))
         }
         return rows
     }
@@ -561,7 +566,7 @@ enum Row: Identifiable, Hashable {
     /// `quiet`: since when nothing has come back from the model.
     /// `followsHeard`: quiet since the model last sent anything, which new words move on without
     /// the rows being made again (see `RowView.heard`).
-    case working(since: Milliseconds?, quiet: Milliseconds?, followsHeard: Bool)
+    case working(since: Milliseconds?, quiet: Milliseconds?, followsHeard: Bool, holds: Bool)
 
     /// The words Find looks in, as the row shows them: messages, replies, and commands you ran
     /// with what they printed.
@@ -768,7 +773,7 @@ private struct RowView: View, Equatable {
             .background(.quaternary.opacity(0.5), in: .capsule)
             .frame(maxWidth: .infinity)
             .help("Sending a message makes the undo final")
-        case .working(let since, let quiet, let followsHeard):
+        case .working(let since, let quiet, let followsHeard, let holds):
             HStack(spacing: 8) {
                 // A bot shows itself at work.
                 if let bot {
@@ -778,8 +783,15 @@ private struct RowView: View, Equatable {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let latest = heard()
                     // Against the engine's clock, as its times are: a machine's may be behind.
-                    ShimmerText(text: Self.working(since: since, quiet: followsHeard ? latest.last ?? quiet : quiet, now: context.date.addingTimeInterval(-latest.offset / 1000)))
-                        .font(.callout)
+                    let text = Self.working(since: since, quiet: followsHeard ? latest.last ?? quiet : quiet, now: context.date.addingTimeInterval(-latest.offset / 1000))
+                    Group {
+                        if holds {
+                            Text(text).foregroundStyle(.secondary)
+                        } else {
+                            ShimmerText(text: text)
+                        }
+                    }
+                    .font(.callout)
                 }
             }
         }
