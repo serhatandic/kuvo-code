@@ -4,7 +4,8 @@
 
 import { emit } from "../../../src/agents/events"
 
-export type Turn = { text?: string; tool?: boolean; outcome?: "succeeded" | "failed" | "interrupted"; error?: string }
+/** `steps`: model calls before its last, each a message of its own, as a long turn has them. */
+export type Turn = { text?: string; tool?: boolean; steps?: number; outcome?: "succeeded" | "failed" | "interrupted"; error?: string }
 
 /** The engine: a turn for each note, as `turns` script them, and the goal check's verdicts in turn. */
 export class StandIn {
@@ -117,6 +118,7 @@ export class StandIn {
     this.busy.add(session)
     this.emit("session.execution.started", { sessionID: session })
     const end = () => {
+      for (let step = 0; step < (turn.steps ?? 0); step++) this.add(session, { type: "assistant", content: [{ type: "text", text: `Step ${step + 1}.` }] })
       const content = [...(turn.tool ? [{ type: "tool", name: "bash", state: { status: "completed", input: { command: "npm test" }, content: [{ type: "text", text: "1 failing" }] } }] : []), ...(turn.text ? [{ type: "text", text: turn.text }] : [])]
       if (content.length) this.add(session, { type: "assistant", content })
       const outcome = turn.outcome ?? "succeeded"
@@ -172,9 +174,14 @@ export class StandIn {
       }
       if (!what) return Response.json({ data: { id: session, model: { providerID: "p", id: "m" }, ...(this.details.get(session) ?? {}), ...(this.titles.has(session) ? { title: this.titles.get(session) } : {}), ...(this.parents.has(session) ? { parentID: this.parents.get(session) } : {}), ...(this.metadata.has(session) ? { metadata: this.metadata.get(session) } : {}), location: { directory: this.directory } } })
       if (what === "message") {
-        // Newest first, or oldest first with `order=asc`, `limit` at most, as the engine pages them.
+        // Newest first, or oldest first with `order=asc`, `limit` at most, as the engine pages them:
+        // the next page from `cursor`, which a page names while there's more.
         const ordered = url.searchParams.get("order") === "asc" ? [...conversation] : [...conversation].reverse()
-        return Response.json({ data: ordered.slice(0, Number(url.searchParams.get("limit") ?? ordered.length) || ordered.length) })
+        const after = url.searchParams.get("cursor")
+        const start = after ? ordered.findIndex((message) => message.id === after) + 1 : 0
+        const limit = Number(url.searchParams.get("limit") ?? ordered.length) || ordered.length
+        const data = ordered.slice(start, start + limit)
+        return Response.json({ data, cursor: start + limit < ordered.length ? { next: data.at(-1).id } : {} })
       }
       if (what === "synthetic") {
         if (this.busy.has(session) && this.queuesNotes) {

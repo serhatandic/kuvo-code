@@ -437,10 +437,22 @@ export class Goals {
     return this.places.isBridge(session) ? this.places.bridge : this.places.engine
   }
 
-  /** The conversation, oldest first: its newest part (a goal's turns are recent). */
+  /** The conversation, oldest first: its newest part (a goal's turns are recent), back to the end
+   * of the turn before the last one. A long turn (a message for each step, hundreds of them) can
+   * be longer than a page, and is read whole all the same, so what started it is in it. */
   private async messages(session: string, place: GoalPlace): Promise<any[]> {
-    const answer = await place.api.request<{ data?: any[] }>("GET", at(session) + "/message?limit=200")
-    return [...(answer?.data ?? [])].reverse()
+    type Page = { data?: any[]; cursor?: { next?: string; previous?: string } }
+    let page = await place.api.request<Page>("GET", at(session) + `/message?limit=${PAGE}`)
+    let messages = [...(page?.data ?? [])].reverse()
+    for (let pages = 1; pages < MOST_PAGES && (page?.data?.length ?? 0) >= PAGE; pages++) {
+      if (messages.filter((message) => message?.type === "idle").length >= 2) break
+      const cursor = page?.cursor?.next ?? page?.cursor?.previous
+      if (!cursor) break
+      page = await place.api.request<Page>("GET", at(session) + `/message?limit=${PAGE}&cursor=${encodeURIComponent(cursor)}`)
+      if (!page?.data?.length) break
+      messages = [...page.data].reverse().concat(messages)
+    }
+    return messages
   }
 
   private changed(goal: Kept) {
@@ -460,6 +472,9 @@ export class Goals {
 }
 
 const at = (session: string) => "/api/session/" + encodeURIComponent(session)
+// A page of a conversation as a goal reads it, and how many at most (a turn of thousands of steps).
+const PAGE = 200
+const MOST_PAGES = 25
 
 function shown(goal: Kept): Goal {
   const { checkedIdle: _idle, quiet: _quiet, limit: _limit, recheck: _recheck, epoch: _epoch, since: _since, ...rest } = goal

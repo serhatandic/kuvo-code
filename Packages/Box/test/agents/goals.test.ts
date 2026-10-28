@@ -108,6 +108,15 @@ describe("a goal", () => {
     expect(engine.titles.get("ses_work")).toBe("all tests in test/auth pass")
   })
 
+  test("is checked after a turn longer than a page of the conversation (hundreds of steps), and kept going", async () => {
+    engine.turns = [{ steps: 450, tool: true, text: "Still two to fix." }]
+    engine.verdicts = [`{"verdict": "not_met", "reason": "2 tests in test/auth still fail."}`, `{"verdict": "met", "reason": "npm test exits 0."}`]
+    await goals.set("ses_work", "all tests in test/auth pass")
+    await until(() => goal()?.state === "met")
+    expect(nudges().map((message) => message.description)).toEqual(["Not met yet: 2 tests in test/auth still fail."])
+    expect(goal()).toMatchObject({ state: "met", turns: 2 })
+  })
+
   test("on one of OpenCode's free models, is checked afresh all the same", async () => {
     engine.freeModel = true
     engine.verdicts = [`{"verdict": "met", "reason": "Done."}`]

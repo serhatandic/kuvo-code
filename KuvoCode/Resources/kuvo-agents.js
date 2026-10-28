@@ -4276,8 +4276,20 @@ class Goals {
     return this.places.isBridge(session) ? this.places.bridge : this.places.engine;
   }
   async messages(session, place) {
-    const answer = await place.api.request("GET", at2(session) + "/message?limit=200");
-    return [...answer?.data ?? []].reverse();
+    let page = await place.api.request("GET", at2(session) + `/message?limit=${PAGE}`);
+    let messages2 = [...page?.data ?? []].reverse();
+    for (let pages2 = 1;pages2 < MOST_PAGES && (page?.data?.length ?? 0) >= PAGE; pages2++) {
+      if (messages2.filter((message) => message?.type === "idle").length >= 2)
+        break;
+      const cursor = page?.cursor?.next ?? page?.cursor?.previous;
+      if (!cursor)
+        break;
+      page = await place.api.request("GET", at2(session) + `/message?limit=${PAGE}&cursor=${encodeURIComponent(cursor)}`);
+      if (!page?.data?.length)
+        break;
+      messages2 = [...page.data].reverse().concat(messages2);
+    }
+    return messages2;
   }
   changed(goal) {
     if (this.stopped || this.goals.get(goal.session) !== goal)
@@ -4295,6 +4307,8 @@ class Goals {
   }
 }
 var at2 = (session) => "/api/session/" + encodeURIComponent(session);
+var PAGE = 200;
+var MOST_PAGES = 25;
 function shown(goal) {
   const { checkedIdle: _idle, quiet: _quiet, limit: _limit, recheck: _recheck, epoch: _epoch, since: _since, ...rest } = goal;
   return rest;
@@ -19941,4 +19955,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents b712fa145120ac4323ca7f58b1e8a03deb5656232befcb7677de99c5bccf4f17
+// Built from Packages/Box/src/agents d14b659232fc48c14e95dc9f046732341d82e4bd3ae5dbfd86d6f588b3a77e1a
