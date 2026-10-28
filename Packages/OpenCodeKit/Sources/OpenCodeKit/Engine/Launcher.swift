@@ -62,10 +62,15 @@ public enum Launcher {
               elif [ -n "$(find "$folder.lock" -maxdepth 0 -mmin +2 2>/dev/null)" ]; then
                 gone=1
               fi
-              [ -n "$(find "$folder.lock.breaking" -maxdepth 0 -mmin +1 2>/dev/null)" ] && rmdir "$folder.lock.breaking" 2>/dev/null
+              # (Renamed away first, so one start alone lets it go.)
+              if [ -n "$(find "$folder.lock.breaking" -maxdepth 0 -mmin +1 2>/dev/null)" ] && mv "$folder.lock.breaking" "$folder.lock.breaking.$$" 2>/dev/null; then
+                rm -rf "$folder.lock.breaking.$$"
+              fi
               if [ -n "$gone" ] && mkdir "$folder.lock.breaking" 2>/dev/null; then
+                echo $$ >"$folder.lock.breaking/pid"
                 [ "$(cat "$folder.lock/pid" 2>/dev/null)" = "$holder" ] && rm -rf "$folder.lock"
-                rmdir "$folder.lock.breaking"
+                # Only its own: one let go of meanwhile as stale, and taken by another, isn't.
+                [ "$(cat "$folder.lock.breaking/pid" 2>/dev/null)" = $$ ] && rm -rf "$folder.lock.breaking"
                 continue
               fi
               [ $i -ge "$waits" ] && break
@@ -78,7 +83,7 @@ public enum Launcher {
                 node -e 'const [dir, short] = process.argv.slice(1); const bin = JSON.parse(require("fs").readFileSync(dir + "/package.json", "utf8")).bin; const main = typeof bin === "string" ? bin : bin && (bin[short] || Object.values(bin)[0]); if (main) console.log(main)' "$folder/node_modules/$name" "${name##*/}" >"$folder/.main"
               if [ -s "$folder/.main" ] && [ "$name" != "$spec" ]; then
                 for other in "${folder%@*}"@*; do
-                  case $other in "$folder" | *.lock | *.lock.breaking) ;; *) rm -rf "$other" ;; esac
+                  case $other in "$folder" | *.lock | *.lock.breaking*) ;; *) rm -rf "$other" ;; esac
                 done
               fi
             fi
