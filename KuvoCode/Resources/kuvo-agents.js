@@ -12583,8 +12583,21 @@ function runOf(doing) {
 }
 var legacyKeys = ["claudeSession", "claudeStarted", "codexThread", "acpSession", "acpInstructed", "cursorAgent", "cursorInstructed"];
 var carryOn = "Carry on with my last message from where you left off: you're on another model now.";
-var timing = { stopGrace: 8000, idleClose: 15 * 60000, cutShort: 2 * 60000 };
+var timing = { stopGrace: 8000, idleClose: 15 * 60000, cutShort: 2 * 60000, shellGrace: 5000 };
 var changes2 = new Set(["edit", "write", "patch"]);
+function groupRuns(group) {
+  try {
+    process.kill(-group, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+function signalGroup(group, signal) {
+  try {
+    process.kill(-group, signal);
+  } catch {}
+}
 var shellTimeout = 10 * 60000;
 var shellOutputLimit = 50000;
 function runCommand(command, directory, started = () => {}) {
@@ -12631,7 +12644,8 @@ function runCommand(command, directory, started = () => {}) {
       group("SIGTERM");
       setTimeout(() => group("SIGKILL"), 5000);
     }, shellTimeout);
-    started(() => group("SIGTERM"));
+    if (child.pid)
+      started(child.pid);
     child.stdout?.on("data", take);
     child.stderr?.on("data", take);
     child.on("error", (error) => {
@@ -13446,16 +13460,18 @@ class Sessions {
     if (this.atWork(id))
       record2.agent.lateShells = [...record2.agent.lateShells ?? [], message.id];
     this.store.save(id, true);
-    let stop = () => {};
-    const running = this.shells.get(id) ?? new Set;
-    this.shells.set(id, running);
-    runCommand(text2, directory, (given) => {
-      stop = given;
-      running.add(stop);
+    const groups = this.shells.get(id) ?? new Set;
+    for (const group2 of groups)
+      if (!groupRuns(group2))
+        groups.delete(group2);
+    this.shells.set(id, groups);
+    let group;
+    runCommand(text2, directory, (started) => {
+      group = started;
+      groups.add(started);
     }).then((ran) => {
-      running.delete(stop);
-      if (!running.size && this.shells.get(id) === running)
-        this.shells.delete(id);
+      if (group !== undefined && !groupRuns(group))
+        groups.delete(group);
       message.status = ran.code === 0 && !ran.timedOut ? "completed" : "failed";
       message.exit = ran.code;
       message.output = { output: ran.timedOut ? `${ran.output}
@@ -14752,14 +14768,19 @@ ${live.agentPrompt}` : ""
     pending.resolve(answer);
     emit(answer ? "form.replied" : "form.cancelled", { id: formID, sessionID: id }, this.record(id).session.location.directory);
   }
-  stopShells(id) {
-    for (const stop of this.shells.get(id) ?? [])
-      stop();
+  stopShells(id, now = false) {
+    for (const group of this.shells.get(id) ?? []) {
+      signalGroup(group, "SIGTERM");
+      if (now)
+        signalGroup(group, "SIGKILL");
+      else
+        setTimeout(() => signalGroup(group, "SIGKILL"), timing.shellGrace);
+    }
     this.shells.delete(id);
   }
   closeAll() {
     for (const id of [...this.shells.keys()])
-      this.stopShells(id);
+      this.stopShells(id, true);
     for (const [id, live] of this.live) {
       live.go = false;
       live.own = undefined;
@@ -20003,4 +20024,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents ed42182ca994ce5ae7be23ec47a9ab2719f6d5714459492cdd70c63a0ee12635
+// Built from Packages/Box/src/agents 46cb777ea2eb9df91c1590255368e923fb37cf12ab6a49254bd240d5a6b40940

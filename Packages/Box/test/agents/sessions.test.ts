@@ -141,6 +141,7 @@ afterEach(() => {
   unsubscribe()
   sessions.closeAll()
   timing.stopGrace = 8_000
+  timing.shellGrace = 5_000
 })
 
 async function until(condition: () => boolean, ms = 3_000) {
@@ -1389,7 +1390,8 @@ describe("commands you run yourself", () => {
     expect(shells()[1].output.output.length).toBeLessThanOrEqual(50_000)
   })
 
-  test("one still running stops with its session: deleted, or the bridge closing", async () => {
+  test("one still running stops with its session, deleted or the bridge closing: a server it left in the background too, and one that won't stop when asked", async () => {
+    timing.shellGrace = 50
     const running = (pid: number) => {
       try {
         process.kill(pid, 0)
@@ -1401,14 +1403,17 @@ describe("commands you run yourself", () => {
     for (const end of ["deleted", "closed"] as const) {
       const folder = mkdtempSync(join(root, "project-"))
       const id = sessions.create({ model: { providerID: "alpha", id: "one" }, location: { directory: folder } }).id
-      // A server you started, say: it runs on until it's stopped.
-      sessions.runShell(id, "sleep 60 & echo $! > pid; wait")
-      await until(() => existsSync(join(folder, "pid")) && readFileSync(join(folder, "pid"), "utf8").endsWith("\n"))
-      const pid = Number(readFileSync(join(folder, "pid"), "utf8"))
-      expect(running(pid)).toBe(true)
+      // A server you started in the background (the command itself ends at once), and one that
+      // takes no notice of being asked to stop.
+      sessions.runShell(id, "sleep 60 & echo $! > server")
+      sessions.runShell(id, "sh -c 'trap \"\" TERM; exec sleep 60' & echo $! > stubborn")
+      const shells = () => sessions.messages(id).filter((message) => message.type === "shell") as any[]
+      await until(() => shells().length === 2 && shells().every((shell) => shell.status !== "running"), 10_000)
+      const pids = ["server", "stubborn"].map((name) => Number(readFileSync(join(folder, name), "utf8")))
+      expect(pids.every(running)).toBe(true)
       if (end === "deleted") await sessions.remove(id)
       else sessions.closeAll()
-      await until(() => !running(pid))
+      await until(() => !pids.some(running))
     }
   })
 

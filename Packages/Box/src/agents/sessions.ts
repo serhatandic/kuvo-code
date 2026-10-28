@@ -144,11 +144,27 @@ const legacyKeys = ["claudeSession", "claudeStarted", "codexThread", "acpSession
 /** What an agent that has your message already is told when it's to go on with it on another of its models. */
 const carryOn = "Carry on with my last message from where you left off: you're on another model now."
 
-/** How long an agent gets to stop when you press Stop, before its conversation is closed; how long a session's agents keep running with nothing to do (the next message starts them again, in the same conversation); how lately a turn the bridge quit in must have last written for what changed since to count as its own. */
-export const timing = { stopGrace: 8_000, idleClose: 15 * 60_000, cutShort: 2 * 60_000 }
+/** How long an agent gets to stop when you press Stop, before its conversation is closed; how long a session's agents keep running with nothing to do (the next message starts them again, in the same conversation); how lately a turn the bridge quit in must have last written for what changed since to count as its own; how long your `!` commands get to stop once their session goes, before they're made to. */
+export const timing = { stopGrace: 8_000, idleClose: 15 * 60_000, cutShort: 2 * 60_000, shellGrace: 5_000 }
 
 /** In plan mode, what changes files: refused, whatever your rules say. */
 const changes = new Set(["edit", "write", "patch"])
+
+/** Whether anything still runs in process group `group`. */
+function groupRuns(group: number): boolean {
+  try {
+    process.kill(-group, 0)
+    return true
+  } catch (error: any) {
+    return error?.code === "EPERM"
+  }
+}
+
+function signalGroup(group: number, signal: NodeJS.Signals) {
+  try {
+    process.kill(-group, signal)
+  } catch {}
+}
 
 /** How long a command you run with "!" may take, and how much of what it printed is kept. */
 const shellTimeout = 10 * 60_000
@@ -159,7 +175,7 @@ const shellOutputLimit = 50_000
  * (its end, when there's a lot), kept as it comes; stopped whole when it runs too long. Its output
  * stops being waited for a moment after it ends (a job it left running may keep it open).
  */
-export function runCommand(command: string, directory: string, started: (stop: () => void) => void = () => {}): Promise<{ code: number; output: string; truncated: boolean; timedOut: boolean }> {
+export function runCommand(command: string, directory: string, started: (group: number) => void = () => {}): Promise<{ code: number; output: string; truncated: boolean; timedOut: boolean }> {
   return new Promise((resolve) => {
     let output = ""
     let truncated = false
@@ -201,7 +217,7 @@ export function runCommand(command: string, directory: string, started: (stop: (
       group("SIGTERM")
       setTimeout(() => group("SIGKILL"), 5_000)
     }, shellTimeout)
-    started(() => group("SIGTERM"))
+    if (child.pid) started(child.pid)
     child.stdout?.on("data", take)
     child.stderr?.on("data", take)
     child.on("error", (error) => {
@@ -742,8 +758,9 @@ function didWork(message: Message): boolean {
 
 export class Sessions {
   private live = new Map<string, Live>()
-  /** Your `!` commands still running, by session: each stops (its whole group) with its session. */
-  private shells = new Map<string, Set<() => void>>()
+  /** Your `!` commands' process groups, by session, while anything in them runs (a server one left
+   * in the background too): each stops with its session. */
+  private shells = new Map<string, Set<number>>()
 
   constructor(
     private readonly store: Store,
@@ -1113,15 +1130,16 @@ export class Sessions {
     // Run while an agent works: it hasn't seen it when its turn ends, and gets it with your next message.
     if (this.atWork(id)) record.agent.lateShells = [...((record.agent.lateShells as string[] | undefined) ?? []), message.id]
     this.store.save(id, true)
-    let stop = () => {}
-    const running = this.shells.get(id) ?? new Set<() => void>()
-    this.shells.set(id, running)
-    void runCommand(text, directory, (given) => {
-      stop = given
-      running.add(stop)
+    const groups = this.shells.get(id) ?? new Set<number>()
+    for (const group of groups) if (!groupRuns(group)) groups.delete(group)
+    this.shells.set(id, groups)
+    let group: number | undefined
+    void runCommand(text, directory, (started) => {
+      group = started
+      groups.add(started)
     }).then((ran) => {
-      running.delete(stop)
-      if (!running.size && this.shells.get(id) === running) this.shells.delete(id)
+      // Kept while what it started runs on in its group.
+      if (group !== undefined && !groupRuns(group)) groups.delete(group)
       message.status = ran.code === 0 && !ran.timedOut ? "completed" : "failed"
       message.exit = ran.code
       message.output = { output: ran.timedOut ? `${ran.output}\n(Stopped: it ran past ${shellTimeout / 60_000} minutes.)`.trim() : ran.output, truncated: ran.truncated }
@@ -2479,16 +2497,21 @@ export class Sessions {
     emit(answer ? "form.replied" : "form.cancelled", { id: formID, sessionID: id }, this.record(id).session.location.directory)
   }
 
-  /** A session's `!` commands still running, stopped. */
-  private stopShells(id: string) {
-    for (const stop of this.shells.get(id) ?? []) stop()
+  /** A session's `!` commands still running, asked to stop, and made to a moment later (`now`: at
+   * once, as the bridge goes and won't be there to). */
+  private stopShells(id: string, now = false) {
+    for (const group of this.shells.get(id) ?? []) {
+      signalGroup(group, "SIGTERM")
+      if (now) signalGroup(group, "SIGKILL")
+      else setTimeout(() => signalGroup(group, "SIGKILL"), timing.shellGrace)
+    }
     this.shells.delete(id)
   }
 
   /** The bridge is stopping: every turn ends as stopped, every agent's conversation closes, and
    * your `!` commands still running stop. */
   closeAll() {
-    for (const id of [...this.shells.keys()]) this.stopShells(id)
+    for (const id of [...this.shells.keys()]) this.stopShells(id, true)
     for (const [id, live] of this.live) {
       live.go = false
       live.own = undefined
