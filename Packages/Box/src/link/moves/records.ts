@@ -39,6 +39,8 @@ export interface MoveRecord extends Move {
   /** Offered to the other box at least once: a copy may be there, to drop if it's taken back. */
   offered?: boolean;
   sentAt?: number;
+  /** Since when the box it leaves has asked the other to let its copy go (taken back). */
+  dropSince?: number;
   started: number;
   /** Taken back, with why (said to whoever asked). */
   failed?: string;

@@ -7057,6 +7057,9 @@ var IN_FLIGHT = 16;
 var PART_AGAIN = 20000;
 var STEP_AGAIN = 60000;
 var NO_ANSWER = 30000;
+var QUIET_AT_MOST = 10 * 60000;
+var DROP_AT_MOST = 24 * 3600000;
+var heard = new Map;
 var SETTLE_FOR = 60;
 var HELD_AT_MOST = 7 * 24 * 3600000;
 var say = {
@@ -7456,13 +7459,18 @@ async function takeBack(id, message, status = 409) {
     changeMove(id, (each) => {
       each.step = "drop";
       each.sentAt = Date.now();
+      each.dropSince = Date.now();
       each.failed = message;
       each.failedStatus = status;
     });
     tell(record.peer, { op: "drop", id });
+    try {
+      fs38.rmSync(bundleOf(id), { recursive: true, force: true });
+    } catch {}
   } else {
     forgetMove(id);
   }
+  heard.delete(id);
   ended(id, { ok: false, status, message });
 }
 async function restore(record, message) {
@@ -7669,6 +7677,8 @@ async function takeMoveMail(sender, given) {
 }
 async function moveMail(sender, given, id) {
   const record = readMove(id);
+  if (record?.role === "from" && record.peer === sender.key)
+    heard.set(id, Date.now());
   const mine = record && record.peer === sender.key ? record : null;
   switch (given.op) {
     case "offer":
@@ -7775,6 +7785,15 @@ function keepMoving(now = Date.now()) {
       continue;
     }
     const due = now - (record.sentAt ?? 0) > STEP_AGAIN;
+    const quiet = now - Math.max(record.sentAt ?? 0, heard.get(record.id) ?? 0) > QUIET_AT_MOST;
+    if (quiet && (record.step === "parts" || record.step === "arrive" || record.step === "offer" && record.tries > 0)) {
+      inTurn(record.id, () => takeBack(record.id, `${nameOf(record.peer)} stopped answering, so ${record.name} stayed here. Try again once it’s back.`, 503)).catch(() => {});
+      continue;
+    }
+    if (record.step === "drop" && now - (record.dropSince ?? record.started) > DROP_AT_MOST) {
+      forgetMove(record.id);
+      continue;
+    }
     switch (record.step) {
       case "offer":
         if (record.tries === 0 && now - (record.sentAt ?? 0) > NO_ANSWER && !outgoing.get(record.id)?.got.size) {
@@ -7791,10 +7810,6 @@ function keepMoving(now = Date.now()) {
           sendParts(record, now);
         else
           inTurn(record.id, () => takeBack(record.id, `${record.name} didn’t get there. Try again.`, 409)).catch(() => {});
-        break;
-      case "arrive":
-        if (now - (record.sentAt ?? 0) > 10 * STEP_AGAIN)
-          inTurn(record.id, () => takeBack(record.id, `${record.name} couldn’t be set up there. Try again.`, 409)).catch(() => {});
         break;
       case "switch":
         if (due) {
@@ -12479,6 +12494,7 @@ export {
   jobLine,
   keepJobs,
   keepKeeper,
+  keepMoving,
   keepSkillTrashClear,
   keysNamedHere,
   learnCompatibility,

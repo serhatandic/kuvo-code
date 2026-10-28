@@ -41,6 +41,12 @@ const PART_AGAIN = 20_000;
  * computer isn't there. */
 const STEP_AGAIN = 60_000;
 const NO_ANSWER = 30_000;
+/** Before the switch, the other computer quiet this long about a move: it's taken back. */
+const QUIET_AT_MOST = 10 * 60_000;
+/** A copy there to let go of that it never says it let go of: given up on (it goes there by itself). */
+const DROP_AT_MOST = 24 * 3600_000;
+// When the other computer last said something of each move here (its parts' answers come often).
+const heard = new Map<string, number>();
 /** How long the box it leaves waits for its conversations to settle, at most. */
 const SETTLE_FOR = 60;
 /** A copy held here with no word from the box it came from this long goes. */
@@ -404,11 +410,14 @@ async function takeBack(id: string, message: string, status = 409): Promise<void
   if (record.kind === "group") await groupAction(readBridgeFile(), record.thing, "activate").catch(() => {});
   // Offered already: its copy there goes too, once that box says so (`dropped`).
   if (record.offered) {
-    changeMove(id, each => { each.step = "drop"; each.sentAt = Date.now(); each.failed = message; each.failedStatus = status; });
+    changeMove(id, each => { each.step = "drop"; each.sentAt = Date.now(); each.dropSince = Date.now(); each.failed = message; each.failedStatus = status; });
     tell(record.peer, { op: "drop", id });
+    // What it would have sent isn't needed any more.
+    try { fs.rmSync(bundleOf(id), { recursive: true, force: true }); } catch {}
   } else {
     forgetMove(id);
   }
+  heard.delete(id);
   ended(id, { ok: false, status, message });
 }
 
@@ -582,6 +591,7 @@ export async function takeMoveMail(sender: MailSender, given: unknown): Promise<
 
 async function moveMail(sender: MailSender, given: Record<string, unknown>, id: string): Promise<void> {
   const record = readMove(id);
+  if (record?.role === "from" && record.peer === sender.key) heard.set(id, Date.now());
   const mine = record && record.peer === sender.key ? record : null;
   switch (given.op) {
     // To the box it goes to.
@@ -669,6 +679,16 @@ export function keepMoving(now = Date.now()): void {
       continue;
     }
     const due = now - (record.sentAt ?? 0) > STEP_AGAIN;
+    // Before the switch, quiet too long: taken back (one first offered gets 30 seconds, below).
+    const quiet = now - Math.max(record.sentAt ?? 0, heard.get(record.id) ?? 0) > QUIET_AT_MOST;
+    if (quiet && (record.step === "parts" || record.step === "arrive" || (record.step === "offer" && record.tries > 0))) {
+      inTurn(record.id, () => takeBack(record.id, `${nameOf(record.peer)} stopped answering, so ${record.name} stayed here. Try again once it’s back.`, 503)).catch(() => {});
+      continue;
+    }
+    if (record.step === "drop" && now - (record.dropSince ?? record.started) > DROP_AT_MOST) {
+      forgetMove(record.id);
+      continue;
+    }
     switch (record.step) {
       case "offer":
         if (record.tries === 0 && now - (record.sentAt ?? 0) > NO_ANSWER && !outgoing.get(record.id)?.got.size) {
@@ -681,10 +701,6 @@ export function keepMoving(now = Date.now()): void {
       case "parts":
         if (outgoing.has(record.id)) sendParts(record, now);
         else inTurn(record.id, () => takeBack(record.id, `${record.name} didn’t get there. Try again.`, 409)).catch(() => {});
-        break;
-      case "arrive":
-        // Its copy's set up there for a while at most; past that, it's taken back.
-        if (now - (record.sentAt ?? 0) > 10 * STEP_AGAIN) inTurn(record.id, () => takeBack(record.id, `${record.name} couldn’t be set up there. Try again.`, 409)).catch(() => {});
         break;
       case "switch":
         if (due) {

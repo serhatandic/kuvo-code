@@ -88,7 +88,7 @@ export { IS_MAC, LINK_FILE } from "./home";
 export { BRIDGE_VERSION } from "./version";
 export { FEATURES } from "../shared/features";
 export { messageID } from "./engine/sessions";
-export { sendMovesWith, takeMoveMail, watchMoves } from "./moves/move";
+export { keepMoving, sendMovesWith, takeMoveMail, watchMoves } from "./moves/move";
 export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
 export { macLink, readLink, updateLink, writeLink } from "./state";
 export { searchPlugins } from "./areas/plugins";

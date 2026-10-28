@@ -218,3 +218,23 @@ test("a copy whose setting up fails partway leaves nothing here: none of its con
   assert.ok(!fs.existsSync(path.join(wakes, thing)), "and its folder");
   assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
 });
+
+test("the other computer going quiet partway: it's taken back after a while, and the original goes on here", async () => {
+  chat("ses_quiet1");
+  // Lab says it's ready, then nothing more (it went away).
+  script = move => { if (move.op === "offer") say({ op: "ready", id: move.id }); };
+  const before = told.length;
+  const asked = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_quiet1", to: peerKey });
+  await until(() => told.slice(before).some(move => move.op === "part"));
+  // Ten minutes and more later, with no word from it.
+  link.keepMoving(Date.now() + 11 * 60_000);
+  const moved = await asked;
+  assert.equal(moved.status, 503);
+  assert.match(moved.json.message, /lab stopped answering/);
+  await asItWas("ses_quiet1");
+  // It asks lab to let its copy go; one never answered is given up a day later, nothing kept.
+  const records = () => fs.readdirSync(path.join(home, "run", "moves")).filter(name => /^mov_.*\.json$/.test(name) && !name.endsWith(".outcome.json"));
+  assert.equal(records().length, 1);
+  link.keepMoving(Date.now() + 25 * 3600_000);
+  assert.deepEqual(records(), []);
+});
