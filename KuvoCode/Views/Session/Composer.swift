@@ -177,7 +177,7 @@ struct Composer: View {
                 Menu {
                     Button("Discard Comments", role: .destructive, action: onDiscardComments)
                 } label: {
-                    Label(commentCount.counting("comment"), systemImage: "text.bubble")
+                    Text(commentCount.counting("comment"))
                         .font(.system(size: 12, weight: .medium))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
@@ -550,10 +550,11 @@ struct Composer: View {
 
     private var placeholder: String {
         if let prompt { return prompt }
-        if isRunning { return "Add to the task, or ⌘↩ to queue a follow-up…" }
+        // ⌘↩ to queue instead is in the send button's help.
+        if isRunning { return "Add to the task…" }
         if let bot { return bot.job.isEmpty ? "Tell \(bot.name) its job…" : "Message \(bot.name)…" }
-        if folders.first.map(Workspace.isChat) == true { return "Ask anything…" }
-        return agent == "plan" ? "Ask the agent to plan something…" : "Ask the agent to build, fix or explain something…"
+        // The mode is named beside it, so it isn't said again here.
+        return "Ask anything…"
     }
 
     /// Where what's said goes: this composer's session, or a new session's draft.
@@ -1046,36 +1047,42 @@ struct ComposerSurface: ViewModifier {
 
 extension View {
     /// What's over a conversation's end (the composer and the cards over it): the conversation
-    /// scrolls on under it, fading out there in the card's own color, as it does under the card's
-    /// header. An inset rather than a bar: a bar gets AppKit's scroll edge effect, which replays the
+    /// scrolls on under it, out of sight there in the card's own color, and fades out just above
+    /// it (`ConversationEndFade`, which `ConversationScroll` draws under its scroll-to-end button).
+    /// An inset rather than a bar: a bar gets AppKit's scroll edge effect, which replays the
     /// window's background, not the card's, and drew a lighter band with a line across the card.
     func conversationBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
         scrollEdgeEffectHidden(true, for: .bottom)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bar()
                     .frame(maxWidth: .infinity)
-                    // From just above it, below the scroll-to-end button (`ConversationScroll`).
-                    .background { ConversationBarFade().padding(.top, -12) }
+                    .background { ConversationEndFade.Fill() }
             }
     }
 }
 
-private struct ConversationBarFade: View {
-    @Environment(\.colorScheme) private var scheme
-    @Environment(\.cardIsFocused) private var cardIsFocused
+/// The conversation fading out into the card's color above what's over its end, eased so no
+/// edge shows, over the room under the last message (so nothing is faded at the end).
+struct ConversationEndFade: View {
+    static let height: CGFloat = 32
 
     var body: some View {
-        Surface.cardFill(scheme, focused: cardIsFocused)
-            .mask {
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 12)
-                    Color.black
-                }
-            }
-            .animation(.ui, value: cardIsFocused)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+        Fill()
+            .mask { LinearGradient(stops: Surface.easedFade(.black), startPoint: .top, endPoint: .bottom) }
+            .frame(height: Self.height)
+    }
+
+    /// The card's color, under what's over the conversation's end.
+    struct Fill: View {
+        @Environment(\.colorScheme) private var scheme
+        @Environment(\.cardIsFocused) private var cardIsFocused
+
+        var body: some View {
+            Surface.cardFill(scheme, focused: cardIsFocused)
+                .animation(.ui, value: cardIsFocused)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 }
 
@@ -1180,11 +1187,9 @@ private struct ShellModeLabel: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "terminal")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.tint)
             Text("Shell")
                 .fontWeight(.medium)
+                .foregroundStyle(.tint)
             Text("runs \(place)")
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

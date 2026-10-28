@@ -246,15 +246,20 @@ final class WindowTabs {
 
     // MARK: Opening and closing
 
-    /// Shows a tab, opening it next to the current one if needed (the session beside a tab: that
-    /// tab, with it beside, and you in it while it shows), out of Settings and any editor. A
-    /// conversation whose subagent is open in its tab comes back in that tab.
+    /// Shows a tab, opening it next to the current one if needed, out of Settings and any editor.
+    /// The session beside a tab is the one you get, by itself: it comes out of that pair into a tab
+    /// of its own next to it (side by side is only for when you ask), unless the pair is in view,
+    /// where you work in it. A conversation whose subagent is open in its tab comes back in that tab.
     func open(_ key: TabKey) {
-        if !keys.contains(key), let id = key.sessionID, workspace.session(id) != nil,
+        var pair = pairs.first { $0.value == key.sessionID && keys.contains($0.key) }?.key
+        if let tab = pair, !(tab == selection && showsBeside) {
+            closeBeside(tab)
+            pair = nil
+        }
+        if pair == nil, !keys.contains(key), let id = key.sessionID, workspace.session(id) != nil,
            let subagent = keys.first(where: { $0.sessionID.map { workspace.session($0) == nil && workspace.root(of: $0) == id } ?? false }) {
             return swap(subagent, for: key)
         }
-        let pair = pairs.first { $0.value == key.sessionID && keys.contains($0.key) }?.key
         let key = pair ?? key
         if !keys.contains(key) {
             let index = selection.flatMap { keys.firstIndex(of: $0) }.map { $0 + 1 } ?? keys.count
@@ -503,16 +508,6 @@ final class WindowTabs {
             selection = .session(id)
         } else if !keys.contains(.session(id)) {
             keys.append(.session(id))
-        }
-    }
-
-    /// A session an agent started: beside the conversation that started it, if that's the one in
-    /// view; otherwise (or asked to) in a tab of its own, for you to find.
-    func agentStarted(_ id: String, by starter: String, beside: Bool) {
-        if beside, starter == sessionID {
-            openBeside(id)
-        } else {
-            add(.session(id))
         }
     }
 

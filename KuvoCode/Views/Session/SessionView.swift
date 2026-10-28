@@ -646,7 +646,7 @@ struct DraftSessionView: View {
             .readableColumn()
 
             if isCreating, isRepository, worktree {
-                Label(attempts > 1 ? "Setting up \(attempts) worktrees…" : "Setting up a worktree…", systemImage: "arrow.triangle.branch")
+                Text(attempts > 1 ? "Setting up \(attempts) worktrees…" : "Setting up a worktree…")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.top, 12)

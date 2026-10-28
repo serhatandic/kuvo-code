@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 
@@ -19,8 +20,9 @@ enum StepsDetail: String, CaseIterable, Identifiable {
     }
 }
 
-/// The agent's steps between two of its replies, in a line ("Thought for 40s, ran 6 commands,
-/// read 3 files"), opening to each. While it works, the step under way shows under the line.
+/// The agent's steps between two of its replies, in a line ("Worked for 40s", or how many while it
+/// works), opening to what they were ("Thought for 40s, ran 6 commands, read 3 files") and each.
+/// While it works, the step under way shows under the line.
 struct StepsRow: View {
     let blocks: [Message.Content]
     let isLive: Bool
@@ -40,9 +42,7 @@ struct StepsRow: View {
                         withAnimation(.ui) { isExpanded.toggle() }
                     } label: {
                         HStack(spacing: 8) {
-                            Image(systemName: "list.bullet")
-                                .frame(width: 16)
-                            Text(detail == .minimal ? Self.count(done) : Self.summary(of: done))
+                            Text(line(done))
                                 .lineLimit(1)
                             Image(systemName: "chevron.right")
                                 .font(.caption2.weight(.semibold))
@@ -53,9 +53,17 @@ struct StepsRow: View {
                     }
                     .buttonStyle(TextButtonStyle(outset: true))
                     .help(isExpanded ? "Hide the steps" : "Show each step")
+                    // What they were, read with how long they took.
+                    .accessibilityLabel(timed(done) ? line(done) + ": " + Self.summary(of: done) : line(done))
                     if isExpanded {
                         // Together, so they fold as one, the space above them too.
                         VStack(alignment: .leading, spacing: 10) {
+                            // What they were, when the line says only how long they took.
+                            if timed(done) {
+                                Text(Self.summary(of: done))
+                                    .font(.callout)
+                                    .foregroundStyle(.tertiary)
+                            }
                             ForEach(Array(done.enumerated()), id: \.offset) { _, block in step(block) }
                         }
                         .padding(.top, 10)
@@ -80,6 +88,22 @@ struct StepsRow: View {
             }
         }
         #endif
+    }
+
+    /// "Worked for 40s" once they're done (what they were, if they don't say when they ran), how
+    /// many while it works, and only how many in Minimal.
+    private func line(_ done: [Message.Content]) -> String {
+        if detail == .minimal || isLive { return Self.count(done) }
+        return StepTime.seconds(of: done).map { "Worked for " + MessageTime.duration($0) + Self.outcomes(of: done) } ?? Self.summary(of: done)
+    }
+
+    private func timed(_ done: [Message.Content]) -> Bool {
+        !isLive && Self.saysTime(done, detail: detail)
+    }
+
+    /// The line says how long these took: the turn's end then doesn't say it again.
+    static func saysTime(_ blocks: [Message.Content], detail: StepsDetail) -> Bool {
+        detail == .summary && StepTime.seconds(of: blocks) != nil
     }
 
     @ViewBuilder private func step(_ block: Message.Content) -> some View {
@@ -120,12 +144,17 @@ struct StepsRow: View {
             parts.append("thought for " + MessageTime.duration(max(1, Int(thought))))
         }
         if !calls.isEmpty { parts.append(StepsSummary.summary(of: calls, capitalized: false)) }
-        // One you stopped (or that quitting cut off) says so, as its own row does.
-        let ended = calls.compactMap { if case .failed(_, let error, _, _) = $0.state { error } else { nil } }
+        let text = parts.joined(separator: ", ") + outcomes(of: blocks)
+        return text.prefix(1).uppercased() + text.dropFirst()
+    }
+
+    /// " (1 failed)", or "(1 stopped)" for one you stopped (or that quitting cut off), as its own
+    /// row says; nothing when they all went through.
+    static func outcomes(of blocks: [Message.Content]) -> String {
+        let ended = blocks.compactMap { if case .tool(let call) = $0, case .failed(_, let error, _, _) = call.state { error } else { nil } }
         let stopped = ended.count(where: \.isInterruption)
         let outcomes = [(ended.count - stopped, "failed"), (stopped, "stopped")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
-        let text = parts.joined(separator: ", ") + (outcomes.isEmpty ? "" : " (" + outcomes.joined(separator: ", ") + ")")
-        return text.prefix(1).uppercased() + text.dropFirst()
+        return outcomes.isEmpty ? "" : " (" + outcomes.joined(separator: ", ") + ")"
     }
 }
 

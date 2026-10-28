@@ -114,14 +114,14 @@ struct GoalBar: View {
         HStack(spacing: 2) {
             switch goal.state {
             case .working:
-                Button("Pause", systemImage: "pause", action: pause)
+                Button("Pause", action: pause)
                     .help("Let the turn under way finish, then hold the goal")
-                Button("Stop", systemImage: "stop.circle") { confirmsStop = true }
+                Button("Stop") { confirmsStop = true }
                     .help("Stop the agent and take the goal away")
             case .paused:
-                Button("Resume", systemImage: "play", action: resume)
+                Button("Resume", action: resume)
                     .help("Check what it last did, and carry on unless that met the goal")
-                Button("Stop", systemImage: "stop.circle") { confirmsStop = true }
+                Button("Stop") { confirmsStop = true }
                     .help("Take the goal away")
             case .met, .unmet:
                 EmptyView()

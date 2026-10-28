@@ -403,11 +403,16 @@ struct ToolCallView: View {
         return (RemoteFolder.fileURL(path, in: directory), isFolder)
     }
 
-    /// The session a start_session step started, once it's listed here.
+    /// The session a start_session step started, once it's listed here: by the address its result
+    /// gives, or while it waits for the session's first answer, the one started since it began.
     private var startedSession: String? {
-        guard call.name == "kuvo-browser_start_session", case .completed = call.state,
-              let id = Branches.started(byStep: outputText), app.workspace.session(id) != nil else { return nil }
-        return id
+        guard call.name == "kuvo-browser_start_session" else { return nil }
+        let id: String? = switch call.state {
+        case .completed: Branches.started(byStep: outputText)
+        case .running: Branches.started(byWaiting: call, among: app.workspace.sessions)
+        case .streaming, .failed: nil
+        }
+        return id.flatMap { app.workspace.session($0) != nil ? $0 : nil }
     }
 
     /// The session a subagent works in, once it has started.

@@ -76,6 +76,15 @@ public enum Surface {
         }
     }
 
+    /// A fade from clear to `color` between `start` and `end` (0 to 1 along the gradient) that
+    /// eases in and out, so no edge shows where it begins or ends, as a straight one's does.
+    public static func easedFade(_ color: Color, from start: CGFloat = 0, to end: CGFloat = 1) -> [Gradient.Stop] {
+        (0...8).map { step in
+            let t = CGFloat(step) / 8
+            return .init(color: color.opacity(t * t * (3 - 2 * t)), location: start + (end - start) * t)
+        }
+    }
+
     /// The accent glass's fill: a soft wash of the accent color.
     public static func accentWash(_ scheme: ColorScheme, accent: Color = .accentColor) -> Color {
         accent.opacity(scheme == .dark ? 0.22 : 0.1)

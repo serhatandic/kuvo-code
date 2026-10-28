@@ -20,11 +20,9 @@ final class Workspace {
             for model in models.values where !RemoteFolder.isRemote(model.session.location.directory) && !OutsideAgents.isAgentSession(model.session) { model.reconnect(api) }
         }
     }
-    /// The main window's tabs, where a fork, a move to the coding agents and an agent's new session
-    /// open (the app sets it; none in a test of the workspace alone).
+    /// The main window's tabs, where a fork and a move to the coding agents open (the app sets it;
+    /// none in a test of the workspace alone).
     @ObservationIgnored weak var tabs: WindowTabs?
-    /// Sessions agents started that have been shown (see `noteBeside`).
-    @ObservationIgnored private var askedBeside: Set<String> = []
 
     /// The agents bridge: sessions with Claude Code, Codex, Cursor, Grok and Antigravity go to it,
     /// whatever their folder (on this Mac).
@@ -2784,23 +2782,12 @@ final class Workspace {
         }
     }
 
-    /// A session an agent started (its start_session tool) shows beside the conversation that
-    /// started it or in a tab of its own, as its metadata says (`kuvo.startedBy`, `kuvo.beside`):
-    /// once, the first time it's seen, while it's new, wherever it runs.
-    private func noteBeside(_ session: Session) {
-        guard let kuvo = session.metadata?["kuvo"], let starter = kuvo["startedBy"]?.string,
-              Date.now.timeIntervalSince1970 * 1000 - session.time.created < 120_000,
-              askedBeside.insert(session.id).inserted else { return }
-        tabs?.agentStarted(session.id, by: starter, beside: kuvo["beside"]?.bool != false)
-    }
-
     private func upsert(_ session: Session) {
         guard !isHidden(session) else {
             sessions.removeAll { $0.id == session.id }
             return
         }
         nameBranch(of: session)
-        defer { noteBeside(session) }
         var session = session
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
             let wasArchived = Self.isArchived(sessions[index])

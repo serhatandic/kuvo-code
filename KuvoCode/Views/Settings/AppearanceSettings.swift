@@ -120,7 +120,7 @@ struct AppearanceSettings: View {
     private var stepsCaption: String {
         switch steps {
         case .each: "Every step the agent takes, as it takes it."
-        case .summary: "Its steps between replies in a line, like “Ran 6 commands, read 3 files”, that opens to each."
+        case .summary: "Its steps between replies in a line, like “Worked for 40s”, that opens to each."
         case .minimal: "Only how many steps it took, to open if you want."
         }
     }
