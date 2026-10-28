@@ -33,8 +33,6 @@ struct VoiceSettings: View {
                 Text("Shortcut")
                 Text("Hold it to talk, or press it to start and again to stop.")
             }
-        }
-        Section("Speech model") {
             SpeechModelRow(model: .shared)
         }
     }

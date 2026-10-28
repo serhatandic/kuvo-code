@@ -383,7 +383,7 @@ struct Composer: View {
             // now, where you type.
             let left = old ?? "new:" + (folders.first ?? "")
             if app.dictation.isListening(for: left) {
-                if app.dictation.voice?.phase == .listening { app.dictation.finish() } else { app.dictation.cancel() }
+                if app.dictation.voice?.phase == .listening || app.dictation.voice?.keepsWords == true { app.dictation.finish() } else { app.dictation.cancel() }
             }
             app.dictation.withdraw(left)
             if fieldHasKeyboard { offerVoice() }
@@ -579,18 +579,7 @@ struct Composer: View {
 
     /// Talk instead of typing: what you say goes after what's written, and nothing is sent.
     private var voiceButton: some View {
-        Button(action: startVoice) {
-            Image(systemName: "mic")
-                .font(.system(size: 14, weight: .medium))
-                .frame(width: 30, height: 28)
-                .overlay { MicRing(model: .shared) }
-                .hoverHighlight(in: Capsule(), mutesInk: true)
-        }
-        .buttonStyle(.plain)
-        .clickablePointer()
-        .help(["Talk Instead of Typing (⇧⌘Space)", MicRing.words(.shared)].compactMap(\.self).joined(separator: "\n"))
-        .accessibilityLabel("Voice Input")
-        .accessibilityValue(MicRing.words(.shared) ?? "")
+        MicButton(owner: voiceOwner, start: startVoice)
     }
 
     private func startVoice() {

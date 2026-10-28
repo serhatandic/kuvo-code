@@ -128,6 +128,90 @@ func whisperWritesTheProjectsNamesAsTheyreWrittenAndNothingInThePause() async th
     }
 }
 
+// Voice input as you'd use it, with a recording for the microphone: once Whisper is loaded it
+// listens, each phrase is written after its pause while you go on, and Done writes the last one
+// and puts it all in the message. (Once, nothing was written and Done stayed dimmed: Whisper
+// loaded for minutes behind a listening line.) Needs the model, as above.
+@MainActor
+@Test(.enabled(if: ProcessInfo.processInfo.environment["KUVO_TEST_WHISPER_MODEL"] != nil))
+func eachPhraseIsWrittenAfterItsPauseAndDonePutsInTheLast() async throws {
+    let folder = URL(fileURLWithPath: ProcessInfo.processInfo.environment["KUVO_TEST_WHISPER_MODEL"]!)
+    let scratch = FileManager.default.temporaryDirectory.appending(path: "kuvo-voice-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: scratch) }
+    // A clone of the model in the test's own folder (instant, and no room taken), made ready for
+    // this system: the model's own folder is never touched.
+    let speech = scratch.appending(path: "Speech")
+    try FileManager.default.createDirectory(at: speech, withIntermediateDirectories: true)
+    try FileManager.default.copyItem(at: folder, to: speech.appending(path: folder.lastPathComponent))
+    try Data(SpeechModel.system.utf8).write(to: speech.appending(path: folder.lastPathComponent).appending(path: SpeechModel.preparedMark))
+    let model = SpeechModel(defaults: UserDefaults(suiteName: "kuvo-voice-\(UUID().uuidString)")!, compiled: [])
+    model.use(folder: speech)
+    try #require(model.listensWithWhisper)
+    let voice = VoiceInput(model: model)
+    var told: [String] = []
+    voice.ended = { told.append($0) }
+    let (clip, feed) = AsyncStream<[Float]>.makeStream()
+    voice.start(locale: Locale(identifier: "en_US"), words: { ["src/timer.ts", "npm test", "useEffect", "fetchUser"] }, clip: clip)
+    while voice.phase != .listening {
+        if case .failed(let failure) = voice.phase { Issue.record("\(failure.message)"); return }
+        await Task.yield()
+    }
+    // A phrase, then a pause: it's written while you go on.
+    let first = try spoken("Open S R C slash timer dot T S.", in: scratch) + quiet(1.5)
+    stride(from: 0, to: first.count, by: 1_600).forEach { feed.yield(Array(first[$0..<min($0 + 1_600, first.count)])) }
+    while voice.transcript.confirmed.isEmpty { await Task.yield() }
+    #expect(voice.transcript.confirmed.contains("src/timer.ts"), "\(voice.transcript.text)")
+    // Another, and Done straight after it.
+    let second = try spoken("Then add a use effect hook that calls fetch user.", in: scratch)
+    stride(from: 0, to: second.count, by: 1_600).forEach { feed.yield(Array(second[$0..<min($0 + 1_600, second.count)])) }
+    voice.finish()
+    // The microphone stops: what it heard is all there is.
+    feed.finish()
+    while voice.phase != .idle { await Task.yield() }
+    #expect(told.count == 1)
+    for name in ["src/timer.ts", "useEffect", "fetchUser"] {
+        #expect(told.first?.contains(name) == true, "\(told)")
+    }
+}
+
+// Whisper loads before anything listens (once, a listening line ran for minutes with nothing
+// written while it loaded, and Done waited on it): Done while it loads ends at once, with
+// nothing heard. A model that can't load says so, plainly, and Done and Cancel still close it.
+@MainActor
+@Test func doneWhileWhisperLoadsEndsAtOnceAndAModelThatWontLoadSaysSo() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    // Downloaded and made ready, as far as it knows: its files aren't Whisper's.
+    let model = rig.model()
+    model.isOn = true
+    #expect(await settled(model) == .ready)
+    let voice = VoiceInput(model: model)
+    var told: [String] = []
+    voice.ended = { told.append($0) }
+    let (clip, feed) = AsyncStream<[Float]>.makeStream()
+    defer { feed.finish() }
+    voice.start(clip: clip)
+    #expect(voice.phase == .preparing(progress: nil))
+    voice.finish()
+    #expect(voice.phase == .idle)
+    #expect(told == [""])
+    // Left to load, it can't; and while it tries, nothing seems to listen.
+    voice.start(clip: clip)
+    var listened = false
+    while voice.isActive {
+        if voice.phase == .listening { listened = true }
+        await Task.yield()
+    }
+    #expect(!listened)
+    guard case .failed(let failure) = voice.phase else { Issue.record("not failed: \(voice.phase)"); return }
+    #expect(failure.message.hasPrefix("Voice input couldn’t start"))
+    #expect(!voice.keepsWords)
+    voice.finish()
+    #expect(voice.phase == .idle)
+    #expect(told == ["", ""])
+}
+
 /// `words`, said by macOS's own voice, as 16 kHz samples.
 private func spoken(_ words: String, in folder: URL) throws -> [Float] {
     let file = folder.appending(path: "\(UUID().uuidString).wav")
@@ -192,6 +276,12 @@ private final class Rig {
         "tokenizer.json": Data(#"{"model":{}}"#.utf8),
     ]
     nonisolated let prepared = Mutex<[URL]>([])
+    /// How much room the disk has.
+    nonisolated let free = Mutex<Int64>(10_000_000_000)
+    /// Where Core ML would keep its copy made ready for the chip.
+    var compiled: URL { folder.appending(path: "compiled") }
+    /// How large a copy Core ML keeps when it's made ready (nil: kept where the app can't see).
+    nonisolated let keeps = Mutex<Int64?>(nil)
     let defaults: UserDefaults
 
     init() {
@@ -209,10 +299,21 @@ private final class Rig {
     }
 
     func model(free: Int64? = nil) -> SpeechModel {
+        if let free { self.free.withLock { $0 = free } }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubHub.self]
-        let model = SpeechModel(files: files, defaults: defaults, session: configuration, supported: true, freeSpace: { _ in free ?? 10_000_000_000 },
-                                prepare: { [self] folder in prepared.withLock { $0.append(folder) } })
+        let model = SpeechModel(files: files, defaults: defaults, session: configuration, supported: true, freeSpace: { [self] _ in self.free.withLock { $0 } },
+                                prepare: { [self, compiled] folder in
+                                    prepared.withLock { $0.append(folder) }
+                                    // As Core ML would: its copy, without taking the room (a sparse file).
+                                    guard let size = keeps.withLock({ $0 }) else { return }
+                                    let copy = compiled.appending(path: "26A434/encoder.bundle")
+                                    try FileManager.default.createDirectory(at: copy.deletingLastPathComponent(), withIntermediateDirectories: true)
+                                    FileManager.default.createFile(atPath: copy.path, contents: nil)
+                                    let handle = try FileHandle(forWritingTo: copy)
+                                    try handle.truncate(atOffset: UInt64(size))
+                                    try handle.close()
+                                }, compiled: [compiled])
         model.use(folder: folder)
         return model
     }
@@ -233,26 +334,184 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
     return model.state
 }
 
+// Apple's dictation is voice input until you turn more accurate voice input on: pressing the
+// mic downloads nothing, and nothing comes from the network.
 @MainActor
-@Test func theFirstTimeYouTalkItDownloadsAndIsMadeReady() async throws {
+@Test func voiceInputListensWithDictationAndDownloadsNothingUntilWhisperIsTurnedOn() async throws {
     let rig = Rig()
     defer { rig.done() }
     let model = rig.model()
     #expect(model.state == .absent)
-    model.voiceStarted()
+    #expect(!model.isOn)
+    #expect(!model.listensWithWhisper)
+    #expect(!model.isUnderway)
+    #expect(model.progressWords == nil)
+    #expect(rig.model().state == .absent)
+    #expect(rig.requests.isEmpty)
+}
+
+// Turned on, it comes while Apple's dictation goes on listening, and voice input uses it from
+// the time it's ready; turned off, dictation again, with what came kept until Remove.
+@MainActor
+@Test func turnedOnWhisperTakesOverOnceReadyAndTurnedOffDictationIsBack() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    let model = rig.model()
+    model.isOn = true
     #expect(model.state == .downloading)
+    #expect(!model.listensWithWhisper)
+    #expect(model.isUnderway)
+    #expect(model.progressWords?.hasPrefix("More accurate voice input: downloading") == true)
     #expect(await settled(model) == .ready)
-    #expect(model.received == model.size)
-    #expect(model.isNewlyReady)
+    #expect(model.listensWithWhisper)
+    #expect(model.progressWords == nil)
     // In its folder, checked, made ready once; nothing left half-done.
     let kept = rig.folder.appending(path: "whisper-large-v3-turbo")
     #expect(FileManager.default.contents(atPath: kept.appending(path: "tokenizer.json").path) == rig.contents["tokenizer.json"])
     #expect(!FileManager.default.fileExists(atPath: rig.folder.appending(path: "partial").path))
     #expect(rig.prepared.withLock { $0 }.map(\.path) == [kept.path])
-    // Opened again later, it's there, without downloading.
+    // Opened again later, it's there and on, without downloading.
     let again = rig.model()
-    #expect(again.state == .ready)
+    #expect(again.listensWithWhisper)
     #expect(rig.requests.count == rig.contents.count)
+    // Off: dictation again, and the download stays until it's removed.
+    again.isOn = false
+    #expect(!again.listensWithWhisper)
+    #expect(FileManager.default.fileExists(atPath: kept.path))
+    #expect(again.status(device: "Mac").hasPrefix("Off · "))
+    // On again: at once, nothing downloaded.
+    again.isOn = true
+    #expect(again.listensWithWhisper)
+    #expect(rig.requests.count == rig.contents.count)
+}
+
+// Downloaded before it was a setting, it stays on.
+@MainActor
+@Test func aModelDownloadedBeforeItWasASettingStaysOn() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    let first = rig.model()
+    first.isOn = true
+    #expect(await settled(first) == .ready)
+    rig.defaults.removeObject(forKey: "voice.whisper.on")
+    #expect(rig.model().listensWithWhisper)
+}
+
+// After the first dictation, never before it, the tip that voice input can be more accurate
+// shows once; not while it's on, nor on a device that can't run it.
+@MainActor
+@Test func theTipAboutMoreAccurateVoiceInputShowsOnceAfterTheFirstDictation() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    let model = rig.model()
+    #expect(VoiceTip.takeTurn(model: model, defaults: rig.defaults))
+    #expect(!VoiceTip.takeTurn(model: model, defaults: rig.defaults))
+    // Turned on before the first dictation: no tip.
+    let other = Rig()
+    defer { other.done() }
+    let on = other.model()
+    on.isOn = true
+    #expect(!VoiceTip.takeTurn(model: on, defaults: other.defaults))
+    // A device that can't run it: none.
+    let old = Rig()
+    defer { old.done() }
+    let unsupported = SpeechModel(files: old.files, defaults: old.defaults, supported: false)
+    unsupported.use(folder: old.folder)
+    #expect(!VoiceTip.takeTurn(model: unsupported, defaults: old.defaults))
+    #expect(VoiceTip.line(device: "Mac") == "Uses a more capable model that runs on this Mac.")
+}
+
+// An iPhone too old for Whisper keeps voice input, with Apple's dictation, and never downloads a
+// model it can't run.
+@MainActor
+@Test func aDeviceThatCantRunWhisperListensWithoutDownloadingIt() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    let model = SpeechModel(files: rig.files, defaults: rig.defaults, supported: false)
+    model.use(folder: rig.folder)
+    #expect(model.state == .unsupported)
+    model.isOn = true
+    #expect(model.state == .unsupported)
+    #expect(!model.listensWithWhisper)
+    #expect(rig.requests.isEmpty)
+}
+
+// Made ready once, voice input opens within seconds after that; a system update needs it made
+// ready again, which happens in the background as the app opens, not once you press the mic.
+// Without room for the copy made ready for the chip, Core ML couldn't keep it and every load would
+// take minutes: it says how much it needs instead, and goes on once there's room.
+@MainActor
+@Test func aSystemUpdateMakesItReadyAgainInTheBackgroundIfThereIsRoom() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    let model = rig.model()
+    model.isOn = true
+    #expect(await settled(model) == .ready)
+    #expect(rig.model().state == .ready)
+    #expect(rig.prepared.withLock { $0.count } == 1)
+    // Made ready for an older system.
+    let mark = rig.folder.appending(path: "whisper-large-v3-turbo").appending(path: ".prepared")
+    try Data("Version 26.0 (Build 25A1)".utf8).write(to: mark)
+    rig.free.withLock { $0 = 1_000_000_000 }
+    let updated = rig.model()
+    guard case .lowSpace(let free) = updated.state else { Issue.record("not low on space: \(updated.state)"); return }
+    #expect(free == 1_000_000_000)
+    #expect(updated.status(device: "Mac").contains("GB free"))
+    #expect(!updated.listensWithWhisper)
+    // Room made: Try Again makes it ready, without downloading anything again.
+    rig.free.withLock { $0 = 10_000_000_000 }
+    let before = rig.requests.count
+    updated.download()
+    #expect(await settled(updated) == .ready)
+    #expect(rig.prepared.withLock { $0.count } == 2)
+    #expect(rig.requests.count == before)
+    #expect(rig.model().state == .ready)
+}
+
+// Core ML's copy for the chip is what makes loading take seconds: the system may clear it, and
+// then it's made ready again in the background; a copy Core ML couldn't keep (no room) is said
+// as such, rather than every press taking minutes.
+@MainActor
+@Test func aCopyForTheChipThatsGoneIsMadeAgainAndOneThatWasntKeptSaysWhatItNeeds() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.keeps.withLock { $0 = 600_000_000 }
+    let model = rig.model()
+    model.isOn = true
+    #expect(await settled(model) == .ready)
+    #expect(model.status(device: "Mac").hasPrefix("In use · about"))
+    // The system cleared caches: made ready again as the app opens.
+    try FileManager.default.removeItem(at: rig.compiled)
+    let reopened = rig.model()
+    #expect(reopened.state == .preparing)
+    #expect(await settled(reopened) == .ready)
+    #expect(rig.prepared.withLock { $0.count } == 2)
+    // Core ML ran out of room for it: not ready, and it says so.
+    rig.keeps.withLock { $0 = 1_000 }
+    try FileManager.default.removeItem(at: rig.compiled)
+    let full = rig.model()
+    guard case .lowSpace = await settled(full) else { Issue.record("not low on space: \(full.state)"); return }
+    #expect(full.status(device: "Mac").hasPrefix("Needs "))
+    #expect(!full.listensWithWhisper)
+}
+
+// Made ready before this version kept the size of Core ML's copy: with that copy still here,
+// it's made ready again in seconds, even without room for a new one.
+@MainActor
+@Test func aCopyMadeReadyBeforeIsUsedWithoutAskingForRoomAgain() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.keeps.withLock { $0 = 3_100_000_000 }
+    let model = rig.model()
+    model.isOn = true
+    #expect(await settled(model) == .ready)
+    let mark = rig.folder.appending(path: "whisper-large-v3-turbo").appending(path: ".prepared")
+    try Data().write(to: mark)
+    rig.free.withLock { $0 = 1_000_000_000 }
+    let updated = rig.model()
+    #expect(updated.state == .preparing)
+    #expect(await settled(updated) == .ready)
+    #expect(updated.wasPrepared)
 }
 
 @MainActor
@@ -264,12 +523,11 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
     let partial = rig.folder.appending(path: "partial").appending(path: path)
     try FileManager.default.createDirectory(at: partial.deletingLastPathComponent(), withIntermediateDirectories: true)
     try whole.prefix(120_000).write(to: partial)
+    rig.defaults.set(true, forKey: "voice.whisper.on")
     let model = rig.model()
-    #expect(model.state == .paused)
-    #expect(model.received == 120_000)
-    // Not paused by you: it's still coming, and goes on the next time you talk.
+    // On, and not paused by you: it goes on by itself as the app opens.
+    #expect(model.state == .downloading)
     #expect(model.isUnderway)
-    model.voiceStarted()
     #expect(await settled(model) == .ready)
     #expect(rig.requests.first { $0.path.hasSuffix("weight.bin") }?.range == "bytes=120000-")
     #expect(FileManager.default.contents(atPath: rig.folder.appending(path: "whisper-large-v3-turbo").appending(path: path).path) == whole)
@@ -281,7 +539,7 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
     defer { rig.done() }
     rig.serve("tokenizer.json", Data(#"{"model":[]}"#.utf8))
     let model = rig.model()
-    model.download()
+    model.isOn = true
     guard case .failed(let words) = await settled(model) else { Issue.record("not failed: \(model.state)"); return }
     #expect(words.contains("didn’t match"))
     #expect(rig.prepared.withLock { $0 }.isEmpty)
@@ -299,29 +557,31 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
     let rig = Rig()
     defer { rig.done() }
     let model = rig.model(free: 40_000_000)
-    model.voiceStarted()
+    model.isOn = true
     #expect(model.state == .lowSpace(free: 40_000_000))
+    #expect(model.status(device: "Mac").hasSuffix("40 MB free"))
     #expect(rig.requests.isEmpty)
 }
 
 @MainActor
-@Test func removedItsGoneAndDoesntComeBackByItself() async throws {
+@Test func removedItsGoneAndDictationListensAgain() async throws {
     let rig = Rig()
     defer { rig.done() }
     let model = rig.model()
-    model.download()
+    model.isOn = true
     #expect(await settled(model) == .ready)
+    try FileManager.default.createDirectory(at: rig.compiled.appending(path: "encoder.bundle"), withIntermediateDirectories: true)
     model.remove()
     #expect(model.state == .absent)
     #expect(model.received == 0)
     #expect(!FileManager.default.fileExists(atPath: rig.folder.appending(path: "whisper-large-v3-turbo").path))
-    // Talking again keeps to Apple's dictation; choosing it in Settings brings it back.
-    let before = rig.requests.count
-    model.voiceStarted()
-    #expect(model.state == .absent)
+    // The copy made ready for the chip goes too, once Whisper is let go: it's larger than the model.
+    while FileManager.default.fileExists(atPath: rig.compiled.path) { await Task.yield() }
+    // It stays gone and off: Apple's dictation listens, and turning it on brings it back.
     #expect(rig.model().state == .absent)
-    #expect(rig.requests.count == before)
-    model.download()
+    #expect(!model.isOn)
+    #expect(!model.listensWithWhisper)
+    model.isOn = true
     #expect(await settled(model) == .ready)
 }
 
@@ -330,15 +590,14 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
     let rig = Rig()
     defer { rig.done() }
     let model = rig.model()
-    model.download()
+    model.isOn = true
     model.pause()
     #expect(model.state == .paused)
     #expect(!model.isUnderway)
-    model.voiceStarted()
-    #expect(model.state == .paused)
     let reopened = rig.model()
-    reopened.voiceStarted()
     #expect(reopened.isPausedByYou)
+    #expect(!reopened.isUnderway)
+    // Resume, in Settings: it goes on.
     reopened.download()
     let end = await settled(reopened)
     #expect(end == .ready)
@@ -353,8 +612,8 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
     let partial = rig.folder.appending(path: "partial").appending(path: path)
     try FileManager.default.createDirectory(at: partial.deletingLastPathComponent(), withIntermediateDirectories: true)
     try rig.contents[path]!.write(to: partial)
+    rig.defaults.set(true, forKey: "voice.whisper.on")
     let model = rig.model()
-    model.voiceStarted()
     #expect(await settled(model) == .ready)
     #expect(!rig.requests.contains { $0.path.hasSuffix("weight.bin") })
 }

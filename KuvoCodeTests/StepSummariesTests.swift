@@ -30,6 +30,15 @@ import Testing
         #expect(try words("read", ["path": "/Users/me/web"]) == "Read web")
     }
 
+    /// A subagent's row says what it's doing while its step runs ("Sleeping", not "Used sleep"),
+    /// and what it did once that's done.
+    @Test func aStepUnderWayInThePresentAndDoneInThePast() throws {
+        #expect(StepsSummary.doing(try step("sleep", ["seconds": 180], running: true)) == "Sleeping")
+        #expect(StepsSummary.summary(of: [try step("sleep", ["seconds": 180])]) == "Slept")
+        #expect(StepsSummary.doing(try step("bash", ["command": "swift test"], running: true)) == "Running a command")
+        #expect(StepsSummary.summary(of: [try step("bash", ["command": "swift test"])]) == "Ran a command")
+    }
+
     @Test func aPatchOfSeveralFiles() throws {
         let files: [[String: Any]] = [["file": "/Users/me/web/a.swift", "patch": "x", "additions": 1, "deletions": 0],
                                       ["file": "/Users/me/web/b.swift", "patch": "y", "additions": 1, "deletions": 0]]

@@ -16,6 +16,9 @@ public struct StepActivity: View {
     let symbol: String?
     let running: Bool
     let size: CGFloat
+    /// Running, but something under it shows the work (its open steps): its arc holds still, as
+    /// with Reduce Motion, so only the deepest step at work moves.
+    let holds: Bool
     /// Whether the ring is still up: while it runs, and for its closing motion once it ends.
     @State private var ringed: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -28,10 +31,12 @@ public struct StepActivity: View {
     nonisolated static let closing: CFTimeInterval = 0.35
 
     /// `size` is the icon's column: the ring fills it, and the icon keeps the width it has there.
-    public init(symbol: String?, running: Bool, size: CGFloat = 16) {
+    /// `holds`: running, with the work shown deeper down, so its arc holds still.
+    public init(symbol: String?, running: Bool, size: CGFloat = 16, holds: Bool = false) {
         self.symbol = symbol
         self.running = running
         self.size = size
+        self.holds = holds
         _ringed = State(initialValue: running)
     }
 
@@ -68,7 +73,7 @@ public struct StepActivity: View {
 
     @ViewBuilder private var ring: some View {
         if ringed || running {
-            StepRingHost(running: running, size: size, around: symbol != nil, still: reduceMotion,
+            StepRingHost(running: running, size: size, around: symbol != nil, still: reduceMotion || holds,
                          ink: StatusMarkInk(scheme: scheme, accent: accent))
                 .frame(width: size, height: size)
         }

@@ -173,6 +173,39 @@ enum StepsSummary {
         return capitalized ? text.prefix(1).uppercased() + text.dropFirst() : text
     }
 
+    /// A step still under way, in a few words, as it happens: "Running a command", "Sleeping".
+    static func doing(_ step: Message.ToolCall) -> String {
+        let kind = kind(of: step.name)
+        switch kind {
+        case "websearch": return "Searching the web"
+        case "webfetch": return "Fetching a page"
+        case "read": return "Reading a file"
+        case "search": return "Searching the files"
+        case "shell": return "Running a command"
+        case "edit": return "Editing a file"
+        case "browser": return "Using the browser"
+        case "subagent": return "Handing off a task"
+        case "question": return "Asking you a question"
+        case "show": return "Showing you something"
+        case "message": return "Writing to another agent"
+        case "agents": return "Looking up the other agents"
+        case "conversation": return "Reading another conversation"
+        case "wake": return "Scheduling a wake-up"
+        case "watch": return "Starting a watch"
+        case "wakes": return "Checking its wake-ups"
+        case "unwake": return "Canceling a wake-up"
+        case "todowrite", "todoread": return "Keeping its to-do list"
+        case "skill": return "Using a skill"
+        case "start_session": return "Starting a session"
+        case "mark_final": return "Marking a file final"
+        case "sleep": return "Sleeping"
+        case let kind where kind.hasPrefix("mcp:"):
+            let server = String(kind.dropFirst(4))
+            return "Using \(Integrations.service(server)?.title ?? server)"
+        default: return "Using \(kind)"
+        }
+    }
+
     private static func kind(of name: String) -> String {
         // The browser's tools, as the engine names them ("kuvo-browser_browser_click").
         if name.hasPrefix("kuvo-browser_browser_") || name.hasPrefix("browser_") { return "browser" }
@@ -221,6 +254,7 @@ enum StepsSummary {
         case "skill": return many ? "used \(count) skills" : "used a skill"
         case "start_session": return many ? "started \(count) sessions" : "started a session"
         case "mark_final": return many ? "marked \(count) files final" : "marked a file final"
+        case "sleep": return many ? "slept \(count) times" : "slept"
         case let kind where kind.hasPrefix("mcp:"):
             let server = String(kind.dropFirst(4))
             let name = Integrations.service(server)?.title ?? server

@@ -151,7 +151,8 @@ struct ToolCallView: View {
             // One view running and done, so its ring closes as the step ends. Only a subagent's
             // step can be at work in the background, and only it says so.
             if call.name == "subagent" {
-                StepActivity(symbol: symbol, running: isWorking, size: Self.iconWidth)
+                // Open, its own steps show the work: its arc holds still.
+                StepActivity(symbol: symbol, running: isWorking, size: Self.iconWidth, holds: isExpanded)
                     .help(isAtWork ? "Working in the background" : "")
             } else {
                 StepActivity(symbol: symbol, running: isWorking, size: Self.iconWidth)
@@ -501,6 +502,18 @@ struct SubagentSteps: View {
     @Environment(Workspace.self) private var workspace
     @State private var model: SessionModel?
 
+    /// A step of its own shows it at work (a tool running, its reply being written), so no
+    /// "Working…" under it says so twice.
+    static func showsWork(_ model: SessionModel) -> Bool {
+        guard case .assistant(let step)? = model.transcript.messages.last(where: { if case .assistant = $0 { true } else { false } }),
+              step.time.completed == nil, let block = step.content.last else { return false }
+        switch block {
+        case .text: return true
+        case .tool: return StepsRow.isUnfinished(block)
+        default: return false
+        }
+    }
+
     /// What it used, as a turn shows it: "4.2K tokens · $0.01".
     static func usage(_ model: SessionModel) -> String? {
         let steps = model.transcript.messages.compactMap { if case .assistant(let step) = $0 { step } else { nil } }
@@ -541,7 +554,8 @@ struct SubagentSteps: View {
                 }
                 // Its reply being written draws its words from it.
                 .environment(model.writing)
-                if model.isRunning {
+                // Between its steps, or waiting on its model: nothing above says it's at work.
+                if model.isRunning, !Self.showsWork(model) {
                     HStack(spacing: 8) {
                         StepActivity(symbol: nil, running: true)
                         Text("Working…")
