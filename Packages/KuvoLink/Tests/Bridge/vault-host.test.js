@@ -1,0 +1,93 @@
+// This Mac's vault (PROTOCOL.md, "Vault"): its values in the Keychain, through its app's host
+// interface (`vault/get`, `vault/set`, `vault/delete`), never in the box's own folder; it needs no
+// unlock key. Here a stand-in for the app keeps them in memory. (A machine's: vault.test.js.)
+//
+// Run with `node --test Packages/KuvoLink/Tests/Bridge/vault-host.test.js`.
+import { test, after, before } from "node:test";
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { script, standInHost } from "./bot-keys-scenarios.js";
+
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "kvh-"));
+const home = path.join(root, "box");
+const PASSWORD = "host-password-not-a-key";
+const host = await standInHost(PASSWORD);
+const env = { ...process.env, HOME: root, KUVO_HOME: home, KUVO_HOST_URL: host.url, KUVO_HOST_PASSWORD: PASSWORD };
+for (const name of ["KUVO_KEYS", "KUVO_KEYS_ON_HOST", "KUVO_BOX"]) delete env[name];
+after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+const SECRET = "mac-secret-sauce-42";
+let engine;
+let box;
+
+before(async () => {
+  fs.mkdirSync(path.join(home, "run"), { recursive: true });
+  fs.mkdirSync(path.join(home, "bots", "bot_ship"), { recursive: true });
+  fs.writeFileSync(path.join(home, "bots", "bot_ship", "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_ship", name: "Ship" }));
+  fs.writeFileSync(path.join(home, "bots", "bot_ship", "session"), "ses_ship");
+  engine = http.createServer((request, response) => {
+    const found = request.url.startsWith("/api/session/ses_ship");
+    response.writeHead(found ? 200 : 404, { "content-type": "application/json" });
+    response.end(JSON.stringify(found ? { data: { id: "ses_ship", title: "Ship", location: { directory: path.join(home, "bots", "bot_ship") } } } : {}));
+  });
+  await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
+  fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify({ port: engine.address().port, password: "engine-pw" }));
+  const child = spawn(process.execPath, [script, "serve"], { env: { ...env, OPENCODE_PASSWORD: "box-pw" }, stdio: ["pipe", "pipe", "pipe"] });
+  let out = "";
+  child.stdout.setEncoding("utf8");
+  const url = await new Promise(resolve => child.stdout.on("data", chunk => { out += chunk; if (out.includes("\n")) resolve(JSON.parse(out.split("\n")[0]).url); }));
+  // `app`: this Mac's own app asking (`x-kuvo-from: app`); without it, something else on this Mac.
+  const route = async (method, path, body, app = true) => {
+    const response = await fetch(`${url}/${path}`, { method, headers: { authorization: `Basic ${Buffer.from("opencode:box-pw").toString("base64")}`, "content-type": "application/json", ...(app ? { "x-kuvo-from": "app" } : {}) }, body: body && method !== "GET" ? JSON.stringify(body) : undefined });
+    return { status: response.status, value: await response.json().catch(() => ({})) };
+  };
+  box = { route, stop: () => { child.stdin.end(); return new Promise(resolve => child.once("exit", resolve)); } };
+});
+after(async () => { await box?.stop(); engine?.closeAllConnections(); engine?.close(); });
+
+let item;
+
+test("an item added on this Mac keeps its values in the Keychain, through its app, and nothing of them in the box's folder", async () => {
+  const state = (await box.route("GET", "kuvo/vault")).value.state;
+  assert.deepEqual({ made: state.made, locked: state.locked, store: state.store }, { made: true, locked: false, store: "keychain" });
+  const added = await box.route("POST", "kuvo/vault/items", { kind: "login", name: "Shop admin", sites: ["https://admin.shop.example/login"], username: "ops", values: { password: SECRET } });
+  assert.equal(added.status, 200);
+  item = added.value.item;
+  assert.equal(added.value.key, undefined, "this Mac's vault has no key to give");
+  assert.deepEqual(item.sites, ["admin.shop.example"]);
+  assert.deepEqual(host.vault.get(item.id), { password: SECRET });
+  const folder = fs.readdirSync(path.join(home, "box", "vault"));
+  assert.ok(!folder.includes("values") && !folder.includes("key.json"), folder.join(", "));
+  for (const name of folder) assert.ok(!fs.readFileSync(path.join(home, "box", "vault", name), "utf8").includes(SECRET));
+  assert.ok(!host.asked.some(each => JSON.stringify(each).includes(SECRET)), "the stand-in's log of calls leaves values out, as the app's would");
+  assert.equal((await box.route("POST", "kuvo/vault/key", {})).status, 409);
+});
+
+test("its values come back from the Keychain for a client, and for a bot's fill on the item's site", async () => {
+  assert.equal((await box.route("GET", `kuvo/vault/items/${item.id}/values`)).value.values.password, SECRET);
+  assert.equal((await box.route("POST", "kuvo/vault/grants", { item: item.id, who: { bot: "bot_ship" }, how: "own" })).status, 200);
+  const filled = await box.route("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://admin.shop.example", purpose: "sign-in" }, false);
+  assert.equal(filled.status, 200);
+  assert.equal(filled.value.values.password, SECRET);
+});
+
+test("something else on this Mac, without the app's word, can't list or read it", async () => {
+  assert.equal((await box.route("GET", "kuvo/vault", undefined, false)).status, 403);
+  assert.equal((await box.route("GET", `kuvo/vault/items/${item.id}/values`, undefined, false)).status, 403);
+});
+
+test("with the app not answering, what needs the Keychain says so; removing an item takes its values from the Keychain", async () => {
+  host.down = true;
+  const stalled = await box.route("GET", `kuvo/vault/items/${item.id}/values`);
+  assert.equal(stalled.status, 503);
+  assert.ok(stalled.value.message);
+  assert.equal((await box.route("GET", "kuvo/vault")).value.items.length, 1, "the list is the box's own");
+  host.down = false;
+  assert.equal((await box.route("DELETE", `kuvo/vault/items/${item.id}`)).status, 200);
+  assert.equal(host.vault.has(item.id), false);
+  assert.deepEqual((await box.route("GET", "kuvo/vault")).value.items, []);
+});

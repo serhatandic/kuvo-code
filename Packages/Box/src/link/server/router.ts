@@ -35,6 +35,7 @@ import { phoneHere } from "../compat/leave-running";
 import { readBridgeFile, readEngineFile } from "../engine/client";
 import { linkRoute } from "../mac/routes";
 import { updateRoute } from "../updates/update";
+import { vaultRoute } from "../areas/vault";
 import { AGENTS, agentsRoute, engineRoute } from "./forward";
 import type { BridgeRecord, EngineRecord } from "../../shared/records";
 import type { NoticeHold } from "../notices/hold";
@@ -54,6 +55,7 @@ export interface Route<Match = true> {
 // its own ("events" isn't an id), as personalities', asks' and wake-ups' do.
 const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/info", answer: infoRoute },
+  { when: route => route === "kuvo/vault" || route.startsWith("kuvo/vault/"), answer: vaultRoute },
   { when: route => route === "kuvo/file", answer: ({ request, json }: RouteContext) => fileAt(request.path, json) },
   { when: route => route === "kuvo/update", answer: updateRoute },
   { when: (route, request) => /^kuvo\/integrations(\/|\?|$)/.test(request.path), answer: integrationsRoute },

@@ -51,6 +51,9 @@ import { macLinkCheck } from "./mac/link";
 import { macNoticeHold, macTell } from "./mac/notices";
 import { runMacPeers } from "./mac/peers";
 import { runMacLink } from "./mac/relay";
+import { watchVaultAsks } from "./vault/asks";
+import { holdVault } from "./vault/holder";
+import { setVaultTell } from "./vault/use";
 import { HELD_FILE, NoticeHold } from "./notices/hold";
 import { noticeJSON, pushTo } from "./notices/notice";
 import { announce, forgetMacsAgents, refreshOwn } from "./peers/agents";
@@ -282,6 +285,10 @@ async function run(): Promise<void> {
   // What its group chats send your other computers, carried on the relay connection that's up.
   watchSeats(() => current);
   watchAsks(tell, { answered });
+  // The vault, held here: its key in this process's memory, its asks told to your phones.
+  holdVault(engineHandler(readEngineFile, { name: os.hostname() }));
+  setVaultTell(tell);
+  watchVaultAsks(tell, answered);
   // Your other computers: this box's agents told to them while the relay connection is up (and
   // listed here, relay or not), and its agents' letters sent; without the relay a while, those
   // not sent yet go to the Mac.
@@ -394,7 +401,9 @@ async function box(command: string): Promise<void> {
       const handle = engineHandler(readEngineFile, { name: os.hostname() });
       // With the folder it's asked about (`x-opencode-directory`), as a phone's request has it.
       const folder = (given?.headers as Record<string, unknown> | undefined)?.["x-opencode-directory"];
-      const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json", ...(typeof folder === "string" ? { "x-opencode-directory": folder } : {}) }, body: Buffer.from(given?.body === undefined ? "" : JSON.stringify(given.body)), fromMac: true };
+      // And the vault's unlock key, which makes the Mac a client of this machine's vault (areas/vault.ts).
+      const vaultKey = (given?.headers as Record<string, unknown> | undefined)?.["x-kuvo-vault-key"];
+      const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json", ...(typeof folder === "string" ? { "x-opencode-directory": folder } : {}), ...(typeof vaultKey === "string" ? { "x-kuvo-vault-key": vaultKey } : {}) }, body: Buffer.from(given?.body === undefined ? "" : JSON.stringify(given.body)), fromMac: true };
       let status = 502;
       let type = "";
       const chunks: Buffer[] = [];
@@ -465,6 +474,13 @@ async function serve(): Promise<void> {
     server.listen(0, "127.0.0.1", resolve);
   });
   console.log(JSON.stringify({ url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }));
+  // The vault, held here (on a machine, `run` holds it; a test's box serves alone), its asks told
+  // to your phones through this Mac's link.
+  holdVault(engineHandler(readEngineFile, { name: os.hostname() }, readBridgeFile));
+  if (IS_MAC) {
+    setVaultTell(macTell);
+    watchVaultAsks(macTell, id => macLink.hold?.resolve(id));
+  }
   // Its bots' folders' settings, as its keys and integrations are now (after an update, say), as a
   // machine's bridge does as it starts; where its keys can't be reached yet, they stay as they were.
   refreshBotsKeys().catch(() => {});

@@ -75,7 +75,7 @@ export async function standInHost(password) {
       return answer(401, {});
     }
     const given = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    const { value: _, ...asked } = given;
+    const { value: _, values: __, ...asked } = given;
     host.asked.push({ call: request.url, ...asked });
     if (host.down || host.failing?.has(request.url)) return answer(500, { message: "The Keychain is locked." });
     switch (request.url) {
@@ -98,6 +98,15 @@ export async function standInHost(password) {
         return answer(200, {});
       case "/keys/delete":
         host.keys.delete(given.name);
+        return answer(200, {});
+      // The vault's values, kept by id as the Keychain would (vault-host.test.js).
+      case "/vault/get":
+        return host.vault?.has(given.id) ? answer(200, { values: host.vault.get(given.id) }) : answer(404, {});
+      case "/vault/set":
+        (host.vault ??= new Map()).set(given.id, given.values);
+        return answer(200, {});
+      case "/vault/delete":
+        host.vault?.delete(given.id);
         return answer(200, {});
       // Whether its browser is signed in to the sites the agent uses there, as the test sets it.
       case "/sites/signed-in":

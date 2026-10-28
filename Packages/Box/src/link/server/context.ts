@@ -34,7 +34,7 @@ export type AnyPiece = Partial<Extract<AnswerPiece, { head: unknown }> & Extract
 
 /** The statuses the box's routes answer with besides 200: 201 for one made, 202 for one begun,
  * and their refusals'. */
-export type OtherStatus = 201 | 202 | 400 | 403 | 404 | 405 | 409 | 413 | 422 | 500 | 502 | 503;
+export type OtherStatus = 201 | 202 | 400 | 403 | 404 | 405 | 409 | 413 | 422 | 423 | 500 | 502 | 503;
 
 /** What an area's answer helper gives its route to send as JSON (`json(status, value)`): the
  * status, and the value as the body: `Value` with a 200, `Refusal` with any other (`Value` too
