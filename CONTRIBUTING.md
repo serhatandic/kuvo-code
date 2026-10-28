@@ -314,6 +314,9 @@ when you're there to answer.
 | `KUVO_DEMO_BOX` | The sidebar's box in view, `mac` or a machine's name, a few seconds after launch |
 | `KUVO_DEMO_BOXES` | Stand-in machines in the sidebar by name, comma-separated (`lokum,staging,gpu-01`): how the name strip looks with many and with long names; their pages are empty |
 | `KUVO_DEMO_UNFOLD` | Every session's sub-sessions (its subagents') shown under it in the sidebar, for a look at the branches |
+| `KUVO_DEMO_SHOW_ALL` | Every project's sessions shown, as after Show More, and every unfolded session's sub-sessions (with `KUVO_DEMO_UNFOLD`, all of them), for the sidebar with many rows |
+| `KUVO_DEMO_STATES` | Stand-in states for the sidebar's rows and tabs, shared out by session as `kind=percent` (`working=25,needsYou=10,new=15,failed=5`; the kinds are `StatusMark.Kind`'s); `KUVO_DEMO_STATES_CHURN=<seconds>` deals them again that often. For seeing and measuring many marks without as many agents |
+| `KUVO_DEMO_LOADERS` | A window, behind the others, with every state mark and loader in light and dark, moving and with Reduce Motion |
 | `KUVO_DEMO_SEARCH` | Type this in the sidebar's search field |
 | `KUVO_DEMO_BOX_FAILED` | This Mac's box as if it had stopped for good, with this reason: how the sidebar shows it |
 | `KUVO_DEMO_KEYS_UNREAD` | The app's host interface not started as this Mac's box starts, so the box can't reach its keys: how Settings › Integrations shows it, until its Try Again starts it |

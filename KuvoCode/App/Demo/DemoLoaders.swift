@@ -1,0 +1,91 @@
+#if DEBUG
+import AppKit
+import ClientDesign
+import SwiftUI
+
+/// KUVO_DEMO_LOADERS: a window with every state mark and loader, in light and dark, moving and
+/// with Reduce Motion, for checking them side by side without making each happen. Debug builds only.
+@MainActor
+enum DemoLoaders {
+    private static var window: NSWindow?
+
+    static func showIfAsked(_ environment: [String: String]) {
+        guard environment["KUVO_DEMO_LOADERS"] != nil, window == nil else { return }
+        let content = HStack(alignment: .top, spacing: 0) {
+            Column(scheme: .light, still: false)
+            Column(scheme: .dark, still: false)
+            Column(scheme: .light, still: true)
+            Column(scheme: .dark, still: true)
+        }
+        // A panel, which never becomes main, so the demo variables that look for the main window
+        // don't take it for that.
+        let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 860), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.hidesOnDeactivate = false
+        window.title = "Loaders"
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: content)
+        window.setFrameOrigin(NSPoint(x: 40, y: 40))
+        window.orderBack(nil)
+        self.window = window
+    }
+
+    private struct Column: View {
+        let scheme: ColorScheme
+        let still: Bool
+        private let started = Date().addingTimeInterval(-14)
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 14) {
+                Text((scheme == .dark ? "Dark" : "Light") + (still ? ", Reduce Motion" : ""))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                let kinds: [StatusMark.Kind] = [.working, .subagents, .needsYou, .new, .failed, .wake, .watching, .paused, .waitingForComputer, .offline]
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(kinds, id: \.self) { kind in
+                        HStack(spacing: 8) {
+                            StatusMark(kind)
+                            StatusMark(kind, size: 11)
+                            Text(kind.words).font(.system(size: 13))
+                        }
+                    }
+                }
+                Divider()
+                HStack(spacing: 6) {
+                    StepActivity(symbol: "terminal", running: true)
+                    Text("Running tests").font(.system(size: 13))
+                    StepActivity.Elapsed(since: started).font(.system(size: 13))
+                }
+                HStack(spacing: 6) {
+                    StepActivity(symbol: "terminal", running: false)
+                    Text("Ran tests").font(.system(size: 13))
+                    StepActivity.Elapsed(since: started, running: false, until: Date()).font(.system(size: 13))
+                }
+                ProgressLine("Downloading the engine", bytes: 41_000_000, of: 96_000_000)
+                ProgressLine("Getting ready", fraction: nil)
+                ProgressLine("Installing", fraction: 0.62, layout: .inline)
+                Placeholder(.lines(count: 3))
+                Placeholder(.rows(count: 2))
+                HandoffWait("Waiting for you to finish in your browser…", to: .browser)
+                HandoffWait("Waiting for your phone…", to: .phone)
+                ConnectingLink("Connecting to lokum…")
+                ConnectingLink("Connected", isConnected: true)
+                HStack(spacing: 8) {
+                    Text("Searching lokum").font(.system(size: 13))
+                    AskingDots()
+                }
+                HStack(spacing: 10) {
+                    Spinner(size: 14)
+                    Button {} label: { HStack(spacing: 6) { Spinner(size: 12); Text("Signing In") } }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(16)
+            .frame(width: 310, alignment: .topLeading)
+            .frame(maxHeight: .infinity, alignment: .top)
+            .background(scheme == .dark ? Color(white: 0.12) : Color.white)
+            .environment(\.colorScheme, scheme)
+            .environment(\._accessibilityReduceMotion, still)
+        }
+    }
+}
+#endif

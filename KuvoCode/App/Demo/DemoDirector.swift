@@ -50,6 +50,7 @@ enum DemoDirector {
         default: break
         }
         if environment["KUVO_DEMO_CHANGES"] != nil { app.tabs.showPanel() }
+        DemoLoaders.showIfAsked(environment)
         // KUVO_DEMO_PALETTE=<text>: the command palette, with that typed in it (`DemoPalette`).
         if workspace.isLoaded, environment["KUVO_DEMO_PALETTE"] != nil { window.showPalette() }
         // KUVO_DEMO_RENAME=header: the session in view, renamed in its card's header.
