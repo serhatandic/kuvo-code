@@ -566,6 +566,10 @@ final class PhoneLink {
                 """), input: settings)
             struct Answer: Decodable { var address: String?; var key: String?; var peers: Bool?; var sign: String?; var docs: [Documents.Envelope]? }
             let answer = try? JSONDecoder().decode(Answer.self, from: Data(output.utf8))
+            // Removed or uninstalled meanwhile (or merged into another): not named to your phones
+            // and other computers again.
+            if engine.isRetired { return }
+            if let machines = bots?.app?.machines, machines.engine(machine.id) !== engine { return }
             let before = machineHosts[machine.id]
             if let address = answer?.address, let key = answer?.key {
                 machineHosts[machine.id] = MachineHost(name: machine.name, address: address, key: key, anotherMac: engine.isAnotherMacsEngine, peers: answer?.peers,

@@ -261,6 +261,46 @@ import Testing
         #expect(told.contains("/home/tests/shared") && !told.contains("ssh://"))
     }
 
+    /// A machine uninstalled while it's still being set up for your phones and other computers
+    /// stays gone: the setup finishing after doesn't name it to them again.
+    @Test func aMachineUninstalledWhileItsSetUpForYourPhonesStaysGone() async throws {
+        defer { done() }
+        UserDefaults.standard.set(true, forKey: "phoneLink")
+        UserDefaults.standard.set("ws://127.0.0.1:9", forKey: "phoneLink.relay")
+        defer {
+            for key in ["phoneLink", "phoneLink.relay"] { UserDefaults.standard.removeObject(forKey: key) }
+            try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "phone-link.json"))
+            _ = Keychain.delete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: PhoneLink.keychainService])
+        }
+        let box = try await SettingsBox(port: 47_964, alongside: true)
+        defer { box.stop() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        let link = app.phoneLink
+        let client = box.client
+        link.box = { client }
+        link.hasMachines = { true }
+        box.box.host.phoneLink = link
+        link.start(endpoint: ServerEndpoint(url: URL(string: box.engine.url)!, password: "test"))
+        defer { link.stop() }
+        try await until { if case .failed(let reason) = link.status { reason.contains("relay") } else { false } }
+        // Its setup answers once let through, as a slow machine does.
+        let held = Gate(), reached = Gate()
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            guard script.contains(" setup") else { return "" }
+            reached.open()
+            held.wait()
+            return #"{"address":"\#(Data(repeating: 7, count: 16).base64URL)","key":"\#(LinkKey().publicBytes.base64URL)","peers":true,"docs":[]}"#
+        }
+        let connecting = Task { await app.connect(engine).value }
+        try await until { reached.isOpen }
+        app.removeMachine(id, uninstall: true)
+        held.open()
+        await connecting.value
+        #expect(link.machineHosts[id] == nil, "named to your phones and other computers again")
+    }
+
     /// A new session in a machine's project that has other folders works in them there from its
     /// start: its rules and what its agent is told name the machine's own paths.
     @Test func aNewSessionInAMachinesProjectWorksInItsOtherFoldersThere() async throws {
