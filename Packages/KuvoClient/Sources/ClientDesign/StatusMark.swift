@@ -102,6 +102,8 @@ public enum ConversationState {
 /// The colours a mark draws with, resolved for its appearance.
 struct StatusMarkInk: Equatable {
     var ink: Color.Resolved
+    /// Quieter than ink, still clear of the row: a state that's away rather than at work.
+    var muted: Color.Resolved
     var faint: Color.Resolved
     var accent: Color.Resolved
     var orange: Color.Resolved
@@ -111,6 +113,7 @@ struct StatusMarkInk: Equatable {
         var environment = EnvironmentValues()
         environment.colorScheme = scheme
         ink = Color.primary.opacity(0.6).resolve(in: environment)
+        muted = Color.primary.opacity(0.38).resolve(in: environment)
         faint = Color.primary.opacity(0.16).resolve(in: environment)
         self.accent = accent.resolve(in: environment)
         orange = Color.orange.resolve(in: environment)
@@ -334,8 +337,8 @@ final class StatusMarkLayer: CALayer {
         case .waitingForComputer:
             _ = shape(circle(6), stroke: ink.ink, dash: [1.6, 2.6])
         case .offline:
-            _ = shape(circle(6), stroke: ink.faint)
-            _ = shape(lines([(CGPoint(x: 4.2, y: 11.8), CGPoint(x: 11.8, y: 4.2))]), stroke: ink.faint)
+            _ = shape(circle(6), stroke: ink.muted)
+            _ = shape(lines([(CGPoint(x: 4.2, y: 11.8), CGPoint(x: 11.8, y: 4.2))]), stroke: ink.muted)
         }
     }
 

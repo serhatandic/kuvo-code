@@ -118,9 +118,11 @@ extension StepActivity {
                     guard running else { return }
                     while !Task.isCancelled {
                         now = Date()
-                        // On to its next whole second.
-                        let into = max(0, now.timeIntervalSince(since)).truncatingRemainder(dividingBy: 1)
-                        guard (try? await Task.sleep(for: .seconds(1 - into))) != nil else { return }
+                        // On to when what it says changes: its next whole second, or past an hour
+                        // (hours and minutes), its next whole minute.
+                        let elapsed = max(0, now.timeIntervalSince(since))
+                        let step: Double = elapsed < 3600 ? 1 : 60
+                        guard (try? await Task.sleep(for: .seconds(step - elapsed.truncatingRemainder(dividingBy: step)))) != nil else { return }
                     }
                 }
             }

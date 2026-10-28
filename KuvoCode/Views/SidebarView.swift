@@ -692,11 +692,11 @@ struct SidebarView: View {
                 }
             }
             terminalRows(terminals(in: project.directory), indented: true)
-            let all = showsAll.contains(project.directory)
+            let all = showsAll.contains(project.directory) || Self.demoShowsAll
             ForEach(all ? project.sessions : Array(project.sessions.prefix(Self.sessionsPerProject))) { session in
                 sessionRow(session, in: .project)
             }
-            if project.sessions.count > Self.sessionsPerProject {
+            if project.sessions.count > Self.sessionsPerProject, !Self.demoShowsAll {
                 SidebarRow(isSelected: false, indented: true, action: {
                     withAnimation(.ui) {
                         if all { showsAll.remove(project.directory) } else { showsAll.insert(project.directory) }
@@ -851,6 +851,14 @@ struct SidebarView: View {
             }
         }
     }
+
+    /// KUVO_DEMO_SHOW_ALL: every project's sessions shown, as after Show More, for the sidebar
+    /// with many rows.
+    #if DEBUG
+    static let demoShowsAll = ProcessInfo.processInfo.environment["KUVO_DEMO_SHOW_ALL"] != nil
+    #else
+    static let demoShowsAll = false
+    #endif
 
     private func isUnfolded(_ id: String) -> Bool {
         #if DEBUG
@@ -1201,11 +1209,13 @@ private struct SidebarRow<Icon: View, Title: View, Accessory: View>: View {
             } else if indented {
                 Color.clear.frame(width: SidebarMetrics.iconWidth, height: 1)
             }
+            // The title takes the room up to the accessory, one gap from its mark, rather than
+            // a spacer with a gap on each side of it.
             title()
                 .font(.system(size: 14))
                 .lineLimit(1)
                 .truncationMode(.tail)
-            Spacer(minLength: 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
             accessory()
         }
         .padding(.horizontal, 10)
@@ -1297,6 +1307,9 @@ private struct TerminalRow: View {
                     .foregroundStyle(.secondary)
                 Text(title)
             }
+        } accessory: {
+            // Room for the End button, so a long name never runs under it.
+            Color.clear.frame(width: 6, height: 1)
         }
         .overlay(alignment: .trailing) {
             Button(action: end) {
@@ -1412,7 +1425,7 @@ private struct FaceRow<Face: View, Subtitle: View, Trailing: View>: View {
                         .foregroundStyle(.secondary)
                 }
                 .lineLimit(1)
-                Spacer(minLength: 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 trailing
             }
             .padding(.horizontal, 10)
@@ -1756,6 +1769,9 @@ private struct MoveToComputerMenu: View {
 /// What a session's row and its tab show: one place decides, so the two always agree. A move to
 /// another computer is work; a machine that's getting there (connecting, installing) isn't away.
 @MainActor func statusMark(of session: Session, isNew: Bool, workspace: Workspace, app: AppModel) -> StatusMark.Kind? {
+    #if DEBUG
+    if DemoStates.shared.isOn { return DemoStates.shared.kind(of: session.id) }
+    #endif
     let id = session.id
     let moving = app.moves.underWay[id] != nil
     let working = workspace.isWorking(id) || moving
@@ -1828,7 +1844,7 @@ private struct SubSessionRows: View {
     private static let shown = 8
 
     private var all: [Session] { workspace.subSessions[parent.id] ?? [] }
-    private var children: [Session] { showsAll ? all : Array(all.prefix(Self.shown)) }
+    private var children: [Session] { showsAll || SidebarView.demoShowsAll ? all : Array(all.prefix(Self.shown)) }
     private var lineX: CGFloat { titleInset + 5 }
     private var childInset: CGFloat { lineX + 14 }
 
@@ -1917,7 +1933,7 @@ private struct SubSessionRow: View {
                     .fontWeight(isUnread ? .semibold : .regular)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Spacer(minLength: 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 HStack(spacing: 6) {
                     if count > 0 {
                         SubSessionToggle(count: count, isUnfolded: isUnfolded, toggle: toggle)
