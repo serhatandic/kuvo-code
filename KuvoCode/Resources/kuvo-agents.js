@@ -9542,7 +9542,12 @@ class CodexAgent {
       for (const thread of this.threads.values())
         thread.serverStopped();
     };
-    await rpc.request("initialize", { clientInfo: { name: "kuvo-code", title: "Kuvo Code", version: "1" }, capabilities: { experimentalApi: true, optOutNotificationMethods: ["turn/diff/updated"] } }, 30000);
+    try {
+      await rpc.request("initialize", { clientInfo: { name: "kuvo-code", title: "Kuvo Code", version: "1" }, capabilities: { experimentalApi: true, optOutNotificationMethods: ["turn/diff/updated"] } }, 30000);
+    } catch (error) {
+      rpc.kill();
+      throw error;
+    }
     rpc.notify("initialized");
     this.server = rpc;
     return rpc;
@@ -19960,4 +19965,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 7f01b6534a615784e05a0555adb8d1a62b3c7d90ef18e7c0dadfc8f54ade6feb
+// Built from Packages/Box/src/agents 09083b4a486ad4fefbfa45bf6f9b597da492402a8aee5cc28df3627d99e9efa5
