@@ -1329,7 +1329,7 @@ private struct TurnEndView: View {
         if !stats.text.isEmpty {
             CopyButton(text: stats.text.joined(separator: "\n\n"), help: "Copy the Reply")
             if let reply {
-                MessageActionButton(symbol: "arrowshape.turn.up.left", help: "Reply: quotes the part you selected (or the whole reply) in the composer") {
+                MessageActionButton(symbol: "arrowshape.turn.up.left", help: "Reply: quotes the whole reply in the composer") {
                     reply(stats.text.joined(separator: "\n\n"))
                 }
             }
