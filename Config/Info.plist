@@ -33,8 +33,6 @@
 	<string>The Apple Calendar and Reminders integration lets the agent read and add events, when you've turned it on in Settings › Integrations.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Kuvo Code listens while you talk instead of typing, only when you start voice input. Your voice is recognized on this Mac and isn't kept or sent anywhere.</string>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Kuvo Code turns what you say into words for your message, on this Mac. Nothing is sent until you press Send.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>The Apple Calendar and Reminders integration lets the agent read and add reminders, when you've turned it on in Settings › Integrations.</string>
 	<key>UTExportedTypeDeclarations</key>

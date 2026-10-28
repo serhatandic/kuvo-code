@@ -26,31 +26,58 @@ struct MicRing: View {
 
     /// For the mic's help and VoiceOver: what's coming, while it is.
     static func words(_ model: SpeechModel) -> String? {
-        model.isUnderway ? "Whisper: \(model.status(device: "Mac"))" : nil
+        model.isUnderway ? model.micWords.title : nil
     }
 }
 
-/// Beside the trace while you talk: Whisper on its way ("Whisper · 42%"), or listening now,
-/// the first time ("Whisper, on this Mac").
-struct SpeechModelNote: View {
-    let voice: VoiceInput
+/// From the mic, pressed while the voice model is still coming: how far it's come, plainly, and
+/// Cancel; the first time it's made ready, that it takes a while. It closes once voice input can listen.
+struct VoiceModelPopover: View {
+    let model: SpeechModel
+    let close: () -> Void
 
     var body: some View {
-        if let note = voice.model.note(usesWhisper: voice.usesWhisper, device: "Mac") {
-            Text(note)
-                .font(.system(size: 12))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .fixedSize()
-                .help(voice.usesWhisper ? "Whisper writes what you say, on this Mac." : "Apple’s dictation listens until Whisper is downloaded. " + sentence(voice.model.status(device: "Mac")))
-                // Said once: it's Whisper from now on.
-                .onDisappear { if voice.usesWhisper { voice.model.sawReady() } }
+        let words = model.micWords
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(words.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .monospacedDigit()
+                if let detail = words.detail {
+                    Text(detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if let action {
+                HStack {
+                    Spacer()
+                    action
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: 280, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+
+    /// Cancel while it comes (what's come is kept, for the next press); Try Again once it stopped.
+    private var action: AnyView? {
+        switch model.state {
+        case .downloading, .waiting, .askingCellular:
+            AnyView(Button("Cancel") {
+                model.pause()
+                close()
+            })
+        case .failed, .lowSpace, .paused:
+            AnyView(Button(model.state == .paused ? "Resume" : "Try Again") { model.download() }
+                .keyboardShortcut(.defaultAction))
+        default:
+            nil
         }
     }
 }
-
-/// `words` ending in one full stop.
-private func sentence(_ words: String) -> String { words.hasSuffix(".") ? words : words + "." }
 
 /// Settings › Voice Input › Speech model: Whisper's download, and taking it away.
 struct SpeechModelRow: View {
@@ -110,7 +137,7 @@ struct SpeechModelRow: View {
         .confirmationDialog("Remove Whisper from this Mac?", isPresented: $confirmsRemoving) {
             Button("Remove Download", role: .destructive) { model.remove() }
         } message: {
-            Text("Voice input goes back to Apple’s dictation. You can download Whisper again here.")
+            Text("Voice input needs it: it’s downloaded again the next time you press the mic, or here.")
         }
     }
 }

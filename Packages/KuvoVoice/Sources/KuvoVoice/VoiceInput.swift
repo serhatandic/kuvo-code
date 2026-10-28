@@ -7,14 +7,16 @@ import Speech
 /// it listens on this device's microphone, writes what you say as you say it (`transcript`), says
 /// how loud you are (`level`, for the motion), and goes on, through any silence, until you say
 /// done. Then `ended` gets the words, for the composer to take. Speech is recognized on the
-/// device: by Whisper once it's here (`SpeechModel`), and until then by Apple's dictation, each
-/// told the words you're likely to say (the project's names).
+/// device, by Whisper (`SpeechModel`), and only once it's here: until then voice input doesn't
+/// start. A device that can't run Whisper listens with Apple's dictation. Each is told the words
+/// you're likely to say (the project's names).
 @MainActor
 @Observable
 public final class VoiceInput {
     public enum Phase: Equatable, Sendable {
         case idle
-        /// Getting ready: asking to use the microphone, or downloading the speech model (`progress`, 0 to 1, when it says).
+        /// Getting ready: asking to use the microphone, or, where Apple's dictation listens,
+        /// downloading its model for your language (`progress`, 0 to 1, when it says).
         case preparing(progress: Double?)
         case listening
         /// What was said last being settled, after you finished.
@@ -55,9 +57,9 @@ public final class VoiceInput {
     public static let recentCount = 64
     /// When it started listening, for how long it's been.
     public private(set) var listeningSince: Date?
-    /// Whisper is writing what you say (not Apple's dictation).
+    /// Whisper is writing what you say (not Apple's dictation, on a device that can't run it).
     public private(set) var usesWhisper = false
-    /// The speech model it uses once it's in.
+    /// The speech model it listens with.
     public let model: SpeechModel
     /// Told the words once `finish` has ended it (none, when nothing was heard),
     /// never after `cancel`.
@@ -90,10 +92,10 @@ public final class VoiceInput {
     }
 
     /// Starts listening in `locale`'s language, for `words` (the project's names, which it's told
-    /// to expect): asks for the microphone the first time, and starts Whisper's download if
-    /// this device hasn't it yet.
+    /// to expect), asking for the microphone the first time. Nothing starts while the model
+    /// can't listen yet: the mic brings it in first (`SpeechModel.micPressed`).
     public func start(locale: Locale = .current, words: @escaping @Sendable () async -> [String] = { [] }) {
-        guard !isActive else { return }
+        guard !isActive, model.canListen else { return }
         run += 1
         let run = run
         transcript = VoiceTranscript()
@@ -103,7 +105,6 @@ public final class VoiceInput {
         listeningSince = nil
         meter = VoiceLevel()
         phase = .preparing(progress: nil)
-        model.voiceStarted()
         if model.isReady, let folder = model.modelFolder {
             usesWhisper = true
             listening = Task { await listenWithWhisper(folder: folder, locale: locale, words: words, run: run) }
@@ -168,6 +169,7 @@ public final class VoiceInput {
 
     // MARK: Listening
 
+    /// Listening with Apple's dictation, on a device that can't run Whisper.
     private func listen(locale: Locale, words: @escaping @Sendable () async -> [String], run: Int) async {
         // The microphone, asked for once.
         guard await Self.microphoneAllowed() else { return fail(.microphoneDenied, run: run) }

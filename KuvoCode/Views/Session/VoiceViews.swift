@@ -26,19 +26,11 @@ struct VoiceComposerRow: View {
     var body: some View {
         HStack(spacing: 10) {
             switch voice.phase {
-            case .preparing(let progress):
-                // Downloading the speech model, when it says how far; asking for the microphone, not.
-                if let progress {
-                    Text("Getting voice ready…")
-                        .foregroundStyle(.secondary)
-                        .fixedSize()
-                    ProgressLine("Downloading the speech model", fraction: progress, layout: .inline)
-                        .frame(maxWidth: 260)
-                } else {
-                    Spinner(size: 13)
-                    Text("Getting voice ready…")
-                        .foregroundStyle(.secondary)
-                }
+            case .preparing:
+                // Asking for the microphone, the first time.
+                Spinner(size: 13)
+                Text("Getting voice ready…")
+                    .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
             case .failed(let failure):
                 Image(systemName: "mic.slash")
@@ -66,7 +58,6 @@ struct VoiceComposerRow: View {
                 VoiceTrace(levels: voice.recentLevels)
                     .frame(height: 22)
                     .frame(maxWidth: .infinity)
-                SpeechModelNote(voice: voice)
             }
             Button(action: cancel) {
                 HStack(spacing: 5) {
@@ -135,11 +126,7 @@ struct VoiceField: View {
             Spacer(minLength: 24)
             VoiceWave(level: voice.level)
                 .frame(height: 56)
-                .padding(.bottom, 16)
-            // Whisper on its way, or listening the first time; the same room either way.
-            SpeechModelNote(voice: voice)
-                .frame(height: 16)
-                .padding(.bottom, 12)
+                .padding(.bottom, 44)
             HStack(spacing: 14) {
                 Button(action: cancel) {
                     HStack(spacing: 6) {
@@ -183,7 +170,7 @@ struct VoiceField: View {
 
     private var status: String {
         switch voice.phase {
-        case .preparing(let progress): progress.map { "Getting voice ready… \(Int(($0 * 100).rounded()))%" } ?? "Getting voice ready…"
+        case .preparing: "Getting voice ready…"
         case .finishing: "Finishing…"
         case .failed: "Voice input stopped"
         default: "Listening"
@@ -199,7 +186,7 @@ struct VoiceFieldCover: View {
 
     var body: some View {
         if let voice = app.dictation.voice, app.dictation.style == .field {
-            VoiceField(voice: voice, cancel: { app.dictation.cancel() }, done: { app.dictation.finish() }, openSettings: { Composer.openPrivacySettings(for: voice.phase) })
+            VoiceField(voice: voice, cancel: { app.dictation.cancel() }, done: { app.dictation.finish() }, openSettings: Composer.openMicrophoneSettings)
                 .background {
                     Rectangle()
                         .fill(.ultraThinMaterial)

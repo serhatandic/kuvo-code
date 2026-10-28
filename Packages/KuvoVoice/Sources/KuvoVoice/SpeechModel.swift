@@ -3,10 +3,10 @@ import Foundation
 import Network
 import Observation
 
-/// Whisper, the speech model voice input uses once it's on this device: it downloads the first
-/// time you talk (or when you choose it in Settings), and until it's in, voice input goes on with
-/// Apple's dictation. Kept in a folder of the app's own; Remove takes it all away, and it doesn't
-/// come back by itself after that.
+/// Whisper, the speech model voice input listens with: it downloads the first time you press the
+/// mic (or when you choose it in Settings), and voice input opens only once it's here and ready.
+/// A device that can't run it (an older iPhone) listens with Apple's dictation instead. Kept in a
+/// folder of the app's own; Remove takes it all away.
 @MainActor
 @Observable
 public final class SpeechModel {
@@ -40,13 +40,13 @@ public final class SpeechModel {
     public private(set) var state: State = .absent
     /// How much of it is here.
     public private(set) var received: Int64 = 0
-    /// It came while the app was open, for a word once that voice input is on it now.
-    public private(set) var isNewlyReady = false
 
     public var fraction: Double { Double(received) / Double(size) }
     /// Its whole size.
     public var size: Int64 { files.reduce(0) { $0 + $1.size } }
     public var isReady: Bool { state == .ready }
+    /// Voice input can listen: with Whisper, or with Apple's dictation where Whisper can't run.
+    public var canListen: Bool { state == .ready || state == .unsupported }
     /// It's coming (or was, and will go on): the ring on the mic shows it.
     public var isUnderway: Bool {
         switch state {
@@ -85,7 +85,6 @@ public final class SpeechModel {
     @ObservationIgnored let files: [File]
 
     private static let cellularKey = "voice.whisper.cellular"
-    private static let removedKey = "voice.whisper.removed"
     /// You paused it: it waits for you, rather than going on the next time you talk.
     private static let pausedKey = "voice.whisper.paused"
     static let name = "whisper-large-v3-turbo"
@@ -135,21 +134,23 @@ public final class SpeechModel {
         }
     }
 
-    /// Voice input started: it comes now, unless it's here, on its way, or was removed.
-    public func voiceStarted() {
+    /// What pressing the mic does.
+    public enum MicPress: Sendable { case listen, waitForModel }
+
+    /// The mic, pressed: it listens once the model can (`listen`). Until then nothing listens, and
+    /// the press brings the model in: its download starts, goes on, or is tried again.
+    public func micPressed() -> MicPress {
+        if canListen { return .listen }
         switch state {
-        case .absent where !defaults.bool(forKey: Self.removedKey): download()
-        // Stopped by quitting, not by you: it goes on.
-        case .paused where !defaults.bool(forKey: Self.pausedKey): download()
-        case .failed, .lowSpace: download()
+        case .absent, .paused, .failed, .lowSpace: download()
         default: break
         }
+        return .waitForModel
     }
 
     /// Download it, or go on with it from where it stopped.
     public func download() {
         guard let folder, supported else { return }
-        defaults.set(false, forKey: Self.removedKey)
         defaults.set(false, forKey: Self.pausedKey)
         guard state != .ready, state != .preparing else { return }
         cancelFetch()
@@ -182,8 +183,8 @@ public final class SpeechModel {
         defaults.set(true, forKey: Self.pausedKey)
     }
 
-    /// Takes it off this device. Voice input goes back to Apple's dictation, and it doesn't come
-    /// back unless you download it again.
+    /// Takes it off this device: voice input waits for it again, until the mic or Settings
+    /// downloads it.
     public func remove() {
         cancelFetch()
         if let folder {
@@ -191,15 +192,10 @@ public final class SpeechModel {
             try? FileManager.default.removeItem(at: folder.appending(path: "partial"))
         }
         Task { await WhisperRuntime.shared.unload() }
-        defaults.set(true, forKey: Self.removedKey)
         defaults.set(false, forKey: Self.pausedKey)
         received = 0
-        isNewlyReady = false
         state = supported ? .absent : .unsupported
     }
-
-    /// Its word that it's ready was shown.
-    public func sawReady() { isNewlyReady = false }
 
     #if DEBUG
     /// As if it were `named` ("downloading", "paused", "waiting", "failed", "space", "preparing",
@@ -207,7 +203,6 @@ public final class SpeechModel {
     public func showSample(_ named: String) {
         cancelFetch()
         received = named == "ready" || named == "preparing" ? size : size * 42 / 100
-        isNewlyReady = named == "ready"
         state = switch named {
         case "downloading": .downloading
         case "paused": .paused
@@ -271,7 +266,7 @@ public final class SpeechModel {
         }
     }
 
-    /// Made ready for this device's chip, the first time: then voice input uses it.
+    /// Made ready for this device's chip, the first time: then voice input opens.
     private func makeReady() {
         guard let done = modelFolder else { return }
         state = .preparing
@@ -282,7 +277,6 @@ public final class SpeechModel {
                 guard let self, self.state == .preparing else { return }
                 FileManager.default.createFile(atPath: done.appending(path: Self.preparedMark).path, contents: nil)
                 self.state = .ready
-                self.isNewlyReady = true
             } catch {
                 guard let self, self.state == .preparing else { return }
                 self.state = .failed("Whisper couldn’t start on this device: \(error.localizedDescription)")
@@ -546,17 +540,20 @@ final class Fetch: NSObject, URLSessionDataDelegate, @unchecked Sendable {
 // MARK: What each app says about it
 
 extension SpeechModel {
-    /// A few words beside the trace while you talk (nil: nothing to say): it's on its way, so
-    /// Apple's dictation is listening meanwhile, or it's what's listening now, the first time.
-    /// `device` is "Mac" or "iPhone".
-    public func note(usesWhisper: Bool, device: String) -> String? {
-        if usesWhisper { return isNewlyReady ? "Whisper, on this \(device)" : nil }
+    /// What the mic says while voice input waits for it: in its popover, its help and to
+    /// VoiceOver. `detail` is a second, quieter line.
+    public var micWords: (title: String, detail: String?) {
+        let percent = "\(Int(fraction * 100))%"
         switch state {
-        case .downloading: return "Whisper · \(Int(fraction * 100))%"
-        case .waiting(.wifi), .askingCellular: return "Whisper · waiting for Wi-Fi"
-        case .waiting(.network): return "Whisper · waiting for the network"
-        case .preparing: return "Whisper · getting ready"
-        default: return nil
+        case .downloading: return ("Downloading the voice model · \(percent)", "You can talk once it’s in.")
+        case .waiting(.wifi), .askingCellular: return ("Waiting for Wi-Fi · \(percent)", nil)
+        case .waiting(.network): return ("Waiting for the network · \(percent)", nil)
+        case .paused: return ("Paused · \(percent)", nil)
+        case .preparing: return ("Getting ready…", "This takes a few minutes, once.")
+        case .lowSpace(let free): return ("Not enough space for the voice model", "Needs \(Self.megabytes(size - received)) MB · \(Self.megabytes(free)) MB free")
+        case .failed(let words): return ("Couldn’t download the voice model", words)
+        case .absent: return ("Voice input needs its model", "\(Self.megabytes(size)) MB, downloaded once.")
+        case .ready, .unsupported: return ("", nil)
         }
     }
 
@@ -564,14 +561,14 @@ extension SpeechModel {
     public func status(device: String, amount: Bool = true) -> String {
         let of = amount ? " · \(Self.megabytes(received)) of \(Self.megabytes(size)) MB" : ""
         switch state {
-        case .absent: return "Writes what you say more accurately, and the project’s names as they’re written. \(Self.megabytes(size)) MB, kept on this \(device)."
+        case .absent: return "Voice input listens with it, on this \(device), and writes the project’s names as they’re written. \(Self.megabytes(size)) MB."
         case .downloading: return "Downloading\(of)"
         case .waiting(.wifi), .askingCellular: return "Waiting for Wi-Fi\(of)"
         case .waiting(.network): return "Waiting for the network\(of)"
         case .paused: return "Paused\(of)"
         case .lowSpace(let free): return "Needs \(Self.megabytes(size - received)) MB · \(Self.megabytes(free)) MB free"
         case .failed(let words): return words
-        case .preparing: return "Getting ready for this \(device)… This takes a few minutes, once."
+        case .preparing: return "Getting ready… This takes a few minutes, once."
         case .ready: return "Downloaded · \(Self.megabytes(size)) MB · in use"
         case .unsupported: return "Needs a newer \(device). Apple’s dictation writes what you say."
         }

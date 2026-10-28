@@ -234,16 +234,25 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
 }
 
 @MainActor
-@Test func theFirstTimeYouTalkItDownloadsAndIsMadeReady() async throws {
+@Test func theFirstPressOfTheMicDownloadsItAndVoiceInputWaitsUntilItsReady() async throws {
     let rig = Rig()
     defer { rig.done() }
     let model = rig.model()
     #expect(model.state == .absent)
-    model.voiceStarted()
+    // Nothing listens before the model can: no microphone, no listening line.
+    let voice = VoiceInput(model: model)
+    voice.start()
+    #expect(voice.phase == .idle)
+    #expect(model.state == .absent)
+    // The mic brings it in, and says so while it comes.
+    #expect(model.micPressed() == .waitForModel)
     #expect(model.state == .downloading)
+    #expect(model.micWords.title.hasPrefix("Downloading the voice model · "))
+    // Pressed again meanwhile, it waits on the same download.
+    #expect(model.micPressed() == .waitForModel)
     #expect(await settled(model) == .ready)
     #expect(model.received == model.size)
-    #expect(model.isNewlyReady)
+    #expect(model.micPressed() == .listen)
     // In its folder, checked, made ready once; nothing left half-done.
     let kept = rig.folder.appending(path: "whisper-large-v3-turbo")
     #expect(FileManager.default.contents(atPath: kept.appending(path: "tokenizer.json").path) == rig.contents["tokenizer.json"])
@@ -253,6 +262,20 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
     let again = rig.model()
     #expect(again.state == .ready)
     #expect(rig.requests.count == rig.contents.count)
+}
+
+// An iPhone too old for Whisper keeps voice input, with Apple's dictation: the mic listens at
+// once and never downloads a model it can't run.
+@MainActor
+@Test func aDeviceThatCantRunWhisperListensWithoutDownloadingIt() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    let model = SpeechModel(files: rig.files, defaults: rig.defaults, supported: false)
+    model.use(folder: rig.folder)
+    #expect(model.state == .unsupported)
+    #expect(model.micPressed() == .listen)
+    #expect(model.state == .unsupported)
+    #expect(rig.requests.isEmpty)
 }
 
 @MainActor
@@ -267,9 +290,9 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
     let model = rig.model()
     #expect(model.state == .paused)
     #expect(model.received == 120_000)
-    // Not paused by you: it's still coming, and goes on the next time you talk.
+    // Not paused by you: it's still coming, and goes on the next time you press the mic.
     #expect(model.isUnderway)
-    model.voiceStarted()
+    #expect(model.micPressed() == .waitForModel)
     #expect(await settled(model) == .ready)
     #expect(rig.requests.first { $0.path.hasSuffix("weight.bin") }?.range == "bytes=120000-")
     #expect(FileManager.default.contents(atPath: rig.folder.appending(path: "whisper-large-v3-turbo").appending(path: path).path) == whole)
@@ -299,13 +322,14 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
     let rig = Rig()
     defer { rig.done() }
     let model = rig.model(free: 40_000_000)
-    model.voiceStarted()
+    #expect(model.micPressed() == .waitForModel)
     #expect(model.state == .lowSpace(free: 40_000_000))
+    #expect(model.micWords.detail?.hasSuffix("40 MB free") == true)
     #expect(rig.requests.isEmpty)
 }
 
 @MainActor
-@Test func removedItsGoneAndDoesntComeBackByItself() async throws {
+@Test func removedItsGoneAndVoiceInputWaitsForItAgain() async throws {
     let rig = Rig()
     defer { rig.done() }
     let model = rig.model()
@@ -315,13 +339,10 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
     #expect(model.state == .absent)
     #expect(model.received == 0)
     #expect(!FileManager.default.fileExists(atPath: rig.folder.appending(path: "whisper-large-v3-turbo").path))
-    // Talking again keeps to Apple's dictation; choosing it in Settings brings it back.
-    let before = rig.requests.count
-    model.voiceStarted()
-    #expect(model.state == .absent)
+    // It stays gone, and nothing listens without it; the mic brings it back.
     #expect(rig.model().state == .absent)
-    #expect(rig.requests.count == before)
-    model.download()
+    #expect(!model.canListen)
+    #expect(model.micPressed() == .waitForModel)
     #expect(await settled(model) == .ready)
 }
 
@@ -334,12 +355,11 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
     model.pause()
     #expect(model.state == .paused)
     #expect(!model.isUnderway)
-    model.voiceStarted()
-    #expect(model.state == .paused)
     let reopened = rig.model()
-    reopened.voiceStarted()
     #expect(reopened.isPausedByYou)
-    reopened.download()
+    #expect(!reopened.isUnderway)
+    // Pressing the mic is asking for it: it goes on.
+    #expect(reopened.micPressed() == .waitForModel)
     let end = await settled(reopened)
     #expect(end == .ready)
 }
@@ -354,7 +374,7 @@ private func settled(_ model: SpeechModel) async -> SpeechModel.State {
     try FileManager.default.createDirectory(at: partial.deletingLastPathComponent(), withIntermediateDirectories: true)
     try rig.contents[path]!.write(to: partial)
     let model = rig.model()
-    model.voiceStarted()
+    #expect(model.micPressed() == .waitForModel)
     #expect(await settled(model) == .ready)
     #expect(!rig.requests.contains { $0.path.hasSuffix("weight.bin") })
 }

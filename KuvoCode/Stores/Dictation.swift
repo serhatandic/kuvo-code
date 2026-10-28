@@ -13,6 +13,9 @@ final class Dictation {
     private(set) var owner: String?
     /// How it shows while it listens: as Settings said when it started.
     private(set) var style = VoiceStyle.composer
+    /// The composer whose mic was pressed while the voice model is still coming: its popover
+    /// says how far it's come.
+    var waitsForModel: String?
     @ObservationIgnored private var deliver: ((String) -> Void)?
     /// The composer in view, which the shortcut starts voice input for.
     @ObservationIgnored private var focused: (owner: String, words: Words, deliver: (String) -> Void)?
@@ -21,8 +24,15 @@ final class Dictation {
     typealias Words = @Sendable () async -> [String]
 
     /// Listens for the composer `owner`, for `words`; `deliver` gets what was said once it's done.
+    /// Until the voice model is here, nothing listens: the press brings it in, and that
+    /// composer's mic says how far it's come.
     func start(for owner: String, words: @escaping Words = { [] }, deliver: @escaping (String) -> Void) {
         cancel()
+        guard SpeechModel.shared.micPressed() == .listen else {
+            waitsForModel = owner
+            return
+        }
+        waitsForModel = nil
         let voice = VoiceInput()
         voice.ended = { [weak self, weak voice] words in
             guard let self, let voice, self.voice === voice else { return }

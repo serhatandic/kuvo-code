@@ -303,7 +303,7 @@ struct Composer: View {
 
             if let voice = listening {
                 // The chips make way for the voice: how long, how loud, Cancel and Done.
-                VoiceComposerRow(voice: voice, cancel: { app.dictation.cancel(); focusAtEnd() }, done: { app.dictation.finish() }, openSettings: { Self.openPrivacySettings(for: voice.phase) })
+                VoiceComposerRow(voice: voice, cancel: { app.dictation.cancel(); focusAtEnd() }, done: { app.dictation.finish() }, openSettings: Self.openMicrophoneSettings)
                     .transition(.opacity)
             } else {
                 HStack(spacing: 4) {
@@ -381,6 +381,7 @@ struct Composer: View {
         .onDisappear {
             if isDictating { app.dictation.cancel() }
             app.dictation.withdraw(voiceOwner)
+            waitsForModel.wrappedValue = false
         }
         .onChange(of: session) { old, _ in
             // Listening for the session it showed: that stops, rather than going on unseen, and
@@ -588,13 +589,31 @@ struct Composer: View {
                 .font(.system(size: 14, weight: .medium))
                 .frame(width: 30, height: 28)
                 .overlay { MicRing(model: .shared) }
-                .hoverHighlight(in: Capsule(), mutesInk: true)
+                .hoverHighlight(in: Capsule(), selected: waitsForModel.wrappedValue, mutesInk: true)
         }
         .buttonStyle(.plain)
         .clickablePointer()
-        .help(["Talk Instead of Typing (⇧⌘Space)", MicRing.words(.shared)].compactMap(\.self).joined(separator: "\n"))
+        .help(MicRing.words(.shared) ?? "Talk Instead of Typing (⇧⌘Space)")
         .accessibilityLabel("Voice Input")
         .accessibilityValue(MicRing.words(.shared) ?? "")
+        .accessibilityHint(SpeechModel.shared.canListen ? "Talk instead of typing" : "Downloads the voice model first")
+        // Pressed while the voice model comes (or by the shortcut): how far it's come.
+        .popover(isPresented: waitsForModel, arrowEdge: .top) {
+            VoiceModelPopover(model: .shared) { waitsForModel.wrappedValue = false }
+                .popoverContent()
+        }
+    }
+
+    /// This composer's mic was pressed before voice input could listen, until it can (or the
+    /// popover is closed).
+    private var waitsForModel: Binding<Bool> {
+        // Read as the view is drawn, so it's drawn again when they change.
+        let shown = app.dictation.waitsForModel == voiceOwner && !SpeechModel.shared.canListen
+        return Binding {
+            shown
+        } set: { shown in
+            if !shown, app.dictation.waitsForModel == voiceOwner { app.dictation.waitsForModel = nil }
+        }
     }
 
     private func startVoice() {
@@ -607,10 +626,9 @@ struct Composer: View {
         }
     }
 
-    /// Privacy & Security, on what wasn't allowed: the microphone, or speech recognition.
-    static func openPrivacySettings(for phase: VoiceInput.Phase) {
-        let pane = phase == .failed(.speechDenied) ? "Privacy_SpeechRecognition" : "Privacy_Microphone"
-        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?" + pane)!)
+    /// Privacy & Security › Microphone, when it wasn't allowed.
+    static func openMicrophoneSettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
     }
 
     private var actionButton: some View {
