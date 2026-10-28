@@ -30,6 +30,10 @@ export interface MoveRecord extends Move {
   /** The box it goes to: all its parts came, and it's being (or was) put in place; parts that come
    * after are ignored. */
   complete?: boolean;
+  /** What its folder's `paused` said before it moved (your own pause), to put back. */
+  pausedAs?: string;
+  /** The box it goes to: its folder was put in place by this move (and goes if it's taken back). */
+  placed?: boolean;
   /** A group chat's bots, which the box it goes to checks it has. */
   members?: string[];
   /** Offered to the other box at least once: a copy may be there, to drop if it's taken back. */

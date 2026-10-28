@@ -40,6 +40,7 @@ const server = http.createServer((request, response) => {
     if (url.pathname === "/api/session/active") return send(200, {});
     if (url.pathname === "/api/experimental/session/import") {
       if (engine.sessions.has(given.info.id)) return response.writeHead(409).end("{}");
+      if (engine.refuse === given.info.id) return response.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ message: "The disk is full." }));
       engine.imports += 1;
       engine.sessions.set(given.info.id, { id: given.info.id, title: given.info.title, directory: given.location.directory, messages: given.messages });
       return send(200, listed(engine.sessions.get(given.info.id)));
@@ -190,4 +191,30 @@ test("a step for a move this box doesn't have is answered dropped, never switche
   await say({ op: "switch", id: "mov_nothere1" });
   await say({ op: "drop", id: "mov_nothere2" });
   assert.deepEqual(told.filter(move => move.id?.startsWith("mov_nothere")).map(move => move.op), ["dropped", "dropped"]);
+});
+
+// A bundle lab packs for a chat it moves here: its conversations, and its wake-ups' folder.
+function bundleFor(thing, exports, wakeFiles = {}) {
+  const packed = fs.mkdtempSync(path.join(support, "pack-"));
+  fs.writeFileSync(path.join(packed, "move.json"), JSON.stringify({ kind: "chat", thing, name: "“Notes”", wasPaused: false, folder: thing, exports }));
+  fs.mkdirSync(path.join(packed, thing));
+  for (const [name, text] of Object.entries(wakeFiles)) fs.writeFileSync(path.join(packed, thing, name), text);
+  const file = path.join(packed, "bundle.tgz");
+  assert.equal(spawnSync("tar", ["-czf", file, "-C", packed, "move.json", thing]).status, 0);
+  const bytes = fs.readFileSync(file);
+  return { bytes, hash: crypto.createHash("sha256").update(bytes).digest("base64url") };
+}
+
+test("a copy whose setting up fails partway leaves nothing here: none of its conversations, nor its folder", async () => {
+  const thing = "ses_part1";
+  const { bytes, hash } = bundleFor(thing, [{ info: { id: thing, title: "Notes" }, messages: [] }, { info: { id: "ses_part1sub", parentID: thing, title: "Sub" }, messages: [] }], { "wakes.json": "[]" });
+  engine.refuse = "ses_part1sub";
+  const id = "mov_part1";
+  await say({ op: "offer", id, kind: "chat", thing, name: "“Notes”", size: bytes.length, hash, wasPaused: false, from: peerKey });
+  await say({ op: "part", id, hash, i: 0, of: 1, d: bytes.toString("base64url") });
+  await until(() => told.some(move => move.id === id && move.op === "failed"));
+  engine.refuse = null;
+  assert.ok(!engine.sessions.has(thing), "the conversation that did come in is gone");
+  assert.ok(!fs.existsSync(path.join(wakes, thing)), "and its folder");
+  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
 });

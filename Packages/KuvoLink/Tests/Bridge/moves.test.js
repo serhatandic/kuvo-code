@@ -208,6 +208,11 @@ write(path.join(macWakes, "ses_chat1", "wakes.json"), [{ id: "wak_1", due: 1, no
 write(path.join(labBots, "bot_ada", "bot.json"), { kuvo: 1, id: "bot_ada", name: "Ada", look: { color: "graphite", shape: "round", face: "calm" } });
 write(path.join(labBots, "bot_ada", "session"), "ses_bot1\n");
 write(path.join(labBots, "bot_ada", "MEMORY.md"), "The deploy is on Fridays.\n");
+// A bot you paused, on the machine.
+write(path.join(labBots, "bot_rest", "bot.json"), { kuvo: 1, id: "bot_rest", name: "Rest" });
+write(path.join(labBots, "bot_rest", "session"), "ses_rest\n");
+write(path.join(labBots, "bot_rest", "paused"), "Back on Monday");
+labEngine.sessions.set("ses_rest", { id: "ses_rest", title: "Rest", directory: path.join(labBots, "bot_rest", "workspace"), messages: messages("Rest up.") });
 
 // This Mac's keys, as your Keychain keeps them.
 const macKey = link.newKey();
@@ -373,4 +378,21 @@ test("a chat with more subagents than the engine lists at once moves with every 
   assert.equal(moved.json.move.sessions.length, 131);
   for (let i = 0; i < 130; i++) assert.equal(labEngine.sessions.get(`ses_sub${i}`)?.parent, "ses_many", `ses_sub${i} there`);
   assert.ok(![...macEngine.sessions.keys()].some(id => id === "ses_many" || id.startsWith("ses_sub")), "and gone here");
+});
+
+test("asked twice at once (a phone and this Mac, say), it moves once; the other is told it's moving", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  macEngine.sessions.set("ses_twice", { id: "ses_twice", title: "Twice", directory: macChats, messages: messages("Once?") });
+  const asked = await Promise.all([1, 2].map(() => ask("POST", "kuvo/moves", { kind: "chat", id: "ses_twice", to: lab.key })));
+  assert.deepEqual(asked.map(each => each.status).sort(), [200, 409]);
+  assert.match(asked.find(each => each.status === 409).json.message, /moving to another computer/);
+  assert.ok(labEngine.sessions.has("ses_twice") && !macEngine.sessions.has("ses_twice"));
+});
+
+test("a bot you paused moves paused, as you paused it", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  const moved = await askMachine("POST", "kuvo/moves", { kind: "bot", id: "bot_rest", to: mac });
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  assert.equal(fs.readFileSync(path.join(macBots, "bot_rest", "paused"), "utf8"), "Back on Monday");
+  assert.ok(macEngine.sessions.has("ses_rest") && !fs.existsSync(path.join(labBots, "bot_rest")));
 });

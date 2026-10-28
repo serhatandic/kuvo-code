@@ -212,28 +212,56 @@ export async function startMove(kind: MoveKind, thing: string, to: string, signa
     id, kind, thing, name: what.name, from: own, to, role: "from", stage: "holding", sessions: what.root ? [what.root] : [],
     peer: to, wasPaused: true, tries: 0, started: Date.now(), ...(folder && fs.existsSync(folder) ? { folder } : {}),
   };
+  // One move of a thing at a time, whoever asks (a phone and a Mac at once, through this bridge or
+  // `box route`): noted under a lock, after a look again.
+  if (!noteFirst(record)) return { ok: false, status: 409, message: say.moving };
   const outcome = outcomeOf(id);
-  saveMove(record);
   // Moved by this process when it's the bridge; else by the bridge, as it next looks.
   if (watching) drive(id);
   return outcome;
+}
+
+/** `record` noted, unless a move of its thing is under way already: under a lock of its own (a file
+ * made only if it isn't there; one left by a process cut off goes after a minute). */
+function noteFirst(record: MoveRecord): boolean {
+  fs.mkdirSync(MOVES, { recursive: true, mode: 0o700 });
+  const lock = path.join(MOVES, `.${record.thing}.lock`);
+  try { if (Date.now() - fs.statSync(lock).mtimeMs > 60_000) fs.rmSync(lock, { force: true }); } catch {}
+  let handle: number;
+  try { handle = fs.openSync(lock, "wx", 0o600); } catch { return false; }
+  try {
+    if (moveOf(record.thing)) return false;
+    saveMove(record);
+    return true;
+  } finally {
+    fs.closeSync(handle);
+    fs.rmSync(lock, { force: true });
+  }
 }
 
 const PAUSED = (folder: string) => path.join(folder, "paused");
 const pausedText = (folder: string): string | null => { try { return fs.readFileSync(PAUSED(folder), "utf8").trim(); } catch { return null; } };
 
 /** Its wake-ups held while it moves, as Pause does (only a move takes `moving` away). */
+// It says `moving` while it moves, whatever it said before (your own pause, kept to put back), so
+// nothing changes it on the way and its copy there is known for one a move brought.
 function hold(record: MoveRecord): void {
   if (!record.folder || !fs.existsSync(record.folder)) return;
   const was = pausedText(record.folder);
-  if (was !== "moving") record.wasPaused = was !== null;
-  if (was === null) writePrivate(PAUSED(record.folder), "moving");
+  if (was !== "moving") {
+    record.wasPaused = was !== null;
+    if (was !== null) record.pausedAs = was;
+    writePrivate(PAUSED(record.folder), "moving");
+  }
 }
 
-/** Its wake-ups going again, as they were before it moved. */
-function unhold(folder: string | undefined, wasPaused: boolean): void {
-  if (!folder || wasPaused || pausedText(folder) !== "moving") return;
-  try { fs.rmSync(PAUSED(folder), { force: true }); } catch {}
+/** Its wake-ups as they were before it moved: going again, or paused as you paused them. */
+function unhold(folder: string | undefined, wasPaused: boolean, pausedAs?: string): void {
+  if (!folder || pausedText(folder) !== "moving") return;
+  try {
+    if (wasPaused) writePrivate(PAUSED(folder), pausedAs ?? "");
+    else fs.rmSync(PAUSED(folder), { force: true });
+  } catch {}
 }
 
 /** Until none of its conversations is at work and nothing waits to go to them: a minute at most. */
@@ -287,13 +315,13 @@ async function carryOn(id: string): Promise<void> {
   if (bundle.size > MOST_BUNDLE) throw new Refused(say.tooBig(record.name));
   outgoing.set(id, { got: new Set(), flying: new Map(), exports });
   const now = changeMove(id, each => {
-    Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now() });
+    Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now() });
   });
   if (now) offer(now);
 }
 
 function offer(record: MoveRecord): void {
-  tell(record.peer, { op: "offer", id: record.id, kind: record.kind, thing: record.thing, name: record.name, size: record.size, hash: record.hash, wasPaused: record.wasPaused, from: record.from, ...(record.members ? { members: record.members } : {}) });
+  tell(record.peer, { op: "offer", id: record.id, kind: record.kind, thing: record.thing, name: record.name, size: record.size, hash: record.hash, wasPaused: record.wasPaused, ...(record.pausedAs !== undefined ? { pausedAs: record.pausedAs } : {}), from: record.from, ...(record.members ? { members: record.members } : {}) });
 }
 
 // The next parts to the other box, up to `IN_FLIGHT` on their way.
@@ -372,7 +400,7 @@ async function takeBack(id: string, message: string, status = 409): Promise<void
   if (!record || record.role !== "from" || record.failed || record.stage === "switching" || record.stage === "finishing") return;
   outgoing.delete(id);
   // As it was, before whoever asked hears.
-  unhold(record.folder, record.wasPaused);
+  unhold(record.folder, record.wasPaused, record.pausedAs);
   if (record.kind === "group") await groupAction(readBridgeFile(), record.thing, "activate").catch(() => {});
   // Offered already: its copy there goes too, once that box says so (`dropped`).
   if (record.offered) {
@@ -387,7 +415,7 @@ async function takeBack(id: string, message: string, status = 409): Promise<void
 /** A move whose copy the other box let go of before it was switched to: the original goes on here. */
 async function restore(record: MoveRecord, message: string): Promise<void> {
   outgoing.delete(record.id);
-  unhold(record.folder, record.wasPaused);
+  unhold(record.folder, record.wasPaused, record.pausedAs);
   if (record.kind === "group") await groupAction(readBridgeFile(), record.thing, "activate").catch(() => {});
   forgetMove(record.id);
   try { fs.rmSync(bundleOf(record.id), { recursive: true, force: true }); } catch {}
@@ -435,7 +463,7 @@ async function takeOffer(sender: MailSender, given: Record<string, unknown>): Pr
   incoming.set(id, new Set());
   saveMove({
     id, kind, thing, name, from: sender.key, to: ownKey(readLink() ?? {}) ?? "", role: "to", stage: "copying", sessions: was?.sessions ?? [],
-    peer: sender.key, wasPaused: given.wasPaused === true, hash: given.hash, size, sent: 0, tries: 0, started: was?.started ?? Date.now(),
+    peer: sender.key, wasPaused: given.wasPaused === true, ...(typeof given.pausedAs === "string" ? { pausedAs: given.pausedAs.slice(0, 2000) } : {}), hash: given.hash, size, sent: 0, tries: 0, started: was?.started ?? Date.now(),
   });
   answer({ op: "ready" });
 }
@@ -489,13 +517,17 @@ async function bringIn(record: MoveRecord): Promise<string[]> {
     if (fs.existsSync(place)) await toTrash(place);
     fs.mkdirSync(path.dirname(place), { recursive: true });
     fs.renameSync(folder, place);
+    // Placed by this move: it goes if the move's taken back.
+    changeMove(record.id, each => { each.placed = true; });
     // Held here until the switch, whatever it was where it came from.
-    if (pausedText(place) === null) writePrivate(PAUSED(place), "moving");
+    writePrivate(PAUSED(place), "moving");
     // Where a chat's watches' checks run here.
     if (record.kind === "chat") writePrivate(path.join(place, "directory"), CHATS);
   }
   const directory = directoryOf(record.kind, record.thing);
   fs.mkdirSync(directory, { recursive: true });
+  // Its conversations, noted before they're brought in: any that came go if it's taken back.
+  changeMove(record.id, each => { each.sessions = idsOf(contents.exports); });
   await importAll(readEngineFile(), contents.exports, directory);
   for (const [integration, keys] of Object.entries(contents.keys ?? {})) {
     const given = await answerBotKeys("PUT", `kuvo/bots/${record.thing}/keys/${encodeURIComponent(integration)}`, { keys }, null);
@@ -510,7 +542,7 @@ async function switchHere(record: MoveRecord): Promise<void> {
   if (record.kind === "group") {
     await groupAction(readBridgeFile(), record.thing, "activate");
   } else {
-    unhold(folderOf(record.kind, record.thing) ?? undefined, record.wasPaused);
+    unhold(folderOf(record.kind, record.thing) ?? undefined, record.wasPaused, record.pausedAs);
     forgetMovedAway(record.sessions);
     if (record.kind === "bot") await settleBot(record.thing, readEngineFile, () => { try { return readBridgeFile(); } catch { return null; } }).catch(() => {});
   }
@@ -529,8 +561,8 @@ async function drop(id: string): Promise<void> {
     try { engine = readEngineFile(); } catch {}
     for (const session of [...record.sessions].reverse()) if (engine) await deleteSession(engine, session).catch(() => {});
     const place = folderOf(record.kind, record.thing);
-    // Only a copy it brought (held for the move), never one that lives here.
-    if (place && pausedText(place) === "moving") {
+    // Only a copy this move placed, never one that lives here.
+    if (place && record.placed) {
       if (record.kind === "bot") await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).catch(() => {});
       await toTrash(place).catch(() => {});
     }
@@ -675,7 +707,7 @@ export function keepMoving(now = Date.now()): void {
 async function endWithout(record: MoveRecord): Promise<void> {
   if (record.role === "to") return drop(record.id);
   if (record.stage === "switching" || record.stage === "finishing") return finish(record.id);
-  unhold(record.folder, record.wasPaused);
+  unhold(record.folder, record.wasPaused, record.pausedAs);
   if (record.kind === "group") await groupAction(readBridgeFile(), record.thing, "activate").catch(() => {});
   forgetMove(record.id);
   ended(record.id, { ok: false, status: 409, message: say.notConnected(nameOf(record.peer)) });

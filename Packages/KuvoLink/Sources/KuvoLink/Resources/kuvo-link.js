@@ -7240,11 +7240,35 @@ async function startMove(kind, thing, to, signal) {
     started: Date.now(),
     ...folder && fs38.existsSync(folder) ? { folder } : {}
   };
+  if (!noteFirst(record))
+    return { ok: false, status: 409, message: say.moving };
   const outcome = outcomeOf(id);
-  saveMove(record);
   if (watching)
     drive(id);
   return outcome;
+}
+function noteFirst(record) {
+  fs38.mkdirSync(MOVES, { recursive: true, mode: 448 });
+  const lock = path38.join(MOVES, `.${record.thing}.lock`);
+  try {
+    if (Date.now() - fs38.statSync(lock).mtimeMs > 60000)
+      fs38.rmSync(lock, { force: true });
+  } catch {}
+  let handle;
+  try {
+    handle = fs38.openSync(lock, "wx", 384);
+  } catch {
+    return false;
+  }
+  try {
+    if (moveOf(record.thing))
+      return false;
+    saveMove(record);
+    return true;
+  } finally {
+    fs38.closeSync(handle);
+    fs38.rmSync(lock, { force: true });
+  }
 }
 var PAUSED = (folder) => path38.join(folder, "paused");
 var pausedText = (folder) => {
@@ -7258,16 +7282,21 @@ function hold(record) {
   if (!record.folder || !fs38.existsSync(record.folder))
     return;
   const was = pausedText(record.folder);
-  if (was !== "moving")
+  if (was !== "moving") {
     record.wasPaused = was !== null;
-  if (was === null)
+    if (was !== null)
+      record.pausedAs = was;
     writePrivate(PAUSED(record.folder), "moving");
+  }
 }
-function unhold(folder, wasPaused) {
-  if (!folder || wasPaused || pausedText(folder) !== "moving")
+function unhold(folder, wasPaused, pausedAs) {
+  if (!folder || pausedText(folder) !== "moving")
     return;
   try {
-    fs38.rmSync(PAUSED(folder), { force: true });
+    if (wasPaused)
+      writePrivate(PAUSED(folder), pausedAs ?? "");
+    else
+      fs38.rmSync(PAUSED(folder), { force: true });
   } catch {}
 }
 async function settle(engine, sessions, name) {
@@ -7323,13 +7352,13 @@ async function carryOn(id) {
     throw new Refused(say.tooBig(record.name));
   outgoing.set(id, { got: new Set, flying: new Map, exports });
   const now = changeMove(id, (each) => {
-    Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now() });
+    Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now() });
   });
   if (now)
     offer(now);
 }
 function offer(record) {
-  tell(record.peer, { op: "offer", id: record.id, kind: record.kind, thing: record.thing, name: record.name, size: record.size, hash: record.hash, wasPaused: record.wasPaused, from: record.from, ...record.members ? { members: record.members } : {} });
+  tell(record.peer, { op: "offer", id: record.id, kind: record.kind, thing: record.thing, name: record.name, size: record.size, hash: record.hash, wasPaused: record.wasPaused, ...record.pausedAs !== undefined ? { pausedAs: record.pausedAs } : {}, from: record.from, ...record.members ? { members: record.members } : {} });
 }
 function sendParts(record, now = Date.now()) {
   const state = outgoing.get(record.id);
@@ -7420,7 +7449,7 @@ async function takeBack(id, message, status = 409) {
   if (!record || record.role !== "from" || record.failed || record.stage === "switching" || record.stage === "finishing")
     return;
   outgoing.delete(id);
-  unhold(record.folder, record.wasPaused);
+  unhold(record.folder, record.wasPaused, record.pausedAs);
   if (record.kind === "group")
     await groupAction(readBridgeFile(), record.thing, "activate").catch(() => {});
   if (record.offered) {
@@ -7438,7 +7467,7 @@ async function takeBack(id, message, status = 409) {
 }
 async function restore(record, message) {
   outgoing.delete(record.id);
-  unhold(record.folder, record.wasPaused);
+  unhold(record.folder, record.wasPaused, record.pausedAs);
   if (record.kind === "group")
     await groupAction(readBridgeFile(), record.thing, "activate").catch(() => {});
   forgetMove(record.id);
@@ -7501,6 +7530,7 @@ async function takeOffer(sender, given) {
     sessions: was?.sessions ?? [],
     peer: sender.key,
     wasPaused: given.wasPaused === true,
+    ...typeof given.pausedAs === "string" ? { pausedAs: given.pausedAs.slice(0, 2000) } : {},
     hash: given.hash,
     size,
     sent: 0,
@@ -7568,13 +7598,18 @@ async function bringIn(record) {
       await toTrash(place);
     fs38.mkdirSync(path38.dirname(place), { recursive: true });
     fs38.renameSync(folder, place);
-    if (pausedText(place) === null)
-      writePrivate(PAUSED(place), "moving");
+    changeMove(record.id, (each) => {
+      each.placed = true;
+    });
+    writePrivate(PAUSED(place), "moving");
     if (record.kind === "chat")
       writePrivate(path38.join(place, "directory"), CHATS);
   }
   const directory = directoryOf(record.kind, record.thing);
   fs38.mkdirSync(directory, { recursive: true });
+  changeMove(record.id, (each) => {
+    each.sessions = idsOf(contents.exports);
+  });
   await importAll(readEngineFile(), contents.exports, directory);
   for (const [integration, keys] of Object.entries(contents.keys ?? {})) {
     const given = await answerBotKeys("PUT", `kuvo/bots/${record.thing}/keys/${encodeURIComponent(integration)}`, { keys }, null);
@@ -7588,7 +7623,7 @@ async function switchHere(record) {
   if (record.kind === "group") {
     await groupAction(readBridgeFile(), record.thing, "activate");
   } else {
-    unhold(folderOf(record.kind, record.thing) ?? undefined, record.wasPaused);
+    unhold(folderOf(record.kind, record.thing) ?? undefined, record.wasPaused, record.pausedAs);
     forgetMovedAway(record.sessions);
     if (record.kind === "bot")
       await settleBot(record.thing, readEngineFile, () => {
@@ -7617,7 +7652,7 @@ async function drop(id) {
       if (engine)
         await deleteSession(engine, session).catch(() => {});
     const place = folderOf(record.kind, record.thing);
-    if (place && pausedText(place) === "moving") {
+    if (place && record.placed) {
       if (record.kind === "bot")
         await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).catch(() => {});
       await toTrash(place).catch(() => {});
@@ -7785,7 +7820,7 @@ async function endWithout(record) {
     return drop(record.id);
   if (record.stage === "switching" || record.stage === "finishing")
     return finish(record.id);
-  unhold(record.folder, record.wasPaused);
+  unhold(record.folder, record.wasPaused, record.pausedAs);
   if (record.kind === "group")
     await groupAction(readBridgeFile(), record.thing, "activate").catch(() => {});
   forgetMove(record.id);
