@@ -68,10 +68,11 @@ private struct PressableLabel<Label: View>: View {
     @ViewBuilder let label: () -> Label
     @State private var isHovering = false
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.showsHover) private var showsHover
 
     var body: some View {
         label()
-            .foregroundStyle(isHovering && isEnabled || !dimsAtRest ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+            .foregroundStyle((isHovering || showsHover) && isEnabled || !dimsAtRest ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
             .background(fill, in: .rect(cornerRadius: cornerRadius))
             .contentShape(.rect(cornerRadius: cornerRadius))
             .opacity(isEnabled ? 1 : 0.45)
@@ -83,8 +84,13 @@ private struct PressableLabel<Label: View>: View {
     private var fill: Color {
         guard isEnabled else { return .clear }
         if configuration.isPressed { return Pressable.pressedFill }
-        return isHovering ? Pressable.hoverFill : .clear
+        return isHovering || showsHover ? Pressable.hoverFill : .clear
     }
+}
+
+extension EnvironmentValues {
+    /// Buttons drawn as with the pointer over them, for a screenshot.
+    @Entry var showsHover = false
 }
 
 /// The clear (×) button at the end of a search field: it brightens under the pointer, as the

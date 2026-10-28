@@ -301,6 +301,7 @@ when you're there to answer.
 | `KUVO_DEMO_SIDE_THREAD` | With `KUVO_DEMO_PROMPT`: a sample side thread of three questions over the composer, and an older one in its ⋯ (`answering` leaves its last one being answered), once the first turn ends |
 | `KUVO_DEMO_GOAL` | With `KUVO_DEMO_PROMPT`: `met` or `working`, a sample goal over the composer once the first turn ends (no model checks it) |
 | `KUVO_DEMO_REVIEW` | With `KUVO_DEMO_PROMPT`: `starting` (nothing found yet), `running`, `stopped` or `done`, a sample security review of the whole project in parts over the composer once the first turn ends (no model reads it) |
+| `KUVO_DEMO_SIDE_THREAD_HOVER` | The side thread's Copy shown as with the pointer over it |
 | `KUVO_DEMO_WAITING` | With `KUVO_DEMO_SESSION`: these messages shown waiting in its queue, separated by `\|`, without sending them; `<words>@<picture path>` attaches a picture |
 | `KUVO_DEMO_NEW_PROJECT` | Open the New Project sheet with these comma-separated folders |
 | `KUVO_DEMO_BACKGROUND` | Don't bring the window forward, so it doesn't take the keyboard while you work elsewhere; it also asks nothing of macOS (above) |
