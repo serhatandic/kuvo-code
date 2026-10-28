@@ -1033,4 +1033,30 @@ describe("the routes", () => {
     expect((await line()).artifacts.map((artifact: any) => artifact.name)).toEqual(["a.md"])
     controller.abort()
   })
+
+  test("what you keep in a conversation's followed list goes to the top, marked yours, as you keep it, and back in its place as you stop", async () => {
+    session("ses_code", project)
+    // A minute apart, so which is newer is never a tie.
+    let minute = 0
+    const now = () => new Date(Date.UTC(2026, 9, 26, 9, minute))
+    store = new ArtifactStore(join(root, "artifacts"), { bots, disk: () => disk, now })
+    recorder = new Recorder(store, { bots, now })
+    for (const [n, name] of ["older.png", "newer.pdf"].entries()) {
+      minute = n
+      const file = join(project, name)
+      writeFileSync(file, name)
+      await hear(turn("ses_code", `m${n}`, tool("ses_code", `c${n}`, "write", { filePath: file })))
+    }
+    const controller = new AbortController()
+    const response = await artifactRoutes(store, "GET", ["events"], new URLSearchParams("session=ses_code"), async () => ({}), controller.signal)
+    const reader = response.body!.getReader()
+    const line = async () => JSON.parse(new TextDecoder().decode((await reader.read()).value)).artifacts.map((artifact: any) => [artifact.name, artifact.pinned?.by ?? null])
+    expect(await line()).toEqual([["newer.pdf", null], ["older.png", null]])
+    const older = ArtifactStore.idOf(join(project, "older.png"))
+    await route("POST", `kuvo/artifacts/${older}/pin`, { pinned: true })
+    expect(await line()).toEqual([["older.png", "you"], ["newer.pdf", null]])
+    await route("POST", `kuvo/artifacts/${older}/pin`, { pinned: false })
+    expect(await line()).toEqual([["newer.pdf", null], ["older.png", null]])
+    controller.abort()
+  })
 })

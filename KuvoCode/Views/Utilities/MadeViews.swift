@@ -661,8 +661,9 @@ struct MadeRow: View {
                             .font(.system(size: 13, weight: .medium))
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        if let pin = header.pinned, timeOnly || pin.by == "bot" {
-                            MarkBadge(text: ArtifactWords.mark(pin))
+                        // Kept, wherever it's listed: a star for yours, Final for its bot's.
+                        if let pin = header.pinned {
+                            if pin.by == "bot" { MarkBadge(text: ArtifactWords.mark(pin)) } else { KeptStar() }
                         }
                     }
                     Text(subtitle)
@@ -1444,7 +1445,7 @@ private struct QuickLookPreview: NSViewRepresentable {
     }
 }
 
-/// What's kept at the top, as a small tinted capsule: "Final" (its bot's mark) or "Kept" (yours).
+/// What its bot marked final, as a small tinted capsule beside its name.
 private struct MarkBadge: View {
     let text: String
 
@@ -1455,5 +1456,16 @@ private struct MarkBadge: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
             .background(.tint.opacity(0.14), in: .capsule)
+    }
+}
+
+/// What you keep, as the star Keep fills, beside its name.
+private struct KeptStar: View {
+    var body: some View {
+        Image(systemName: ArtifactWords.kept.symbol)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.tint)
+            .help("Kept")
+            .accessibilityLabel("Kept")
     }
 }
