@@ -180,6 +180,13 @@ import Testing
         window.contentView?.layoutSubtreeIfNeeded()
     }
 
+    /// Settled, and what the window queued on the main queue as it did (where the keyboard goes
+    /// next) done too: the main queue runs in order.
+    private func drain() async throws {
+        try await settle()
+        await withCheckedContinuation { done in DispatchQueue.main.async { done.resume() } }
+    }
+
     /// The composers in view, left to right: the conversation's, then the one beside it.
     private var composers: [MessageTextView] {
         window.contentView?.layoutSubtreeIfNeeded()
@@ -207,10 +214,10 @@ import Testing
         _ = try #require(reply)
         #expect(composerHasKeys)
         withAnimation(.ui) { app.tabs.showPanel(true) }
-        try await settle()
+        try await drain()
         #expect(composerHasKeys, "opening the panel leaves the keyboard where it was")
         withAnimation(.ui) { app.tabs.showPanel(false) }
-        try await settle()
+        try await drain()
         #expect(composerHasKeys)
     }
 
@@ -228,8 +235,7 @@ import Testing
 
         withAnimation(.ui) { app.tabs.showPanel(true) }
         try await until { terminal.view.window === window }
-        try await settle()
-        try await settle()
+        try await drain()
         #expect(composerHasKeys, "the panel back with its terminal leaves the keyboard in the composer")
         #expect(app.tabs.focus == .conversation)
     }
@@ -249,6 +255,28 @@ import Testing
         withAnimation(.ui) { app.tabs.showPanel(false) }
         try await until { window.firstResponder === beside }
         #expect(app.tabs.focus == .split)
+    }
+
+    /// What has the keyboard and stays in view keeps it: the panel's terminal as the panel grown
+    /// over the conversation goes back beside it, and the sidebar's search as the panel closes.
+    @Test func whatStaysInViewKeepsTheKeyboard() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        let terminal = try await terminalInThePanel()
+        withAnimation(.ui) { app.tabs.panelExpanded = true }
+        try await settle()
+        withAnimation(.ui) { app.tabs.panelExpanded = false }
+        try await drain()
+        #expect(window.firstResponder === terminal.view, "the terminal keeps the keyboard")
+
+        let search = try #require(all(NSTextField.self, in: window.contentView).first { field in
+            field.isEditable && field.convert(field.bounds, to: nil).midX < 300
+        }, "the sidebar's search field")
+        window.makeFirstResponder(search)
+        let editor = try #require(window.firstResponder as? NSTextView)
+        withAnimation(.ui) { app.tabs.showPanel(false) }
+        try await drain()
+        #expect(window.firstResponder === editor, "the sidebar's search keeps the keyboard")
     }
 
     /// Nothing left with the keyboard, as Settings or the panel grown over the conversation leave

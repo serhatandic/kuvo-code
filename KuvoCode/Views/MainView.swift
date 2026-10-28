@@ -273,8 +273,8 @@ struct MainView: View {
         }
         // The panel or the sidebar going takes the keyboard with it, if either had it: it goes
         // back to the conversation. One coming in leaves it where it is.
-        .onChange(of: panelOnScreen) { _, shown in if !shown { returnKeyboard() } }
-        .onChange(of: sidebarOnScreen) { _, shown in if !shown { returnKeyboard() } }
+        .onChange(of: panelOnScreen) { _, shown in if !shown { returnKeyboard(leaving: .changes) } }
+        .onChange(of: sidebarOnScreen) { _, shown in if !shown { returnKeyboard(leaving: .sessions) } }
         // The agent started browsing: show it.
         .onChange(of: utilities.revealRequest) { withAnimation(.ui) { tabs.showPanel() } }
         // Hiding the tab bar takes the whole row away and the cards reach the top. The sidebar
@@ -624,6 +624,7 @@ struct MainView: View {
             if !showsTabBar { WindowDragArea().frame(height: Metrics.windowControlsHeight) }
         }
         .onCardClick(isOn: !overlayShown) { tabs.focus = .sessions }
+        .background(KeyboardPlace(pane: .sessions, places: keyboardReturn))
     }
 
     /// The session's title, renamed in its card's header, while it's the one being renamed.
@@ -856,11 +857,13 @@ struct MainView: View {
     }
 
     /// The keyboard back in the conversation you work in (the session beside, in a split), when
-    /// it isn't there (in what's going, or nowhere): to what had it there last, or else its
-    /// composer. After SwiftUI's update.
-    private func returnKeyboard() {
+    /// the card `leaving` had it or nothing has it: to what had it there last, or else its
+    /// composer. Where it is is read now, while what's leaving is still in place; it moves after
+    /// SwiftUI's update.
+    private func returnKeyboard(leaving: WindowTabs.Pane? = nil) {
+        let had = leaving.map(keyboardReturn.isIn) ?? false
         DispatchQueue.main.async {
-            guard !app.showsSettings, !(showsPanel && panelExpanded), !keyboardReturn.isInConversation else { return }
+            guard !app.showsSettings, !(showsPanel && panelExpanded), had || keyboardReturn.isNowhere else { return }
             if !keyboardReturn.handBack(to: tabs.activeHalf) { tabs.focusComposer() }
         }
     }
@@ -894,6 +897,7 @@ struct MainView: View {
         )
         .environment(catalog(for: focusedDirectory))
         .onCardClick(isOn: !overlayShown) { tabs.focus = .changes }
+        .background(KeyboardPlace(pane: .changes, places: keyboardReturn))
     }
 
     /// Opens the panel on a tool.
@@ -1377,19 +1381,36 @@ struct WelcomeView: View {
 
 /// What had the keyboard last in the conversation and in the session beside it (a composer, a
 /// terminal tab, a field), to give it back to when what took it goes: the panel or the sidebar
-/// closing, Settings put away.
+/// closing, Settings put away. And where the panel's and the sidebar's cards are, to tell whether
+/// the one going has it.
 @MainActor private final class KeyboardReturn {
     private weak var conversation: NSView?
     private weak var split: NSView?
+    private var places: [WindowTabs.Pane: Weak] = [:]
+
+    private struct Weak { weak var view: NSView? }
 
     func remember(_ view: NSView, in pane: WindowTabs.Pane) {
         if pane == .split { split = view } else { conversation = view }
     }
 
-    /// Whether what had the keyboard last in the conversation (either half) has it still.
-    var isInConversation: Bool {
-        guard let window = (conversation ?? split)?.window else { return false }
-        return window.firstResponder.map { $0 === conversation || $0 === split } ?? false
+    func place(_ view: NSView, of pane: WindowTabs.Pane) {
+        places[pane] = Weak(view: view)
+    }
+
+    /// Whether the keyboard is in `pane`'s card: what has it shows inside it.
+    func isIn(_ pane: WindowTabs.Pane) -> Bool {
+        guard let place = places[pane]?.view, let window = place.window,
+              let view = window.firstResponder as? NSView, view.window === window else { return false }
+        let shown = view.convert(view.visibleRect, to: nil)
+        return !shown.isEmpty && place.convert(place.bounds, to: nil).insetBy(dx: -1, dy: -1).contains(shown)
+    }
+
+    /// Whether nothing in the window has the keyboard.
+    var isNowhere: Bool {
+        guard let window = (conversation ?? split)?.window ?? places.values.lazy.compactMap({ $0.view?.window }).first else { return false }
+        guard let view = window.firstResponder as? NSView else { return true }
+        return view.window !== window || view === window.contentView?.superview
     }
 
     /// Gives the keyboard back to what had it last in `pane`, if that's still there to type in.
@@ -1397,5 +1418,21 @@ struct WelcomeView: View {
         guard let view = pane == .split ? split : conversation, let window = view.window,
               !view.isHiddenOrHasHiddenAncestor, !view.visibleRect.isEmpty else { return false }
         return window.firstResponder === view || window.makeFirstResponder(view)
+    }
+}
+
+/// Where a card is, for `KeyboardReturn` to tell whether the keyboard is in it.
+private struct KeyboardPlace: NSViewRepresentable {
+    let pane: WindowTabs.Pane
+    let places: KeyboardReturn
+
+    func makeNSView(context: Context) -> Place { Place() }
+
+    func updateNSView(_ view: Place, context: Context) {
+        places.place(view, of: pane)
+    }
+
+    final class Place: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
