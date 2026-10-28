@@ -242,7 +242,7 @@ Betas are manual: an annotated `vX.Y.Z-beta.N` tag on `main` (the version it lea
 
 On 2026-10-28 GitHub's automated abuse checks hid the user's account: the profile, the repos and the release downloads (the DMG and the update feed) answered 404 to everyone else. The likely cause is the heavy automated traffic of many sessions at once. A reinstatement request is open. Until the user says the account is cleared, and as a habit after it:
 
-- **Push in batches.** Land finished, reviewed pieces together: at most about one push per repo per hour from a session. Never push only to start CI.
+- **Sessions never push.** Commit finished, tested, reviewed work to your branch (merged with main locally) and tell the coordinating session (or the user) it is ready. **One push per repo a day** (the user, 2026-10-28), carrying everyone's finished work together. Never push only to start CI.
 - **No polling.** Never loop on `gh run`, `gh api`, `gh pr` or `git fetch`. Check CI once after a push, and read the result when you're told it's done.
 - **No GitHub writes beyond the task**: no issues, labels, releases, tags or repo settings unless the user asks.
 - **One account.** Never create or use another GitHub account or token.
