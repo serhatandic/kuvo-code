@@ -367,6 +367,8 @@ when you're there to answer.
 | `KUVO_DEMO_EDIT_BOT_SAVE` | With `KUVO_DEMO_EDIT_BOT`: its job in a few words changed to this, and saved, ten seconds on (with `KUVO_DEMO_BOX_FAILED`, to see what Save says while this Mac's box is down) |
 | `KUVO_DEMO_MOVE_BOT` | With `KUVO_DEMO_BOT`: once that bot is done (and its prompt with it), it moves to this machine, or to this Mac when empty, as Move to Computer does |
 | `KUVO_DEMO_MOVE_GROUP` | With `KUVO_DEMO_GROUP`: that group chat moves to this machine, or to this Mac when empty, as Move to Computer does, before its message goes |
+| `KUVO_DEMO_MOVES` | Move to Computer without a second computer: the first bot, group chat and chat shown on their way (copying, getting ready, finishing), and every bot's menu listing lab and a Mac mini that needs a newer Kuvo Code |
+| `KUVO_DEMO_MOVE_MENU` | A bot's name: its Move to Computer list built as its menu is, before and after its box says where it can go, with what it shows each time printed |
 | `KUVO_DEMO_ADD_WAKE` | With `KUVO_DEMO_EDIT_BOT`: adding a wake-up, every day, with this note (`KUVO_DEMO_ADD_WAKE_NOW`: and adds it) |
 | `KUVO_DEMO_REPLY` | With `KUVO_DEMO_BOT`: sends this to the bot as a notification's Reply does |
 | `KUVO_DEMO_IMPORT_BOT` | A shared bot's file: New Bot opens from it, as File › Import Bot… does |

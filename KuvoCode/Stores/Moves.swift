@@ -118,6 +118,15 @@ final class Moves {
     /// A move of it that its box hasn't finished yet.
     func isPending(_ id: String) -> Bool { told.values.contains { $0.moves.contains { $0.thing == id } } }
 
+    #if DEBUG
+    /// `KUVO_DEMO_MOVES`: moves on their way and places, as boxes would say them (`DemoMoves`).
+    func showDemo(going: [String: Going] = [:], places demo: [String: (machine: String?, list: [Place])] = [:]) {
+        asked.merge(going) { _, new in new }
+        for (id, known) in demo { places[id] = Known(box: known.machine ?? BoxClient.mac, list: known.list, read: .distantFuture) }
+        show()
+    }
+    #endif
+
     // MARK: Where it can go
 
     /// Where `id` can go from the box it lives on (`machine`, nil: this Mac), as that box last said,

@@ -1740,38 +1740,57 @@ private struct MoveToProjectMenu: View {
 /// carries on (`Moves`), as the box it lives on says it can go, with why not where it can't. Asked
 /// first, as the original goes to the trash where it was.
 private struct MoveToComputerMenu: View {
+    let thing: MoveToComputerItems.Thing
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        Menu("Move to Computer") {
+            MoveToComputerItems(thing: thing)
+        }
+        .disabled(app.moves.isMoving(thing.id))
+        .onAppear { Task { await app.moves.loadPlaces(thing.kind, thing.id, from: thing.machine(in: app)) } }
+    }
+}
+
+/// What "Move to Computer ›" lists.
+struct MoveToComputerItems: View {
     enum Thing {
         case bot(Bot)
         case chat(Session)
         case group(BotGroup)
+
+        var id: String {
+            switch self {
+            case .bot(let bot): bot.id
+            case .chat(let session): session.id
+            case .group(let group): group.id
+            }
+        }
+
+        var kind: String {
+            switch self {
+            case .bot: "bot"
+            case .chat: "chat"
+            case .group: "group"
+            }
+        }
+
+        /// The machine it lives on (nil: this Mac).
+        @MainActor func machine(in app: AppModel) -> String? {
+            switch self {
+            case .bot(let bot): bot.machine
+            case .chat(let session): RemoteFolder.machine(of: session.location.directory)
+            case .group(let group): app.chats.machine(of: group.id)
+            }
+        }
     }
 
     let thing: Thing
     @Environment(AppModel.self) private var app
 
-    private var id: String {
-        switch thing {
-        case .bot(let bot): bot.id
-        case .chat(let session): session.id
-        case .group(let group): group.id
-        }
-    }
-
-    private var here: String? {
-        switch thing {
-        case .bot(let bot): bot.machine
-        case .chat(let session): RemoteFolder.machine(of: session.location.directory)
-        case .group(let group): app.chats.machine(of: group.id)
-        }
-    }
-
-    private var kind: String {
-        switch thing {
-        case .bot: "bot"
-        case .chat: "chat"
-        case .group: "group"
-        }
-    }
+    private var id: String { thing.id }
+    private var kind: String { thing.kind }
+    private var here: String? { thing.machine(in: app) }
 
     /// Where it can go, as the box it lives on said last (asked again as the menu opens); before
     /// it has, your other computers as this Mac knows them, each asked as it's picked.
@@ -1780,29 +1799,25 @@ private struct MoveToComputerMenu: View {
     }
 
     var body: some View {
-        Menu("Move to Computer") {
-            let places = places
-            let reasons = Set(places.map(\.why))
-            if let why = app.moves.whyNotAsked(from: here) {
-                Text(why)
-            } else if places.isEmpty {
-                Text("No other computers to move it to")
-            } else if places.count > 1, reasons.count == 1, let one = places.first, !one.ok {
-                // Why it can't go anywhere (it works in a project, it's moving already), once.
-                Text(one.note ?? one.why ?? "")
-            } else {
-                // Why not one, in a few words beside its name (a menu doesn't wrap).
-                ForEach(places, id: \.key) { place in
-                    Button { move(to: place) } label: {
-                        Text(place.name)
-                        if let why = place.note ?? place.why { Text(why) }
-                    }
-                    .disabled(!place.ok)
+        let places = places
+        let reasons = Set(places.map(\.why))
+        if let why = app.moves.whyNotAsked(from: here) {
+            Text(why)
+        } else if places.isEmpty {
+            Text("No other computers to move it to")
+        } else if places.count > 1, reasons.count == 1, let one = places.first, !one.ok {
+            // Why it can't go anywhere (it works in a project, it's moving already), once.
+            Text(one.note ?? one.why ?? "")
+        } else {
+            // Why not one, in a few words beside its name (a menu doesn't wrap).
+            ForEach(places, id: \.key) { place in
+                Button { move(to: place) } label: {
+                    Text(place.name)
+                    if let why = place.note ?? place.why { Text(why) }
                 }
+                .disabled(!place.ok)
             }
         }
-        .disabled(app.moves.isMoving(id))
-        .onAppear { Task { await app.moves.loadPlaces(kind, id, from: here) } }
     }
 
     private func move(to place: Moves.Place) {
