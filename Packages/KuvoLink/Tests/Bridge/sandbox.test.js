@@ -456,11 +456,22 @@ test("turned off and on again, it isn't on until the engine has loaded it again"
   }
 });
 
-test("on macOS, a command can't start what runs outside it, nor read another copy of Kuvo Code's", { skip: linux && "macOS only" }, async () => {
+test("on macOS, a command can't start what runs outside it, nor read another copy of Kuvo Code's, and still reads your Keychain for gh and git", { skip: linux && "macOS only" }, async () => {
   const box = boxAt("outside");
   const project = path.join(root, "outside-project");
   fs.mkdirSync(project);
   const outside = path.join(root, "job-escaped");
+  // gh and git's Keychain helper read your sign-ins from the Keychain's files in their own process
+  // (your own, as the sandbox hides what's in your home folder: listed here, nothing read).
+  const keychains = path.join(os.userInfo().homedir, "Library", "Keychains");
+  // An app that would run outside the sandbox, were it opened: it leaves a mark where the command can't.
+  const app = path.join(root, "Escape.app");
+  const opened = path.join(root, "app-escaped");
+  fs.mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
+  fs.writeFileSync(path.join(app, "Contents", "Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>CFBundleExecutable</key><string>Escape</string><key>CFBundleIdentifier</key><string>run.kuvo.code.sandbox-test-escape</string><key>LSBackgroundOnly</key><true/></dict></plist>
+`);
+  fs.writeFileSync(path.join(app, "Contents", "MacOS", "Escape"), `#!/bin/sh\necho x > ${JSON.stringify(opened)}\n`, { mode: 0o755 });
   // Another copy's temporary folder, where the system keeps them (`…/T/run.kuvo.code.<copy>`).
   const user = spawnSync("getconf", ["DARWIN_USER_TEMP_DIR"], { encoding: "utf8" }).stdout.trim();
   const copy = fs.mkdtempSync(path.join(user, "run.kuvo.code.sandbox-test-"));
@@ -472,8 +483,11 @@ test("on macOS, a command can't start what runs outside it, nor read another cop
     const ran = await engineRuns(box, project, tries([
       ["read another copy's files", `cat ${JSON.stringify(path.join(copy, "secret"))}`],
       ["start a launchd job", `launchctl submit -l ${label} -- /bin/sh -c 'echo x > ${outside}'`],
+      ["open an app", `open -g -j -a ${JSON.stringify(app)} && sleep 2 && test -f ${JSON.stringify(opened)}`],
+      ["read your Keychain", `ls ${JSON.stringify(keychains)}`],
     ]));
-    assert.deepEqual(outcome(ran.out), { "read another copy's files": "refused", "start a launchd job": "refused" }, ran.out);
+    assert.deepEqual(outcome(ran.out), { "read another copy's files": "refused", "start a launchd job": "refused", "open an app": "refused", "read your Keychain": "allowed" }, ran.out);
+    assert.equal(fs.existsSync(opened), false, "the app ran outside the sandbox");
   } finally {
     spawnSync("launchctl", ["remove", label]);
     fs.rmSync(copy, { recursive: true, force: true });

@@ -57,7 +57,9 @@ const SECRETS = [".aws", ".config/gcloud", ".azure", ".kube", ".docker/config.js
 const MAC_SECRETS = ["Library/Application Support/Google/Chrome", "Library/Application Support/BraveSoftware",
   "Library/Application Support/Arc", "Library/Application Support/Firefox", "Library/Application Support/Microsoft Edge",
   "Library/Safari", "Library/Cookies", "Library/Application Support/1Password", "Library/Group Containers/2BUA8C4S2C.com.1password",
-  "Library/Application Support/Bitwarden", "Library/Keychains"];
+  "Library/Application Support/Bitwarden"];
+// Not the Keychain's folder: gh and git's helper read their sign-ins from it in their own process
+// (its items keep their own access lists, Kuvo Code's too).
 const LINUX_SECRETS = [".config/google-chrome", ".config/chromium", ".config/BraveSoftware", ".mozilla", ".local/share/keyrings"];
 
 /**
