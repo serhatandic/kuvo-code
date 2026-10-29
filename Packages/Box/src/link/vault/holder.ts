@@ -12,7 +12,7 @@ import net from "node:net";
 import path from "node:path";
 import { RUN } from "../home";
 import type { AnyPiece, LinkHandler, LinkRequest } from "../server/context";
-import { provesUnlock, unlockProof } from "./store";
+import { LOCKED, provesUnlock, unlockProof } from "./store";
 
 export const VAULT_SOCKET = path.join(RUN, "vault.sock");
 
@@ -38,6 +38,9 @@ const MOST = 8 * 1024 * 1024;
 const KEY = "x-kuvo-vault-key";
 const AUTH = "x-kuvo-vault-auth";
 const nonce = () => crypto.randomBytes(18).toString("base64url");
+/** What a client's proof covers: the holder's nonce for this connection, and the request itself. */
+const covered = (theirs: string, method: string, route: string, body: string) =>
+  `${theirs}\0${method.toUpperCase()}\0${route}\0${crypto.createHash("sha256").update(body).digest("base64url")}`;
 
 /** This process holds the vault from now on, answering the socket with `handle` (as a local request:
  * neither a phone nor this Mac's app, whatever it says). */
@@ -75,8 +78,8 @@ export function holdVault(handle: LinkHandler): net.Server {
       let sent: Partial<Sent> | null = null;
       try { sent = JSON.parse(given.slice(0, end)); } catch {}
       const headers: Record<string, string> = typeof sent?.headers === "object" && sent.headers ? { ...sent.headers } : {};
-      // A client proves it holds the unlock key for this connection alone.
-      const proved = provesUnlock("client", mine, headers[AUTH]);
+      // A client proves it holds the unlock key for this connection and this request alone.
+      const proved = provesUnlock("client", covered(mine, String(sent?.method ?? "GET"), String(sent?.path ?? ""), String(sent?.body ?? "")), headers[AUTH]);
       delete headers[AUTH];
       const request: LinkRequest = {
         method: String(sent?.method ?? "GET"),
@@ -141,7 +144,8 @@ export const NOT_THE_HOLDER = "That isn't this vault's key, or what answers for 
 
 /** `request` asked of the process that holds the vault; null when none does (nothing listens). A
  * request with the unlock key sends a proof of it instead, once the holder proved it has it too;
- * to one that can't (it's locked), the key itself, which unlocks it. */
+ * to one that can't (it's locked), the key itself only to unlock it (`kuvo/vault/unlock`, which a
+ * client sends when you ask): anything else is told it's locked, and nothing is sent. */
 export function askHolder(request: LinkRequest, signal?: AbortSignal): Promise<Answered | null> {
   return new Promise(resolve => {
     if (!socketLooksHeld()) return resolve(null);
@@ -159,10 +163,15 @@ export function askHolder(request: LinkRequest, signal?: AbortSignal): Promise<A
     signal?.addEventListener("abort", () => finish(null), { once: true });
     socket.setEncoding("utf8");
     socket.on("connect", () => socket.write(JSON.stringify({ hello: ours }) + "\n"));
+    const body = Buffer.from(request.body ?? Buffer.alloc(0)).toString("base64");
     const send = () => {
       const headers: Record<string, string> = {};
       for (const [name, value] of Object.entries(request.headers ?? {})) if (typeof value === "string" && name !== AUTH) headers[name] = value;
       const key = headers[KEY];
+      if (key && typeof theirs?.proof !== "string" && !/^kuvo\/vault\/unlock(\?|$)/.test(request.path)) {
+        finish({ status: 423, type: "application/json", body: Buffer.from(JSON.stringify({ message: LOCKED })).toString("base64") });
+        return;
+      }
       if (key) {
         const unlock = Buffer.from(key, "base64url");
         if (typeof theirs?.proof === "string") {
@@ -174,10 +183,10 @@ export function askHolder(request: LinkRequest, signal?: AbortSignal): Promise<A
             return;
           }
           delete headers[KEY];
-          headers[AUTH] = unlockProof("client", String(theirs.nonce ?? ""), unlock)!;
+          headers[AUTH] = unlockProof("client", covered(String(theirs.nonce ?? ""), request.method, request.path, body), unlock)!;
         }
       }
-      socket.write(JSON.stringify({ method: request.method, path: request.path, headers, body: Buffer.from(request.body ?? Buffer.alloc(0)).toString("base64") } satisfies Sent) + "\n");
+      socket.write(JSON.stringify({ method: request.method, path: request.path, headers, body } satisfies Sent) + "\n");
     };
     socket.on("data", chunk => {
       answer += chunk;

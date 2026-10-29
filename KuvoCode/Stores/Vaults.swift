@@ -18,6 +18,8 @@ final class Vaults {
         var activity: [VaultActivity] = []
         /// Why it couldn't be read just now.
         var failure: String?
+        /// A machine's vault, locked since it started again, until you unlock it (`unlock`).
+        var locked = false
     }
 
     private(set) var shown: [String: Shown] = [:]
@@ -93,8 +95,10 @@ final class Vaults {
             now.asks = try await ask(Asks.self, "GET", VaultRoutes.asks, on: box).asks
             now.activity = try await ask(Entries.self, "GET", VaultRoutes.activity(limit: 50), on: box).entries
             now.failure = nil
+            now.locked = false
         } catch {
             now.failure = error.localizedDescription
+            now.locked = (error as? BoxRefusal)?.status == 423
         }
         guard reads[box] == read else { return }
         shown[box] = now
@@ -180,6 +184,14 @@ final class Vaults {
         if let project = who.project { whom["project"] = project }
         if who.everyone == true { whom["everyone"] = true }
         _ = try await ask(Nothing.self, "POST", VaultRoutes.grants, body: ["item": item.id, "who": whom, "how": how?.rawValue ?? NSNull()], on: box)
+        await refresh(box)
+    }
+
+    /// Unlocks a machine's vault, locked since it started again, with the key this Mac keeps: sent
+    /// only now, when you ask, since what answers for it then can't prove it's the vault.
+    func unlock(_ box: String) async throws {
+        guard let key = VaultKeys.key(for: box) else { throw BoxRefusal(status: 403, message: "This Mac doesn't keep that machine's vault key. Unlock it from your iPhone.") }
+        _ = try await ask(Nothing.self, "POST", VaultRoutes.unlock, body: ["key": key], on: box)
         await refresh(box)
     }
 

@@ -47,7 +47,15 @@ struct VaultSettings: View {
 
     var body: some View {
         ScrollingSettingsForm {
-            if let failure = shown.failure, shown.vault == nil {
+            if shown.locked {
+                Section {
+                    HStack(alignment: .firstTextBaseline) {
+                        Label("\(computer)’s vault is locked since it started again. Its agents can’t use it until you unlock it.", systemImage: "lock.fill")
+                        Spacer()
+                        Button("Unlock") { change { try await Vaults.shared.unlock(box) } }
+                    }
+                }
+            } else if let failure = shown.failure, shown.vault == nil {
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Couldn’t open \(computer)’s vault").font(.headline)
@@ -110,12 +118,7 @@ struct VaultSettings: View {
                     .foregroundStyle(.secondary)
             }
         }
-        if state.locked {
-            Section {
-                Label("This machine’s vault is locked since it started again. It unlocks the next time Kuvo Code on this Mac or your iPhone reaches it.", systemImage: "lock.fill")
-                    .foregroundStyle(.secondary)
-            }
-        }
+
         if !shown.asks.isEmpty {
             Section("Waiting for You") {
                 ForEach(shown.asks) { asked in

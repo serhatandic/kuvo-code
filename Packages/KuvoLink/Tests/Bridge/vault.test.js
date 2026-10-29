@@ -369,29 +369,74 @@ test("the Mac's proof works once, and what answers on the vault's socket gets th
   const once = proof();
   assert.equal((await fromMac("POST", "kuvo/vault/key", once)).status, 200);
   assert.equal((await fromMac("POST", "kuvo/vault/key", once)).status, 403, "the same proof again");
-  // Something else in the socket's place, which can't prove it holds the key.
-  const socket = path.join(home, "run", "vault.sock");
-  fs.renameSync(socket, socket + ".kept");
+  // Something else in the socket's place: a box whose `run/vault.sock` is a stand-in's, which
+  // claims it's locked (to be sent the key), or passes what it's sent on to the real holder with
+  // another request in its place (to have the Mac's proof read an item's values).
+  const elsewhere = path.join(root, "elsewhere");
+  fs.mkdirSync(path.join(elsewhere, "run"), { recursive: true, mode: 0o700 });
+  const socket = path.join(elsewhere, "run", "vault.sock");
+  const real = path.join(home, "run", "vault.sock");
   const heard = [];
+  let mode = "locked";
+  const connections = new Set();
   const fake = net.createServer(connection => {
+    connections.add(connection);
     connection.setEncoding("utf8");
+    let given = "";
+    let upstream = null;
     connection.on("data", chunk => {
       heard.push(chunk);
-      if (heard.length === 1) connection.write(JSON.stringify({ nonce: "fake-nonce-0123456789", proof: "not-a-proof" }) + "\n");
+      given += chunk;
+      if (mode === "locked") {
+        if (given.includes("\n") && heard.length === 1) connection.write(JSON.stringify({ nonce: "fake-nonce-0123456789" }) + "\n");
+        return;
+      }
+      // Relay: hello through as it is; the request with a values read in its place.
+      const lines = given.split("\n");
+      if (!upstream && lines.length > 1) {
+        upstream = net.createConnection(real);
+        upstream.setEncoding("utf8");
+        upstream.write(lines[0] + "\n");
+        let back = "";
+        upstream.on("data", answer => {
+          back += answer;
+          if (!connection.destroyed) connection.write(answer);
+        });
+      }
+      if (upstream && lines.length > 2 && !upstream.sent) {
+        upstream.sent = true;
+        const request = JSON.parse(lines[1]);
+        request.method = "GET";
+        request.path = `kuvo/vault/items/${items.GitHub.id}/values`;
+        request.body = "";
+        upstream.write(JSON.stringify(request) + "\n");
+      }
     });
   });
   const umask = process.umask(0o177);
   await new Promise(resolve => fake.listen(socket, resolve));
   process.umask(umask);
+  const viaFake = async (method, route, body) => {
+    const child = spawn(process.execPath, [script, "box", "route"], { env: { ...env, KUVO_HOME: elsewhere }, stdio: ["pipe", "pipe", "ignore"] });
+    child.stdin.end(JSON.stringify({ method, path: route, body, headers: { "x-kuvo-vault-key": key } }));
+    let out = "";
+    child.stdout.setEncoding("utf8");
+    for await (const chunk of child.stdout) out += chunk;
+    const answer = JSON.parse(out.trim().split("\n").at(-1));
+    return { status: answer.status, value: JSON.parse(answer.body || "{}") };
+  };
   try {
-    const asked = await fromMac("GET", "kuvo/vault", undefined, key);
-    assert.equal(asked.status, 403);
+    const locked = await viaFake("GET", "kuvo/vault");
+    assert.equal(locked.status, 423, "a holder that can't prove it has the key isn't sent it, but to unlock");
     assert.ok(!heard.join("").includes(key), "its key never sent");
-    assert.equal(heard.length, 1, "nothing but hello");
+    mode = "relay";
+    heard.length = 0;
+    const swapped = await viaFake("GET", "kuvo/vault");
+    assert.notEqual(swapped.status, 200, "the Mac's proof is for its own request, not one put in its place");
+    assert.ok(!JSON.stringify(swapped.value).includes(SECRET));
   } finally {
+    for (const connection of connections) connection.destroy();
     await new Promise(resolve => fake.close(resolve));
-    fs.rmSync(socket, { force: true });
-    fs.renameSync(socket + ".kept", socket);
   }
   assert.equal((await fromMac("GET", "kuvo/vault", undefined, key)).status, 200, "the real one again");
 });
@@ -408,6 +453,15 @@ test("a conversation that isn't a bot's is paused too when it's steered to anoth
   const nas = await fromMac("POST", "kuvo/vault/items", { name: "NAS", kind: "login", sites: ["nas"], username: "admin", values: { password: "nas-password-1" } }, key);
   assert.equal(nas.status, 200, JSON.stringify(nas.value));
   assert.deepEqual(nas.value.item.sites, ["nas"]);
+  await fromMac("POST", "kuvo/vault/grants", { item: nas.value.item.id, who: { bot: "bot_ship" }, how: "own" }, key);
+  calling.ses_ship = [];
+  assert.equal((await box.local("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://nas", purpose: "sign-in", item: "NAS" })).status, 403, "only for its conversation's own call");
+  assert.equal((await fillAs({ session: "ses_ship", origin: "https://nas", purpose: "sign-in", item: "NAS" })).value.values.password, "nas-password-1");
+  // A name without dots is only itself: not every site that ends with it.
+  const dotless = await fromMac("POST", "kuvo/vault/items", { name: "Everything com", kind: "login", sites: ["com"], values: { password: "everything-1" } }, key);
+  await fromMac("POST", "kuvo/vault/grants", { item: dotless.value.item.id, who: { bot: "bot_ship" }, how: "own" }, key);
+  assert.equal((await fillAs({ session: "ses_ship", origin: "https://github.com", purpose: "sign-in", item: "Everything com" })).status, 403);
+  await fromMac("POST", "kuvo/vault/pause", { paused: false, bot: "bot_ship" }, key);
 });
 
 test("after the box starts again the vault is locked, until a client's key unlocks it", async () => {
@@ -420,11 +474,13 @@ test("after the box starts again the vault is locked, until a client's key unloc
   assert.equal(locked.status, 423);
   assert.match(locked.value.message, /locked/);
   assert.equal((await box.local("POST", "kuvo/vault/unlock", { key: crypto.randomBytes(32).toString("base64url") })).status, 403);
-  // The Mac's next request carries its key, which unlocks it.
   assert.equal(fs.existsSync(path.join(home, "run", "vault-run")), false, "a copy left behind is gone");
+  // The Mac's requests carry its key, but only Unlock sends it to a holder that can't prove it has it.
+  assert.equal((await fromMac("GET", "kuvo/vault", undefined, key)).status, 423);
+  assert.equal((await fromMac("POST", "kuvo/vault/unlock", { key }, key)).status, 200);
   const listed = await fromMac("GET", "kuvo/vault", undefined, key);
   assert.equal(listed.value.state.locked, false);
-  assert.equal(listed.value.items.length, 8);
+  assert.equal(listed.value.items.length, 9);
   assert.equal((await fillAs({ session: "ses_ship", origin: "https://github.com", purpose: "sign-in" })).value.values.password, SECRET);
   await box.stop();
 });

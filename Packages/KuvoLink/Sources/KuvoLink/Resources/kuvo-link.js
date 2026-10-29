@@ -11280,6 +11280,7 @@ var MOST2 = 8 * 1024 * 1024;
 var KEY3 = "x-kuvo-vault-key";
 var AUTH = "x-kuvo-vault-auth";
 var nonce = () => crypto20.randomBytes(18).toString("base64url");
+var covered = (theirs, method, route, body) => `${theirs}\x00${method.toUpperCase()}\x00${route}\x00${crypto20.createHash("sha256").update(body).digest("base64url")}`;
 function holdVault(handle) {
   holding = true;
   fs52.mkdirSync(RUN, { recursive: true, mode: 448 });
@@ -11326,7 +11327,7 @@ function holdVault(handle) {
         sent = JSON.parse(given.slice(0, end));
       } catch {}
       const headers = typeof sent?.headers === "object" && sent.headers ? { ...sent.headers } : {};
-      const proved = provesUnlock("client", mine, headers[AUTH]);
+      const proved = provesUnlock("client", covered(mine, String(sent?.method ?? "GET"), String(sent?.path ?? ""), String(sent?.body ?? "")), headers[AUTH]);
       delete headers[AUTH];
       const request = {
         method: String(sent?.method ?? "GET"),
@@ -11407,12 +11408,17 @@ function askHolder(request, signal) {
     socket.setEncoding("utf8");
     socket.on("connect", () => socket.write(JSON.stringify({ hello: ours }) + `
 `));
+    const body = Buffer.from(request.body ?? Buffer.alloc(0)).toString("base64");
     const send = () => {
       const headers = {};
       for (const [name, value] of Object.entries(request.headers ?? {}))
         if (typeof value === "string" && name !== AUTH)
           headers[name] = value;
       const key = headers[KEY3];
+      if (key && typeof theirs?.proof !== "string" && !/^kuvo\/vault\/unlock(\?|$)/.test(request.path)) {
+        finish({ status: 423, type: "application/json", body: Buffer.from(JSON.stringify({ message: LOCKED })).toString("base64") });
+        return;
+      }
       if (key) {
         const unlock = Buffer.from(key, "base64url");
         if (typeof theirs?.proof === "string") {
@@ -11421,10 +11427,10 @@ function askHolder(request, signal) {
             return;
           }
           delete headers[KEY3];
-          headers[AUTH] = unlockProof("client", String(theirs.nonce ?? ""), unlock);
+          headers[AUTH] = unlockProof("client", covered(String(theirs.nonce ?? ""), request.method, request.path, body), unlock);
         }
       }
-      socket.write(JSON.stringify({ method: request.method, path: request.path, headers, body: Buffer.from(request.body ?? Buffer.alloc(0)).toString("base64") }) + `
+      socket.write(JSON.stringify({ method: request.method, path: request.path, headers, body }) + `
 `);
     };
     socket.on("data", (chunk) => {
