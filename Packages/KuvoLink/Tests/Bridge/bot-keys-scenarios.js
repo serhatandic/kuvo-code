@@ -67,15 +67,20 @@ export async function standInHost(password) {
     // without it (and answered while its Keychain is locked too).
     if (request.method === "POST" && request.url === "/hello") {
       host.hellos = (host.hellos ?? 0) + 1;
-      const { nonce } = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      return answer(200, { proof: crypto.createHmac("sha256", password).update(`kuvo-host-hello\0${nonce}\0${host.url.replace("http://", "")}`).digest("hex") });
+      const { nonce, vault } = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const at = host.url.replace("http://", "");
+      return answer(200, {
+        proof: crypto.createHmac("sha256", password).update(`kuvo-host-hello\0${nonce}\0${at}`).digest("hex"),
+        // For the vault's calls, with the secret the app gave its box alone.
+        ...(vault && host.vaultSecret ? { vaultProof: crypto.createHmac("sha256", host.vaultSecret).update(`kuvo-host-vault\0${nonce}\0${at}`).digest("hex") } : {}),
+      });
     }
     if (request.method !== "POST" || request.headers.authorization !== `Bearer ${password}` || request.headers["content-type"] !== "application/json") {
       host.turnedAway++;
       return answer(401, {});
     }
     const given = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    const { value: _, ...asked } = given;
+    const { value: _, values: __, ...asked } = given;
     host.asked.push({ call: request.url, ...asked });
     if (host.down || host.failing?.has(request.url)) return answer(500, { message: "The Keychain is locked." });
     switch (request.url) {
@@ -98,6 +103,38 @@ export async function standInHost(password) {
         return answer(200, {});
       case "/keys/delete":
         host.keys.delete(given.name);
+        return answer(200, {});
+      // The vault's values, kept by id as the Keychain would (vault-host.test.js): only to the box,
+      // with the secret the app started it with (`vaultSecret`), never to what read its folder.
+      case "/vault/get":
+      case "/vault/set":
+      case "/vault/delete":
+      case "/vault/generations":
+        // Each with its own proof: an HMAC with the secret of the call, its body and when.
+        if (host.vaultSecret && request.headers["x-kuvo-vault-auth"] !== crypto.createHmac("sha256", host.vaultSecret).update(`kuvo-host-vault-call\0${request.url.slice(1)}\0${crypto.createHash("sha256").update(Buffer.concat(chunks)).digest("hex")}\0${request.headers["x-kuvo-vault-at"]}`).digest("hex")) {
+          host.turnedAway++;
+          return answer(403, {});
+        }
+        break;
+    }
+    switch (request.url) {
+      // The vault files' newest generations, as the app keeps them in the Keychain.
+      case "/vault/generations":
+        // (`unreadable`: its Keychain locked; `adopt`: kept by an app from before the generations were.)
+        if (host.unreadable) return answer(503, { message: "This Mac's Keychain can't be read now, so its vault waits." });
+        host.generations ??= {};
+        if (typeof given.file === "string") {
+          host.adopt = false;
+          if (given.generation > (host.generations[given.file] ?? 0)) host.generations[given.file] = given.generation;
+        }
+        return answer(200, { generations: host.generations, ...(host.adopt ? { adopt: true } : {}) });
+      case "/vault/get":
+        return host.vault?.has(given.id) ? answer(200, { values: host.vault.get(given.id) }) : answer(404, {});
+      case "/vault/set":
+        (host.vault ??= new Map()).set(given.id, given.values);
+        return answer(200, {});
+      case "/vault/delete":
+        host.vault?.delete(given.id);
         return answer(200, {});
       // Whether its browser is signed in to the sites the agent uses there, as the test sets it.
       case "/sites/signed-in":

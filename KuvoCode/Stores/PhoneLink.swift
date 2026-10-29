@@ -817,6 +817,30 @@ final class PhoneLink {
         return ["key": key.rawRepresentation.base64URL, "secret": secret.bytes.base64URL, "sign": sign]
     }
 
+    /// That it's this Mac asking a machine it set up for its vault's key (PROTOCOL.md, "Vault"):
+    /// its link key, the time, and its signing key's signature of both and the machine's id here.
+    func vaultProof(machine: String) -> [String: Any]? {
+        guard hasIdentity else { return nil }
+        let at = Int(Date().timeIntervalSince1970 * 1000)
+        // Once only: the machine takes each nonce once.
+        let nonce = Data((0..<18).map { _ in UInt8.random(in: 0...255) }).base64URL
+        guard let signature = try? signing.signature(for: Data("kuvo-vault-key\u{0}\(machine)\u{0}\(at)\u{0}\(nonce)".utf8)) else { return nil }
+        return ["mac": key.publicKey.rawRepresentation.base64URL, "at": at, "nonce": nonce, "proof": signature.base64URL]
+    }
+
+    /// This Mac's proof, for one request to a machine's vault, instead of its unlock key (which goes
+    /// only to unlock it): its signing key's signature of `kuvo-vault-request\0<machine>\0<at>\0<nonce>
+    /// \0<METHOD>\0<path>\0<sha256 of the body, hex>`, base64url JSON (`x-kuvo-vault-proof`).
+    func vaultRequestProof(machine: String, method: String, path: String, body: Data) -> String? {
+        guard hasIdentity else { return nil }
+        let at = Int(Date().timeIntervalSince1970 * 1000)
+        let nonce = Data((0..<18).map { _ in UInt8.random(in: 0...255) }).base64URL
+        let hash = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
+        guard let signature = try? signing.signature(for: Data("kuvo-vault-request\u{0}\(machine)\u{0}\(at)\u{0}\(nonce)\u{0}\(method.uppercased())\u{0}\(path)\u{0}\(hash)".utf8)),
+              let json = try? JSONSerialization.data(withJSONObject: ["mac": key.publicKey.rawRepresentation.base64URL, "at": at, "nonce": nonce, "proof": signature.base64URL]) else { return nil }
+        return json.base64URL
+    }
+
     /// What a phone asks of this Mac that its box hands the app (the Mac's own routes, and those
     /// that haven't moved to the box yet), answered as it was: `phone`, the phone's key.
     func answerForBox(_ request: LinkRequest, phone: Data?) -> AsyncThrowingStream<LinkResponsePart, Error> {
@@ -910,7 +934,7 @@ final class PhoneLink {
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
     nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/plugins", "kuvo/folders", "kuvo/programs", "kuvo/providers", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities",
-                                                  "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended", "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/artifacts", "kuvo/search", "kuvo/git", "kuvo/agent-tools", "kuvo/moves", "kuvo/work"]
+                                                  "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended", "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/artifacts", "kuvo/search", "kuvo/git", "kuvo/agent-tools", "kuvo/moves", "kuvo/work", "kuvo/vault"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
@@ -949,7 +973,7 @@ final class PhoneLink {
         "accounts.credentials", "accounts.found", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply", "engine.restart",
         "file", "folders", "git", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves",
         "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.parts", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
-        "personalities.events", "skills.trash", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
+        "personalities.events", "skills.trash", "vault", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
         "agent-tools", "sessions.start", "letters-read", "queue", "work", "work.projects",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",
@@ -1122,7 +1146,10 @@ final class PhoneLink {
                 let username = given.username.flatMap { $0.isEmpty ? nil : $0 }
                 let password = given.password.flatMap { $0.isEmpty ? nil : $0 }
                 guard username != nil || password != nil else { return (400, Data()) }
-                if given.save == true, let password { _ = Passwords.save(host: ask.host, account: username ?? "", password: password) }
+                if given.save == true, let password {
+                    let host = ask.host
+                    Task { await Passwords.save(host: host, account: username ?? "", password: password) }
+                }
                 asks.answer(id, .signIn(username: username, password: password))
             }
         case ("code", .code):

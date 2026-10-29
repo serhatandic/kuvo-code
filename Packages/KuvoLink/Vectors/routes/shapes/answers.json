@@ -2350,6 +2350,9 @@
             "literal": "work.projects"
            },
            {
+            "literal": "vault"
+           },
+           {
             "literal": "accounts.ended"
            },
            {
@@ -2596,6 +2599,9 @@
            },
            {
             "literal": "work.projects"
+           },
+           {
+            "literal": "vault"
            }
           ]
          }
@@ -5219,7 +5225,28 @@
         "object": {
          "session": "string",
          "next?": "number",
-         "watching": "bool"
+         "watching": "bool",
+         "wakes?": {
+          "list": {
+           "object": {
+            "id": "string",
+            "due": "number",
+            "note": "string",
+            "every?": "string"
+           }
+          }
+         },
+         "watches?": {
+          "list": {
+           "object": {
+            "letters": "string",
+            "every": "string",
+            "check": "string",
+            "note": "string"
+           }
+          }
+         },
+         "paused?": "bool"
         }
        }
       }
@@ -5360,6 +5387,527 @@
    "answers": {
     "200": {
      "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/vault",
+   "answers": {
+    "200": {
+     "object": {
+      "state": {
+       "object": {
+        "made": "bool",
+        "locked": "bool",
+        "paused": "bool",
+        "pausedBots": {
+         "map": "string"
+        },
+        "store": {
+         "oneOf": [
+          {
+           "literal": "keychain"
+          },
+          {
+           "literal": "encrypted"
+          }
+         ]
+        },
+        "keptDays": "number",
+        "agents?": "bool",
+        "tampered?": "bool",
+        "generations?": {
+         "map": "number"
+        }
+       }
+      },
+      "items": {
+       "list": {
+        "object": {
+         "id": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "login"
+           },
+           {
+            "literal": "key"
+           },
+           {
+            "literal": "file"
+           },
+           {
+            "literal": "note"
+           }
+          ]
+         },
+         "name": "string",
+         "sites": {
+          "list": "string"
+         },
+         "username?": "string",
+         "fields": {
+          "list": "string"
+         },
+         "fileName?": "string",
+         "readable?": "bool",
+         "signInOnly?": "bool",
+         "created": "number",
+         "changed": "number",
+         "used?": "number"
+        }
+       }
+      },
+      "grants": {
+       "list": {
+        "object": {
+         "item": "string",
+         "who": {
+          "object": {
+           "bot?": "string",
+           "project?": "string",
+           "everyone?": "bool"
+          }
+         },
+         "how": {
+          "oneOf": [
+           {
+            "literal": "own"
+           },
+           {
+            "literal": "ask"
+           }
+          ]
+         },
+         "at": "number"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/vault/items",
+   "answers": {
+    "200": {
+     "object": {
+      "item": {
+       "object": {
+        "id": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "login"
+          },
+          {
+           "literal": "key"
+          },
+          {
+           "literal": "file"
+          },
+          {
+           "literal": "note"
+          }
+         ]
+        },
+        "name": "string",
+        "sites": {
+         "list": "string"
+        },
+        "username?": "string",
+        "fields": {
+         "list": "string"
+        },
+        "fileName?": "string",
+        "readable?": "bool",
+        "signInOnly?": "bool",
+        "created": "number",
+        "changed": "number",
+        "used?": "number"
+       }
+      },
+      "key?": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "PATCH kuvo/vault/items/:id",
+   "answers": {
+    "200": {
+     "object": {
+      "item": {
+       "object": {
+        "id": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "login"
+          },
+          {
+           "literal": "key"
+          },
+          {
+           "literal": "file"
+          },
+          {
+           "literal": "note"
+          }
+         ]
+        },
+        "name": "string",
+        "sites": {
+         "list": "string"
+        },
+        "username?": "string",
+        "fields": {
+         "list": "string"
+        },
+        "fileName?": "string",
+        "readable?": "bool",
+        "signInOnly?": "bool",
+        "created": "number",
+        "changed": "number",
+        "used?": "number"
+       }
+      },
+      "key?": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/vault/items/:id",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/vault/items/:id/values",
+   "answers": {
+    "200": {
+     "object": {
+      "values": {
+       "map": "string"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/vault/grants",
+   "answers": {
+    "200": {
+     "object": {
+      "grants": {
+       "list": {
+        "object": {
+         "item": "string",
+         "who": {
+          "object": {
+           "bot?": "string",
+           "project?": "string",
+           "everyone?": "bool"
+          }
+         },
+         "how": {
+          "oneOf": [
+           {
+            "literal": "own"
+           },
+           {
+            "literal": "ask"
+           }
+          ]
+         },
+         "at": "number"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/vault/grants",
+   "answers": {
+    "200": {
+     "object": {
+      "grants": {
+       "list": {
+        "object": {
+         "item": "string",
+         "who": {
+          "object": {
+           "bot?": "string",
+           "project?": "string",
+           "everyone?": "bool"
+          }
+         },
+         "how": {
+          "oneOf": [
+           {
+            "literal": "own"
+           },
+           {
+            "literal": "ask"
+           }
+          ]
+         },
+         "at": "number"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/vault/activity",
+   "answers": {
+    "200": {
+     "object": {
+      "entries": {
+       "list": {
+        "object": {
+         "id": "string",
+         "at": "number",
+         "what": {
+          "oneOf": [
+           {
+            "literal": "used"
+           },
+           {
+            "literal": "asked"
+           },
+           {
+            "literal": "allowed"
+           },
+           {
+            "literal": "declined"
+           },
+           {
+            "literal": "refused"
+           },
+           {
+            "literal": "added"
+           },
+           {
+            "literal": "changed"
+           },
+           {
+            "literal": "removed"
+           },
+           {
+            "literal": "granted"
+           },
+           {
+            "literal": "ungranted"
+           },
+           {
+            "literal": "paused"
+           },
+           {
+            "literal": "resumed"
+           },
+           {
+            "literal": "shown"
+           }
+          ]
+         },
+         "item?": "string",
+         "itemName?": "string",
+         "kind?": {
+          "oneOf": [
+           {
+            "literal": "login"
+           },
+           {
+            "literal": "key"
+           },
+           {
+            "literal": "file"
+           },
+           {
+            "literal": "note"
+           }
+          ]
+         },
+         "bot?": "string",
+         "botName?": "string",
+         "session?": "string",
+         "sessionName?": "string",
+         "client?": "string",
+         "site?": "string",
+         "program?": "string",
+         "how?": "string",
+         "why?": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/vault/pause",
+   "answers": {
+    "200": {
+     "object": {
+      "made": "bool",
+      "locked": "bool",
+      "paused": "bool",
+      "pausedBots": {
+       "map": "string"
+      },
+      "store": {
+       "oneOf": [
+        {
+         "literal": "keychain"
+        },
+        {
+         "literal": "encrypted"
+        }
+       ]
+      },
+      "keptDays": "number",
+      "agents?": "bool",
+      "tampered?": "bool",
+      "generations?": {
+       "map": "number"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/vault/key",
+   "answers": {
+    "200": {
+     "object": {
+      "key": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/vault/unlock",
+   "answers": {
+    "200": {
+     "object": {
+      "made": "bool",
+      "locked": "bool",
+      "paused": "bool",
+      "pausedBots": {
+       "map": "string"
+      },
+      "store": {
+       "oneOf": [
+        {
+         "literal": "keychain"
+        },
+        {
+         "literal": "encrypted"
+        }
+       ]
+      },
+      "keptDays": "number",
+      "agents?": "bool",
+      "tampered?": "bool",
+      "generations?": {
+       "map": "number"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/vault/asks",
+   "answers": {
+    "200": {
+     "object": {
+      "asks": {
+       "list": {
+        "object": {
+         "id": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "use"
+           },
+           {
+            "literal": "item"
+           }
+          ]
+         },
+         "at": "number",
+         "session?": "string",
+         "sessionName?": "string",
+         "bot?": "string",
+         "botName?": "string",
+         "item?": "string",
+         "itemName?": "string",
+         "need?": "string",
+         "why?": "string",
+         "site?": "string",
+         "machine?": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/vault/asks/:id",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/vault/tools",
+   "answers": {
+    "200": {
+     "object": {
+      "tools": {
+       "list": "any"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/vault/tools",
+   "answers": {
+    "200": {
+     "object": {
+      "text": "string",
+      "isError": "bool"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/vault/fill",
+   "answers": {
+    "200": {
+     "object": {
+      "item": {
+       "object": {
+        "id": "string",
+        "name": "string"
+       }
+      },
+      "username?": "string",
+      "values": {
+       "map": "string"
+      }
+     }
     }
    }
   },

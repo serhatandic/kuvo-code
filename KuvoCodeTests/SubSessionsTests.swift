@@ -95,6 +95,25 @@ import Testing
         try await until { engine.requests("POST", "/api/session/ses_tests/view").first?.body["idle"] as? Double == 22 }
     }
 
+    /// A box whose sessions' parents go round (one its own subagent's, two each other's): what's
+    /// new about them and reading them work, rather than the app crashing.
+    @Test func subSessionsWhoseParentsGoRoundDontCrashIt() async throws {
+        defer { engine.stop() }
+        engine.list([
+            session("ses_timer", "Timer cycle", created: 1, idle: 5, viewed: 5),
+            session("ses_self", "Its own subagent", parent: "ses_self", created: 10, idle: 12, viewed: 4),
+            session("ses_a", "One", parent: "ses_b", created: 20, idle: 22, viewed: 4),
+            session("ses_b", "The other", parent: "ses_a", created: 30, idle: 32, viewed: 4),
+        ])
+        await workspace.refresh()
+        #expect(!workspace.hasNewSubSessions("ses_self"), "listed under itself, it isn't a sub-session of its own")
+        #expect(workspace.hasNewSubSessions("ses_a"))
+
+        workspace.markViewed("ses_a")
+        #expect(!workspace.hasNewSubSessions("ses_a"))
+        #expect(!workspace.hasNewSubSessions("ses_b"))
+    }
+
     /// A sub-session finished since you read its session: its computer's name in the strip says
     /// there's something new, as its folded row does.
     @Test func aComputerWithANewSubSessionHasSomethingNew() async throws {

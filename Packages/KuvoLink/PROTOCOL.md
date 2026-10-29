@@ -1630,9 +1630,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   alike, with the Mac closed too: ask the box a conversation lives on (one that keeps none answers
   an empty list). A wake-up reaches the conversation as a
   message starting with `[Wake-up] `. `GET kuvo/wakes` lists every session with a wake-up or a
-  watch at once, for the marks beside them in a list: `{"sessions": [{session, next, watching}]}`
-  (`next`, the soonest, in seconds since 1970, left out when it has none). Bots' come with
-  `kuvo/bots`. Each box lists its own.
+  watch at once, for the marks beside them in a list: `{"sessions": [{session, next, watching,
+  wakes, watches, paused}]}` (`next`, the soonest, in seconds since 1970, left out when it has
+  none; `wakes`, `watches` and `paused` as `GET kuvo/wakes/<session>` says them, so a client reads
+  them all in one call, and left out by an older box). Bots' come with `kuvo/bots`. Each box
+  lists its own.
 - `POST kuvo/wakes/<session>/watch` with `{"every", "check", "note"}` makes a watch, as its agent
   makes one with `kuvo-wake watch`: `every` 5m or more, 2h or 1d, `check` a shell command run on
   that computer, `note` what to do when its output changes. It answers the list as it is then;
@@ -2086,6 +2088,9 @@ application/json`:
   signed in to the sites the agent uses there (X, LinkedIn, Reddit), as their cookies say: only
   those it can tell. The app reads the cookies again only once they've changed (or after 30
   seconds);
+- `vault/get {"id"}` → `{"values"}` (`404` for none), `vault/set {"id", "values"}` → `{}`,
+  `vault/delete {"id"}` → `{}`: the vault's values, by item, in the Keychain ("Vault", bridge
+  0.9.100);
 - `trash {"path"}` → `{}`: a folder the box put in its trash (`box/trash`, a deleted bot's), to the
   Finder's Trash (bridge 0.9.52); one anywhere else stays where it is;
 - for its link (bridge 0.9.61, "The relay, on this Mac's box"):
@@ -2398,6 +2403,152 @@ sends it for a phone, and the relay and `box route` never carry it), and anythin
 A change on one computer reaches the others it reaches by mail at once, and the rest as they
 connect. A bot made on a machine can have one there at once: its
 `kuvo/bots/templates` lists them, told as the Mac words them (the kit's `personalityWords`).
+
+### Vault
+
+Each box keeps a vault of its own (`vault` in `features`, bridge 0.9.100): sign-ins, keys, files
+and notes that its agents use without seeing a value. An agent names an item; the box fills it into
+a page (through the browser's own process), a command's environment or a temporary file. No answer
+an agent can get holds a value. Each computer keeps only its own; nothing is synced or fetched from
+another box.
+
+**Where it's kept.** In `box/vault/` under the box's folder: `items.json` (each item without its
+values), `grants.json`, `paused.json` and `activity.jsonl` (kept a year). The first three are
+`{"v": 2, "gen", "data", "sig"}`, signed (HMAC-SHA256 of `<file name>\0<gen>\0<data as JSON>`) with
+a key no agent can read: a machine's from its store key (so they can't be checked while it's
+locked), this Mac's given by its app from the Keychain to the box alone, on its stdin as it starts
+(below). `gen` goes up with each write. One that isn't signed with it, was changed, or is older than
+the newest the box knows counts for nothing. This Mac's app keeps each file's newest `gen` in the
+Keychain, in one item with the file key (host interface `vault/generations {file?, generation?}`
+→ `{generations}`), which the box reads before it answers anything of the vault and tells as it
+writes: a file there whose generation the app doesn't have counts as changed, and while one it told
+couldn't be kept, agents' use waits; a client remembers a machine's
+(the state's `generations`) and, seeing one go back, pauses every agent's use there. `paused.json`, made with the first item,
+then pauses everyone, and so does its being gone. The state says `tampered`. Values:
+
+- this Mac's are in the Keychain, through its app ("Host interface": `vault/get {"id"}` →
+  `{"values"}` or `404`, `vault/set {"id", "values"}`, `vault/delete {"id"}`), never in the box's
+  folder. The app gives the box a secret of the vault's (with its own password and the file key)
+  on `serve`'s stdin as it starts, `{"password", "hostVaultSecret", "vaultFileKey"}`, never in its
+  environment, which any of the user's processes can read (`ps -E`): the password in
+  `run/host.json` is in a file an agent's command can read, and rewrite. Before a vault call the
+  box asks `hello` with `"vault": true`, and goes on only if the answer's `vaultProof` is that
+  secret's HMAC-SHA256 of `kuvo-host-vault\0<nonce>\0<where it reached it>`; each call carries
+  `x-kuvo-vault-at` (ms) and `x-kuvo-vault-auth`, the secret's HMAC of
+  `kuvo-host-vault-call\0<call>\0<sha256 of its body, hex>\0<at>`, taken within a minute and once
+  (`403` otherwise);
+- a machine's are in `box/vault/values/<id>`, AES-256-GCM with the store key, which is only ever
+  in the memory of the process that holds the vault. `key.json` keeps the store key wrapped by the
+  unlock key, and an HMAC that checks one. Only clients keep the unlock key. After the box starts
+  again the vault is locked (`423 {"message"}`) until a client sends it.
+
+**The process that holds it.** The box's long-running process (`run` on a machine, `serve` on a
+Mac) holds the vault. A `box route` passes `kuvo/vault…` to it over `run/vault.sock` (`0600`, owned
+by the user, which the route checks first), one request a connection: `{"hello": <nonce>}`, answered
+`{"nonce", "proof"?}` (`proof`, while the holder has the unlock key: HMAC-SHA256 with it of
+`kuvo-vault-holder\0<the route's nonce>`, base64url); then a line of `{"method", "path", "headers",
+"body"}` (base64) there, `{"status", "type", "body"}` back. A request with the unlock key sends, to
+a holder that proves it has it, `x-kuvo-vault-auth` instead: HMAC-SHA256 with the key of
+`kuvo-vault-client\0<the holder's nonce>\0<METHOD>\0<path>\0<sha256 of the base64 body, base64url>`,
+for that request alone. To one whose proof is wrong, nothing (`403`); to one that gives none (a
+locked one), the key itself only for `kuvo/vault/unlock`, which a client sends when you ask
+(**Unlock** on a machine's Vault page), and `423` for anything else. It says `503 {"message"}` when nothing holds it. A
+machine's link keeps running while it has a vault.
+
+**Who may do what.** Clients are your phones (through the relay, by their keys), this Mac's own app
+(`x-kuvo-from: app`, on the box's own password, which it was given on its stdin), and a request from
+the computer itself (the Mac over SSH, `box route`) that carries the Mac's proof for that request
+alone in `x-kuvo-vault-proof`: base64url JSON `{mac, at, nonce, proof}`, its signing key's signature
+of `kuvo-vault-request\0<the machine's id>\0<at>\0<nonce>\0<METHOD>\0<path>\0<sha256 of the body,
+hex>`, within five minutes, each nonce once (`box route` takes the body as sent, `bodyText`, for
+it). The unlock key goes only to unlock (`x-kuvo-vault-key`, or `kuvo/vault/unlock`), when you ask:
+what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it on its way then. Anything else
+(an agent's command) gets `403 {"message"}` from every route but the agents' own two and `unlock`.
+
+- `POST kuvo/vault/key` → `{"key"}`, the unlock key (32 bytes, base64url), for a client to keep:
+  answered to a phone, this Mac's app, or the Mac over SSH proving it set the machine up:
+  `{"mac", "at", "nonce", "proof"}`, its link key, the time (ms), a nonce (16 to 64 base64url
+  characters) and its signing key's (link.json's `macSigns`) Ed25519 signature of
+  `kuvo-vault-key\0<the machine's id on its Macs>\0<at>\0<nonce>` (link.json's `id`), within five
+  minutes, each nonce once. It makes the vault
+  if there isn't one yet. `409` on this Mac (its Keychain needs no key), `423` while locked.
+- `POST kuvo/vault/unlock {"key"}` → the state; `403` for a key that isn't this vault's. Before
+  there's a vault, the state (`made: false`) whatever the key, so a client can tell whether to fetch
+  one without making it.
+- `GET kuvo/vault` → `{state, items, grants}`. `state` is `{made, locked, paused, pausedBots:
+  {<bot, or a conversation that isn't a bot's>: why}, store: "keychain" | "encrypted", keptDays,
+  agents, tampered?, generations: {items, grants, paused}}` (`agents`: whether agents may use it
+  on this box, below); an item is `{id, kind: "login" |
+  "key" | "file" | "note", name, sites, username?, fields, fileName?, readable?, signInOnly?,
+  created, changed, used?}` (`sites`: hosts, a site's own and those under it; `fields`: the names of the values it
+  holds, a sign-in's `password`, a file's `file` (base64), a note's `text`, a key's own); a grant
+  is `{item, who: {bot} | {project: <folder>} | {everyone: true}, how: "own" | "ask", at}`.
+- `POST kuvo/vault/items {kind, name, sites?, username?, fileName?, readable?, signInOnly?, values}`
+  → `{item, key?}`: `key` when this item made a machine's vault. A sign-in needs a site (a host, or a
+  name without dots on your network); names are unique; a value has at least 4 characters, so it can
+  be hidden. `signInOnly` (a sign-in) is filled in only to sign in, in the browser: never to
+  `vault_run`, nor `browser_fill`. `PATCH kuvo/vault/items/<id>` with any of those (a value `null` takes it away) →
+  `{item}`; `DELETE` → `{}`, with its values and grants.
+- `GET kuvo/vault/items/<id>/values` → `{values}`.
+- `POST kuvo/vault/grants {item, who, how}` (`how: null` takes it away) → `{grants}`;
+  `GET kuvo/vault/grants` → `{grants}`.
+- `POST kuvo/vault/pause {paused, bot?}` → the state: every agent's use, or one bot's (or, by its
+  root session, a conversation's that isn't a bot's).
+- `GET kuvo/vault/activity?item=&bot=&session=&before=&limit=` → `{entries}`, newest first:
+  `{id, at, what, item?, itemName?, kind?, bot?, botName?, session?, sessionName?, client?, site?,
+  program?, how?, why?}`, never a value. `what` is one of `used`, `asked`, `allowed`, `declined`,
+  `refused`, `added`, `changed`, `removed`, `granted`, `ungranted`, `paused`, `resumed`, `shown`.
+- `GET kuvo/vault/asks` → `{asks}`, and `GET kuvo/vault/asks/events` (`application/x-ndjson`, the
+  list now and on each change): what agents wait on you for, `{id, kind: "use" | "item", at,
+  session?, sessionName?, bot?, botName?, item?, itemName?, need?, why?, site?, machine?}`. `use`:
+  an item it may use only by asking (or has no grant for); `item`: something it needs (`need`).
+  `POST kuvo/vault/asks/<id> {answer: "once" | "always" | "no", item?}` → `{}` (`item`, for an
+  `item` ask, the one you give; `always` grants it on its own, to the bot or, for another session,
+  its project). An agent waits 15 minutes, then takes it as no. Your phones hear of one still open
+  after two seconds (`category: "ask"`, `data: {session?, vaultAsk}`).
+
+**The agents' own.** Both tool servers pass these on as they come, with the calling conversation.
+Each is answered only while that conversation is making the call: its engine (or the coding agents'
+bridge) has a tool call of that name running in it (`api/session/<id>/message`, a `tool` block,
+`running` or `pending`; for `tools`, with the same arguments; for `fill`, `browser_sign_in` or
+`browser_fill`, and one fill for each such call). Any program on the computer could name a session;
+only the conversation's own call uses its grants. (On a machine its browser, and anything that runs
+as you there, can still reach a value a fill puts in a page: until agents' commands are fenced off,
+that's what a machine can't keep from them.)
+
+Agents use the vault only on a box whose agents' commands are fenced (not yet on any box; the
+tests open it with `KUVO_VAULT_AGENTS=1`, which a Mac's app never passes its box, and which a box
+takes only in a test's own folder, never the account's own `~/.kuvo-code` or a Mac's
+`run.kuvo.code…/box`). Until then `GET kuvo/vault/tools` lists no tools, and a call says the vault
+isn't open to agents. A fill does only what Kuvo Code did before the vault: for `browser_sign_in`
+with no item, the one sign-in for the page's site the conversation may use on its own (else `404`,
+and the browser asks you); an item named, or a field, is `404`. The browser tools leave out
+`browser_fill`, `browser_sign_in`'s `item` and the vault's sentence in their instructions. Your
+clients see and change everything as before, and the state says `agents: false` (every box that
+has the vault sends `agents`; a client reads its absence as `true`, a box from before the gate).
+
+- `POST kuvo/vault/tools {name, arguments, session}` → `{text, isError}`: `vault_items`, the items
+  this conversation may use (by its bot, its project or everyone), never another's name, and a
+  note you let bots read; `vault_ask {need, why, site?}`, which asks you; `vault_run {command,
+  variables: {VAR: "Item" | "Item.field"}, why, timeout?}`, which runs the command with the user's
+  shell in the conversation's folder, the values in its environment (a file's as the path of a
+  `0600` copy in `run/vault-run/`, removed after), and gives back its output (64 KB at most) with
+  each value, raw, base64, hex, URL- and JSON-escaped, or a key file's lines, and a file's bytes
+  as base64 whole and wrapped at 76 and 64, and hex, shown as `[vault: <item>]`.
+- `POST kuvo/vault/fill {session, origin, purpose: "sign-in" | "field", item?, field?, why?}` →
+  `{item: {id, name}, username?, values}` for the browser's own process to fill (on this Mac, only
+  to its app, `403` otherwise; a machine's browser runs as you, as everything you run there does,
+  so there it's answered to anything on the machine, under the same grants): only on an `https`
+  page (`400`), only on one of the item's sites. A sign-in without an item takes the one sign-in
+  for the site the caller may use on its own (`404` for none or more, and the browser asks you as
+  before). An item named for another site is refused (`403`) and pauses that bot's use of the
+  vault (a conversation's that isn't a bot's, by its root session), telling your phones.
+
+Every use first checks Pause, then the grant: `own` goes ahead, `ask` (or no grant, for an item
+named) asks you and waits. An item you give through `vault_ask` "always" is granted on its own
+(to the bot, or the conversation's project, never a home folder); "once", its next use within
+half an hour goes ahead. A command's copies (`run/vault-run/`) go when it ends, when the box ends,
+and as a box starts.
 
 ### Paired phones
 

@@ -99,7 +99,7 @@ struct GroupMessage: Codable, Identifiable, Hashable {
     /// On a bot's message: the part of the work it's reporting back on, from its own conversation.
     var report: String?
 
-    enum Kind: String, Codable {
+    enum Kind: Codable, Hashable {
         /// Said in the chat.
         case message
         /// The lead's sum-up at the end of a discussion.
@@ -108,6 +108,33 @@ struct GroupMessage: Codable, Identifiable, Hashable {
         case note
         /// A meeting you scheduled, come due: its topic.
         case meeting
+        /// One a newer Kuvo Code says, left out of the chat rather than shown as something else,
+        /// and kept as it said it, for when this copy is updated.
+        case unknown(String)
+
+        var rawValue: String {
+            switch self {
+            case .message: "message"
+            case .wrapUp: "wrapUp"
+            case .note: "note"
+            case .meeting: "meeting"
+            case .unknown(let kind): kind
+            }
+        }
+
+        var isKnown: Bool {
+            if case .unknown = self { false } else { true }
+        }
+
+        init(from decoder: Decoder) throws {
+            let kind = try decoder.singleValueContainer().decode(String.self)
+            self = [Self.message, .wrapUp, .note, .meeting].first { $0.rawValue == kind } ?? .unknown(kind)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
+        }
     }
 }
 
@@ -125,7 +152,7 @@ struct GroupTask: Codable, Hashable, Identifiable {
     /// The bots whose parts come first: it starts once theirs are done, with what they reported.
     var after: [String]?
 
-    enum State: String, Codable {
+    enum State: Codable, Hashable {
         /// In the wrap-up, waiting for you to say go.
         case proposed
         /// Started, but waiting for the parts it comes after.
@@ -136,6 +163,30 @@ struct GroupTask: Codable, Hashable, Identifiable {
         case done
         /// It couldn't be done: the bot's machine away, an error.
         case failed
+        /// One a newer Kuvo Code says: not under way as far as this copy can tell (no spinner, and
+        /// nothing held back for it), and kept as it said it, for when this copy is updated.
+        case other(String)
+
+        var rawValue: String {
+            switch self {
+            case .proposed: "proposed"
+            case .waiting: "waiting"
+            case .working: "working"
+            case .done: "done"
+            case .failed: "failed"
+            case .other(let state): state
+            }
+        }
+
+        init(from decoder: Decoder) throws {
+            let state = try decoder.singleValueContainer().decode(String.self)
+            self = [Self.proposed, .waiting, .working, .done, .failed].first { $0.rawValue == state } ?? .other(state)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
+        }
     }
 }
 

@@ -25,6 +25,8 @@ final class BrowserSession: NSObject {
     @ObservationIgnored var onClose: (() -> Void)?
     /// A sign-in you just sent, which the toolbar offers to save.
     var pendingLogin: PendingLogin?
+    /// The pending login was offered again because saving it didn't work.
+    var pendingLoginFailed = false
     /// The saved logins for the page's site, and whether it has a field to fill them into.
     private(set) var savedLogins: [Passwords.Login] = []
     private(set) var hasLoginField = false
@@ -241,14 +243,23 @@ final class BrowserSession: NSObject {
 
     func offerToSave(_ login: PendingLogin) {
         pendingLogin = login
+        pendingLoginFailed = false
     }
 
     func savePendingLogin() {
         guard let login = pendingLogin else { return }
-        Passwords.save(host: login.host, account: login.account, password: login.password)
-        Analytics.shared.track("password_saved")
         pendingLogin = nil
-        refreshLogins()
+        pendingLoginFailed = false
+        Task {
+            if await Passwords.save(host: login.host, account: login.account, password: login.password) != nil {
+                Analytics.shared.track("password_saved")
+            } else if pendingLogin == nil {
+                // This Mac's vault didn't answer: offered again, saying so, to try once more.
+                pendingLogin = login
+                pendingLoginFailed = true
+            }
+            refreshLogins()
+        }
     }
 
     func dismissPendingLogin(never: Bool) {
@@ -653,7 +664,7 @@ struct BrowserPane<NewTab: View>: View {
                         Button(login.account.isEmpty ? "No username" : login.account) { session.fill(login) }
                     }
                     Divider()
-                    Button("Passwords…") { app.openSettings(.passwords) }
+                    Button("Vault…") { app.openSettings(.vault) }
                 } label: {
                     Label("Fill Password", systemImage: "key.fill")
                 } primaryAction: {
@@ -710,7 +721,7 @@ private struct SaveLoginBar: View {
                 Image(systemName: "key.fill")
                     .foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(login.isUpdate ? "Update the saved password?" : "Save this password?")
+                    Text(session.pendingLoginFailed ? "Couldn’t save it. Try again?" : login.isUpdate ? "Update the saved password?" : "Save this password?")
                         .font(.system(size: 13, weight: .semibold))
                     Text(login.account.isEmpty ? login.host : "\(login.account) on \(login.host)")
                         .font(.system(size: 12))

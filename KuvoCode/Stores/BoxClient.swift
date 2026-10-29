@@ -20,10 +20,10 @@ struct BoxClient: Sendable {
     }
 
     /// What the box answered.
-    func send(_ method: String, _ path: String, body: Data? = nil) async throws -> (status: Int, body: Data) {
+    func send(_ method: String, _ path: String, body: Data? = nil, headers: [String: String] = [:]) async throws -> (status: Int, body: Data) {
         var status = 502
         var answer = Data()
-        let request = LinkRequest(method: method, path: path, headers: body == nil ? [:] : ["content-type": "application/json"], body: body ?? Data())
+        let request = LinkRequest(method: method, path: path, headers: headers.merging(body == nil ? [:] : ["content-type": "application/json"]) { $1 }, body: body ?? Data())
         for try await part in transport.send(request) {
             switch part {
             case .head(let code, _): status = code
@@ -130,7 +130,11 @@ struct MachineBoxTransport: BoxTransport {
             let task = Task {
                 do {
                     let body = request.body.isEmpty ? nil : try JSONSerialization.jsonObject(with: request.body) as? [String: Any]
-                    let (status, data) = try await MachineBox.route(request.method, request.path, body: body, on: connection)
+                    // This Mac's proof for a request to the machine's vault (PROTOCOL.md, "Vault"),
+                    // which covers its body as sent: that body as it is, not as JSON again.
+                    let vault = request.headers["x-kuvo-vault-proof"] != nil
+                    let (status, data) = try await MachineBox.route(request.method, request.path, body: body, bodyText: vault ? String(decoding: request.body, as: UTF8.self) : nil,
+                                                                    headers: request.headers.filter { $0.key == "x-kuvo-vault-proof" }, on: connection)
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(data))
                     continuation.finish()

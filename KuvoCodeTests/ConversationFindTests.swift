@@ -1,5 +1,8 @@
 import ClientDesign
+import ClientText
 import Foundation
+import OpenCodeKit
+import SwiftUI
 import Testing
 @testable import KuvoCode
 
@@ -90,5 +93,97 @@ import Testing
         #expect(left.isOn, "still open there, for going back to it")
         left.isShown = true
         #expect(ConversationFind.closeOpen())
+    }
+
+    /// A message sent with a keyword shows it in front of its words: Find counts the places in
+    /// both, as many as the bubble marks, so the place you're on is the one marked.
+    @Test func aKeywordInFrontOfYourWordsIsFoundAsShown() async throws {
+        let json: [String: Any] = ["id": "you-1", "type": "user", "time": ["created": 1],
+                                   "text": SentWithKeyword.message("Review the tests", typed: "/review")]
+        guard case .user(let message) = try JSONDecoder().decode(Message.self, from: JSONSerialization.data(withJSONObject: json)) else {
+            Issue.record("not a user message"); return
+        }
+        let find = await found("review", in: [.init(id: "you-1", parts: Row.user(message).findParts)])
+        var drawn = MessageMentions.keyword("/review", before: AttributedString("Review the tests"))
+        FindText.mark(&drawn, try #require(find.highlight(for: "you-1")))
+        #expect(find.places.count == 2)
+        #expect(marks(in: drawn) == find.places.count)
+    }
+
+    /// A bot's reply naming an agent with "&" draws a face in the "&"'s place, and a group chat's
+    /// "@Name" too: Find, which reads them as written, marks them where it finds them.
+    @Test func aNameDrawnWithAFaceIsMarkedWhereFound() async throws {
+        let reply = "Ask &Ada about the config."
+        let find = await found("&ada", in: [.init(id: "reply-1", parts: [.markdown(reply)])])
+        let ada = MessageMentions.Agent(reference: .init(name: "Ada", session: "ses_ada"), look: nil)
+        let drawn = try FileLinkingParser(folders: { [] }, agents: [ada], highlight: find.highlight(for: "reply-1")).attributedString(for: reply)
+        #expect(find.places.count == 1)
+        #expect(marks(in: drawn) == 1)
+    }
+
+    /// "/review" sent with your words under a quote, searched for "review": stepping to the last
+    /// place marks it, in the words the keyword's drawn in front of, as the bubble counts its places
+    /// as Find does.
+    @Test func thePlaceYoureOnBehindAKeywordIsTheOneMarked() async throws {
+        let text = "> Should we review this?\n\nReview the tests"
+        let find = await found("review", in: [.init(id: "you-1", parts: UserBubble.findParts(text, keyword: "/review").map(ConversationFind.Part.plain))])
+        find.step(-1)
+        let marks = try #require(UserBubble.findMarks(find.highlight(for: "you-1"), in: text, keyword: "/review"))
+        var drawn = MessageMentions.keyword("/review", before: AttributedString("Review the tests"))
+        FindText.mark(&drawn, marks[1])
+        #expect(find.places.count == 3)
+        #expect(marks[0].current == nil)
+        #expect(placeColors(in: drawn) == [FindText.place, FindText.currentPlace])
+    }
+
+    /// A group chat's "@Name" is drawn with the bot's face in the "@"'s place: Find, which reads it
+    /// as written, marks it where it finds it, as the place you're on.
+    @Test func aGroupChatsNameDrawnWithAFaceIsMarkedWhereFound() async throws {
+        let reply = "Ask @Scout about the deploy."
+        let find = await found("@scout", in: [.init(id: "gm-1", parts: [.markdown(reply)])])
+        let scout = Bot(id: "bot_scout", name: "Scout", job: "", instructions: "", jobInMemory: true, look: BotLook(color: .mint, shape: .round, face: .calm),
+                        machine: nil, project: nil, folder: "/bots/bot_scout", sessionID: "ses_scout", created: .now, model: nil, personality: nil)
+        let drawn = try FileLinkingParser(folders: { [] }, mentions: [scout], highlight: find.highlight(for: "gm-1")).attributedString(for: reply)
+        #expect(find.places.count == 1)
+        #expect(placeColors(in: drawn) == [FindText.currentPlace])
+    }
+
+    /// A long message (a pasted log) of many runs, bold and links among them: each place is
+    /// marked, the one you're on orange, and its words and links stay as they were.
+    @Test func everyPlaceInALongMessageIsMarked() {
+        var text = AttributedString()
+        for line in 0..<300 {
+            var bold = AttributedString("Config \(line): ")
+            bold.inlinePresentationIntent = .stronglyEmphasized
+            var link = AttributedString("the config docs")
+            link.link = URL(string: "https://example.com/\(line)")
+            text += bold + link + AttributedString(", then more config.\n")
+        }
+        var marked = text
+        FindText.mark(&marked, FindHighlight(query: "config", current: 451))
+        let places = placeColors(in: marked)
+        #expect(places.count == 900)
+        #expect(places.firstIndex(of: FindText.currentPlace) == 451)
+        #expect(places.count { $0 == FindText.currentPlace } == 1)
+        #expect(String(marked.characters) == String(text.characters))
+        #expect(marked.runs[\.link].compactMap(\.0) == text.runs[\.link].compactMap(\.0))
+        #expect(marked.runs[\.inlinePresentationIntent].compactMap(\.0).count == 300)
+    }
+
+    /// The places marked in `text`, as drawn.
+    private func marks(in text: AttributedString) -> Int {
+        placeColors(in: text).count
+    }
+
+    /// The color each place marked in `text` is drawn in, in order.
+    private func placeColors(in text: AttributedString) -> [Color] {
+        var colors: [Color] = []
+        var inMark = false
+        for run in text.runs {
+            let color = run.swiftUI.backgroundColor.flatMap { [FindText.place, FindText.currentPlace].contains($0) ? $0 : nil }
+            if let color, !inMark { colors.append(color) }
+            inMark = color != nil
+        }
+        return colors
     }
 }
