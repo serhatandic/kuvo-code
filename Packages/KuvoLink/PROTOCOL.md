@@ -417,12 +417,13 @@ until it's answered:
 4. Once all are there and its SHA-256 matches, the box it goes to puts it in place, held, in the
    move's turn (a step about it that comes meanwhile waits), saying `working` now and each minute
    until it's done: the folder where it keeps them (only files and folders: a link or anything else
-   in it, or a `move.json` that isn't a file of its own, and it's refused), `paused` saying `moving`,
+   in it or for it, or a `move.json` that isn't a file of its own, and it's refused), `paused` saying `moving`,
    a chat's `directory` its chats folder; each conversation imported under its own ID (noted first;
    they must be one conversation and its subagents', rooted at the chat or at the conversation a
    bot's folder names, none of them on this box already); a bot's keys given; a group chat put there
    held (`PUT api/kuvo/groups/<id>`, `status: "held"`). → `arrived`, or `failed {message}`, what it
    set up gone again; the message says only what's wrong with what came, never what this box found.
+   Setting it up for 30 minutes (its engine stuck) is given up on the same way.
 5. The box it leaves settles and reads it again. Anything new, and it all goes again (from 1, three
    tries; then 409, `busy`).
 6. It notes the switch, and sends `switch` → `switched`: the box it went to lets its wake-ups go (as
@@ -444,7 +445,8 @@ Before the switch, anything that goes wrong takes it back: the box it leaves sen
 goes on as it was. After it, only forward. Each box keeps its moves in `run/moves/<id>.json` (and
 the bundle beside it), so a move cut short by a restart carries on: one that switched finishes, one
 that didn't is taken back. Letting the original go after `switched` is tried again each minute
-until it's done (its engine was down). Before the switch, the other computer quiet about it for
+until it's done (its engine was down); its engine, up, refusing to give its conversation to keep ten
+times, it goes on here as well, said in the move's 409 (two copies, never none). Before the switch, the other computer quiet about it for
 ten minutes takes it back (503); a `drop` never answered is given up after a day (the copy there
 goes by itself after a week). A `switch` with no answer either way for ten minutes turns into a
 `drop`, sent until it's answered: `switched` (it did switch) and the original goes, `dropped` and
@@ -453,7 +455,8 @@ box asks about for a week goes. One thing moves once at a time, whoever asks (a 
 `run/moves`), and a move taken back keeps no bundle. A peer gone from your computers for five
 minutes (not one left out a moment as they're read again) ends its moves: what's here goes back as
 it was (a copy that came, or an original, switching or not), and only one that heard `switched`
-finishes. As a box starts, a `moving` hold no move of its own made (a released Mac's move cut
+finishes. So a peer removed after it switched but before its `switched` came leaves the original
+going on here as well as the copy there: two copies, never none. As a box starts, a `moving` hold no move of its own made (a released Mac's move cut
 short) is lifted.
 
 ### Updates
