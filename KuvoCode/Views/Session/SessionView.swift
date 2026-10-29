@@ -314,6 +314,8 @@ private struct BottomStack: View {
                     BrowserAskCard(ask: ask)
                         .modifier(ComposerSurface())
                 }
+                // What its agent asks of its computer's vault.
+                VaultAskCards(session: model.session.id, box: Workspace.box(of: model.session.location.directory))
                 // What went wrong, over the composer rather than in an alert you must click away.
                 if let failure = model.failure, offlineMachine == nil {
                     FailureBar(text: failure) { model.failure = nil }

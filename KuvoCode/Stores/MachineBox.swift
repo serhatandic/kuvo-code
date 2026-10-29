@@ -187,11 +187,13 @@ enum MachineBox {
 
     /// A client's request to the machine's box, answered as its bridge answers a phone's (`box
     /// route`), over SSH: the status and body. Only for routes that answer once, never a stream.
-    static func route(_ method: String, _ path: String, body: [String: Any]? = nil, folder: String? = nil, on connection: SSHConnection) async throws -> (status: Int, body: Data) {
+    static func route(_ method: String, _ path: String, body: [String: Any]? = nil, folder: String? = nil, headers: [String: String] = [:], on connection: SSHConnection) async throws -> (status: Int, body: Data) {
         var request: [String: Any] = ["method": method, "path": path]
         if let body { request["body"] = body }
         // The folder it's about, on the machine, as a phone's request names it.
-        if let folder { request["headers"] = ["x-opencode-directory": folder] }
+        var given = headers
+        if let folder { given["x-opencode-directory"] = folder }
+        if !given.isEmpty { request["headers"] = given }
         // One that only reads (a search, a list) is let go when nothing waits for it any more.
         let output = try await lastLine("route", input: try JSONSerialization.data(withJSONObject: request), cancellable: method == "GET", on: connection)
         /// Text as it came, or bytes that aren't text (a picture) in base64.

@@ -835,6 +835,15 @@ final class PhoneLink {
         return ["key": key.rawRepresentation.base64URL, "secret": secret.bytes.base64URL, "sign": sign]
     }
 
+    /// That it's this Mac asking a machine it set up for its vault's key (PROTOCOL.md, "Vault"):
+    /// its link key, the time, and its signing key's signature of both and the machine's id here.
+    func vaultProof(machine: String) -> [String: Any]? {
+        guard hasIdentity else { return nil }
+        let at = Int(Date().timeIntervalSince1970 * 1000)
+        guard let signature = try? signing.signature(for: Data("kuvo-vault-key\u{0}\(machine)\u{0}\(at)".utf8)) else { return nil }
+        return ["mac": key.publicKey.rawRepresentation.base64URL, "at": at, "proof": signature.base64URL]
+    }
+
     /// What a phone asks of this Mac that its box hands the app (the Mac's own routes, and those
     /// that haven't moved to the box yet), answered as it was: `phone`, the phone's key.
     func answerForBox(_ request: LinkRequest, phone: Data?) -> AsyncThrowingStream<LinkResponsePart, Error> {

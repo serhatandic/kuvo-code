@@ -314,6 +314,9 @@ struct BotEditor: View {
                             EmptyView()
                         }
                     }
+                    section("Vault", note: "What it signs in, builds and works with from \(bot.machine.map { app.machines.engine($0)?.machine.name ?? $0 } ?? "this Mac")’s vault. It never sees a value: Kuvo Code fills it in, only on the item’s own sites.") {
+                        BotVaultSection(bot: bot)
+                    }
                     section("Memory") {
                         WellGroup {
                             Button {

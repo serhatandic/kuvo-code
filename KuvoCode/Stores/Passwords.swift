@@ -1,21 +1,26 @@
+import ClientVault
 import Foundation
 import LocalAuthentication
 import Security
 import WebKit
 
-/// Sign-ins the panel's browser saved: in the login keychain as internet passwords, marked as Kuvo
-/// Code's own (so other apps' items, like git's GitHub token, are never read), by site and
-/// username. Filled in only when you click the key in the browser's toolbar, never on their own,
-/// and never handed to the agent.
-nonisolated enum Passwords {
+/// Sign-ins the panel's browser saved: this Mac's vault's sign-ins (`Vaults`, KuvoLink's
+/// PROTOCOL.md "Vault"), one per site and username, their passwords in the Keychain under the
+/// vault's own service (`VaultValues`). Filled in only when you click the key in the browser's
+/// toolbar, or for an agent the vault lets sign in there, and never handed to the agent. Before
+/// the vault, they were internet passwords marked as Kuvo Code's own, moved into it once.
+@MainActor
+enum Passwords {
     struct Login: Identifiable, Hashable, Sendable {
         var host: String
         var account: String
         var modified: Date?
+        /// The vault's item.
+        var item: String = ""
         var id: String { host + "\n" + account }
     }
 
-    /// Settings › Passwords: whether the browser offers to save a password you sign in with.
+    /// Settings › Vault: whether the browser offers to save a password you sign in with.
     static let offersKey = "passwords.offersToSave"
     /// Sites you chose Never for.
     static let neverKey = "passwords.never"
@@ -24,46 +29,44 @@ nonisolated enum Passwords {
 
     static var neverSites: [String] { UserDefaults.standard.stringArray(forKey: neverKey) ?? [] }
 
-    /// Sites you let agents sign in to with their saved password, without asking you each time.
-    static let agentSitesKey = "passwords.agentSignIn"
-    /// The account each of those is for (by site): the one you allowed, not whichever is newest.
-    static let agentAccountsKey = "passwords.agentSignInAccounts"
+    private static var vault: Vault? { Vaults.shared[BoxClient.mac].vault }
 
-    static var agentSites: [String] { UserDefaults.standard.stringArray(forKey: agentSitesKey) ?? [] }
+    /// The vault's sign-in for each saved login.
+    private static var signIns: [VaultItem] { vault?.items.filter { $0.kind == .login } ?? [] }
 
-    private static var agentAccounts: [String: String] {
-        UserDefaults.standard.dictionary(forKey: agentAccountsKey) as? [String: String] ?? [:]
+    private static func login(_ item: VaultItem) -> Login {
+        Login(host: item.sites.first ?? "", account: item.username ?? "", modified: Date(timeIntervalSince1970: item.changed / 1000), item: item.id)
     }
 
-    static func setAgentSignIn(_ host: String, _ allowed: Bool, account: String? = nil) {
-        var sites = agentSites.filter { $0 != host }
-        var accounts = agentAccounts
-        accounts[host] = nil
-        if allowed {
-            sites.append(host)
-            accounts[host] = account
-        }
-        UserDefaults.standard.set(sites.sorted(), forKey: agentSitesKey)
-        UserDefaults.standard.set(accounts, forKey: agentAccountsKey)
+    /// Saved logins, every site's or one's, newest first.
+    static func logins(for host: String? = nil) -> [Login] {
+        signIns.filter { host == nil || $0.sites.contains(host!) }.sorted { $0.changed > $1.changed }.map(login)
     }
 
-    /// The saved login agents sign in to `host` with on their own, if you allowed that: the
-    /// account you allowed it for.
+    static func password(for login: Login) -> String? {
+        guard !login.item.isEmpty else { return nil }
+        return VaultValues.values(login.item)?["password"]
+    }
+
+    /// Sites agents sign in to on their own: a sign-in the vault lets everyone use on its own.
+    static var agentSites: [String] {
+        guard let vault else { return [] }
+        return signIns.filter { item in vault.grants(for: item).contains { $0.who.everyone == true && $0.how == .own } }.compactMap(\.sites.first).sorted()
+    }
+
+    /// The saved login agents sign in to `host` with on their own, if you allowed that.
     static func agentLogin(for host: String) -> Login? {
-        guard agentSites.contains(host), let account = agentAccounts[host] else { return nil }
-        return logins(for: host).first { $0.account == account }
+        guard let vault else { return nil }
+        return signIns.first { item in item.sites.contains(host) && vault.grants(for: item).contains { $0.who.everyone == true && $0.how == .own } }.map(login)
     }
 
-    /// Sites allowed before the account was kept get the one they'd have used then, the site's
-    /// newest: a login saved after this isn't used without asking. Run once, at launch.
-    static func keepAgentAccounts() {
-        let accounts = agentAccounts
-        let loose = agentSites.filter { accounts[$0] == nil }
-        guard !loose.isEmpty else { return }
-        for host in loose {
-            // The keychain couldn't say (locked at launch): left for the next launch, not turned off.
-            guard let saved = found(for: host) else { continue }
-            if let newest = saved.first { setAgentSignIn(host, true, account: newest.account) } else { setAgentSignIn(host, false) }
+    /// Lets every agent sign in to `host` with the saved login for `account` on their own (or not).
+    static func setAgentSignIn(_ host: String, _ allowed: Bool, account: String? = nil) {
+        let fitting = signIns.filter { $0.sites.contains(host) && (account == nil || ($0.username ?? "") == account) }
+        Task {
+            for item in fitting {
+                try? await Vaults.shared.grant(item, to: .init(everyone: true), how: allowed ? .own : nil, on: BoxClient.mac)
+            }
         }
     }
 
@@ -73,79 +76,70 @@ nonisolated enum Passwords {
         UserDefaults.standard.set(sites.sorted(), forKey: neverKey)
     }
 
-    /// 'KUVO', the creator code on every item the app saves. A demo or test copy (another bundle
-    /// ID) marks its own with 'KV' and two letters of its own, so it never lists, fills or
-    /// deletes the passwords you saved in the app.
-    private static let creator: OSType = {
-        guard AppInfo.bundleID != "run.kuvo.code" else { return 0x4B55_564F }
-        var hash: UInt32 = 2_166_136_261
-        for byte in AppInfo.bundleID.utf8 { hash = (hash ^ UInt32(byte)) &* 16_777_619 }
-        let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".utf8)
-        return 0x4B56_0000 | OSType(letters[Int(hash % 36)]) << 8 | OSType(letters[Int(hash / 36 % 36)])
-    }()
-
-    private static var base: [String: Any] {
-        [kSecClass as String: kSecClassInternetPassword, kSecAttrCreator as String: creator]
-    }
-
-    /// Saved logins, every site's or one's, newest first.
-    static func logins(for host: String? = nil) -> [Login] {
-        found(for: host) ?? []
-    }
-
-    /// The saved logins, or nil when the keychain couldn't say (locked, say): none is `[]`.
-    private static func found(for host: String?) -> [Login]? {
-        var query = base
-        query[kSecMatchLimit as String] = kSecMatchLimitAll
-        query[kSecReturnAttributes as String] = true
-        if let host { query[kSecAttrServer as String] = host }
-        var result: CFTypeRef?
-        let status = Keychain.copyMatching(query, &result)
-        if status == errSecItemNotFound { return [] }
-        guard status == errSecSuccess, let items = result as? [[String: Any]] else { return nil }
-        return items.compactMap { item in
-            guard let host = item[kSecAttrServer as String] as? String else { return nil }
-            return Login(host: host, account: item[kSecAttrAccount as String] as? String ?? "", modified: item[kSecAttrModificationDate as String] as? Date)
-        }
-        .sorted { ($0.modified ?? .distantPast) > ($1.modified ?? .distantPast) }
-    }
-
-    static func password(for login: Login) -> String? {
-        var query = base
-        query[kSecAttrServer as String] = login.host
-        query[kSecAttrAccount as String] = login.account
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        guard Keychain.copyMatching(query, &result) == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    /// Saves a login, or updates its password.
+    /// Saves a login, or updates its password: in this Mac's vault.
     @discardableResult
     static func save(host: String, account: String, password: String) -> Bool {
-        var query = base
-        query[kSecAttrServer as String] = host
-        query[kSecAttrAccount as String] = account
-        let data = Data(password.utf8)
-        if Keychain.update(query, [kSecValueData as String: data]) == errSecSuccess { return true }
-        query[kSecValueData as String] = data
-        query[kSecAttrProtocol as String] = kSecAttrProtocolHTTPS
-        query[kSecAttrLabel as String] = host
-        query[kSecAttrDescription as String] = "Kuvo Code browser password"
-        return Keychain.add(query) == errSecSuccess
+        let existing = signIns.first { $0.sites.contains(host) && ($0.username ?? "") == account }
+        Task {
+            if let existing {
+                var given = Vaults.Given(kind: .login, name: existing.name, sites: existing.sites, username: existing.username)
+                given.values = ["password": password]
+                _ = try? await Vaults.shared.change(existing, to: given, on: BoxClient.mac)
+            } else {
+                _ = try? await Vaults.shared.add(Vaults.Given(kind: .login, name: freeName(host: host, account: account), sites: [host], username: account.isEmpty ? nil : account, values: ["password": password]), on: BoxClient.mac)
+            }
+        }
+        return true
+    }
+
+    /// A name no item has: the site's, or with its account.
+    private static func freeName(host: String, account: String) -> String {
+        let taken = Set((vault?.items ?? []).map { $0.name.lowercased() })
+        for name in [host, account.isEmpty ? nil : "\(host) (\(account))"].compactMap({ $0 }) where !taken.contains(name.lowercased()) { return name }
+        var number = 2
+        while taken.contains("\(host) \(number)".lowercased()) { number += 1 }
+        return "\(host) \(number)"
     }
 
     static func delete(_ login: Login) {
-        var query = base
-        query[kSecAttrServer as String] = login.host
-        query[kSecAttrAccount as String] = login.account
-        Keychain.delete(query)
-        // Agents no longer sign in with it on their own: a password saved later for the site isn't
-        // theirs without asking.
-        if agentSites.contains(login.host), agentAccounts[login.host] == login.account {
-            setAgentSignIn(login.host, false)
+        guard let item = signIns.first(where: { $0.id == login.item }) else { return }
+        Task { try? await Vaults.shared.remove(item, on: BoxClient.mac) }
+    }
+
+    // MARK: Before the vault
+
+    /// Done once the old sign-ins are in the vault.
+    private static let movedKey = "passwords.movedToVault"
+
+    /// The sign-ins kept before the vault (internet passwords marked as Kuvo Code's own), moved into
+    /// it, each with whether agents signed in with it on their own; each old one taken away once
+    /// it's there. True once there's none left to move.
+    static func moveToVault() async -> Bool {
+        if UserDefaults.standard.bool(forKey: movedKey) { return true }
+        guard let found = await Task.detached(operation: { Legacy.found(for: nil) }).value else { return false }
+        let allowed = Legacy.agentSites
+        let accounts = Legacy.agentAccounts
+        await Vaults.shared.refresh(BoxClient.mac)
+        guard Vaults.shared[BoxClient.mac].vault != nil else { return false }
+        var left = false
+        for old in found {
+            guard let password = await Task.detached(operation: { Legacy.password(for: old) }).value else { left = true; continue }
+            do {
+                let item = try await Vaults.shared.add(Vaults.Given(kind: .login, name: freeName(host: old.host, account: old.account), sites: [old.host], username: old.account.isEmpty ? nil : old.account, values: ["password": password]), on: BoxClient.mac)
+                if allowed.contains(old.host), accounts[old.host] == old.account {
+                    try await Vaults.shared.grant(item, to: .init(everyone: true), how: .own, on: BoxClient.mac)
+                }
+                Legacy.delete(old)
+            } catch {
+                left = true
+            }
         }
+        if !left {
+            UserDefaults.standard.set(true, forKey: movedKey)
+            UserDefaults.standard.removeObject(forKey: Legacy.agentSitesKey)
+            UserDefaults.standard.removeObject(forKey: Legacy.agentAccountsKey)
+        }
+        return !left
     }
 
     /// Asks for Touch ID or your Mac's password before showing or copying a password.
@@ -159,11 +153,11 @@ nonisolated enum Passwords {
     /// The world the browser's password scripts run in, apart from the page's own scripts. Kept,
     /// as WebKit drops a world once nothing holds it.
     @MainActor static let world = WKContentWorld.world(name: "kuvo-passwords")
-    static let messageName = "kuvoLogin"
+    nonisolated static let messageName = "kuvoLogin"
 
     /// Spots a sign-in being sent (a form submitted, a button clicked, Return pressed with a password
     /// filled in) and tells the app the username and password, for it to offer saving them.
-    static let captureScript = """
+    nonisolated static let captureScript = """
     (() => {
       const report = (scope) => {
         const fields = [...(scope || document).querySelectorAll('input')];
@@ -188,7 +182,7 @@ nonisolated enum Passwords {
 
     /// Fills the page's sign-in fields: the password field, and the username field before it (or,
     /// on a page that asks for the username first, the first one there is).
-    static let fillScript = """
+    nonisolated static let fillScript = """
     // Only on the site the login is for: the toolbar's list can be a page behind. And over https,
     // where it was saved: over plain http it could be read on the way.
     if (location.hostname !== host || location.protocol !== 'https:') return false;
@@ -208,9 +202,65 @@ nonisolated enum Passwords {
     """
 
     /// Whether the page has a field for a password or a username.
-    static let hasLoginFieldScript = """
+    nonisolated static let hasLoginFieldScript = """
     return Boolean(document.querySelector('input[type=password], input[autocomplete~=username], input[type=email]'));
     """
+}
+
+/// The sign-ins as they were kept before the vault: read to move them, then taken away.
+nonisolated enum Legacy {
+    static let agentSitesKey = "passwords.agentSignIn"
+    static let agentAccountsKey = "passwords.agentSignInAccounts"
+    static var agentSites: [String] { UserDefaults.standard.stringArray(forKey: agentSitesKey) ?? [] }
+    static var agentAccounts: [String: String] { UserDefaults.standard.dictionary(forKey: agentAccountsKey) as? [String: String] ?? [:] }
+
+    /// 'KUVO', the creator code on every item the app saved. A demo or test copy (another bundle
+    /// ID) marked its own with 'KV' and two letters of its own.
+    private static let creator: OSType = {
+        guard AppInfo.bundleID != "run.kuvo.code" else { return 0x4B55_564F }
+        var hash: UInt32 = 2_166_136_261
+        for byte in AppInfo.bundleID.utf8 { hash = (hash ^ UInt32(byte)) &* 16_777_619 }
+        let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".utf8)
+        return 0x4B56_0000 | OSType(letters[Int(hash % 36)]) << 8 | OSType(letters[Int(hash / 36 % 36)])
+    }()
+
+    private static var base: [String: Any] {
+        [kSecClass as String: kSecClassInternetPassword, kSecAttrCreator as String: creator]
+    }
+
+    /// The logins kept, or nil when the keychain couldn't say (locked, say): none is `[]`.
+    static func found(for host: String?) -> [Passwords.Login]? {
+        var query = base
+        query[kSecMatchLimit as String] = kSecMatchLimitAll
+        query[kSecReturnAttributes as String] = true
+        if let host { query[kSecAttrServer as String] = host }
+        var result: CFTypeRef?
+        let status = Keychain.copyMatching(query, &result)
+        if status == errSecItemNotFound { return [] }
+        guard status == errSecSuccess, let items = result as? [[String: Any]] else { return nil }
+        return items.compactMap { item in
+            guard let host = item[kSecAttrServer as String] as? String else { return nil }
+            return Passwords.Login(host: host, account: item[kSecAttrAccount as String] as? String ?? "", modified: item[kSecAttrModificationDate as String] as? Date)
+        }
+    }
+
+    static func password(for login: Passwords.Login) -> String? {
+        var query = base
+        query[kSecAttrServer as String] = login.host
+        query[kSecAttrAccount as String] = login.account
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        guard Keychain.copyMatching(query, &result) == errSecSuccess, let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func delete(_ login: Passwords.Login) {
+        var query = base
+        query[kSecAttrServer as String] = login.host
+        query[kSecAttrAccount as String] = login.account
+        Keychain.delete(query)
+    }
 }
 
 /// A sign-in the browser saw, waiting for you to save it or not.

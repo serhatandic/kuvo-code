@@ -270,7 +270,7 @@ struct PrivacySettings: View {
                     Text("Kept apart from your other browsers.")
                 }
                 LabeledContent {
-                    Button("Passwords…") { app.settingsTabs.show(.passwords) }
+                    Button("Vault…") { app.settingsTabs.show(.vault) }
                 } label: {
                     Text("Saved passwords")
                     Text("In your Keychain, filled in only when you ask.")

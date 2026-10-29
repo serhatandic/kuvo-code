@@ -653,7 +653,7 @@ struct BrowserPane<NewTab: View>: View {
                         Button(login.account.isEmpty ? "No username" : login.account) { session.fill(login) }
                     }
                     Divider()
-                    Button("Passwords…") { app.openSettings(.passwords) }
+                    Button("Vault…") { app.openSettings(.vault) }
                 } label: {
                     Label("Fill Password", systemImage: "key.fill")
                 } primaryAction: {

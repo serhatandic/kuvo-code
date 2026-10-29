@@ -4,6 +4,21 @@ extension AppModel {
     /// The vault's tools for this Mac's conversations, which its box lists and carries out
     /// (KuvoLink's PROTOCOL.md, "Vault"), and the fills its browser asks it for.
     func wireVault() {
+        Vaults.shared.client = { [weak self] box in self?.box(box) }
+        Vaults.shared.proof = { [weak self] machine in self?.phoneLink.vaultProof(machine: machine) }
+        // The panel browser's sign-ins kept before the vault, into this Mac's, once its box answers.
+        Task {
+            for _ in 0..<60 {
+                if await Passwords.moveToVault() { break }
+                try? await Task.sleep(for: .seconds(10))
+            }
+        }
+        #if DEBUG
+        // KUVO_DEMO_VAULT: this Mac's vault with sample items, for a look at its pages.
+        if ProcessInfo.processInfo.environment["KUVO_DEMO_VAULT"] != nil {
+            Task { await Self.seedDemoVault() }
+        }
+        #endif
         BrowserTools.vaultDefinitions = { [weak self] in
             if let kept = VaultTools.definitions { return kept }
             guard let self, let answer = try? await box(BoxClient.mac).send("GET", "kuvo/vault/tools"), answer.status == 200,
@@ -30,6 +45,31 @@ extension AppModel {
         }
     }
 }
+
+#if DEBUG
+extension AppModel {
+    /// Sample items in this Mac's vault, once its box answers, made only where they aren't yet.
+    static func seedDemoVault() async {
+        for _ in 0..<60 {
+            await Vaults.shared.refresh(BoxClient.mac)
+            if Vaults.shared[BoxClient.mac].vault != nil { break }
+            try? await Task.sleep(for: .seconds(2))
+        }
+        let have = Set((Vaults.shared[BoxClient.mac].vault?.items ?? []).map(\.name))
+        let samples: [Vaults.Given] = [
+            .init(kind: .login, name: "App Store Connect", sites: ["appstoreconnect.apple.com"], username: "you@example.com", values: ["password": "sample-password-1"]),
+            .init(kind: .key, name: "App Store Connect API key", sites: ["api.appstoreconnect.apple.com"], values: ["value": "sample-key-id", "issuer_id": "sample-issuer"]),
+            .init(kind: .file, name: "AuthKey_7QX2.p8", fileName: "AuthKey_7QX2.p8", values: ["file": Data("-----BEGIN PRIVATE KEY-----\nsample\n-----END PRIVATE KEY-----\n".utf8).base64EncodedString()]),
+            .init(kind: .login, name: "GitHub", sites: ["github.com"], username: "kuvo-bots", values: ["password": "sample-password-2"]),
+            .init(kind: .note, name: "App Review contact", readable: true, values: ["text": "Alex Doe, +1 555 0100"]),
+            .init(kind: .key, name: "Stripe test key", sites: ["api.stripe.com"], values: ["value": "sk_test_sample"]),
+        ]
+        for sample in samples where !have.contains(sample.name) {
+            _ = try? await Vaults.shared.add(sample, on: BoxClient.mac)
+        }
+    }
+}
+#endif
 
 /// The vault tools' definitions, as this Mac's box gave them: asked once a launch.
 @MainActor
