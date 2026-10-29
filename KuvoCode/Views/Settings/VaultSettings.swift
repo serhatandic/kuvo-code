@@ -64,7 +64,6 @@ struct VaultSettings: View {
         }
         .task(id: box) {
             await Vaults.shared.refresh(box)
-            Vaults.shared.follow(box)
             keyed = ((try? await app.integrations(on: settingsBox))?.integrations ?? []).filter { $0.added && $0.takesKeys }
             #if DEBUG
             // KUVO_DEMO_VAULT_ITEM: that item's sheet, open (by name).
@@ -75,6 +74,7 @@ struct VaultSettings: View {
                 }
             }
             #endif
+            await Vaults.shared.follow(box)
         }
         .sheet(item: $opened) { item in
             VaultItemSheet(item: item, box: box, computer: computer)
@@ -94,6 +94,16 @@ struct VaultSettings: View {
 
     @ViewBuilder private var content: some View {
         let state = shown.vault?.state ?? VaultState()
+        if let failure = shown.failure {
+            Section {
+                HStack(alignment: .firstTextBaseline) {
+                    Label("Couldn’t read the latest from \(computer): \(failure)", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Try Again") { Task { await Vaults.shared.refresh(box) } }
+                }
+            }
+        }
         if state.locked {
             Section {
                 Label("This machine’s vault is locked since it started again. It unlocks the next time Kuvo Code on this Mac or your iPhone reaches it.", systemImage: "lock.fill")
@@ -392,6 +402,8 @@ struct VaultAskRow: View {
 
     private func answer(_ answer: String, _ item: VaultItem? = nil) {
         Task {
+            // From now on is a grant, which asks you first, as one made in the item's sheet does.
+            if answer == "always", !(await Passwords.authenticate(reason: "let \(asked.asker) use \(item.map { "“\($0.name)”" } ?? asked.itemName.map { "“\($0)”" } ?? "it") from now on")) { return }
             do { try await Vaults.shared.answer(asked, answer, item: item, on: box) } catch { trouble = error.localizedDescription }
         }
     }
@@ -403,6 +415,7 @@ struct VaultActivitySheet: View {
     let computer: String
     @Environment(\.dismiss) private var dismiss
     @State private var entries: [VaultActivity]?
+    @State private var failure: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -416,11 +429,24 @@ struct VaultActivitySheet: View {
             if let entries {
                 List(entries) { VaultActivityRow(entry: $0) }
                     .overlay { if entries.isEmpty { Text("Nothing yet.").foregroundStyle(.secondary) } }
+            } else if let failure {
+                VStack(spacing: 8) {
+                    Text("Couldn’t read the activity").font(.headline)
+                    Text(failure).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Button("Try Again") { Task { await read() } }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(width: 520, height: 480)
-        .task { entries = await Vaults.shared.activity(on: box, limit: 500) }
+        .task { await read() }
+    }
+
+    private func read() async {
+        failure = nil
+        do { entries = try await Vaults.shared.activity(on: box, limit: 500) } catch { failure = error.localizedDescription }
     }
 }

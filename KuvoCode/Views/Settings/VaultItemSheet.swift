@@ -76,8 +76,9 @@ struct VaultItemSheet: View {
             .padding(16)
         }
         .frame(width: 500, height: 560)
-        .task { recent = await Vaults.shared.activity(on: box, item: item.id, limit: 20) }
-        .sheet(isPresented: $editing) { VaultItemEditor(kind: current.kind, box: box, item: current) }
+        .task { recent = (try? await Vaults.shared.activity(on: box, item: item.id, limit: 20)) ?? [] }
+        // What was shown may have changed: hidden again.
+        .sheet(isPresented: $editing, onDismiss: { revealed = [:] }) { VaultItemEditor(kind: current.kind, box: box, item: current) }
         .confirmationDialog("Delete “\(current.name)” from \(computer)’s vault?", isPresented: $deleting) {
             Button("Delete", role: .destructive) {
                 Task {
@@ -101,6 +102,7 @@ struct VaultItemSheet: View {
                 HStack {
                     Text(username).textSelection(.enabled)
                     copyButton { username }
+                        .accessibilityLabel("Copy Username")
                 }
             }
         }
@@ -118,11 +120,13 @@ struct VaultItemSheet: View {
                         .textSelection(.enabled)
                         .lineLimit(current.kind == .note ? 6 : 1)
                         .frame(maxWidth: 240, alignment: .trailing)
+                        .accessibilityLabel(revealed[field] ?? "Hidden")
                     Button {
                         if revealed[field] != nil { revealed[field] = nil } else { reveal(field) }
                     } label: { Image(systemName: revealed[field] == nil ? "eye" : "eye.slash") }
                         .buttonStyle(IconButtonStyle(width: 28, height: 24))
                         .help(revealed[field] == nil ? "Show" : "Hide")
+                        .accessibilityLabel("\(revealed[field] == nil ? "Show" : "Hide") \(label(field))")
                     copyButton(field: field)
                 }
             }
@@ -164,7 +168,8 @@ struct VaultItemSheet: View {
     private func reveal(_ field: String) {
         Task {
             guard await Passwords.authenticate(reason: "show “\(current.name)”") else { return }
-            do { revealed = try await Vaults.shared.values(of: current, on: box) } catch { trouble = error.localizedDescription }
+            // Only the one asked for: the others stay hidden.
+            do { revealed[field] = try await Vaults.shared.values(of: current, on: box)[field] } catch { trouble = error.localizedDescription }
         }
     }
 
@@ -186,6 +191,7 @@ struct VaultItemSheet: View {
         } label: { Image(systemName: "doc.on.doc") }
             .buttonStyle(IconButtonStyle(width: 28, height: 24))
             .help("Copy")
+            .accessibilityLabel("Copy \(label(field))")
     }
 
     private func copy(_ value: String) {
@@ -211,6 +217,8 @@ struct VaultItemEditor: View {
     @State private var readable = false
     @State private var file: (name: String, data: Data)?
     @State private var extra: [(field: String, value: String)] = []
+    /// A key's own fields it had, taken away here.
+    @State private var removed: Set<String> = []
     @State private var saving = false
     @State private var trouble: String?
 
@@ -245,9 +253,19 @@ struct VaultItemEditor: View {
                         }
                         if kind == .key {
                             ForEach(extra.indices, id: \.self) { index in
+                                let had = item?.fields.contains(extra[index].field) == true
                                 HStack {
-                                    TextField("Field", text: Binding(get: { extra[index].field }, set: { extra[index].field = $0 }), prompt: Text("field_name")).frame(width: 120)
-                                    SecureField("Value", text: Binding(get: { extra[index].value }, set: { extra[index].value = $0 }))
+                                    TextField("Field", text: Binding(get: { extra[index].field }, set: { extra[index].field = $0 }), prompt: Text("field_name"))
+                                        .frame(width: 120)
+                                        .disabled(had)
+                                    SecureField("Value", text: Binding(get: { extra[index].value }, set: { extra[index].value = $0 }), prompt: Text(had ? "Unchanged" : ""))
+                                    Button {
+                                        if had { removed.insert(extra[index].field) }
+                                        extra.remove(at: index)
+                                    } label: { Image(systemName: "minus.circle") }
+                                        .buttonStyle(IconButtonStyle(width: 24, height: 24))
+                                        .help("Remove This Field")
+                                        .accessibilityLabel("Remove \(extra[index].field.isEmpty ? "this field" : extra[index].field)")
                                 }
                             }
                             Button("Add Another Field") { extra.append(("", "")) }.buttonStyle(TextButtonStyle())
@@ -257,7 +275,18 @@ struct VaultItemEditor: View {
                             Button("Choose File…", action: chooseFile)
                         }
                     case .note:
-                        TextEditor(text: $note).frame(minHeight: 90).font(.body)
+                        TextEditor(text: $note)
+                            .frame(minHeight: 90)
+                            .font(.body)
+                            .overlay(alignment: .topLeading) {
+                                // Its text isn't read until you ask to see it: typing replaces it.
+                                if item != nil, note.isEmpty {
+                                    Text("Unchanged. Type here to replace it.")
+                                        .foregroundStyle(.tertiary)
+                                        .padding(.leading, 5)
+                                        .allowsHitTesting(false)
+                                }
+                            }
                         Toggle(isOn: $readable) {
                             Text("Bots May Read It")
                             Text("For what isn’t a secret, like a contact for App Review.")
@@ -283,6 +312,7 @@ struct VaultItemEditor: View {
             sites = item.sites.joined(separator: ", ")
             username = item.username ?? ""
             readable = item.readable == true
+            if kind == .key { extra = item.fields.filter { $0 != "value" }.map { ($0, "") } }
         }
     }
 
@@ -319,7 +349,7 @@ struct VaultItemEditor: View {
     }
 
     private func save() {
-        var given = Vaults.Given(kind: kind, name: name.trimmingCharacters(in: .whitespaces),
+        var given = VaultDraft(kind: kind, name: name.trimmingCharacters(in: .whitespaces),
                                  sites: sites.split(whereSeparator: { $0 == "," || $0 == " " }).map(String.init).filter { !$0.isEmpty },
                                  username: username.trimmingCharacters(in: .whitespaces).isEmpty ? nil : username.trimmingCharacters(in: .whitespaces),
                                  fileName: file?.name ?? item?.fileName, readable: readable)
@@ -328,6 +358,7 @@ struct VaultItemEditor: View {
         case .key:
             if !secret.isEmpty { given.values["value"] = secret }
             for (field, value) in extra where !field.isEmpty && !value.isEmpty { given.values[field.lowercased().replacingOccurrences(of: " ", with: "_")] = value }
+            for field in removed { given.values[field] = .some(nil) }
         case .file: if let file { given.values["file"] = file.data.base64EncodedString() }
         case .note: if !note.isEmpty { given.values["text"] = note }
         }

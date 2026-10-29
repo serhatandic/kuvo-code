@@ -39,7 +39,7 @@ struct BotVaultSection: View {
             WellGroup {
                 if own.isEmpty {
                     WellRow { Image(systemName: "lock.shield") } content: {
-                        Text(vault == nil ? "Reading the vault…" : "Nothing yet. When it needs a sign-in or a key, it asks you.")
+                        Text(vault != nil ? "Nothing yet. When it needs a sign-in or a key, it asks you." : Vaults.shared[box].failure.map { "Couldn’t read the vault: \($0)" } ?? "Reading the vault…")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -93,7 +93,7 @@ struct BotVaultSection: View {
         }
         .task(id: bot.id) {
             await Vaults.shared.refresh(box)
-            recent = await Vaults.shared.activity(on: box, bot: bot.id, limit: 3)
+            recent = (try? await Vaults.shared.activity(on: box, bot: bot.id, limit: 3)) ?? []
         }
     }
 

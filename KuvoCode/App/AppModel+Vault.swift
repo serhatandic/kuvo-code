@@ -69,7 +69,7 @@ extension AppModel {
             try? await Task.sleep(for: .seconds(2))
         }
         let have = Set((Vaults.shared[BoxClient.mac].vault?.items ?? []).map(\.name))
-        let samples: [Vaults.Given] = [
+        let samples: [VaultDraft] = [
             .init(kind: .login, name: "App Store Connect", sites: ["appstoreconnect.apple.com"], username: "you@example.com", values: ["password": "sample-password-1"]),
             .init(kind: .key, name: "App Store Connect API key", sites: ["api.appstoreconnect.apple.com"], values: ["value": "sample-key-id", "issuer_id": "sample-issuer"]),
             .init(kind: .file, name: "AuthKey_7QX2.p8", fileName: "AuthKey_7QX2.p8", values: ["file": Data("-----BEGIN PRIVATE KEY-----\nsample\n-----END PRIVATE KEY-----\n".utf8).base64EncodedString()]),
