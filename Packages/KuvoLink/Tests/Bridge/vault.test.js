@@ -654,7 +654,11 @@ test("an SSH key you keep for a project signs through its conversations' own age
     await box.stop();
   }
   // A box killed before it could close them leaves its sockets; the next one to hold the vault
-  // clears them, and opens its own.
+  // clears them, and opens its own. A note of a conversation untouched for over a month goes.
+  const old = path.join(home, "run", "ssh-for", folderNote(path.join(root, "projects", "gone")));
+  fs.writeFileSync(old, path.join(root, "projects", "gone"));
+  const monthAgo = new Date(Date.now() - 31 * 24 * 60 * 60_000);
+  fs.utimesSync(old, monthAgo, monthAgo);
   box = await start();
   try {
     let now = [];
@@ -664,6 +668,7 @@ test("an SSH key you keep for a project signs through its conversations' own age
     }
     assert.equal(now.length, left.length, "an agent for each conversation again");
     assert.deepEqual(now.filter(name => left.includes(name)), [], "none of the old ones");
+    assert.equal(fs.existsSync(old), false, "a month-old note");
   } finally {
     await box.stop();
   }

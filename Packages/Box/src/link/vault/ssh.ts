@@ -31,6 +31,7 @@ export const isSshKey = (item: VaultItem) => item.kind === "key" && item.fields.
 
 const sumOf = (text: string) => crypto.createHash("sha256").update(text).digest("hex").slice(0, 32);
 const REFUSED_FOR = 30_000;
+const NOTE_KEPT = 30 * 24 * 60 * 60_000;
 // Where any conversation's commands can reach any conversation's agent (see above).
 const EVERYONE_ONLY = process.platform !== "darwin";
 const NOTE = /^(ses_[A-Za-z0-9_]{1,80}|dir-[0-9a-f]{32})$/;
@@ -131,6 +132,11 @@ export function keepSshAgents(): () => void {
   fs.mkdirSync(SSH_FOR, { recursive: true, mode: 0o700 });
   // Sockets an earlier process left (killed before it could clear them): this one holds the vault now.
   fs.rmSync(SSH_AGENTS, { recursive: true, force: true });
+  // Notes of conversations long gone (a note is written once, so one still going is noted again by
+  // its next command).
+  for (const note of fs.readdirSync(SSH_FOR)) {
+    try { if (Date.now() - fs.statSync(path.join(SSH_FOR, note)).mtimeMs > NOTE_KEPT) fs.rmSync(path.join(SSH_FOR, note), { force: true }); } catch {}
+  }
   look();
   let watcher: fs.FSWatcher | null = null;
   try { watcher = fs.watch(SSH_FOR, () => look()); watcher.unref?.(); } catch {}

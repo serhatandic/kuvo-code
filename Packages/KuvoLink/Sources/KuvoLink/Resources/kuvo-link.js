@@ -16917,6 +16917,7 @@ function serveAgent(socket, source) {
 var isSshKey = (item) => item.kind === "key" && item.fields.includes("private_key");
 var sumOf = (text) => crypto26.createHash("sha256").update(text).digest("hex").slice(0, 32);
 var REFUSED_FOR = 30000;
+var NOTE_KEPT = 30 * 24 * 60 * 60000;
 var EVERYONE_ONLY = process.platform !== "darwin";
 var NOTE2 = /^(ses_[A-Za-z0-9_]{1,80}|dir-[0-9a-f]{32})$/;
 function callerFor(note, folder) {
@@ -17026,6 +17027,12 @@ function keepSshAgents() {
   };
   fs72.mkdirSync(SSH_FOR, { recursive: true, mode: 448 });
   fs72.rmSync(SSH_AGENTS, { recursive: true, force: true });
+  for (const note of fs72.readdirSync(SSH_FOR)) {
+    try {
+      if (Date.now() - fs72.statSync(path72.join(SSH_FOR, note)).mtimeMs > NOTE_KEPT)
+        fs72.rmSync(path72.join(SSH_FOR, note), { force: true });
+    } catch {}
+  }
   look();
   let watcher = null;
   try {
