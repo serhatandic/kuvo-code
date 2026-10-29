@@ -20,7 +20,7 @@ import Testing
     }
 
     /// Pixel's goal on the machine, at `state`; the machine may work on it alone where `alone`.
-    private func lab(_ state: String = "proposed", alone: Bool = true, waiting: [[String: Any]] = []) async throws -> MachineTestBox {
+    private func lab(_ state: String = "proposed", alone: Bool = true, waiting: [[String: Any]] = [], ends: Double? = nil) async throws -> MachineTestBox {
         let machine = try await MachineTestBox(name: "lab", environment: alone ? ["KUVO_TEST_SANDBOX_ON": "1"] : [:])
         let folder = machine.folder.appending(path: "bots/bot_pixel00001")
         try FileManager.default.createDirectory(at: folder.appending(path: "workspace"), withIntermediateDirectories: true)
@@ -34,7 +34,7 @@ import Testing
             "checks": [["id": "c1", "text": "Add a Cloudflare API token", "state": "needs", "by": "bot", "action": ["kind": "open", "label": "Add", "url": "https://dash.cloudflare.com"]]],
             "spend": [["what": "ads", "cap": 20, "currency": "USD", "per": "day", "spent": 0]], "public": [["id": "p1", "text": "Publish the site", "on": false]],
             "projects": [String](), "wake": false, "digest": "day", "proposed": now, "waiting": waiting, "paused": [Any](), "waited": 0, "watching": [String](),
-        ].merging(state == "running" ? ["started": now] : [:]) { _, given in given }
+        ].merging(state == "running" ? ["started": now] : [:]) { _, given in given }.merging(ends.map { ["ends": $0] } ?? [:]) { _, given in given }
         try FileManager.default.createDirectory(at: machine.folder.appending(path: "run/work"), withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: ["goals": [goal]]).write(to: machine.folder.appending(path: "run/work/goals.json"))
         app.goalPlans.boxes = { box in box == "lab" ? machine.client : BoxClient(box: box, transport: LocalBox { _ in AsyncThrowingStream { $0.finish() } }) }
@@ -208,5 +208,18 @@ import Testing
         let row = try #require(GoalSandbox.row(reading, computer: "lab", onThisMac: false, bot: "Pixel", agent: nil))
         #expect(row.title == "lab can’t work on its own yet")
         #expect(row.buttons.isEmpty)
+    }
+
+    @Test func noneAfterTheBotsDeadlineStartsTheGoalWithNoEnd() async throws {
+        let machine = try await lab(ends: Date.now.addingTimeInterval(7 * 86_400).timeIntervalSince1970 * 1000)
+        defer { machine.stop() }
+        await app.goalPlans.read("lab")
+        let (box, plan) = try #require(app.goalPlans.plan(for: "ses_pixel"))
+        #expect(plan.ends != nil, "the bot proposed an end")
+        let answer = GoalCard.start(plan, switches: [:], wake: false, digest: .none, deadline: .none, caps: [], periods: [])
+        let started = try #require(try await app.goalPlans.answer(plan, on: box, answer))
+        #expect(started.state == .running)
+        #expect(started.ends == nil, "None takes the bot's end away")
+        #expect(try kept(machine)["ends"] == nil)
     }
 }

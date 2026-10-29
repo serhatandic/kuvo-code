@@ -407,6 +407,8 @@ extension GoalCard {
                       caps: [Double], periods: [GoalPlan.Spend.Period], now: Date = .now, calendar: Calendar = .current) -> GoalPlanAnswer {
         .start(public: Dictionary(uniqueKeysWithValues: plan.public.map { ($0.id, switches[$0.id] ?? $0.on) }), wake: wake, digest: digest,
                ends: deadline.date(now: now, calendar: calendar),
+               // None where the bot had proposed an end: no end.
+               clearsEnd: deadline == .none && plan.ends != nil,
                spend: plan.spend.indices.map { index in
                    GoalPlanAnswer.SpendChange(cap: caps.indices.contains(index) ? caps[index] : plan.spend[index].cap,
                                               per: periods.indices.contains(index) ? periods[index] : plan.spend[index].per)
