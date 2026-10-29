@@ -1,7 +1,7 @@
 // A new session started with a task (PROTOCOL.md, "Agents' tools": `POST kuvo/sessions`, and the
 // start_session tool on every box)
 // From a conversation: an agent of its own, in that one's folder (or the one given), on its model,
-// with its approval, so Ask First isn't got around; it gets the task as a message from the
+// in its mode (Plan stays Plan), with its approval, so Ask First isn't got around; it gets the task as a message from the
 // conversation, so it knows who to report to, and its metadata says who started it, for every client
 // to show it beside them. From a client (no `startedBy`): the task as the user's own first message.
 
@@ -159,7 +159,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const rules = rulesFor(parent, project?.folders ?? []);
   let session: string;
   try {
-    const made = await call(target, "POST", "/api/session", { location: { directory: folder }, ...(title ? { title } : {}), ...(parent?.model ? { model: parent.model } : {}), ...(rules ? { permissions: rules } : {}) }, place.signal);
+    const made = await call(target, "POST", "/api/session", { location: { directory: folder }, ...(title ? { title } : {}), ...(parent?.model ? { model: parent.model } : {}), ...(parent?.agent ? { agent: parent.agent } : {}), ...(rules ? { permissions: rules } : {}) }, place.signal);
     if (!isObject(made) || typeof made.id !== "string" || !made.id) throw new Error("No session was made.");
     session = made.id;
   } catch (error) {

@@ -202,6 +202,18 @@ test("start_session starts one where its conversation works, on its model and ap
   assert.equal(prompts[0].text, "[Message from Lead · ses_lead] (To answer, use send_message to ses_lead.)\n\nReview the docs.");
 });
 
+test("a session started from a conversation in Plan mode plans too; one from a conversation that builds builds", async () => {
+  sessions.get("ses_lead").agent = "plan";
+  try {
+    assert.equal((await tool("start_session", { task: "Plan the docs." }, "ses_helper")).isError, false);
+  } finally {
+    delete sessions.get("ses_lead").agent;
+  }
+  assert.equal(made[0].agent, "plan", "the conversation's mode, not its subagent's");
+  assert.equal((await tool("start_session", { task: "Write the docs." }, "ses_lead")).isError, false);
+  assert.equal(made[1].agent, undefined, "the engine's own, build");
+});
+
 test("a bot starts its sessions in the chats, and six in ten minutes at most", async () => {
   const first = await tool("start_session", { task: "Look into the flaky test." }, "ses_scout");
   assert.match(first.text, /^Started a new session, beside this conversation \(address ses_new1\)/);

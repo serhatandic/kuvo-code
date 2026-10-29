@@ -398,7 +398,7 @@ its own, which a `SIGTERM` stops waiting.
   `wait`, its first answer in ten minutes, else null). `start_session` is this route, from the
   calling conversation.
   - From a conversation (`startedBy`, its root found as above): in its folder unless `folder` names
-    another (a bot's own folder is its chats), on its model, on the engine or coding agents' bridge
+    another (a bot's own folder is its chats), on its model and in its mode (Plan stays Plan), on the engine or coding agents' bridge
     it runs on, with its approval made again with this box's Settings › Permissions (Ask First isn't
     got around), its metadata `kuvo: {startedBy, beside}`, and the task as a message from it.
   - From a client (no `startedBy`): in `folder`, approved as Approve All with Settings ›

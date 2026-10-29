@@ -8788,7 +8788,7 @@ async function startSession(given, by, place) {
   const rules = rulesFor(parent, project?.folders ?? []);
   let session;
   try {
-    const made = await call(target, "POST", "/api/session", { location: { directory: folder }, ...title ? { title } : {}, ...parent?.model ? { model: parent.model } : {}, ...rules ? { permissions: rules } : {} }, place.signal);
+    const made = await call(target, "POST", "/api/session", { location: { directory: folder }, ...title ? { title } : {}, ...parent?.model ? { model: parent.model } : {}, ...parent?.agent ? { agent: parent.agent } : {}, ...rules ? { permissions: rules } : {} }, place.signal);
     if (!isObject(made) || typeof made.id !== "string" || !made.id)
       throw new Error("No session was made.");
     session = made.id;
