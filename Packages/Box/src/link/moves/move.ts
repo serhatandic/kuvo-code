@@ -405,14 +405,18 @@ async function finish(id: string): Promise<void> {
   } else {
     const engine = readEngineFile();
     const place = record.folder ?? path.join(K, `moved-${record.thing}`);
-    try {
-      const exports = await exportAll(engine, record.sessions[0]);
-      fs.mkdirSync(place, { recursive: true });
-      writePrivate(path.join(place, "conversation.json"), JSON.stringify(exports, null, 2));
-    } catch (error) {
-      // Gone already (a try before this one kept it, then let it go): on. Still here: not yet.
-      const there = await call(engine, "GET", `/api/session/${encodeURIComponent(record.sessions[0])}`).then(() => true, () => false);
-      if (there) throw error;
+    // Kept by a try before this one, whole: not again (some of it may be gone since).
+    if (!record.kept) {
+      try {
+        const exports = await exportAll(engine, record.sessions[0]);
+        fs.mkdirSync(place, { recursive: true });
+        writePrivate(path.join(place, "conversation.json"), JSON.stringify(exports, null, 2));
+        changeMove(id, each => { each.kept = true; });
+      } catch (error) {
+        // Gone already: on. Still here: not yet.
+        const there = await call(engine, "GET", `/api/session/${encodeURIComponent(record.sessions[0])}`).then(() => true, () => false);
+        if (there) throw error;
+      }
     }
     for (const session of [...record.sessions].reverse()) await deleteSession(engine, session);
     if (record.kind === "bot") await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).catch(() => {});
@@ -511,7 +515,8 @@ async function takeOffer(sender: MailSender, given: Record<string, unknown>): Pr
   // A move of it this way from the same computer, cut short: this one takes its place. Any other
   // under way (from another computer, or away from here) stays.
   const before = moveOf(thing);
-  if (before && before.id !== id && before.role === "to" && before.peer === sender.key) await drop(before.id);
+  // (In its own turn: one still being set up is let go of once it's all there.)
+  if (before && before.id !== id && before.role === "to" && before.peer === sender.key) await inTurn(before.id, () => drop(before.id));
   else if (before && before.id !== id) return void answer({ op: "refused", message: say.moving });
   // Never over one that lives here: a copy only comes where there's none.
   if (!was && await livesHere(kind, thing)) return void answer({ op: "refused", message: `${name} is on ${place} already.` });
@@ -607,7 +612,7 @@ async function bringIn(record: MoveRecord): Promise<string[]> {
   const place = folderOf(record.kind, record.thing)!;
   // Only its own conversations, one of them its root (a chat's is the chat; a bot's, the one its
   // folder names), and none that's here already: it never brings in, or takes away, another one.
-  const root = record.kind === "chat" ? record.thing : (() => { try { return fs.readFileSync(path.join(folder ?? "", "session"), "utf8").trim(); } catch { return ""; } })();
+  const root = record.kind === "chat" ? record.thing : (() => { try { return folder ? fs.readFileSync(path.join(folder, "session"), "utf8").trim() : ""; } catch { return ""; } })();
   if (!ownTree(contents.exports, root)) throw new NotTaken("Its conversations aren’t its own.");
   const engine = readEngineFile();
   for (const session of idsOf(contents.exports)) {
@@ -779,7 +784,8 @@ export function keepMoving(now = Date.now()): void {
       if (now - record.started > HELD_AT_MOST) inTurn(record.id, () => drop(record.id)).catch(() => {});
       continue;
     }
-    // Taken back, whatever step it was left at: its copy there is let go.
+    // Taken back, whatever step it was left at (`takeBack` always says `drop`; a record from before
+    // it did, or one written by hand, may not): its copy there is let go.
     if (record.failed && record.step !== "drop") {
       changeMove(record.id, each => { each.step = "drop"; each.sentAt = now; each.dropSince = now; });
       tell(record.peer, { op: "drop", id: record.id });
@@ -799,7 +805,7 @@ export function keepMoving(now = Date.now()): void {
     // Asked to switch, a while, with no answer either way: it asks the other box to let its copy go
     // instead. It answers `switched` if it did switch, else `dropped`, and the original goes on
     // here; nothing goes here without `switched`.
-    if (record.step === "switch" && now - (record.switchSince ?? record.sentAt ?? 0) > QUIET_AT_MOST) {
+    if (record.step === "switch" && now - (record.switchSince ?? 0) > QUIET_AT_MOST) {
       changeMove(record.id, each => { each.step = "drop"; each.sentAt = now; });
       tell(record.peer, { op: "drop", id: record.id });
       continue;

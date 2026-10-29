@@ -7476,14 +7476,19 @@ async function finish(id) {
   } else {
     const engine = readEngineFile();
     const place = record.folder ?? path38.join(K, `moved-${record.thing}`);
-    try {
-      const exports = await exportAll(engine, record.sessions[0]);
-      fs38.mkdirSync(place, { recursive: true });
-      writePrivate(path38.join(place, "conversation.json"), JSON.stringify(exports, null, 2));
-    } catch (error) {
-      const there = await call(engine, "GET", `/api/session/${encodeURIComponent(record.sessions[0])}`).then(() => true, () => false);
-      if (there)
-        throw error;
+    if (!record.kept) {
+      try {
+        const exports = await exportAll(engine, record.sessions[0]);
+        fs38.mkdirSync(place, { recursive: true });
+        writePrivate(path38.join(place, "conversation.json"), JSON.stringify(exports, null, 2));
+        changeMove(id, (each) => {
+          each.kept = true;
+        });
+      } catch (error) {
+        const there = await call(engine, "GET", `/api/session/${encodeURIComponent(record.sessions[0])}`).then(() => true, () => false);
+        if (there)
+          throw error;
+      }
     }
     for (const session of [...record.sessions].reverse())
       await deleteSession(engine, session);
@@ -7592,7 +7597,7 @@ async function takeOffer(sender, given) {
     await clearCopy(was);
   const before = moveOf(thing);
   if (before && before.id !== id && before.role === "to" && before.peer === sender.key)
-    await drop(before.id);
+    await inTurn(before.id, () => drop(before.id));
   else if (before && before.id !== id)
     return void answer({ op: "refused", message: say.moving });
   if (!was && await livesHere(kind, thing))
@@ -7712,7 +7717,7 @@ async function bringIn(record) {
   const place = folderOf(record.kind, record.thing);
   const root = record.kind === "chat" ? record.thing : (() => {
     try {
-      return fs38.readFileSync(path38.join(folder ?? "", "session"), "utf8").trim();
+      return folder ? fs38.readFileSync(path38.join(folder, "session"), "utf8").trim() : "";
     } catch {
       return "";
     }
@@ -7931,7 +7936,7 @@ function keepMoving(now = Date.now()) {
         inTurn(record.id, () => finish(record.id)).catch(() => {});
       continue;
     }
-    if (record.step === "switch" && now - (record.switchSince ?? record.sentAt ?? 0) > QUIET_AT_MOST) {
+    if (record.step === "switch" && now - (record.switchSince ?? 0) > QUIET_AT_MOST) {
       changeMove(record.id, (each) => {
         each.step = "drop";
         each.sentAt = now;

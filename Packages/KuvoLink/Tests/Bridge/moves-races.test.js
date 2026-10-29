@@ -28,8 +28,8 @@ const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // An engine with its conversations, as its API exports, imports and deletes them; it counts imports.
 // Its imports can be held (`hold`, a promise: a big one on a small machine), and its deletes fail
-// (`down`: the engine went away).
-const engine = { sessions: new Map(), imports: 0, hold: null, holding: false, down: false, refused: 0 };
+// (`down`: the engine went away; or one conversation's, `downFor`).
+const engine = { sessions: new Map(), imports: 0, hold: null, holding: false, down: false, downFor: null, refused: 0 };
 const server = http.createServer((request, response) => {
   const chunks = [];
   request.on("data", chunk => chunks.push(chunk));
@@ -38,14 +38,14 @@ const server = http.createServer((request, response) => {
     const url = new URL(request.url, "http://x");
     const send = (status, data) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify({ data }));
     const listed = each => ({ id: each.id, title: each.title, directory: each.directory, location: { directory: each.directory } });
-    if (url.pathname === "/api/session" && url.searchParams.get("parentID")) return send(200, []);
+    if (url.pathname === "/api/session" && url.searchParams.get("parentID")) return send(200, [...engine.sessions.values()].filter(each => each.parentID === url.searchParams.get("parentID")).map(listed));
     if (url.pathname === "/api/session/active") return send(200, {});
     if (url.pathname === "/api/experimental/session/import") {
       const bring = () => {
         if (engine.sessions.has(given.info.id)) return response.writeHead(409).end("{}");
         if (engine.refuse === given.info.id) return response.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ message: "The disk is full." }));
         engine.imports += 1;
-        engine.sessions.set(given.info.id, { id: given.info.id, title: given.info.title, directory: given.location.directory, messages: given.messages });
+        engine.sessions.set(given.info.id, { id: given.info.id, title: given.info.title, parentID: given.info.parentID, directory: given.location.directory, messages: given.messages });
         return send(200, listed(engine.sessions.get(given.info.id)));
       };
       if (!engine.hold) return bring();
@@ -55,14 +55,14 @@ const server = http.createServer((request, response) => {
     const exported = url.pathname.match(/^\/api\/experimental\/session\/([^/]+)\/export$/);
     if (exported) {
       const session = engine.sessions.get(exported[1]);
-      return session ? send(200, { info: { id: session.id, title: session.title }, messages: session.messages }) : send(404, null);
+      return session ? send(200, { info: { id: session.id, title: session.title, ...(session.parentID ? { parentID: session.parentID } : {}) }, messages: session.messages }) : send(404, null);
     }
     const match = url.pathname.match(/^\/api\/session\/([^/]+)(\/inbox)?$/);
     const session = match && engine.sessions.get(match[1]);
     if (!session) return send(404, null);
     if (match[2]) return send(200, []);
     if (request.method === "DELETE") {
-      if (engine.down) {
+      if (engine.down || engine.downFor === session.id) {
         engine.refused += 1;
         return response.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ message: "The engine went away." }));
       }
@@ -353,7 +353,8 @@ test("where a moved conversation lives: by the computer that moved it, lately, a
 // The record of the move of `thing` here, as it's kept.
 const movesFolder = path.join(home, "run", "moves");
 function recordOf(thing) {
-  for (const name of fs.readdirSync(movesFolder).filter(name => /^mov_[A-Za-z0-9]+\.json$/.test(name))) {
+  const names = fs.existsSync(movesFolder) ? fs.readdirSync(movesFolder) : [];
+  for (const name of names.filter(name => /^mov_[A-Za-z0-9]+\.json$/.test(name))) {
     try {
       const record = JSON.parse(fs.readFileSync(path.join(movesFolder, name), "utf8"));
       if (record.thing === thing) return record;
@@ -429,8 +430,9 @@ test("a switch heard while this box's engine is down: the original goes once it'
   chat("ses_fin1");
   labAnswers("switched");
   engine.down = true;
+  const refused = engine.refused;
   const asked = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_fin1", to: peerKey });
-  await until(() => recordOf("ses_fin1")?.stage === "finishing" && engine.refused > 0);
+  await until(() => recordOf("ses_fin1")?.stage === "finishing" && engine.refused > refused);
   assert.ok(engine.sessions.has("ses_fin1"));
   engine.down = false;
   link.keepMoving(Date.now() + 2 * 60_000);
@@ -456,6 +458,7 @@ test("a switch never answered: it asks the other computer to let its copy go, an
 test("a move taken back, left at any step, lets its copy there go and is forgotten; never offered again", async () => {
   const id = "mov_left1";
   const file = path.join(movesFolder, `${id}.json`);
+  fs.mkdirSync(movesFolder, { recursive: true });
   fs.writeFileSync(file, JSON.stringify({
     id, kind: "chat", thing: "ses_left1", name: "“Left”", from: "", to: peerKey, role: "from", stage: "copying", sessions: ["ses_left1"],
     peer: peerKey, wasPaused: false, tries: 0, started: Date.now(), offered: true, step: "offer", sentAt: Date.now() - 120_000, failed: "It didn’t get there.", failedStatus: 409,
@@ -469,6 +472,7 @@ test("a move taken back, left at any step, lets its copy there go and is forgott
 
 test("a switch asked again long after it switched (the other computer asleep all that while) is answered switched", async () => {
   const file = path.join(movesFolder, "ended.json");
+  fs.mkdirSync(movesFolder, { recursive: true });
   let kept = {};
   try { kept = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
   kept.mov_long1 = { as: "switched", at: Date.now() - 8 * 24 * 3600_000 };
@@ -493,6 +497,20 @@ test("a copy whose conversations aren't its own is refused, and what lives here 
   await say({ op: "part", id: "mov_tie2", hash: other.hash, i: 0, of: 1, d: other.bytes.toString("base64url") });
   await until(() => told.some(move => move.id === "mov_tie2" && move.op === "failed"));
   assert.ok(!engine.sessions.has("ses_else1"));
+  // And ones whose conversations aren't one tree: a subagent's whose parent didn't come, a root with
+  // a parent.
+  for (const [id, exports] of [
+    ["mov_tie3", [{ info: { id: "ses_tie3", title: "Notes" }, messages: [] }, { info: { id: "ses_tie3sub", parentID: "ses_nowhere", title: "Sub" }, messages: [] }]],
+    ["mov_tie4", [{ info: { id: "ses_tie4", parentID: "ses_tie4sub", title: "Notes" }, messages: [] }, { info: { id: "ses_tie4sub", parentID: "ses_tie4", title: "Sub" }, messages: [] }]],
+  ]) {
+    const thing = exports[0].info.id;
+    const shape = bundleFor(thing, exports);
+    await say({ op: "offer", id, kind: "chat", thing, name: "“Notes”", size: shape.bytes.length, hash: shape.hash, wasPaused: false, from: peerKey });
+    await say({ op: "part", id, hash: shape.hash, i: 0, of: 1, d: shape.bytes.toString("base64url") });
+    await until(() => told.some(move => move.id === id && move.op === "failed"));
+    assert.match(told.find(move => move.id === id && move.op === "failed").message, /aren’t its own/);
+    assert.ok(exports.every(each => !engine.sessions.has(each.info.id)));
+  }
   assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
 });
 
@@ -528,4 +546,57 @@ test("a computer with a Kuvo Code from before moves says it needs a newer one, a
   } finally {
     fs.rmSync(file, { force: true });
   }
+});
+
+test("offered again as a copy before it is still being set up: that one goes once it's all here, and no copy of it is left", async () => {
+  script = () => {};
+  const thing = "ses_again1";
+  const first = bundleFor(thing, [{ info: { id: thing, title: "Notes" }, messages: [] }]);
+  let release;
+  engine.hold = new Promise(resolve => { release = resolve; });
+  await say({ op: "offer", id: "mov_again1", kind: "chat", thing, name: "“Notes”", size: first.bytes.length, hash: first.hash, wasPaused: false, from: peerKey });
+  const settingUp = say({ op: "part", id: "mov_again1", hash: first.hash, i: 0, of: 1, d: first.bytes.toString("base64url") });
+  await until(() => engine.holding);
+  // Lab started again, took that one back, and moves it once more.
+  const again = say({ op: "offer", id: "mov_again2", kind: "chat", thing, name: "“Notes”", size: first.bytes.length, hash: first.hash, wasPaused: false, from: peerKey });
+  // An offer that doesn't wait for the first copy is answered before it's all here.
+  for (let tries = 0; tries < 2000 && !told.some(move => move.id === "mov_again2"); tries++) await new Promise(resolve => setImmediate(resolve));
+  engine.hold = null;
+  release();
+  await Promise.all([settingUp, again]);
+  assert.equal(told.find(move => move.id === "mov_again2")?.op, "ready");
+  assert.ok(!engine.sessions.has(thing), "the first copy isn't left here, live");
+  assert.deepEqual((await ask("GET", "kuvo/moves")).json.moves.map(move => move.id), ["mov_again2"]);
+  await say({ op: "drop", id: "mov_again2" });
+});
+
+test("a switch never answered, then asked to let go, answered switched: the original goes, as it would have", async () => {
+  chat("ses_late1");
+  labAnswers(null);
+  script = (answer => move => (move.op === "drop" ? say({ op: "switched", id: move.id }) : answer(move)))(script);
+  const before = told.length;
+  const asked = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_late1", to: peerKey });
+  await until(() => told.slice(before).some(move => move.op === "switch"));
+  link.keepMoving(Date.now() + 11 * 60_000);
+  const moved = await asked;
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  assert.ok(!engine.sessions.has("ses_late1"));
+});
+
+test("letting the original go, cut short partway: tried again, it keeps the whole conversation, subagents too", async () => {
+  chat("ses_keep1");
+  engine.sessions.set("ses_keep1sub", { id: "ses_keep1sub", title: "Sub", parentID: "ses_keep1", directory: chats, messages: [{ info: { id: "msg_s1", role: "user" }, parts: [{ type: "text", text: "Look it up." }] }] });
+  labAnswers("switched");
+  // Its subagent's goes, then the engine goes away before the chat's own does.
+  engine.downFor = "ses_keep1";
+  const refused = engine.refused;
+  const asked = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_keep1", to: peerKey });
+  await until(() => recordOf("ses_keep1")?.stage === "finishing" && !engine.sessions.has("ses_keep1sub") && engine.refused > refused);
+  engine.downFor = null;
+  link.keepMoving(Date.now() + 2 * 60_000);
+  assert.equal((await asked).status, 200);
+  const trash = path.join(home, "trash");
+  const kept = fs.readdirSync(trash).map(each => path.join(trash, each, "ses_keep1", "conversation.json")).find(each => fs.existsSync(each));
+  assert.ok(kept, "kept in the trash");
+  assert.deepEqual(JSON.parse(fs.readFileSync(kept, "utf8")).map(each => each.info.id), ["ses_keep1", "ses_keep1sub"]);
 });
