@@ -92,6 +92,7 @@ var VERSION_FILE = path.join(RUN, "link.version");
 var SOCKET_KEY_FILE = path.join(RUN, "socket.key");
 var SSH_FOR = path.join(RUN, "ssh-for");
 var SSH_AGENTS = process.platform === "darwin" ? path.join("/private/tmp", `kuvo-ssh-${os.userInfo().uid}`, `agents-${crypto.createHash("sha256").update(K).digest("hex").slice(0, 8)}`) : path.join(RUN, "ssh-agents");
+var SANDBOX_NOTE = path.join(RUN, "fence", "agents.md");
 var KEY_SHAPE = /^[0-9a-f]{64}$/;
 var madeKey = () => crypto.randomBytes(32).toString("hex") + `
 `;
@@ -7624,7 +7625,11 @@ function engineConfigContent(content, file = COMPATIBILITY_FILE) {
       return content;
     }
   }
-  return JSON.stringify(deepMerged(given, layer));
+  const merged = deepMerged(given, layer);
+  if (!isObject(merged))
+    return JSON.stringify(merged);
+  const instructions = Array.isArray(merged.instructions) ? merged.instructions : [];
+  return JSON.stringify({ ...merged, instructions: [...new Set([...instructions, SANDBOX_NOTE])] });
 }
 
 // Packages/Box/src/link/areas/accounts.ts
@@ -10300,6 +10305,28 @@ export default {
 }
 `;
 }
+function agentsNote(platform) {
+  const mac = platform === "darwin";
+  return [
+    "# Commands run in a sandbox here",
+    "",
+    "Each command you run with the shell tool runs in Kuvo Code's sandbox. It writes only in this conversation's folder, its git repository, its temporary folder (`$TMPDIR`) and tools' caches, and it can't read Kuvo Code's own folders or the user's secrets (private SSH keys, cloud and package tokens)." + (mac ? " Nor can it change git's hooks or config, or the settings of opencode and the coding agents in a project (`.opencode`, `opencode.json`, `.claude`, `.mcp.json`, `.codex`, `.cursor`, `.grok`, `.gemini`)." : ""),
+    ...mac ? [
+      "",
+      "On this Mac:",
+      "- `swift build`, `swift test` and `swift run` need `--disable-sandbox`: SwiftPM's own sandbox can't start inside this one.",
+      "- `xcodebuild` on a project with Swift packages needs `-IDEPackageSupportDisableManifestSandbox=YES -IDEPackageSupportDisablePluginExecutionSandbox=YES`. It can't open a Swift package that has no Xcode project: use `swift build --disable-sandbox` or `swift test --disable-sandbox` there.",
+      "- `ps` and `top` are refused: use `pgrep -fl` or `lsof`.",
+      "- Commands can't open apps (`open`) or start launchd jobs."
+    ] : [],
+    "",
+    "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
+    "",
+    `When the sandbox refuses something a task needs ("Operation not permitted" or "Permission denied" outside these folders), don't work around it: tell the user what was refused and why you need it.`,
+    ""
+  ].join(`
+`);
+}
 
 // Packages/Box/src/link/fence/landlock.ts
 function landlockPolicy(policy) {
@@ -10811,7 +10838,15 @@ function probe() {
     fs49.rmSync(hidden, { force: true });
   }
 }
+function tellAgents(on) {
+  const note = on ? agentsNote(platform) : "";
+  if (textOf(SANDBOX_NOTE) !== note)
+    writePrivate(SANDBOX_NOTE, note);
+}
 function withdraw() {
+  try {
+    tellAgents(false);
+  } catch {}
   fs49.rmSync(PLUGIN, { force: true });
   fs49.rmSync(ON, { force: true });
   fs49.rmSync(READY, { force: true });
@@ -10852,6 +10887,7 @@ function setUpFence() {
     }
     if (!fs49.existsSync(ON))
       writePrivate(ON, "");
+    tellAgents(true);
   } catch (error) {
     withdraw();
     checked = { able: true, passed: false, why: `It couldn't be set up: ${error.message}`, reason: "checkFailed", check: "setup" };
@@ -18595,6 +18631,9 @@ async function serve() {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
+  try {
+    socketKey();
+  } catch {}
   console.log(JSON.stringify({ url: `http://127.0.0.1:${server.address().port}` }));
   fenceOwnPort(server.address().port);
   keepFence();

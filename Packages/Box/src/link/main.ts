@@ -47,7 +47,7 @@ import { engineConfigContent } from "./engine/compatibility";
 import { watchBox } from "./engine/watch";
 import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
-import { IS_MAC, K, NEEDED_FILE, OWN_RUNTIME, PID_FILE, REAL_BOX, RUN, scriptIs, takeVaultSecrets, VERSION_FILE } from "./home";
+import { IS_MAC, K, NEEDED_FILE, OWN_RUNTIME, PID_FILE, REAL_BOX, RUN, scriptIs, socketKey, takeVaultSecrets, VERSION_FILE } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
 import { noteRelay } from "./letters/leave";
 import { deliverLeftAnswers, sendOutbox } from "./letters/outbox";
@@ -526,6 +526,8 @@ async function serve(): Promise<void> {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
+  // The key to its sockets, there before it says where it is (holdVault makes it too, after).
+  try { socketKey(); } catch {}
   console.log(JSON.stringify({ url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }));
   // Agents' commands, in the sandbox while you want it (fence/state.ts), which refuses them this
   // server too.
