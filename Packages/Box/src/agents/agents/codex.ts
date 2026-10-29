@@ -1,6 +1,7 @@
 // Codex, as T3 Code runs it: your own `codex`, signed in with ChatGPT or an API key (what
 // `codex login` keeps), driven through its app-server (JSON-RPC over stdio). One app-server
-// serves every Codex session; each session is one of its threads.
+// serves every Codex session, each one of its threads; while the box's sandbox is on, each session
+// has one of its own, run whole in it.
 
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs"
 import { homedir } from "node:os"
@@ -11,8 +12,9 @@ import type { Limit } from "../auto"
 import { accountName, ContextWindows, failure, model } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
 import { emit } from "../events"
-import { allowedFolders, fenceKey, fenceOn, fenceRules, wakeFolder, worktreeGitFolders, type FenceRules } from "../fence"
+import { allowedFolders, fenceAgent, fenceCopy, fenceKey, fenceRules } from "../fence"
 import { kuvoTools, toolServerName } from "../kuvotools"
+import { dropRelayed, relayedTools, relayPort } from "../toolrelay"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import { elicitationField } from "../forms"
 import { newID } from "../ids"
@@ -21,59 +23,40 @@ import { install, maintenance, update, type MaintenanceDefinition } from "../mai
 import { which } from "../proc"
 import { RPC, RPCError } from "../rpc"
 import { CodexCitations, plainCitations, type Said } from "./codex-citations"
-import { engineSkills, skillsFolder, skillsFor, turnedOff, upward, within } from "../skills"
+import { engineSkills, skillsFolder, skillsFor, skillsRoot, turnedOff, upward, within } from "../skills"
 import type { Turn } from "../turn"
 import type { FileDiff, FormField, Model, ModelRef, OAuthStatus, Session } from "../wire"
 
 const places = ["/opt/homebrew/bin", "/usr/local/bin", join(homedir(), ".local/bin"), join(homedir(), ".codex/bin")]
 const outputLimit = 30_000
 /**
+ * While the box's sandbox is on, Codex runs whole in it, with its commands and all it starts (its
+ * own sandbox off: one can't be made inside another): what it writes besides the session's folder
+ * is its own home (its sign-in, its conversations), and of that, its settings and rules only read,
+ * which run as it starts, outside the sandbox, when you use Codex yourself.
+ */
+const KEPT_IN_HOME = ["config.toml", "rules", "hooks.json", "AGENTS.md", "AGENTS.override.md"]
+
+/**
  * Codex's plugins that drive your computer (ChatGPT's Computer Use), off for every thread here
  * even where your Codex settings turn them on: they click around your Mac with no card to allow it.
  * (Written without quotes: `-c` takes a key's dots as its path. Harmless where they aren't.)
  */
-// What a command in the sandbox can't change in a project (as the engine's can't): git's hooks and
-// settings, a worktree's pointers to its repository, the engine's settings, and the coding agents'
-// folders whole (Codex's rules are by path, so a folder moved into place would get past a rule for
-// a file in it). In its conversation's wake-up folder, all but its inbox, as the launcher has it
-// (what's there says which conversation and folder it is). Only at the top of each folder it works
-// in: Codex's rules can't reach deeper.
-const KEPT_IN_PROJECT = [".git/hooks", ".git/config", "config.worktree", "commondir", "gitdir", ".opencode", "opencode.json", "opencode.jsonc",
-  ".mcp.json", ".claude", ".codex", ".cursor", ".gemini", ".grok", "session", "directory", "wakes", "watches"]
-
-const toml = (text: string) => JSON.stringify(text)
-
-// What the launcher keeps out of a command's environment (link/fence/files.ts), out of Codex's too:
-// the engine's settings and passwords, Kuvo Code's, and your SSH agent (the keys the sandbox hides).
-// (Its conversation's name it gets back: `set` comes after.)
-const KEPT_FROM_COMMANDS = ["OPENCODE_*", "*PASSWORD*", "*SECRET*", "*TOKEN*", "*KEY*", "KUVO_HOST_*", "KUVO_VAULT_*", "SSH_AUTH_SOCK", "KUVO_WAKE_FOLDER"]
-
-/**
- * The box's sandbox as Codex's own permission profiles, for its app-server (`-c`): `kuvo`, where the
- * folders it works in are written (but `KEPT_IN_PROJECT`), and `kuvo_read` for Plan, where they're
- * only read. Both read everything but Kuvo Code's folders and your secrets, write the temporary
- * folders and tools' caches (not what runs later in them), and reach the network. (Its
- * conversation's wake-up folder is a turn's: `wakeFolder`.)
- */
-export function fenceProfiles(rules: FenceRules): string[] {
-  const filesystem = (projects: "write" | "read") => {
-    const access = new Map<string, string>([["/", "read"]])
-    for (const folder of rules.writable) access.set(folder, "write")
-    for (const place of rules.readOnly) access.set(place, "read")
-    for (const place of rules.hidden) access.set(place, "deny")
-    for (const place of rules.readable) access.set(place, "read")
-    const inProjects = projects === "read" ? [[".", "read"]] : [[".", "write"], ...KEPT_IN_PROJECT.map((place) => [place, "read"])]
-    const entries = [...[...access].map(([place, how]) => `${toml(place)}=${toml(how)}`), `":workspace_roots"={${inProjects.map(([place, how]) => `${toml(place)}=${toml(how)}`).join(",")}}`]
-    return `{${entries.join(",")}}`
-  }
-  return [
-    "-c", `permissions.kuvo.filesystem=${filesystem("write")}`, "-c", "permissions.kuvo.network.enabled=true",
-    "-c", `permissions.kuvo_read.filesystem=${filesystem("read")}`, "-c", "permissions.kuvo_read.network.enabled=true",
-    "-c", `default_permissions="kuvo"`,
-  ]
-}
-
 const noComputerUse = ["unified-computer-use@openai-bundled", "computer-use@openai-bundled"]
+
+/** Your account's app-server, among each session's (`CodexAgent.slots`). */
+const ACCOUNT = ""
+
+/** An app-server, as it runs now. */
+interface Slot {
+  server?: RPC
+  starting?: Promise<RPC>
+  /** The one still running the old Codex, or with the box's sandbox as it was. */
+  outdated?: RPC
+  /** The box's sandbox as it started with it (`fenceKey`). */
+  fence?: string
+  lastUse: number
+}
 
 export class CodexAgent implements Agent {
   id = "codex"
@@ -83,13 +66,14 @@ export class CodexAgent implements Agent {
   }
   /** OpenAI's installer, as its docs give it (it needs no Node). */
   install = "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
-  private server?: RPC
-
-  /** Its app-server while one runs (none is started for this). */
-  get running(): RPC | undefined {
-    return this.server && !this.server.isClosed ? this.server : undefined
-  }
-  private starting?: Promise<RPC>
+  /**
+   * Its app-servers: your account's (`ACCOUNT`: its sign-in, its models, one-off answers, and while
+   * the box's sandbox is off every session's thread), and while it's on, each session's own, run
+   * whole in it (`fenceAgent`), with that session's folder, wake-ups and Kuvo Code tools.
+   */
+  private slots = new Map<string, Slot>()
+  /** The app-servers run whole in the box's sandbox. */
+  private fencedServers = new WeakSet<RPC>()
   private threads = new Map<string, CodexThread>()
   /** One-off answers under way (`generate`), by their thread: what each is told. */
   private oneOffs = new Map<string, { rpc: RPC; notify: (method: string, params: any) => void; fail: (error: Error) => void }>()
@@ -101,7 +85,8 @@ export class CodexAgent implements Agent {
    * app-server, not a thread, so it has all of them (they differ only by a project's own).
    */
   private skillRoots = new Map<string, string>()
-  private rootsSet?: { rpc: RPC; key: string }
+  /** The skills folders each app-server was told. */
+  private rootsSet = new WeakMap<RPC, string>()
   /** Your plan's usage windows as Codex last said, by limit ("codex" is the plan's; others, a model's). */
   rateLimits = new Map<string, any>()
 
@@ -139,40 +124,55 @@ export class CodexAgent implements Agent {
     return install("Codex", this.install, this.context.temporary, () => this.executable())
   }
 
-  /** The app-server still running the old Codex. */
-  private outdated?: RPC
-  /** The box's sandbox as the app-server running now started with it (`fenceKey`), and whether it's on. */
-  private serverFence?: string
-  fenced = false
+  private slot(key: string): Slot {
+    let slot = this.slots.get(key)
+    if (!slot) this.slots.set(key, (slot = { lastUse: 0 }))
+    return slot
+  }
+
+  /** Whether `rpc` runs whole in the box's sandbox. */
+  isFenced(rpc: RPC): boolean {
+    return this.fencedServers.has(rpc)
+  }
 
   /**
-   * The new Codex lists the models and runs the sessions once its app-server starts again: now,
-   * or once no turn or sign-in is using the old one (a session goes on with its thread there).
+   * The new Codex lists the models and runs the sessions once its app-servers start again: now,
+   * or once no turn or sign-in is using the old ones (a session goes on with its thread there).
    */
   programUpdated() {
     this.modelList = undefined
     this.accountCache = undefined
-    this.outdated = this.server
-    // One starting now may be the old program's too.
-    void this.starting?.then((rpc) => {
-      this.outdated ??= rpc
-      this.restartIfQuiet()
-    }, () => {})
-    this.restartIfQuiet()
+    for (const [key, slot] of this.slots) {
+      slot.outdated = slot.server
+      // One starting now may be the old program's too.
+      void slot.starting?.then((rpc) => {
+        slot.outdated ??= rpc
+        this.restartIfQuiet(key)
+      }, () => {})
+      this.restartIfQuiet(key)
+    }
   }
 
-  /** Restarts the old app-server when no turn but `starting`'s (not on it yet) and no sign-in uses it. */
-  private restartIfQuiet(starting?: CodexThread) {
-    const server = this.outdated
-    if (!server) return
-    if (server.isClosed || this.server !== server) {
-      this.outdated = undefined
+  /** Whether something but `starting`'s turn (not on it yet) uses `server`: a turn, a sign-in, a one-off answer. */
+  private busy(key: string, server: RPC, starting?: CodexThread): boolean {
+    if (key === ACCOUNT && (this.logins.size || this.oneOffs.size)) return true
+    return [...this.threads.values()].some((thread) => thread !== starting && thread.server === server && (thread.isRunning || thread.keepsWorking))
+  }
+
+  /** Restarts an old app-server when nothing but `starting`'s turn uses it. */
+  private restartIfQuiet(key: string, starting?: CodexThread) {
+    const slot = this.slots.get(key)
+    const server = slot?.outdated
+    if (!slot || !server) return
+    if (server.isClosed || slot.server !== server) {
+      slot.outdated = undefined
       return
     }
-    if (this.logins.size || this.oneOffs.size || [...this.threads.values()].some((thread) => thread !== starting && (thread.isRunning || thread.keepsWorking))) return
-    this.outdated = undefined
-    this.shutdown()
+    if (this.busy(key, server, starting)) return
+    slot.outdated = undefined
+    this.stop(key)
     // What the old one listed meanwhile, asked anew.
+    if (key !== ACCOUNT) return
     this.modelList = undefined
     emit("model.updated", {})
   }
@@ -184,46 +184,76 @@ export class CodexAgent implements Agent {
     ]
   }
 
-  private lastUse = 0
   private idleCheck?: ReturnType<typeof setInterval>
 
-  /** The app-server, started the first time it's needed and again after it stops. */
-  async rpc(starting?: CodexThread): Promise<RPC> {
-    this.lastUse = Date.now()
-    // Stopped when nothing has used it for a while (no session, no sign-in).
+  /**
+   * The app-server for `thread` (or your account's), started the first time it's needed and again
+   * after it stops. A thread's own asks go to the one it's in; a turn `starting` goes to the one
+   * for it now (the box's sandbox turned on or off since: another).
+   */
+  async rpc(thread?: CodexThread, starting = false): Promise<RPC> {
+    if (thread && !starting && thread.server && !thread.server.isClosed) return thread.server
+    const key = thread && fenceRules() ? thread.session.id : ACCOUNT
+    const slot = this.slot(key)
+    slot.lastUse = Date.now()
+    // Stopped when nothing has used it for a while: a session's, or your account's with no session in it.
     this.idleCheck ??= setInterval(() => {
-      this.restartIfQuiet()
-      if (!this.server || this.threads.size || this.logins.size || this.oneOffs.size || Date.now() - this.lastUse < 15 * 60_000) return
-      this.shutdown()
+      for (const [each, slot] of this.slots) {
+        this.restartIfQuiet(each)
+        const server = slot.server
+        if (!server || this.busy(each, server) || Date.now() - slot.lastUse < 15 * 60_000) continue
+        if (each === ACCOUNT && [...this.threads.values()].some((thread) => thread.server === server)) continue
+        this.stop(each)
+      }
     }, 60_000)
-    // The box's sandbox changed (on, off, its rules): Codex starts again with it once it's quiet.
-    if (this.server && !this.server.isClosed && this.serverFence !== fenceKey()) this.outdated ??= this.server
-    this.restartIfQuiet(starting)
-    if (this.server && !this.server.isClosed) return this.server
-    this.starting ??= this.start().finally(() => (this.starting = undefined))
-    return this.starting
+    // The box's sandbox changed (on, off, its rules, the folders you let this session's commands
+    // write in): Codex starts again with it once it's quiet.
+    const fence = key === ACCOUNT ? fenceKey() : fenceKey() + JSON.stringify(allowedFolders(thread!.session.location.directory))
+    if (slot.server && !slot.server.isClosed && slot.fence !== fence) slot.outdated ??= slot.server
+    this.restartIfQuiet(key, starting ? thread : undefined)
+    if (slot.server && !slot.server.isClosed) return slot.server
+    slot.starting ??= this.start(key, fence, thread).finally(() => (slot.starting = undefined))
+    return slot.starting
   }
 
-  private async start(): Promise<RPC> {
+  /** Its own folders, as it runs whole in the box's sandbox: its home, and the skills it's given (only read). */
+  private fenced(directory: string, sessionID?: string) {
+    const skills = skillsRoot()
+    if (skills) mkdirSync(skills, { recursive: true, mode: 0o700 })
+    const relayed = sessionID ? relayedTools(sessionID) : undefined
+    return fenceAgent(this.executable()!, directory, {
+      own: [this.home, ...(skills ? [skills] : [])],
+      kept: [...KEPT_IN_HOME.map((name) => join(this.home, name)), ...(skills ? [skills] : [])],
+      port: relayed ? relayPort() : undefined,
+    })
+  }
+
+  private async start(key: string, fenceNow: string, thread?: CodexThread): Promise<RPC> {
     const executable = this.executable()
     if (!executable) throw new Error(`Install Codex first: ${this.install}`)
     // An added account's own CODEX_HOME, with your Codex settings in it: only its sign-in is its
     // own. (On a machine, nothing of the machine's own Codex.)
     if (this.instance.home && !onMachine) shadowHome(this.instance.home)
-    // Its commands in the box's sandbox while it's on, as Codex's own (fenceProfiles).
-    const fence = fenceRules()
-    const rpc = new RPC([executable, "app-server", ...noComputerUse.flatMap((plugin) => ["-c", `plugins.${plugin}.enabled=false`]), ...(fence ? fenceProfiles(fence) : [])], { cwd: this.context.temporary, env: this.instance.home ? { CODEX_HOME: this.instance.home } : undefined })
-    this.serverFence = JSON.stringify(fence ?? null)
-    this.fenced = Boolean(fence)
+    const slot = this.slot(key)
+    // While the box's sandbox is on, Codex runs whole in it: a session's in its folder, your
+    // account's in its home.
+    const directory = thread?.session.location.directory ?? this.home
+    const fence = fenceRules() ? this.fenced(directory, thread?.session.id) : undefined
+    if (fenceRules() && !fence) throw new Error("Codex runs in the sandbox here, and it isn't ready: restart Kuvo Code.")
+    const args = ["app-server", ...noComputerUse.flatMap((plugin) => ["-c", `plugins.${plugin}.enabled=false`])]
+    const env = { ...(this.instance.home ? { CODEX_HOME: this.instance.home } : {}), ...(thread ? { OPENCODE_SESSION_ID: thread.session.id } : {}), ...fence?.env }
+    const rpc = new RPC(fence ? [fence.command, ...args] : [executable, ...args], { cwd: fence ? directory : this.context.temporary, env })
+    slot.fence = fenceNow
+    if (fence) this.fencedServers.add(rpc)
     rpc.onNotification = (method, params) => this.notification(method, params)
     rpc.onRequest = (method, params, id) => this.request(method, params, id)
     rpc.onExit = () => {
       // A title or commit text it was writing won't come.
       for (const oneOff of this.oneOffs.values()) if (oneOff.rpc === rpc) oneOff.fail(new Error("Codex stopped."))
       // Stopped on purpose: the threads were told then (they may be on a newer one by now).
-      if (this.server !== rpc) return
-      this.server = undefined
-      for (const thread of this.threads.values()) thread.serverStopped()
+      if (slot.server !== rpc) return
+      slot.server = undefined
+      for (const each of this.threads.values()) if (each.server === rpc) each.serverStopped()
     }
     try {
       await rpc.request("initialize", { clientInfo: { name: "kuvo-code", title: "Kuvo Code", version: "1" }, capabilities: { experimentalApi: true, optOutNotificationMethods: ["turn/diff/updated"] } }, 30_000)
@@ -233,9 +263,24 @@ export class CodexAgent implements Agent {
       throw error
     }
     rpc.notify("initialized")
-    this.server = rpc
+    slot.server = rpc
     return rpc
   }
+
+  /** Stops an app-server: its threads are loaded again, in a new one, as they're next used. */
+  private stop(key: string) {
+    const slot = this.slots.get(key)
+    const server = slot?.server
+    if (!slot || !server) return
+    slot.server = undefined
+    server.kill()
+    for (const thread of this.threads.values()) if (thread.server === server) thread.serverStopped()
+    if (key !== ACCOUNT) {
+      this.slots.delete(key)
+      dropRelayed(key)
+    }
+  }
+
 
   private notification(method: string, params: any) {
     if (method === "account/login/completed") {
@@ -430,7 +475,7 @@ export class CodexAgent implements Agent {
       cursor = page?.nextCursor ?? undefined
     } while (cursor)
     // Not kept from the old Codex's app-server: asked again of the new one.
-    if (rpc !== this.outdated) this.modelList = { at: Date.now(), models }
+    if (rpc !== this.slots.get(ACCOUNT)?.outdated) this.modelList = { at: Date.now(), models }
     return models
   }
 
@@ -439,18 +484,16 @@ export class CodexAgent implements Agent {
   }
 
   shutdown() {
-    const server = this.server
-    if (!server) return
-    this.server = undefined
-    server.kill()
-    for (const thread of this.threads.values()) thread.serverStopped()
+    for (const key of [...this.slots.keys()]) this.stop(key)
   }
 
   /** One answer from Codex on your plan, in a thread kept nowhere, that can only read. */
   async generate(prompt: string, model?: ModelRef): Promise<string> {
     const rpc = await this.rpc()
     // (Its own default model, when none is given; thinking little either way.)
-    const started: any = await rpc.request("thread/start", { ephemeral: true, cwd: this.context.temporary, ...(model && model.id !== "default" ? { model: model.id } : {}), approvalPolicy: "never", ...(this.fenced ? { permissions: "kuvo_read" } : { sandbox: "read-only" }) }, 60_000)
+    // (Run whole in the box's sandbox, in Codex's home: Kuvo Code's folders are hidden there.)
+    const cwd = this.isFenced(rpc) ? this.home : this.context.temporary
+    const started: any = await rpc.request("thread/start", { ephemeral: true, cwd, ...(model && model.id !== "default" ? { model: model.id } : {}), approvalPolicy: "never", sandbox: "read-only" }, 60_000)
     const threadId: string = started.thread.id
     let text = ""
     let turnId: string | undefined
@@ -506,9 +549,9 @@ export class CodexAgent implements Agent {
     else this.skillRoots.delete(sessionID)
     const roots = [...new Set(this.skillRoots.values())].sort()
     const key = JSON.stringify(roots)
-    if (this.rootsSet?.rpc === rpc && this.rootsSet.key === key) return
+    if (this.rootsSet.get(rpc) === key) return
     await rpc.request("skills/extraRoots/set", { extraRoots: roots }, 30_000).then(
-      () => (this.rootsSet = { rpc, key }),
+      () => this.rootsSet.set(rpc, key),
       () => {},
     )
   }
@@ -527,8 +570,10 @@ export class CodexAgent implements Agent {
     const thread = this.threads.get(sessionID)
     this.threads.delete(sessionID)
     this.skillRoots.delete(sessionID)
-    // The agents it spawned go with it.
+    // The agents it spawned go with it, and its own app-server.
     for (const [spawn, owner] of this.spawned) if (owner === thread) this.spawned.delete(spawn)
+    this.stop(sessionID)
+    dropRelayed(sessionID)
   }
 }
 
@@ -671,6 +716,14 @@ class CodexThread implements Thread {
     for (const threadID of Object.keys(this.spawnedSessions)) this.agent.adopt(threadID, this)
   }
 
+  /** The app-server its thread is in, as its last turn started. */
+  server?: RPC
+
+  /** The session's folder, when `rpc` runs whole in the box's sandbox (attachments are copied for it). */
+  private fencedIn(rpc: RPC): string | undefined {
+    return this.agent.isFenced(rpc) ? this.session.location.directory : undefined
+  }
+
   /** The app-server stopped: a thread must be loaded again, and a turn under way is over, and the agents it left at work. */
   serverStopped() {
     this.loaded = false
@@ -682,27 +735,20 @@ class CodexThread implements Thread {
     active.resolve(active.hooks.signal.aborted ? { outcome: "interrupted" } : { outcome: "failed", error: failure(active.problem ?? "Codex stopped.") })
   }
 
-  private policy(hooks: TurnHooks, plan: boolean) {
-    // In the box's sandbox (fenceProfiles), with what a commit in a worktree writes in its
-    // repository's folder, its wake-up folder (kuvo-wake), and the folders you let this project's
-    // commands write in (Also Allowed). Codex never runs a command outside it on its own: it isn't
-    // let ask to (a command that needs it is `sandbox_ask`'s, which only you answer), nor asks
-    // about what its own rules would (rm -f), which it turns down itself. Ask First asks before its
-    // commands as Codex does, and a command you allow it runs outside its sandbox, as Codex runs
-    // every command it asked about.
-    if (this.agent.fenced) {
-      const directory = this.session.location.directory
-      const wakes = wakeFolder(this.session.id, directory)
-      const roots = { runtimeWorkspaceRoots: [directory, ...worktreeGitFolders(directory), ...(wakes ? [wakes] : []), ...allowedFolders(directory)] }
-      const inside = { granular: { sandbox_approval: false, rules: false, mcp_elicitations: true, request_permissions: false } }
-      if (plan) return { approvalPolicy: inside, permissions: "kuvo_read", ...roots }
-      if (hooks.approvesAll()) return { approvalPolicy: inside, permissions: "kuvo", ...roots }
-      return { approvalPolicy: "untrusted", permissions: "kuvo", ...roots }
+  private policy(hooks: TurnHooks, plan: boolean, rpc: RPC) {
+    // Run whole in the box's sandbox: its commands are in it however they run, Codex's own sandbox
+    // off (it can't be made inside), and it asks as it does outside it. A command you allow runs
+    // in the box's sandbox all the same: one that needs more is `sandbox_ask`'s, which only you
+    // answer. Plan asks before all but a look.
+    if (this.agent.isFenced(rpc)) {
+      const sandboxPolicy = { type: "dangerFullAccess" }
+      if (plan) return { approvalPolicy: "untrusted", sandboxPolicy }
+      return { approvalPolicy: hooks.approvesAll() ? "on-request" : "untrusted", sandboxPolicy }
     }
     if (plan) return { approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly", networkAccess: true } }
     // The box's sandbox just turned on, while this Codex was still at work: its own sandbox until
-    // it starts again with the box's, whatever the mode.
-    if (fenceOn()) return { approvalPolicy: hooks.approvesAll() ? "on-request" : "untrusted", sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: true } }
+    // it starts again in the box's, whatever the mode.
+    if (fenceRules()) return { approvalPolicy: hooks.approvesAll() ? "on-request" : "untrusted", sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: true } }
     // Approve All: what Codex's own rules ask about (rm -f) is asked too, and your rules let it
     // through without a card; with "never", Codex refuses it itself.
     if (hooks.approvesAll()) return { approvalPolicy: "on-request", sandboxPolicy: { type: "dangerFullAccess" } }
@@ -714,11 +760,18 @@ class CodexThread implements Thread {
   }
 
   private async ensureThread(input: RunInput, hooks: TurnHooks) {
-    // A turn starting: on the new Codex, when it was updated.
-    const rpc = await this.agent.rpc(this)
+    // A turn starting: on the new Codex, when it was updated, or another (the box's sandbox
+    // turned on or off), where its thread is loaded again.
+    const rpc = await this.agent.rpc(this, true)
+    if (rpc !== this.server) {
+      this.server = rpc
+      this.loaded = false
+    }
+    const fenced = this.agent.isFenced(rpc)
     const instructions = hooks.instructions() || null
-    // Loaded again with what the app adds to its instructions, when that changed.
-    const tools = kuvoTools(this.session.id)
+    // Loaded again with what the app adds to its instructions, when that changed. (In the box's
+    // sandbox, through the bridge's relay: the sandbox hides where they are.)
+    const tools = fenced ? relayedTools(this.session.id) : kuvoTools(this.session.id)
     // Settings › Skills' skills, as extra ones (but those it reads itself), and those of its own
     // you turned off, off for this thread.
     const directory = this.session.location.directory
@@ -739,13 +792,10 @@ class CodexThread implements Thread {
     const server = tools?.kind === "http" ? { url: tools.url, http_headers: tools.headers, ...timeout } : tools?.kind === "stdio" ? { command: tools.command, args: tools.args, env: tools.env, ...timeout } : undefined
     // Its commands know their conversation, as the engine's do (kuvo-wake schedules for it).
     // (On a machine, the machine's own folders too: Codex keeps its own in Kuvo Code's folder.)
-    const wakes = this.agent.fenced ? wakeFolder(this.session.id, this.session.location.directory) : undefined
+    // In the box's sandbox, the launcher kept Kuvo Code's passwords out of Codex, and gave it the
+    // conversation's wake-up folder.
     const config = {
       "shell_environment_policy.set.OPENCODE_SESSION_ID": this.session.id,
-      // In the box's sandbox, what the launcher keeps out of commands; its wake-up folder, as the
-      // launcher names it.
-      ...(this.agent.fenced ? { "shell_environment_policy.exclude": KEPT_FROM_COMMANDS } : {}),
-      ...(wakes ? { "shell_environment_policy.set.KUVO_WAKE_FOLDER": wakes } : {}),
       ...(onMachine ? ownFoldersConfig() : {}),
       ...(tools && server ? { [`mcp_servers.${tools.name}`]: server } : {}),
       ...(turnedOffHere.length ? { "skills.config": [...this.agent.ownSkillSettings(), ...turnedOffHere] } : {}),
@@ -798,8 +848,8 @@ class CodexThread implements Thread {
     const active = this.active
     if (!active?.turnID || !this.nativeID) return false
     try {
-      const rpc = await this.agent.rpc()
-      await rpc.request("turn/steer", { threadId: this.nativeID, input: codexInput(input), expectedTurnId: active.turnID }, 30_000)
+      const rpc = await this.agent.rpc(this)
+      await rpc.request("turn/steer", { threadId: this.nativeID, input: codexInput(input, this.fencedIn(rpc)), expectedTurnId: active.turnID }, 30_000)
       return this.active === active
     } catch {
       return false
@@ -817,11 +867,11 @@ class CodexThread implements Thread {
     return async (input: MessageInput, resume: () => SubagentRun): Promise<boolean> => {
       let rpc: RPC
       try {
-        rpc = await this.agent.rpc()
+        rpc = await this.agent.rpc(this)
       } catch {
         return false
       }
-      const items = codexInput(input)
+      const items = codexInput(input, this.fencedIn(rpc))
       const lane = this.active?.subagents.get(threadID) ?? this.backgroundLanes.get(threadID)
       if (lane && !lane.ended) {
         try {
@@ -917,7 +967,10 @@ class CodexThread implements Thread {
     if (hooks.signal.aborted) return { outcome: "interrupted" }
     const items: any[] = [{ type: "text", text: input.text, text_elements: [] }]
     const others: string[] = []
-    for (const file of input.files) {
+    // In the box's sandbox, attachments are copied where it reads them: Kuvo Code's folder is hidden.
+    const fencedIn = this.fencedIn(rpc)
+    for (const attached of input.files) {
+      const file = fencedIn && attached.path ? { ...attached, path: fenceCopy(fencedIn, attached.path) } : attached
       if (file.mime.startsWith("image/")) {
         if (file.path) items.push({ type: "localImage", path: file.path })
         else if (file.data) items.push({ type: "image", url: `data:${file.mime};base64,${file.data}` })
@@ -934,7 +987,7 @@ class CodexThread implements Thread {
       model: input.model.id,
       summary: "detailed",
       approvalsReviewer: "user",
-      ...this.policy(hooks, input.plan),
+      ...this.policy(hooks, input.plan, rpc),
       ...(effort ? { effort } : {}),
       collaborationMode: { mode: input.plan ? "plan" : "default", settings: { model: input.model.id, reasoning_effort: effort ?? null, developer_instructions: null } },
     }
@@ -1295,7 +1348,7 @@ class CodexThread implements Thread {
   /** A spawned agent stopped from Kuvo Code: its turn on its thread is interrupted (it then says so). */
   private async stopSubagent(threadID: string) {
     const lane = this.active?.subagents.get(threadID) ?? this.backgroundLanes.get(threadID)
-    if (lane && !lane.ended) await this.interruptLane(threadID, lane, this.agent.running)
+    if (lane && !lane.ended) await this.interruptLane(threadID, lane, this.server)
   }
 
   /** Interrupts a spawned agent's turn, through `rpc`, the Codex its thread is in (none running: nothing to stop). */
@@ -1710,7 +1763,7 @@ class CodexThread implements Thread {
   }
 
   private async stopTurn(active: Active) {
-    const rpc = await this.agent.rpc().catch(() => undefined)
+    const rpc = await this.agent.rpc(this).catch(() => undefined)
     if (rpc && active.turnID && this.nativeID) await rpc.request("turn/interrupt", { threadId: this.nativeID, turnId: active.turnID }, 10_000).catch(() => {})
   }
 
@@ -1718,7 +1771,7 @@ class CodexThread implements Thread {
     const active = this.active
     if (!active || !this.nativeID) return
     active.stopping = true
-    const rpc = await this.agent.rpc().catch(() => undefined)
+    const rpc = await this.agent.rpc(this).catch(() => undefined)
     for (let waited = 0; waited < 10_000 && !active.turnID && this.active === active; waited += 100) await Bun.sleep(100)
     if (rpc && active.turnID) await rpc.request("turn/interrupt", { threadId: this.nativeID, turnId: active.turnID }, 10_000).catch(() => {})
     for (let waited = 0; waited < 10_000 && this.active === active; waited += 100) await Bun.sleep(100)
@@ -1731,8 +1784,10 @@ class CodexThread implements Thread {
   close() {
     for (const lane of this.backgroundLanes.values()) this.endSubagent(lane, "interrupted")
     this.backgroundLanes.clear()
+    // Let go of in the app-server it's in (one of its own stops with it).
+    const server = this.server
+    if (this.nativeID && this.loaded && server && !server.isClosed && !this.agent.isFenced(server)) void server.request("thread/unsubscribe", { threadId: this.nativeID }).catch(() => {})
     this.agent.forget(this.session.id)
-    if (this.nativeID && this.loaded) void this.agent.rpc().then((rpc) => rpc.request("thread/unsubscribe", { threadId: this.nativeID }).catch(() => {}), () => {})
   }
 }
 
@@ -1936,11 +1991,15 @@ function firstLine(text: string): string {
   return line.length > 80 ? line.slice(0, 79) + "…" : line
 }
 
-/** Your message, as Codex takes it: its words, its pictures, and the paths of other files. */
-function codexInput(input: { text: string; files: PromptFile[] }): any[] {
+/**
+ * Your message, as Codex takes it: its words, its pictures, and the paths of other files (for a
+ * Codex in the box's sandbox, copies where it reads them, for the session's folder: `fencedIn`).
+ */
+function codexInput(input: { text: string; files: PromptFile[] }, fencedIn?: string): any[] {
   const items: any[] = [{ type: "text", text: input.text, text_elements: [] }]
   const others: string[] = []
-  for (const file of input.files) {
+  for (const attached of input.files) {
+    const file = fencedIn && attached.path ? { ...attached, path: fenceCopy(fencedIn, attached.path) } : attached
     if (file.mime.startsWith("image/") && file.path) items.push({ type: "localImage", path: file.path })
     else if (file.mime.startsWith("image/") && file.data) items.push({ type: "image", url: `data:${file.mime};base64,${file.data}` })
     else if (file.path) others.push(file.path)

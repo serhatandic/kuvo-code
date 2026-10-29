@@ -1,10 +1,10 @@
 // The box's sandbox, as the coding agents' own programs run their commands in it (PROTOCOL.md,
 // "Sandbox"): the rules the box writes for its launcher (`run/fence/policy.json`), while it has the
-// sandbox on here (`run/fence/on`). Each agent puts them in its own terms: Codex as a permission
-// profile of its own sandbox.
+// sandbox on here (`run/fence/on`). Claude Code runs its commands through the launcher, as the
+// engine does; Codex runs whole in it.
 
 import { createHash } from "node:crypto"
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs"
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { machineHome } from "./machine"
 
@@ -65,18 +65,6 @@ export function allowedFolders(directory: string): string[] {
 /** What changes with the rules, to tell when an agent's program must start again with new ones. */
 export const fenceKey = () => JSON.stringify(fenceRules() ?? null)
 
-/**
- * In a git worktree, the parts of its repository's own folder a commit writes (`objects`, `refs`,
- * `logs`, and the worktree's own folder in it), which are outside the session's folder; none
- * elsewhere. Only a real worktree's, as `gitOf` checks it: a command can write a `.git` file naming
- * any other repository.
- */
-export function worktreeGitFolders(directory: string): string[] {
-  const git = gitOf(real(directory))
-  if (!git.common || !git.own) return []
-  return [join(git.common, "objects"), join(git.common, "refs"), join(git.common, "logs"), git.own]
-}
-
 /** The launcher's sum for a folder (its real path), as `sha256sum | cut -c 1-32` makes it. */
 const sum = (place: string) => createHash("sha256").update(place).digest("hex").slice(0, 32)
 
@@ -97,11 +85,6 @@ function isRepository(git: string): boolean {
  * back; "" for none (its commands write only the folder).
  */
 export function repositoryOf(folder: string): string {
-  return gitOf(folder).common
-}
-
-/** A folder's repository (`common`, "" for none) and, in a worktree, the worktree's own folder in it. */
-function gitOf(folder: string): { common: string; own?: string } {
   const realOr = (place: string) => {
     try {
       return realpathSync(place)
@@ -117,21 +100,21 @@ function gitOf(folder: string): { common: string; own?: string } {
     } catch {
       continue
     }
-    if (link.isSymbolicLink()) return { common: "" }
-    if (link.isDirectory()) return { common: isRepository(git) ? realOr(git) : "" }
+    if (link.isSymbolicLink()) return ""
+    if (link.isDirectory()) return isRepository(git) ? realOr(git) : ""
     try {
       const named = readFileSync(git, "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim()
-      if (!named) return { common: "" }
+      if (!named) return ""
       const own = realOr(resolve(at, named))
-      if (!own || basename(dirname(own)) !== "worktrees") return { common: "" }
-      if (realOr(readFileSync(join(own, "gitdir"), "utf8").trim()) !== realOr(git)) return { common: "" }
+      if (!own || basename(dirname(own)) !== "worktrees") return ""
+      if (realOr(readFileSync(join(own, "gitdir"), "utf8").trim()) !== realOr(git)) return ""
       const common = realOr(resolve(own, readFileSync(join(own, "commondir"), "utf8").trim()))
-      return common && common === dirname(dirname(own)) && isRepository(common) ? { common, own } : { common: "" }
+      return common && common === dirname(dirname(own)) && isRepository(common) ? common : ""
     } catch {
-      return { common: "" }
+      return ""
     }
   }
-  return { common: "" }
+  return ""
 }
 
 /**
@@ -152,43 +135,53 @@ export function fenceShell(directory: string): { shell: string; work: string; gi
   return { shell, work, git: repositoryOf(work), temporary }
 }
 
-// Where Kuvo Code keeps conversations' wake-ups: a bot's in its own folder, any other's in the
-// wakes folder (the agents' bridge's main says where: on this Mac, the app's).
-let wakePlaces: { bots?: string; wakes?: string } = {}
-export function setWakePlaces(places: { bots?: string; wakes?: string }) {
-  wakePlaces = places
+/** How many folders of its own, and files it only reads in them, an agent run whole has (link/fence/seatbelt.ts). */
+const AGENT_FOLDERS = 4
+const AGENT_KEPT = 8
+
+/**
+ * For an agent run whole in the sandbox (Codex): the launcher that runs it (`run/fence/shell/run`)
+ * and what it's told: its program, the conversation's folder and repository, its own folders
+ * (`own`: its sign-in and state, written), what in them it only reads (`kept`: its settings, what
+ * runs outside the sandbox when you use it yourself), and its Kuvo Code tools' port. A folder in
+ * both is read, never written. Undefined while the sandbox is off here.
+ */
+export function fenceAgent(program: string, directory: string, mine: { own: string[]; kept: string[]; port?: number }): { command: string; env: Record<string, string> } | undefined {
+  const where = folder()
+  if (!where || !fenceRules()) return undefined
+  const command = join(where, "shell", "run")
+  if (!existsSync(command)) return undefined
+  const work = real(directory)
+  // By their real place, which the sandbox goes by (one not made yet, as it's named).
+  const own = mine.own.map(real).slice(0, AGENT_FOLDERS)
+  const kept = mine.kept.map(real).slice(0, AGENT_KEPT)
+  return {
+    command,
+    env: {
+      KUVO_FENCE_SHELL: program,
+      KUVO_FENCE_WORK: work,
+      KUVO_FENCE_GIT: repositoryOf(work),
+      KUVO_FENCE_OWN: own.join("\n"),
+      KUVO_FENCE_KEPT: kept.join("\n"),
+      KUVO_FENCE_PORT: String(mine.port ?? 0),
+    },
+  }
 }
 
 /**
- * A conversation's wake-up folder, as the launcher finds or makes it for its commands (kuvo-wake;
- * `launcherScript` in link/fence/files.ts, keep the two the same): its bot's folder, or its own in
- * the wakes folder, made with the folder it works in.
+ * A file you attached, for an agent run whole in the sandbox, which hides Kuvo Code's folder where
+ * it's kept: a copy in the conversation's temporary folder, which its commands read and write.
+ * (The file itself where that can't be made.)
  */
-export function wakeFolder(sessionID: string, directory: string): string | undefined {
-  if (!/^ses_[A-Za-z0-9_]+$/.test(sessionID)) return undefined
-  const { bots, wakes } = wakePlaces
-  let own: string | undefined
+export function fenceCopy(directory: string, file: string): string {
+  const where = folder()
+  if (!where) return file
+  const copy = join(where, "tmp", sum(real(directory)), "attachments", sum(file).slice(0, 12), basename(file))
   try {
-    for (const bot of bots ? readdirSync(bots) : []) {
-      try {
-        if (readFileSync(join(bots!, bot, "session"), "utf8") === sessionID) {
-          own = join(bots!, bot)
-          break
-        }
-      } catch {}
-    }
-    if (!own) {
-      if (!wakes) return undefined
-      own = join(wakes, sessionID)
-      if (!existsSync(join(own, "session"))) {
-        mkdirSync(own, { recursive: true, mode: 0o700 })
-        writeFileSync(join(own, "session"), sessionID, { mode: 0o600 })
-        writeFileSync(join(own, "directory"), real(directory), { mode: 0o600 })
-      }
-    }
-    for (const part of ["wakes", "watches", "inbox"]) mkdirSync(join(own, part), { recursive: true, mode: 0o700 })
-    return realpathSync(own)
+    mkdirSync(dirname(copy), { recursive: true, mode: 0o700 })
+    copyFileSync(file, copy)
+    return copy
   } catch {
-    return undefined
+    return file
   }
 }

@@ -2672,7 +2672,11 @@ it's empty.
   yet), a failed check, `Its plugin for the engine was changed or removed.`, `The engine isn't
   running.`, `Waiting for the engine to load it.`. `agents`: the coding agents' own
   programs' commands (Claude Code, Codex…, which don't go through the engine) are in it too; `false`
-  for now, so on doesn't yet cover them.
+  for now, so on doesn't yet cover them. How each will: Claude Code runs its commands through the
+  box's shell for it (`run/fence/shell/zsh` or `bash`); Codex runs whole in the sandbox
+  (`run/fence/shell/run`), an app-server for each session in that session's folder, with its own
+  home written (on a Mac, its settings in it only read), its own sandbox off, asking as it does,
+  and Kuvo Code's tools through the agents bridge's relay on 127.0.0.1, a key for each session.
   When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
   you can do (`action`) and the box's route that does it (`route`, where there is one):
 

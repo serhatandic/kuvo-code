@@ -90,13 +90,18 @@ let allowed = [];
 // (Each by the real path the box keeps: one that's become a link since, to anywhere, isn't given.)
 try { allowed = fs.readFileSync(allowedFile, "utf8").split("\n").filter((line) => line.startsWith("/") && real(line) === line); } catch {}
 for (const where of [...policy.writable, work, git, ...allowed]) if (where) grantExcept(where, all, kept);
-// A coding agent run whole in it: its own folders (its sign-in and state), but what's only read in
-// them (what it runs as it starts, outside, when you use it yourself). Its tools' port needs no
-// rule: Landlock leaves connections to it open.
+// A coding agent run whole in it: its own folders (its sign-in and state), whole, but one it's
+// given only to read (KUVO_FENCE_KEPT names it too: the skills it's given). What macOS keeps only
+// read inside them (its settings) Landlock can't: carved out, the agent couldn't make its own files
+// beside them (its databases' journals, its sign-in written anew). Here they're Kuvo Code's own
+// copy of it (a machine's agents' homes are in Kuvo Code's folder), never the one you use yourself.
+// Its tools' port needs no rule: Landlock leaves connections to it open.
 const lines = (text) => (text || "").split("\n").filter((line) => line.startsWith("/"));
-const ownKept = lines(process.env.KUVO_FENCE_KEPT).slice(0, 8).map(real);
-for (const where of lines(process.env.KUVO_FENCE_OWN).slice(0, 4)) grantExcept(where, all, new Set([...kept, ...ownKept]));
-for (const where of ownKept) grant(where, READS);
+const onlyRead = new Set(lines(process.env.KUVO_FENCE_KEPT).slice(0, 8).map(real));
+for (const where of lines(process.env.KUVO_FENCE_OWN).slice(0, 4)) {
+  if (onlyRead.has(real(where))) grant(where, READS);
+  else grantExcept(where, all, kept);
+}
 if (tmp) { fs.mkdirSync(tmp, { recursive: true }); grant(tmp, all); }
 // Its conversation's wake-ups and watches (kuvo-wake): read, and only its inbox written, which the box
 // takes in, out of its reach.

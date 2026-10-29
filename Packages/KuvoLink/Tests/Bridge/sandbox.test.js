@@ -334,6 +334,7 @@ test("a coding agent run whole in the sandbox keeps its own sign-in and state, b
     const whole = (port) => spawnSync(path.join(box.home, "run", "fence", "shell", "run"), ["-c", tries([
       ["read its sign-in", `cat ${JSON.stringify(path.join(own, "auth.json"))}`],
       ["write its sessions", `echo x > ${JSON.stringify(path.join(own, "sessions", "s1"))}`],
+      ["make its own files beside its settings", `echo x > ${JSON.stringify(path.join(own, "state.sqlite-wal"))}`],
       ["read its settings", `cat ${JSON.stringify(path.join(own, "config.toml"))}`],
       ["change its settings", `echo 'hook = 1' >> ${JSON.stringify(path.join(own, "config.toml"))}`],
       ["write in its project", "echo ok > made.txt"],
@@ -341,11 +342,13 @@ test("a coding agent run whole in the sandbox keeps its own sign-in and state, b
       ["reach its tools", `curl -s -m 2 -o /dev/null http://127.0.0.1:${toolsPort}/kuvo/info`],
     ])], { cwd: project, encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, KUVO_FENCE_SHELL: "/bin/sh", KUVO_FENCE_WORK: project, KUVO_FENCE_OWN: own, KUVO_FENCE_KEPT: path.join(own, "config.toml"), ...(port ? { KUVO_FENCE_PORT: port } : {}) } });
     const ran = whole(toolsPort);
+    // (Linux grants its folders whole: what macOS keeps only read there, it can't, without stopping
+    // the agent making its own files beside it. A machine's agents' homes are Kuvo Code's own.)
     assert.deepEqual(outcome(ran.stdout), {
-      "read its sign-in": "allowed", "write its sessions": "allowed", "read its settings": "allowed", "change its settings": "refused",
-      "write in its project": "allowed", "read the box's files": "refused", "reach its tools": "allowed",
+      "read its sign-in": "allowed", "write its sessions": "allowed", "make its own files beside its settings": "allowed", "read its settings": "allowed",
+      "change its settings": linux ? "allowed" : "refused", "write in its project": "allowed", "read the box's files": "refused", "reach its tools": "allowed",
     }, ran.stdout + ran.stderr);
-    assert.equal(fs.readFileSync(path.join(own, "config.toml"), "utf8"), "model = 'x'\n");
+    if (!linux) assert.equal(fs.readFileSync(path.join(own, "config.toml"), "utf8"), "model = 'x'\n");
     // (Linux leaves local ports open to every command.)
     if (!linux) assert.equal(outcome(whole().stdout)["reach its tools"], "refused", "only the agent's own port, only for it");
   } finally {

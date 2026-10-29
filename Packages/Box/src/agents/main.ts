@@ -39,7 +39,6 @@ import { SeatServer } from "./groups/peer"
 import { LinkDirectory, PeerPost, type PeerParts } from "./groups/post"
 import { GroupRunner } from "./groups/runner"
 import { GroupStore } from "./groups/store"
-import { setWakePlaces } from "./fence"
 
 const version = "1"
 const home = process.env.KUVO_AGENTS_HOME
@@ -150,8 +149,6 @@ const groupMemoryKey = process.env.KUVO_GROUPS_MEMORY_KEY || undefined
 // the app says (its box's own folder). Its bots' folders, where their memory is.
 const artifactsFolder = onMachine ? join(machineHome!, "artifacts") : process.env.KUVO_ARTIFACTS || undefined
 const botsFolder = groupFolders?.bots ?? (onMachine ? join(machineHome!, "bots") : process.env.KUVO_BOTS || undefined)
-// Where conversations' wake-ups are, for agents whose commands run in the box's sandbox.
-setWakePlaces({ bots: botsFolder, wakes: process.env.KUVO_WAKES })
 // Who there is to name with "&" in a chat: the agents the box's link lists (on the Mac, where the app says).
 const agentsFile = onMachine ? join(machineHome!, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined
 // Nor do the agents get these.
