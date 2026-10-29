@@ -85,18 +85,30 @@ export async function primeGenerations(): Promise<void> {
   for (const file of [ITEMS, GRANTS, PAUSED]) {
     const generation = kept[path.basename(file, ".json")];
     if (typeof generation === "number") newest.set(file, Math.max(newest.get(file) ?? 0, generation));
+    // A file there whose generation the app doesn't have (it was taken out of the Keychain):
+    // not taken as a first run, but as changed.
+    else if (fs.existsSync(file)) newest.set(file, Number.MAX_SAFE_INTEGER);
   }
   primed = true;
 }
 
-// What's been told to this Mac's app, in order: a change is answered once its app has it.
+// What's been told to this Mac's app, in order: a change is answered once its app has it. One it
+// couldn't keep pauses agents' use until one is kept (a copy put back then couldn't be caught).
 let told: Promise<unknown> = Promise.resolve();
+let unkept = false;
+const UNKEPT = "This Mac's vault couldn't keep what it changed last in the Keychain. Try again in a moment.";
 
 /** Tells this Mac's app a file's newest generation. */
 const rememberGeneration = (file: string, generation: number) => {
   if (!onHost()) return;
   const found = appHost();
-  if (found) told = told.then(() => askHost(found, "vault/generations", { file: path.basename(file, ".json"), generation })).catch(() => {});
+  if (!found) {
+    unkept = true;
+    return;
+  }
+  told = told
+    .then(() => askHost(found, "vault/generations", { file: path.basename(file, ".json"), generation }))
+    .then(() => { unkept = false; }, () => { unkept = true; });
 };
 
 /** Once this Mac's app has every generation told it so far. */
@@ -531,6 +543,7 @@ export function setPaused(paused: boolean, who?: string, why = "Paused by you.")
 /** Why agents can't use the vault now, for a bot or a conversation (its root session): null when they may. */
 export function pausedFor(bot: string | undefined, root?: string): string | null {
   if (onHost() && !primed) return STARTING;
+  if (onHost() && unkept) return UNKEPT;
   const now = readPaused();
   if (now.all) return tampered.has(PAUSED) ? TAMPERED : "The user paused the vault on this computer.";
   if (bot && now.bots?.[bot]) return `The user paused this bot's use of the vault: ${now.bots[bot]}`;

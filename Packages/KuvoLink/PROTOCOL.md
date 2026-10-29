@@ -2083,8 +2083,10 @@ a key no agent can read: a machine's from its store key (so they can't be checke
 locked), this Mac's given by its app from the Keychain to the box alone, on its stdin as it starts
 (below). `gen` goes up with each write. One that isn't signed with it, was changed, or is older than
 the newest the box knows counts for nothing. This Mac's app keeps each file's newest `gen` in the
-Keychain (host interface `vault/generations {file?, generation?}` → `{generations}`), which the box
-reads before it answers anything of the vault and tells as it writes; a client remembers a machine's
+Keychain, in one item with the file key (host interface `vault/generations {file?, generation?}`
+→ `{generations}`), which the box reads before it answers anything of the vault and tells as it
+writes: a file there whose generation the app doesn't have counts as changed, and while one it told
+couldn't be kept, agents' use waits; a client remembers a machine's
 (the state's `generations`) and, seeing one go back, pauses every agent's use there. `paused.json`, made with the first item,
 then pauses everyone, and so does its being gone. The state says `tampered`. Values:
 

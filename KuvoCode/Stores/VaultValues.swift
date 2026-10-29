@@ -42,46 +42,62 @@ nonisolated enum VaultValues {
     }
 
     /// The key this Mac's box signs its vault's files with (its items, grants and Pause), which no
-    /// agent can read: made once, kept here, given to the box alone as it starts
-    /// (`KUVO_VAULT_FILE_KEY`). Nil when the Keychain won't say.
-    static func fileKey() -> String? {
-        let account = "files"
-        var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account, kSecReturnData as String: true]
+    /// agent can read, and each file's newest generation, in one Keychain item: one can't be taken
+    /// away without the other (made again, the key signs none of the files there). Given to the box
+    /// alone as it starts. Nil when the Keychain won't say.
+    private static let filesAccount = "files"
+
+    private struct Files: Codable {
+        var key: String
+        var generations: [String: Int] = [:]
+    }
+
+    private static func readFiles() -> (Files?, OSStatus) {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: filesAccount, kSecReturnData as String: true]
         var result: CFTypeRef?
         let status = Keychain.copyMatching(query, &result)
-        if status == errSecSuccess, let data = result as? Data, data.count == 32 { return data.base64URL }
-        guard status == errSecItemNotFound else { return nil }
-        let made = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
-        query[kSecReturnData as String] = nil
-        query[kSecValueData as String] = made
-        query[kSecAttrLabel as String] = "Kuvo Code vault"
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        return Keychain.add(query) == errSecSuccess ? made.base64URL : nil
+        guard status == errSecSuccess, let data = result as? Data else { return (nil, status) }
+        return (try? JSONDecoder().decode(Files.self, from: data), status)
     }
 
-    /// The newest generation of each of the box's signed files (`items`, `grants`, `paused`), as it
-    /// told the app it wrote them: so a copy put back while the box was stopped is caught as it starts.
-    static func generations() -> [String: Int] {
-        var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: "generations", kSecReturnData as String: true]
-        var result: CFTypeRef?
-        guard Keychain.copyMatching(query, &result) == errSecSuccess, let data = result as? Data else { return [:] }
-        query[kSecReturnData as String] = nil
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Int] ?? [:]
-    }
-
-    /// Notes a file's newer generation (never an older one).
-    static func remember(_ file: String, generation: Int) -> Bool {
-        var all = generations()
-        guard generation > all[file] ?? 0 else { return true }
-        all[file] = generation
-        guard let data = try? JSONSerialization.data(withJSONObject: all, options: [.sortedKeys]) else { return false }
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: "generations"]
-        if Keychain.update(query, [kSecValueData as String: data]) == errSecSuccess { return true }
+    private static func keep(_ files: Files) -> Bool {
+        guard let data = try? JSONEncoder().encode(files) else { return false }
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: filesAccount]
+        let updated = Keychain.update(query, [kSecValueData as String: data])
+        if updated == errSecSuccess { return true }
+        guard updated == errSecItemNotFound else { return false }
         var item = query
         item[kSecValueData as String] = data
         item[kSecAttrLabel as String] = "Kuvo Code vault"
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         return Keychain.add(item) == errSecSuccess
+    }
+
+    static func fileKey() -> String? {
+        let (files, status) = readFiles()
+        if let files { return files.key }
+        guard status == errSecItemNotFound else { return nil }
+        let made = Files(key: Data((0..<32).map { _ in UInt8.random(in: 0...255) }).base64URL)
+        return keep(made) ? made.key : nil
+    }
+
+    /// The newest generation of each of the box's signed files (`items`, `grants`, `paused`), as it
+    /// told the app it wrote them: so a copy put back while the box was stopped is caught as it starts.
+    static func generations() -> [String: Int] {
+        readFiles().0?.generations ?? [:]
+    }
+
+    /// Notes a file's newer generation (never an older one).
+    static func remember(_ file: String, generation: Int) -> Bool {
+        guard var files = readFiles().0 else { return false }
+        guard generation > files.generations[file] ?? 0 else { return true }
+        files.generations[file] = generation
+        return keep(files)
+    }
+
+    /// Takes the file key and generations away (a test's, as it ends: the next starts afresh).
+    static func forgetFiles() {
+        Keychain.delete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: filesAccount])
     }
 
     /// Takes it away (nothing for one that wasn't kept).

@@ -6871,16 +6871,27 @@ async function primeGenerations() {
     const generation = kept[path34.basename(file, ".json")];
     if (typeof generation === "number")
       newest.set(file, Math.max(newest.get(file) ?? 0, generation));
+    else if (fs34.existsSync(file))
+      newest.set(file, Number.MAX_SAFE_INTEGER);
   }
   primed = true;
 }
 var told = Promise.resolve();
+var unkept = false;
+var UNKEPT = "This Mac's vault couldn't keep what it changed last in the Keychain. Try again in a moment.";
 var rememberGeneration = (file, generation) => {
   if (!onHost())
     return;
   const found = appHost();
-  if (found)
-    told = told.then(() => askHost(found, "vault/generations", { file: path34.basename(file, ".json"), generation })).catch(() => {});
+  if (!found) {
+    unkept = true;
+    return;
+  }
+  told = told.then(() => askHost(found, "vault/generations", { file: path34.basename(file, ".json"), generation })).then(() => {
+    unkept = false;
+  }, () => {
+    unkept = true;
+  });
 };
 var generationsTold = () => told;
 var generations = () => Object.fromEntries([ITEMS, GRANTS, PAUSED].map((file) => [path34.basename(file, ".json"), Number(readJSON(file, null)?.gen) || 0]));
@@ -7263,6 +7274,8 @@ function setPaused(paused, who, why = "Paused by you.") {
 function pausedFor(bot, root) {
   if (onHost() && !primed)
     return STARTING;
+  if (onHost() && unkept)
+    return UNKEPT;
   const now = readPaused();
   if (now.all)
     return tampered.has(PAUSED) ? TAMPERED : "The user paused the vault on this computer.";

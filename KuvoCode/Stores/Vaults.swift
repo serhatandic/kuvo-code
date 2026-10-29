@@ -90,9 +90,18 @@ final class Vaults {
             now.activity = try await ask(Entries.self, "GET", VaultRoutes.activity(limit: 50), on: box).entries
             now.failure = nil
             now.locked = false
-            if box != BoxClient.mac, let vault = now.vault, Self.wentBack(box, to: vault.state.generations ?? [:]) {
-                now.rolledBack = true
-                if (try? await ask(Nothing.self, "POST", VaultRoutes.pause, body: ["paused": true], on: box)) != nil { now.vault?.state.paused = true }
+            if box != BoxClient.mac, let generations = now.vault?.state.generations {
+                if Self.wentBack(box, to: generations) {
+                    now.rolledBack = true
+                    // What it says now is taken from now on only once its agents are paused: if
+                    // that didn't go, it's seen again next time.
+                    if (try? await ask(Nothing.self, "POST", VaultRoutes.pause, body: ["paused": true], on: box)) != nil {
+                        now.vault?.state.paused = true
+                        Self.remember(box, generations, replacing: true)
+                    }
+                } else {
+                    Self.remember(box, generations)
+                }
             }
         } catch {
             now.failure = error.localizedDescription
@@ -183,13 +192,18 @@ final class Vaults {
 
     /// Whether a machine's vault files are older than this Mac saw them last (each newest one is
     /// remembered here, where nothing on the machine reaches): a copy put back while its box was
-    /// stopped. What it says now is remembered from then on.
+    /// stopped.
     static func wentBack(_ box: String, to generations: [String: Int]) -> Bool {
+        let seen = UserDefaults.standard.dictionary(forKey: "vault.generations.\(box)") as? [String: Int] ?? [:]
+        return seen.contains { file, generation in (generations[file] ?? 0) < generation }
+    }
+
+    /// Remembers a machine's generations: the newest of these and those seen, or (once its agents
+    /// were paused for a copy put back) these from now on.
+    static func remember(_ box: String, _ generations: [String: Int], replacing: Bool = false) {
         let key = "vault.generations.\(box)"
         let seen = UserDefaults.standard.dictionary(forKey: key) as? [String: Int] ?? [:]
-        let back = seen.contains { file, generation in (generations[file] ?? 0) < generation }
-        UserDefaults.standard.set(back ? generations : seen.merging(generations) { max($0, $1) }, forKey: key)
-        return back
+        UserDefaults.standard.set(replacing ? generations : seen.merging(generations) { max($0, $1) }, forKey: key)
     }
 
     /// Unlocks a machine's vault, locked since it started again, with the key this Mac keeps: sent

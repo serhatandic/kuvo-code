@@ -468,6 +468,9 @@ extension AppModel {
             { await AgentMail.shared.collect(from: engine) },
             { await AgentMail.shared.deliverWaiting(to: engine) },
             { await self.wakeUps.share(with: engine) },
+            // Its vault, read as it connects: an older copy of its files put back while it was
+            // away is caught now, not only when its page is opened.
+            { await Vaults.shared.refresh(machine) },
             { await Utilities.shareTabTidying(on: machine) },
         ]) else { return }
         connection.every(600, "sign-ins", [

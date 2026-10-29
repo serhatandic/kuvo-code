@@ -26,6 +26,7 @@ import Testing
         // The sign-ins saved as before the vault, and this Mac's vault's values.
         Keychain.delete([kSecClass as String: kSecClassInternetPassword, kSecAttrCreator as String: Legacy.creator])
         for item in Vaults.shared[BoxClient.mac].vault?.items ?? [] { _ = VaultValues.remove(item.id) }
+        VaultValues.forgetFiles()
         Vaults.shared.forget(BoxClient.mac)
         Vaults.shared.client = { _ in nil }
         for key in [Passwords.movedKey, Legacy.agentSitesKey, Legacy.agentAccountsKey] { UserDefaults.standard.removeObject(forKey: key) }
@@ -140,7 +141,7 @@ import Testing
         let other = BoxProcess()
         await other.start(engine: URL(filePath: "/bin/sh"), environment: ProcessInfo.processInfo.environment)
         #expect(other.endpoint == nil)
-        #expect(other.failure?.contains("isn’t opencode’s own") == true)
+        #expect(other.failure?.contains("isn’t the one it downloaded") == true)
     }
 
     /// A machine's vault files put back to older copies while its box was stopped: this Mac, which
@@ -152,9 +153,15 @@ import Testing
             done()
         }
         #expect(!Vaults.wentBack(machine, to: ["items": 3, "grants": 5, "paused": 1]), "the first look")
+        Vaults.remember(machine, ["items": 3, "grants": 5, "paused": 1])
         #expect(!Vaults.wentBack(machine, to: ["items": 4, "grants": 5, "paused": 1]), "newer")
+        Vaults.remember(machine, ["items": 4, "grants": 5, "paused": 1])
         #expect(Vaults.wentBack(machine, to: ["items": 4, "grants": 2, "paused": 1]), "its grants older than seen")
-        #expect(!Vaults.wentBack(machine, to: ["items": 4, "grants": 3, "paused": 1]), "noticed once, then going on from there")
+        // Its agents not paused yet (that didn't go): seen again.
+        #expect(Vaults.wentBack(machine, to: ["items": 4, "grants": 2, "paused": 1]))
+        // Paused: these from now on.
+        Vaults.remember(machine, ["items": 4, "grants": 2, "paused": 1], replacing: true)
+        #expect(!Vaults.wentBack(machine, to: ["items": 4, "grants": 3, "paused": 1]))
     }
 
     @Test func aMacWithNothingSavedBeforeHasAnEmptyVault() async throws {
