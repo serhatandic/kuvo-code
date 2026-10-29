@@ -2077,21 +2077,33 @@ an agent can get holds a value. Each computer keeps only its own; nothing is syn
 another box.
 
 **Where it's kept.** In `box/vault/` under the box's folder: `items.json` (each item without its
-values), `grants.json`, `paused.json` and `activity.jsonl` (kept a year). Values:
+values), `grants.json`, `paused.json` and `activity.jsonl` (kept a year). The first three are
+`{"v": 2, "data", "sig"}`, signed (HMAC-SHA256 of `<file name>\0<data as JSON>`) with a key no agent
+can read: a machine's from its store key (so they can't be checked while it's locked), this Mac's
+given by its app from the Keychain to the box alone, in `KUVO_VAULT_FILE_KEY` as it starts. One that
+isn't signed with it, or was changed, counts for nothing (`paused.json` then pauses everyone), and
+the state says `tampered`. Values:
 
 - this Mac's are in the Keychain, through its app ("Host interface": `vault/get {"id"}` →
   `{"values"}` or `404`, `vault/set {"id", "values"}`, `vault/delete {"id"}`), never in the box's
-  folder;
+  folder. Those calls also carry `x-kuvo-vault-secret`, which the app gives the box alone, in
+  `KUVO_HOST_VAULT_SECRET` as it starts (the password in `run/host.json` is in a file an agent's
+  command can read): `403` without it;
 - a machine's are in `box/vault/values/<id>`, AES-256-GCM with the store key, which is only ever
   in the memory of the process that holds the vault. `key.json` keeps the store key wrapped by the
   unlock key, and an HMAC that checks one. Only clients keep the unlock key. After the box starts
   again the vault is locked (`423 {"message"}`) until a client sends it.
 
 **The process that holds it.** The box's long-running process (`run` on a machine, `serve` on a
-Mac) holds the vault. A `box route` passes `kuvo/vault…` to it over `run/vault.sock` (`0600`, one
-request a connection: a line of `{"method", "path", "headers", "body"}` (base64) there,
-`{"status", "type", "body"}` back), and says `503 {"message"}` when nothing holds it. A machine's
-link keeps running while it has a vault.
+Mac) holds the vault. A `box route` passes `kuvo/vault…` to it over `run/vault.sock` (`0600`, owned
+by the user, which the route checks first), one request a connection: `{"hello": <nonce>}`, answered
+`{"nonce", "proof"?}` (`proof`, while the holder has the unlock key: HMAC-SHA256 with it of
+`kuvo-vault-holder\0<the route's nonce>`, base64url); then a line of `{"method", "path", "headers",
+"body"}` (base64) there, `{"status", "type", "body"}` back. A request with the unlock key sends it
+only to a holder that can't prove it has it (a locked one, which it unlocks); to one that proves it,
+`x-kuvo-vault-auth` instead (HMAC-SHA256 with the key of `kuvo-vault-client\0<the holder's nonce>`),
+and to one whose proof is wrong, nothing (`403`). It says `503 {"message"}` when nothing holds it. A
+machine's link keeps running while it has a vault.
 
 **Who may do what.** Clients are your phones (through the relay, by their keys), this Mac's own app
 (`x-kuvo-from: app`), and a request from the computer itself (the Mac over SSH, `box route`) that
@@ -2100,27 +2112,32 @@ carries the unlock key in `x-kuvo-vault-key`, which also unlocks a locked vault.
 
 - `POST kuvo/vault/key` → `{"key"}`, the unlock key (32 bytes, base64url), for a client to keep:
   answered to a phone, this Mac's app, or the Mac over SSH proving it set the machine up:
-  `{"mac", "at", "proof"}`, its link key, the time (ms), and its signing key's (link.json's
-  `macSigns`) Ed25519 signature of `kuvo-vault-key\0<the machine's id on its Macs>\0<at>` (link.json's
-  `id`), within five minutes. It makes the vault
+  `{"mac", "at", "nonce", "proof"}`, its link key, the time (ms), a nonce (16 to 64 base64url
+  characters) and its signing key's (link.json's `macSigns`) Ed25519 signature of
+  `kuvo-vault-key\0<the machine's id on its Macs>\0<at>\0<nonce>` (link.json's `id`), within five
+  minutes, each nonce once. It makes the vault
   if there isn't one yet. `409` on this Mac (its Keychain needs no key), `423` while locked.
 - `POST kuvo/vault/unlock {"key"}` → the state; `403` for a key that isn't this vault's. Before
   there's a vault, the state (`made: false`) whatever the key, so a client can tell whether to fetch
   one without making it.
 - `GET kuvo/vault` → `{state, items, grants}`. `state` is `{made, locked, paused, pausedBots:
-  {<bot>: why}, store: "keychain" | "encrypted", keptDays}`; an item is `{id, kind: "login" |
-  "key" | "file" | "note", name, sites, username?, fields, fileName?, readable?, created, changed,
-  used?}` (`sites`: hosts, a site's own and those under it; `fields`: the names of the values it
+  {<bot, or a conversation that isn't a bot's>: why}, store: "keychain" | "encrypted", keptDays,
+  tampered?}`; an item is `{id, kind: "login" |
+  "key" | "file" | "note", name, sites, username?, fields, fileName?, readable?, signInOnly?,
+  created, changed, used?}` (`sites`: hosts, a site's own and those under it; `fields`: the names of the values it
   holds, a sign-in's `password`, a file's `file` (base64), a note's `text`, a key's own); a grant
   is `{item, who: {bot} | {project: <folder>} | {everyone: true}, how: "own" | "ask", at}`.
-- `POST kuvo/vault/items {kind, name, sites?, username?, fileName?, readable?, values}` →
-  `{item, key?}`: `key` when this item made a machine's vault. A sign-in needs a site; names are
-  unique. `PATCH kuvo/vault/items/<id>` with any of those (a value `null` takes it away) →
+- `POST kuvo/vault/items {kind, name, sites?, username?, fileName?, readable?, signInOnly?, values}`
+  → `{item, key?}`: `key` when this item made a machine's vault. A sign-in needs a site (a host, or a
+  name without dots on your network); names are unique; a value has at least 4 characters, so it can
+  be hidden. `signInOnly` (a sign-in) is filled in only to sign in, in the browser: never to
+  `vault_run`, nor `browser_fill`. `PATCH kuvo/vault/items/<id>` with any of those (a value `null` takes it away) →
   `{item}`; `DELETE` → `{}`, with its values and grants.
 - `GET kuvo/vault/items/<id>/values` → `{values}`.
 - `POST kuvo/vault/grants {item, who, how}` (`how: null` takes it away) → `{grants}`;
   `GET kuvo/vault/grants` → `{grants}`.
-- `POST kuvo/vault/pause {paused, bot?}` → the state: every agent's use, or one bot's.
+- `POST kuvo/vault/pause {paused, bot?}` → the state: every agent's use, or one bot's (or, by its
+  root session, a conversation's that isn't a bot's).
 - `GET kuvo/vault/activity?item=&bot=&session=&before=&limit=` → `{entries}`, newest first:
   `{id, at, what, item?, itemName?, kind?, bot?, botName?, session?, sessionName?, client?, site?,
   program?, how?, why?}`, never a value. `what` is one of `used`, `asked`, `allowed`, `declined`,
@@ -2134,7 +2151,12 @@ carries the unlock key in `x-kuvo-vault-key`, which also unlocks a locked vault.
   its project). An agent waits 15 minutes, then takes it as no. Your phones hear of one still open
   after two seconds (`category: "ask"`, `data: {session?, vaultAsk}`).
 
-**The agents' own.** Both tool servers pass these on as they come, with the calling conversation:
+**The agents' own.** Both tool servers pass these on as they come, with the calling conversation.
+Each is answered only while that conversation is making the call: its engine (or the coding agents'
+bridge) has a tool call of that name running in it (`api/session/<id>/message`, a `tool` block,
+`running` or `pending`; for `tools`, with the same arguments; for `fill`, `browser_sign_in` or
+`browser_fill`). Any program on the computer could name a session; only the conversation's own call
+uses its grants.
 
 - `POST kuvo/vault/tools {name, arguments, session}` → `{text, isError}`: `vault_items`, the items
   this conversation may use (by its bot, its project or everyone), never another's name, and a
@@ -2142,8 +2164,8 @@ carries the unlock key in `x-kuvo-vault-key`, which also unlocks a locked vault.
   variables: {VAR: "Item" | "Item.field"}, why, timeout?}`, which runs the command with the user's
   shell in the conversation's folder, the values in its environment (a file's as the path of a
   `0600` copy in `run/vault-run/`, removed after), and gives back its output (64 KB at most) with
-  each value, raw, base64, hex, URL- and JSON-escaped, or a key file's lines, shown as
-  `[vault: <item>]`.
+  each value, raw, base64, hex, URL- and JSON-escaped, or a key file's lines, and a file's bytes
+  as base64 whole and wrapped at 76 and 64, and hex, shown as `[vault: <item>]`.
 - `POST kuvo/vault/fill {session, origin, purpose: "sign-in" | "field", item?, field?, why?}` →
   `{item: {id, name}, username?, values}` for the browser's own process to fill (on this Mac, only
   to its app, `403` otherwise; a machine's browser runs as you, as everything you run there does,
@@ -2151,7 +2173,7 @@ carries the unlock key in `x-kuvo-vault-key`, which also unlocks a locked vault.
   page (`400`), only on one of the item's sites. A sign-in without an item takes the one sign-in
   for the site the caller may use on its own (`404` for none or more, and the browser asks you as
   before). An item named for another site is refused (`403`) and pauses that bot's use of the
-  vault, telling your phones.
+  vault (a conversation's that isn't a bot's, by its root session), telling your phones.
 
 Every use first checks Pause, then the grant: `own` goes ahead, `ask` (or no grant, for an item
 named) asks you and waits. An item you give through `vault_ask` "always" is granted on its own

@@ -35,6 +35,9 @@ extension AppModel {
         // Where it answers is in the box's folder, never its environment.
         environment["KUVO_HOST_URL"] = nil
         environment["KUVO_HOST_PASSWORD"] = nil
+        // The vault's secrets, for it alone (HostInterface.vaultSecret, VaultValues.fileKey).
+        environment["KUVO_HOST_VAULT_SECRET"] = host.vaultSecret
+        environment["KUVO_VAULT_FILE_KEY"] = VaultValues.fileKey()
         #if DEBUG
         // KUVO_DEMO_KEYS_UNREAD: not answering as the box starts, so its keys can't be reached, to
         // see how that shows (Try Again in Settings › Integrations starts it).

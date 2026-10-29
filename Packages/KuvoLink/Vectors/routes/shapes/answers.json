@@ -4869,7 +4869,8 @@
           }
          ]
         },
-        "keptDays": "number"
+        "keptDays": "number",
+        "tampered?": "bool"
        }
       },
       "items": {
@@ -4902,6 +4903,7 @@
          },
          "fileName?": "string",
          "readable?": "bool",
+         "signInOnly?": "bool",
          "created": "number",
          "changed": "number",
          "used?": "number"
@@ -4971,6 +4973,7 @@
         },
         "fileName?": "string",
         "readable?": "bool",
+        "signInOnly?": "bool",
         "created": "number",
         "changed": "number",
         "used?": "number"
@@ -5015,6 +5018,7 @@
         },
         "fileName?": "string",
         "readable?": "bool",
+        "signInOnly?": "bool",
         "created": "number",
         "changed": "number",
         "used?": "number"
@@ -5221,7 +5225,8 @@
         }
        ]
       },
-      "keptDays": "number"
+      "keptDays": "number",
+      "tampered?": "bool"
      }
     }
    }
@@ -5257,7 +5262,8 @@
         }
        ]
       },
-      "keptDays": "number"
+      "keptDays": "number",
+      "tampered?": "bool"
      }
     }
    }

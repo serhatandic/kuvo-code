@@ -840,8 +840,10 @@ final class PhoneLink {
     func vaultProof(machine: String) -> [String: Any]? {
         guard hasIdentity else { return nil }
         let at = Int(Date().timeIntervalSince1970 * 1000)
-        guard let signature = try? signing.signature(for: Data("kuvo-vault-key\u{0}\(machine)\u{0}\(at)".utf8)) else { return nil }
-        return ["mac": key.publicKey.rawRepresentation.base64URL, "at": at, "proof": signature.base64URL]
+        // Once only: the machine takes each nonce once.
+        let nonce = Data((0..<18).map { _ in UInt8.random(in: 0...255) }).base64URL
+        guard let signature = try? signing.signature(for: Data("kuvo-vault-key\u{0}\(machine)\u{0}\(at)\u{0}\(nonce)".utf8)) else { return nil }
+        return ["mac": key.publicKey.rawRepresentation.base64URL, "at": at, "nonce": nonce, "proof": signature.base64URL]
     }
 
     /// What a phone asks of this Mac that its box hands the app (the Mac's own routes, and those

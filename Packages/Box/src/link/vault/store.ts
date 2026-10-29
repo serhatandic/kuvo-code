@@ -12,7 +12,7 @@ import { isObject } from "../../shared/json";
 import { newID, oneLine } from "../../shared/text";
 import { GRANT_HOWS, ITEM_KINDS, type VaultGrant, type VaultItem, type VaultState, type VaultWho } from "../../shared/routes/vault";
 import { locked, textOf, writePrivate } from "../files";
-import { BOX, KEYS_ON_HOST, RUN } from "../home";
+import { BOX, KEYS_ON_HOST, MAC_VAULT_FILE_KEY, RUN } from "../home";
 import { appHost, askHost, KeysUnavailable, NOT_ANSWERING } from "../host-interface";
 
 export const VAULT_FOLDER = path.join(BOX, "vault");
@@ -48,6 +48,49 @@ export function forgetKeys() {
 const readJSON = <T>(file: string, fallback: T): T => {
   try { return JSON.parse(fs.readFileSync(file, "utf8")) as T; } catch { return fallback; }
 };
+
+// ── Signed files ──────────────────────────────────────────────────────────────────────────────
+// Items (with their sites), grants and Pause decide what an agent may use, and an agent's command
+// can write any file this box can: so each is signed with a key no agent can read (a machine's
+// from its store key, in memory while it's unlocked; this Mac's from its Keychain, which its app
+// gives this box alone), and one that isn't signed, or was changed, counts for nothing.
+
+export const TAMPERED = "The vault's files were changed outside Kuvo Code, so it uses none of them. Add its items again.";
+
+/** The key files are signed with now; null while a machine's vault is locked, or on a Mac whose app gave none. */
+const fileKey = (): Buffer | null => {
+  if (onHost()) return MAC_VAULT_FILE_KEY;
+  return storeKey ? crypto.createHmac("sha256", storeKey).update("kuvo-vault-files").digest() : null;
+};
+
+const signatureOf = (key: Buffer, file: string, data: unknown) =>
+  crypto.createHmac("sha256", key).update(`${path.basename(file)}\0${JSON.stringify(data)}`).digest("base64url");
+
+// Files found changed since this process started (said in the state until they're written again).
+const tampered = new Set<string>();
+
+/** A signed file's data: `fallback` when there's none, or it can't be checked now (locked), or it
+ * wasn't signed with this vault's key. */
+function readSigned<T>(file: string, fallback: T): T {
+  const kept = readJSON<{ data?: T; sig?: unknown } | null>(file, null);
+  if (!kept) return fallback;
+  const key = fileKey();
+  if (!key) return fallback;
+  const given = Buffer.from(typeof kept.sig === "string" ? kept.sig : "");
+  const expected = Buffer.from(signatureOf(key, file, kept.data));
+  if (kept.data === undefined || given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
+    tampered.add(file);
+    return fallback;
+  }
+  return kept.data;
+}
+
+function keepSigned(file: string, data: unknown) {
+  const key = fileKey();
+  if (!key) throw onHost() ? new VaultRefusal(503, "Kuvo Code on this Mac didn't give its vault its key. Quit Kuvo Code and open it again.") : new VaultRefusal(423, LOCKED);
+  keepJSON(file, { v: 2, data, sig: signatureOf(key, file, data) });
+  tampered.delete(file);
+}
 
 const keepJSON = (file: string, value: unknown) => {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -124,6 +167,18 @@ export function unlockWith(given: unknown): boolean {
   }
 }
 
+/** What holding the unlock key proves about `nonce` (`tag` says who proves it): null while it isn't
+ * held here (a locked vault, or this Mac's). */
+export const unlockProof = (tag: string, nonce: string, key: Buffer | null = unlockKey): string | null =>
+  key ? crypto.createHmac("sha256", key).update(`kuvo-vault-${tag}\0${nonce}`).digest("base64url") : null;
+
+/** Whether `given` is what holding the unlock key proves about `nonce`. */
+export function provesUnlock(tag: string, nonce: string, given: unknown): boolean {
+  const expected = unlockProof(tag, nonce);
+  if (!expected || typeof given !== "string" || given.length !== expected.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+}
+
 /** The unlock key, for a client that's proved itself, while it's unlocked; null for this Mac's
  * vault (its Keychain needs none) or a locked one. */
 export const currentUnlockKey = (): string | null => (unlockKey ? unlockKey.toString("base64url") : null);
@@ -186,8 +241,8 @@ async function dropValues(id: string): Promise<void> {
 
 // ── Items ─────────────────────────────────────────────────────────────────────────────────────
 
-export const readItems = (): VaultItem[] => readJSON<{ items?: VaultItem[] }>(ITEMS, {}).items ?? [];
-const keepItems = (items: VaultItem[]) => keepJSON(ITEMS, { v: 1, items });
+export const readItems = (): VaultItem[] => readSigned<VaultItem[]>(ITEMS, []);
+const keepItems = (items: VaultItem[]) => keepSigned(ITEMS, items);
 
 export const itemByID = (id: string): VaultItem | undefined => readItems().find(item => item.id === id);
 
@@ -207,7 +262,8 @@ export function siteOf(given: unknown): string | null {
   if (!/^[a-z][a-z0-9+.-]*:\/\//.test(text)) text = "https://" + text;
   try {
     const host = new URL(text).hostname.replace(/\.$/, "");
-    return /^[a-z0-9.-]+$/.test(host) && host.includes(".") || host === "localhost" ? host : null;
+    // A name on your network without dots (`nas`) too.
+    return /^[a-z0-9.-]+$/.test(host) && /[a-z0-9]/.test(host) ? host : null;
   } catch {
     return null;
   }
@@ -225,11 +281,14 @@ export interface GivenItem {
   username?: unknown;
   fileName?: unknown;
   readable?: unknown;
+  /** A sign-in only filled in to sign in, in the browser: never handed to a command or another field. */
+  signInOnly?: unknown;
   /** Values by field; null takes one away (a change only). */
   values?: unknown;
 }
 
 const FIELD = /^[a-z][a-z0-9_]{0,39}$/;
+const SHORTEST_VALUE = 4;
 
 function givenValues(given: unknown, change: boolean): Record<string, string | null> {
   if (given == null) return {};
@@ -238,6 +297,8 @@ function givenValues(given: unknown, change: boolean): Record<string, string | n
   for (const [field, value] of Object.entries(given)) {
     if (!FIELD.test(field)) throw new VaultRefusal(400, `“${oneLine(field, 40)}” isn't a field's name: use lowercase letters, digits and _.`);
     if (value === null && change) values[field] = null;
+    // One shorter than what's hidden from agents in what they read back (mask.ts) couldn't be.
+    else if (typeof value === "string" && value.length < SHORTEST_VALUE) throw new VaultRefusal(400, `A value needs at least ${SHORTEST_VALUE} characters, so it can be hidden from agents.`);
     else if (typeof value === "string" && value.length <= 1_000_000) values[field] = value;
     else throw new VaultRefusal(400, "A value is text, at most a megabyte.");
   }
@@ -296,6 +357,7 @@ async function addOne(given: GivenItem): Promise<VaultItem> {
     fields: Object.keys(values).sort(),
     ...(kind === "file" && typeof given.fileName === "string" && given.fileName.trim() ? { fileName: path.basename(oneLine(given.fileName, 200).trim()) } : {}),
     ...(kind === "note" && given.readable === true ? { readable: true } : {}),
+    ...(kind === "login" && given.signInOnly === true ? { signInOnly: true } : {}),
     created: now,
     changed: now,
   };
@@ -329,6 +391,10 @@ async function changeOne(id: string, given: GivenItem): Promise<VaultItem> {
     if (given.readable === true) item.readable = true;
     else delete item.readable;
   }
+  if (given.signInOnly !== undefined && item.kind === "login") {
+    if (given.signInOnly === true) item.signInOnly = true;
+    else delete item.signInOnly;
+  }
   const changes = givenValues(given.values, true);
   if (Object.keys(changes).length) {
     const values = { ...(await valuesOf(id)) };
@@ -350,7 +416,7 @@ async function removeOne(id: string): Promise<VaultItem> {
   await dropValues(id);
   vaultWork(() => {
     keepItems(readItems().filter(each => each.id !== id));
-    keepJSON(GRANTS, { v: 1, grants: readGrants().filter(grant => grant.item !== id) });
+    keepSigned(GRANTS, readGrants().filter(grant => grant.item !== id));
   });
   return item;
 }
@@ -360,7 +426,7 @@ export const noteUsed = (id: string) => vaultWork(() => keepItems(readItems().ma
 
 // ── Grants ────────────────────────────────────────────────────────────────────────────────────
 
-export const readGrants = (): VaultGrant[] => readJSON<{ grants?: VaultGrant[] }>(GRANTS, {}).grants ?? [];
+export const readGrants = (): VaultGrant[] => readSigned<VaultGrant[]>(GRANTS, []);
 
 /** Who a grant is for, as given; null for one that names nobody. */
 export function givenWho(given: unknown): VaultWho | null {
@@ -381,7 +447,7 @@ export function setGrant(itemID: string, who: VaultWho, how: unknown): VaultGran
   return vaultWork(() => {
     const grants = readGrants().filter(grant => !(grant.item === itemID && sameWho(grant.who, who)));
     if (how !== null) grants.push({ item: itemID, who, how: how as VaultGrant["how"], at: Date.now() });
-    keepJSON(GRANTS, { v: 1, grants });
+    keepSigned(GRANTS, grants);
     return grants;
   });
 }
@@ -390,31 +456,38 @@ export function setGrant(itemID: string, who: VaultWho, how: unknown): VaultGran
 
 interface Paused {
   all?: boolean;
+  /** Bots paused, by id, and conversations that aren't a bot's, by their root session: why. */
   bots?: Record<string, string>;
 }
 
-const readPaused = (): Paused => readJSON<Paused>(PAUSED, {});
+// While its file can't be read (a machine's vault locked, or this Mac's app gave no key), or was
+// changed: every agent's use is paused, rather than one you paused going on.
+const readPaused = (): Paused => {
+  if (!fs.existsSync(PAUSED)) return {};
+  return readSigned<Paused>(PAUSED, { all: true });
+};
 
-/** Pauses (or lets go again) every agent's use, or one bot's, with why. */
-export function setPaused(paused: boolean, bot?: string, why = "Paused by you."): void {
+/** Pauses (or lets go again) every agent's use, or one bot's or conversation's (`who`), with why. */
+export function setPaused(paused: boolean, who?: string, why = "Paused by you."): void {
   vaultWork(() => {
-    const now = readPaused();
-    if (bot) {
+    const now = fs.existsSync(PAUSED) ? readSigned<Paused>(PAUSED, {}) : {};
+    if (who) {
       const bots = { ...(now.bots ?? {}) };
-      if (paused) bots[bot] = oneLine(why, 300);
-      else delete bots[bot];
-      keepJSON(PAUSED, { ...now, bots });
+      if (paused) bots[who] = oneLine(why, 300);
+      else delete bots[who];
+      keepSigned(PAUSED, { ...now, bots });
     } else {
-      keepJSON(PAUSED, { ...now, all: paused });
+      keepSigned(PAUSED, { ...now, all: paused });
     }
   });
 }
 
-/** Why agents can't use the vault now, for one bot (or any agent): null when they may. */
-export function pausedFor(bot: string | undefined): string | null {
+/** Why agents can't use the vault now, for a bot or a conversation (its root session): null when they may. */
+export function pausedFor(bot: string | undefined, root?: string): string | null {
   const now = readPaused();
-  if (now.all) return "The user paused the vault on this computer.";
+  if (now.all) return tampered.has(PAUSED) ? TAMPERED : "The user paused the vault on this computer.";
   if (bot && now.bots?.[bot]) return `The user paused this bot's use of the vault: ${now.bots[bot]}`;
+  if (root && now.bots?.[root]) return `The user paused this conversation's use of the vault: ${now.bots[root]}`;
   return null;
 }
 
@@ -427,6 +500,7 @@ export function vaultState(): VaultState {
     pausedBots: { ...(paused.bots ?? {}) },
     store: onHost() ? "keychain" : "encrypted",
     keptDays: KEPT_DAYS,
+    ...(tampered.size ? { tampered: true } : {}),
   };
 }
 

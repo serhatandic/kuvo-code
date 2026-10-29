@@ -1,4 +1,5 @@
 import Foundation
+import KuvoLink
 import Security
 
 /// This Mac's vault's values (KuvoLink's PROTOCOL.md, "Vault"), in the Keychain: one item each, by
@@ -38,6 +39,24 @@ nonisolated enum VaultValues {
         // Bots work overnight, with the Mac locked: readable once it's been unlocked since it started.
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         return Keychain.add(item) == errSecSuccess
+    }
+
+    /// The key this Mac's box signs its vault's files with (its items, grants and Pause), which no
+    /// agent can read: made once, kept here, given to the box alone as it starts
+    /// (`KUVO_VAULT_FILE_KEY`). Nil when the Keychain won't say.
+    static func fileKey() -> String? {
+        let account = "files"
+        var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account, kSecReturnData as String: true]
+        var result: CFTypeRef?
+        let status = Keychain.copyMatching(query, &result)
+        if status == errSecSuccess, let data = result as? Data, data.count == 32 { return data.base64URL }
+        guard status == errSecItemNotFound else { return nil }
+        let made = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+        query[kSecReturnData as String] = nil
+        query[kSecValueData as String] = made
+        query[kSecAttrLabel as String] = "Kuvo Code vault"
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        return Keychain.add(query) == errSecSuccess ? made.base64URL : nil
     }
 
     /// Takes it away (nothing for one that wasn't kept).

@@ -99,7 +99,18 @@ export async function standInHost(password) {
       case "/keys/delete":
         host.keys.delete(given.name);
         return answer(200, {});
-      // The vault's values, kept by id as the Keychain would (vault-host.test.js).
+      // The vault's values, kept by id as the Keychain would (vault-host.test.js): only to the box,
+      // with the secret the app started it with (`vaultSecret`), never to what read its folder.
+      case "/vault/get":
+      case "/vault/set":
+      case "/vault/delete":
+        if (host.vaultSecret && request.headers["x-kuvo-vault-secret"] !== host.vaultSecret) {
+          host.turnedAway++;
+          return answer(403, {});
+        }
+        break;
+    }
+    switch (request.url) {
       case "/vault/get":
         return host.vault?.has(given.id) ? answer(200, { values: host.vault.get(given.id) }) : answer(404, {});
       case "/vault/set":

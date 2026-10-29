@@ -78,7 +78,8 @@ async function listItems(caller: Caller): Promise<ToolAnswer> {
     const where = item.sites.length ? ` on ${item.sites.join(", ")}` : "";
     const fields = item.kind === "key" && item.fields.length > 1 ? ` (fields: ${item.fields.join(", ")})` : "";
     const user = item.kind === "login" && item.username ? `, username ${item.username}` : "";
-    lines.push(`- “${item.name}”: a ${KIND_WORDS[item.kind]}${where}${user}${fields}; ${how === "own" ? "yours to use" : "the user is asked each time"}.`);
+    const only = item.signInOnly ? ", only for signing in with browser_sign_in" : "";
+    lines.push(`- “${item.name}”: a ${KIND_WORDS[item.kind]}${where}${user}${fields}${only}; ${how === "own" ? "yours to use" : "the user is asked each time"}.`);
     if (item.kind === "note" && item.readable && how === "own") {
       try {
         const text = (await valuesOf(item.id)).text;
@@ -130,7 +131,7 @@ const MOST_KEPT = 4 * 1024 * 1024;
 const CALL_BUDGET = 15.5 * 60_000;
 const VARIABLE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 // What the box's own process has that no command it runs should.
-const PRIVATE = ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "BUN_BE_BUN"];
+const PRIVATE = ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "KUVO_HOST_VAULT_SECRET", "KUVO_VAULT_FILE_KEY", "BUN_BE_BUN"];
 /** Where commands' copies of files go while they run: emptied as the vault is held, and as it ends. */
 export const RUN_FOLDER = path.join(RUN, "vault-run");
 
@@ -178,6 +179,7 @@ async function runWith(caller: Caller, args: Record<string, unknown>, signal?: A
     if (typeof named !== "string") return failed(`Name the item ${variable} gets.`);
     const found = namedValue(named);
     if (!found) return failed(`There's no item “${oneLine(named, 80)}” in the vault. See what you may use with vault_items.`);
+    if (found.item.signInOnly) return failed(`“${found.item.name}” is only for signing in, in the browser: use browser_sign_in. It's never handed to a command.`);
     const field = fieldOf(found.item, found.field);
     if (field instanceof VaultRefusal) return failed(field.message);
     wanted.push({ variable, item: found.item, field });
@@ -207,7 +209,11 @@ async function runWith(caller: Caller, args: Record<string, unknown>, signal?: A
         const bytes = Buffer.from(value, "base64");
         fs.writeFileSync(file, bytes, { mode: 0o600 });
         env[variable] = file;
-        hidden.push({ item: item.name, value: bytes.toString("utf8") });
+        // Its text, and its bytes as a command would print them: base64 whole and wrapped as
+        // `base64` (76) and PEM (64) wrap it, and hex.
+        const base64 = bytes.toString("base64");
+        const wrapped = (width: number) => base64.match(new RegExp(`.{1,${width}}`, "g"))!.join("\n");
+        hidden.push({ item: item.name, value: bytes.toString("utf8") }, { item: item.name, value: base64 }, { item: item.name, value: wrapped(76) }, { item: item.name, value: wrapped(64) }, { item: item.name, value: bytes.toString("hex") });
       } else {
         env[variable] = value;
         hidden.push({ item: item.name, value });

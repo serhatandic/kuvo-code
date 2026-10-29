@@ -37,7 +37,8 @@ const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
 const macSign = publicKey.export({ format: "der", type: "spki" }).subarray(12).toString("base64url");
 const proof = () => {
   const at = Date.now();
-  return { mac: macKey, at, proof: crypto.sign(null, Buffer.from(`kuvo-vault-key\0lokum\0${at}`), privateKey).toString("base64url") };
+  const nonce = crypto.randomBytes(18).toString("base64url");
+  return { mac: macKey, at, nonce, proof: crypto.sign(null, Buffer.from(`kuvo-vault-key\0lokum\0${at}\0${nonce}`), privateKey).toString("base64url") };
 };
 write(path.join(home, "run", "link.json"), JSON.stringify({ id: "lokum", macs: [macKey], mac: macKey, macSigns: { [macKey]: macSign } }));
 

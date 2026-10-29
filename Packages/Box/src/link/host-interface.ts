@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../shared/json";
 import { oneLine } from "../shared/text";
-import { KEYS_ON_HOST, LAUNCH_HOST, RUN } from "./home";
+import { HOST_VAULT_SECRET, KEYS_ON_HOST, LAUNCH_HOST, RUN } from "./home";
 
 /** A key store's trouble, said in plain words: the caller answers `503 {"message"}` with it. */
 export class KeysUnavailable extends Error {}
@@ -107,7 +107,8 @@ export async function askHost(host: HostAddress, call: string, body: unknown, mi
   try {
     response = await fetch(`${host.url}/${call}`, {
       method: "POST",
-      headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json" },
+      // The vault's calls carry the secret the app gave this box alone (home.ts).
+      headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json", ...(call.startsWith("vault/") && HOST_VAULT_SECRET ? { "x-kuvo-vault-secret": HOST_VAULT_SECRET } : {}) },
       body: JSON.stringify(body),
       // Reading or saving one can wait on you (a Keychain prompt on this Mac): two minutes for those.
       signal: AbortSignal.timeout(["keys/get", "keys/set", "link/identity", "vault/get", "vault/set"].includes(call) ? 120_000 : 15_000),

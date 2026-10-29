@@ -12,12 +12,13 @@ import Testing
     let host = HostInterface()
     let name = "KUVO_KEY_GITHUB_TOKEN__BOT_HOSTED"
 
-    private func ask(_ path: String, _ body: [String: Any], password: String?, at environment: [String: String]) async throws -> (status: Int, json: [String: Any]?) {
+    private func ask(_ path: String, _ body: [String: Any], password: String?, vaultSecret: String? = nil, at environment: [String: String]) async throws -> (status: Int, json: [String: Any]?) {
         let base = try #require(environment["KUVO_HOST_URL"])
         var request = URLRequest(url: try #require(URL(string: base + path)))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         if let password { request.setValue("Bearer \(password)", forHTTPHeaderField: "authorization") }
+        if let vaultSecret { request.setValue(vaultSecret, forHTTPHeaderField: "x-kuvo-vault-secret") }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
         return ((response as? HTTPURLResponse)?.statusCode ?? 0, try? JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -44,6 +45,32 @@ import Testing
         #expect(IntegrationKeys.value(name) == nil)
         #expect(!FileManager.default.fileExists(atPath: file.path))
         #expect(try await ask("/keys/get", ["name": name], password: password, at: environment).status == 404)
+    }
+
+    /// The password is in the box's folder, which an agent's command can read: with it alone, the
+    /// vault's values stay in the Keychain. Only the box, given the vault's secret as it starts
+    /// (never written down), gets them.
+    @Test func theVaultsValuesGoOnlyToTheBoxNotToWhatReadsItsFolder() async throws {
+        let environment = try await host.start()
+        let id = "v_hostedtest"
+        defer {
+            host.stop()
+            _ = VaultValues.remove(id)
+        }
+        let password = try #require(environment["KUVO_HOST_PASSWORD"])
+        #expect(VaultValues.set(["password": "kept-secret"], for: id))
+
+        // As anything that read `run/host.json` would ask.
+        #expect(try await ask("/vault/get", ["id": id], password: password, at: environment).status == 403)
+        #expect(try await ask("/vault/set", ["id": id, "values": ["password": "replaced"]], password: password, at: environment).status == 403)
+        #expect(try await ask("/vault/delete", ["id": id], password: password, at: environment).status == 403)
+        #expect(try await ask("/vault/get", ["id": id], password: password, vaultSecret: "not-the-secret", at: environment).status == 403)
+        #expect(VaultValues.values(id) == ["password": "kept-secret"], "nothing changed")
+
+        // As the box asks, with the secret it was started with.
+        let answer = try await ask("/vault/get", ["id": id], password: password, vaultSecret: host.vaultSecret, at: environment)
+        #expect(answer.status == 200)
+        #expect(answer.json?["values"] as? [String: String] == ["password": "kept-secret"])
     }
 
     @Test func nothingWithoutThePasswordNorForANameThatIsntKuvoCodes() async throws {

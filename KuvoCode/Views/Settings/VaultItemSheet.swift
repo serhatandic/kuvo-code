@@ -112,6 +112,9 @@ struct VaultItemSheet: View {
         if current.kind == .note, current.readable == true {
             LabeledContent("Bots may read it", value: "Yes")
         }
+        if current.kind == .login, current.signInOnly == true {
+            LabeledContent("Used", value: "Only to sign in, in the browser")
+        }
         ForEach(current.fields.filter { $0 != "file" }, id: \.self) { field in
             LabeledContent(label(field)) {
                 HStack(spacing: 4) {
@@ -215,6 +218,8 @@ struct VaultItemEditor: View {
     @State private var secret = ""
     @State private var note = ""
     @State private var readable = false
+    /// A sign-in only for signing in, in the browser: new ones are, until you say otherwise.
+    @State private var signInOnly = true
     @State private var file: (name: String, data: Data)?
     @State private var extra: [ExtraField] = []
     /// A key's own fields it had, taken away here.
@@ -241,6 +246,10 @@ struct VaultItemEditor: View {
                     }
                     if kind == .login {
                         SettingsTextRow(title: "Username") { TextField("Username", text: $username, prompt: Text("Email or username")).labelsHidden() }
+                        Toggle(isOn: $signInOnly) {
+                            Text("Only for Signing In")
+                            Text("Agents sign in with it in the browser, and can’t hand it to a command.")
+                        }
                     }
                 } footer: {
                     if kind == .login { Text("It’s filled in only on this site and those under it.").foregroundStyle(.secondary) }
@@ -311,6 +320,7 @@ struct VaultItemEditor: View {
             sites = item.sites.joined(separator: ", ")
             username = item.username ?? ""
             readable = item.readable == true
+            signInOnly = item.signInOnly == true
             if kind == .key { extra = item.fields.filter { $0 != "value" }.map { ExtraField(field: $0, value: "", had: true) } }
         }
     }
@@ -351,7 +361,7 @@ struct VaultItemEditor: View {
         var given = VaultDraft(kind: kind, name: name.trimmingCharacters(in: .whitespaces),
                                  sites: sites.split(whereSeparator: { $0 == "," || $0 == " " }).map(String.init).filter { !$0.isEmpty },
                                  username: username.trimmingCharacters(in: .whitespaces).isEmpty ? nil : username.trimmingCharacters(in: .whitespaces),
-                                 fileName: file?.name ?? item?.fileName, readable: readable)
+                                 fileName: file?.name ?? item?.fileName, readable: readable, signInOnly: kind == .login ? signInOnly : nil)
         switch kind {
         case .login: if !secret.isEmpty { given.values["password"] = secret }
         case .key:

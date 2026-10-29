@@ -22,10 +22,12 @@ import {
   removeItem, setGrant, setPaused, unlockWith, valuesOf, VaultRefusal, vaultState,
 } from "../vault/store";
 import { callTool, VAULT_TOOLS } from "../vault/tools";
-import { callerOf } from "../vault/who";
+import { callerOf, isCalling } from "../vault/who";
 
 const NOT_OPEN = "This computer's vault isn't open: Kuvo Code's link here isn't running. Try again in a moment.";
 const CLIENTS_ONLY = "Only Kuvo Code on your Mac or iPhone can do this.";
+const NOT_CALLING = "Only a conversation's own tool call can use the vault, and this one isn't running in it.";
+const stringOf = (value: unknown) => (typeof value === "string" ? value : undefined);
 const ED_SPKI = Buffer.from("302a300506032b6570032100", "hex");
 
 /** Who's asking, as a client: a phone (by its name), this Mac's app, the Mac over SSH with the
@@ -36,23 +38,36 @@ function clientOf({ request, phone }: RouteContext): string | null {
     return readLink()?.phones?.find(each => each.key === key)?.name || "iPhone";
   }
   if (request.fromApp) return "Mac";
+  // Proved over the vault's socket (vault/holder.ts), or with the key itself, which unlocks a locked one.
+  if (request.vaultClient) return "Mac";
   const key = request.headers["x-kuvo-vault-key"];
   if (typeof key === "string" && unlockWith(key)) return "Mac";
   return null;
 }
 
+// Proofs used already, by their nonce, until they'd be too old anyway: each works once.
+const PROOF_FOR = 300_000;
+const usedProofs = new Map<string, number>();
+
 /** Whether `proof` is a Mac that set this machine up, asking for its vault's key: its signing key's
- * signature of `kuvo-vault-key\0<this machine's id on its Macs>\0<at>`, made within five minutes. */
+ * signature of `kuvo-vault-key\0<this machine's id on its Macs>\0<at>\0<nonce>`, made within five
+ * minutes, and not used before. */
 function provedMac(given: Record<string, unknown>): boolean {
   const link = readLink();
   const mac = typeof given.mac === "string" ? given.mac : "";
   const at = Number(given.at);
+  const nonce = typeof given.nonce === "string" && /^[A-Za-z0-9_-]{16,64}$/.test(given.nonce) ? given.nonce : "";
   const sign = mac ? macSign(link, mac) : null;
-  if (!sign || !(link?.macs ?? []).includes(mac) || !Number.isFinite(at) || Math.abs(Date.now() - at) > 300_000 || typeof given.proof !== "string") return false;
+  if (!sign || !nonce || !(link?.macs ?? []).includes(mac) || !Number.isFinite(at) || Math.abs(Date.now() - at) > PROOF_FOR || typeof given.proof !== "string") return false;
+  const now = Date.now();
+  for (const [used, until] of usedProofs) if (until < now) usedProofs.delete(used);
+  if (usedProofs.has(nonce)) return false;
   try {
     const key = crypto.createPublicKey({ key: Buffer.concat([ED_SPKI, Buffer.from(sign, "base64url")]), format: "der", type: "spki" });
     const signature = Buffer.from(given.proof, "base64url");
-    return signature.length === 64 && typeof link?.id === "string" && crypto.verify(null, Buffer.from(`kuvo-vault-key\0${link.id}\0${at}`), key, signature);
+    const good = signature.length === 64 && typeof link?.id === "string" && crypto.verify(null, Buffer.from(`kuvo-vault-key\0${link.id}\0${at}\0${nonce}`), key, signature);
+    if (good) usedProofs.set(nonce, now + 2 * PROOF_FOR);
+    return good;
   } catch {
     return false;
   }
@@ -88,8 +103,13 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
     // What a tool server lists (`tools/list`), in this box's own words.
     if (method === "GET") return yield* json(200, { tools: VAULT_TOOLS });
     if (method !== "POST") return yield* json(405, {});
+    // Only a call the conversation it names is making now, with these arguments (vault/who.ts).
+    const args = isObject(given.arguments) ? given.arguments : {};
+    if (typeof given.name !== "string" || !await isCalling(stringOf(given.session), [given.name], args, readEngine, readBridge)) {
+      return yield* json(200, { text: NOT_CALLING, isError: true });
+    }
     const caller = await callerOf(given.session, readEngine, readBridge);
-    return yield* json(200, await callTool(given.name, given.arguments, caller, signal));
+    return yield* json(200, await callTool(given.name, args, caller, signal));
   }
   if (route === "kuvo/vault/fill") {
     if (method !== "POST") return yield* json(405, {});
@@ -97,6 +117,7 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
     // (On a machine, the browser and anything you run there share your account: PROTOCOL.md.)
     if (onHost() && !request.fromApp) return yield* json(403, { message: CLIENTS_ONLY });
     if (isLocked()) return yield* json(423, { message: LOCKED });
+    if (!await isCalling(stringOf(given.session), ["browser_sign_in", "browser_fill"], null, readEngine, readBridge)) return yield* json(403, { message: NOT_CALLING });
     const caller = await callerOf(given.session, readEngine, readBridge);
     const outcome = await fill(given, caller, signal);
     return yield* json(outcome.status, outcome.value);
@@ -128,7 +149,8 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
   }
   if (route === "kuvo/vault/pause") {
     if (method !== "POST") return yield* json(405, {});
-    const bot = typeof given.bot === "string" && /^bot_[A-Za-z0-9]+$/.test(given.bot) ? given.bot : undefined;
+    // A bot, or a conversation that isn't a bot's (paused by the tripwire).
+    const bot = typeof given.bot === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(given.bot) ? given.bot : undefined;
     const paused = given.paused === true;
     setPaused(paused, bot);
     note({ what: paused ? "paused" : "resumed", client, ...(bot ? { bot } : {}) });

@@ -6,6 +6,7 @@
 import { test, after, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -16,7 +17,9 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "kvh-"));
 const home = path.join(root, "box");
 const PASSWORD = "host-password-not-a-key";
 const host = await standInHost(PASSWORD);
-const env = { ...process.env, HOME: root, KUVO_HOME: home, KUVO_HOST_URL: host.url, KUVO_HOST_PASSWORD: PASSWORD };
+// With the vault's two secrets, as the app starts its box (AppModel.boxEnvironment).
+host.vaultSecret = crypto.randomBytes(32).toString("hex");
+const env = { ...process.env, HOME: root, KUVO_HOME: home, KUVO_HOST_URL: host.url, KUVO_HOST_PASSWORD: PASSWORD, KUVO_HOST_VAULT_SECRET: host.vaultSecret, KUVO_VAULT_FILE_KEY: crypto.randomBytes(32).toString("base64url") };
 for (const name of ["KUVO_KEYS", "KUVO_KEYS_ON_HOST", "KUVO_BOX"]) delete env[name];
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 
@@ -30,6 +33,11 @@ before(async () => {
   fs.writeFileSync(path.join(home, "bots", "bot_ship", "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_ship", name: "Ship" }));
   fs.writeFileSync(path.join(home, "bots", "bot_ship", "session"), "ses_ship");
   engine = http.createServer((request, response) => {
+    // Its browser_sign_in, running as the fill comes (the box answers a fill only for one: vault/who.ts).
+    if (request.url.startsWith("/api/session/ses_ship/message")) {
+      response.writeHead(200, { "content-type": "application/json" });
+      return response.end(JSON.stringify({ data: [{ type: "assistant", content: [{ type: "tool", name: "kuvo-browser_browser_sign_in", state: { status: "running", input: {} } }] }] }));
+    }
     const found = request.url.startsWith("/api/session/ses_ship");
     response.writeHead(found ? 200 : 404, { "content-type": "application/json" });
     response.end(JSON.stringify(found ? { data: { id: "ses_ship", title: "Ship", location: { directory: path.join(home, "bots", "bot_ship") } } } : {}));

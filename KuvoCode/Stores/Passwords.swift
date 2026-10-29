@@ -48,12 +48,6 @@ enum Passwords {
         return VaultValues.values(login.item)?["password"]
     }
 
-    /// The saved login agents sign in to `host` with on their own, if you allowed that.
-    static func agentLogin(for host: String) -> Login? {
-        guard let vault else { return nil }
-        return signIns.first { item in item.sites.contains(host) && vault.grants(for: item).contains { $0.who.everyone == true && $0.how == .own } }.map(login)
-    }
-
     /// Lets every agent sign in to `host` with the saved login for `account` on their own (or not),
     /// as this Mac's vault has it now.
     static func setAgentSignIn(_ host: String, _ allowed: Bool, account: String? = nil) async {
@@ -80,7 +74,8 @@ enum Passwords {
             if let existing = signIns.first(where: { $0.sites.contains(host) && ($0.username ?? "") == account }) {
                 item = try await Vaults.shared.change(existing, to: VaultDraft(kind: .login, name: existing.name, sites: existing.sites, username: existing.username, values: ["password": password]), on: BoxClient.mac)
             } else {
-                item = try await Vaults.shared.add(VaultDraft(kind: .login, name: freeName(host: host, account: account), sites: [host], username: account.isEmpty ? nil : account, values: ["password": password]), on: BoxClient.mac)
+                // Saved from the browser: for signing in there, never handed to a command.
+                item = try await Vaults.shared.add(VaultDraft(kind: .login, name: freeName(host: host, account: account), sites: [host], username: account.isEmpty ? nil : account, signInOnly: true, values: ["password": password]), on: BoxClient.mac)
             }
             if allowAgents { try await Vaults.shared.grant(item, to: .init(everyone: true), how: .own, on: BoxClient.mac) }
             return item
@@ -123,7 +118,8 @@ enum Passwords {
                 if let moved = signIns.first(where: { $0.sites.contains(old.host) && ($0.username ?? "") == old.account }) {
                     item = moved
                 } else {
-                    item = try await Vaults.shared.add(VaultDraft(kind: .login, name: freeName(host: old.host, account: old.account), sites: [old.host], username: old.account.isEmpty ? nil : old.account, values: ["password": password]), on: BoxClient.mac)
+                    // What it was before: a sign-in the browser fills in, never handed to a command.
+                    item = try await Vaults.shared.add(VaultDraft(kind: .login, name: freeName(host: old.host, account: old.account), sites: [old.host], username: old.account.isEmpty ? nil : old.account, signInOnly: true, values: ["password": password]), on: BoxClient.mac)
                 }
                 if allowed.contains(old.host), accounts[old.host] == old.account {
                     try await Vaults.shared.grant(item, to: .init(everyone: true), how: .own, on: BoxClient.mac)

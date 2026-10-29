@@ -39,19 +39,22 @@ public struct VaultState: Codable, Equatable, Sendable {
     public var made: Bool
     public var locked: Bool
     public var paused: Bool
-    /// Bots whose use is paused, and why.
+    /// Bots whose use is paused (by id), and conversations that aren't a bot's (by session): why.
     public var pausedBots: [String: String]
     /// "keychain" (this Mac's) or "encrypted" (a machine's own store).
     public var store: String
     public var keptDays: Int
+    /// Its files were changed outside Kuvo Code, so it uses none of them.
+    public var tampered: Bool?
 
-    public init(made: Bool = true, locked: Bool = false, paused: Bool = false, pausedBots: [String: String] = [:], store: String = "keychain", keptDays: Int = 365) {
+    public init(made: Bool = true, locked: Bool = false, paused: Bool = false, pausedBots: [String: String] = [:], store: String = "keychain", keptDays: Int = 365, tampered: Bool? = nil) {
         self.made = made
         self.locked = locked
         self.paused = paused
         self.pausedBots = pausedBots
         self.store = store
         self.keptDays = keptDays
+        self.tampered = tampered
     }
 }
 
@@ -88,12 +91,14 @@ public struct VaultItem: Codable, Equatable, Hashable, Identifiable, Sendable {
     public var fields: [String]
     public var fileName: String?
     public var readable: Bool?
+    /// A sign-in only filled in to sign in, in the browser: never handed to a command.
+    public var signInOnly: Bool?
     /// When it was made, changed and last used, in milliseconds since 1970.
     public var created: Double
     public var changed: Double
     public var used: Double?
 
-    public init(id: String, kind: Kind, name: String, sites: [String] = [], username: String? = nil, fields: [String] = [], fileName: String? = nil, readable: Bool? = nil, created: Double = 0, changed: Double = 0, used: Double? = nil) {
+    public init(id: String, kind: Kind, name: String, sites: [String] = [], username: String? = nil, fields: [String] = [], fileName: String? = nil, readable: Bool? = nil, signInOnly: Bool? = nil, created: Double = 0, changed: Double = 0, used: Double? = nil) {
         self.id = id
         self.kind = kind
         self.name = name
@@ -102,6 +107,7 @@ public struct VaultItem: Codable, Equatable, Hashable, Identifiable, Sendable {
         self.fields = fields
         self.fileName = fileName
         self.readable = readable
+        self.signInOnly = signInOnly
         self.created = created
         self.changed = changed
         self.used = used
@@ -279,16 +285,19 @@ public struct VaultDraft: Sendable {
     public var username: String?
     public var fileName: String?
     public var readable: Bool?
+    /// A sign-in only for signing in, in the browser (nil leaves it as it is).
+    public var signInOnly: Bool?
     /// Values by field; nil takes one away (a change only).
     public var values: [String: String?]
 
-    public init(kind: VaultItem.Kind, name: String, sites: [String] = [], username: String? = nil, fileName: String? = nil, readable: Bool? = nil, values: [String: String?] = [:]) {
+    public init(kind: VaultItem.Kind, name: String, sites: [String] = [], username: String? = nil, fileName: String? = nil, readable: Bool? = nil, signInOnly: Bool? = nil, values: [String: String?] = [:]) {
         self.kind = kind
         self.name = name
         self.sites = sites
         self.username = username
         self.fileName = fileName
         self.readable = readable
+        self.signInOnly = signInOnly
         self.values = values
     }
 
@@ -298,6 +307,7 @@ public struct VaultDraft: Sendable {
         body["username"] = username ?? ""
         if kind == .file { body["fileName"] = fileName ?? "" }
         if kind == .note { body["readable"] = readable == true }
+        if kind == .login, let signInOnly { body["signInOnly"] = signInOnly }
         if !values.isEmpty { body["values"] = values.mapValues { $0 as Any? ?? NSNull() } }
         return body
     }

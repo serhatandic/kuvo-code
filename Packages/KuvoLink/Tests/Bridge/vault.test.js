@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { script } from "./bot-keys-scenarios.js";
@@ -30,7 +31,8 @@ const macKey = crypto.randomBytes(32).toString("base64url");
 const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
 const macSign = publicKey.export({ format: "der", type: "spki" }).subarray(12).toString("base64url");
 // (Signed for this machine, by its id on the Mac: a proof for another of the Mac's machines is no proof here.)
-const proof = (at = Date.now(), machine = "lokum") => ({ mac: macKey, at, proof: crypto.sign(null, Buffer.from(`kuvo-vault-key\0${machine}\0${at}`), privateKey).toString("base64url") });
+// Each with a nonce of its own, which the machine takes once.
+const proof = (at = Date.now(), machine = "lokum", nonce = crypto.randomBytes(18).toString("base64url")) => ({ mac: macKey, at, nonce, proof: crypto.sign(null, Buffer.from(`kuvo-vault-key\0${machine}\0${at}\0${nonce}`), privateKey).toString("base64url") });
 
 // The engine, as far as the vault asks it: who a session is, and its folder.
 const project = path.join(root, "projects", "shop");
@@ -41,6 +43,10 @@ const sessions = {
   ses_shop: { id: "ses_shop", title: "Fix checkout", location: { directory: project } },
 };
 let engine;
+// The tool calls each session's engine says are running now: a vault call is answered only as one
+// of them (vault/who.ts, isCalling). `tool` and `fillAs` say so before they call, as the engine would.
+const calling = {};
+const running = (session, name, input) => { calling[session] = [{ type: "tool", name: `kuvo-browser_${name}`, state: { status: "running", input } }]; };
 
 before(async () => {
   fs.mkdirSync(path.join(home, "run"), { recursive: true });
@@ -53,6 +59,10 @@ before(async () => {
   }
   engine = http.createServer((request, response) => {
     const id = decodeURIComponent((request.url.match(/^\/api\/session\/([^/?]+)/) ?? [])[1] ?? "");
+    if (/^\/api\/session\/[^/?]+\/message/.test(request.url)) {
+      response.writeHead(200, { "content-type": "application/json" });
+      return response.end(JSON.stringify({ data: [{ type: "assistant", content: calling[id] ?? [] }] }));
+    }
     response.writeHead(sessions[id] ? 200 : 404, { "content-type": "application/json" });
     response.end(JSON.stringify(sessions[id] ? { data: sessions[id] } : { message: "No such session." }));
   });
@@ -109,7 +119,15 @@ const onDisk = () => {
 let box;
 let key;
 const items = {};
-const tool = (session, name, args) => box.local("POST", "kuvo/vault/tools", { session, name, arguments: args });
+const tool = (session, name, args) => {
+  running(session, name, args ?? {});
+  return box.local("POST", "kuvo/vault/tools", { session, name, arguments: args });
+};
+// A browser's fill, while the session's browser_sign_in (or browser_fill) runs.
+const fillAs = (body) => {
+  running(body.session, body.purpose === "field" ? "browser_fill" : "browser_sign_in", {});
+  return box.local("POST", "kuvo/vault/fill", body);
+};
 
 test("your Mac sets up a machine's vault over SSH, proving it's the Mac that set the machine up, and keeps its key", async () => {
   box = await start();
@@ -165,18 +183,18 @@ test("an agent uses only what it's granted: vault_items lists it, without names 
 });
 
 test("a bot signs in on its own site; on another site the fill is refused and the bot paused until you look", async () => {
-  const signedIn = await box.local("POST", "kuvo/vault/fill", { session: "ses_sub", origin: "https://github.com", purpose: "sign-in" });
+  const signedIn = await fillAs({ session: "ses_sub", origin: "https://github.com", purpose: "sign-in" });
   assert.equal(signedIn.status, 200);
   assert.deepEqual(signedIn.value, { item: { id: items.GitHub.id, name: "GitHub" }, username: "ship-bot", values: { password: SECRET } });
-  assert.equal((await box.local("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://gist.github.com", purpose: "sign-in" })).status, 200, "a site under its own");
-  assert.equal((await box.local("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "http://github.com", purpose: "sign-in" })).status, 400, "never over plain http");
-  assert.equal((await box.local("POST", "kuvo/vault/fill", { session: "ses_scout", origin: "https://github.com", purpose: "sign-in" })).status, 404, "another bot: the browser asks you instead");
-  const steered = await box.local("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://github.com.evil.example", purpose: "sign-in", item: "GitHub" });
+  assert.equal((await fillAs({ session: "ses_ship", origin: "https://gist.github.com", purpose: "sign-in" })).status, 200, "a site under its own");
+  assert.equal((await fillAs({ session: "ses_ship", origin: "http://github.com", purpose: "sign-in" })).status, 400, "never over plain http");
+  assert.equal((await fillAs({ session: "ses_scout", origin: "https://github.com", purpose: "sign-in" })).status, 404, "another bot: the browser asks you instead");
+  const steered = await fillAs({ session: "ses_ship", origin: "https://github.com.evil.example", purpose: "sign-in", item: "GitHub" });
   assert.equal(steered.status, 403);
   assert.match(steered.value.message, /isn't one of its sites/);
   const state = (await fromMac("GET", "kuvo/vault", undefined, key)).value.state;
   assert.match(state.pausedBots.bot_ship, /github\.com\.evil\.example/);
-  const paused = await box.local("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://github.com", purpose: "sign-in" });
+  const paused = await fillAs({ session: "ses_ship", origin: "https://github.com", purpose: "sign-in" });
   assert.equal(paused.status, 403);
   assert.match(paused.value.message, /paused this bot's use/);
   assert.equal((await fromMac("POST", "kuvo/vault/pause", { bot: "bot_ship", paused: false }, key)).value.pausedBots.bot_ship, undefined);
@@ -277,8 +295,119 @@ test("every use, ask and answer is noted, without a value", async () => {
 test("Pause stops every agent's use at once", async () => {
   assert.equal((await fromMac("POST", "kuvo/vault/pause", { paused: true }, key)).value.paused, true);
   assert.match((await tool("ses_ship", "vault_run", { command: "true", variables: { T: "GitHub token" }, why: "x" })).value.text, /paused the vault/);
-  assert.equal((await box.local("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://github.com", purpose: "sign-in" })).status, 403);
+  assert.equal((await fillAs({ session: "ses_ship", origin: "https://github.com", purpose: "sign-in" })).status, 403);
   assert.equal((await fromMac("POST", "kuvo/vault/pause", { paused: false }, key)).value.paused, false);
+});
+
+test("only a call its conversation is making uses the vault: another command naming the session, or other arguments, gets nothing", async () => {
+  const run = { command: "echo $T", variables: { T: "GitHub token" }, why: "To check the token." };
+  calling.ses_ship = [];
+  const forged = await box.local("POST", "kuvo/vault/tools", { session: "ses_ship", name: "vault_run", arguments: run });
+  assert.equal(forged.value.isError, true);
+  assert.match(forged.value.text, /isn't running/);
+  assert.ok(!forged.value.text.includes(TOKEN));
+  // Its conversation runs another command than the one asked for.
+  running("ses_ship", "vault_run", { ...run, command: "true" });
+  assert.match((await box.local("POST", "kuvo/vault/tools", { session: "ses_ship", name: "vault_run", arguments: run })).value.text, /isn't running/);
+  // A fill with no sign-in running there.
+  calling.ses_ship = [];
+  assert.equal((await box.local("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://github.com", purpose: "sign-in" })).status, 403);
+});
+
+test("the vault's files changed outside Kuvo Code count for nothing: a grant written in, or a site added, gives nothing", async () => {
+  const grants = path.join(home, "box", "vault", "grants.json");
+  const itemsFile = path.join(home, "box", "vault", "items.json");
+  const keptGrants = fs.readFileSync(grants, "utf8");
+  const keptItems = fs.readFileSync(itemsFile, "utf8");
+  try {
+    // Scout, granted nothing, writes itself a grant.
+    const changed = JSON.parse(keptGrants);
+    changed.data.push({ item: items["GitHub token"].id, who: { bot: "bot_scout" }, how: "own", at: Date.now() });
+    fs.writeFileSync(grants, JSON.stringify(changed));
+    assert.match((await tool("ses_scout", "vault_items", {})).value.text, /You may use nothing/);
+    assert.equal((await fromMac("GET", "kuvo/vault", undefined, key)).value.state.tampered, true, "the page says so");
+    fs.writeFileSync(grants, keptGrants);
+    // A site of an agent's choosing added to the GitHub sign-in.
+    const items2 = JSON.parse(keptItems);
+    for (const item of items2.data) if (item.name === "GitHub") item.sites.push("github.com.evil.example");
+    fs.writeFileSync(itemsFile, JSON.stringify(items2));
+    assert.notEqual((await fillAs({ session: "ses_ship", origin: "https://github.com.evil.example", purpose: "sign-in" })).status, 200);
+  } finally {
+    fs.writeFileSync(grants, keptGrants);
+    fs.writeFileSync(itemsFile, keptItems);
+  }
+  assert.equal((await fillAs({ session: "ses_ship", origin: "https://github.com", purpose: "sign-in" })).status, 200, "as it was again");
+});
+
+test("a sign-in only for signing in is never handed to a command or another field, and a value too short to hide isn't kept", async () => {
+  const added = await fromMac("POST", "kuvo/vault/items", { name: "Shop admin", kind: "login", sites: ["admin.shop.example"], username: "ship", signInOnly: true, values: { password: "shop-admin-pass-1" } }, key);
+  assert.equal(added.status, 200, JSON.stringify(added.value));
+  assert.equal(added.value.item.signInOnly, true);
+  await fromMac("POST", "kuvo/vault/grants", { item: added.value.item.id, who: { bot: "bot_ship" }, how: "own" }, key);
+  const ran = await tool("ses_ship", "vault_run", { command: "echo $P | rev", variables: { P: "Shop admin" }, why: "x" });
+  assert.equal(ran.value.isError, true);
+  assert.match(ran.value.text, /only for signing in/);
+  assert.equal((await fillAs({ session: "ses_ship", origin: "https://admin.shop.example", purpose: "field", item: "Shop admin" })).status, 403);
+  assert.equal((await fillAs({ session: "ses_ship", origin: "https://admin.shop.example", purpose: "sign-in", item: "Shop admin" })).value.values.password, "shop-admin-pass-1", "signing in, as it's for");
+  const short = await fromMac("POST", "kuvo/vault/items", { name: "Short", kind: "key", values: { value: "abc" } }, key);
+  assert.equal(short.status, 400);
+  assert.match(short.value.message, /at least 4/);
+});
+
+test("a file's bytes stay hidden however a command prints them: whole, or wrapped as base64 and PEM wrap it", async () => {
+  const bytes = crypto.randomBytes(150);
+  const added = await fromMac("POST", "kuvo/vault/items", { name: "Signing cert", kind: "file", fileName: "cert.der", values: { file: bytes.toString("base64") } }, key);
+  await fromMac("POST", "kuvo/vault/grants", { item: added.value.item.id, who: { bot: "bot_ship" }, how: "own" }, key);
+  const ran = await tool("ses_ship", "vault_run", { command: 'node -e \'const b=require("fs").readFileSync(process.env.C).toString("base64");console.log(b);console.log(b.match(/.{1,76}/g).join("\\n"));console.log(b.match(/.{1,64}/g).join("\\n"))\'', variables: { C: "Signing cert" }, why: "x" });
+  const base64 = bytes.toString("base64");
+  for (const width of [76, 64]) for (const line of base64.match(new RegExp(`.{1,${width}}`, "g")).filter(each => each.length >= 8)) assert.ok(!ran.value.text.includes(line), `a ${width}-wide line shows: ${ran.value.text}`);
+  assert.ok(!ran.value.text.includes(base64));
+  assert.match(ran.value.text, /\[vault: Signing cert\]/);
+});
+
+test("the Mac's proof works once, and what answers on the vault's socket gets the Mac's key only by proving it holds it", async () => {
+  const once = proof();
+  assert.equal((await fromMac("POST", "kuvo/vault/key", once)).status, 200);
+  assert.equal((await fromMac("POST", "kuvo/vault/key", once)).status, 403, "the same proof again");
+  // Something else in the socket's place, which can't prove it holds the key.
+  const socket = path.join(home, "run", "vault.sock");
+  fs.renameSync(socket, socket + ".kept");
+  const heard = [];
+  const fake = net.createServer(connection => {
+    connection.setEncoding("utf8");
+    connection.on("data", chunk => {
+      heard.push(chunk);
+      if (heard.length === 1) connection.write(JSON.stringify({ nonce: "fake-nonce-0123456789", proof: "not-a-proof" }) + "\n");
+    });
+  });
+  const umask = process.umask(0o177);
+  await new Promise(resolve => fake.listen(socket, resolve));
+  process.umask(umask);
+  try {
+    const asked = await fromMac("GET", "kuvo/vault", undefined, key);
+    assert.equal(asked.status, 403);
+    assert.ok(!heard.join("").includes(key), "its key never sent");
+    assert.equal(heard.length, 1, "nothing but hello");
+  } finally {
+    await new Promise(resolve => fake.close(resolve));
+    fs.rmSync(socket, { force: true });
+    fs.renameSync(socket + ".kept", socket);
+  }
+  assert.equal((await fromMac("GET", "kuvo/vault", undefined, key)).status, 200, "the real one again");
+});
+
+test("a conversation that isn't a bot's is paused too when it's steered to another site, and a sign-in on a name without dots works", async () => {
+  await fromMac("POST", "kuvo/vault/grants", { item: items.GitHub.id, who: { project: project }, how: "own" }, key);
+  const steered = await fillAs({ session: "ses_shop", origin: "https://github.com.evil.example", purpose: "sign-in", item: "GitHub" });
+  assert.equal(steered.status, 403);
+  assert.match(steered.value.message, /conversation's use of the vault is paused/);
+  assert.equal((await fromMac("GET", "kuvo/vault", undefined, key)).value.state.pausedBots.ses_shop !== undefined, true);
+  assert.equal((await fillAs({ session: "ses_shop", origin: "https://github.com", purpose: "sign-in" })).status, 403, "paused");
+  await fromMac("POST", "kuvo/vault/pause", { paused: false, bot: "ses_shop" }, key);
+  assert.equal((await fillAs({ session: "ses_shop", origin: "https://github.com", purpose: "sign-in" })).status, 200, "let go on");
+  const nas = await fromMac("POST", "kuvo/vault/items", { name: "NAS", kind: "login", sites: ["nas"], username: "admin", values: { password: "nas-password-1" } }, key);
+  assert.equal(nas.status, 200, JSON.stringify(nas.value));
+  assert.deepEqual(nas.value.item.sites, ["nas"]);
 });
 
 test("after the box starts again the vault is locked, until a client's key unlocks it", async () => {
@@ -287,7 +416,7 @@ test("after the box starts again the vault is locked, until a client's key unloc
   fs.mkdirSync(path.join(home, "run", "vault-run", "left"), { recursive: true });
   fs.writeFileSync(path.join(home, "run", "vault-run", "left", "AuthKey.p8"), P8);
   box = await start();
-  const locked = await box.local("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://github.com", purpose: "sign-in" });
+  const locked = await fillAs({ session: "ses_ship", origin: "https://github.com", purpose: "sign-in" });
   assert.equal(locked.status, 423);
   assert.match(locked.value.message, /locked/);
   assert.equal((await box.local("POST", "kuvo/vault/unlock", { key: crypto.randomBytes(32).toString("base64url") })).status, 403);
@@ -295,8 +424,8 @@ test("after the box starts again the vault is locked, until a client's key unloc
   assert.equal(fs.existsSync(path.join(home, "run", "vault-run")), false, "a copy left behind is gone");
   const listed = await fromMac("GET", "kuvo/vault", undefined, key);
   assert.equal(listed.value.state.locked, false);
-  assert.equal(listed.value.items.length, 5);
-  assert.equal((await box.local("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://github.com", purpose: "sign-in" })).value.values.password, SECRET);
+  assert.equal(listed.value.items.length, 8);
+  assert.equal((await fillAs({ session: "ses_ship", origin: "https://github.com", purpose: "sign-in" })).value.values.password, SECRET);
   await box.stop();
 });
 

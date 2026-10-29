@@ -57,6 +57,44 @@ export async function callerOf(session: unknown, readEngine: () => EngineRecord,
   };
 }
 
+/** A JSON value with its keys in order, to compare two. */
+const ordered = (value: unknown): unknown =>
+  Array.isArray(value) ? value.map(ordered)
+    : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key, ordered((value as Record<string, unknown>)[key])]))
+    : value;
+
+interface ToolBlock { type?: string; name?: string; state?: { status?: string; input?: unknown } }
+
+/**
+ * Whether `session` is making one of `tools` now, with `args` (when given): its engine (or the coding
+ * agents' bridge) has that call running in it. A tool server names the session that calls, but so
+ * could any command on this computer: only a call the conversation really makes uses its grants.
+ * A tool's name may carry its server's (`kuvo-browser_vault_run`, `mcp__kuvo-browser__vault_run`).
+ */
+export async function isCalling(session: string | undefined, tools: string[], args: Record<string, unknown> | null, readEngine: () => EngineRecord, readBridge: () => BridgeRecord): Promise<boolean> {
+  if (!session || !/^[A-Za-z0-9_-]{1,100}$/.test(session)) return false;
+  const targets: Target[] = [];
+  try { targets.push(readEngine()); } catch {}
+  try {
+    const bridge = readBridge();
+    if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) targets.push(bridge);
+  } catch {}
+  const named = (name: unknown) => typeof name === "string" && tools.some(tool => name === tool || name.endsWith("_" + tool));
+  const wanted = args ? JSON.stringify(ordered(args)) : null;
+  for (const target of targets) {
+    try {
+      const page = await engineGet(target, `api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`) as EngineAnswer<{ content?: ToolBlock[] }[]> | null;
+      for (const message of page?.data ?? []) {
+        for (const block of message.content ?? []) {
+          if (block.type !== "tool" || !named(block.name) || !["running", "pending"].includes(block.state?.status ?? "")) continue;
+          if (wanted === null || JSON.stringify(ordered(block.state?.input ?? {})) === wanted) return true;
+        }
+      }
+    } catch {}
+  }
+  return false;
+}
+
 /** How `caller` may use `item`: on its own, by asking you, or not at all (null). The most a grant
  * gives wins: a bot's, its project's or everyone's. */
 export function grantFor(item: VaultItem, caller: Caller, grants: VaultGrant[] = readGrants()): VaultGrant["how"] | null {

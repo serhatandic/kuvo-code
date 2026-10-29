@@ -72,7 +72,7 @@ export function alwaysFor(caller: Caller): { bot: string } | { project: string }
 
 export async function mayUse(item: VaultItem, caller: Caller, use: Use): Promise<Allowed> {
   const where = { ...(use.site ? { site: use.site } : {}), ...(use.program ? { program: use.program } : {}), ...(use.why ? { why: use.why } : {}) };
-  const paused = pausedFor(caller.bot);
+  const paused = pausedFor(caller.bot, caller.root ?? caller.session);
   if (paused) {
     note({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: "paused" });
     return { ok: false, message: paused };
@@ -102,15 +102,17 @@ export async function mayUse(item: VaultItem, caller: Caller, use: Use): Promise
 }
 
 /** A fill refused because the page isn't one of the item's sites: the strongest sign a page is
- * steering the agent. That bot's use of the vault pauses until you look. */
+ * steering the agent. That bot's use of the vault (or that conversation's, when it isn't a bot's)
+ * pauses until you look. */
 export function tripwire(item: VaultItem, caller: Caller, site: string): string {
   const why = `It tried to use “${item.name}” on ${site}, which isn't one of its sites.`;
-  if (caller.bot) setPaused(true, caller.bot, why);
+  const who = caller.bot ?? caller.root ?? caller.session;
+  if (who) setPaused(true, who, why);
   note({ what: "refused", ...itemOf(item), ...whoOf(caller), site, how: "wrong site" });
   try {
     tell({ title: caller.botName ? `${caller.botName} paused` : "A fill was refused", subtitle: machineName(), body: why, category: "message", thread: caller.root ?? "vault", data: caller.root ? { session: caller.root } : {} });
   } catch {}
-  return `${why} Kuvo Code only fills it on ${item.sites.join(", ")}.${caller.bot ? " The user has been told, and this bot's use of the vault is paused until they look." : ""}`;
+  return `${why} Kuvo Code only fills it on ${item.sites.join(", ")}.${who ? ` The user has been told, and this ${caller.bot ? "bot" : "conversation"}'s use of the vault is paused until they look.` : ""}`;
 }
 
 /** Notes a use that went ahead. */

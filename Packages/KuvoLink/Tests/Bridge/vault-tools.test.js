@@ -28,8 +28,14 @@ for (const name of ["KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "KUVO_KEYS", "KUVO_KE
 
 const TOKEN = "glpat-very-secret-token-0001";
 
-// The engine: a bot's conversation, in its folder.
+// The engine: a bot's conversation, in its folder, and the tool call it's making now (the box
+// answers a vault call only as one its conversation makes: vault/who.ts).
+let calling = [];
 const engine = http.createServer((request, response) => {
+  if (/^\/api\/session\/ses_ship\/message/.test(request.url)) {
+    response.writeHead(200, { "content-type": "application/json" });
+    return response.end(JSON.stringify({ data: [{ type: "assistant", content: calling }] }));
+  }
   const found = request.url.match(/^\/api\/session\/(ses_ship)$/);
   response.writeHead(found ? 200 : 404, { "content-type": "application/json" });
   response.end(JSON.stringify(found ? { data: { id: "ses_ship", title: "Ship", location: { directory: home } } } : { message: "No such session." }));
@@ -78,7 +84,10 @@ function ask(method, params) {
     mcp.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
   });
 }
-const call = (name, args) => ask("tools/call", { name, arguments: args, _meta: { "ai.opencode/sessionID": "ses_ship" } });
+const call = (name, args) => {
+  calling = [{ type: "tool", name: `kuvo-browser_${name}`, state: { status: "running", input: args ?? {} } }];
+  return ask("tools/call", { name, arguments: args, _meta: { "ai.opencode/sessionID": "ses_ship" } });
+};
 
 test("an agent on a machine lists the vault's tools, in its box's words", async () => {
   const { tools } = await ask("tools/list", {});

@@ -9,7 +9,8 @@ export const GRANT_HOWS = ["own", "ask"] as const;
 
 /** One item, without its values: what it's called, what kind, where it may be used (a sign-in's
  * sites, a key's hosts), its username (not a secret), which fields it holds, a file's name, whether
- * agents may read a note (then it isn't a secret), and when it was made, changed and last used. */
+ * agents may read a note (then it isn't a secret), whether a sign-in is only for signing in, in the
+ * browser (never handed to a command), and when it was made, changed and last used. */
 export const VAULT_ITEM = object({
   id: string,
   kind: words(...ITEM_KINDS),
@@ -19,6 +20,7 @@ export const VAULT_ITEM = object({
   fields: list(string),
   "fileName?": string,
   "readable?": bool,
+  "signInOnly?": bool,
   created: number,
   changed: number,
   "used?": number,
@@ -30,8 +32,10 @@ export const VAULT_WHO = object({ "bot?": string, "project?": string, "everyone?
 export const VAULT_GRANT = object({ item: string, who: VAULT_WHO, how: words(...GRANT_HOWS), at: number });
 
 /** How the vault stands: whether it's made yet, locked (a machine's after a restart, until a
- * client unlocks it), paused for everyone or for some bots (by id, with why), where its values are
- * kept (this Mac's Keychain, or a machine's encrypted store), and how long activity is kept. */
+ * client unlocks it), paused for everyone or for some bots (by id) or conversations that aren't a
+ * bot's (by root session), with why, where its values are kept (this Mac's Keychain, or a
+ * machine's encrypted store), how long activity is kept, and whether its files were changed
+ * outside Kuvo Code (then it uses none of them). */
 export const VAULT_STATE = object({
   made: bool,
   locked: bool,
@@ -39,6 +43,7 @@ export const VAULT_STATE = object({
   pausedBots: map(string),
   store: words("keychain", "encrypted"),
   keptDays: number,
+  "tampered?": bool,
 });
 
 /** Everything a client's Vault page shows at once. */

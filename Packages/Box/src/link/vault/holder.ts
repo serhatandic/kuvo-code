@@ -1,13 +1,18 @@
 // Which process holds the vault: the box's long-running one (`run` on a machine, `serve`), which
 // keeps a machine's store key in memory and is the only one that touches the vault. A `box route`
 // (the Mac over SSH, kuvo-browser.js) passes `kuvo/vault…` to it over `run/vault.sock` (only you can
-// reach it), one request a connection: a line of JSON there, the answer's line back.
+// reach it), one request a connection: first each says hello (a nonce each way, and the holder's
+// proof that it holds the unlock key), then a line of JSON there, the answer's line back. The Mac's
+// unlock key never crosses the socket while the holder can prove it has it: the request carries a
+// proof of it for this connection instead, which nothing that reads the socket can use again.
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { RUN } from "../home";
 import type { AnyPiece, LinkHandler, LinkRequest } from "../server/context";
+import { provesUnlock, unlockProof } from "./store";
 
 export const VAULT_SOCKET = path.join(RUN, "vault.sock");
 
@@ -30,6 +35,9 @@ interface Answered {
 }
 
 const MOST = 8 * 1024 * 1024;
+const KEY = "x-kuvo-vault-key";
+const AUTH = "x-kuvo-vault-auth";
+const nonce = () => crypto.randomBytes(18).toString("base64url");
 
 /** This process holds the vault from now on, answering the socket with `handle` (as a local request:
  * neither a phone nor this Mac's app, whatever it says). */
@@ -41,6 +49,8 @@ export function holdVault(handle: LinkHandler): net.Server {
   try { fs.rmSync(VAULT_SOCKET, { force: true }); } catch {}
   const server = net.createServer(socket => {
     let given = "";
+    let hello: string | null = null;
+    const mine = nonce();
     const stop = new AbortController();
     socket.on("close", () => stop.abort());
     socket.on("error", () => stop.abort());
@@ -48,17 +58,33 @@ export function holdVault(handle: LinkHandler): net.Server {
     socket.on("data", async (chunk): Promise<void> => {
       given += chunk;
       if (given.length > MOST) return void socket.destroy();
+      // Hello first: its nonce, answered with this one's and, while the unlock key is here, the proof of it.
+      if (hello === null) {
+        const end = given.indexOf("\n");
+        if (end < 0) return;
+        let said: { hello?: unknown } | null = null;
+        try { said = JSON.parse(given.slice(0, end)); } catch {}
+        given = given.slice(end + 1);
+        hello = typeof said?.hello === "string" ? said.hello.slice(0, 100) : "";
+        const proof = hello ? unlockProof("holder", hello) : null;
+        socket.write(JSON.stringify({ nonce: mine, ...(proof ? { proof } : {}) }) + "\n");
+      }
       const end = given.indexOf("\n");
       if (end < 0) return;
       socket.removeAllListeners("data");
       let sent: Partial<Sent> | null = null;
       try { sent = JSON.parse(given.slice(0, end)); } catch {}
+      const headers: Record<string, string> = typeof sent?.headers === "object" && sent.headers ? { ...sent.headers } : {};
+      // A client proves it holds the unlock key for this connection alone.
+      const proved = provesUnlock("client", mine, headers[AUTH]);
+      delete headers[AUTH];
       const request: LinkRequest = {
         method: String(sent?.method ?? "GET"),
         path: String(sent?.path ?? ""),
-        headers: typeof sent?.headers === "object" && sent.headers ? sent.headers : {},
+        headers,
         body: Buffer.from(String(sent?.body ?? ""), "base64"),
         fromMac: true,
+        ...(proved ? { vaultClient: true } : {}),
       };
       // Only the vault's own routes answer here.
       if (!/^kuvo\/vault(\/|\?|$)/.test(request.path)) return void socket.end(JSON.stringify({ status: 404, type: "application/json", body: Buffer.from("{}").toString("base64") }) + "\n");
@@ -100,10 +126,28 @@ export function holdVault(handle: LinkHandler): net.Server {
   return server;
 }
 
-/** `request` asked of the process that holds the vault; null when none does (nothing listens). */
+/** Whether the socket is one only this user could have made, as the holder makes it. */
+function socketLooksHeld(): boolean {
+  try {
+    const stat = fs.lstatSync(VAULT_SOCKET);
+    return stat.isSocket() && (process.getuid ? stat.uid === process.getuid() : true) && (stat.mode & 0o077) === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Why a request wasn't passed on: the process at the socket couldn't prove it holds the vault. */
+export const NOT_THE_HOLDER = "That isn't this vault's key, or what answers for it couldn't prove it's Kuvo Code's own: nothing was sent to it.";
+
+/** `request` asked of the process that holds the vault; null when none does (nothing listens). A
+ * request with the unlock key sends a proof of it instead, once the holder proved it has it too;
+ * to one that can't (it's locked), the key itself, which unlocks it. */
 export function askHolder(request: LinkRequest, signal?: AbortSignal): Promise<Answered | null> {
   return new Promise(resolve => {
+    if (!socketLooksHeld()) return resolve(null);
     const socket = net.createConnection(VAULT_SOCKET);
+    const ours = nonce();
+    let theirs: { nonce?: unknown; proof?: unknown } | null = null;
     let answer = "";
     let done = false;
     const finish = (value: Answered | null) => {
@@ -114,16 +158,39 @@ export function askHolder(request: LinkRequest, signal?: AbortSignal): Promise<A
     };
     signal?.addEventListener("abort", () => finish(null), { once: true });
     socket.setEncoding("utf8");
-    socket.on("connect", () => {
+    socket.on("connect", () => socket.write(JSON.stringify({ hello: ours }) + "\n"));
+    const send = () => {
       const headers: Record<string, string> = {};
-      for (const [name, value] of Object.entries(request.headers ?? {})) if (typeof value === "string") headers[name] = value;
+      for (const [name, value] of Object.entries(request.headers ?? {})) if (typeof value === "string" && name !== AUTH) headers[name] = value;
+      const key = headers[KEY];
+      if (key) {
+        const unlock = Buffer.from(key, "base64url");
+        if (typeof theirs?.proof === "string") {
+          // It holds the key: proved, and the key stays here.
+          // It doesn't: the key isn't this vault's any more (made again), or what answers isn't the
+          // holder. Either way nothing is sent, and the client hears its key isn't this vault's.
+          if (theirs.proof !== unlockProof("holder", ours, unlock)) {
+            finish({ status: 403, type: "application/json", body: Buffer.from(JSON.stringify({ message: NOT_THE_HOLDER })).toString("base64") });
+            return;
+          }
+          delete headers[KEY];
+          headers[AUTH] = unlockProof("client", String(theirs.nonce ?? ""), unlock)!;
+        }
+      }
       socket.write(JSON.stringify({ method: request.method, path: request.path, headers, body: Buffer.from(request.body ?? Buffer.alloc(0)).toString("base64") } satisfies Sent) + "\n");
-    });
+    };
     socket.on("data", chunk => {
       answer += chunk;
       if (answer.length > MOST * 2) return finish(null);
-      const end = answer.indexOf("\n");
+      let end = answer.indexOf("\n");
       if (end < 0) return;
+      if (!theirs) {
+        try { theirs = JSON.parse(answer.slice(0, end)); } catch { return finish(null); }
+        answer = answer.slice(end + 1);
+        send();
+        end = answer.indexOf("\n");
+        if (end < 0) return;
+      }
       try { finish(JSON.parse(answer.slice(0, end))); } catch { finish(null); }
     });
     socket.on("error", () => finish(null));

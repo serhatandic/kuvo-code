@@ -2,7 +2,7 @@
 
 // Packages/Box/src/link/main.ts
 import { spawn as spawn6 } from "node:child_process";
-import crypto23 from "node:crypto";
+import crypto24 from "node:crypto";
 import fs54 from "node:fs";
 import os10 from "node:os";
 import path55 from "node:path";
@@ -110,6 +110,10 @@ if (IS_MAC && !ENGINE_CONFIG)
 var LAUNCH_HOST = process.env.KUVO_HOST_URL && process.env.KUVO_HOST_PASSWORD ? { url: process.env.KUVO_HOST_URL.replace(/\/+$/, ""), password: process.env.KUVO_HOST_PASSWORD } : null;
 var KEYS_ON_HOST = process.env.KUVO_KEYS_ON_HOST === "1" || Boolean(process.env.KUVO_HOST_URL);
 delete process.env.KUVO_HOST_PASSWORD;
+var HOST_VAULT_SECRET = process.env.KUVO_HOST_VAULT_SECRET || null;
+var MAC_VAULT_FILE_KEY = process.env.KUVO_VAULT_FILE_KEY ? Buffer.from(process.env.KUVO_VAULT_FILE_KEY, "base64url") : null;
+delete process.env.KUVO_HOST_VAULT_SECRET;
+delete process.env.KUVO_VAULT_FILE_KEY;
 var SCRIPT = "";
 var scriptIs = (file) => {
   SCRIPT = file;
@@ -518,7 +522,7 @@ async function askHost(host, call, body, missing = false) {
   try {
     response = await fetch(`${host.url}/${call}`, {
       method: "POST",
-      headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json", ...call.startsWith("vault/") && HOST_VAULT_SECRET ? { "x-kuvo-vault-secret": HOST_VAULT_SECRET } : {} },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(["keys/get", "keys/set", "link/identity", "vault/get", "vault/set"].includes(call) ? 120000 : 15000)
     });
@@ -6721,6 +6725,7 @@ var VAULT_ITEM = object({
   fields: list(string),
   "fileName?": string,
   "readable?": bool,
+  "signInOnly?": bool,
   created: number,
   changed: number,
   "used?": number
@@ -6733,7 +6738,8 @@ var VAULT_STATE = object({
   paused: bool,
   pausedBots: map(string),
   store: words("keychain", "encrypted"),
-  keptDays: number
+  keptDays: number,
+  "tampered?": bool
 });
 var VAULT = object({ state: VAULT_STATE, items: list(VAULT_ITEM), grants: list(VAULT_GRANT) });
 var VAULT_ITEM_ANSWER = object({ item: VAULT_ITEM, "key?": string });
@@ -6805,6 +6811,36 @@ var readJSON = (file, fallback) => {
     return fallback;
   }
 };
+var TAMPERED = "The vault's files were changed outside Kuvo Code, so it uses none of them. Add its items again.";
+var fileKey = () => {
+  if (onHost())
+    return MAC_VAULT_FILE_KEY;
+  return storeKey ? crypto15.createHmac("sha256", storeKey).update("kuvo-vault-files").digest() : null;
+};
+var signatureOf = (key, file, data) => crypto15.createHmac("sha256", key).update(`${path34.basename(file)}\x00${JSON.stringify(data)}`).digest("base64url");
+var tampered = new Set;
+function readSigned(file, fallback) {
+  const kept = readJSON(file, null);
+  if (!kept)
+    return fallback;
+  const key = fileKey();
+  if (!key)
+    return fallback;
+  const given = Buffer.from(typeof kept.sig === "string" ? kept.sig : "");
+  const expected = Buffer.from(signatureOf(key, file, kept.data));
+  if (kept.data === undefined || given.length !== expected.length || !crypto15.timingSafeEqual(given, expected)) {
+    tampered.add(file);
+    return fallback;
+  }
+  return kept.data;
+}
+function keepSigned(file, data) {
+  const key = fileKey();
+  if (!key)
+    throw onHost() ? new VaultRefusal(503, "Kuvo Code on this Mac didn't give its vault its key. Quit Kuvo Code and open it again.") : new VaultRefusal(423, LOCKED);
+  keepJSON(file, { v: 2, data, sig: signatureOf(key, file, data) });
+  tampered.delete(file);
+}
 var keepJSON = (file, value) => {
   fs34.mkdirSync(path34.dirname(file), { recursive: true, mode: 448 });
   writePrivate(file, JSON.stringify(value, null, 1) + `
@@ -6869,6 +6905,13 @@ function unlockWith(given) {
     return false;
   }
 }
+var unlockProof = (tag, nonce, key = unlockKey) => key ? crypto15.createHmac("sha256", key).update(`kuvo-vault-${tag}\x00${nonce}`).digest("base64url") : null;
+function provesUnlock(tag, nonce, given) {
+  const expected = unlockProof(tag, nonce);
+  if (!expected || typeof given !== "string" || given.length !== expected.length)
+    return false;
+  return crypto15.timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+}
 var currentUnlockKey = () => unlockKey ? unlockKey.toString("base64url") : null;
 var host = () => {
   const found = appHost();
@@ -6923,8 +6966,8 @@ async function dropValues(id) {
     return void await asHost(() => askHost(host(), "vault/delete", { id }));
   fs34.rmSync(path34.join(VALUES, id), { force: true });
 }
-var readItems = () => readJSON(ITEMS, {}).items ?? [];
-var keepItems = (items) => keepJSON(ITEMS, { v: 1, items });
+var readItems = () => readSigned(ITEMS, []);
+var keepItems = (items) => keepSigned(ITEMS, items);
 var itemByID = (id) => readItems().find((item) => item.id === id);
 function itemNamed(named) {
   if (typeof named !== "string" || !named.trim())
@@ -6943,13 +6986,14 @@ function siteOf(given) {
     text = "https://" + text;
   try {
     const host = new URL(text).hostname.replace(/\.$/, "");
-    return /^[a-z0-9.-]+$/.test(host) && host.includes(".") || host === "localhost" ? host : null;
+    return /^[a-z0-9.-]+$/.test(host) && /[a-z0-9]/.test(host) ? host : null;
   } catch {
     return null;
   }
 }
 var usableOn = (item, host) => item.sites.some((site) => host === site || host.endsWith("." + site));
 var FIELD = /^[a-z][a-z0-9_]{0,39}$/;
+var SHORTEST_VALUE = 4;
 function givenValues(given, change) {
   if (given == null)
     return {};
@@ -6961,6 +7005,8 @@ function givenValues(given, change) {
       throw new VaultRefusal(400, `“${oneLine(field, 40)}” isn't a field's name: use lowercase letters, digits and _.`);
     if (value === null && change)
       values[field] = null;
+    else if (typeof value === "string" && value.length < SHORTEST_VALUE)
+      throw new VaultRefusal(400, `A value needs at least ${SHORTEST_VALUE} characters, so it can be hidden from agents.`);
     else if (typeof value === "string" && value.length <= 1e6)
       values[field] = value;
     else
@@ -7019,6 +7065,7 @@ async function addOne(given) {
     fields: Object.keys(values).sort(),
     ...kind === "file" && typeof given.fileName === "string" && given.fileName.trim() ? { fileName: path34.basename(oneLine(given.fileName, 200).trim()) } : {},
     ...kind === "note" && given.readable === true ? { readable: true } : {},
+    ...kind === "login" && given.signInOnly === true ? { signInOnly: true } : {},
     created: now,
     changed: now
   };
@@ -7060,6 +7107,12 @@ async function changeOne(id, given) {
     else
       delete item.readable;
   }
+  if (given.signInOnly !== undefined && item.kind === "login") {
+    if (given.signInOnly === true)
+      item.signInOnly = true;
+    else
+      delete item.signInOnly;
+  }
   const changes = givenValues(given.values, true);
   if (Object.keys(changes).length) {
     const values = { ...await valuesOf(id) };
@@ -7083,12 +7136,12 @@ async function removeOne(id) {
   await dropValues(id);
   vaultWork(() => {
     keepItems(readItems().filter((each) => each.id !== id));
-    keepJSON(GRANTS, { v: 1, grants: readGrants().filter((grant) => grant.item !== id) });
+    keepSigned(GRANTS, readGrants().filter((grant) => grant.item !== id));
   });
   return item;
 }
 var noteUsed = (id) => vaultWork(() => keepItems(readItems().map((item) => item.id === id ? { ...item, used: Date.now() } : item)));
-var readGrants = () => readJSON(GRANTS, {}).grants ?? [];
+var readGrants = () => readSigned(GRANTS, []);
 function givenWho(given) {
   if (!isObject(given))
     return null;
@@ -7111,32 +7164,38 @@ function setGrant(itemID, who, how) {
     const grants = readGrants().filter((grant) => !(grant.item === itemID && sameWho(grant.who, who)));
     if (how !== null)
       grants.push({ item: itemID, who, how, at: Date.now() });
-    keepJSON(GRANTS, { v: 1, grants });
+    keepSigned(GRANTS, grants);
     return grants;
   });
 }
-var readPaused = () => readJSON(PAUSED, {});
-function setPaused(paused, bot, why = "Paused by you.") {
+var readPaused = () => {
+  if (!fs34.existsSync(PAUSED))
+    return {};
+  return readSigned(PAUSED, { all: true });
+};
+function setPaused(paused, who, why = "Paused by you.") {
   vaultWork(() => {
-    const now = readPaused();
-    if (bot) {
+    const now = fs34.existsSync(PAUSED) ? readSigned(PAUSED, {}) : {};
+    if (who) {
       const bots = { ...now.bots ?? {} };
       if (paused)
-        bots[bot] = oneLine(why, 300);
+        bots[who] = oneLine(why, 300);
       else
-        delete bots[bot];
-      keepJSON(PAUSED, { ...now, bots });
+        delete bots[who];
+      keepSigned(PAUSED, { ...now, bots });
     } else {
-      keepJSON(PAUSED, { ...now, all: paused });
+      keepSigned(PAUSED, { ...now, all: paused });
     }
   });
 }
-function pausedFor(bot) {
+function pausedFor(bot, root) {
   const now = readPaused();
   if (now.all)
-    return "The user paused the vault on this computer.";
+    return tampered.has(PAUSED) ? TAMPERED : "The user paused the vault on this computer.";
   if (bot && now.bots?.[bot])
     return `The user paused this bot's use of the vault: ${now.bots[bot]}`;
+  if (root && now.bots?.[root])
+    return `The user paused this conversation's use of the vault: ${now.bots[root]}`;
   return null;
 }
 function vaultState() {
@@ -7147,7 +7206,8 @@ function vaultState() {
     paused: Boolean(paused.all),
     pausedBots: { ...paused.bots ?? {} },
     store: onHost() ? "keychain" : "encrypted",
-    keptDays: KEPT_DAYS
+    keptDays: KEPT_DAYS,
+    ...tampered.size ? { tampered: true } : {}
   };
 }
 
@@ -10799,7 +10859,7 @@ async function* updateRoute(context) {
 }
 
 // Packages/Box/src/link/areas/vault.ts
-import crypto21 from "node:crypto";
+import crypto22 from "node:crypto";
 
 // Packages/Box/src/link/vault/activity.ts
 import fs51 from "node:fs";
@@ -10981,6 +11041,36 @@ async function callerOf(session, readEngine, readBridge) {
     ...bot ? { bot: bot.id, botName: bot.name } : {}
   };
 }
+var ordered = (value) => Array.isArray(value) ? value.map(ordered) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, ordered(value[key])])) : value;
+async function isCalling(session, tools, args, readEngine, readBridge) {
+  if (!session || !/^[A-Za-z0-9_-]{1,100}$/.test(session))
+    return false;
+  const targets = [];
+  try {
+    targets.push(readEngine());
+  } catch {}
+  try {
+    const bridge = readBridge();
+    if (bridge?.port && bridge?.password && processRuns(bridge.pid, "kuvo-agents"))
+      targets.push(bridge);
+  } catch {}
+  const named = (name) => typeof name === "string" && tools.some((tool) => name === tool || name.endsWith("_" + tool));
+  const wanted = args ? JSON.stringify(ordered(args)) : null;
+  for (const target of targets) {
+    try {
+      const page = await engineGet(target, `api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`);
+      for (const message of page?.data ?? []) {
+        for (const block of message.content ?? []) {
+          if (block.type !== "tool" || !named(block.name) || !["running", "pending"].includes(block.state?.status ?? ""))
+            continue;
+          if (wanted === null || JSON.stringify(ordered(block.state?.input ?? {})) === wanted)
+            return true;
+        }
+      }
+    } catch {}
+  }
+  return false;
+}
 function grantFor(item, caller, grants = readGrants()) {
   let how = null;
   for (const grant of grants) {
@@ -11036,7 +11126,7 @@ function alwaysFor(caller) {
 }
 async function mayUse(item, caller, use) {
   const where = { ...use.site ? { site: use.site } : {}, ...use.program ? { program: use.program } : {}, ...use.why ? { why: use.why } : {} };
-  const paused = pausedFor(caller.bot);
+  const paused = pausedFor(caller.bot, caller.root ?? caller.session);
   if (paused) {
     note({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: "paused" });
     return { ok: false, message: paused };
@@ -11067,13 +11157,14 @@ async function mayUse(item, caller, use) {
 }
 function tripwire(item, caller, site) {
   const why = `It tried to use “${item.name}” on ${site}, which isn't one of its sites.`;
-  if (caller.bot)
-    setPaused(true, caller.bot, why);
+  const who = caller.bot ?? caller.root ?? caller.session;
+  if (who)
+    setPaused(true, who, why);
   note({ what: "refused", ...itemOf(item), ...whoOf(caller), site, how: "wrong site" });
   try {
     tell({ title: caller.botName ? `${caller.botName} paused` : "A fill was refused", subtitle: machineName(), body: why, category: "message", thread: caller.root ?? "vault", data: caller.root ? { session: caller.root } : {} });
   } catch {}
-  return `${why} Kuvo Code only fills it on ${item.sites.join(", ")}.${caller.bot ? " The user has been told, and this bot's use of the vault is paused until they look." : ""}`;
+  return `${why} Kuvo Code only fills it on ${item.sites.join(", ")}.${who ? ` The user has been told, and this ${caller.bot ? "bot" : "conversation"}'s use of the vault is paused until they look.` : ""}`;
 }
 var noteUse = (item, caller, use, how) => note({ what: "used", ...itemOf(item), ...whoOf(caller), ...use.site ? { site: use.site } : {}, ...use.program ? { program: use.program } : {}, ...use.why ? { why: use.why } : {}, how });
 
@@ -11113,6 +11204,8 @@ async function fill(given, caller, signal) {
       return refused(404, own.length ? "More than one sign-in fits this site." : "No sign-in in the vault is yours to use on this site.");
     item = own[0];
   }
+  if (purpose === "field" && item.signInOnly)
+    return refused(403, `“${item.name}” is only for signing in: use browser_sign_in.`);
   const may = await mayUse(item, caller, { site, ...why ? { why } : {}, askWithout: true, signal });
   if (!may.ok)
     return refused(403, may.message);
@@ -11137,6 +11230,7 @@ async function fill(given, caller, signal) {
 }
 
 // Packages/Box/src/link/vault/holder.ts
+import crypto20 from "node:crypto";
 import fs52 from "node:fs";
 import net2 from "node:net";
 import path53 from "node:path";
@@ -11144,6 +11238,9 @@ var VAULT_SOCKET = path53.join(RUN, "vault.sock");
 var holding = false;
 var holdsVault = () => holding;
 var MOST2 = 8 * 1024 * 1024;
+var KEY3 = "x-kuvo-vault-key";
+var AUTH = "x-kuvo-vault-auth";
+var nonce = () => crypto20.randomBytes(18).toString("base64url");
 function holdVault(handle) {
   holding = true;
   fs52.mkdirSync(RUN, { recursive: true, mode: 448 });
@@ -11155,6 +11252,8 @@ function holdVault(handle) {
   } catch {}
   const server = net2.createServer((socket) => {
     let given = "";
+    let hello = null;
+    const mine = nonce();
     const stop = new AbortController;
     socket.on("close", () => stop.abort());
     socket.on("error", () => stop.abort());
@@ -11163,6 +11262,21 @@ function holdVault(handle) {
       given += chunk;
       if (given.length > MOST2)
         return void socket.destroy();
+      if (hello === null) {
+        const end = given.indexOf(`
+`);
+        if (end < 0)
+          return;
+        let said = null;
+        try {
+          said = JSON.parse(given.slice(0, end));
+        } catch {}
+        given = given.slice(end + 1);
+        hello = typeof said?.hello === "string" ? said.hello.slice(0, 100) : "";
+        const proof = hello ? unlockProof("holder", hello) : null;
+        socket.write(JSON.stringify({ nonce: mine, ...proof ? { proof } : {} }) + `
+`);
+      }
       const end = given.indexOf(`
 `);
       if (end < 0)
@@ -11172,12 +11286,16 @@ function holdVault(handle) {
       try {
         sent = JSON.parse(given.slice(0, end));
       } catch {}
+      const headers = typeof sent?.headers === "object" && sent.headers ? { ...sent.headers } : {};
+      const proved = provesUnlock("client", mine, headers[AUTH]);
+      delete headers[AUTH];
       const request = {
         method: String(sent?.method ?? "GET"),
         path: String(sent?.path ?? ""),
-        headers: typeof sent?.headers === "object" && sent.headers ? sent.headers : {},
+        headers,
         body: Buffer.from(String(sent?.body ?? ""), "base64"),
-        fromMac: true
+        fromMac: true,
+        ...proved ? { vaultClient: true } : {}
       };
       if (!/^kuvo\/vault(\/|\?|$)/.test(request.path))
         return void socket.end(JSON.stringify({ status: 404, type: "application/json", body: Buffer.from("{}").toString("base64") }) + `
@@ -11221,9 +11339,22 @@ function holdVault(handle) {
   server.unref();
   return server;
 }
+function socketLooksHeld() {
+  try {
+    const stat = fs52.lstatSync(VAULT_SOCKET);
+    return stat.isSocket() && (process.getuid ? stat.uid === process.getuid() : true) && (stat.mode & 63) === 0;
+  } catch {
+    return false;
+  }
+}
+var NOT_THE_HOLDER = "That isn't this vault's key, or what answers for it couldn't prove it's Kuvo Code's own: nothing was sent to it.";
 function askHolder(request, signal) {
   return new Promise((resolve) => {
+    if (!socketLooksHeld())
+      return resolve(null);
     const socket = net2.createConnection(VAULT_SOCKET);
+    const ours = nonce();
+    let theirs = null;
     let answer = "";
     let done = false;
     const finish = (value) => {
@@ -11235,22 +11366,49 @@ function askHolder(request, signal) {
     };
     signal?.addEventListener("abort", () => finish(null), { once: true });
     socket.setEncoding("utf8");
-    socket.on("connect", () => {
+    socket.on("connect", () => socket.write(JSON.stringify({ hello: ours }) + `
+`));
+    const send = () => {
       const headers = {};
       for (const [name, value] of Object.entries(request.headers ?? {}))
-        if (typeof value === "string")
+        if (typeof value === "string" && name !== AUTH)
           headers[name] = value;
+      const key = headers[KEY3];
+      if (key) {
+        const unlock = Buffer.from(key, "base64url");
+        if (typeof theirs?.proof === "string") {
+          if (theirs.proof !== unlockProof("holder", ours, unlock)) {
+            finish({ status: 403, type: "application/json", body: Buffer.from(JSON.stringify({ message: NOT_THE_HOLDER })).toString("base64") });
+            return;
+          }
+          delete headers[KEY3];
+          headers[AUTH] = unlockProof("client", String(theirs.nonce ?? ""), unlock);
+        }
+      }
       socket.write(JSON.stringify({ method: request.method, path: request.path, headers, body: Buffer.from(request.body ?? Buffer.alloc(0)).toString("base64") }) + `
 `);
-    });
+    };
     socket.on("data", (chunk) => {
       answer += chunk;
       if (answer.length > MOST2 * 2)
         return finish(null);
-      const end = answer.indexOf(`
+      let end = answer.indexOf(`
 `);
       if (end < 0)
         return;
+      if (!theirs) {
+        try {
+          theirs = JSON.parse(answer.slice(0, end));
+        } catch {
+          return finish(null);
+        }
+        answer = answer.slice(end + 1);
+        send();
+        end = answer.indexOf(`
+`);
+        if (end < 0)
+          return;
+      }
       try {
         finish(JSON.parse(answer.slice(0, end)));
       } catch {
@@ -11264,7 +11422,7 @@ function askHolder(request, signal) {
 
 // Packages/Box/src/link/vault/tools.ts
 import { spawn as spawn5 } from "node:child_process";
-import crypto20 from "node:crypto";
+import crypto21 from "node:crypto";
 import fs53 from "node:fs";
 import os7 from "node:os";
 import path54 from "node:path";
@@ -11367,7 +11525,8 @@ async function listItems(caller) {
     const where = item.sites.length ? ` on ${item.sites.join(", ")}` : "";
     const fields = item.kind === "key" && item.fields.length > 1 ? ` (fields: ${item.fields.join(", ")})` : "";
     const user = item.kind === "login" && item.username ? `, username ${item.username}` : "";
-    lines.push(`- “${item.name}”: a ${KIND_WORDS[item.kind]}${where}${user}${fields}; ${how === "own" ? "yours to use" : "the user is asked each time"}.`);
+    const only = item.signInOnly ? ", only for signing in with browser_sign_in" : "";
+    lines.push(`- “${item.name}”: a ${KIND_WORDS[item.kind]}${where}${user}${fields}${only}; ${how === "own" ? "yours to use" : "the user is asked each time"}.`);
     if (item.kind === "note" && item.readable && how === "own") {
       try {
         const text = (await valuesOf(item.id)).text;
@@ -11420,7 +11579,7 @@ var MOST_OUTPUT2 = 64 * 1024;
 var MOST_KEPT2 = 4 * 1024 * 1024;
 var CALL_BUDGET = 15.5 * 60000;
 var VARIABLE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
-var PRIVATE = ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "BUN_BE_BUN"];
+var PRIVATE = ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "KUVO_HOST_VAULT_SECRET", "KUVO_VAULT_FILE_KEY", "BUN_BE_BUN"];
 var RUN_FOLDER = path54.join(RUN, "vault-run");
 var running = new Map;
 process.once("exit", () => {
@@ -11472,6 +11631,8 @@ async function runWith(caller, args, signal) {
     const found = namedValue(named);
     if (!found)
       return failed(`There's no item “${oneLine(named, 80)}” in the vault. See what you may use with vault_items.`);
+    if (found.item.signInOnly)
+      return failed(`“${found.item.name}” is only for signing in, in the browser: use browser_sign_in. It's never handed to a command.`);
     const field = fieldOf(found.item, found.field);
     if (field instanceof VaultRefusal)
       return failed(field.message);
@@ -11486,7 +11647,7 @@ async function runWith(caller, args, signal) {
       return failed(may.message);
     allowed.set(item.id, may.how);
   }
-  const scratch = path54.join(RUN_FOLDER, crypto20.randomBytes(8).toString("hex"));
+  const scratch = path54.join(RUN_FOLDER, crypto21.randomBytes(8).toString("hex"));
   const env = {};
   for (const [name, value] of Object.entries(process.env))
     if (value !== undefined && !PRIVATE.includes(name))
@@ -11505,7 +11666,10 @@ async function runWith(caller, args, signal) {
         const bytes = Buffer.from(value, "base64");
         fs53.writeFileSync(file, bytes, { mode: 384 });
         env[variable] = file;
-        hidden.push({ item: item.name, value: bytes.toString("utf8") });
+        const base64 = bytes.toString("base64");
+        const wrapped = (width) => base64.match(new RegExp(`.{1,${width}}`, "g")).join(`
+`);
+        hidden.push({ item: item.name, value: bytes.toString("utf8") }, { item: item.name, value: base64 }, { item: item.name, value: wrapped(76) }, { item: item.name, value: wrapped(64) }, { item: item.name, value: bytes.toString("hex") });
       } else {
         env[variable] = value;
         hidden.push({ item: item.name, value });
@@ -11597,6 +11761,8 @@ async function callTool(name, args, caller, signal) {
 // Packages/Box/src/link/areas/vault.ts
 var NOT_OPEN = "This computer's vault isn't open: Kuvo Code's link here isn't running. Try again in a moment.";
 var CLIENTS_ONLY = "Only Kuvo Code on your Mac or iPhone can do this.";
+var NOT_CALLING = "Only a conversation's own tool call can use the vault, and this one isn't running in it.";
+var stringOf = (value) => typeof value === "string" ? value : undefined;
 var ED_SPKI2 = Buffer.from("302a300506032b6570032100", "hex");
 function clientOf({ request, phone }) {
   if (phone?.key) {
@@ -11605,22 +11771,36 @@ function clientOf({ request, phone }) {
   }
   if (request.fromApp)
     return "Mac";
+  if (request.vaultClient)
+    return "Mac";
   const key = request.headers["x-kuvo-vault-key"];
   if (typeof key === "string" && unlockWith(key))
     return "Mac";
   return null;
 }
+var PROOF_FOR = 300000;
+var usedProofs = new Map;
 function provedMac(given) {
   const link = readLink();
   const mac = typeof given.mac === "string" ? given.mac : "";
   const at = Number(given.at);
+  const nonce = typeof given.nonce === "string" && /^[A-Za-z0-9_-]{16,64}$/.test(given.nonce) ? given.nonce : "";
   const sign = mac ? macSign(link, mac) : null;
-  if (!sign || !(link?.macs ?? []).includes(mac) || !Number.isFinite(at) || Math.abs(Date.now() - at) > 300000 || typeof given.proof !== "string")
+  if (!sign || !nonce || !(link?.macs ?? []).includes(mac) || !Number.isFinite(at) || Math.abs(Date.now() - at) > PROOF_FOR || typeof given.proof !== "string")
+    return false;
+  const now = Date.now();
+  for (const [used, until] of usedProofs)
+    if (until < now)
+      usedProofs.delete(used);
+  if (usedProofs.has(nonce))
     return false;
   try {
-    const key = crypto21.createPublicKey({ key: Buffer.concat([ED_SPKI2, Buffer.from(sign, "base64url")]), format: "der", type: "spki" });
+    const key = crypto22.createPublicKey({ key: Buffer.concat([ED_SPKI2, Buffer.from(sign, "base64url")]), format: "der", type: "spki" });
     const signature = Buffer.from(given.proof, "base64url");
-    return signature.length === 64 && typeof link?.id === "string" && crypto21.verify(null, Buffer.from(`kuvo-vault-key\x00${link.id}\x00${at}`), key, signature);
+    const good = signature.length === 64 && typeof link?.id === "string" && crypto22.verify(null, Buffer.from(`kuvo-vault-key\x00${link.id}\x00${at}\x00${nonce}`), key, signature);
+    if (good)
+      usedProofs.set(nonce, now + 2 * PROOF_FOR);
+    return good;
   } catch {
     return false;
   }
@@ -11658,8 +11838,12 @@ async function* answerVault(context) {
       return yield* json(200, { tools: VAULT_TOOLS });
     if (method !== "POST")
       return yield* json(405, {});
+    const args = isObject(given.arguments) ? given.arguments : {};
+    if (typeof given.name !== "string" || !await isCalling(stringOf(given.session), [given.name], args, readEngine, readBridge)) {
+      return yield* json(200, { text: NOT_CALLING, isError: true });
+    }
     const caller = await callerOf(given.session, readEngine, readBridge);
-    return yield* json(200, await callTool(given.name, given.arguments, caller, signal));
+    return yield* json(200, await callTool(given.name, args, caller, signal));
   }
   if (route === "kuvo/vault/fill") {
     if (method !== "POST")
@@ -11668,6 +11852,8 @@ async function* answerVault(context) {
       return yield* json(403, { message: CLIENTS_ONLY });
     if (isLocked())
       return yield* json(423, { message: LOCKED });
+    if (!await isCalling(stringOf(given.session), ["browser_sign_in", "browser_fill"], null, readEngine, readBridge))
+      return yield* json(403, { message: NOT_CALLING });
     const caller = await callerOf(given.session, readEngine, readBridge);
     const outcome = await fill(given, caller, signal);
     return yield* json(outcome.status, outcome.value);
@@ -11706,7 +11892,7 @@ async function* answerVault(context) {
   if (route === "kuvo/vault/pause") {
     if (method !== "POST")
       return yield* json(405, {});
-    const bot = typeof given.bot === "string" && /^bot_[A-Za-z0-9]+$/.test(given.bot) ? given.bot : undefined;
+    const bot = typeof given.bot === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(given.bot) ? given.bot : undefined;
     const paused = given.paused === true;
     setPaused(paused, bot);
     note({ what: paused ? "paused" : "resumed", client, ...bot ? { bot } : {} });
@@ -12047,14 +12233,14 @@ async function runMacLink() {
 }
 
 // Packages/Box/src/link/server/serve.ts
-import crypto22 from "node:crypto";
+import crypto23 from "node:crypto";
 import http from "node:http";
 import os9 from "node:os";
 function serveBox(password, handle = engineHandler(readEngineFile, { name: os9.hostname() })) {
   const expected = Buffer.from("Basic " + Buffer.from(`opencode:${password}`).toString("base64"));
   return http.createServer(async (request, response) => {
     const given = Buffer.from(request.headers.authorization ?? "");
-    if (given.length !== expected.length || !crypto22.timingSafeEqual(given, expected)) {
+    if (given.length !== expected.length || !crypto23.timingSafeEqual(given, expected)) {
       response.writeHead(401);
       return response.end();
     }
@@ -12457,7 +12643,7 @@ async function setup() {
   const before = readPersonalities();
   let link = null, work = null, library = before;
   updateLink((current) => {
-    const next = current ?? { secret: crypto23.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), phones: [] };
+    const next = current ?? { secret: crypto24.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), phones: [] };
     next.sign ??= newSigningSeed();
     if (mac) {
       next.mac = mac;
@@ -12546,7 +12732,7 @@ function leave(mac) {
 }
 function pair(relay) {
   const link = updateLink((current) => {
-    const next = current ?? { secret: crypto23.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os10.hostname(), phones: [] };
+    const next = current ?? { secret: crypto24.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os10.hostname(), phones: [] };
     next.sign ??= newSigningSeed();
     if (relay)
       next.relay = relay;

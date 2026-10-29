@@ -16,6 +16,8 @@ export interface LinkRequest {
   fromApp?: boolean;
   /** From Kuvo Code on another computer (the Mac reaching a machine's box, `box route`), not a phone. */
   fromMac?: boolean;
+  /** Proved, over the vault's socket, to hold the vault's unlock key (vault/holder.ts): a client. */
+  vaultClient?: boolean;
 }
 
 /** Who asks: a phone, by its static key and where it is on the relay; nothing for this Mac's app. */

@@ -16,6 +16,10 @@ import KuvoLink
 @MainActor
 final class HostInterface {
     private let password = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+    /// What the vault's calls need besides the password, which is in a file an agent's command can
+    /// read: given to this Mac's box alone, in its environment as it starts (`boxEnvironment`), which
+    /// no other process can read, and never written down.
+    let vaultSecret = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
     private lazy var server: LoopbackServer = {
         let server = LoopbackServer { [weak self] request in await self?.respond(to: request) ?? .init(status: 503) }
         // Gone by itself: started again, so the box's keys aren't out of reach until the app quits;
@@ -217,6 +221,8 @@ final class HostInterface {
             return await Task.detached(operation: { IntegrationKeys.set(nil, for: name) }).value ? .json([:]) : Self.failed
         case "/vault/get", "/vault/set", "/vault/delete":
             // The vault's values, by item, in the Keychain: the box keeps everything else about them.
+            // Only to the box, which has the secret no file holds.
+            guard let secret = request.headers["x-kuvo-vault-secret"], samePassword(secret, vaultSecret) else { return .init(status: 403) }
             guard let id = given["id"] as? String, VaultValues.isItem(id) else { return .init(status: 400) }
             switch request.path {
             case "/vault/get":

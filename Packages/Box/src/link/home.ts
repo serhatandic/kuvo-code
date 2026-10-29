@@ -86,6 +86,14 @@ export const LAUNCH_HOST = process.env.KUVO_HOST_URL && process.env.KUVO_HOST_PA
 // keys can't be reached, rather than kept in files of its own instead of your Keychain.
 export const KEYS_ON_HOST = process.env.KUVO_KEYS_ON_HOST === "1" || Boolean(process.env.KUVO_HOST_URL);
 delete process.env.KUVO_HOST_PASSWORD;
+// This Mac's vault's two secrets from its app, which no file holds (the host interface's password
+// is in `run/host.json`, which an agent's command can read): `KUVO_HOST_VAULT_SECRET`, without
+// which the app gives no value from the Keychain, and `KUVO_VAULT_FILE_KEY`, which signs the
+// vault's files (vault/store.ts). Out of the environment as the box loads, as the password is.
+export const HOST_VAULT_SECRET = process.env.KUVO_HOST_VAULT_SECRET || null;
+export const MAC_VAULT_FILE_KEY = process.env.KUVO_VAULT_FILE_KEY ? Buffer.from(process.env.KUVO_VAULT_FILE_KEY, "base64url") : null;
+delete process.env.KUVO_HOST_VAULT_SECRET;
+delete process.env.KUVO_VAULT_FILE_KEY;
 
 // The box's own script (kuvo-link.js, or its source in a debug run), for what it runs again as a
 // command of its own (`box reconnect`, `update`): said once as it starts, by main.ts.

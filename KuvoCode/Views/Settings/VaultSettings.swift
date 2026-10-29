@@ -104,6 +104,12 @@ struct VaultSettings: View {
                 }
             }
         }
+        if state.tampered == true {
+            Section {
+                Label("Its files were changed outside Kuvo Code, so it uses none of them, and every agent’s use is paused. Add its items again.", systemImage: "exclamationmark.octagon.fill")
+                    .foregroundStyle(.secondary)
+            }
+        }
         if state.locked {
             Section {
                 Label("This machine’s vault is locked since it started again. It unlocks the next time Kuvo Code on this Mac or your iPhone reaches it.", systemImage: "lock.fill")
@@ -151,7 +157,7 @@ struct VaultSettings: View {
         } footer: {
             Text(settingsBox.machine == nil
                  ? "Kept in this Mac’s Keychain. Agents fill them in or hand them to a command without ever seeing them, only as you allow."
-                 : "Kept on \(computer), encrypted, with a key only your Mac and iPhone hold. Agents fill them in or hand them to a command without ever seeing them, only as you allow.")
+                 : "Kept on \(computer), encrypted, with a key only your Mac and iPhone hold. Agents fill them in or hand them to a command without ever seeing them, only as you allow. On a machine, its browser runs as you, so a program you or an agent runs there could get an item an agent there may use.")
                 .foregroundStyle(.secondary)
         }
 
@@ -164,7 +170,7 @@ struct VaultSettings: View {
                 LabeledContent {
                     Button("Let Go On") { change { try await Vaults.shared.pause(false, bot: bot, on: box) } }
                 } label: {
-                    Text("\(bots.first { $0.id == bot }?.name ?? "A bot") is paused")
+                    Text("\(bots.first { $0.id == bot }?.name ?? (bot.hasPrefix("bot_") ? "A bot" : "A conversation")) is paused")
                     Text(why)
                 }
             }

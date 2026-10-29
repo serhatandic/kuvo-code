@@ -50,6 +50,7 @@ export async function fill(given: unknown, caller: Caller, signal?: AbortSignal)
     if (own.length !== 1) return refused(404, own.length ? "More than one sign-in fits this site." : "No sign-in in the vault is yours to use on this site.");
     item = own[0];
   }
+  if (purpose === "field" && item.signInOnly) return refused(403, `“${item.name}” is only for signing in: use browser_sign_in.`);
   const may = await mayUse(item, caller, { site, ...(why ? { why } : {}), askWithout: true, signal });
   if (!may.ok) return refused(403, may.message);
   const values = await valuesOf(item.id);
