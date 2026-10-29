@@ -549,7 +549,8 @@ enum DemoDirector {
         }
         // KUVO_DEMO_GOAL: `met` or `working`, a sample goal over the composer, once the first turn
         // ended (no model checks it).
-        if let kind = environment["KUVO_DEMO_GOAL"], let model = workspace.model(for: session.id) {
+        // (`<bot's name>:<kind>` is a bot's goal and its plan: `GoalPlans.demo(for:)`.)
+        if let kind = environment["KUVO_DEMO_GOAL"], !kind.contains(":"), let model = workspace.model(for: session.id) {
             await DemoWait.until("its turn to end (KUVO_DEMO_GOAL)", limit: .seconds(180)) { !model.isRunning }
             let now = Date.now.timeIntervalSince1970 * 1000
             var goal: [String: Any] = ["session": session.id, "condition": "The README says how to run the tests", "state": kind == "met" ? "met" : "working",

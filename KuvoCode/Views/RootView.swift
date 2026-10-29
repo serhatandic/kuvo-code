@@ -6,6 +6,7 @@ import SwiftUI
 struct RootView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.appearsActive) private var appearsActive
     @AppStorage(Appearance.key) private var appearance = Appearance.system
 
     var body: some View {
@@ -31,6 +32,10 @@ struct RootView: View {
             } else if app.engine == .ready {
                 MainView()
                     .transition(.opacity)
+                    #if DEBUG
+                    // KUVO_DEMO_ACTIVE: drawn as the window in front, though it's behind (for captures).
+                    .environment(\.appearsActive, ProcessInfo.processInfo.environment["KUVO_DEMO_ACTIVE"] != nil ? true : appearsActive)
+                    #endif
             } else {
                 EngineSetupView()
                     .transition(.opacity.combined(with: .scale(0.98)))
