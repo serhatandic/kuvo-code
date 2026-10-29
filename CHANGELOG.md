@@ -163,6 +163,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Renaming, making or deleting a bot on a machine just as Kuvo Code reads that machine's bots again keeps your change, instead of the old name coming back or a new bot's conversation closing.
 - A group chat's part of the work in a state only a newer Kuvo Code knows no longer shows "Working" forever, or stops you moving that chat to another computer.
 - A group chat moved to a machine shows there once it has moved, instead of sometimes disappearing until Kuvo Code opens again.
+- Kuvo Code no longer crashes when a computer lists a conversation's subagents in a loop.
 
 ## 0.7.2
 
