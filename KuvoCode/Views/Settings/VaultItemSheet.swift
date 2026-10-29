@@ -149,7 +149,7 @@ struct VaultItemSheet: View {
             })) {
                 Text("On Its Own").tag(VaultGrant.How?.some(.own))
                 Text("Asks Each Time").tag(VaultGrant.How?.some(.ask))
-                Text(who.everyone == true ? "Ask Me" : "No").tag(VaultGrant.How?.none)
+                Text("No").tag(VaultGrant.How?.none)
             }
             .labelsHidden()
             .fixedSize()

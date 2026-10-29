@@ -19,6 +19,8 @@ struct VaultSettings: View {
     @State private var showingActivity = false
     @State private var trouble: String?
     @State private var never: [String] = Passwords.neverSites
+    /// The integrations added here with keys of their own, which Integrations still keeps.
+    @State private var keyed: [Integrations.Entry] = []
 
     enum Filter: String, CaseIterable, Identifiable {
         case all = "All", signIns = "Sign-ins", keys = "Keys & Files", notes = "Notes"
@@ -63,6 +65,7 @@ struct VaultSettings: View {
         .task(id: box) {
             await Vaults.shared.refresh(box)
             Vaults.shared.follow(box)
+            keyed = ((try? await app.integrations(on: settingsBox))?.integrations ?? []).filter { $0.added && $0.takesKeys }
             #if DEBUG
             // KUVO_DEMO_VAULT_ITEM: that item's sheet, open (by name).
             if let name = ProcessInfo.processInfo.environment["KUVO_DEMO_VAULT_ITEM"] {
@@ -172,6 +175,35 @@ struct VaultSettings: View {
                     Button("Show All") { showingActivity = true }
                         .buttonStyle(TextButtonStyle())
                 }
+            }
+        }
+
+        if !keyed.isEmpty {
+            Section {
+                ForEach(keyed) { entry in
+                    Button { app.openSettings(.integrations, on: settingsBox) } label: {
+                        HStack(spacing: 10) {
+                            VaultKindTile(kind: .key)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(entry.title).lineLimit(1)
+                                Text((entry.keys ?? []).map(\.label).joined(separator: ", ")).font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer(minLength: 8)
+                            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                        }
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 6)
+                        .contentShape(.rect)
+                        .accessibilityElement(children: .combine)
+                    }
+                    .buttonStyle(ListRowButtonStyle(isSelected: false))
+                    .accessibilityHint("Opens Integrations")
+                }
+            } header: {
+                Text("Integrations’ Keys")
+            } footer: {
+                Text("Still kept and changed in Integrations. They move into the vault in a later update.")
+                    .foregroundStyle(.secondary)
             }
         }
 
@@ -287,11 +319,29 @@ struct VaultWhoPill: View {
 struct VaultActivityRow: View {
     let entry: VaultActivity
 
+    private var symbol: String {
+        if entry.isWarning { return "exclamationmark.triangle.fill" }
+        switch entry.what {
+        case "used": return "key"
+        case "asked": return "questionmark.bubble"
+        case "allowed", "granted": return "checkmark.circle"
+        case "declined", "refused", "ungranted": return "xmark.circle"
+        case "added": return "plus.circle"
+        case "changed": return "pencil"
+        case "removed": return "trash"
+        case "shown": return "eye"
+        case "paused": return "pause.circle"
+        case "resumed": return "play.circle"
+        default: return "circle"
+        }
+    }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: entry.isWarning ? "exclamationmark.triangle.fill" : entry.what == "used" ? "checkmark.circle" : "circle")
+            Image(systemName: symbol)
                 .foregroundStyle(entry.isWarning ? .orange : .secondary)
                 .font(.caption)
+                .frame(width: 14)
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.sentence).lineLimit(2)
                 Text("\(entry.date, format: .relative(presentation: .named))\(entry.why.map { " · \($0)" } ?? "")")

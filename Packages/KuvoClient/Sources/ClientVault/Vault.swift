@@ -111,7 +111,7 @@ public struct VaultItem: Codable, Equatable, Hashable, Identifiable, Sendable {
     public var subtitle: String {
         switch kind {
         case .login: [username, sites.first].compactMap { $0 }.joined(separator: " · ")
-        case .file: fileName ?? "A file"
+        case .file: fileName.flatMap { $0 == name ? nil : $0 } ?? "A file"
         case .note: readable == true ? "Bots may read it" : "A note"
         case .key: sites.isEmpty ? (fields.count > 1 ? fields.joined(separator: ", ") : "A key") : sites.joined(separator: ", ")
         }
@@ -242,28 +242,30 @@ public struct VaultActivity: Codable, Equatable, Identifiable, Sendable {
 
     /// What happened, in a sentence both apps show.
     public var sentence: String {
-        let who = botName ?? sessionName ?? (client.map { "You, on \($0)," } ?? "An agent")
+        // You, on the client you did it from: "Mac" is the Mac that keeps it, or a machine's.
+        let you = client.map { "You, on \($0 == "Mac" ? "your Mac" : $0)," } ?? "You"
+        let who = botName ?? sessionName ?? (client == nil ? "An agent" : you)
         let item = itemName.map { "“\($0)”" } ?? "an item"
         let where_ = site.map { " on \($0)" } ?? program.map { " with \($0)" } ?? ""
         switch what {
         case "used": return "\(who) used \(item)\(where_)" + (how == "once" ? ", allowed once" : how == "always" ? ", now always allowed" : "")
         case "asked": return itemName == nil ? "\(who) asked for something from the vault" : "\(who) asked to use \(item)\(where_)"
-        case "allowed": return "\(client.map { "You, on \($0)," } ?? "You") let \(botName ?? sessionName ?? "an agent") use \(item)\(how == "always" ? " from now on" : " once")"
-        case "declined": return "\(client.map { "You, on \($0)," } ?? "You") said no to \(botName ?? sessionName ?? "an agent") using \(item)"
+        case "allowed": return "\(you) let \(botName ?? sessionName ?? "an agent") use \(item)\(how == "always" ? " from now on" : " once")"
+        case "declined": return "\(you) said no to \(botName ?? sessionName ?? "an agent") using \(item)"
         case "refused":
             switch how {
             case "wrong site": return "Refused \(item)\(where_): not one of its sites. \(botName ?? "The bot") was paused"
-            case "paused": return "\(who) couldn't use \(item): paused"
-            default: return "\(who) wasn't allowed \(item)"
+            case "paused": return "\(who) couldn’t use \(item): paused"
+            default: return "\(who) wasn’t allowed \(item)"
             }
-        case "added": return "\(client.map { "You, on \($0)," } ?? "You") added \(item)"
-        case "changed": return "\(client.map { "You, on \($0)," } ?? "You") changed \(item)"
-        case "removed": return "\(client.map { "You, on \($0)," } ?? "You") removed \(item)"
-        case "shown": return "\(client.map { "You, on \($0)," } ?? "You") looked at \(item)"
+        case "added": return "\(you) added \(item)"
+        case "changed": return "\(you) changed \(item)"
+        case "removed": return "\(you) removed \(item)"
+        case "shown": return "\(you) looked at \(item)"
         case "granted": return "\(item) is now \(how == "own" ? "used on its own" : "asked for each time") by \(botName ?? "everyone allowed")"
         case "ungranted": return "\(item) taken away from \(botName ?? "an agent")"
-        case "paused": return botName.map { "\($0)'s use of the vault was paused" } ?? "The vault was paused"
-        case "resumed": return botName.map { "\($0)'s use of the vault goes on again" } ?? "The vault goes on again"
+        case "paused": return botName.map { "\($0)’s use of the vault was paused" } ?? "The vault was paused"
+        case "resumed": return botName.map { "\($0)’s use of the vault goes on again" } ?? "The vault goes on again"
         default: return "\(who): \(what) \(item)"
         }
     }

@@ -40,7 +40,8 @@ import Testing
         #expect(refused.sentence == "Refused “GitHub” on github.com.evil.example: not one of its sites. Ship was paused")
         #expect(refused.isWarning)
         #expect(VaultActivity(id: "a_2", at: 0, what: "used", itemName: "App Store Connect key", botName: "Ship", program: "xcodebuild", how: "once").sentence == "Ship used “App Store Connect key” with xcodebuild, allowed once")
-        #expect(VaultActivity(id: "a_3", at: 0, what: "added", itemName: "GitHub", client: "Mac").sentence == "You, on Mac, added “GitHub”")
+        #expect(VaultActivity(id: "a_3", at: 0, what: "added", itemName: "GitHub", client: "Mac").sentence == "You, on your Mac, added “GitHub”")
+        #expect(VaultActivity(id: "a_4", at: 0, what: "shown", itemName: "GitHub", client: "Alex’s iPhone").sentence == "You, on Alex’s iPhone, looked at “GitHub”")
         #expect(!VaultActivity(id: "a_4", at: 0, what: "refused", itemName: "GitHub", botName: "Scout", how: "no grant").isWarning)
     }
 
