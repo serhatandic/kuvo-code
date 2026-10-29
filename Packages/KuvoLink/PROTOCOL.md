@@ -2560,7 +2560,10 @@ counts for nothing; on macOS never its hooks or config, its submodules' or its w
 engine's settings in the folder: `.opencode/`, `opencode.json`, nor the coding agents' settings
 files, whose hooks and servers they run as they start there: `.claude/settings.json` and
 `settings.local.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and `mcp.json`,
-`.gemini/settings.json`, `.grok/settings.json`), its conversation's own temporary
+`.gemini/settings.json`, `.grok/settings.json`, and the scripts in `.claude/hooks` and
+`.cursor/hooks`; a folder moved or linked into place is checked only by its own name, so the folders
+that hold those, `.git`, a submodule's or a worktree's repository in it and the agents' `.claude`,
+`.codex`, `.cursor`, `.gemini` and `.grok`, can't be made, moved or removed, only written in), its conversation's own temporary
 folder (`TMPDIR`), its conversation's wake-ups' inbox (below), the system's temporary folders, devices and tools'
 caches, but not what in them runs later outside the sandbox (installed programs like
 `~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, npx's packages). It can't read

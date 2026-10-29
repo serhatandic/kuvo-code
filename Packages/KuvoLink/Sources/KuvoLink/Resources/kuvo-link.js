@@ -10310,7 +10310,7 @@ function agentsNote(platform) {
   return [
     "# Commands run in a sandbox here",
     "",
-    "Each command you run with the shell tool runs in Kuvo Code's sandbox. It writes only in this conversation's folder, its git repository, temporary folders (`$TMPDIR`, `/tmp`) and tools' caches, and it can't read Kuvo Code's own folders or the user's secrets (private SSH keys, cloud and package tokens)." + (mac ? " Nor can it change git's hooks or config, or the settings opencode and the coding agents start with in a project (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like). If a task needs one changed, ask the user." : ""),
+    "Each command you run with the shell tool runs in Kuvo Code's sandbox. It writes only in this conversation's folder, its git repository, temporary folders (`$TMPDIR`, `/tmp`) and tools' caches, and it can't read Kuvo Code's own folders or the user's secrets (private SSH keys, cloud and package tokens)." + (mac ? " Nor can it change git's hooks or config, or the settings opencode and the coding agents start with in a project (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like, and their hooks' scripts), nor make, move or remove the folders that hold them (`.git`, `.claude`, `.codex`, `.cursor` and the like): writing in them is fine. If a task needs one changed, ask the user." : ""),
     ...mac ? [
       "",
       "On this Mac:",
@@ -10602,9 +10602,9 @@ var quote2 = (text) => `"${text.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
 var subpath = (folder) => `(subpath ${quote2(folder)})`;
 var regex = (pattern) => `(regex ${quote2(pattern)})`;
 var param = (name) => `(subpath (param ${quote2(name)}))`;
-var GIT_GUARDED = String.raw`((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$)`;
-var AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/config\.toml|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json`;
-var GUARDED = String.raw`(.*/)?(\.git/${GIT_GUARDED}|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
+var GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$)|(modules|worktrees)/[^/]+$)`;
+var AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/config\.toml|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
+var GUARDED = String.raw`(.*/)?(\.git$|\.git/(${GIT_GUARDED})|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
 function seatbeltProfile(policy, options) {
   const mode = options.mode ?? "enforce";
   const tag = quote2(options.tag ?? "kuvo-sandbox");

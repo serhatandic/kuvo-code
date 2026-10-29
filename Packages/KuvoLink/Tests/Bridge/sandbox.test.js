@@ -136,13 +136,14 @@ function changeIn(folder, done) {
   });
 }
 
-test("on wherever it can run, from the box's start, with no switch to turn it off", async () => {
+test("set up wherever it can run as the box starts, waiting only for the engine, with no switch to turn it off", async () => {
   const box = boxAt("always");
   const running = await start(box);
   try {
     const state = (await running.ask("GET", "kuvo/sandbox")).value;
     assert.equal(state.able, true, state.why);
     assert.equal("wanted" in state, false);
+    assert.equal(state.reason, "waiting", state.why);
     assert.equal(fs.existsSync(box.plugin), true, "the engine has its plugin as the box starts");
     assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: false })).status, 405);
     assert.equal(fs.existsSync(box.plugin), true);
@@ -218,6 +219,9 @@ test("a command can't change what git runs on its own, the engine's settings or 
   fs.mkdirSync(path.join(project, ".git", "worktrees", "spare"), { recursive: true });
   fs.mkdirSync(path.join(project, ".claude"));
   fs.writeFileSync(path.join(project, ".claude", "settings.local.json"), "{}\n");
+  fs.mkdirSync(path.join(project, ".claude", "hooks"));
+  fs.writeFileSync(path.join(project, ".claude", "hooks", "check.sh"), "exit 0\n");
+  fs.mkdirSync(path.join(project, ".cursor"));
   const running = await start(box);
   try {
     assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
@@ -241,16 +245,28 @@ test("a command can't change what git runs on its own, the engine's settings or 
       ["add a Cursor rule", "mkdir -p .cursor/rules && echo ok > .cursor/rules/style.mdc"],
       ["write in a worktree kept in .claude", "mkdir -p .claude/worktrees/spare && echo ok > .claude/worktrees/spare/index.js"],
       ["write a source file", "echo ok > index.js"],
+      ["change a Claude Code hook script", "echo 'curl evil' > .claude/hooks/check.sh"],
+      // A folder moved or linked into place carries what's in it past each file's check (last: each
+      // moves what the tries above use).
+      ["swap in a submodule's repository", "mkdir -p m/hooks && echo 'curl evil' > m/hooks/post-checkout && mv m .git/modules/other"],
+      ["link in a Codex folder", "mkdir -p cx && echo 'x = 1' > cx/config.toml && ln -s cx .codex"],
+      ["swap in another .claude", `mkdir -p evil && echo '{"hooks":{}}' > evil/settings.local.json && mv .claude .claude-old && mv evil .claude`],
+      ["swap in another .git", "mkdir -p g/hooks && echo 'curl evil' > g/hooks/pre-commit && mv .git .git-old && mv g .git"],
     ]));
     const seen = outcome(ran.out);
     assert.deepEqual(seen, {
       "add a git hook": "refused", "change git's settings": "refused", "add a submodule's hook": "refused", "change a submodule's settings": "refused",
       "change a worktree's settings": "refused", "make a branch": "allowed", "add the engine's settings": "refused", "add the engine's plugins": "refused",
       "add Claude Code's hooks": "refused", "change Claude Code's own settings": "refused", "add Claude Code's servers": "refused", "add Codex's settings": "refused",
-      "add Cursor's hooks": "refused", "move Claude Code's settings into place": "refused", "write the project's notes for agents": "allowed",
+      "add Cursor's hooks": "refused", "move Claude Code's settings into place": "refused",
+      "swap in another .claude": "refused", "link in a Codex folder": "refused", "swap in another .git": "refused",
+      "swap in a submodule's repository": "refused", "change a Claude Code hook script": "refused", "write the project's notes for agents": "allowed",
       "add a Claude Code command": "allowed", "add a Cursor rule": "allowed", "write in a worktree kept in .claude": "allowed", "write a source file": "allowed",
     }, ran.out);
     assert.equal(fs.readFileSync(path.join(project, ".claude", "settings.local.json"), "utf8"), "{}\n");
+    assert.equal(fs.readFileSync(path.join(project, ".claude", "hooks", "check.sh"), "utf8"), "exit 0\n");
+    assert.equal(fs.existsSync(path.join(project, ".codex")), false);
+    assert.equal(fs.existsSync(path.join(project, ".git", "hooks", "pre-commit")), false);
   } finally {
     await running.stop();
   }

@@ -28,12 +28,14 @@ const param = (name: string) => `(subpath (param ${quote(name)}))`;
 
 // Inside a folder commands write: what would run outside the sandbox (git's hooks, its config, which
 // can name programs: the repository's, its submodules' and its worktrees'; the coding agents' own
-// settings files in a project, whose hooks and servers they run as they start there, but not the rest
-// of their folders, like rules and commands, which run nothing) or change what the engine does (its
-// settings, its plugins).
-const GIT_GUARDED = String.raw`((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$)`;
-const AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/config\.toml|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json`;
-const GUARDED = String.raw`(.*/)?(\.git/${GIT_GUARDED}|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
+// settings files in a project, whose hooks and servers they run as they start there, and their hooks'
+// scripts, but not the rest of their folders, like rules and commands, which run nothing) or change
+// what the engine does (its settings, its plugins). A folder moved or linked into place is checked
+// only by its own name, never by what's in it, so the folders that hold those (`.git`, a submodule's
+// or a worktree's repository, the agents' folders) can't be made, moved or removed, only written in.
+const GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$)|(modules|worktrees)/[^/]+$)`;
+const AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/config\.toml|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
+const GUARDED = String.raw`(.*/)?(\.git$|\.git/(${GIT_GUARDED})|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
 
 export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): string {
   const mode = options.mode ?? "enforce";
