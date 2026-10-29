@@ -469,6 +469,8 @@ extension AppModel {
         ])
         // Settings changed here while it connected, after it took the ones it has.
         connection.run("settings") { [weak self] in await self?.keepSettingsCurrent(engine) }
+        // What its bots ask you (making a project), for as long as it's connected.
+        connection.run("bot-asks") { [weak self] in await self?.botAsks.follow(machine) }
     }
 
     /// Closes this Mac's connection to a machine. It runs on, as a box of its own: its sessions,

@@ -334,6 +334,10 @@ private struct BottomStack: View {
                     BrowserAskCard(ask: ask)
                         .modifier(ComposerSurface())
                 }
+                ForEach(app.botAsks.asks(for: model.session.id), id: \.ask.id) { item in
+                    WorkAskCard(ask: item.ask, box: item.box)
+                        .modifier(ComposerSurface())
+                }
                 // What went wrong, over the composer rather than in an alert you must click away.
                 if let failure = model.failure, offlineMachine == nil {
                     FailureBar(text: failure) { model.failure = nil }

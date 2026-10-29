@@ -1305,8 +1305,27 @@ private struct ProjectRow: View {
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: 10) {
+                let maker = app.workspace.madeBy[project.directory].flatMap { app.bots.bot($0.bot) }
                 FolderIcon(isOpen: isOpen)
                     .foregroundStyle(.secondary)
+                    // One a bot made: its face, still, on the folder's corner, cut out of it.
+                    .mask {
+                        Rectangle()
+                            .overlay(alignment: .bottomTrailing) {
+                                if maker != nil {
+                                    Circle().frame(width: 15, height: 15).offset(x: 4.5, y: 4.5).blendMode(.destinationOut)
+                                }
+                            }
+                            .compositingGroup()
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        if let maker {
+                            BotAvatar(look: maker.look, size: 12, animates: false)
+                                .offset(x: 3, y: 3)
+                                .help(WorkWords.madeBy(maker.name))
+                                .accessibilityLabel(WorkWords.madeBy(maker.name))
+                        }
+                    }
                     .frame(width: SidebarMetrics.iconWidth)
                 Text(project.name)
                     .font(.system(size: 14))

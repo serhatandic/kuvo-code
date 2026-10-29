@@ -99,6 +99,7 @@ test("a bot's first project asks you, with a folder to pick; once you allow it, 
   assert.equal(ask.bot, "bot_pixel00001");
   assert.equal(ask.session, "ses_pixel");
   assert.equal(ask.project, "Tidepool");
+  assert.equal(ask.folderName, "tidepool");
   assert.equal(ask.folder, null, "no projects folder is picked yet");
   assert.equal(ask.suggested, developer, "~/Developer is offered, as it's there");
   assert.equal(fs.existsSync(path.join(developer, "tidepool")), false, "nothing's made before you answer");

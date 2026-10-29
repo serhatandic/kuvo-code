@@ -15,7 +15,7 @@ import { locked, textOf, writePrivate } from "../files";
 import { HERE } from "../home";
 import { placeOfSession } from "../letters/letter";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
-import { madeWords, makeProject, projectPlace, shownPath } from "./projects";
+import { folderName, madeWords, makeProject, projectPlace, shownPath } from "./projects";
 import { projectsFolder, setProjectsFolder, suggestedFolder } from "./settings";
 import type { Target } from "../../shared/records";
 import type { WorkAskShape } from "../../shared/routes/work";
@@ -130,6 +130,7 @@ export function askWork(asker: Asker, action: WorkAction, given: KeptAsk["given"
       ...(asker.bot ? { bot: asker.bot } : {}),
       project: given.name,
       ...(given.clone ? { clone: given.clone } : {}),
+      folderName: folderName(given.name) ?? given.name,
       folder: projectPlace(given.name),
       at: Date.now(),
       given,

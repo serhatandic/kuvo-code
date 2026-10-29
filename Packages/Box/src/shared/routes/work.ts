@@ -50,8 +50,9 @@ export const WORK_SESSION = object({
 
 /** Something a bot (or another conversation) asks you before it does it (`kuvo/work/asks`): making
  * a project, or cloning one into a new project. Who asks (its conversation, by its name, and the
- * bot, for a bot's), the project's name, the repository for a clone, where it would go (null while
- * no projects folder is picked here, with a folder to offer, when there's one), and when (ms). */
+ * bot, for a bot's), the project's name, the repository for a clone, the folder's name it gets and
+ * where it would go (null while no projects folder is picked here, with a folder to offer, when
+ * there's one), and when (ms). */
 export const WORK_ASK = object({
   id: string,
   action: words("makeProject", "cloneProject"),
@@ -60,6 +61,7 @@ export const WORK_ASK = object({
   "bot?": string,
   project: string,
   "clone?": string,
+  folderName: string,
   folder: nullable(string),
   "suggested?": string,
   at: number,

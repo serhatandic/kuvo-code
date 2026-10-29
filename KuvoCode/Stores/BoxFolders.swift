@@ -81,6 +81,18 @@ extension BoxClient {
         try await value(WorktreesWhere.self, "GET", directory.map { "kuvo/worktrees/where?directory=\(Workspace.queryValue($0))" } ?? "kuvo/worktrees/where")
     }
 
+    /// Where new projects go on this box (`kuvo/work/settings`): nil until you pick a folder, with
+    /// one to offer then.
+    func workSettings() async throws -> WorkSettings {
+        try await value(WorkSettings.self, "GET", "kuvo/work/settings")
+    }
+
+    /// New projects to go in `folder` on this box from now on; nil for none picked.
+    @discardableResult
+    func setProjectsFolder(_ folder: String?) async throws -> WorkSettings {
+        try await value(WorkSettings.self, "PATCH", "kuvo/work/settings", body: WorkSettings(projectsFolder: folder))
+    }
+
     /// npm's packages for opencode that `query` finds; with none, the most used plugins.
     func searchPlugins(_ query: String) async throws -> PluginSearch {
         try await value(PluginSearch.self, "GET", "kuvo/plugins/search?q=\(Workspace.queryValue(query))")
@@ -99,5 +111,20 @@ enum BoxPaths {
     /// that as the home folder of the computer it runs on), else as it is.
     static func setting(_ path: String, home: String) -> String {
         path.hasPrefix(home + "/") ? "~/" + path.dropFirst(home.count + 1) : path
+    }
+}
+
+/// Where new projects go on a box (`kuvo/work/settings`), and a folder to offer while none is
+/// picked.
+struct WorkSettings: Codable, Equatable {
+    var projectsFolder: String?
+    var suggested: String?
+
+    private enum CodingKeys: String, CodingKey { case projectsFolder, suggested }
+
+    // (None picked is sent as null, which the box takes as none.)
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(projectsFolder, forKey: .projectsFolder)
     }
 }

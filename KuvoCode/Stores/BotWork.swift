@@ -31,6 +31,16 @@ final class BotWork {
             reports[bot.id] = Self.sample(bot)
             return
         }
+        // KUVO_DEMO_BOT_ASK=<bot's name>: it asks to make a project, the first time on its computer;
+        // KUVO_DEMO_MADE_BY=<bot's name>: your first project is one it made.
+        let environment = ProcessInfo.processInfo.environment
+        if environment["KUVO_DEMO_BOT_ASK"] == bot.name {
+            app?.botAsks.demo = [WorkAsk(id: "wak_demo", action: .makeProject, session: bot.sessionID, name: bot.name, bot: bot.id, project: "Tidepool", folderName: "tidepool",
+                                         folder: nil, suggested: NSHomeDirectory() + "/Developer", at: Date.now.timeIntervalSince1970 * 1000)]
+        }
+        if environment["KUVO_DEMO_MADE_BY"] == bot.name, let first = app?.workspace.projects.first {
+            app?.workspace.noteMadeBy(first.directory, .init(bot: bot.id, name: bot.name))
+        }
         #endif
         guard runsWork(bot), let box = box(of: bot) else { return }
         guard let (status, data) = try? await box.send("GET", "kuvo/work?bot=\(bot.id)") else { return }
@@ -43,6 +53,11 @@ final class BotWork {
         }
         guard status == 200, let report = try? JSONDecoder().decode(BotWorkReport.self, from: data), report != reports[bot.id] else { return }
         reports[bot.id] = report
+        // A project it made on a machine since its projects were read there: read again.
+        if let machine = bot.machine, let workspace = app?.workspace,
+           report.projects.contains(where: { !workspace.folders.contains(RemoteFolder.folder($0.directory, on: machine)) }) {
+            await workspace.loadProjects(on: machine)
+        }
     }
 
     /// Every session of the bot's work stopped, on its box; its work read again.
@@ -75,6 +90,18 @@ final class BotWork {
         guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
         await app?.bots.refresh(bot.box)
         await read(bot)
+    }
+
+    /// What you let a bot do without asking ("Always"), kept on its box; none for nothing.
+    func setAllowed(_ allowed: [WorkAction], for bot: Bot) async throws {
+        guard let box = box(of: bot) else { return }
+        struct Change: Encodable {
+            struct Work: Encodable { var allowed: [WorkAction] }
+            var work: Work
+        }
+        let (status, data) = try await box.send("PATCH", "kuvo/bots/\(bot.id)", body: try JSONEncoder().encode(Change(work: .init(allowed: allowed))))
+        guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
+        await app?.bots.refresh(bot.box)
     }
 
     /// What's kept of a bot's work, once it's gone from here (deleted, or moved).

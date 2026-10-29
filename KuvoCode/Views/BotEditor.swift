@@ -1086,6 +1086,7 @@ struct BotWorkLimits: View {
     @State private var isSaving = false
 
     private var limits: WorkLimits { app.bots.bot(bot.id)?.limits ?? WorkLimits() }
+    private var allowed: [WorkAction] { app.bots.bot(bot.id)?.allowed ?? [] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1100,6 +1101,30 @@ struct BotWorkLimits: View {
                     row("Tokens a day", symbol: "gauge.with.dots.needle.33percent", value: limits.tokensPerDay, choices: [250_000, 1_000_000, 5_000_000, 20_000_000], words: { WorkWords.tokens($0) }) { $0.tokensPerDay = $1 }
                 }
                 .disabled(isSaving)
+                // What you let it do without asking (Always on its card), each taken back here.
+                if !allowed.isEmpty {
+                    WellGroup {
+                        ForEach(Array(allowed.enumerated()), id: \.element) { index, action in
+                            if index > 0 { WellDivider() }
+                            WellRow {
+                                Image(systemName: action == .cloneProject ? "square.and.arrow.down.on.square" : "folder.badge.plus")
+                            } content: {
+                                HStack(spacing: 8) {
+                                    Text(WorkWords.allowed(action))
+                                    Spacer(minLength: 8)
+                                    Text("Without asking")
+                                        .foregroundStyle(.secondary)
+                                    Button("Ask First") { takeBack(action) }
+                                        .buttonStyle(TextButtonStyle())
+                                        .help("\(bot.name) asks you again before it does this.")
+                                }
+                            }
+                            .accessibilityElement(children: .combine)
+                            .accessibilityValue("Without asking")
+                        }
+                    }
+                    .disabled(isSaving)
+                }
             } else {
                 Text("\(bot.machine.map { app.machines.engine($0)?.machine.name ?? $0 } ?? "This Mac") needs a newer Kuvo Code for \(bot.name) to run sessions.")
                     .font(.callout)
@@ -1141,6 +1166,15 @@ struct BotWorkLimits: View {
         }
         .accessibilityLabel(title)
         .accessibilityValue(value.map(words) ?? "No limit")
+    }
+
+    private func takeBack(_ action: WorkAction) {
+        isSaving = true
+        failure = nil
+        Task {
+            do { try await app.botWork.setAllowed(allowed.filter { $0 != action }, for: bot) } catch { failure = error.localizedDescription }
+            isSaving = false
+        }
     }
 
     private func change(_ edit: (inout WorkLimits) -> Void) {

@@ -5315,6 +5315,7 @@
          "bot?": "string",
          "project": "string",
          "clone?": "string",
+         "folderName": "string",
          "folder": {
           "oneOf": [
            "string",
@@ -5422,6 +5423,7 @@
          "bot?": "string",
          "project": "string",
          "clone?": "string",
+         "folderName": "string",
          "folder": {
           "oneOf": [
            "string",
@@ -5461,6 +5463,7 @@
          "bot?": "string",
          "project": "string",
          "clone?": "string",
+         "folderName": "string",
          "folder": {
           "oneOf": [
            "string",

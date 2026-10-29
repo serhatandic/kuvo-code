@@ -136,13 +136,136 @@ public struct BotWorkReport: Decodable, Sendable, Equatable {
     public let answered: [WorkAnswer]
     public let today: Today
     public let limits: WorkLimits?
+    /// What it asks you now (a box from before projects says nothing).
+    public let asks: [WorkAsk]
+    /// The projects it made here.
+    public let projects: [MadeProject]
+
+    /// A project a bot made: its folder and its name (the folder's when it has none of its own).
+    public struct MadeProject: Decodable, Sendable, Equatable, Identifiable {
+        public let directory: String
+        public let name: String?
+        public var id: String { directory }
+        public var title: String { name ?? (directory as NSString).lastPathComponent }
+    }
+
+    private enum CodingKeys: String, CodingKey { case bot, sessions, answered, today, limits, asks, projects }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        bot = try container.decode(String.self, forKey: .bot)
+        sessions = try container.decode([Item].self, forKey: .sessions)
+        answered = try container.decode([WorkAnswer].self, forKey: .answered)
+        today = try container.decode(Today.self, forKey: .today)
+        limits = try container.decodeIfPresent(WorkLimits.self, forKey: .limits)
+        asks = (try? container.decodeIfPresent([Lenient<WorkAsk>].self, forKey: .asks))?.compactMap(\.value) ?? []
+        projects = (try? container.decodeIfPresent([Lenient<MadeProject>].self, forKey: .projects))?.compactMap(\.value) ?? []
+    }
 
     /// Its sessions still at it, the latest first.
     public var atWork: [Item] { sessions.filter(\.isAtWork) }
 }
 
+/// One that reads as `Value`, or nothing for one that doesn't (an older or newer box's).
+struct Lenient<Value: Decodable>: Decodable {
+    let value: Value?
+    init(from decoder: Decoder) throws { value = try? Value(from: decoder) }
+}
+
+/// What a bot can do once you allow it, and what "Always" keeps for it (`work.allowed`).
+public enum WorkAction: String, Codable, Sendable, Hashable, CaseIterable {
+    case makeProject, cloneProject
+}
+
+/// What a bot (or another conversation) asks you before it does it (`kuvo/work/asks`): making a
+/// project, or cloning one into a new project.
+public struct WorkAsk: Decodable, Sendable, Hashable, Identifiable {
+    public let id: String
+    public let action: WorkAction
+    /// The conversation asking (a bot's own), and its name.
+    public let session: String
+    public let name: String
+    /// The bot asking, for a bot's.
+    public let bot: String?
+    /// The project's name.
+    public let project: String
+    /// The repository to clone, for a clone.
+    public let clone: String?
+    /// The name of the folder it gets ("tidepool").
+    public let folderName: String
+    /// Where it would go; nil while no projects folder is picked on its box.
+    public let folder: String?
+    /// A projects folder to offer while none is picked (`~/Developer`, `~/Projects`).
+    public let suggested: String?
+    /// When it was asked, in ms since 1970.
+    public let at: Double
+
+    public init(id: String, action: WorkAction, session: String, name: String, bot: String?, project: String, clone: String? = nil, folderName: String, folder: String?, suggested: String? = nil, at: Double) {
+        self.id = id
+        self.action = action
+        self.session = session
+        self.name = name
+        self.bot = bot
+        self.project = project
+        self.clone = clone
+        self.folderName = folderName
+        self.folder = folder
+        self.suggested = suggested
+        self.at = at
+    }
+
+    /// Whether answering it picks where projects go on its box too: none is picked yet.
+    public var needsFolder: Bool { folder == nil }
+}
+
+/// What's asked on a box (`GET kuvo/work/asks`, and each line of its events): those of a kind a
+/// newer box asks that this client can't answer are left out.
+public struct WorkAskList: Decodable, Sendable, Equatable {
+    public let asks: [WorkAsk]
+
+    private enum CodingKeys: String, CodingKey { case asks }
+
+    public init(from decoder: Decoder) throws {
+        asks = try decoder.container(keyedBy: CodingKeys.self).decode([Lenient<WorkAsk>].self, forKey: .asks).compactMap(\.value)
+    }
+}
+
+/// Your answer to what a bot asks: this once, from now on for that bot ("Always"), or no.
+public enum WorkAskAnswer: String, Encodable, Sendable {
+    case allow, always, deny
+}
+
 /// What both apps say of a bot's work.
 public enum WorkWords {
+    /// The asking card's title: "Allow making a project?"
+    public static func askTitle(_ ask: WorkAsk) -> String {
+        ask.action == .cloneProject ? "Allow cloning a project?" : "Allow making a project?"
+    }
+
+    /// Who asks, and for what: "Pixel wants to make Tidepool."
+    public static func askLine(_ ask: WorkAsk) -> String {
+        ask.action == .cloneProject ? "\(ask.name) wants to clone a repository as \(ask.project)." : "\(ask.name) wants to make \(ask.project)."
+    }
+
+    /// What Allow does, under where it goes: "A new git repository, added to your projects."
+    public static func askDoes(_ ask: WorkAsk) -> String {
+        ask.action == .cloneProject ? "Cloned from \(ask.clone ?? "its repository"), added to your projects." : "A new git repository, added to your projects."
+    }
+
+    /// The button that allows it from now on: "Always for Pixel".
+    public static func always(_ ask: WorkAsk) -> String { "Always for \(ask.name)" }
+
+    /// What a bot may do without asking, as Edit Bot › Work lists it.
+    public static func allowed(_ action: WorkAction) -> String {
+        switch action {
+        case .makeProject: "Make projects"
+        case .cloneProject: "Clone projects"
+        }
+    }
+
+    /// The mark on a project a bot made: "Made by Pixel".
+    public static func madeBy(_ name: String) -> String { "Made by \(name)" }
+
     /// The line under a bot's name while its sessions work: "At work in Tidepool: 3 sessions".
     public static func atWork(count: Int, projects: [String]) -> String {
         let sessions = count == 1 ? "1 session" : "\(count) sessions"

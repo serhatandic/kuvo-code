@@ -63,8 +63,9 @@ struct WorktreesSettings: View {
     @State private var sizes: [String: Int64] = [:]
     @State private var removing: Workspace.Worktree?
     @State private var failure: String?
-    /// Choosing a machine's folder for new worktrees, in the page's place.
+    /// Choosing a machine's folder for new worktrees, or new projects, in the page's place.
     @State private var choosingFolder = false
+    @State private var choosingProjectsFolder = false
     /// A machine's: asked for them as they are now (`reading`), and whether it couldn't be.
     @State private var reading = false
     @State private var unreached = false
@@ -85,6 +86,7 @@ struct WorktreesSettings: View {
 
     var body: some View {
         ScrollingSettingsForm {
+            ProjectsFolderSection(choosing: $choosingProjectsFolder)
             WorktreesFolderSection(choosing: $choosingFolder)
 
             Section {
@@ -159,6 +161,14 @@ struct WorktreesSettings: View {
                 choosingFolder = false
             }
         }
+        .settingsDetail(isPresented: $choosingProjectsFolder, title: "Choose a Folder for Projects") {
+            BoxFolderBrowser(box: box.machine ?? BoxClient.mac, start: nil, primary: "Choose") { path, _ in
+                choosingProjectsFolder = false
+                Task { try? await app.box(box.machine ?? BoxClient.mac).setProjectsFolder(path) }
+            } cancel: {
+                choosingProjectsFolder = false
+            }
+        }
         .confirmationDialog("Remove the worktree for \(removing?.branch ?? "")?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { tree in
             Button("Remove", role: .destructive) {
                 guard let folder = workspace.worktrees.first(where: { $0.value.root == tree.root })?.key else { return }
@@ -168,6 +178,103 @@ struct WorktreesSettings: View {
             }
         } message: { _ in
             Text("Its folder and anything in it that isn’t committed are deleted. Its sessions stay, without a folder to run in.")
+        }
+    }
+}
+
+/// Where new projects go on this computer: the folder bots make them in (`make_project`), picked
+/// the first time one asks, or here; none until then. On a machine, its own folders.
+private struct ProjectsFolderSection: View {
+    /// Choosing a machine's folder, which the page opens in its place.
+    @Binding var choosing: Bool
+    @Environment(AppModel.self) private var app
+    @Environment(\.settingsBox) private var box
+    @State private var settings: WorkSettings?
+    @State private var unread = false
+    @State private var failure: String?
+
+    private var boxID: String { box.machine ?? BoxClient.mac }
+
+    var body: some View {
+        Section {
+            if let settings {
+                LabeledContent("Folder") {
+                    Picker("Folder", selection: Binding(get: { settings.projectsFolder == nil ? Choice.none : .chosen }, set: pick)) {
+                        Text("None").tag(Choice.none)
+                        if let folder = settings.projectsFolder {
+                            Label((folder as NSString).lastPathComponent, systemImage: "folder").tag(Choice.chosen)
+                        }
+                        Divider()
+                        Text("Choose a Folder…").tag(Choice.choose)
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .help(settings.projectsFolder.map(shown) ?? "None picked yet")
+                }
+            } else if unread {
+                Text(box.machine == nil ? "Shows once this Mac’s background service is running." : "Shows once \(app.name(of: box)) is connected and up to date.")
+                    .foregroundStyle(.secondary)
+            }
+            if let failure {
+                Text(failure)
+                    .foregroundStyle(.red)
+            }
+        } header: {
+            Text("New Projects")
+        } footer: {
+            Text("Where projects your bots make go. A bot asks you before it makes one, and Kuvo Code never deletes them.")
+                .foregroundStyle(.secondary)
+        }
+        .task(id: "\(boxID) \(app.isReady(box)) \(choosing)") { await read() }
+    }
+
+    private func read() async {
+        do {
+            settings = try await app.box(boxID).workSettings()
+            unread = false
+        } catch {
+            guard !(error is CancellationError) else { return }
+            unread = true
+        }
+    }
+
+    private func shown(_ path: String) -> String {
+        box.machine == nil ? (path as NSString).abbreviatingWithTildeInPath : path
+    }
+
+    private enum Choice: Hashable { case none, chosen, choose }
+
+    private func pick(_ choice: Choice) {
+        switch choice {
+        case .none: set(nil)
+        case .chosen: break
+        case .choose: choose()
+        }
+    }
+
+    private func choose() {
+        guard box.machine == nil else {
+            DispatchQueue.main.async { choosing = true }
+            return
+        }
+        // Once the menu has closed.
+        DispatchQueue.main.async {
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.canCreateDirectories = true
+            panel.prompt = "Choose"
+            panel.message = "Choose where new projects go. Each one is a folder in it."
+            if let start = settings?.projectsFolder ?? settings?.suggested { panel.directoryURL = URL(filePath: start) }
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            set(url.path)
+        }
+    }
+
+    private func set(_ folder: String?) {
+        failure = nil
+        Task {
+            do { settings = try await app.box(boxID).setProjectsFolder(folder) } catch { failure = error.localizedDescription }
         }
     }
 }

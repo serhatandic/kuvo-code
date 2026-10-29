@@ -52,4 +52,21 @@ struct BotWorkTests {
         #expect(WorkWords.tokens(412_300) == "412k")
         #expect(WorkWords.tokens(1_250_000) == "1.2M")
     }
+
+    @Test func whatABotAsksReadsAsItsBoxTellsItLeavingOutWhatANewerBoxAsks() throws {
+        let json = #"{"asks": [{"id": "wak_1", "action": "makeProject", "session": "ses_pixel", "name": "Pixel", "bot": "bot_pixel", "project": "Tidepool", "folderName": "tidepool", "folder": null, "suggested": "/Users/me/Developer", "at": 1}, {"id": "wak_2", "action": "buyDomain", "session": "ses_pixel", "name": "Pixel", "project": "x", "folderName": "x", "folder": null, "at": 2}]}"#
+        let asks = try JSONDecoder().decode(WorkAskList.self, from: Data(json.utf8)).asks
+        #expect(asks.map(\.id) == ["wak_1"], "a kind this client can't answer isn't shown")
+        let ask = try #require(asks.first)
+        #expect(ask.needsFolder)
+        #expect(WorkWords.askTitle(ask) == "Allow making a project?")
+        #expect(WorkWords.askLine(ask) == "Pixel wants to make Tidepool.")
+        #expect(WorkWords.always(ask) == "Always for Pixel")
+        // A bot's work has what it asks and the projects it made; a box from before, neither.
+        let report = try JSONDecoder().decode(BotWorkReport.self, from: Data(#"{"bot": "bot_pixel", "sessions": [], "answered": [], "today": {"started": 0, "working": 0, "tokens": 0}, "limits": null, "asks": \#(json.dropFirst(9).dropLast()), "projects": [{"directory": "/Users/me/Developer/tidepool", "name": "Tidepool", "folders": [], "madeBy": {"bot": "bot_pixel", "name": "Pixel", "at": 1}}]}"#.utf8))
+        #expect(report.asks.map(\.id) == ["wak_1"])
+        #expect(report.projects.map(\.title) == ["Tidepool"])
+        let older = try JSONDecoder().decode(BotWorkReport.self, from: Data(#"{"bot": "bot_pixel", "sessions": [], "answered": [], "today": {"started": 0, "working": 0, "tokens": 0}, "limits": null}"#.utf8))
+        #expect(older.asks.isEmpty && older.projects.isEmpty)
+    }
 }

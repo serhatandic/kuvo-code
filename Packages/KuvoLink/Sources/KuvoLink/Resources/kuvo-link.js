@@ -1428,6 +1428,7 @@ function askWork(asker, action, given, file = WORK_ASKS) {
       ...asker.bot ? { bot: asker.bot } : {},
       project: given.name,
       ...given.clone ? { clone: given.clone } : {},
+      folderName: folderName(given.name) ?? given.name,
       folder: projectPlace(given.name),
       at: Date.now(),
       given
@@ -5317,6 +5318,7 @@ var WORK_ASK = object({
   "bot?": string,
   project: string,
   "clone?": string,
+  folderName: string,
   folder: nullable(string),
   "suggested?": string,
   at: number

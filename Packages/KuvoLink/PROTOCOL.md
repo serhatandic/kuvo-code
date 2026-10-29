@@ -519,9 +519,10 @@ folder you pick once per box, after asking you.
   `[The user answered] …` as a message when you do.
   - `GET kuvo/work/asks` and `GET kuvo/work/asks/events` (ndjson, a line now and at each change)
     → `{asks: [{id, action: makeProject|cloneProject, session, name, bot?, project, clone?,
-    folder: string|null, suggested?, at}]}`: `session` and `name` are the conversation asking
-    (a bot's own), `folder` where it would go (null with no projects folder yet). A bot's are in
-    its `kuvo/work` too, as `asks`, with the projects it made, as `projects`.
+    folderName, folder: string|null, suggested?, at}]}`: `session` and `name` are the
+    conversation asking (a bot's own), `folderName` the folder it gets, `folder` where it would go
+    (null with no projects folder yet). A bot's are in its `kuvo/work` too, as `asks`, with the
+    projects it made, as `projects`.
   - `POST kuvo/work/asks/<id>` `{answer: allow|always|deny, folder?}` → `{answer, text, isError}`:
     what's asked is done there and then, `text` in the words its asker reads. `folder` picks the
     projects folder too (needed to allow while there's none: 400 "Pick the folder…"). Always keeps
