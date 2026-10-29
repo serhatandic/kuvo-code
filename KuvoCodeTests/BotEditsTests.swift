@@ -1,5 +1,6 @@
 import ClientDesign
 import Foundation
+import KuvoLink
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -101,6 +102,47 @@ import Testing
         // Again: nothing waits, nothing goes.
         await app.bots.refresh("lab")
         #expect(engine.requests("PATCH", "/api/session/ses_ada").filter { $0.body["title"] as? String == "Ada Lovelace" }.count == 1)
+    }
+
+    /// Its bots read again (a run of one ended there), slowly, while you rename one: the list, read
+    /// from before, doesn't put the old name back.
+    @Test func aChangeMadeWhileItsBotsAreReadStays() async throws {
+        let machine = try await lab()
+        defer { done(machine) }
+        app.bots.reachable = { $0 == "lab" }
+        app.bots.boxes = { _ in machine.client }
+        await app.bots.refresh("lab")
+        let ada = try #require(app.bots.bot("bot_ada000001"))
+
+        let before = try await machine.client.send("GET", "kuvo/bots").body
+        let reading = Gate(), release = Gate()
+        let endpoint = machine.endpoint
+        let base = endpoint.url.absoluteString.hasSuffix("/") ? endpoint.url : URL(string: endpoint.url.absoluteString + "/")!
+        app.bots.boxes = { box in
+            BoxClient(box: box, transport: LocalBox { request in
+                guard request.method == "GET", request.path == "kuvo/bots" else {
+                    return EngineRoutes.forward(request, to: base, password: endpoint.password, allowing: { path, _ in path.hasPrefix("kuvo/") })
+                }
+                return AsyncThrowingStream { continuation in
+                    Thread.detachNewThread {
+                        reading.open()
+                        release.wait()
+                        continuation.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+                        continuation.yield(.body(before))
+                        continuation.finish()
+                    }
+                }
+            })
+        }
+        let read = Task { await app.bots.refresh("lab") }
+        try await until { reading.isOpen }
+        var renamed = ada
+        renamed.name = "Ada Lovelace"
+        try await app.bots.update(renamed)
+        #expect(app.bots.bot(ada.id)?.name == "Ada Lovelace")
+        release.open()
+        await read.value
+        #expect(app.bots.bot(ada.id)?.name == "Ada Lovelace")
     }
 
     /// One its box won't take when it's back (a name that's only spaces, say) is let go, and the box's

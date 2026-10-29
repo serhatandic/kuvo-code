@@ -124,6 +124,10 @@ final class Bots {
     @ObservationIgnored var boxes: ((String) -> BoxClient)?
     /// Whether a machine's box can be asked now (connected); a test's stand-in.
     @ObservationIgnored var reachable: ((String) -> Bool)?
+    /// Reads of each box's bots under way, and the bots made, changed or deleted here meanwhile,
+    /// which the read (from before) doesn't take back.
+    @ObservationIgnored private var listing: [String: Int] = [:]
+    @ObservationIgnored private var touchedWhileListing: [String: Set<String>] = [:]
     private let log = Logger(subsystem: "run.kuvo.code", category: "bots")
 
     /// The key under which a bot's job goes to its session.
@@ -263,14 +267,18 @@ final class Bots {
 
     /// One of a box's bots, as it answered a change: taken in at once.
     private func take(one entry: ListedBot, from box: String) {
-        var listed = known.filter { $0.box == box }.compactMap { bot -> ListedBot? in
-            ListedBot(id: bot.id, session: bot.sessionID, name: bot.name, look: bot.look, job: bot.job, jobDetails: bot.instructions, agents: bot.agents,
-                      personality: bot.personality, model: bot.model, folder: bot.folder, project: bot.project.map { RemoteFolder.parse($0)?.path ?? $0 },
-                      created: ISO8601DateFormatter().string(from: bot.created))
-        }
+        touchedWhileListing[box]?.insert(entry.id)
+        var listed = known.filter { $0.box == box }.map(Self.listed)
         listed.removeAll { $0.id == entry.id }
         listed.append(entry)
         take(listed, from: box)
+    }
+
+    /// A bot as its box lists it.
+    private static func listed(_ bot: Bot) -> ListedBot {
+        ListedBot(id: bot.id, session: bot.sessionID, name: bot.name, look: bot.look, job: bot.job, jobDetails: bot.instructions, agents: bot.agents,
+                  personality: bot.personality, model: bot.model, folder: bot.folder, project: bot.project.map { RemoteFolder.parse($0)?.path ?? $0 },
+                  created: ISO8601DateFormatter().string(from: bot.created))
     }
 
     /// The list as you see it: as the boxes said, with your waiting edits as made.
@@ -315,8 +323,16 @@ final class Bots {
             await sendWaiting(to: box)
         }
         struct Listed: Decodable { var bots: [ListedBot] }
+        if listing[box, default: 0] == 0 { touchedWhileListing[box] = [] }
+        listing[box, default: 0] += 1
+        defer {
+            listing[box, default: 1] -= 1
+            if listing[box] == 0 { listing[box] = nil; touchedWhileListing[box] = nil }
+        }
         guard let client = client(box), let listed = try? await client.value(Listed.self, "GET", "kuvo/bots") else { return }
-        take(listed.bots, from: box)
+        // One changed here meanwhile as it is here (made, as made; deleted, gone).
+        let touched = touchedWhileListing[box] ?? []
+        take(listed.bots.filter { !touched.contains($0.id) } + known.filter { $0.box == box && touched.contains($0.id) }.map(Self.listed), from: box)
     }
 
     /// A bot's run ended: on a machine, its box may have changed it meanwhile (its job, kept with
@@ -543,6 +559,7 @@ final class Bots {
         let path = "kuvo/bots/" + (bot.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? bot.id)
         let (status, data) = try await client.send("DELETE", path)
         guard (200..<300).contains(status) || status == 404 else { throw BoxRefusal(status: status, data: data) }
+        touchedWhileListing[bot.box]?.insert(bot.id)
         known.removeAll { $0.id == bot.id }
         save()
         forgetHere(bot)
