@@ -4,7 +4,8 @@ import { bool, type Infer, list, number, object, type RouteShape, string } from 
 
 /** A project: its folder, its name (only when it isn't the folder's own), its other folders, the
  * commands its Run and its terminal start with (left out for none), and `removed`, for one Remove
- * Project took off the list, kept with its settings for when one of its sessions comes back. */
+ * Project took off the list, kept with its settings for when one of its sessions comes back; and
+ * the bot that made it, for one a bot made (`make_project`). */
 export const PROJECT = object({
   directory: string,
   "name?": string,
@@ -12,6 +13,7 @@ export const PROJECT = object({
   "run?": string,
   "terminal?": string,
   "removed?": bool,
+  "madeBy?": object({ bot: string, name: string, at: number }),
 });
 /** The box's projects, newest first. */
 export const PROJECTS = object({ projects: list(PROJECT) });

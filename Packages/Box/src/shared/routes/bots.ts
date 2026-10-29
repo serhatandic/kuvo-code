@@ -40,6 +40,7 @@ export const BOT = object({
   "project?": string,
   "created?": string,
   "limits?": LIMITS,
+  "allowed?": list(words("makeProject", "cloneProject")),
 });
 /** The bots that live here, the first made first. */
 export const BOTS = object({ bots: list(BOT) });

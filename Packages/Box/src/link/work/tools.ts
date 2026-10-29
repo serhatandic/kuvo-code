@@ -1,13 +1,21 @@
 // The tools a conversation runs its sessions with (PROTOCOL.md, "Work"): list_sessions, where each
 // it started stands; stop_session, one of them stopped; answer_ask, what one asks, answered within
-// what the asker may do itself; list_models, what a session can be started on. Every box answers
-// them alike, through `POST kuvo/agent-tools`.
+// what the asker may do itself; list_models, what a session can be started on; make_project, a new
+// project made (asking you first, once for a bot if you say Always); list_projects, the projects
+// here. Every box answers them alike, through `POST kuvo/agent-tools`.
 
 import { call } from "../engine/client";
 import { stopSession } from "../engine/queue";
 import { holdArchived } from "../areas/wakes";
 import { noteWorkChanged } from "./changes";
 import { alwaysYours, keepAnswer, noteSession, pendingAsk, permissionWords, rulesOf, withinLevel } from "./answers";
+import path from "node:path";
+import { readProjects } from "../areas/projects";
+import { gitIn } from "../git";
+import { HERE } from "../home";
+import { answerOf, askWork, botAllows, doWork } from "./asks";
+import { cloneable, folderName, projectPlace, shownPath } from "./projects";
+import { projectsFolder } from "./settings";
 import { describeModels, usableModels } from "./models";
 import { botOfConversation, describeWork, placeWords, under, workingNow, workSessions, worksFor } from "./tree";
 import type { Target } from "../../shared/records";
@@ -146,4 +154,45 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
 /** list_models: the models there's an account for here. */
 export async function listModelsTool(engine: Target | null, bridge: Target | null, signal?: AbortSignal): Promise<ToolAnswer> {
   return said(describeModels(await usableModels(engine, bridge, signal)));
+}
+
+/** make_project: a new project, in the projects folder you picked, made once you allow it (at once
+ * for a bot you said Always to); what it is, or why not. Waits for your answer up to `wait` ms;
+ * after that it stays asked, and the conversation is told when you answer. */
+export async function makeProjectTool(caller: Caller, args: Record<string, unknown>, { signal, wait, every }: { signal?: AbortSignal; wait?: number; every?: number } = {}): Promise<ToolAnswer> {
+  const name = typeof args.name === "string" ? args.name.trim() : "";
+  if (!name) return refused("Say what it's called (name).");
+  if (!folderName(name)) return refused(`${name} can't be a folder's name: use letters or numbers.`);
+  const clone = typeof args.clone === "string" && args.clone.trim() ? args.clone.trim() : undefined;
+  if (clone && !cloneable(clone)) return refused(`${clone} isn't a repository address git can clone: give an https or ssh one.`);
+  // What would fail anyway isn't asked.
+  const place = projectPlace(name);
+  const listed = place ? readProjects().find(each => each.directory === place && !each.removed) : null;
+  if (listed) return refused(`There's a project at ${shownPath(place!)} already: ${listed.name ?? path.basename(place!)}. Start sessions in it with start_session.`);
+  const bot = botOfConversation(caller.session);
+  const asker = { session: caller.session, name: bot?.name ?? caller.name, ...(bot ? { bot: bot.bot } : {}) };
+  const action = clone ? "cloneProject" : "makeProject";
+  const given = { name, ...(args.git === false ? { git: false } : {}), ...(clone ? { clone } : {}) };
+  if (bot && botAllows(bot.bot, action) && projectsFolder()) {
+    const done = await doWork(action, given, asker);
+    return done.isError ? refused(done.text) : said(done.text);
+  }
+  const ask = askWork(asker, action, given);
+  const answer = await answerOf(ask.id, { wait: wait ?? (Number(process.env.KUVO_WORK_ASK_WAIT) || undefined), every, signal });
+  if (!answer) return said(`The user hasn't answered yet: it stays asked on ${HERE}, and you'll hear when they answer. Carry on with what you can meanwhile.`);
+  return answer.isError ? refused(answer.text) : said(answer.text);
+}
+
+/** list_projects: the projects here, with where each is, whether it's a git repository, and who
+ * made it. */
+export function listProjectsTool(): ToolAnswer {
+  const projects = readProjects().filter(each => !each.removed);
+  const root = projectsFolder();
+  const folder = root ? ` New ones go in ${shownPath(root)}.` : " No projects folder is picked yet: the user picks one the first time you make a project.";
+  if (!projects.length) return said(`There are no projects on ${HERE} yet.${folder}`);
+  const lines = projects.slice(0, 60).map(each => {
+    const git = gitIn(each.directory, ["rev-parse", "--is-inside-work-tree"]) === "true" ? "git" : "not git";
+    return `- ${each.name ?? path.basename(each.directory)}: ${shownPath(each.directory)} (${git})${each.madeBy ? `, made by ${each.madeBy.name}` : ""}`;
+  });
+  return said(`Projects on ${HERE}:\n${lines.join("\n")}\n${folder.trim()}`);
 }

@@ -23,6 +23,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sleep } from "../shared/wait";
 import { watchAsks } from "./areas/asks";
+import { watchWorkAsks } from "./work/asks";
 import { refreshBotsKeys } from "./areas/bot-keys";
 import { setBoxKey } from "./areas/box-keys";
 import { addMacDefaults, changeSettings, ownsSettings, readSettings } from "./areas/config";
@@ -285,6 +286,8 @@ async function run(): Promise<void> {
   // What its group chats send your other computers, carried on the relay connection that's up.
   watchSeats(() => current);
   watchAsks(tell, { answered });
+  // What its bots ask you before they do it (making a project): told the same way.
+  watchWorkAsks(tell, { answered });
   // Your other computers: this box's agents told to them while the relay connection is up (and
   // listed here, relay or not), and its agents' letters sent; without the relay a while, those
   // not sent yet go to the Mac.

@@ -502,6 +502,39 @@ client shows it from the same routes.
 - **`POST kuvo/bots/<id>/stop-all`** → `{stopped}`: every session of its work that's working,
   stopped (held and paused, as the queue's Stop). 404 for no such bot here, 503 with no engine.
 
+**Projects** (bridge 0.9.107, feature `work.projects`): a bot makes new projects on its box, in a
+folder you pick once per box, after asking you.
+- **Where they go**: `GET|PATCH kuvo/work/settings` → `{projectsFolder: string|null, suggested?}`,
+  kept in `box/work.json`. None until you pick one; `suggested` is `~/Developer` or `~/Projects`
+  when there's one. PATCH `{projectsFolder}` takes a full path (`~` is fine) to a folder that's
+  there, or null; 400 otherwise. The box makes projects only there, and never deletes one.
+- **Tools**: `make_project` (`{name, git?, clone?}`: a folder named after it, lowercase with
+  dashes, a new git repository there unless `git: false`, or a repository cloned from an https or
+  ssh address), `list_projects` (each project here: its folder, whether it's git, who made it).
+  A folder that's there with files in it, a project there already, or an address git can't clone
+  is refused without asking.
+- **Asking you first**: `make_project` asks unless you said Always to that bot for that kind,
+  and a projects folder is picked. The ask is kept in `run/work/asks.json` until you answer; the
+  tool waits up to ten minutes, then says it stays asked, and the conversation gets
+  `[The user answered] …` as a message when you do.
+  - `GET kuvo/work/asks` and `GET kuvo/work/asks/events` (ndjson, a line now and at each change)
+    → `{asks: [{id, action: makeProject|cloneProject, session, name, bot?, project, clone?,
+    folder: string|null, suggested?, at}]}`: `session` and `name` are the conversation asking
+    (a bot's own), `folder` where it would go (null with no projects folder yet). A bot's are in
+    its `kuvo/work` too, as `asks`, with the projects it made, as `projects`.
+  - `POST kuvo/work/asks/<id>` `{answer: allow|always|deny, folder?}` → `{answer, text, isError}`:
+    what's asked is done there and then, `text` in the words its asker reads. `folder` picks the
+    projects folder too (needed to allow while there's none: 400 "Pick the folder…"). Always keeps
+    `work.allowed: [makeProject|cloneProject]` in its bot.json (`allowed` in `kuvo/bots`; `PATCH
+    kuvo/bots/<id>` `{work: {allowed}}` takes it back, and `{work: {limits}}` alone leaves it). 404
+    for one answered already, from another client say.
+  - A machine's bridge tells your phones of each, as category `ask` with `answerable: "0"`, `data:
+    {session, ask}`: it opens the conversation. A Mac tells them itself.
+- **Made**: `box/projects.json` keeps it first, with `madeBy: {bot, name, at}` for a bot's. `POST
+  kuvo/projects/new` `{name, git?, clone?}` → 201 `{project, text}` makes one from a client
+  the same way (no `madeBy`): 403 `{needs: "projectsFolder"}` with none picked, 409 for one there,
+  400 for a name or address that won't do, 502 when git fails.
+
 ### Updates
 
 A box's files say which Kuvo Code put them there: `~/.kuvo-code/bin/box-version`. It holds that
@@ -1751,6 +1784,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
 | `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |
+| `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
 | `search` | `kuvo/search` |
 | `personalities` | `kuvo/personalities…` |
 | `personalities.events` | `kuvo/personalities/events` |

@@ -1753,7 +1753,7 @@ const noAnswer = (answer, what) =>
 const text = (value, isError = false) => ({ content: [{ type: "text", text: value }], isError });
 
 // The tools answered by this machine's box: agents writing to each other and running their sessions.
-const MAIL_TOOLS = new Set(["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models"]);
+const MAIL_TOOLS = new Set(["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models", "make_project", "list_projects"]);
 // Agents writing to each other (list_agents, send_message, read_conversation, start_session):
 // this machine's box answers them, as every box does (`POST kuvo/agent-tools`), so they're the same
 // on all your computers. A call that waits for an answer holds up to eleven minutes; stopped, the

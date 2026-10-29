@@ -1460,6 +1460,18 @@
            "depth?": "number",
            "tokensPerDay?": "number"
           }
+         },
+         "allowed?": {
+          "list": {
+           "oneOf": [
+            {
+             "literal": "makeProject"
+            },
+            {
+             "literal": "cloneProject"
+            }
+           ]
+          }
          }
         }
        }
@@ -1581,6 +1593,18 @@
           "perDay?": "number",
           "depth?": "number",
           "tokensPerDay?": "number"
+         }
+        },
+        "allowed?": {
+         "list": {
+          "oneOf": [
+           {
+            "literal": "makeProject"
+           },
+           {
+            "literal": "cloneProject"
+           }
+          ]
          }
         }
        }
@@ -1873,6 +1897,18 @@
             "depth?": "number",
             "tokensPerDay?": "number"
            }
+          },
+          "allowed?": {
+           "list": {
+            "oneOf": [
+             {
+              "literal": "makeProject"
+             },
+             {
+              "literal": "cloneProject"
+             }
+            ]
+           }
           }
          }
         },
@@ -2006,6 +2042,18 @@
             "perDay?": "number",
             "depth?": "number",
             "tokensPerDay?": "number"
+           }
+          },
+          "allowed?": {
+           "list": {
+            "oneOf": [
+             {
+              "literal": "makeProject"
+             },
+             {
+              "literal": "cloneProject"
+             }
+            ]
            }
           }
          }
@@ -2293,6 +2341,9 @@
             "literal": "work"
            },
            {
+            "literal": "work.projects"
+           },
+           {
             "literal": "accounts.ended"
            },
            {
@@ -2530,6 +2581,9 @@
            },
            {
             "literal": "work"
+           },
+           {
+            "literal": "work.projects"
            }
           ]
          }
@@ -4402,7 +4456,14 @@
          },
          "run?": "string",
          "terminal?": "string",
-         "removed?": "bool"
+         "removed?": "bool",
+         "madeBy?": {
+          "object": {
+           "bot": "string",
+           "name": "string",
+           "at": "number"
+          }
+         }
         }
        }
       }
@@ -4424,7 +4485,14 @@
         },
         "run?": "string",
         "terminal?": "string",
-        "removed?": "bool"
+        "removed?": "bool",
+        "madeBy?": {
+         "object": {
+          "bot": "string",
+          "name": "string",
+          "at": "number"
+         }
+        }
        }
       }
      }
@@ -5227,6 +5295,57 @@
         },
         "null"
        ]
+      },
+      "asks?": {
+       "list": {
+        "object": {
+         "id": "string",
+         "action": {
+          "oneOf": [
+           {
+            "literal": "makeProject"
+           },
+           {
+            "literal": "cloneProject"
+           }
+          ]
+         },
+         "session": "string",
+         "name": "string",
+         "bot?": "string",
+         "project": "string",
+         "clone?": "string",
+         "folder": {
+          "oneOf": [
+           "string",
+           "null"
+          ]
+         },
+         "suggested?": "string",
+         "at": "number"
+        }
+       }
+      },
+      "projects?": {
+       "list": {
+        "object": {
+         "directory": "string",
+         "name?": "string",
+         "folders": {
+          "list": "string"
+         },
+         "run?": "string",
+         "terminal?": "string",
+         "removed?": "bool",
+         "madeBy?": {
+          "object": {
+           "bot": "string",
+           "name": "string",
+           "at": "number"
+          }
+         }
+        }
+       }
       }
      }
     },
@@ -5273,6 +5392,205 @@
      }
     },
     "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work/asks",
+   "answers": {
+    "200": {
+     "object": {
+      "asks": {
+       "list": {
+        "object": {
+         "id": "string",
+         "action": {
+          "oneOf": [
+           {
+            "literal": "makeProject"
+           },
+           {
+            "literal": "cloneProject"
+           }
+          ]
+         },
+         "session": "string",
+         "name": "string",
+         "bot?": "string",
+         "project": "string",
+         "clone?": "string",
+         "folder": {
+          "oneOf": [
+           "string",
+           "null"
+          ]
+         },
+         "suggested?": "string",
+         "at": "number"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work/asks/events",
+   "answers": {
+    "200": {
+     "object": {
+      "asks": {
+       "list": {
+        "object": {
+         "id": "string",
+         "action": {
+          "oneOf": [
+           {
+            "literal": "makeProject"
+           },
+           {
+            "literal": "cloneProject"
+           }
+          ]
+         },
+         "session": "string",
+         "name": "string",
+         "bot?": "string",
+         "project": "string",
+         "clone?": "string",
+         "folder": {
+          "oneOf": [
+           "string",
+           "null"
+          ]
+         },
+         "suggested?": "string",
+         "at": "number"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/work/asks/:id",
+   "answers": {
+    "200": {
+     "object": {
+      "answer": {
+       "oneOf": [
+        {
+         "literal": "allow"
+        },
+        {
+         "literal": "always"
+        },
+        {
+         "literal": "deny"
+        }
+       ]
+      },
+      "text": "string",
+      "isError": "bool"
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work/settings",
+   "answers": {
+    "200": {
+     "object": {
+      "projectsFolder": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "suggested?": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "PATCH kuvo/work/settings",
+   "answers": {
+    "200": {
+     "object": {
+      "projectsFolder": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "suggested?": "string"
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/projects/new",
+   "answers": {
+    "201": {
+     "object": {
+      "project": {
+       "object": {
+        "directory": "string",
+        "name?": "string",
+        "folders": {
+         "list": "string"
+        },
+        "run?": "string",
+        "terminal?": "string",
+        "removed?": "bool",
+        "madeBy?": {
+         "object": {
+          "bot": "string",
+          "name": "string",
+          "at": "number"
+         }
+        }
+       }
+      },
+      "text": "string"
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "403": {
+     "object": {
+      "message": "string",
+      "needs": "string"
+     }
+    },
+    "409": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "502": {
      "object": {
       "message": "string"
      }

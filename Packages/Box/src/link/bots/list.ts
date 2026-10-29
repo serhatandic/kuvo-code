@@ -7,6 +7,7 @@ import { BOTS, IS_MAC } from "../home";
 import { botHere, isModel } from "./here";
 import { jobOf } from "./jobs";
 import { limitsFrom } from "../work/limits";
+import { allowedOf } from "../work/asks";
 
 // This machine's bots, as the Mac lists them in `kuvo/bots`: each by its session, with its name,
 // look, job, personality and model as the app last described it (or as changed here), and what its
@@ -45,6 +46,8 @@ export function listBots(machine?: string): ListedBot[] {
         created: typeof described.created === "string" ? described.created : undefined,
         // The limits you set for its work, if any.
         limits: limitsFrom((described.work as { limits?: unknown } | undefined)?.limits) ?? undefined,
+        // What you allowed it to do without asking ("Always").
+        allowed: allowedOf(described).length ? allowedOf(described) : undefined,
       },
     });
   }

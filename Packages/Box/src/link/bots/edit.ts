@@ -20,6 +20,7 @@ import { fitsLook, signInRefusal } from "./make";
 import { tellBot, toldNow } from "./tell";
 import { noteWorkChanged } from "../work/changes";
 import { limitsFrom } from "../work/limits";
+import { WORK_ACTIONS } from "../work/asks";
 import type { Target } from "../../shared/records";
 import type { BotLook } from "../../shared/routes/bots";
 import type { ChangedBot } from "../../shared/routes/bots";
@@ -28,7 +29,8 @@ import type { Job } from "./jobs";
 import type { GivenBot } from "./make";
 
 /** A change to a bot, as Edit Bot sends it (`PATCH kuvo/bots/<id>`): its name, look, personality,
- * job or model, and its work's settings (`work: {limits}`, the limits you set; null or {} for none),
+ * job or model, and its work's settings (`work: {limits, allowed}`: the limits you set, null for
+ * none, and what it may do without asking, each only when named),
  * each checked here (`personality` null for none). */
 export type BotChange = Pick<GivenBot, "name" | "look" | "personality" | "job" | "model"> & { work?: unknown };
 
@@ -105,15 +107,25 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
     }
     changed.model = model;
   }
-  // The limits you set for its work: only what's kept, nothing else of it touched.
+  // Its work's settings (the limits you set, what it may do without asking): only those named
+  // changed, nothing else of it touched. `work: null`, or limits left out by a client from before
+  // `allowed`, takes the limits away.
   let limitsChanged = false;
   if ("work" in given) {
     if (given.work !== null && !isObject(given.work)) return no(400, "That isn’t a bot’s work settings.");
+    const asked = isObject(given.work) ? given.work : {};
     const work = isObject(described.work) ? { ...described.work } : {};
-    const limits = limitsFrom(isObject(given.work) ? given.work.limits : null);
-    if (limits) work.limits = limits;
-    else delete work.limits;
-    limitsChanged = JSON.stringify(limitsFrom((described.work as { limits?: unknown } | undefined)?.limits)) !== JSON.stringify(limits);
+    if ("limits" in asked || !("allowed" in asked)) {
+      const limits = limitsFrom(asked.limits);
+      if (limits) work.limits = limits;
+      else delete work.limits;
+    }
+    if ("allowed" in asked) {
+      const allowed = Array.isArray(asked.allowed) ? WORK_ACTIONS.filter(each => (asked.allowed as unknown[]).includes(each)) : [];
+      if (allowed.length) work.allowed = allowed;
+      else delete work.allowed;
+    }
+    limitsChanged = JSON.stringify(work) !== JSON.stringify(isObject(described.work) ? described.work : {});
     if (Object.keys(work).length) changed.work = work;
     else delete changed.work;
   }

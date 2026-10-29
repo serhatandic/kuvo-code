@@ -962,7 +962,7 @@ final class PhoneLink {
         "file", "folders", "git", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog",
         "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
         "personalities.events", "skills.trash", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
-        "agent-tools", "sessions.start", "letters-read", "queue", "work",
+        "agent-tools", "sessions.start", "letters-read", "queue", "work", "work.projects",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",
     ]
