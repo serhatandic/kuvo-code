@@ -245,11 +245,12 @@ final class BoxGroups {
         return made
     }
 
-    /// A chat's messages as kept (nil: none read, as for one gone), and as the window shows them.
+    /// A chat's messages as kept (nil: none read, as for one gone), and as the window shows them:
+    /// without kinds a newer Kuvo Code says.
     private func setLog(_ id: String, _ messages: [GroupMessage]?) {
         logs[id] = messages
         // Set outright: a message event changes them, so comparing all of them first only costs.
-        live(id).messages = messages ?? []
+        live(id).messages = (messages ?? []).filter { $0.kind != .unknown }
     }
 
     /// What the bot talking in a chat is doing, as its computer last said (see `GroupActivity`).

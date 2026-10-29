@@ -108,6 +108,12 @@ struct GroupMessage: Codable, Identifiable, Hashable {
         case note
         /// A meeting you scheduled, come due: its topic.
         case meeting
+        /// One a newer Kuvo Code says, left out of the chat rather than shown as something else.
+        case unknown
+
+        init(from decoder: Decoder) throws {
+            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+        }
     }
 }
 

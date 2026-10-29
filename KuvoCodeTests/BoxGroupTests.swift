@@ -182,6 +182,26 @@ import Testing
         #expect(app.chats.list.map(\.id) == ["grp_mac0000001"])
     }
 
+    /// A machine running a newer Kuvo Code says a kind of message this copy doesn't know: its chats
+    /// still show, with that message left out rather than shown as something else.
+    @Test func aMessageOfANewerKindLeavesTheChatsShowing() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_pal", "Pal", "box")])
+        let newer: [String: Any] = ["id": "gm_2", "author": "bot_pal", "text": "{\"chart\": 1}", "time": "2026-10-22T08:01:00Z", "kind": "chart"]
+        there.add(Self.group("grp_box0000001", members: ["bot_pal"]), messages: [Self.said, newer])
+        let app = app()
+
+        await app.boxGroups.connected("box")
+
+        #expect(app.chats.list.map(\.id) == ["grp_box0000001"])
+        #expect(app.chats.messages(in: "grp_box0000001").map(\.text) == ["Morning."])
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.message", ["id": "grp_box0000001", "message":
+            ["id": "gm_3", "author": "bot_pal", "text": "{}", "time": "2026-10-22T08:02:00Z", "kind": "chart"]]), machine: "box")
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.message", ["id": "grp_box0000001", "message":
+            ["id": "gm_4", "author": "bot_pal", "text": "Done.", "time": "2026-10-22T08:03:00Z", "kind": "message"]]), machine: "box")
+        #expect(app.chats.messages(in: "grp_box0000001").map(\.text) == ["Morning.", "Done."])
+    }
+
     /// This Mac's bridge starting, then stopped: its chats show as last seen, and what you write
     /// waits in the composer; once it's up, it goes.
     @Test func thisMacsChatsWaitForItsBridge() async throws {
