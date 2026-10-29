@@ -12,7 +12,7 @@ import { BOTS, HERE, IS_MAC, K, RUN } from "../home";
 import { hostTrash } from "../host-interface";
 import { botVariable, deleteKey, keyNames } from "../keys";
 import { botPersonalities } from "../personalities/library";
-import { BOT_STEP, botHere, botLook, botModel, isModel, isMoving, MOVING, noteBotsChanged, sameModel } from "./here";
+import { BOT_STEP, botHere, botLook, botModel, changeDescription, isModel, isMoving, MOVING, noteBotsChanged, sameModel } from "./here";
 import { givenJob, jobOf, writeJob } from "./jobs";
 import { NO_KIT, readKit, runsWithAgents } from "./kit";
 import { listBots } from "./list";
@@ -24,9 +24,24 @@ import { WORK_ACTIONS } from "../work/asks";
 import type { Target } from "../../shared/records";
 import type { BotLook } from "../../shared/routes/bots";
 import type { ChangedBot } from "../../shared/routes/bots";
+import type { BotDescription } from "./here";
 import type { JSONAnswer, OtherStatus } from "../server/context";
 import type { Job } from "./jobs";
 import type { GivenBot } from "./make";
+
+// The bot as `changed` has it, with what it may do without asking as it's kept now, unless the
+// change names that itself (`names`): an "Always" answered meanwhile isn't undone.
+function keepAllowed(changed: BotDescription, now: BotDescription | null, names: boolean): BotDescription {
+  if (names) return changed;
+  const next = { ...changed };
+  const kept = isObject(now?.work) ? now.work.allowed : undefined;
+  const work = isObject(next.work) ? { ...next.work } : {};
+  if (kept === undefined) delete work.allowed;
+  else work.allowed = kept;
+  if (Object.keys(work).length) next.work = work;
+  else delete next.work;
+  return next;
+}
 
 /** A change to a bot, as Edit Bot sends it (`PATCH kuvo/bots/<id>`): its name, look, personality,
  * job or model, and its work's settings (`work: {limits, allowed}`: the limits you set, null for
@@ -111,6 +126,7 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
   // changed, nothing else of it touched. `work: null`, or limits left out by a client from before
   // `allowed`, takes the limits away.
   let limitsChanged = false;
+  const namesAllowed = isObject(given.work) && "allowed" in given.work;
   if ("work" in given) {
     if (given.work !== null && !isObject(given.work)) return no(400, "That isn’t a bot’s work settings.");
     const asked = isObject(given.work) ? given.work : {};
@@ -132,9 +148,7 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
   // Only its work's settings changed: its description kept, nothing to tell it.
   if (limitsChanged && !Object.keys(given).some(key => key !== "work")) {
     try {
-      const file = path.join(here.folder, "bot.json");
-      fs.writeFileSync(`${file}.new`, JSON.stringify(changed, null, 2));
-      fs.renameSync(`${file}.new`, file);
+      changeDescription(here.folder, now => keepAllowed(changed, now, namesAllowed));
     } catch (error) {
       return no(503, `The bot couldn’t be changed: ${(error as Error | null)?.message ?? error}`);
     }
@@ -161,10 +175,7 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
         writeJob(here, job!);
         changed.job = job!.line;
       }
-      const file = path.join(here.folder, "bot.json");
-      fs.writeFileSync(`${file}.new`, JSON.stringify(changed, null, 2));
-      fs.renameSync(`${file}.new`, file);
-      here.described = changed;
+      here.described = changeDescription(here.folder, now => keepAllowed(changed, now, namesAllowed));
     } catch (error) {
       return no(503, `The bot couldn’t be changed: ${(error as Error | null)?.message ?? error}`);
     }

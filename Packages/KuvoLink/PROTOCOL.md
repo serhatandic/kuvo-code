@@ -576,12 +576,20 @@ client shows it from the same routes.
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
   an account for here, `provider/model`, with their efforts).
 - **Answering asks**: a bot may allow what one of its sessions (or a subagent of one) asks only
-  where it could go ahead itself (the engine's rules for its own conversation allow it: its
-  defaults, Settings › Permissions, then the conversation's own; a bot that asks first can't allow
-  what it would ask about), and never what always comes to you, told by what each command runs:
-  pushing, changing what's on GitHub, publishing, sending to a store, deploying or releasing
-  (a script or task named for it too), deleting outside the session's folder. It may always deny,
-  with its reason passed on.
+  where it could go ahead itself, part by part (the engine's rules for its own conversation allow
+  each: the engine's defaults, which ask before reading a `.env` file, Settings › Permissions, then
+  the conversation's own), and only what it can read as safe, failing closed:
+  - A command only when every part (`;`, `&&`, `||`, `|`, a new line) is a program from a known-safe
+    set with known-safe arguments, and nothing a shell expands or runs besides: no `sh -c`, `eval`,
+    wrappers (`env`, `timeout`, `nice`, `sudo`, `xargs`…), `$`, backticks, groups, background or
+    text written in. `git` reads or changes the checkout only (never `push`, `-c`, its settings or an
+    alias); package runners run a short list of known tools; scripts run by name only for building,
+    testing and checking; code it can't see (`-c`/`-e`, a script by its path) is never its to allow.
+    What a command deletes or writes must be a literal path inside the session's folder (its
+    project's other folders too), with `cd` followed.
+  - Otherwise: reading, editing inside the project, fetching pages and starting subagents. Anything
+    else (outside the project, an integration's tool) is the user's.
+  - It may always deny, with its reason passed on.
   Each answer is kept on the session, `kuvo.answers: [{ask, call?, what, decision, reason, by:
   {bot?, name}, at}]` (the latest 40), where clients show it on the ask's tool call ("Allowed by
   Pixel") and in the bot's work.
@@ -597,7 +605,11 @@ client shows it from the same routes.
   bot's work (a session started, stopped, finished or asking, an ask answered, its limits); a
   client reads that bot's work again when its time moves. Kept in `run/work/changes.json`.
 - **`POST kuvo/bots/<id>/stop-all`** → `{stopped}`: every session of its work that's working,
-  stopped (held and paused, as the queue's Stop). 404 for no such bot here, 503 with no engine.
+  stopped (held and paused, as the queue's Stop), and the bot's own turn too, with what it was
+  still to hear of them dropped. 404 for no such bot here, 503 with no engine.
+- **A box starting again** (its link): what its followed sessions did while it was down (finished,
+  failed, asked) is told to their starters once, by what `run/work/told.json` says was told, and an
+  answer to an ask given after its tool stopped waiting goes to its conversation if it hadn't.
 
 **Projects** (bridge 0.9.107, feature `work.projects`): a bot makes new projects on its box, in a
 folder you pick once per box, after asking you.

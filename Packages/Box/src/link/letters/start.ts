@@ -200,6 +200,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   if (!folder) return no(400, "Give the folder it works in (folder), as a full path.");
   if (given.mode !== undefined && given.mode !== null && given.mode !== "build" && given.mode !== "plan") return no(400, "mode is build or plan.");
   if (given.approval !== undefined && given.approval !== null && given.approval !== "ask" && given.approval !== "approveAll") return no(400, "approval is ask or approveAll.");
+  // A conversation that plans starts sessions that plan: Build would get round it, as Approve All
+  // would round Ask First.
+  if (given.mode === "build" && parent?.agent === "plan") return no(400, "This conversation is in Plan mode, so the sessions it starts plan too. Start it in plan mode, or ask the user to switch to Build.");
   // The bot this is work for: the conversation itself, or the bot its own starter works for.
   const ownBot = by?.place ? botOfConversation(by.session) : null;
   const bot: WorksFor | null = ownBot ?? (by?.place ? worksFor(by.place.data) : null);

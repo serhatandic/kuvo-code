@@ -28,11 +28,17 @@ const sessions = {
   ses_helper: { id: "ses_helper", parentID: "ses_haptics", title: "Helper", location: { directory: tidepool }, time: { created: 1, updated: 1 } },
 };
 let prompts = [];
+let asking = {};
 const engine = http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
   request.on("end", () => {
     const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+    // The sessions at the top, what works now and what each asks: for catching up as a box starts.
+    if (request.url.startsWith("/api/session?")) return reply({ data: Object.values(sessions).filter(each => !each.parentID) });
+    if (request.url === "/api/session/active") return reply({ data: {} });
+    if (/\/permission$/.test(request.url)) return reply({ data: asking[request.url.split("/")[3]] ?? [] });
+    if (/\/form$/.test(request.url)) return reply({ data: [] });
     const one = request.url.match(/^\/api\/session\/([^/?]+)(\/[^?]*)?/);
     const id = one && decodeURIComponent(one[1]);
     if (one && !one[2]) return sessions[id] ? reply({ data: sessions[id] }) : reply({ message: "No such session." }, 404);
@@ -58,6 +64,7 @@ const changesFile = path.join(home, "run", "work", "changes.json");
 
 beforeEach(() => {
   prompts = [];
+  asking = {};
   fs.rmSync(path.join(home, "run", "work"), { recursive: true, force: true });
 });
 
@@ -121,4 +128,48 @@ test("a wake that can't reach the bot now (its engine starting again) is kept an
   await runAll();
   assert.equal(prompts.length, 1);
   assert.match(prompts[0].text, /^\[Session finished\] "Sign-in"/);
+});
+
+test("what happened while the box was down reaches the bot as it starts again, once", async () => {
+  const toldFile = path.join(home, "run", "work", "told.json");
+  // It last heard of anything a while ago; since, Sign-in finished and Haptics asked something.
+  fs.mkdirSync(path.dirname(toldFile), { recursive: true });
+  fs.writeFileSync(toldFile, JSON.stringify({ since: 5, sessions: { ses_signin: { reply: "msg_old" } } }));
+  sessions.ses_signin.time.updated = 10;
+  sessions.ses_haptics.time.updated = 10;
+  sessions.ses_tests.time.updated = 10;
+  asking = { ses_haptics: [{ id: "per_9", action: "shell", resources: ["npm test"] }] };
+  try {
+    const first = clock();
+    const watch = link.workWatcher(source, () => [source], { schedule: first.schedule });
+    await watch.caughtUp;
+    await first.runAll();
+    assert.equal(prompts.length, 1);
+    assert.equal(prompts[0].to, "ses_pixel");
+    assert.match(prompts[0].text, /\[Session finished\] "Sign-in"/);
+    assert.match(prompts[0].text, /\[Session asks\] "Haptics" in tidepool \(address ses_haptics\) asks to run a command: npm test \(ask per_9\)/);
+    assert.doesNotMatch(prompts[0].text, /Tests/, "a session started without wake stays quiet");
+    // Started again: nothing new to tell.
+    const again = clock();
+    await link.workWatcher(source, () => [source], { schedule: again.schedule }).caughtUp;
+    await again.runAll();
+    assert.equal(prompts.length, 1);
+  } finally {
+    for (const each of Object.values(sessions)) each.time.updated = 1;
+  }
+});
+
+test("an answer given after its bot stopped waiting reaches it as the box starts, if the box stopped first", async () => {
+  const asksFile = path.join(home, "run", "work", "asks.json");
+  fs.mkdirSync(path.dirname(asksFile), { recursive: true });
+  fs.writeFileSync(asksFile, JSON.stringify({ asks: [{ id: "wak_1", action: "makeProject", session: "ses_pixel", name: "Pixel", project: "Tidepool", folderName: "tidepool", folder: null, at: 1,
+    given: { name: "Tidepool" }, late: true, answered: { answer: "allow", text: "Made Tidepool at ~/Developer/tidepool.", isError: false, at: Date.now() - 60 * 60_000 } }] }));
+  const { schedule } = clock();
+  await link.workWatcher(source, () => [source], { schedule }).caughtUp;
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].to, "ses_pixel");
+  assert.equal(prompts[0].text, "[The user answered] Made Tidepool at ~/Developer/tidepool.");
+  // Told once.
+  await link.workWatcher(source, () => [source], { schedule }).caughtUp;
+  assert.equal(prompts.length, 1);
 });

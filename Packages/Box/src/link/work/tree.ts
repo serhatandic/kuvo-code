@@ -6,7 +6,7 @@
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { cut } from "../../shared/text";
-import { call } from "../engine/client";
+import { call, engineGet } from "../engine/client";
 import { CHATS } from "../home";
 import { describePermission, projectNameOf } from "../notices/news";
 import { listBots } from "../bots/list";
@@ -60,15 +60,22 @@ const isArchived = (data: Partial<EngineSession>) => Boolean(data.time?.archived
 export async function workSessions(targets: Target[], signal?: AbortSignal, { archived = false }: { archived?: boolean } = {}): Promise<Listed[]> {
   const found: Listed[] = [];
   for (const target of targets) {
-    let listed: unknown;
-    try {
-      listed = await call(target, "GET", "/api/session?limit=200&order=desc&parentID=null", undefined, signal);
-    } catch {
-      continue;
-    }
-    for (const data of Array.isArray(listed) ? listed as Listed["data"][] : []) {
-      if (!data?.id || data.parentID || (!archived && isArchived(data)) || !startedByOf(data)) continue;
-      found.push({ target, data });
+    // Page after page (a few thousand at most), so a bot's work further back is still its.
+    let query: string | null = "limit=200&order=desc&parentID=null";
+    for (let pages = 0; pages < 15 && query && !signal?.aborted; pages++) {
+      let page: { data?: unknown; cursor?: { next?: string } | null } | null;
+      try {
+        page = await engineGet(target, `api/session?${query}`) as typeof page;
+      } catch {
+        break;
+      }
+      const listed = Array.isArray(page?.data) ? page.data as Listed["data"][] : [];
+      for (const data of listed) {
+        if (!data?.id || data.parentID || (!archived && isArchived(data)) || !startedByOf(data)) continue;
+        found.push({ target, data });
+      }
+      const next = page?.cursor?.next;
+      query = listed.length === 200 && next ? `limit=200&parentID=null&cursor=${encodeURIComponent(next)}` : null;
     }
   }
   return found.sort((a, b) => (b.data.time?.created ?? 0) - (a.data.time?.created ?? 0));

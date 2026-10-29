@@ -181,8 +181,12 @@ export async function makeProjectTool(caller: Caller, args: Record<string, unkno
   const action = clone ? "cloneProject" : "makeProject";
   const given = { name, ...(args.git === false ? { git: false } : {}), ...(clone ? { clone } : {}) };
   if (bot && botAllows(bot.bot, action) && projectsFolder()) {
-    const done = await doWork(action, given, asker);
-    return done.isError ? refused(done.text) : said(done.text);
+    try {
+      const done = await doWork(action, given, asker);
+      return done.isError ? refused(done.text) : said(done.text);
+    } catch (error) {
+      return refused(`Couldn't make it: ${why(error)}`);
+    }
   }
   const ask = askWork(asker, action, given);
   const answer = await answerOf(ask.id, { wait: wait ?? (Number(process.env.KUVO_WORK_ASK_WAIT) || undefined), every, signal });

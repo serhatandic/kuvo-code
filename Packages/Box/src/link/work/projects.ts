@@ -105,8 +105,12 @@ export async function makeProject(given: NewProject, madeBy: MadeBy | null, root
   if (there && !isEmptyFolder(folder)) return no(409, `There's a folder at ${shownPath(folder)} already, with files in it. Pick another name.`);
   let kind: Made["kind"] = "plain";
   if (clone) {
-    // git makes the folder, and takes away what it made of one that failed.
-    if (there) fs.rmdirSync(folder);
+    // git makes the folder, and takes away what it made of one that failed. (An empty one there
+    // goes first: git clones only into a folder it makes, and a Finder note isn't anything.)
+    if (there) {
+      fs.rmSync(path.join(folder, ".DS_Store"), { force: true });
+      fs.rmdirSync(folder);
+    }
     const failed = await cloneInto(clone, folder);
     if (failed) {
       if (!there && fs.existsSync(folder) && isEmptyFolder(folder)) fs.rmdirSync(folder);

@@ -276,3 +276,16 @@ test("a bot deleted while it asks leaves nothing asked", async () => {
   assert.equal((await making).isError, false, "its tool stops waiting");
   assert.deepEqual((await route("GET", "kuvo/work/asks")).body.asks, []);
 });
+
+test("with Always, a project that can't be made is the bot's answer too", async () => {
+  write(path.join(home, "box", "work.json"), JSON.stringify({ projectsFolder: developer }));
+  fs.writeFileSync(botFile, JSON.stringify({ ...pixel(), work: { allowed: ["makeProject"] } }));
+  fs.chmodSync(developer, 0o555);
+  try {
+    const said = await tool("make_project", { name: "Tidepool" });
+    assert.equal(said.isError, true);
+    assert.match(said.text, /Couldn't make it|Couldn't do it/);
+  } finally {
+    fs.chmodSync(developer, 0o755);
+  }
+});

@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { pause } from "../../shared/wait";
-import { botHere, noteBotsChanged } from "../bots/here";
+import { botHere, changeDescription, noteBotsChanged } from "../bots/here";
 import { asked } from "../engine/client";
 import { messageID } from "../engine/sessions";
 import { locked, textOf, writePrivate } from "../files";
@@ -32,6 +32,8 @@ export const WORK_ACTIONS: readonly WorkAction[] = ["makeProject", "cloneProject
 export interface KeptAsk extends WorkAskShape {
   given: { name: string; git?: boolean; clone?: string };
   late?: boolean;
+  /** For one answered after its tool stopped waiting: whether its conversation has been told. */
+  toldLate?: boolean;
   /** Being answered now (ms): one answer at a time does what's asked. */
   answering?: number;
   answered?: { answer: "allow" | "always" | "deny"; text: string; isError: boolean; at: number };
@@ -58,7 +60,7 @@ function changeKept<T>(change: (asks: KeptAsk[]) => T, file = WORK_ASKS): T {
     const value = change(asks);
     // Answered ones once their tool has had them; unanswered ones of a bot that's gone, or asked a
     // week ago and more.
-    const kept = asks.filter(each => (each.answered ? Date.now() - each.answered.at < 15 * 60_000 : (!each.bot || botHere(each.bot)) && Date.now() - each.at < 7 * 86_400_000));
+    const kept = asks.filter(each => (each.answered ? Date.now() - each.answered.at < 15 * 60_000 || (each.late === true && !each.toldLate) : (!each.bot || botHere(each.bot)) && Date.now() - each.at < 7 * 86_400_000));
     writePrivate(file, JSON.stringify({ asks: kept }, null, 2));
     return value;
   });
@@ -69,7 +71,7 @@ function changeKept<T>(change: (asks: KeptAsk[]) => T, file = WORK_ASKS): T {
 /** What's asked now (not answered), as clients list them: of bots still here, and of other
  * conversations. */
 export function workAsks(file = WORK_ASKS): WorkAskShape[] {
-  return readKept(file).filter(each => !each.answered && (!each.bot || botHere(each.bot))).map(({ given: _, late: __, answering: ____, answered: ___, ...listed }) => {
+  return readKept(file).filter(each => !each.answered && (!each.bot || botHere(each.bot))).map(({ given: _, late: __, answering: ____, answered: ___, toldLate: _____, ...listed }) => {
     // Where it would go, as it stands now: the folder may have been picked since.
     const root = projectsFolder();
     const folder = projectPlace(listed.project, root);
@@ -94,17 +96,17 @@ export function allowedOf(described: Record<string, unknown>): WorkAction[] {
   return isObject(work) && Array.isArray(work.allowed) ? WORK_ACTIONS.filter(each => (work.allowed as unknown[]).includes(each)) : [];
 }
 
-// "Always": `action` kept with the bot, for its next time.
+// "Always": `action` kept with the bot, for its next time (with what's in its description now).
 function allowAlways(bot: string, action: WorkAction) {
   const here = botHere(bot);
   if (!here) return;
-  const described = { ...here.described };
-  const work = isObject(described.work) ? { ...described.work } : {};
-  work.allowed = [...new Set([...allowedOf(described), action])];
-  described.work = work;
-  const file = path.join(here.folder, "bot.json");
-  fs.writeFileSync(`${file}.new`, JSON.stringify(described, null, 2));
-  fs.renameSync(`${file}.new`, file);
+  changeDescription(here.folder, now => {
+    const described = { ...(now ?? here.described) };
+    const work = isObject(described.work) ? { ...described.work } : {};
+    work.allowed = [...new Set([...allowedOf(described), action])];
+    described.work = work;
+    return described;
+  });
   noteBotsChanged();
 }
 
@@ -228,12 +230,33 @@ export async function answerWork(id: string, given: Record<string, unknown>, tar
     return Boolean(kept?.late);
   }, file);
   if (ask.bot) noteWorkChanged(ask.bot);
-  // Its tool stopped waiting: its conversation hears of it as a message.
-  if (late) {
-    const place = await placeOfSession(ask.session, targets()).catch(() => null);
-    if (place) await asked(place.target, "POST", `api/session/${encodeURIComponent(ask.session)}/prompt`, { id: messageID(), text: `[The user answered] ${outcome.text}`, delivery: "queue" }).catch(() => {});
-  }
+  // Its tool stopped waiting: its conversation hears of it as a message (and, should the box stop
+  // first, as it starts again: `tellLateAnswers`).
+  if (late) await tellLate(id, targets, file);
   return { answered };
+}
+
+// One answered after its tool stopped waiting, told to its conversation, and noted once it is.
+async function tellLate(id: string, targets: () => Target[], file: string) {
+  const ask = readKept(file).find(each => each.id === id);
+  if (!ask?.answered || !ask.late || ask.toldLate) return;
+  const place = await placeOfSession(ask.session, targets()).catch(() => undefined);
+  // Gone for sure: no one to tell.
+  if (place !== null) {
+    if (!place) return;
+    const sent = await asked(place.target, "POST", `api/session/${encodeURIComponent(ask.session)}/prompt`, { id: messageID(), text: `[The user answered] ${ask.answered.text}`, delivery: "queue" }).then(() => true, () => false);
+    if (!sent) return;
+  }
+  changeKept(asks => {
+    const kept = asks.find(each => each.id === id);
+    if (kept) kept.toldLate = true;
+  }, file);
+}
+
+/** What was answered after its tool stopped waiting and not told yet (the box stopping in
+ * between), told now, as a box starts. */
+export async function tellLateAnswers(targets: () => Target[], file = WORK_ASKS): Promise<void> {
+  for (const ask of readKept(file).filter(each => each.answered && each.late && !each.toldLate)) await tellLate(ask.id, targets, file);
 }
 
 /** The ask in words for a notification: who asks, and what. */

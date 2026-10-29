@@ -77,7 +77,13 @@ const engine = http.createServer((request, response) => {
     if (url.pathname === "/api/session" && request.method === "GET") {
       // A session's subagents by `parentID`; the rest, those at the top.
       const parent = url.searchParams.get("parentID");
-      return reply({ data: [...sessions.values()].filter(each => (parent && parent !== "null" ? each.parentID === parent : !each.parentID)) });
+      const listed = [...sessions.values()].filter(each => (parent && parent !== "null" ? each.parentID === parent : !each.parentID));
+      // Two hundred to a page, as the engine pages them.
+      if (url.searchParams.get("limit") === "200") {
+        const from = Number(url.searchParams.get("cursor") ?? 0);
+        return reply({ data: listed.slice(from, from + 200), cursor: listed.length > from + 200 ? { next: String(from + 200) } : null });
+      }
+      return reply({ data: listed });
     }
     if (url.pathname === "/api/session" && request.method === "POST") {
       const given = JSON.parse(body);
@@ -310,10 +316,13 @@ test("a client sees a bot's work: its sessions, the answers it gave and today's 
 test("a client stops all of a bot's work at once", async () => {
   const one = startedAddress(await tool("start_session", { task: "One.", project: "Tidepool" }, "ses_pixel"));
   const two = startedAddress(await tool("start_session", { task: "Two.", project: "Tidepool" }, "ses_pixel"));
-  active = new Set([one, two]);
+  active = new Set([one, two, "ses_pixel"]);
+  // What it was still to hear of them.
+  write(path.join(home, "run", "work", "wakes.json"), JSON.stringify({ ses_pixel: { lines: ["[Session finished] \"One\""], asks: false, since: 1 } }));
   const stopped = await route("POST", "kuvo/bots/bot_pixel00001/stop-all");
   assert.deepEqual(stopped, { status: 200, body: { stopped: 2 } });
-  assert.deepEqual(interrupted.sort(), [one, two].sort());
+  assert.deepEqual(interrupted.sort(), [one, two, "ses_pixel"].sort(), "the bot's own turn stops too: it would only start them again");
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "run", "work", "wakes.json"), "utf8")), {}, "and it isn't woken with what they did");
 });
 
 test("what a bot may allow fails closed: however it's phrased, what it can't read as safe goes to the user", async () => {
@@ -425,4 +434,26 @@ test("a day's limit counts sessions archived since, and one waited for isn't hea
   const third = await tool("start_session", { task: "Three.", project: "Tidepool" }, "ses_pixel");
   assert.equal(third.isError, true);
   assert.match(third.text, /2 new sessions a day/);
+});
+
+test("a conversation that plans can't start a session that builds", async () => {
+  sessions.get("ses_pixel").agent = "plan";
+  try {
+    const said = await tool("start_session", { task: "Build it.", project: "Tidepool", mode: "build" }, "ses_pixel");
+    assert.equal(said.isError, true);
+    assert.match(said.text, /Plan mode/);
+    assert.equal(made.length, 0);
+  } finally {
+    delete sessions.get("ses_pixel").agent;
+  }
+});
+
+test("a bot's work further back than the latest two hundred sessions is still its", async () => {
+  const old = startedAddress(await tool("start_session", { task: "Long ago.", project: "Tidepool" }, "ses_pixel"));
+  sessions.get(old).time.created = 2;
+  for (let at = 0; at < 230; at++) sessions.set(`ses_other${at}`, { id: `ses_other${at}`, title: "Other", location: { directory: tidepool }, time: { created: 10 + at, updated: 10 + at }, metadata: { kuvo: { startedBy: "ses_mine" } } });
+  // The latest first, as the engine lists them.
+  sessions = new Map([...sessions.entries()].sort(([, a], [, b]) => (b.time?.created ?? 0) - (a.time?.created ?? 0)));
+  const work = await route("GET", "kuvo/work?bot=bot_pixel00001");
+  assert.deepEqual(work.body.sessions.map(each => each.session), [old]);
 });

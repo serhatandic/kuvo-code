@@ -1,7 +1,8 @@
 // A bot's work, as every client shows it (PROTOCOL.md, "Work"): `GET kuvo/work?bot=<id>`, its
 // sessions and where each stands, the asks it answered for them, what it started today and the
 // limits you set; `GET kuvo/work/events`, when each bot's work last changed, a line now and one for
-// each change; `POST kuvo/bots/<id>/stop-all`, every session of its work stopped. What a bot asks
+// each change; `POST kuvo/bots/<id>/stop-all`, every session of its work stopped, and the bot's own
+// turn with what it was still to hear of them. What a bot asks
 // you before it does it (`kuvo/work/asks`, its events, and your answer, `POST kuvo/work/asks/<id>`),
 // where new projects go (`kuvo/work/settings`), and a project made (`POST kuvo/projects/new`).
 
@@ -12,6 +13,7 @@ import { stopSession } from "../engine/queue";
 import { targetsOf } from "../letters/tools";
 import { answersOn } from "../work/answers";
 import { noteWorkChanged, readWorkChanges, WORK_FOLDER, workFollowers } from "../work/changes";
+import { forgetWakes } from "../work/wakes";
 import { botLimits } from "../work/limits";
 import { answerWork, askFollowers, workAsks } from "../work/asks";
 import { madeWords, makeProject } from "../work/projects";
@@ -91,6 +93,14 @@ export async function* workRoute(context: RouteContext, match: RegExpMatchArray)
   for (const each of work) {
     if (!working.has(each.data.id) && !(await askingNow(each, signal ?? undefined))) continue;
     if (await stopSession(each.target, each.data.id).then(() => true, () => false)) stopped += 1;
+  }
+  // The bot itself, mid-turn, and what it was still to hear of them: it would only start them again.
+  const own = botHere(bot)?.session;
+  if (own) {
+    forgetWakes(own);
+    if (working.has(own)) {
+      for (const target of targets) if (await stopSession(target, own).then(() => true, () => false)) break;
+    }
   }
   noteWorkChanged(bot);
   return yield* json(200, { stopped });
