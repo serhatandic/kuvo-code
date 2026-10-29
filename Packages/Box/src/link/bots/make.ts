@@ -15,6 +15,7 @@ import { firstMessageOf } from "./jobs";
 import { botInstructions, NO_KIT, readKit, runsWithAgents } from "./kit";
 import { listBots } from "./list";
 import { noteTold, toldDigest } from "./tell";
+import { withAlwaysAsk } from "../work/always";
 import type { Target } from "../../shared/records";
 import type { BotLook, BotModel } from "../../shared/routes/bots";
 import type { MadeBot } from "../../shared/routes/bots";
@@ -135,7 +136,8 @@ async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Ta
     fs.mkdirSync(path.join(folder, "workspace"), { recursive: true });
     fs.mkdirSync(path.join(folder, "wakes"), { recursive: true });
     fs.writeFileSync(path.join(folder, "MEMORY.md"), kit.memory.replaceAll("⟦name⟧", name));
-    const rules = [...(kit.rules ?? []), { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }];
+    // What always comes to you, asked whatever its approval.
+    const rules = [...withAlwaysAsk(kit.rules ?? []), { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }];
     // The session it made, as far as its id.
     const made = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules }, signal) as Fields<"id"> | null;
     if (typeof made?.id !== "string" || !made.id) throw new Error("No conversation was made.");

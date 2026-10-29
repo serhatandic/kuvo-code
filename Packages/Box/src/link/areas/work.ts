@@ -4,28 +4,30 @@
 // each change; `POST kuvo/bots/<id>/stop-all`, every session of its work stopped, and the bot's own
 // turn with what it was still to hear of them. What a bot asks
 // you before it does it (`kuvo/work/asks`, its events, and your answer, `POST kuvo/work/asks/<id>`),
-// where new projects go (`kuvo/work/settings`), and a project made (`POST kuvo/projects/new`).
+// where new projects go (`kuvo/work/settings`), a project made (`POST kuvo/projects/new`), and a
+// bot's night (`kuvo/work/nights`, its events, and your answer, `POST kuvo/work/nights/<id>`).
 
 import { isObject, parsed } from "../../shared/json";
 import { followed } from "../follow";
 import { botHere } from "../bots/here";
-import { stopSession } from "../engine/queue";
 import { targetsOf } from "../letters/tools";
 import { answersOn } from "../work/answers";
 import { noteWorkChanged, readWorkChanges, WORK_FOLDER, workFollowers } from "../work/changes";
-import { forgetWakes } from "../work/wakes";
+import { stopBotWork } from "../work/stop";
 import { botLimits } from "../work/limits";
 import { answerWork, askFollowers, workAsks } from "../work/asks";
 import { madeWords, makeProject } from "../work/projects";
 import { setProjectsFolder, workSettings } from "../work/settings";
+import { answerNight, nightFollowers, nights } from "../work/night";
 import { readProjects } from "./projects";
 import { HERE } from "../home";
-import { askingNow, describeWork, ofBot, workingNow, workSessions } from "../work/tree";
+import { describeWork, ofBot, workingNow, workSessions } from "../work/tree";
 import type { BotWork, WorkAnswer } from "../../shared/routes/work";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
 export const WORK_ROUTE = /^kuvo\/(?:work(?:\/events)?|bots\/([^/]+)\/stop-all)$/;
 export const WORK_ASKS_ROUTE = /^kuvo\/work\/(?:settings|asks(?:\/([^/]+))?)$/;
+export const NIGHTS_ROUTE = /^kuvo\/work\/nights(?:\/([^/]+))?$/;
 
 // A bot's work as clients show it.
 async function botWork(bot: string, context: RouteContext): Promise<BotWork> {
@@ -86,23 +88,7 @@ export async function* workRoute(context: RouteContext, match: RegExpMatchArray)
   if (!botHere(bot)) return yield* json(404, { message: "There's no such bot here." });
   const targets = targetsOf({ readEngine, bridge });
   if (!targets.length) return yield* json(503, { message: "The engine isn't running." });
-  const work = ofBot(bot, await workSessions(targets, signal ?? undefined));
-  const working = await workingNow(targets, signal ?? undefined);
-  // Those working, and those waiting on an answer (which may not count as working).
-  let stopped = 0;
-  for (const each of work) {
-    if (!working.has(each.data.id) && !(await askingNow(each, signal ?? undefined))) continue;
-    if (await stopSession(each.target, each.data.id).then(() => true, () => false)) stopped += 1;
-  }
-  // The bot itself, mid-turn, and what it was still to hear of them: it would only start them again.
-  const own = botHere(bot)?.session;
-  if (own) {
-    forgetWakes(own);
-    if (working.has(own)) {
-      for (const target of targets) if (await stopSession(target, own).then(() => true, () => false)) break;
-    }
-  }
-  noteWorkChanged(bot);
+  const stopped = await stopBotWork(bot, targets, signal ?? undefined);
   return yield* json(200, { stopped });
 }
 
@@ -145,4 +131,25 @@ export async function* newProjectRoute(context: RouteContext): AsyncGenerator<An
     return yield* json(status, refusal);
   }
   return yield* json(201, { project: outcome.made.project, text: madeWords(outcome.made, HERE) });
+}
+
+// The nights here (each bot's latest), their events, and your answer to one: start (with your
+// switches), decline or stop.
+export async function* nightsRoute(context: RouteContext, match: RegExpMatchArray): AsyncGenerator<AnswerPiece> {
+  const { request, readEngine, bridge, signal, json } = context;
+  const method = request.method.toUpperCase();
+  if (!match[1] || match[1] === "events") {
+    if (method !== "GET") return yield* json(405, {});
+    if (!match[1]) return yield* json(200, { nights: nights() });
+    yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+    return yield* followed(() => ({ nights: nights() }), nightFollowers, signal ?? undefined, { folders: [WORK_FOLDER], recursive: false });
+  }
+  if (method !== "POST") return yield* json(405, {});
+  const given = parsed(request.body);
+  const outcome = await answerNight(decodeURIComponent(match[1]), isObject(given) ? given : {}, () => targetsOf({ readEngine, bridge }));
+  if ("refused" in outcome) {
+    const { status, ...refusal } = outcome.refused;
+    return yield* json(status, refusal);
+  }
+  return yield* json(200, outcome);
 }

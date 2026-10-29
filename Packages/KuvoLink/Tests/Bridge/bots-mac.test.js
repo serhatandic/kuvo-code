@@ -24,6 +24,10 @@ Object.assign(process.env, {
   KUVO_ENGINE_CONFIG: path.join(support, "engine"),
 });
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+
+// A bot's rules as its box makes them: what always comes to you asked whatever its approval, after
+// what they allow and ask and before what they hold back (PROTOCOL.md, "What always comes to you").
+const withAlways = rules => [...rules.filter(rule => rule.effect === "allow" || rule.effect === "ask"), ...link.ALWAYS_ASK_RULES, ...rules.filter(rule => rule.effect !== "allow" && rule.effect !== "ask")];
 const bots = process.env.KUVO_BOTS;
 const home = process.env.KUVO_HOME;
 const settingsFile = path.join(process.env.KUVO_ENGINE_CONFIG, "opencode", "opencode.json");
@@ -299,7 +303,7 @@ test("a bot's own rules are put right at its next run: its folder its own, an ol
   fs.rmSync(path.join(folder, "MEMORY.md"));
   await link.freshenBot(fake.read(), "ses_bot_scout00001");
   assert.deepEqual(fake.rules.ses_bot_scout00001, [
-    { action: "shell", resource: "rm -rf *", effect: "deny" },
+    ...withAlways([{ action: "shell", resource: "rm -rf *", effect: "deny" }]),
     { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" },
   ]);
   // Its memory, for one made before it was made with it.
@@ -418,7 +422,7 @@ test("a bot brought here from another computer is made this Mac's: its folder sa
   assert.equal(fs.existsSync(path.join(folder, "timezone")), false, "this Mac's bots go by its own clock");
   assert.equal(fs.existsSync(path.join(folder, "zoneinfo")), false);
   assert.deepEqual(fake.rules.ses_bot_moved00001, [
-    { action: "shell", resource: "git push *", effect: "allow" },
+    ...withAlways([{ action: "shell", resource: "git push *", effect: "allow" }]),
     { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" },
   ]);
   assert.match(told(fake.asked, "ses_bot_moved00001").at(-1).body.value, /You run on this Mac\./);

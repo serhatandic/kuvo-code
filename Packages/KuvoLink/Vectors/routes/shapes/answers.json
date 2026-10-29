@@ -2350,6 +2350,9 @@
             "literal": "work.projects"
            },
            {
+            "literal": "work.nights"
+           },
+           {
             "literal": "accounts.ended"
            },
            {
@@ -2596,6 +2599,9 @@
            },
            {
             "literal": "work.projects"
+           },
+           {
+            "literal": "work.nights"
            }
           ]
          }
@@ -5715,6 +5721,536 @@
     "400": {
      "object": {
       "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work/nights",
+   "answers": {
+    "200": {
+     "object": {
+      "nights": {
+       "list": {
+        "object": {
+         "id": "string",
+         "bot": "string",
+         "name": "string",
+         "session": "string",
+         "goal": "string",
+         "state": {
+          "oneOf": [
+           {
+            "literal": "proposed"
+           },
+           {
+            "literal": "running"
+           },
+           {
+            "literal": "done"
+           },
+           {
+            "literal": "stopped"
+           },
+           {
+            "literal": "declined"
+           }
+          ]
+         },
+         "steps": {
+          "list": {
+           "object": {
+            "text": "string",
+            "state": {
+             "oneOf": [
+              {
+               "literal": "todo"
+              },
+              {
+               "literal": "doing"
+              },
+              {
+               "literal": "done"
+              },
+              {
+               "literal": "blocked"
+              },
+              {
+               "literal": "skipped"
+              }
+             ]
+            },
+            "note?": "string"
+           }
+          }
+         },
+         "checks": {
+          "list": {
+           "object": {
+            "id": "string",
+            "text": "string",
+            "detail?": "string",
+            "state": {
+             "oneOf": [
+              {
+               "literal": "ok"
+              },
+              {
+               "literal": "needs"
+              },
+              {
+               "literal": "failed"
+              }
+             ]
+            },
+            "by": {
+             "oneOf": [
+              {
+               "literal": "bot"
+              },
+              {
+               "literal": "box"
+              }
+             ]
+            },
+            "action?": {
+             "object": {
+              "kind": {
+               "oneOf": [
+                {
+                 "literal": "open"
+                },
+                {
+                 "literal": "projectsFolder"
+                }
+               ]
+              },
+              "label": "string",
+              "url?": "string"
+             }
+            }
+           }
+          }
+         },
+         "spend": {
+          "list": {
+           "object": {
+            "what": "string",
+            "cap": "number",
+            "currency": "string"
+           }
+          }
+         },
+         "public": {
+          "list": {
+           "object": {
+            "id": "string",
+            "text": "string",
+            "on": "bool"
+           }
+          }
+         },
+         "projects": {
+          "list": "string"
+         },
+         "wake": "bool",
+         "proposed": "number",
+         "started?": "number",
+         "ended?": "number",
+         "blockers": {
+          "list": {
+           "object": {
+            "id": "string",
+            "kind": {
+             "oneOf": [
+              {
+               "literal": "you"
+              },
+              {
+               "literal": "judgment"
+              },
+              {
+               "literal": "outside"
+              },
+              {
+               "literal": "ask"
+              }
+             ]
+            },
+            "text": "string",
+            "detail?": "string",
+            "url?": "string",
+            "session?": "string",
+            "at": "number"
+           }
+          }
+         },
+         "watching": {
+          "list": "string"
+         },
+         "report?": "string",
+         "canStart": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work/nights/events",
+   "answers": {
+    "200": {
+     "object": {
+      "nights": {
+       "list": {
+        "object": {
+         "id": "string",
+         "bot": "string",
+         "name": "string",
+         "session": "string",
+         "goal": "string",
+         "state": {
+          "oneOf": [
+           {
+            "literal": "proposed"
+           },
+           {
+            "literal": "running"
+           },
+           {
+            "literal": "done"
+           },
+           {
+            "literal": "stopped"
+           },
+           {
+            "literal": "declined"
+           }
+          ]
+         },
+         "steps": {
+          "list": {
+           "object": {
+            "text": "string",
+            "state": {
+             "oneOf": [
+              {
+               "literal": "todo"
+              },
+              {
+               "literal": "doing"
+              },
+              {
+               "literal": "done"
+              },
+              {
+               "literal": "blocked"
+              },
+              {
+               "literal": "skipped"
+              }
+             ]
+            },
+            "note?": "string"
+           }
+          }
+         },
+         "checks": {
+          "list": {
+           "object": {
+            "id": "string",
+            "text": "string",
+            "detail?": "string",
+            "state": {
+             "oneOf": [
+              {
+               "literal": "ok"
+              },
+              {
+               "literal": "needs"
+              },
+              {
+               "literal": "failed"
+              }
+             ]
+            },
+            "by": {
+             "oneOf": [
+              {
+               "literal": "bot"
+              },
+              {
+               "literal": "box"
+              }
+             ]
+            },
+            "action?": {
+             "object": {
+              "kind": {
+               "oneOf": [
+                {
+                 "literal": "open"
+                },
+                {
+                 "literal": "projectsFolder"
+                }
+               ]
+              },
+              "label": "string",
+              "url?": "string"
+             }
+            }
+           }
+          }
+         },
+         "spend": {
+          "list": {
+           "object": {
+            "what": "string",
+            "cap": "number",
+            "currency": "string"
+           }
+          }
+         },
+         "public": {
+          "list": {
+           "object": {
+            "id": "string",
+            "text": "string",
+            "on": "bool"
+           }
+          }
+         },
+         "projects": {
+          "list": "string"
+         },
+         "wake": "bool",
+         "proposed": "number",
+         "started?": "number",
+         "ended?": "number",
+         "blockers": {
+          "list": {
+           "object": {
+            "id": "string",
+            "kind": {
+             "oneOf": [
+              {
+               "literal": "you"
+              },
+              {
+               "literal": "judgment"
+              },
+              {
+               "literal": "outside"
+              },
+              {
+               "literal": "ask"
+              }
+             ]
+            },
+            "text": "string",
+            "detail?": "string",
+            "url?": "string",
+            "session?": "string",
+            "at": "number"
+           }
+          }
+         },
+         "watching": {
+          "list": "string"
+         },
+         "report?": "string",
+         "canStart": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/work/nights/:id",
+   "answers": {
+    "200": {
+     "object": {
+      "night": {
+       "object": {
+        "id": "string",
+        "bot": "string",
+        "name": "string",
+        "session": "string",
+        "goal": "string",
+        "state": {
+         "oneOf": [
+          {
+           "literal": "proposed"
+          },
+          {
+           "literal": "running"
+          },
+          {
+           "literal": "done"
+          },
+          {
+           "literal": "stopped"
+          },
+          {
+           "literal": "declined"
+          }
+         ]
+        },
+        "steps": {
+         "list": {
+          "object": {
+           "text": "string",
+           "state": {
+            "oneOf": [
+             {
+              "literal": "todo"
+             },
+             {
+              "literal": "doing"
+             },
+             {
+              "literal": "done"
+             },
+             {
+              "literal": "blocked"
+             },
+             {
+              "literal": "skipped"
+             }
+            ]
+           },
+           "note?": "string"
+          }
+         }
+        },
+        "checks": {
+         "list": {
+          "object": {
+           "id": "string",
+           "text": "string",
+           "detail?": "string",
+           "state": {
+            "oneOf": [
+             {
+              "literal": "ok"
+             },
+             {
+              "literal": "needs"
+             },
+             {
+              "literal": "failed"
+             }
+            ]
+           },
+           "by": {
+            "oneOf": [
+             {
+              "literal": "bot"
+             },
+             {
+              "literal": "box"
+             }
+            ]
+           },
+           "action?": {
+            "object": {
+             "kind": {
+              "oneOf": [
+               {
+                "literal": "open"
+               },
+               {
+                "literal": "projectsFolder"
+               }
+              ]
+             },
+             "label": "string",
+             "url?": "string"
+            }
+           }
+          }
+         }
+        },
+        "spend": {
+         "list": {
+          "object": {
+           "what": "string",
+           "cap": "number",
+           "currency": "string"
+          }
+         }
+        },
+        "public": {
+         "list": {
+          "object": {
+           "id": "string",
+           "text": "string",
+           "on": "bool"
+          }
+         }
+        },
+        "projects": {
+         "list": "string"
+        },
+        "wake": "bool",
+        "proposed": "number",
+        "started?": "number",
+        "ended?": "number",
+        "blockers": {
+         "list": {
+          "object": {
+           "id": "string",
+           "kind": {
+            "oneOf": [
+             {
+              "literal": "you"
+             },
+             {
+              "literal": "judgment"
+             },
+             {
+              "literal": "outside"
+             },
+             {
+              "literal": "ask"
+             }
+            ]
+           },
+           "text": "string",
+           "detail?": "string",
+           "url?": "string",
+           "session?": "string",
+           "at": "number"
+          }
+         }
+        },
+        "watching": {
+         "list": "string"
+        },
+        "report?": "string",
+        "canStart": "bool"
+       }
+      }
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "409": {
+     "object": {
+      "message": "string",
+      "needs?": "string"
      }
     }
    }

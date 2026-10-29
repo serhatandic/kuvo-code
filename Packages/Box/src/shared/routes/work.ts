@@ -92,6 +92,64 @@ export const WORK = object({
  * work again when its time moves. */
 export const WORK_CHANGED = object({ changed: map(number) });
 
+/** A step of a night's plan, and where it stands (with a word on why, when there's one). */
+export const NIGHT_STEP = object({ text: string, state: words("todo", "doing", "done", "blocked", "skipped"), "note?": string });
+
+/** What a night needs, checked before you start it: by the bot (its tools, keys, services) or by
+ * the box (working unattended here, on power, where new projects go). `needs` is yours to do, with
+ * what you'd press (a page to open, or the projects folder to pick); `failed` can't be done here. */
+export const NIGHT_CHECK = object({
+  id: string,
+  text: string,
+  "detail?": string,
+  state: words("ok", "needs", "failed"),
+  by: words("bot", "box"),
+  "action?": object({ kind: words("open", "projectsFolder"), label: string, "url?": string }),
+});
+
+/** Something the night couldn't do without you, kept for the morning: only you can fix it, a
+ * judgment call before anything public, something outside the plan, or an ask no one answered (it
+ * was said no to, and worked around). A page to open for it, and the session it's in, if any. */
+export const NIGHT_BLOCKER = object({
+  id: string,
+  kind: words("you", "judgment", "outside", "ask"),
+  text: string,
+  "detail?": string,
+  "url?": string,
+  "session?": string,
+  at: number,
+});
+
+/** A bot's night (PROTOCOL.md, "Work › A night"): the goal in your words, the plan's steps, what
+ * it checked, what it may spend (each with a cap: what the plan names, never more), the public
+ * steps with your switch for each (off until you turn it on), the projects it may make, whether a
+ * blocker wakes you, where it stands, what's blocked, what's still watched, and the morning report.
+ * Proposed by the bot; only you start it, decline it or stop it. Times in ms since 1970. */
+export const NIGHT = object({
+  id: string,
+  bot: string,
+  name: string,
+  session: string,
+  goal: string,
+  state: words("proposed", "running", "done", "stopped", "declined"),
+  steps: list(NIGHT_STEP),
+  checks: list(NIGHT_CHECK),
+  spend: list(object({ what: string, cap: number, currency: string })),
+  public: list(object({ id: string, text: string, on: bool })),
+  projects: list(string),
+  wake: bool,
+  proposed: number,
+  "started?": number,
+  "ended?": number,
+  blockers: list(NIGHT_BLOCKER),
+  watching: list(string),
+  "report?": string,
+  /** Whether a night can run here now (working unattended is on for this box). */
+  canStart: bool,
+});
+/** The nights here: each bot's latest, while it's proposed or running, or ended in the last day. */
+export const NIGHTS = object({ nights: list(NIGHT) });
+
 const REFUSED = object({ message: string });
 
 export type WorkLimits = Infer<typeof LIMITS>;
@@ -100,6 +158,9 @@ export type WorkAnswer = Infer<typeof ANSWER>;
 export type WorkSession = Infer<typeof WORK_SESSION>;
 export type BotWork = Infer<typeof WORK>;
 export type WorkAskShape = Infer<typeof WORK_ASK>;
+export type NightShape = Infer<typeof NIGHT>;
+export type NightBlockerShape = Infer<typeof NIGHT_BLOCKER>;
+export type NightCheckShape = Infer<typeof NIGHT_CHECK>;
 
 export const WORK_ROUTES: RouteShape[] = [
   { route: "GET kuvo/work", answers: { 200: WORK, 400: REFUSED, 404: REFUSED, 503: REFUSED } },
@@ -110,5 +171,8 @@ export const WORK_ROUTES: RouteShape[] = [
   { route: "POST kuvo/work/asks/:id", answers: { 200: WORK_ASK_ANSWERED, 400: REFUSED, 404: REFUSED } },
   { route: "GET kuvo/work/settings", answers: { 200: WORK_SETTINGS } },
   { route: "PATCH kuvo/work/settings", answers: { 200: WORK_SETTINGS, 400: REFUSED } },
+  { route: "GET kuvo/work/nights", answers: { 200: NIGHTS } },
+  { route: "GET kuvo/work/nights/events", answers: { 200: NIGHTS } },
+  { route: "POST kuvo/work/nights/:id", answers: { 200: object({ night: NIGHT }), 400: REFUSED, 404: REFUSED, 409: object({ message: string, "needs?": string }) } },
   { route: "POST kuvo/projects/new", answers: { 201: object({ project: PROJECT, text: string }), 400: REFUSED, 403: object({ message: string, needs: string }), 409: REFUSED, 502: REFUSED } },
 ];

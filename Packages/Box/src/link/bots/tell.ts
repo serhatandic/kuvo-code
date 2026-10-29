@@ -11,6 +11,7 @@ import { call } from "../engine/client";
 import { listOf, textOf } from "../files";
 import { BOTS, HERE, IS_MAC, WAKE_COMMAND } from "../home";
 import { botPersonalities } from "../personalities/library";
+import { withAlwaysAsk } from "../work/always";
 import { botHere, isMoving, noteBotsChanged } from "./here";
 import { jobOf } from "./jobs";
 import { botInstructions, NO_KIT, readKit, readMacKit, zoneOf } from "./kit";
@@ -246,7 +247,8 @@ async function repairRules(target: Target, here: BotHere, sessionID: string): Pr
   const kept: unknown[] = rules.filter(rule => !old(rule));
   const settings = kept.every(isRule) ? permissionsHere() : null;
   // Where `settings` is there, every one kept is a rule (checked just above).
-  const repaired = [...(settings ? refreshedRules(kept as KitRule[], settings) : kept), own];
+  // What always comes to you, asked whatever its approval.
+  const repaired = [...withAlwaysAsk(settings ? refreshedRules(kept as KitRule[], settings) : kept as KitRule[]), own];
   if (JSON.stringify(repaired) === JSON.stringify(rules)) return true;
   return call(target, "PATCH", `/api/session/${encodeURIComponent(sessionID)}`, { permissions: repaired }).then(() => true, () => false);
 }

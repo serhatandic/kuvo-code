@@ -8,7 +8,7 @@ import { Frame, frame, relayPush } from "../relay/frames";
 import { masked } from "./mask";
 
 /** What a notice is about (PROTOCOL.md, "Notifications"), for its buttons: what's asked of you, or news. */
-export type NoticeCategory = "permission" | "question" | "ask" | "finished" | "failed" | "report" | "message";
+export type NoticeCategory = "permission" | "question" | "ask" | "finished" | "failed" | "report" | "blocked" | "message";
 
 /** Where a notice opens (`session` or `group`), and what answering takes it back (`request`, `ask`). */
 export interface NoticeData {
@@ -20,6 +20,8 @@ export interface NoticeData {
   /** "0": its notification mustn't answer it from buttons. */
   answerable?: "0";
   ask?: string;
+  /** "1": a night's blocker you asked to be woken for (shown time-sensitive, not quietly). */
+  wake?: "1";
 }
 
 /** A notice for your phones, as the box words it, before it's masked and cut. */

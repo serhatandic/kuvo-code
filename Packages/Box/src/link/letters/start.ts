@@ -21,6 +21,8 @@ import { answerTo } from "./take";
 import { noteWorkChanged } from "../work/changes";
 import { botLimits, pastLimit } from "../work/limits";
 import { pickModel, usableModels } from "../work/models";
+import { withAlwaysAsk } from "../work/always";
+import { runningNight } from "../work/night";
 import { botOfConversation, depthOf, ofBot, workingNow, workSessions, worksFor } from "../work/tree";
 import type { WorksFor } from "../../shared/routes/work";
 import type { Target } from "../../shared/records";
@@ -94,6 +96,8 @@ export interface StartPlace {
 
 /** What a session a bot started is told with its task: its half of the playbook (PROTOCOL.md,
  * "Work"), in the task's text, so it works with any agent. */
+/** What a session a bot starts during its night is told: the user is asleep. */
+export const nightNote = "This runs overnight while the user sleeps, so no one will answer what you ask for a while, and what you ask is said no to. Prepare rather than act on the world: don't publish, deploy, send or pay anything, and do only what your task names. What you can't do without the user, report rather than wait for.";
 export const sessionNote = (bot: string) => `You were started by ${bot}, a bot coordinating this work. When you're done, review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left. ${bot} reads that report.`;
 
 // What a start's wake names: what its starter hears of it.
@@ -269,7 +273,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const askedFirst = given.approval === "approveAll" && asksFirst(parent?.permissions);
   const project = projectOf(folder);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
-  const rules = rulesFor(wantsAsk && !asksFirst(parent?.permissions) ? { ...parent, permissions: askFirstRules() as EngineSession["permissions"] } : parent, project?.folders ?? []);
+  const made = rulesFor(wantsAsk && !asksFirst(parent?.permissions) ? { ...parent, permissions: askFirstRules() as EngineSession["permissions"] } : parent, project?.folders ?? []);
+  // A bot's work asks for what always comes to you, whatever its approval (last, so they win).
+  const rules = bot ? withAlwaysAsk(made ?? []) : made;
   // Its mode: the one asked for, else the conversation's (one that plans starts sessions that plan).
   const agent = given.mode === "plan" || given.mode === "build" ? given.mode : parent?.agent ?? null;
   let session: string;
@@ -295,7 +301,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   }
   const waits = given.wait === true;
   const id = messageID();
-  const text = by ? composeLetter(by.name, by.session, task, waits) + (bot ? `\n\n${sessionNote(bot.name)}` : "") : task;
+  const text = by ? composeLetter(by.name, by.session, task, waits) + (bot ? `\n\n${sessionNote(bot.name)}${runningNight(bot.bot) ? `\n\n${nightNote}` : ""}` : "") : task;
   try {
     await asked(target, "POST", `api/session/${address}/prompt`, { id, text, delivery: "steer" });
   } catch (error) {

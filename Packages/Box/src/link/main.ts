@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { sleep } from "../shared/wait";
 import { watchAsks } from "./areas/asks";
 import { watchWorkAsks } from "./work/asks";
+import { watchNights } from "./work/night";
 import { refreshBotsKeys } from "./areas/bot-keys";
 import { setBoxKey } from "./areas/box-keys";
 import { addMacDefaults, changeSettings, ownsSettings, readSettings } from "./areas/config";
@@ -94,6 +95,9 @@ export { forgetMovesInMemory, keepMoving, sendMovesWith, takeMoveMail, watchMove
 export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
 export { queueOf, queueWatcher, readQueues, scanQueues } from "./engine/queue";
 export { workWatcher } from "./work/wakes";
+export { lookAtNights } from "./work/night";
+export { keptAwake } from "./work/awake";
+export { ALWAYS_ASK_RULES } from "./work/always";
 export { macLink, readLink, updateLink, writeLink } from "./state";
 export { searchPlugins } from "./areas/plugins";
 export { listFolders, makeFolder } from "./areas/folders";
@@ -294,6 +298,9 @@ async function run(): Promise<void> {
   watchAsks(tell, { answered });
   // What its bots ask you before they do it (making a project): told the same way.
   watchWorkAsks(tell, { answered });
+  // Its bots' nights: the Mac kept awake while one runs, asks no one answers in time said no to,
+  // and blockers and the morning report told quietly.
+  watchNights(tell, peerTargets);
   // Your other computers: this box's agents told to them while the relay connection is up (and
   // listed here, relay or not), and its agents' letters sent; without the relay a while, those
   // not sent yet go to the Mac.
@@ -502,6 +509,9 @@ async function serve(): Promise<void> {
   // Its bots kept told what they are as their runs start, on the engine and with the coding agents;
   // on a Mac, its news for your phones too (while the phone link's on), and its sign-ins that ended.
   watchBox({ tell: macTell, hold: macLink.hold, bots: true, notices: IS_MAC });
+  // Its bots' nights: kept awake while one runs (on power), asks no one answers in time said no
+  // to, and blockers and the morning report told quietly to your phones.
+  if (IS_MAC) watchNights(macTell, peerTargets);
   // Its app gone (its stdin closed): so is it, once what its link has queued for the relay is out
   // (a notice sent as the app quit), a moment at most.
   const leave = async (): Promise<void> => {

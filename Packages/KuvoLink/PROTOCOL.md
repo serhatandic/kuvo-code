@@ -659,6 +659,65 @@ folder you pick once per box, after asking you.
   the same way (no `madeBy`): 403 `{needs: "projectsFolder"}` with none picked, 409 for one there,
   400 for a name or address that won't do, 502 when git fails.
 
+**What always comes to you** (bridge 0.9.111, `work/always.ts`): payments, permanent deletes,
+changes to who may do what, new accounts, messages to people, your passwords, keys and sign-ins,
+and git's settings. No mode, Always, plan or night's switch turns this off.
+- `answer_ask` checks it first, before the policy above, by the tool call's whole input: a
+  command's programs and subcommands (`rm`, `chmod`, `sudo`, `git config`, `git push --force`,
+  `gh pr create`, `stripe … create`, `docker rm`…), a request to a payment's or a message's service
+  (`api.stripe.com`, `hooks.slack.com`…), an edit of `.env`, `.ssh/`, `.gitconfig`, and another tool
+  by its name's words (`gmail_send_email`, `delete_page`, `create_account`). It refuses with the kind
+  in words: "That's a permanent delete, which always comes to the user".
+- Every session a bot starts, and the bot's own conversation, carries engine rules that ask for
+  them whatever its approval (`shell` asks for those programs and services, after its own rules so
+  they win over Approve All, and before what you don't allow, which stays not allowed).
+
+**A night** (bridge 0.9.111, feature `work.nights`, `work/night.ts`): you give a bot a goal at
+bedtime, and it works through it while you sleep.
+- **Only where the box may work unattended**: a night starts only on a box whose sessions' commands
+  run in the sandbox (`sandboxOn`, false until it's built in; a test box says yes with
+  `KUVO_TEST_SANDBOX_ON=1`). Everything else about nights works without it. Clients never say
+  "sandbox" on the card: the box's check reads "This Mac can't run a night yet".
+- **Tools** (a bot's conversation only): `propose_night` (`{goal, steps: [text], checks?: [{text,
+  ok?, detail?, url?, button?}], spend?: [{what, cap, currency?}], public?: [text], projects?:
+  [name]}`) puts the card up, replacing one it proposed before (refused while one runs);
+  `night_progress` (`{steps: [{step, state: todo|doing|done|blocked|skipped, note?}]}` or `{step,
+  state, note?}`, `blocker?: {kind: you|judgment|outside, text, detail?, url?}`, `watching?:
+  [text]}`); `may_publish` (`{step}`: a public step's id or words; yes only when you switched it
+  on); `finish_night` (`{report, watching?}`).
+- **Only you start it**: `POST kuvo/work/nights/<id>` from a client, `{action: start, public?: {<id>:
+  bool}, wake?}`, `{action: decline}` or `{action: stop}` → `{night}`. Never a tool, an agent's
+  message or another computer's mail. 409 `{needs: "sandbox"}` where the box can't work unattended;
+  400 for a night in the wrong state; 404 for none. Starting tells the bot `[Night started] …` with
+  what's switched on and off, what it may spend and the projects it may make; declining tells it
+  `[Not tonight] …`; stopping stops its work as `stop-all` does.
+- **`GET kuvo/work/nights`** and **`GET kuvo/work/nights/events`** (ndjson, now and at each
+  change) → `{nights: [{id, bot, name, session, goal, state: proposed|running|done|stopped|
+  declined, steps: [{text, state, note?}], checks: [{id, text, detail?, state: ok|needs|failed, by:
+  bot|box, action?: {kind: open|projectsFolder, label, url?}}], spend: [{what, cap, currency}],
+  public: [{id, text, on}], projects, wake, proposed, started?, ended?, blockers: [{id, kind:
+  you|judgment|outside|ask, text, detail?, url?, session?, at}], watching, report?, canStart}]}`:
+  each bot's latest, while it's proposed or running, or ended within a day. Kept in
+  `run/work/nights.json`; `kuvo/work/events` moves too. While it's proposed, the box's own checks
+  come first: `unattended` (failed where it can't), `power` (a Mac: needs on battery), and
+  `projectsFolder` (needs when the plan makes a project and none is picked).
+- **Overnight**:
+  - A project the plan names is made without asking; any other work ask, and any permission a
+    session of its work (or the bot) asks that no one answers in 15 minutes, is said no to
+    (`reject`, with words telling it to work around it) and kept as a blocker of kind `ask`
+    (`outside` for a project), with the answer kept on the session (`by: {name: "Kuvo Code"}`).
+  - A session the bot starts is told it runs overnight: prepare, don't publish, deploy, send or pay.
+  - The bot is told to make drafts of what's public unless its switch is on, spend only what the
+    plan names, and the five kinds of trouble (`bot-words.json`).
+  - **Keep-awake**: a Mac's box holds `caffeinate -s -w <its pid>` while any night runs (macOS
+    honors it on power only), and lets go once none does. A machine doesn't sleep. A Mac on battery
+    mid-night is a blocker.
+- **Your phones**: each new blocker, once, as category `blocked` (`title` the bot, `subtitle`
+  "Needs you in the morning", `data: {session}`, and `wake: "1"` for kind `you` on a night you
+  asked to be woken for); the morning report, once, as `report` (`title` "<bot>'s night"). Both
+  show quietly unless `wake` says otherwise. A Mac's box sends them while its phone link is on;
+  the Mac app shows its own from `kuvo/work/nights`.
+
 ### Updates
 
 A box's files say which Kuvo Code put them there: `~/.kuvo-code/bin/box-version`. It holds that
@@ -764,7 +823,7 @@ with a mail frame, sealed with the sender's static key for the phone's. Its payl
 | `body` | What the Mac shows: the request, the question, the last words of a reply. |
 | `category` | What it's about, below. |
 | `thread` | What it's grouped under: the session's id, or the group chat's. |
-| `data` | Where it opens: `session` or `group`; `request` for a permission or a form, with `requestSession` when the session asking isn't the one shown (a subagent's), and `answerable: "0"` when its notification mustn't answer it from buttons (it can't show all it covers, or some of its text shows as dots); `ask` for a browser ask. |
+| `data` | Where it opens: `session` or `group`; `request` for a permission or a form, with `requestSession` when the session asking isn't the one shown (a subagent's), and `answerable: "0"` when its notification mustn't answer it from buttons (it can't show all it covers, or some of its text shows as dots); `ask` for a browser ask; `wake: "1"` for a night's blocker you asked to be woken for. |
 
 | Category | When |
 | --- | --- |
@@ -773,7 +832,8 @@ with a mail frame, sealed with the sender's static key for the phone's. Its payl
 | `ask` | An agent browsing asks for a sign-in, a code or a step. `ask` is it. |
 | `finished` | A run finished. |
 | `failed` | A run stopped with an error. |
-| `report` | A bot's run finished: a wake-up's or a watch's news. |
+| `report` | A bot's run finished: a wake-up's or a watch's news, or a night's morning report. Quiet. |
+| `blocked` | A bot's night needs you in the morning. Quiet, unless `data.wake` is `"1"`. |
 | `message` | Something in a group chat. |
 
 A phone should ignore a category it doesn't know, and show the notification plainly.
