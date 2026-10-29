@@ -3,7 +3,7 @@
 // Packages/Box/src/link/main.ts
 import { spawn as spawn6 } from "node:child_process";
 import crypto23 from "node:crypto";
-import fs65 from "node:fs";
+import fs66 from "node:fs";
 import os8 from "node:os";
 import path67 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
@@ -12026,6 +12026,7 @@ ${answer}` : "It hasn't answered yet; it may still write back with send_message.
 }
 
 // Packages/Box/src/link/work/policy.ts
+import fs55 from "node:fs";
 import path55 from "node:path";
 function readLine(line) {
   const parts = [];
@@ -12147,238 +12148,262 @@ function readLine(line) {
     return no("a part it can't read");
   return { parts };
 }
-var written2 = (target) => target.replace(/^~(?=$|\/)/, homeFolder());
-var resolved = (target, place) => path55.resolve(place.cwd, written2(target));
+function realPath(target, cwd) {
+  let full = path55.resolve(cwd, target.replace(/^~(?=$|\/)/, homeFolder()));
+  const rest = [];
+  for (let step = 0;step < 64; step++) {
+    try {
+      return path55.join(fs55.realpathSync(full), ...rest);
+    } catch {
+      const parent = path55.dirname(full);
+      if (parent === full)
+        break;
+      rest.unshift(path55.basename(full));
+      full = parent;
+    }
+  }
+  return path55.join(full, ...rest);
+}
+var realFolders = (place) => place.folders.map((folder) => realPath(folder, "/"));
 var under2 = (full, folder) => full.startsWith(folder.endsWith("/") ? folder : folder + "/");
-function insideFolders(target, place, strictly = false) {
-  if (target === "/dev/null")
-    return !strictly;
-  const full = resolved(target, place);
-  return place.folders.some((folder) => under2(full, path55.resolve(folder)) || !strictly && full === path55.resolve(folder));
+function isSecret(full) {
+  const home = realPath(homeFolder(), "/");
+  const kuvo = realPath(K, "/");
+  const secrets = [
+    path55.join(kuvo, "keys"),
+    path55.join(kuvo, "box"),
+    path55.join(kuvo, "run"),
+    path55.join(kuvo, "agents"),
+    path55.join(kuvo, "integrations"),
+    ...[".ssh", ".aws", ".gnupg", ".kube", ".docker", ".config/gh", ".netrc", ".git-credentials", ".npmrc", ".pypirc", "Library/Keychains", ".claude", ".codex", ".grok"].map((name) => path55.join(home, name))
+  ];
+  return secrets.some((secret) => full === secret || under2(full, secret));
+}
+var RUNS_LATER = /(^|\/)(\.git|\.husky|\.githooks|node_modules\/\.bin|\.cargo)(\/|$)|(^|\/)(\.npmrc|\.yarnrc(\.yml)?|\.pnpmfile\.cjs|package\.json|Makefile|makefile|GNUmakefile|[^/]+\.mk|build\.rs|conftest\.py|setup\.py|setup\.cfg|pyproject\.toml|tox\.ini|pytest\.ini|Package\.swift|project\.pbxproj|Podfile|Gemfile|Rakefile|[^/]+\.gradle(\.kts)?|lefthook\.ya?ml|\.pre-commit-config\.yaml|\.envrc)$/;
+function pathRefusal(target, place, use) {
+  if (target === "/dev/null" && use !== "delete")
+    return null;
+  if (/[*?[\]]/.test(target))
+    return "a pattern of files it can't see";
+  const full = realPath(target, place.cwd);
+  if (isSecret(full))
+    return "your keys and sign-ins";
+  const inside = realFolders(place).some((folder) => under2(full, folder) || use !== "delete" && full === folder);
+  if (!inside)
+    return use === "read" ? "reading outside the project" : use === "delete" ? "deleting outside the project" : "changing files outside the project";
+  if (use !== "read" && RUNS_LATER.test(full))
+    return "changing a file that later commands run";
+  return null;
 }
 var CANT = "a command it can't tell is safe";
-var plain2 = (rest) => rest.filter((word) => !word.startsWith("-"));
-var noneOf = (rest, banned) => !rest.some((word) => banned.test(word));
-var reads2 = (banned) => (rest) => banned && !noneOf(rest, banned) ? CANT : null;
-var changes = (strictly) => (rest, place) => {
-  if (plain2(rest).some((target) => /(^|\/)\.[*?[]/.test(target)))
-    return CANT;
-  return plain2(rest).every((target) => insideFolders(target, place, strictly)) ? null : strictly ? "deleting outside the project" : "changing files outside the project";
-};
-var SAFE_SCRIPTS = /^(test|tests|build|lint|typecheck|type-check|check|format|fmt|dev|start|compile|tsc|prettier|eslint)(:[a-z0-9-]+)?$/;
-var SAFE_PACKAGES = {
-  tsc: () => true,
-  typescript: () => true,
-  eslint: () => true,
-  prettier: () => true,
-  jest: () => true,
-  vitest: () => true,
-  knip: () => true,
-  depcheck: () => true,
-  biome: (rest) => ["check", "format", "lint", "ci"].includes(plain2(rest)[0] ?? ""),
-  "@biomejs/biome": (rest) => ["check", "format", "lint", "ci"].includes(plain2(rest)[0] ?? ""),
-  playwright: (rest) => ["test", "install"].includes(plain2(rest)[0] ?? ""),
-  "@playwright/test": (rest) => ["test", "install"].includes(plain2(rest)[0] ?? ""),
-  expo: (rest) => ["install", "doctor", "lint", "start", "export", "prebuild", "customize"].includes(plain2(rest)[0] ?? ""),
-  tailwindcss: () => true,
-  "@tailwindcss/cli": () => true
-};
-function runsPackage(rest) {
-  const at = rest.findIndex((word) => !word.startsWith("-"));
-  if (at < 0 || rest.slice(0, at).some((word) => !/^(-y|--yes|--no-install|--quiet|-q)$/.test(word)))
-    return CANT;
-  const name = rest[at].replace(/(?<=.)@[^/]*$/, "");
-  const check = SAFE_PACKAGES[name];
-  if (!check)
-    return /^(vercel|netlify|wrangler|firebase(-tools)?|eas(-cli)?|surge|gh-pages|np|release-it|semantic-release|changeset)$/.test(name) ? "deploying or publishing" : CANT;
-  return check(rest.slice(at + 1)) ? null : CANT;
-}
-function packageManager(program) {
-  return (rest) => {
-    const [first, ...more] = rest.filter((word) => !/^(--silent|-s|--loglevel=\w+|--frozen-lockfile|--prefer-offline)$/.test(word));
-    if (first === undefined || ["--version", "-v", "ls", "list", "outdated", "view", "info", "why", "audit", "doctor"].includes(first))
-      return first === "audit" && more.includes("fix") ? CANT : null;
-    if (["install", "i", "ci", "add", "remove", "rm", "uninstall", "update", "up", "upgrade"].includes(first))
-      return more.some((word) => /^(--global|-g)$/.test(word)) ? "installing on the computer itself" : null;
-    if (first === "test" || first === "t")
+function checkValue(kind, value, place) {
+  switch (kind) {
+    case "number":
+      return /^[0-9]+[kKmMgG]?$/.test(value) ? null : CANT;
+    case "url":
+      return /^https?:\/\/[^\s]+$/.test(value) ? null : CANT;
+    case "text":
       return null;
-    if (first === "publish" || first === "pm" && more[0] === "publish")
-      return "publishing";
-    if (program === "npm" && first === "exec" || program === "pnpm" && (first === "dlx" || first === "exec") || program === "yarn" && first === "dlx" || program === "bun" && first === "x")
-      return runsPackage(more);
-    const script = first === "run" || first === "run-script" ? more[0] : program === "yarn" || program === "pnpm" ? first : undefined;
-    if (script !== undefined)
-      return SAFE_SCRIPTS.test(script) ? null : /(deploy|release|publish)/i.test(script) ? "releasing or deploying" : CANT;
-    return CANT;
-  };
-}
-var GIT_SAFE = new Set(["status", "diff", "log", "show", "add", "commit", "checkout", "switch", "restore", "branch", "stash", "fetch", "pull", "merge", "rebase", "init", "rev-parse", "ls-files", "blame", "grep", "tag", "describe", "shortlog", "cherry-pick", "revert", "reset", "mv", "rm", "clean", "worktree", "remote", "config", "submodule", "reflog", "show-ref", "cat-file", "diff-tree", "merge-base", "rev-list", "count-objects", "version"]);
-var git = (rest, place) => {
-  let at = 0;
-  while (at < rest.length && rest[at].startsWith("-")) {
-    if (rest[at] === "-C") {
-      if (!rest[at + 1] || !insideFolders(rest[at + 1], place))
-        return "changing files outside the project";
-      at += 2;
-    } else if (["--no-pager", "--no-optional-locks", "--paginate", "-P"].includes(rest[at]))
-      at++;
-    else
-      return CANT;
+    default:
+      return pathRefusal(value, place, kind);
   }
-  const command = rest[at];
-  const args = rest.slice(at + 1);
+}
+function checkSpec(spec, words, place) {
+  const flags = spec.flags ?? {};
+  const positional = [];
+  let patternGiven = false;
+  for (let at = 0;at < words.length; at++) {
+    const word = words[at];
+    if (word === "--") {
+      positional.push(...words.slice(at + 1));
+      break;
+    }
+    if (word.startsWith("-") && word.length > 1) {
+      const [name, inline] = word.startsWith("--") && word.includes("=") ? [word.slice(0, word.indexOf("=")), word.slice(word.indexOf("=") + 1)] : [word, undefined];
+      if (name in flags) {
+        const kind = flags[name];
+        if (kind === null) {
+          if (inline !== undefined)
+            return CANT;
+          continue;
+        }
+        const value = inline ?? words[++at];
+        if (value === undefined)
+          return CANT;
+        if (name === "-e" && spec.pattern)
+          patternGiven = true;
+        const why = checkValue(kind, value, place);
+        if (why)
+          return why;
+        continue;
+      }
+      if (spec.counts && /^-[0-9]+$/.test(word))
+        continue;
+      if (!word.startsWith("--") && spec.letters && [...word.slice(1)].every((letter) => spec.letters.includes(letter)))
+        continue;
+      return CANT;
+    }
+    positional.push(word);
+  }
+  const kinds = [...spec.pattern && !patternGiven ? ["text"] : [], ...spec.args ?? []];
+  if (spec.most !== undefined && positional.length > spec.most + (spec.pattern && !patternGiven ? 1 : 0))
+    return CANT;
+  for (const [index, word] of positional.entries()) {
+    const kind = kinds[index] ?? spec.rest;
+    if (!kind)
+      return CANT;
+    const why = checkValue(kind, word, place);
+    if (why)
+      return why;
+  }
+  return spec.also?.(words) ?? null;
+}
+var reading = (letters = "", flags = {}, extra = {}) => ({ letters, flags, rest: "read", ...extra });
+var PROGRAMS = {
+  ls: reading("1aAlhRtrSdFGT"),
+  cat: reading("nbsvetA"),
+  head: reading("", { "-n": "number", "-c": "number" }, { counts: true }),
+  tail: reading("fF", { "-n": "number", "-c": "number" }, { counts: true }),
+  wc: reading("lwcm"),
+  nl: reading("ba"),
+  file: reading("bL"),
+  stat: reading("Lx"),
+  du: reading("shkacx", { "-d": "number" }),
+  df: reading("hk"),
+  tree: reading("adfiFC", { "-L": "number", "-I": "text", "-P": "text" }),
+  basename: { rest: "text" },
+  dirname: { rest: "text" },
+  realpath: reading(""),
+  md5: reading("q"),
+  shasum: reading("", { "-a": "number" }),
+  sha256sum: reading(""),
+  diff: reading("uNqwbBi", { "-U": "number", "--color": null, "--brief": null }),
+  cmp: reading("ls"),
+  grep: reading("rniIlLcvwxEFHhoqsz", { "-e": "text", "-A": "number", "-B": "number", "-C": "number", "--include": "text", "--exclude": "text", "--exclude-dir": "text", "--color": null, "-m": "number" }, { pattern: true }),
+  rg: reading("inlcwFSuHoq", { "-e": "text", "-g": "text", "-t": "text", "-T": "text", "-A": "number", "-B": "number", "-C": "number", "--hidden": null, "--no-ignore": null, "--files": null, "--json": null, "-m": "number" }, { pattern: true }),
+  sort: reading("nrufhVb", { "-k": "text", "-t": "text" }),
+  uniq: reading("cdui", {}, { most: 1 }),
+  cut: reading("s", { "-d": "text", "-f": "text", "-c": "text" }),
+  comm: reading("123"),
+  column: reading("t", { "-s": "text" }),
+  tr: { letters: "dsc", rest: "text", most: 2 },
+  echo: { letters: "ne", rest: "text" },
+  printf: (words) => words[0]?.startsWith("-") ? CANT : null,
+  pwd: { letters: "LP" },
+  whoami: {},
+  true: { rest: "text" },
+  false: { rest: "text" },
+  date: { letters: "uR", rest: "text", also: (words) => words.some((word) => !word.startsWith("+") && !/^-[uR]+$/.test(word)) ? CANT : null },
+  uname: { letters: "amsrnp" },
+  which: { letters: "a", rest: "text" },
+  sleep: { args: ["number"], most: 1 },
+  test: { rest: "text" },
+  "[": { rest: "text" },
+  sed: { letters: "nE", args: ["text"], rest: "read", also: (words) => /^([0-9]+(,([0-9]+|\$))?|\$|\/[^/]*\/)p$/.test(words.find((word) => !word.startsWith("-")) ?? "") ? null : CANT },
+  jq: { letters: "rcensSM", args: ["text"], rest: "read", also: (words) => words.some((word) => /\benv\b|\$ENV|\$__|input_filename|@sh/.test(word)) ? CANT : null },
+  find: (words, place) => {
+    let at = 0;
+    for (;at < words.length && !words[at].startsWith("-") && words[at] !== "!" && words[at] !== "("; at++) {
+      const why = pathRefusal(words[at], place, "read");
+      if (why)
+        return why;
+    }
+    const valued = new Set(["-name", "-iname", "-path", "-ipath", "-type", "-maxdepth", "-mindepth", "-mtime", "-mmin", "-size", "-newer", "-regex"]);
+    for (;at < words.length; at++) {
+      const word = words[at];
+      if (valued.has(word)) {
+        if (word === "-newer" && pathRefusal(words[at + 1] ?? "", place, "read"))
+          return "reading outside the project";
+        at++;
+      } else if (!["!", "-not", "-o", "-or", "-a", "-and", "-print", "-print0", "-empty", "-prune"].includes(word))
+        return CANT;
+    }
+    return null;
+  },
+  mkdir: { letters: "p", rest: "write" },
+  touch: { rest: "write" },
+  cp: { letters: "rRpfn", rest: "write", also: undefined },
+  mv: { letters: "fn", rest: "write" },
+  rm: { letters: "rRfd", rest: "delete" },
+  rmdir: { letters: "p", rest: "delete" },
+  chmod: { letters: "R", args: ["text"], rest: "write", also: (words) => /^[ugoa]*[+=-][rwx]+$|^[0-7]{3,4}$/.test(words.find((word) => !word.startsWith("-")) ?? "") ? null : CANT },
+  cd: (words, place) => words.length === 1 && words[0] !== "-" ? pathRefusal(words[0], place, "read") : CANT,
+  git: (words, place) => git(words, place),
+  gh: (words) => {
+    const reads = { pr: ["view", "list", "diff", "checks", "status"], issue: ["view", "list", "status"], run: ["view", "list", "watch"], repo: ["view"], release: ["view", "list"] };
+    const [area, action, ...rest] = words;
+    if (!reads[area ?? ""]?.includes(action ?? ""))
+      return ["repo", "release", "pr", "secret", "workflow", "variable", "issue", "api"].includes(area ?? "") ? "changing what's on GitHub" : CANT;
+    return checkSpec({ flags: { "--json": "text", "--limit": "number", "-L": "number", "--state": "text", "--log": null, "--log-failed": null, "-R": "text", "--repo": "text", "--jq": "text", "--name-only": null }, rest: "text" }, rest, { cwd: "/", folders: [] });
+  },
+  curl: (words, place) => checkSpec({
+    letters: "sSLIifv",
+    flags: { "--fail": null, "--compressed": null, "--max-time": "number", "-m": "number", "-H": "text", "--header": "text", "-A": "text", "--retry": "number", "-X": "text", "--request": "text" },
+    rest: "url",
+    also: (all) => all.some((word, at) => /^(-X|--request)$/.test(word) && !/^(GET|HEAD)$/i.test(all[at + 1] ?? "")) ? CANT : null
+  }, words, place),
+  node: (words) => words.length === 1 && /^(-v|--version)$/.test(words[0]) ? null : CANT,
+  python: (words) => words.length === 1 && /^(-V|--version)$/.test(words[0]) ? null : words[0] === "-m" ? "building, testing or installing" : CANT,
+  python3: (words) => words.length === 1 && /^(-V|--version)$/.test(words[0]) ? null : words[0] === "-m" ? "building, testing or installing" : CANT,
+  npm: (words) => words.length === 1 && /^(-v|--version)$/.test(words[0]) ? null : "building, testing or installing"
+};
+var GIT = {
+  status: { letters: "sbu", flags: { "--short": null, "--branch": null, "--porcelain": null, "--untracked-files": "text" }, rest: "text" },
+  diff: { letters: "wR", flags: { "--stat": null, "--cached": null, "--staged": null, "--name-only": null, "--name-status": null, "--color": null, "--no-color": null, "--word-diff": null, "-U": "number", "--shortstat": null, "--numstat": null, "--check": null }, rest: "text" },
+  log: { letters: "p", flags: { "--oneline": null, "-n": "number", "--stat": null, "--graph": null, "--decorate": null, "--all": null, "--format": "text", "--pretty": "text", "--grep": "text", "--author": "text", "--since": "text", "--until": "text", "--patch": null, "--reverse": null, "--name-only": null, "--name-status": null, "--follow": null, "--first-parent": null, "--no-merges": null, "--merges": null }, rest: "text", counts: true },
+  show: { flags: { "--stat": null, "--name-only": null, "--name-status": null, "--format": "text", "--pretty": "text", "--oneline": null, "--no-patch": null }, rest: "text" },
+  add: { letters: "Auv", flags: { "--all": null, "--update": null, "--intent-to-add": null, "-N": null }, rest: "text" },
+  commit: { letters: "aqv", flags: { "-m": "text", "--message": "text", "--amend": null, "--no-edit": null, "--allow-empty": null, "--no-verify": null, "--quiet": null }, most: 0 },
+  checkout: { letters: "bBq", flags: { "--quiet": null }, rest: "text" },
+  switch: { letters: "cCq", flags: { "--create": null, "--detach": null, "--quiet": null }, rest: "text" },
+  restore: { letters: "SW", flags: { "--staged": null, "--worktree": null, "--source": "text" }, rest: "text" },
+  branch: { letters: "arvdDm", flags: { "--list": null, "--show-current": null, "--all": null, "--merged": null, "--no-merged": null }, rest: "text" },
+  stash: { letters: "pu", flags: { "-m": "text", "--message": "text", "--include-untracked": null }, rest: "text", also: (words) => ["push", "pop", "list", "show", "apply", "drop", undefined].includes(words.find((word) => !word.startsWith("-"))) || !words.some((word) => !word.startsWith("-")) ? null : CANT },
+  fetch: { letters: "pq", flags: { "--all": null, "--prune": null, "--tags": null, "--quiet": null }, rest: "text", also: (words) => words.every((word) => word.startsWith("-") || /^[A-Za-z0-9._/-]+$/.test(word) && !word.includes("//")) ? null : CANT },
+  pull: { letters: "q", flags: { "--rebase": null, "--ff-only": null, "--no-rebase": null, "--quiet": null }, rest: "text", also: (words) => words.every((word) => word.startsWith("-") || /^[A-Za-z0-9._/-]+$/.test(word) && !word.includes("//")) ? null : CANT },
+  merge: { flags: { "--no-ff": null, "--ff-only": null, "--abort": null, "--continue": null, "--squash": null, "-m": "text", "--no-edit": null }, rest: "text" },
+  rebase: { flags: { "--continue": null, "--abort": null, "--skip": null, "--onto": "text" }, rest: "text" },
+  init: { flags: { "-b": "text", "--initial-branch": "text", "-q": null }, most: 0 },
+  "rev-parse": { flags: { "--show-toplevel": null, "--abbrev-ref": null, "--short": null, "--verify": null, "--git-dir": null, "--is-inside-work-tree": null }, rest: "text" },
+  "ls-files": { letters: "comdz", flags: { "--others": null, "--exclude-standard": null, "--modified": null, "--deleted": null }, rest: "text" },
+  blame: { letters: "wM", flags: { "-L": "text" }, rest: "text" },
+  grep: { letters: "nilwcIE", flags: { "-e": "text" }, rest: "text" },
+  tag: { letters: "l", flags: { "--list": null, "--sort": "text" }, rest: "text" },
+  describe: { flags: { "--tags": null, "--always": null, "--abbrev": "number" }, rest: "text" },
+  shortlog: { letters: "sne", rest: "text" },
+  reset: { flags: { "--soft": null, "--mixed": null, "--hard": null, "--keep": null, "-q": null }, rest: "text" },
+  "cherry-pick": { flags: { "--continue": null, "--abort": null, "--no-commit": null, "-n": null, "-x": null }, rest: "text" },
+  revert: { flags: { "--no-edit": null, "--continue": null, "--abort": null, "--no-commit": null, "-n": null }, rest: "text" },
+  clean: { letters: "nfdxq", most: 0 },
+  mv: { letters: "fk", rest: "text" },
+  rm: { letters: "rfq", flags: { "--cached": null }, rest: "text" },
+  remote: { letters: "v", rest: "text", also: (words) => words.filter((word) => !word.startsWith("-")).length === 0 || ["show", "get-url"].includes(words.find((word) => !word.startsWith("-")) ?? "") ? null : CANT },
+  config: { flags: { "--get": "text", "--get-all": "text", "--list": null, "-l": null, "--local": null }, most: 0, also: (words) => words.some((word) => /^(--get|--get-all|--list|-l)$/.test(word)) ? null : CANT },
+  worktree: { rest: "text", most: 1, also: (words) => words[0] === "list" ? null : CANT },
+  reflog: { flags: { "-n": "number" }, rest: "text" },
+  "show-ref": { rest: "text" },
+  "merge-base": { rest: "text" },
+  version: {},
+  "rev-list": { flags: { "--count": null, "--all": null, "-n": "number" }, rest: "text" },
+  "cat-file": { letters: "pts", rest: "text" }
+};
+function git(words, place) {
+  const [command, ...rest] = words[0] === "--no-pager" ? words.slice(1) : words;
   if (command === "push")
     return "pushing";
-  if (!command || !GIT_SAFE.has(command))
+  const spec = GIT[command ?? ""];
+  if (!spec)
     return CANT;
-  if (args.some((word) => /^(--exec|--upload-pack|--receive-pack|--config|--ext-diff|--open-files-in-pager)/.test(word) || command === "rebase" && /^-x/.test(word)))
-    return CANT;
-  if (command === "remote" && !(args.length === 0 || ["-v", "show", "get-url"].includes(args[0])))
-    return CANT;
-  if (command === "config" && !(args.length && args.every((word) => /^(--get|--get-all|--list|-l|--show-origin|--local|--global)$/.test(word) || !word.startsWith("-")) && args.some((word) => /^(--get|--get-all|--list|-l)$/.test(word))))
-    return CANT;
-  if (command === "submodule" && !["status", "update", "init", "foreach"].includes(args[0] ?? "status"))
-    return CANT;
-  if (command === "submodule" && args[0] === "foreach")
-    return CANT;
-  if (command === "worktree" && !["list", "add", "prune"].includes(args[0] ?? ""))
-    return CANT;
-  return null;
-};
-var gh = (rest) => {
-  const [area, action] = plain2(rest);
-  if (area === "api") {
-    if (plain2(rest)[1] === "graphql")
-      return CANT;
-    return rest.some((word, at) => /^(-X|--method)$/.test(word) ? !/^get$/i.test(rest[at + 1] ?? "") : /^--method=(?!get$)/i.test(word) || /^-X(?!get$)./i.test(word) || /^(-f|-F|--field|--raw-field|--input)/.test(word)) ? "changing what's on GitHub" : null;
-  }
-  const reading = { pr: ["view", "list", "status", "diff", "checks"], issue: ["view", "list", "status"], run: ["view", "list", "watch"], repo: ["view"], release: ["view", "list"], workflow: ["view", "list"], auth: ["status"] };
-  if (reading[area ?? ""]?.includes(action ?? ""))
-    return null;
-  return area && ["repo", "release", "pr", "secret", "workflow", "variable", "issue"].includes(area) ? "changing what's on GitHub" : CANT;
-};
-var PROGRAMS = {
-  ls: reads2(),
-  cat: reads2(),
-  head: reads2(),
-  tail: reads2(),
-  wc: reads2(),
-  echo: reads2(),
-  printf: reads2(),
-  pwd: reads2(),
-  which: reads2(),
-  whoami: reads2(),
-  date: reads2(),
-  true: reads2(),
-  false: reads2(),
-  test: reads2(),
-  "[": reads2(),
-  diff: reads2(),
-  cmp: reads2(),
-  uniq: reads2(),
-  cut: reads2(),
-  tr: reads2(),
-  jq: reads2(),
-  file: reads2(),
-  stat: reads2(),
-  du: reads2(),
-  df: reads2(),
-  tree: reads2(),
-  basename: reads2(),
-  dirname: reads2(),
-  realpath: reads2(),
-  nl: reads2(),
-  column: reads2(),
-  comm: reads2(),
-  md5: reads2(),
-  shasum: reads2(),
-  sha256sum: reads2(),
-  uname: reads2(),
-  sleep: reads2(),
-  grep: reads2(),
-  egrep: reads2(),
-  fgrep: reads2(),
-  rg: reads2(/^--pre/),
-  sort: reads2(/^(-o|--output)/),
-  find: reads2(/^-(delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/),
-  sed: (rest) => {
-    const options = rest.filter((word) => word.startsWith("-"));
-    const others = rest.filter((word) => !word.startsWith("-"));
-    if (!options.every((word) => /^-[nEr]+$/.test(word)) || !others.length)
-      return CANT;
-    return /^([0-9]+(,([0-9]+|\$))?|\$|\/[^/]*\/)p$/.test(others[0]) ? null : CANT;
-  },
-  mkdir: changes(false),
-  touch: changes(false),
-  cp: changes(false),
-  mv: changes(false),
-  ln: changes(false),
-  chmod: changes(false),
-  rm: changes(true),
-  rmdir: changes(true),
-  unlink: changes(true),
-  cd: (rest, place) => rest.length === 1 && rest[0] !== "-" && insideFolders(rest[0], place) ? null : CANT,
-  git,
-  gh,
-  npm: packageManager("npm"),
-  pnpm: packageManager("pnpm"),
-  yarn: packageManager("yarn"),
-  bun: packageManager("bun"),
-  npx: runsPackage,
-  bunx: runsPackage,
-  pip: (rest) => ["install", "list", "show", "freeze", "--version"].includes(plain2(rest)[0] ?? rest[0] ?? "") && !rest.some((word) => /^(--user|--target|-t|--prefix|--root)$/.test(word)) ? null : CANT,
-  python: (rest) => python(rest),
-  python3: (rest) => python(rest),
-  node: (rest) => rest.length === 1 && /^(-v|--version)$/.test(rest[0]) ? null : CANT,
-  swift: (rest) => ["build", "test", "package", "--version"].includes(rest[0] ?? "") && (rest[0] !== "package" || ["resolve", "update", "describe", "show-dependencies", "dump-package"].includes(rest[1] ?? "")) ? null : CANT,
-  xcodebuild: (rest) => rest.some((word) => /^-exportArchive$/.test(word)) ? "sending to a store" : null,
-  xcrun: (rest) => rest[0] === "simctl" && ["list", "boot", "install", "launch", "terminate", "shutdown", "io", "ui", "openurl", "get_app_container"].includes(rest[1] ?? "") ? null : rest[0] === "altool" || rest[0] === "notarytool" ? "sending to a store" : CANT,
-  cargo: (rest) => ["build", "check", "test", "fmt", "clippy", "doc", "tree", "metadata", "add", "remove", "update", "fetch", "bench", "--version"].includes(rest[0] ?? "") ? null : rest[0] === "publish" ? "publishing" : CANT,
-  go: (rest) => ["build", "test", "vet", "fmt", "list", "version", "env", "generate"].includes(rest[0] ?? "") || rest[0] === "mod" && ["tidy", "download", "verify", "graph", "why"].includes(rest[1] ?? "") ? rest[0] === "generate" ? CANT : null : CANT,
-  make: (rest) => {
-    const target = plain2(rest)[0] ?? "";
-    if (rest.some((word) => /^(-f|--file|-C|--directory|-e)$/.test(word)))
-      return CANT;
-    return ["", "test", "build", "check", "lint", "all", "fmt", "format", "clean"].includes(target) ? null : /(deploy|release|publish)/i.test(target) ? "releasing or deploying" : CANT;
-  },
-  pod: (rest) => ["install", "update", "--version"].includes(rest[0] ?? "") ? null : rest[0] === "trunk" ? "publishing" : CANT,
-  bundle: (rest) => ["install", "check", "--version"].includes(rest[0] ?? "") ? null : CANT,
-  curl: (rest, place) => {
-    if (rest.some((word) => /^(-d|--data|--data-\w+|-F|--form|--form-string|-T|--upload-file|--json|-K|--config|-u|--user)/.test(word)))
-      return CANT;
-    if (rest.some((word, at) => /^(-X|--request)$/.test(word) ? !/^(get|head)$/i.test(rest[at + 1] ?? "") : /^-X(?!get$|head$)./i.test(word)))
-      return CANT;
-    const outputs = rest.flatMap((word, at) => /^(-o|--output)$/.test(word) ? [rest[at + 1] ?? ""] : []);
-    if (rest.some((word) => /^(-O|--remote-name)/.test(word)))
-      return null;
-    return outputs.every((target) => insideFolders(target, place)) ? null : "changing files outside the project";
-  },
-  docker: (rest) => ["ps", "images", "logs", "inspect", "version", "info"].includes(rest[0] ?? "") ? null : rest[0] === "push" ? "publishing" : CANT
-};
-function python(rest) {
-  if (rest.length === 1 && /^(-V|--version)$/.test(rest[0]))
-    return null;
-  if (rest[0] !== "-m")
-    return CANT;
-  const [module, ...more] = rest.slice(1);
-  if (["pytest", "unittest", "mypy", "ruff", "black", "py_compile", "compileall"].includes(module ?? ""))
-    return null;
-  if (module === "pip")
-    return PROGRAMS.pip(more, { cwd: "/", folders: [] });
-  if (module === "venv")
-    return null;
-  return CANT;
+  return checkSpec(spec, rest, place);
 }
-var SAFE_SETTINGS = /^(CI|NODE_ENV|FORCE_COLOR|NO_COLOR|RUST_BACKTRACE|DEBUG|PORT|TZ|LANG|LC_ALL|TERM)=/;
+var SAFE_SETTINGS = /^(CI|FORCE_COLOR|NO_COLOR|TZ|LANG|LC_ALL|TERM|GIT_PAGER|PAGER)=[A-Za-z0-9._:-]*$/;
 function commandRefusal(line, folders) {
   const read = readLine(line);
   if ("unreadable" in read)
     return `${CANT} (${read.unreadable})`;
-  if (!read.parts.length)
+  if (!read.parts.length || !folders.length)
     return CANT;
-  if (!folders.length)
-    return CANT;
-  const place = { cwd: path55.resolve(folders[0]), folders };
+  const place = { cwd: realPath(folders[0], "/"), folders };
   for (const part of read.parts) {
     let at = 0;
     while (at < part.words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(part.words[at])) {
@@ -12391,26 +12416,60 @@ function commandRefusal(line, folders) {
       return CANT;
     if (program.includes("/"))
       return /(deploy|release|publish)/i.test(path55.basename(program)) ? "releasing or deploying" : CANT;
-    const check = PROGRAMS[program];
-    if (!check)
-      return CANT;
-    const why = check(rest, place);
+    const known = PROGRAMS[program];
+    if (!known)
+      return NAMED[program] ?? CANT;
+    const why = typeof known === "function" ? known(rest, place) : checkSpec(known, rest, place);
     if (why)
       return why;
-    if (!part.writes.every((target) => insideFolders(target, place)))
-      return "changing files outside the project";
+    for (const target of part.writes) {
+      const refused = pathRefusal(target, place, "write");
+      if (refused)
+        return refused;
+    }
     if (program === "cd")
-      place.cwd = resolved(rest[0], place);
+      place.cwd = realPath(rest[0], place.cwd);
   }
   return null;
 }
+var NAMED = {
+  vercel: "deploying",
+  netlify: "deploying",
+  wrangler: "deploying",
+  firebase: "deploying",
+  fly: "deploying",
+  flyctl: "deploying",
+  heroku: "deploying",
+  fastlane: "sending to a store",
+  eas: "sending to a store",
+  security: "your keys and sign-ins",
+  ssh: "reaching another computer",
+  scp: "reaching another computer",
+  rsync: "reaching another computer",
+  npx: "running a package's code",
+  bunx: "running a package's code",
+  pnpm: "building, testing or installing",
+  yarn: "building, testing or installing",
+  bun: "building, testing or installing",
+  pip: "installing",
+  pip3: "installing",
+  go: "building, testing or installing",
+  cargo: "building, testing or installing",
+  make: "building, testing or installing",
+  swift: "building, testing or installing",
+  xcodebuild: "building, testing or installing",
+  pytest: "building, testing or installing",
+  pod: "installing",
+  bundle: "installing",
+  brew: "installing"
+};
 function partsOf2(line) {
   const read = readLine(line);
   return "unreadable" in read ? [line] : read.parts.map((part) => part.text);
 }
-var READS = new Set(["read", "list", "glob", "grep", "webfetch", "websearch", "codesearch", "lsp", "todowrite", "todoread", "question"]);
+var READS = new Set(["read", "list", "glob", "grep", "lsp", "codesearch"]);
+var FREE = new Set(["webfetch", "websearch", "todowrite", "todoread", "question", "subagent", "task", "doom_loop"]);
 var EDITS = new Set(["edit", "write", "patch", "multiedit"]);
-var STARTS = new Set(["subagent", "task", "doom_loop"]);
 function allowRefusal(action, resources, folders, rules, ruleFor) {
   const asked = resources.length ? resources : ["*"];
   if (action === "shell" || action === "bash") {
@@ -12423,15 +12482,25 @@ function allowRefusal(action, resources, folders, rules, ruleFor) {
     }
     return null;
   }
-  if (!READS.has(action) && !EDITS.has(action) && !STARTS.has(action))
+  if (!READS.has(action) && !EDITS.has(action) && !FREE.has(action))
     return action === "external_directory" ? "working outside the project" : "a tool it can't tell is safe";
-  if (EDITS.has(action) && !asked.every((resource) => resource !== "*" && insideFolders(resource, { cwd: path55.resolve(folders[0] ?? "/"), folders })))
-    return "changing files outside the project";
+  const place = { cwd: realPath(folders[0] ?? "/", "/"), folders };
+  if (READS.has(action) || EDITS.has(action)) {
+    for (const resource of asked) {
+      if (!folders.length)
+        return "working outside the project";
+      if (READS.has(action) && !resource.includes("/") && /[*?]/.test(resource))
+        continue;
+      const why = pathRefusal(resource.replace(/\/\*+$/, "") || ".", place, EDITS.has(action) ? "write" : "read");
+      if (why)
+        return why;
+    }
+  }
   return asked.every((resource) => ruleFor(rules, action, resource) === "allow") ? null : "above";
 }
 
 // Packages/Box/src/link/work/tools.ts
-import fs55 from "node:fs";
+import fs56 from "node:fs";
 import path56 from "node:path";
 var said = (text) => ({ text, isError: false });
 var refused = (text) => ({ text, isError: true });
@@ -12574,7 +12643,7 @@ async function makeProjectTool(caller, args, { signal, wait, every } = {}) {
   const listed = place ? readProjects().find((each) => each.directory === place && !each.removed) : null;
   if (listed)
     return refused(`There's a project at ${shownPath(place)} already: ${listed.name ?? path56.basename(place)}. Start sessions in it with start_session.`);
-  if (place && fs55.existsSync(place) && !isEmptyFolder(place))
+  if (place && fs56.existsSync(place) && !isEmptyFolder(place))
     return refused(`There's a folder at ${shownPath(place)} already, with files in it. Pick another name.`);
   const bot = botOfConversation(caller.session);
   const asker = { session: caller.session, name: bot?.name ?? caller.name, ...bot ? { bot: bot.bot } : {} };
@@ -12990,13 +13059,13 @@ async function* foundRoute(context) {
 }
 
 // Packages/Box/src/link/areas/search.ts
-import fs56 from "node:fs";
+import fs57 from "node:fs";
 import path58 from "node:path";
 var MOST = 50;
 var MOST_TEXT = 400000;
 var MOST_OUTPUT = 2000;
 var texts = new Map;
-var reading = new Map;
+var reading2 = new Map;
 async function* searchRoute(context) {
   const { request, readEngine, bridge, json } = context;
   if (request.method.toUpperCase() !== "GET")
@@ -13088,7 +13157,7 @@ function textOf2(place, target, session) {
   const known = texts.get(name) ?? fromDisk(name);
   if (known?.updated === updated)
     return Promise.resolve(known);
-  const already = reading.get(name);
+  const already = reading2.get(name);
   if (already)
     return already;
   const read = conversationOf2(target, session.id).then((messages) => {
@@ -13098,13 +13167,13 @@ function textOf2(place, target, session) {
     texts.set(name, { updated, folded: kept.folded });
     toDisk(name, kept);
     return kept;
-  }, () => null).finally(() => reading.delete(name));
-  reading.set(name, read);
+  }, () => null).finally(() => reading2.delete(name));
+  reading2.set(name, read);
   return read;
 }
 function fromDisk(name) {
   try {
-    const kept = JSON.parse(fs56.readFileSync(path58.join(SEARCH, name + ".json"), "utf8"));
+    const kept = JSON.parse(fs57.readFileSync(path58.join(SEARCH, name + ".json"), "utf8"));
     if (typeof kept.updated !== "number" || typeof kept.text !== "string" || typeof kept.folded !== "string")
       return null;
     texts.set(name, { updated: kept.updated, folded: kept.folded });
@@ -13117,11 +13186,11 @@ function toDisk(name, kept) {
   const file = path58.join(SEARCH, name + ".json");
   const writing = `${file}.${process.pid}.writing`;
   try {
-    fs56.mkdirSync(SEARCH, { recursive: true });
-    fs56.writeFileSync(writing, JSON.stringify(kept));
-    fs56.renameSync(writing, file);
+    fs57.mkdirSync(SEARCH, { recursive: true });
+    fs57.writeFileSync(writing, JSON.stringify(kept));
+    fs57.renameSync(writing, file);
   } catch {
-    fs56.rmSync(writing, { force: true });
+    fs57.rmSync(writing, { force: true });
   }
 }
 function forgetGone(known, places) {
@@ -13130,11 +13199,11 @@ function forgetGone(known, places) {
     if (listed(name) && !known.has(name))
       texts.delete(name);
   try {
-    for (const file of fs56.readdirSync(SEARCH)) {
+    for (const file of fs57.readdirSync(SEARCH)) {
       const name = file.slice(0, -5);
-      const gone = file.endsWith(".json") ? listed(name) && !known.has(name) : file.endsWith(".writing") && Date.now() - fs56.statSync(path58.join(SEARCH, file)).mtimeMs > 60000;
+      const gone = file.endsWith(".json") ? listed(name) && !known.has(name) : file.endsWith(".writing") && Date.now() - fs57.statSync(path58.join(SEARCH, file)).mtimeMs > 60000;
       if (gone)
-        fs56.rmSync(path58.join(SEARCH, file), { force: true });
+        fs57.rmSync(path58.join(SEARCH, file), { force: true });
     }
   } catch {}
 }
@@ -13221,12 +13290,12 @@ function snippet(text, at, length) {
 
 // Packages/Box/src/link/areas/changes.ts
 import { execFile as execFile4, execFileSync, spawn as spawn5 } from "node:child_process";
-import fs58 from "node:fs";
+import fs59 from "node:fs";
 import os5 from "node:os";
 import path60 from "node:path";
 
 // Packages/Box/src/link/areas/file.ts
-import fs57 from "node:fs";
+import fs58 from "node:fs";
 import path59 from "node:path";
 import { fileURLToPath } from "node:url";
 var FILE_LIMIT = 25 * 1024 * 1024;
@@ -13264,7 +13333,7 @@ async function* fileAt(requestPath, json) {
     return yield* json(400, { message: "That isn’t a file:// address." });
   let stat;
   try {
-    stat = fs57.statSync(file);
+    stat = fs58.statSync(file);
   } catch {}
   if (!stat?.isFile())
     return yield* json(404, { message: "That file isn’t there anymore." });
@@ -13275,7 +13344,7 @@ async function* fileAt(requestPath, json) {
   const type = TYPES[path59.extname(file).slice(1).toLowerCase()] ?? "application/octet-stream";
   let handle;
   try {
-    handle = await fs57.promises.open(file, "r");
+    handle = await fs58.promises.open(file, "r");
   } catch (error) {
     const refused = ["EACCES", "EPERM"].includes(error?.code);
     return yield* json(refused ? 403 : 404, { message: refused ? "That file can’t be opened here." : "That file isn’t there anymore." });
@@ -13324,7 +13393,7 @@ function folderAt(value) {
   if (typeof value !== "string" || !path60.isAbsolute(value))
     return null;
   try {
-    return fs58.statSync(value).isDirectory() ? value : null;
+    return fs59.statSync(value).isDirectory() ? value : null;
   } catch {
     return null;
   }
@@ -13337,7 +13406,7 @@ function inRepository(value) {
 }
 var realOr2 = (folder) => {
   try {
-    return fs58.realpathSync(folder);
+    return fs59.realpathSync(folder);
   } catch {
     return folder;
   }
@@ -13386,29 +13455,29 @@ function trash(file) {
   const name = path60.basename(file);
   let into;
   if (process.platform === "darwin" && !process.env.KUVO_CHANGES_TRASH) {
-    if (fs58.existsSync("/usr/bin/trash"))
+    if (fs59.existsSync("/usr/bin/trash"))
       return void execFileSync("/usr/bin/trash", [file], { stdio: "ignore" });
     const bin = path60.join(os5.homedir(), ".Trash");
     into = path60.join(bin, name);
-    for (let n = 2;fs58.existsSync(into); n++)
+    for (let n = 2;fs59.existsSync(into); n++)
       into = path60.join(bin, `${name} ${n}`);
   } else {
     const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").replace(/\..*/, "");
     into = path60.join(process.env.KUVO_CHANGES_TRASH || path60.join(K, "trash"), `${stamp}-${process.pid}-${Math.random().toString(36).slice(2, 6)}`, name);
   }
-  fs58.mkdirSync(path60.dirname(into), { recursive: true });
+  fs59.mkdirSync(path60.dirname(into), { recursive: true });
   try {
-    fs58.renameSync(file, into);
+    fs59.renameSync(file, into);
   } catch (error) {
     if (error.code !== "EXDEV")
       throw error;
-    fs58.cpSync(file, into, { recursive: true, verbatimSymlinks: true });
-    fs58.rmSync(file, { recursive: true, force: true });
+    fs59.cpSync(file, into, { recursive: true, verbatimSymlinks: true });
+    fs59.rmSync(file, { recursive: true, force: true });
   }
 }
 var kind = (file) => {
   try {
-    return fs58.lstatSync(file);
+    return fs59.lstatSync(file);
   } catch {
     return null;
   }
@@ -13697,7 +13766,7 @@ async function* botsRoute(context) {
 }
 
 // Packages/Box/src/link/areas/folders.ts
-import fs59 from "node:fs";
+import fs60 from "node:fs";
 import path61 from "node:path";
 function listFolders(requestPath) {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
@@ -13709,7 +13778,7 @@ function listFolders(requestPath) {
   const at = path61.resolve(folder);
   let entries;
   try {
-    entries = fs59.readdirSync(at, { withFileTypes: true });
+    entries = fs60.readdirSync(at, { withFileTypes: true });
   } catch (error) {
     if (error?.code === "ENOENT" || error?.code === "ENOTDIR")
       return { status: 404, value: { message: `There's no folder ${at} here.` } };
@@ -13719,12 +13788,12 @@ function listFolders(requestPath) {
   const asks = at === home ? promptedFolders() : new Set;
   const isFolder = (entry) => entry.isDirectory() || entry.isSymbolicLink() && (() => {
     try {
-      return fs59.statSync(path61.join(at, entry.name)).isDirectory();
+      return fs60.statSync(path61.join(at, entry.name)).isDirectory();
     } catch {
       return false;
     }
   })();
-  const folders = entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && isFolder(entry)).map((entry) => !asks.has(entry.name) && fs59.existsSync(path61.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+  const folders = entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && isFolder(entry)).map((entry) => !asks.has(entry.name) && fs60.existsSync(path61.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
   return { status: 200, value: { path: at, home, parent: at === path61.dirname(at) ? null : path61.dirname(at), folders } };
 }
 function makeFolder(body) {
@@ -13734,10 +13803,10 @@ function makeFolder(body) {
   if (!path61.isAbsolute(folder))
     return { status: 400, value: { message: "Send the new folder's full path, or one that starts with ~/." } };
   const at = path61.resolve(folder);
-  if (fs59.existsSync(at))
+  if (fs60.existsSync(at))
     return { status: 409, value: { message: `There's already something called ${path61.basename(at)} there.` } };
   try {
-    fs59.mkdirSync(at);
+    fs60.mkdirSync(at);
   } catch (error) {
     if (error?.code === "ENOENT")
       return { status: 404, value: { message: `There's no folder ${path61.dirname(at)} here.` } };
@@ -13797,7 +13866,7 @@ async function* artifactsRoute(context) {
 }
 
 // Packages/Box/src/link/areas/info.ts
-import fs60 from "node:fs";
+import fs61 from "node:fs";
 import path62 from "node:path";
 
 // Packages/Box/src/link/version.ts
@@ -13813,13 +13882,13 @@ async function* infoRoute(context) {
   let started = null;
   if (engine.pid)
     try {
-      started = fs60.statSync(ENGINE_FILE).mtimeMs / 1000;
+      started = fs61.statSync(ENGINE_FILE).mtimeMs / 1000;
     } catch {}
   const running = Boolean(engine.pid && processRuns(engine.pid, `${K}/engine/`));
-  const stopped = fs60.existsSync(path62.join(RUN, "stopped"));
+  const stopped = fs61.existsSync(path62.join(RUN, "stopped"));
   const chats = path62.join(K, "chats");
   try {
-    fs60.mkdirSync(chats, { recursive: true });
+    fs61.mkdirSync(chats, { recursive: true });
   } catch {}
   const notes = engine.notes ?? {};
   const home = typeof notes.mac === "string" ? { mac: notes.mac, ...typeof notes.macName === "string" ? { name: notes.macName } : {} } : undefined;
@@ -14024,7 +14093,7 @@ async function* pluginSearchRoute(context) {
 }
 
 // Packages/Box/src/link/areas/programs.ts
-import fs61 from "node:fs";
+import fs62 from "node:fs";
 import path64 from "node:path";
 function findProgram(requestPath, PATH = process.env.PATH ?? "") {
   const name = (new URLSearchParams(requestPath.split("?")[1] ?? "").get("name") ?? "").trim();
@@ -14032,8 +14101,8 @@ function findProgram(requestPath, PATH = process.env.PATH ?? "") {
     return { status: 400, value: { message: "Name the program (name)." } };
   const runnable = (file) => {
     try {
-      fs61.accessSync(file, fs61.constants.X_OK);
-      return fs61.statSync(file).isFile();
+      fs62.accessSync(file, fs62.constants.X_OK);
+      return fs62.statSync(file).isFile();
     } catch {
       return false;
     }
@@ -14111,10 +14180,10 @@ async function* providerModelsRoute(context) {
 }
 
 // Packages/Box/src/link/areas/apply.ts
-import fs63 from "node:fs";
+import fs64 from "node:fs";
 
 // Packages/Box/src/link/areas/mcp-catalog.ts
-import fs62 from "node:fs";
+import fs63 from "node:fs";
 import path65 from "node:path";
 
 // Packages/Box/src/shared/routes/settings.ts
@@ -14152,7 +14221,7 @@ var CATALOG_FILE = path65.join(K, "bin", "mcp-catalog.json");
 function mcpCatalog(settings, file = CATALOG_FILE, mac = IS_MAC) {
   let servers = [];
   try {
-    servers = JSON.parse(fs62.readFileSync(file, "utf8")).servers ?? [];
+    servers = JSON.parse(fs63.readFileSync(file, "utf8")).servers ?? [];
   } catch {}
   return {
     servers: servers.filter((server) => offered(server, mac)).map((server) => {
@@ -14172,7 +14241,7 @@ function mcpCatalog(settings, file = CATALOG_FILE, mac = IS_MAC) {
 function addFromCatalog(id, file = CONFIG_FILE, catalog = CATALOG_FILE, lock = CONFIG_LOCK, mac = IS_MAC) {
   let servers = [];
   try {
-    servers = JSON.parse(fs62.readFileSync(catalog, "utf8")).servers ?? [];
+    servers = JSON.parse(fs63.readFileSync(catalog, "utf8")).servers ?? [];
   } catch {}
   const server = servers.find((each) => each?.id === id && offered(each, mac));
   if (!server || !isObject(server.settings))
@@ -14212,7 +14281,7 @@ function neededFor(change) {
 }
 function macOnlyServers(file = CATALOG_FILE) {
   try {
-    const catalog = JSON.parse(fs63.readFileSync(file, "utf8"));
+    const catalog = JSON.parse(fs64.readFileSync(file, "utf8"));
     const named = [...Array.isArray(catalog.macOnly) ? catalog.macOnly : [], ...(catalog.servers ?? []).filter((server) => server?.macOnly).map((server) => server.id)];
     return new Set(named.filter((id) => typeof id === "string"));
   } catch {
@@ -14512,7 +14581,7 @@ async function* newProjectRoute(context) {
 }
 
 // Packages/Box/src/link/mac/routes.ts
-import fs64 from "node:fs";
+import fs65 from "node:fs";
 import path66 from "node:path";
 var macPhones = () => {
   const link = readLink();
@@ -14661,7 +14730,7 @@ async function* macLinkRoute(route, request, signal) {
         return yield* json(400, { message: "Send {letters, seen}." });
       const now = Date.now();
       try {
-        fs64.mkdirSync(SENDING, { recursive: true, mode: 448 });
+        fs65.mkdirSync(SENDING, { recursive: true, mode: 448 });
         for (const letter of Array.isArray(given.letters) ? given.letters.slice(0, 500) : []) {
           if (!isObject(letter) || !LETTER_ID.test(letter.id ?? "") || typeof letter.to !== "string" || typeof letter.text !== "string" || typeof letter.peer !== "string")
             continue;
@@ -15027,9 +15096,9 @@ onLinkWritten((link) => {
     return;
   }
   if (needed(link))
-    fs65.writeFileSync(NEEDED_FILE, "", { mode: 384 });
+    fs66.writeFileSync(NEEDED_FILE, "", { mode: 384 });
   else
-    fs65.rmSync(NEEDED_FILE, { force: true });
+    fs66.rmSync(NEEDED_FILE, { force: true });
 });
 function machineWelcomed(host) {
   announce(host, readEngineFile, undefined, undefined, true).catch(() => {});
@@ -15043,15 +15112,15 @@ function machineWelcomed(host) {
 async function run2() {
   let old = null;
   try {
-    old = Number(fs65.readFileSync(PID_FILE, "utf8"));
+    old = Number(fs66.readFileSync(PID_FILE, "utf8"));
     if (isBridge(old))
       process.kill(old, "SIGTERM");
   } catch {}
-  fs65.mkdirSync(RUN, { recursive: true, mode: 448 });
-  fs65.writeFileSync(PID_FILE, String(process.pid), { mode: 384 });
-  fs65.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 384 });
+  fs66.mkdirSync(RUN, { recursive: true, mode: 448 });
+  fs66.writeFileSync(PID_FILE, String(process.pid), { mode: 384 });
+  fs66.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 384 });
   for (const folder of ["present", "connected"])
-    fs65.rmSync(path67.join(RUN, folder), { recursive: true, force: true });
+    fs66.rmSync(path67.join(RUN, folder), { recursive: true, force: true });
   try {
     keepJobs();
   } catch {}
@@ -15066,8 +15135,8 @@ async function run2() {
   });
   const cleanUp = () => {
     try {
-      if (fs65.readFileSync(PID_FILE, "utf8") === String(process.pid))
-        fs65.unlinkSync(PID_FILE);
+      if (fs66.readFileSync(PID_FILE, "utf8") === String(process.pid))
+        fs66.unlinkSync(PID_FILE);
     } catch {}
     process.exit(0);
   };
@@ -15077,7 +15146,7 @@ async function run2() {
   setInterval(() => {
     let owner = null;
     try {
-      owner = Number(fs65.readFileSync(PID_FILE, "utf8"));
+      owner = Number(fs66.readFileSync(PID_FILE, "utf8"));
     } catch {}
     const link = readLink();
     if (!needed(link)) {
@@ -15111,7 +15180,7 @@ async function run2() {
     await sleep(50);
   let held = [];
   try {
-    held = JSON.parse(fs65.readFileSync(HELD_FILE, "utf8"));
+    held = JSON.parse(fs66.readFileSync(HELD_FILE, "utf8"));
   } catch {}
   const hold = new NoticeHold({
     send: tellPhones,
@@ -15121,7 +15190,7 @@ async function run2() {
         if (entries.length)
           writePrivate(HELD_FILE, JSON.stringify(entries));
         else
-          fs65.rmSync(HELD_FILE, { force: true });
+          fs66.rmSync(HELD_FILE, { force: true });
       } catch {}
     }
   });
@@ -15317,7 +15386,7 @@ async function serve() {
     console.error("serve answers only with a password: set OPENCODE_PASSWORD.");
     process.exit(2);
   }
-  fs65.mkdirSync(RUN, { recursive: true, mode: 448 });
+  fs66.mkdirSync(RUN, { recursive: true, mode: 448 });
   if (IS_MAC)
     addMacDefaults();
   if (IS_MAC)
@@ -15410,7 +15479,7 @@ async function setup() {
   }
   let runningVersion = null;
   try {
-    runningVersion = fs65.readFileSync(VERSION_FILE, "utf8").trim();
+    runningVersion = fs66.readFileSync(VERSION_FILE, "utf8").trim();
   } catch {}
   const restart = old?.relay !== link.relay || old?.name !== link.name || runningVersion !== BRIDGE_VERSION;
   if (!isUpdating()) {
@@ -15489,7 +15558,7 @@ function selftest() {
   const ok = said.toString() === "hello" && payload.toString() === "welcome" && echoed.toString() === "ping" && mail.toString() === "mail" && responder.rs.equals(publicOf(phone)) && typeof WebSocket === "function" && typeof fetch === "function";
   return ok;
 }
-var main = process.argv[1] && fs65.realpathSync(process.argv[1]) === fs65.realpathSync(fileURLToPath2(import.meta.url));
+var main = process.argv[1] && fs66.realpathSync(process.argv[1]) === fs66.realpathSync(fileURLToPath2(import.meta.url));
 if (main) {
   const [mode, argument] = process.argv.slice(2);
   if (mode === "run")

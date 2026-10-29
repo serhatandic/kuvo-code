@@ -578,18 +578,27 @@ client shows it from the same routes.
 - **Answering asks**: a bot may allow what one of its sessions (or a subagent of one) asks only
   where it could go ahead itself, part by part (the engine's rules for its own conversation allow
   each: the engine's defaults, which ask before reading a `.env` file, Settings › Permissions, then
-  the conversation's own), and only what it can read as safe, failing closed:
-  - A command only when every part (`;`, `&&`, `||`, `|`, a new line) is a program from a known-safe
-    set with known-safe arguments, and nothing a shell expands or runs besides: no `sh -c`, `eval`,
-    wrappers (`env`, `timeout`, `nice`, `sudo`, `xargs`…), `$`, backticks, groups, background or
-    text written in. `git` reads or changes the checkout only (never `push`, `-c`, its settings or an
-    alias); package runners run a short list of known tools; scripts run by name only for building,
-    testing and checking; code it can't see (`-c`/`-e`, a script by its path) is never its to allow.
-    What a command deletes or writes must be a literal path inside the session's folder (its
-    project's other folders too), with `cd` followed.
-  - Otherwise: reading, editing inside the project, fetching pages and starting subagents. Anything
-    else (outside the project, an integration's tool) is the user's.
+  the conversation's own), and only what it can read as safe, failing closed (`work/policy.ts`):
+  - A command only when every part (`;`, `&&`, `||`, `|`, a new line) is a program on a short list
+    (reading files, `git` on this checkout, making and removing files, `curl` fetching a page)
+    with every flag on that program's own list, and nothing a shell expands or runs besides (`$`,
+    backticks, groups, background, text written in, wrappers, `sh -c`, `eval`). Never `git push`,
+    its settings or an alias.
+  - Nothing that builds, tests or installs (`npm`, `npx`, `pip`, `go`, `cargo`, `make`, `swift`,
+    `xcodebuild`, `pytest`…): they run the project's code or a package's. Until a plan the user
+    approved can name a command (phase 4), those always come to the user.
+  - Every path it reads, writes or deletes inside the session's folder (its project's other folders
+    too) by its real place, links followed, with `cd` followed; never a pattern of files (it can't
+    see what it takes in), never your keys and sign-ins (`~/.kuvo-code`'s keys and run state, `~/.ssh`,
+    `~/.aws`, the Keychain…) wherever the folder is.
+  - Besides commands: reading inside the project, editing there, fetching pages and starting
+    subagents. Never an edit to a file later commands run (`.git/`, hooks, `.npmrc`,
+    `package.json`, `Makefile`, `build.rs`, `conftest.py`, `node_modules/.bin`…), anything outside
+    the project, or an integration's tool.
   - It may always deny, with its reason passed on.
+  - What it can't fence: an edit it allowed, then a run the user allows later, runs what was
+    edited. Each is judged alone, so the user allowing a build or a test run allows the project's
+    code as it is then (phase 5's fencing is meant for that).
   Each answer is kept on the session, `kuvo.answers: [{ask, call?, what, decision, reason, by:
   {bot?, name}, at}]` (the latest 40), where clients show it on the ask's tool call ("Allowed by
   Pixel") and in the bot's work.
