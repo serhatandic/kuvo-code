@@ -135,20 +135,29 @@ public final class ServerProcess: @unchecked Sendable {
 
     /// Starts another server that starts as the engine does (the agents bridge): it prints
     /// `{"url": …}` once it's listening, answers only with the password it's given in
-    /// OPENCODE_PASSWORD, and stops when its stdin closes.
+    /// OPENCODE_PASSWORD, and stops when its stdin closes. With `secrets` (this Mac's box), the
+    /// password and those go as the first line on its stdin instead, `{"password", …}`: any process
+    /// of the user's can read another's environment (`ps -E`), but not what its stdin was sent.
     public static func start(
         executable: URL,
         arguments: [String],
         environment base: [String: String],
         directory: URL,
+        secrets: [String: String]? = nil,
         timeout: Duration = .seconds(60),
         onExit: @escaping @Sendable (Int32) -> Void = { _ in }
     ) async throws -> ServerProcess {
         let password = Self.randomPassword()
         var environment = base
-        environment["OPENCODE_PASSWORD"] = password
+        var first: Data?
+        if let secrets {
+            environment.removeValue(forKey: "OPENCODE_PASSWORD")
+            first = try JSONSerialization.data(withJSONObject: secrets.merging(["password": password]) { $1 }) + Data("\n".utf8)
+        } else {
+            environment["OPENCODE_PASSWORD"] = password
+        }
         return try await launch(executable: executable, arguments: arguments, environment: environment, directory: directory,
-                                password: password, timeout: timeout, onExit: onExit)
+                                password: password, firstInput: first, timeout: timeout, onExit: onExit)
     }
 
     private static func launch(
@@ -157,6 +166,7 @@ public final class ServerProcess: @unchecked Sendable {
         environment: [String: String],
         directory: URL,
         password: String,
+        firstInput: Data? = nil,
         timeout: Duration,
         onExit: @escaping @Sendable (Int32) -> Void
     ) async throws -> ServerProcess {
@@ -191,6 +201,7 @@ public final class ServerProcess: @unchecked Sendable {
         }
         let firstLine = FirstLine(stdout.fileHandleForReading)
         try process.run()
+        if let firstInput { try? stdin.fileHandleForWriting.write(contentsOf: firstInput) }
 
         let url: URL
         do {

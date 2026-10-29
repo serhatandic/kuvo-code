@@ -96,6 +96,27 @@ import Testing
         #expect(agentsOwn("example.com") == "me@example.com", "still theirs")
     }
 
+    /// Any of your processes can read another's environment (`ps -E`), agents' commands among them:
+    /// the box's password and the vault's secrets go to it on its stdin, so none of them is there.
+    @Test func theBoxsSecretsAreNotInItsEnvironment() async throws {
+        defer { done() }
+        let pid = try #require(box.process.processID)
+        let ps = Process()
+        ps.executableURL = URL(filePath: "/bin/ps")
+        ps.arguments = ["-Eww", "-o", "command=", "-p", String(pid)]
+        let out = Pipe()
+        ps.standardOutput = out
+        try ps.run()
+        ps.waitUntilExit()
+        let shown = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        #expect(shown.contains("serve"), "it's the box: \(shown.prefix(200))")
+        for name in ["OPENCODE_PASSWORD=", "KUVO_HOST_VAULT_SECRET=", "KUVO_VAULT_FILE_KEY="] {
+            #expect(!shown.contains(name), "\(name) is in its environment")
+        }
+        // And it answers with them all the same.
+        #expect(await Passwords.ready())
+    }
+
     @Test func aMacWithNothingSavedBeforeHasAnEmptyVault() async throws {
         defer { done() }
         #expect(await Passwords.ready())

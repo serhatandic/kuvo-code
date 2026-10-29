@@ -269,9 +269,10 @@ export function siteOf(given: unknown): string | null {
   }
 }
 
-/** Whether `host` (where a page really is) is one of `item`'s sites: the site itself or one under it. */
+/** Whether `host` (where a page really is) is one of `item`'s sites: the site itself or one under
+ * it. A name without dots (`nas`) is only itself: under `com` would be every .com site. */
 export const usableOn = (item: VaultItem, host: string): boolean =>
-  item.sites.some(site => host === site || host.endsWith("." + site));
+  item.sites.some(site => host === site || (site.includes(".") && host.endsWith("." + site)));
 
 /** What a client sends to make or change an item. */
 export interface GivenItem {

@@ -44,7 +44,7 @@ import { docsWork, ownDocs, pruneDocs } from "./documents/work";
 import { peerTargets, readBridgeFile, readEngineFile } from "./engine/client";
 import { watchBox } from "./engine/watch";
 import { writePrivate } from "./files";
-import { IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, VERSION_FILE, homeFolder } from "./home";
+import { IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, takeVaultSecrets, VERSION_FILE, homeFolder } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
 import { deliverLeftAnswers, sendOutbox } from "./letters/outbox";
 import { macLinkCheck } from "./mac/link";
@@ -457,10 +457,37 @@ async function box(command: string): Promise<void> {
   }
 }
 
+/** The first line on stdin, as JSON (what the app sends `serve` there, before anything else). */
+function firstLine(): Promise<Record<string, unknown>> {
+  return new Promise(resolve => {
+    let given = "";
+    const take = (chunk: Buffer | string) => {
+      given += chunk.toString();
+      const end = given.indexOf("\n");
+      if (end < 0) return;
+      process.stdin.off("data", take);
+      process.stdin.off("end", done);
+      process.stdin.pause();
+      try { resolve(JSON.parse(given.slice(0, end))); } catch { resolve({}); }
+    };
+    const done = () => resolve({});
+    process.stdin.on("data", take);
+    process.stdin.once("end", done);
+  });
+}
+
 async function serve(): Promise<void> {
-  const password = process.env.OPENCODE_PASSWORD;
+  // Its password, and this Mac's vault's secrets, from the app on stdin (never its environment,
+  // which any of your processes can read); a test's box, in OPENCODE_PASSWORD.
+  let password = process.env.OPENCODE_PASSWORD;
+  delete process.env.OPENCODE_PASSWORD;
   if (!password) {
-    console.error("serve answers only with a password: set OPENCODE_PASSWORD.");
+    const given = await firstLine();
+    if (typeof given.password === "string") password = given.password;
+    takeVaultSecrets(given);
+  }
+  if (!password) {
+    console.error("serve answers only with a password: on its stdin, {\"password\"}, or in OPENCODE_PASSWORD.");
     process.exit(2);
   }
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });

@@ -27,6 +27,8 @@ final class BoxProcess {
     private(set) var failure: String?
 
     @ObservationIgnored private var server: ServerProcess?
+    /// Its process, while it runs.
+    var processID: Int32? { server?.processID }
     /// What it was started with, to start it again the same way.
     @ObservationIgnored private var runtime: (executable: URL, environment: [String: String], arguments: (URL) -> [String])?
 
@@ -107,11 +109,18 @@ final class BoxProcess {
         do {
             try FileManager.default.createDirectory(at: Self.run, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+            // Its password and the vault's secrets on its stdin, never in its environment, which
+            // any of your processes can read (`ps -E`): agents' commands among them.
+            var secrets: [String: String] = [:]
+            for (variable, name) in [("KUVO_HOST_VAULT_SECRET", "hostVaultSecret"), ("KUVO_VAULT_FILE_KEY", "vaultFileKey")] {
+                if let value = env.removeValue(forKey: variable) { secrets[name] = value }
+            }
             let server = try await ServerProcess.start(
                 executable: runtime,
                 arguments: arguments(script),
                 environment: env,
                 directory: Self.home,
+                secrets: secrets,
                 // Up in well under a second: the engine's start waits for it (its settings first),
                 // so one that's held up (macOS asking about a folder its script is in) doesn't
                 // hold the engine up for long. It's tried again once the engine is up.

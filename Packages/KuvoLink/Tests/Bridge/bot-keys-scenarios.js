@@ -67,8 +67,13 @@ export async function standInHost(password) {
     // without it (and answered while its Keychain is locked too).
     if (request.method === "POST" && request.url === "/hello") {
       host.hellos = (host.hellos ?? 0) + 1;
-      const { nonce } = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      return answer(200, { proof: crypto.createHmac("sha256", password).update(`kuvo-host-hello\0${nonce}\0${host.url.replace("http://", "")}`).digest("hex") });
+      const { nonce, vault } = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const at = host.url.replace("http://", "");
+      return answer(200, {
+        proof: crypto.createHmac("sha256", password).update(`kuvo-host-hello\0${nonce}\0${at}`).digest("hex"),
+        // For the vault's calls, with the secret the app gave its box alone.
+        ...(vault && host.vaultSecret ? { vaultProof: crypto.createHmac("sha256", host.vaultSecret).update(`kuvo-host-vault\0${nonce}\0${at}`).digest("hex") } : {}),
+      });
     }
     if (request.method !== "POST" || request.headers.authorization !== `Bearer ${password}` || request.headers["content-type"] !== "application/json") {
       host.turnedAway++;
@@ -104,7 +109,8 @@ export async function standInHost(password) {
       case "/vault/get":
       case "/vault/set":
       case "/vault/delete":
-        if (host.vaultSecret && request.headers["x-kuvo-vault-secret"] !== host.vaultSecret) {
+        // Each with its own proof: an HMAC with the secret of the call, its body and when.
+        if (host.vaultSecret && request.headers["x-kuvo-vault-auth"] !== crypto.createHmac("sha256", host.vaultSecret).update(`kuvo-host-vault-call\0${request.url.slice(1)}\0${crypto.createHash("sha256").update(Buffer.concat(chunks)).digest("hex")}\0${request.headers["x-kuvo-vault-at"]}`).digest("hex")) {
           host.turnedAway++;
           return answer(403, {});
         }

@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import Testing
 @testable import KuvoCode
@@ -18,7 +19,19 @@ import Testing
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         if let password { request.setValue("Bearer \(password)", forHTTPHeaderField: "authorization") }
-        if let vaultSecret { request.setValue(vaultSecret, forHTTPHeaderField: "x-kuvo-vault-secret") }
+        if let vaultSecret {
+            // As the box proves a vault call: an HMAC with the secret of the call, its body and when.
+            let at = String(Int(Date().timeIntervalSince1970 * 1000))
+            let body = try JSONSerialization.data(withJSONObject: body)
+            let hash = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
+            let signed = Data("kuvo-host-vault-call\u{0}\(path.dropFirst())\u{0}\(hash)\u{0}\(at)".utf8)
+            let auth = HMAC<SHA256>.authenticationCode(for: signed, using: SymmetricKey(data: Data(vaultSecret.utf8))).map { String(format: "%02x", $0) }.joined()
+            request.setValue(auth, forHTTPHeaderField: "x-kuvo-vault-auth")
+            request.setValue(at, forHTTPHeaderField: "x-kuvo-vault-at")
+            request.httpBody = body
+            let (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
+            return ((response as? HTTPURLResponse)?.statusCode ?? 0, try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
         return ((response as? HTTPURLResponse)?.statusCode ?? 0, try? JSONSerialization.jsonObject(with: data) as? [String: Any])

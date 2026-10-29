@@ -90,6 +90,35 @@ test("something else on this Mac, without the app's word, can't list or read it"
   assert.equal((await box.route("GET", `kuvo/vault/items/${item.id}/values`, undefined, false)).status, 403);
 });
 
+test("a host.json rewritten by something on this Mac sends nothing of the vault elsewhere: the app proves itself with a secret no file holds", async () => {
+  // Something that read and rewrote the box's folder: its own server, with a password of its own,
+  // which it can prove itself with, as the app would.
+  const password = "rewritten-password";
+  const heard = [];
+  const fake = http.createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    heard.push(request.url);
+    const given = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    const at = `127.0.0.1:${fake.address().port}`;
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(request.url === "/hello" ? { proof: crypto.createHmac("sha256", password).update(`kuvo-host-hello\0${given.nonce}\0${at}`).digest("hex"), vaultProof: "not-the-vaults" } : { values: {} }));
+  });
+  await new Promise(resolve => fake.listen(0, "127.0.0.1", resolve));
+  const file = path.join(home, "run", "host.json");
+  fs.writeFileSync(file, JSON.stringify({ url: `http://127.0.0.1:${fake.address().port}`, password }));
+  try {
+    const shown = await box.route("GET", `kuvo/vault/items/${item.id}/values`);
+    assert.notEqual(shown.status, 200);
+    assert.ok(!heard.some(url => url.startsWith("/vault/")), `nothing of the vault went there: ${heard.join(", ")}`);
+  } finally {
+    fs.rmSync(file, { force: true });
+    fake.closeAllConnections();
+    await new Promise(resolve => fake.close(resolve));
+  }
+  assert.equal((await box.route("GET", `kuvo/vault/items/${item.id}/values`)).value.values.password, SECRET, "from the app again");
+});
+
 test("with the app not answering, what needs the Keychain says so; removing an item takes its values from the Keychain", async () => {
   host.down = true;
   const stalled = await box.route("GET", `kuvo/vault/items/${item.id}/values`);

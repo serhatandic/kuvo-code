@@ -114,6 +114,12 @@ var HOST_VAULT_SECRET = process.env.KUVO_HOST_VAULT_SECRET || null;
 var MAC_VAULT_FILE_KEY = process.env.KUVO_VAULT_FILE_KEY ? Buffer.from(process.env.KUVO_VAULT_FILE_KEY, "base64url") : null;
 delete process.env.KUVO_HOST_VAULT_SECRET;
 delete process.env.KUVO_VAULT_FILE_KEY;
+function takeVaultSecrets(given) {
+  if (typeof given.hostVaultSecret === "string" && given.hostVaultSecret)
+    HOST_VAULT_SECRET = given.hostVaultSecret;
+  if (typeof given.vaultFileKey === "string" && given.vaultFileKey)
+    MAC_VAULT_FILE_KEY = Buffer.from(given.vaultFileKey, "base64url");
+}
 var SCRIPT = "";
 var scriptIs = (file) => {
   SCRIPT = file;
@@ -479,8 +485,10 @@ function helloProof(password, nonce, url) {
   return crypto2.createHmac("sha256", password).update(`kuvo-host-hello\x00${nonce}\x00${reached.hostname}:${reached.port || 80}`).digest("hex");
 }
 var provenBy = null;
+var vaultProvenBy = null;
 function forgetHostProof() {
   provenBy = null;
+  vaultProvenBy = null;
 }
 async function proveHost(host) {
   if (provenBy === host.said)
@@ -503,6 +511,31 @@ async function proveHost(host) {
     throw new KeysUnavailable(NOT_ANSWERING);
   provenBy = host.said;
 }
+async function proveVaultHost(host) {
+  if (!HOST_VAULT_SECRET)
+    throw new KeysUnavailable("Kuvo Code on this Mac didn't give its vault its secret. Quit Kuvo Code and open it again.");
+  if (vaultProvenBy === host.said)
+    return;
+  const nonce = crypto2.randomBytes(32).toString("hex");
+  let proof = null;
+  try {
+    const response = await fetch(`${host.url}/hello`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nonce, vault: true }),
+      signal: AbortSignal.timeout(15000)
+    });
+    const answer = await response.json().catch(() => null);
+    if (response.ok && typeof answer?.vaultProof === "string")
+      proof = Buffer.from(answer.vaultProof);
+  } catch {}
+  const reached = new URL(host.url);
+  const expected = Buffer.from(crypto2.createHmac("sha256", HOST_VAULT_SECRET).update(`kuvo-host-vault\x00${nonce}\x00${reached.hostname}:${reached.port || 80}`).digest("hex"));
+  if (!proof || proof.length !== expected.length || !crypto2.timingSafeEqual(proof, expected))
+    throw new KeysUnavailable(NOT_ANSWERING);
+  vaultProvenBy = host.said;
+}
+var vaultAuth = (call, body, at) => crypto2.createHmac("sha256", HOST_VAULT_SECRET ?? "").update(`kuvo-host-vault-call\x00${call}\x00${crypto2.createHash("sha256").update(body).digest("hex")}\x00${at}`).digest("hex");
 async function hostTrash(folder) {
   const host = appHost();
   if (!host)
@@ -518,16 +551,22 @@ async function hostTrash(folder) {
 }
 async function askHost(host, call, body, missing = false) {
   await proveHost(host);
+  const sent = JSON.stringify(body);
+  const vault = call.startsWith("vault/");
+  if (vault)
+    await proveVaultHost(host);
+  const at = Date.now();
   let response;
   try {
     response = await fetch(`${host.url}/${call}`, {
       method: "POST",
-      headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json", ...call.startsWith("vault/") && HOST_VAULT_SECRET ? { "x-kuvo-vault-secret": HOST_VAULT_SECRET } : {} },
-      body: JSON.stringify(body),
+      headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json", ...vault ? { "x-kuvo-vault-auth": vaultAuth(call, sent, at), "x-kuvo-vault-at": String(at) } : {} },
+      body: sent,
       signal: AbortSignal.timeout(["keys/get", "keys/set", "link/identity", "vault/get", "vault/set"].includes(call) ? 120000 : 15000)
     });
   } catch {
     provenBy = null;
+    vaultProvenBy = null;
     throw new KeysUnavailable(NOT_ANSWERING);
   }
   if (missing && response.status === 404) {
@@ -6991,7 +7030,7 @@ function siteOf(given) {
     return null;
   }
 }
-var usableOn = (item, host) => item.sites.some((site) => host === site || host.endsWith("." + site));
+var usableOn = (item, host) => item.sites.some((site) => host === site || site.includes(".") && host.endsWith("." + site));
 var FIELD = /^[a-z][a-z0-9_]{0,39}$/;
 var SHORTEST_VALUE = 4;
 function givenValues(given, change) {
@@ -12579,10 +12618,40 @@ async function box(command) {
       process.exit(2);
   }
 }
+function firstLine() {
+  return new Promise((resolve) => {
+    let given = "";
+    const take = (chunk) => {
+      given += chunk.toString();
+      const end = given.indexOf(`
+`);
+      if (end < 0)
+        return;
+      process.stdin.off("data", take);
+      process.stdin.off("end", done);
+      process.stdin.pause();
+      try {
+        resolve(JSON.parse(given.slice(0, end)));
+      } catch {
+        resolve({});
+      }
+    };
+    const done = () => resolve({});
+    process.stdin.on("data", take);
+    process.stdin.once("end", done);
+  });
+}
 async function serve() {
-  const password = process.env.OPENCODE_PASSWORD;
+  let password = process.env.OPENCODE_PASSWORD;
+  delete process.env.OPENCODE_PASSWORD;
   if (!password) {
-    console.error("serve answers only with a password: set OPENCODE_PASSWORD.");
+    const given = await firstLine();
+    if (typeof given.password === "string")
+      password = given.password;
+    takeVaultSecrets(given);
+  }
+  if (!password) {
+    console.error('serve answers only with a password: on its stdin, {"password"}, or in OPENCODE_PASSWORD.');
     process.exit(2);
   }
   fs54.mkdirSync(RUN, { recursive: true, mode: 448 });
