@@ -325,7 +325,7 @@ test("a client stops all of a bot's work at once", async () => {
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "run", "work", "wakes.json"), "utf8")), {}, "and it isn't woken with what they did");
 });
 
-test("what a bot may allow fails closed: however it's phrased, what it can't read as safe goes to the user", async () => {
+test("what a bot may allow fails closed: however it's phrased, what it can't read as safe goes to the user", { timeout: 120_000 }, async () => {
   const session = startedAddress(await tool("start_session", { task: "Ship it.", project: "Tidepool" }, "ses_pixel"));
   const yours = [
     // Shells, wrappers and what runs a command of its own.
@@ -347,9 +347,13 @@ test("what a bot may allow fails closed: however it's phrased, what it can't rea
     "curl -s http://localhost:3000/health", "mkdir -p src/screens", "git log --grep push", "gh run view 12", `rm -rf ${path.join(tidepool, "build")}`];
   const all = [...yours, ...fine];
   asked.set(session, all.map((command, at) => ({ id: `per_${at}`, sessionID: session, action: "shell", resources: [command] })));
-  for (const [at, command] of all.entries()) {
-    const said = await tool("answer_ask", { session, ask: `per_${at}`, decision: "allow", reason: "Part of the plan." }, "ses_pixel");
-    assert.equal(said.isError, at < yours.length, `${command}: ${said.text}`);
+  // A few at a time: each is a process of its own.
+  for (let from = 0; from < all.length; from += 12) {
+    await Promise.all(all.slice(from, from + 12).map(async (command, offset) => {
+      const at = from + offset;
+      const said = await tool("answer_ask", { session, ask: `per_${at}`, decision: "allow", reason: "Part of the plan." }, "ses_pixel");
+      assert.equal(said.isError, at < yours.length, `${command}: ${said.text}`);
+    }));
   }
 });
 
