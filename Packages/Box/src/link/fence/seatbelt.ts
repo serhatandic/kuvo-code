@@ -48,7 +48,7 @@ const param = (name: string) => `(subpath (param ${quote(name)}))`;
 // only by its own name, never by what's in it, so the folders that hold those (`.git`, a submodule's
 // or a worktree's repository, the agents' folders) can't be made, moved or removed, only written in.
 const GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)/[^/]+$)`;
-const AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/config\.toml|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
+const AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/(config\.toml|hooks\.json|\.env|rules(/.*)?)|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
 const GUARDED = String.raw`(.*/)?(\.git$|\.git/(${GIT_GUARDED})|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
 
 export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): string {
@@ -119,6 +119,8 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   if (options.agent) allow("network-outbound", `(remote tcp (string-append "localhost:" (param "PORT")))`);
   deny("network-outbound", ...policy.kuvo.map(folder => `(remote unix-socket ${subpath(folder)})`),
     ...policy.kuvoPatterns.map(pattern => `(remote unix-socket ${regex(pattern)})`));
+  out.push(";; other apps' sockets that run what they're asked outside it");
+  deny("network-outbound", ...(policy.sockets ?? []).map(folder => `(remote unix-socket ${subpath(folder)})`));
   // But its own SSH agent, Kuvo Code's (vault/ssh.ts), in `/tmp/kuvo-ssh-<uid>` with the app's
   // connections to your machines, which the launcher names (none: nothing).
   allow("network-outbound", `(remote unix-socket (literal (param "SSH")))`);

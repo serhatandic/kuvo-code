@@ -95,7 +95,8 @@ for (const where of [...policy.writable, work, git, ...allowed]) if (where) gran
 // folders) Landlock can't: what it grants a folder it grants all inside, and the agent makes its
 // own files at the top (its databases' journals, its sign-in written anew). Here its homes are Kuvo
 // Code's own copy of it (a machine's agents' homes are in Kuvo Code's folder), never the one you
-// use yourself, and it runs in the sandbox whenever it's on. Its tools' port needs no rule:
+// use yourself. (What a command leaves there while it is on, Codex reads when the sandbox is off
+// too: you turn it off, and that's yours to judge.) Its tools' port needs no rule:
 // Landlock leaves connections to it open.
 const lines = (text) => (text || "").split("\n").filter((line) => line.startsWith("/"));
 for (const where of lines(process.env.KUVO_FENCE_OWN).slice(0, 4)) grantExcept(where, all, kept);

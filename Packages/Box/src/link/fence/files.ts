@@ -102,12 +102,12 @@ export function launcherScript(places: FencePlaces): string {
     `allowed=$F/allowed/$sum`,
     // (On a Mac, each escaped too, for what's kept from its commands inside it; `-` matches no path.)
     ...(places.platform === "darwin" ? [`escaped() { printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\\\&/g'; }`,
-      // An agent's homes, escaped too, and the names in them as one pattern (`-` matches no name).
+      // An agent's homes, escaped too, and the names in them as one pattern (`-/` matches no name).
       ...Array.from({ length: AGENT_FOLDERS }, (_, at) => `q${at}=$(escaped "$o${at}")`),
       "names() { r=; while IFS= read -r n; do case $n in ''|*/*) ;; *) r=\"$r|$(escaped \"$n\" | sed 's/\\\\\\*/[^\\/]*/g')\" ;; esac; done <<EOF_NAMES",
       "$1",
       "EOF_NAMES",
-      "if [ -n \"$r\" ]; then printf '%s' \"${r#|}\"; else printf '%s' -; fi; }",
+      "if [ -n \"$r\" ]; then printf '%s' \"${r#|}\"; else printf '%s' -/; fi; }",
     ] : []),
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => `a${at}=$F/none r${at}=-`),
     `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; ${places.platform === "darwin" ? `eval "r$i=\\$(escaped \\"\\$line\\")"; ` : ""}i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,

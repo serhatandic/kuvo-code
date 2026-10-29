@@ -12,7 +12,7 @@ import type { Limit } from "../auto"
 import { accountName, ContextWindows, failure, model } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
 import { emit } from "../events"
-import { allowedFolders, fenceAgent, fenceCopy, fenceKey, fenceRules } from "../fence"
+import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules } from "../fence"
 import { kuvoTools, toolServerName } from "../kuvotools"
 import { dropRelayed, relayedTools, relayPort } from "../toolrelay"
 import { pictureData, pictureFile, withPictures } from "../pictures"
@@ -37,8 +37,14 @@ const outputLimit = 30_000
  * (plugins, skills, what drives your computer), which run outside the sandbox when you use Codex
  * yourself.
  */
-const STATE_IN_HOME = ["sessions", "archived_sessions", "log", "logs", ".tmp", "tmp", "cache", "shell_snapshots", "sqlite", "thread-writer-locks", "ipc", "generated_images", "memories"]
-const KEPT_IN_HOME = ["*.toml", "*.md", ".env", "hooks.json", "rules"]
+const STATE_IN_HOME = ["sessions", "archived_sessions", "log", "logs", "cache", "sqlite", "thread-writer-locks", "generated_images"]
+/**
+ * Not its state: what your Codex reads as it starts or as you work with it, and runs or takes as
+ * its instructions (its plugins' repository in `.tmp`, its helpers in `tmp`, the scripts it
+ * sources in `shell_snapshots`, its memories and their skills, the ChatGPT app's socket in `ipc`),
+ * and at the top, its settings, its models' instructions and the ChatGPT app's state.
+ */
+const KEPT_IN_HOME = ["*.toml", "*.md", ".env", "hooks.json", "rules", "models_cache.json", ".codex-global-state.json*"]
 
 /**
  * Codex's plugins that drive your computer (ChatGPT's Computer Use), off for every thread here
@@ -199,12 +205,17 @@ export class CodexAgent implements Agent {
    */
   async rpc(thread?: CodexThread, starting = false): Promise<RPC> {
     if (thread && !starting && thread.server && !thread.server.isClosed) return thread.server
-    // A turn starting while agents it spawned still work in the Codex its thread is in: there, as
-    // long as that's as safe (one outside the box's sandbox, now that it's on, isn't).
-    if (thread && starting && thread.server && !thread.server.isClosed && thread.keepsWorking && (this.isFenced(thread.server) || !fenceRules())) return thread.server
     const key = !fenceRules() ? SHARED : thread ? thread.session.id : ACCOUNT
     const slot = this.slot(key)
     slot.lastUse = Date.now()
+    // The box's sandbox changed (its rules, the folders you let this session's commands write in):
+    // Codex starts again with it once it's quiet.
+    const fence = key === SHARED ? "" : key === ACCOUNT ? fenceKey() : fenceKey() + JSON.stringify(allowedFolders(thread!.session.location.directory))
+    if (slot.server && !slot.server.isClosed && slot.fence !== fence) slot.outdated ??= slot.server
+    // A turn starting while agents it spawned still work in the Codex its thread is in: there, as
+    // long as that's as safe (one outside the box's sandbox, now that it's on, isn't); it starts
+    // again once they're done.
+    if (thread && starting && thread.server && !thread.server.isClosed && thread.keepsWorking && (this.isFenced(thread.server) || !fenceRules())) return thread.server
     // Stopped when nothing has used it for a while: a session's, or your account's with no session
     // in it. (One at work stays in use.)
     this.idleCheck ??= setInterval(() => {
@@ -219,10 +230,6 @@ export class CodexAgent implements Agent {
         if (Date.now() - slot.lastUse >= 15 * 60_000) this.stop(each)
       }
     }, 60_000)
-    // The box's sandbox changed (its rules, the folders you let this session's commands write in):
-    // Codex starts again with it once it's quiet.
-    const fence = key === SHARED ? "" : key === ACCOUNT ? fenceKey() : fenceKey() + JSON.stringify(allowedFolders(thread!.session.location.directory))
-    if (slot.server && !slot.server.isClosed && slot.fence !== fence) slot.outdated ??= slot.server
     this.restartIfQuiet(key, starting ? thread : undefined)
     if (slot.server && !slot.server.isClosed) return slot.server
     slot.starting ??= this.start(key, slot, fence, thread).finally(() => (slot.starting = undefined))
@@ -238,11 +245,13 @@ export class CodexAgent implements Agent {
     if (skills) mkdirSync(skills, { recursive: true, mode: 0o700 })
     const relayed = sessionID ? relayedTools(sessionID) : undefined
     const homes = [this.home, ...(this.instance.home && !onMachine ? [this.yourCodex] : [])]
+    // The files you attach in the session, copied where only the box writes (`fenceCopy`).
+    const attached = sessionID ? fenceAttachments(directory) : undefined
     return fenceAgent(this.executable()!, directory, {
       homes,
       state: STATE_IN_HOME,
       kept: KEPT_IN_HOME,
-      read: skills ? [skills] : [],
+      read: [...(skills ? [skills] : []), ...(attached ? [attached] : [])],
       port: relayed ? relayPort() : undefined,
     })
   }
@@ -255,7 +264,7 @@ export class CodexAgent implements Agent {
     if (this.instance.home && !onMachine) shadowHome(this.instance.home, this.yourCodex)
     // While the box's sandbox is on, Codex runs whole in it: a session's in its folder, your
     // account's in its home.
-    const directory = key === ACCOUNT ? this.home : (thread?.session.location.directory ?? this.home)
+    const directory = key === ACCOUNT ? this.accountFolder() : (thread?.session.location.directory ?? this.home)
     const fence = key === SHARED ? undefined : this.fenced(directory, key === ACCOUNT ? undefined : key)
     if (key !== SHARED && !fence) throw new Error("Codex runs in the sandbox here, and it isn't ready: restart Kuvo Code.")
     const args = ["app-server", ...noComputerUse.flatMap((plugin) => ["-c", `plugins.${plugin}.enabled=false`])]
@@ -263,7 +272,7 @@ export class CodexAgent implements Agent {
     const rpc = new RPC(fence ? [fence.command, ...args] : [executable, ...args], { cwd: fence ? directory : this.context.temporary, env })
     slot.fence = fenceNow
     if (fence) this.fencedServers.add(rpc)
-    rpc.onNotification = (method, params) => this.notification(method, params)
+    rpc.onNotification = (method, params) => this.notification(method, params, rpc)
     rpc.onRequest = (method, params, id) => this.request(method, params, id)
     rpc.onExit = () => {
       // A title or commit text it was writing won't come.
@@ -303,7 +312,7 @@ export class CodexAgent implements Agent {
   }
 
 
-  private notification(method: string, params: any) {
+  private notification(method: string, params: any, from?: RPC) {
     if (method === "account/login/completed") {
       const done = this.logins.get(params?.loginId)
       if (done) {
@@ -351,7 +360,7 @@ export class CodexAgent implements Agent {
     if (oneOff) return oneOff.notify(method, params)
     if (!threadID) return
     const thread = this.threadFor(threadID)
-    if (thread) return thread.notification(method, params)
+    if (thread) return thread.notification(method, params, from)
     // Kept a moment, for a spawned agent's thread its spawn hasn't named yet.
     const now = Date.now()
     for (const [id, kept] of this.early) if (now - kept.at > 30_000) this.early.delete(id)
@@ -513,7 +522,7 @@ export class CodexAgent implements Agent {
     const rpc = await this.rpc()
     // (Its own default model, when none is given; thinking little either way.)
     // (Run whole in the box's sandbox, in Codex's home: Kuvo Code's folders are hidden there.)
-    const cwd = this.isFenced(rpc) ? this.home : this.context.temporary
+    const cwd = this.isFenced(rpc) ? this.accountFolder() : this.context.temporary
     const started: any = await rpc.request("thread/start", { ephemeral: true, cwd, ...(model && model.id !== "default" ? { model: model.id } : {}), approvalPolicy: "never", sandbox: "read-only" }, 60_000)
     const threadId: string = started.thread.id
     let text = ""
@@ -562,6 +571,16 @@ export class CodexAgent implements Agent {
   /** Its home (CODEX_HOME): an added account's own, or yours. */
   get home(): string {
     return this.instance.home ?? process.env.CODEX_HOME ?? this.yourCodex
+  }
+
+  /**
+   * Where your account's Codex works while it runs whole in the box's sandbox (one-off answers,
+   * signing in), which its commands may write: a folder of its state, never its whole home.
+   */
+  private accountFolder(): string {
+    const folder = join(this.home, "sessions")
+    mkdirSync(folder, { recursive: true, mode: 0o700 })
+    return folder
   }
 
   /** Your own Codex's folder, which an added account's links to (on this Mac). */
@@ -1061,10 +1080,11 @@ class CodexThread implements Thread {
     })
   }
 
-  notification(method: string, params: any) {
+  /** What Codex says (`from`: the app-server that said it). */
+  notification(method: string, params: any, from?: RPC) {
     const active = this.active
     // An agent it spawned: told in its session (one still at work after the turn too).
-    if (params?.threadId && this.nativeID && params.threadId !== this.nativeID) return this.subagentNotification(active, params.threadId, method, params)
+    if (params?.threadId && this.nativeID && params.threadId !== this.nativeID) return this.subagentNotification(active, params.threadId, method, params, from)
     // Codex let go of the thread: the next turn loads it again.
     if (method === "thread/closed") {
       this.loaded = false
@@ -1278,7 +1298,7 @@ class CodexThread implements Thread {
   }
 
   /** What a spawned agent's thread says, in its session. */
-  private subagentNotification(active: Active | undefined, threadID: string, method: string, params: any) {
+  private subagentNotification(active: Active | undefined, threadID: string, method: string, params: any, from?: RPC) {
     let lane = active?.subagents.get(threadID)
     const kept = this.backgroundLanes.get(threadID)
     if (!lane && kept) {
@@ -1299,14 +1319,14 @@ class CodexThread implements Thread {
       if (method !== "turn/started") return
       const before = this.spawnedSessions[threadID]
       if (!before) return
-      lane = this.resumedLane(active, threadID, before.call, before.title, before.sessionID, resume)
+      lane = this.resumedLane(active, threadID, before.call, before.title, before.sessionID, resume, from)
       if (!lane) return
     }
     if (lane.ended) {
       // Given more to do: its session goes on (in a turn of this session's, or one of its own
       // when you wrote to it; otherwise, between turns, it's told when the next one begins).
       if (method !== "turn/started") return
-      const next = this.resumedLane(active, threadID, lane.call, lane.title, lane.run.sessionID, resume)
+      const next = this.resumedLane(active, threadID, lane.call, lane.title, lane.run.sessionID, resume, from)
       if (!next) return
       lane = next
     }
@@ -1364,20 +1384,21 @@ class CodexThread implements Thread {
    * A spawned agent at work again, in its session: under the turn under way, or, with none, as a
    * run of its own you started by writing to it (`resume`). None when neither has it.
    */
-  private resumedLane(active: Active | undefined, threadID: string, call: string, title: string, sessionID: string, resume?: () => SubagentRun): SubagentLane | undefined {
-    if (active) return this.continueSubagent(active, threadID, call, title, sessionID)
+  private resumedLane(active: Active | undefined, threadID: string, call: string, title: string, sessionID: string, resume?: () => SubagentRun, from?: RPC): SubagentLane | undefined {
+    if (active) return this.continueSubagent(active, threadID, call, title, sessionID, from)
     if (!resume) return undefined
     const run = resume()
     run.stop = () => this.stopSubagent(threadID)
-    const lane: SubagentLane = { turn: run.turn, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, run, threadID, call, title, ended: false, server: this.server }
+    const lane: SubagentLane = { turn: run.turn, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, run, threadID, call, title, ended: false, server: from ?? this.server }
     this.backgroundLanes.set(threadID, lane)
     return lane
   }
 
-  private continueSubagent(active: Active, threadID: string, call: string, title: string, sessionID: string): SubagentLane {
+  /** (In the Codex it's heard from, `from`: one its agents still work in may not be the turn's.) */
+  private continueSubagent(active: Active, threadID: string, call: string, title: string, sessionID: string, from?: RPC): SubagentLane {
     const run = active.hooks.subagent(call, { title, sessionID, background: true, messages: this.messagesFor(threadID) })
     run.stop = () => this.stopSubagent(threadID)
-    const next: SubagentLane = { turn: run.turn, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, run, threadID, call, title, ended: false, server: this.server }
+    const next: SubagentLane = { turn: run.turn, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, run, threadID, call, title, ended: false, server: from ?? this.server }
     active.subagents.set(threadID, next)
     return next
   }

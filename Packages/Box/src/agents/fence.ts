@@ -4,7 +4,7 @@
 // engine does; Codex runs whole in it.
 
 import { createHash, randomBytes } from "node:crypto"
-import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs"
+import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { machineHome } from "./machine"
 
@@ -185,18 +185,37 @@ export function fenceAgent(program: string, directory: string, mine: AgentPlaces
 }
 
 /**
+ * Where the files you attach in a conversation are copied for an agent run whole in the sandbox
+ * (`fenceCopy`): in the sandbox's folder, which only the box writes, given to the agent to read.
+ * Undefined while the sandbox is off here.
+ */
+export function fenceAttachments(directory: string): string | undefined {
+  const where = folder()
+  if (!where || !fenceRules()) return undefined
+  const attached = join(where, "attachments", sum(real(directory)))
+  try {
+    mkdirSync(attached, { recursive: true, mode: 0o700 })
+    return attached
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * A file you attached, for an agent run whole in the sandbox, which hides Kuvo Code's folder where
- * it's kept: a copy in the conversation's temporary folder, which its commands read and write. Made
- * anew each time, under a name no command could have known to put a link at; the file itself where
- * that can't be made.
+ * it's kept: a copy it reads (`fenceAttachments`), made anew each time. The file itself where that
+ * can't be made.
  */
 export function fenceCopy(directory: string, file: string): string {
-  const where = folder()
-  if (!where) return file
-  const temporary = join(where, "tmp", sum(real(directory)))
-  const copy = join(temporary, `attached-${randomBytes(8).toString("hex")}-${basename(file)}`)
+  const attached = fenceAttachments(directory)
+  if (!attached) return file
+  const copy = join(attached, `${randomBytes(8).toString("hex")}-${basename(file)}`)
+  // Copies made more than a week ago go (their turns are long done; by when each was made: a
+  // copy may keep its file's own times).
   try {
-    mkdirSync(temporary, { recursive: true, mode: 0o700 })
+    for (const name of readdirSync(attached)) if (Date.now() - statSync(join(attached, name)).ctimeMs > 7 * 86_400_000) rmSync(join(attached, name), { force: true })
+  } catch {}
+  try {
     copyFileSync(file, copy, constants.COPYFILE_EXCL)
     return copy
   } catch {

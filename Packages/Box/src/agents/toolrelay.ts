@@ -161,6 +161,8 @@ class Program {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.waiting.delete(id)
+        this.ours.delete(known)
+        this.write({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id, reason: "Took too long." } })
         resolve(failed(message.id, "Kuvo Code's tools took too long."))
       }, timeout)
       this.waiting.set(id, {

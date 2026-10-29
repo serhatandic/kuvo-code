@@ -223,6 +223,8 @@ test("a command can't change what git runs on its own, the engine's settings or 
   fs.mkdirSync(path.join(project, ".claude", "hooks"));
   fs.writeFileSync(path.join(project, ".claude", "hooks", "check.sh"), "exit 0\n");
   fs.mkdirSync(path.join(project, ".cursor"));
+  // A Codex folder a project already has (as your home does, when a session's folder is it).
+  fs.mkdirSync(path.join(project, "app", ".codex"), { recursive: true });
   const running = await start(box);
   try {
     assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
@@ -242,6 +244,9 @@ test("a command can't change what git runs on its own, the engine's settings or 
       ["add Claude Code's servers", `echo '{"mcpServers":{}}' > .mcp.json`],
       ["add Codex's settings", "mkdir -p .codex && echo 'x = 1' > .codex/config.toml"],
       ["add Cursor's hooks", "mkdir -p app/.cursor && echo '{}' > app/.cursor/hooks.json"],
+      ["add Codex's hooks", "echo '{}' > app/.codex/hooks.json"],
+      ["add Codex's rules", "mkdir -p app/.codex/rules && echo x > app/.codex/rules/default.rules"],
+      ["change Codex's environment", "echo X=1 > app/.codex/.env"],
       ["move Claude Code's settings into place", `echo '{}' > s.json && mv s.json .claude/settings.json`],
       ["write the project's notes for agents", "echo ok > CLAUDE.md"],
       ["add a Claude Code command", "mkdir -p .claude/commands && echo ok > .claude/commands/ship.md"],
@@ -262,6 +267,7 @@ test("a command can't change what git runs on its own, the engine's settings or 
       "change a worktree's settings": "refused", "point a worktree at another repository": "refused", "point a worktree at another checkout": "refused", "make a branch": "allowed", "add the engine's settings": "refused", "add the engine's plugins": "refused",
       "add Claude Code's hooks": "refused", "change Claude Code's own settings": "refused", "add Claude Code's servers": "refused", "add Codex's settings": "refused",
       "add Cursor's hooks": "refused", "move Claude Code's settings into place": "refused",
+      "add Codex's hooks": "refused", "add Codex's rules": "refused", "change Codex's environment": "refused",
       "swap in another .claude": "refused", "link in a Codex folder": "refused", "swap in another .git": "refused",
       "swap in a submodule's repository": "refused", "change a Claude Code hook script": "refused", "write the project's notes for agents": "allowed",
       "add a Claude Code command": "allowed", "add a Cursor rule": "allowed", "write in a worktree kept in .claude": "allowed", "write a source file": "allowed",

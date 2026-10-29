@@ -2675,10 +2675,12 @@ it's empty.
   for now, so on doesn't yet cover them. How each will: Claude Code runs its commands through the
   box's shell for it (`run/fence/shell/zsh` or `bash`); Codex runs whole in the sandbox
   (`run/fence/shell/run`), an app-server for each session in that session's folder (and your
-  account's in its home), its own sandbox off, asking as it does, and Kuvo Code's tools through the
-  agents bridge's relay on 127.0.0.1, a key for each session. Of its home it writes, on a Mac, only
-  its state (the files at the top, its conversations, logs and caches), never its settings,
-  plugins or skills; on Linux, a machine's Codex home (Kuvo Code's own copy) whole.
+  account's in its `sessions` folder), its own sandbox off, asking as it does, and Kuvo Code's tools
+  through the agents bridge's relay on 127.0.0.1, a key for each session. Of its home it writes, on
+  a Mac, only its state (the files at the top, its conversations, logs and caches), never its
+  settings, plugins, skills, memories, helpers, shell snapshots or models' instructions, and it
+  can't reach the ChatGPT app's socket (`ipc`); on Linux, a machine's Codex home (Kuvo Code's own
+  copy) whole. Files you attach are copied for it to `run/fence/attachments`, which it only reads.
   When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
   you can do (`action`) and the box's route that does it (`route`, where there is one):
 

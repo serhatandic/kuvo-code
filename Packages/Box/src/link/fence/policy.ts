@@ -36,6 +36,9 @@ export interface FencePolicy {
   /** Kuvo Code's own servers on 127.0.0.1, refused where the system can (macOS); everywhere their
    * passwords are in files a command can't read. */
   ports: number[];
+  /** Other apps' sockets that run what they're asked, outside the sandbox (folders), refused where
+   * the system can (macOS): the ChatGPT app's. */
+  sockets?: string[];
 }
 
 // Tools' caches, written by installs and builds in any project.
@@ -129,6 +132,7 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
         `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
       ],
       writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES])],
+      sockets: inHome([".codex/ipc"]),
       secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...sshKeys(home).map(realish), ...ghHosts(home).map(realish)],
     };
   }

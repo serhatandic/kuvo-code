@@ -5,8 +5,9 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
-import { existsSync, mkdirSync, realpathSync, symlinkSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, realpathSync, symlinkSync } from "node:fs"
 import { createHash } from "node:crypto"
+import { createServer } from "node:net"
 import { CodexAgent } from "../../src/agents/agents/codex"
 import { agentShellScript, launcherScript, type FencePlaces } from "../../src/link/fence/files"
 import { LANDLOCK_RUNNER, landlockPolicy } from "../../src/link/fence/landlock"
@@ -43,6 +44,7 @@ let asked = 0
 let turns = 0
 const answered = new Map()
 let stopped
+let input = []
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n")
 // Its thread: "t1", but for a Codex of a session elsewhere (one of its own).
 const thread = process.cwd() === ${JSON.stringify(folder)} ? "t1" : "t-" + process.pid
@@ -53,15 +55,30 @@ async function turn() {
   for (const [method, params] of events) {
     if (method === ${JSON.stringify(untilStopped[0])}) return new Promise((resolve) => (stopped = resolve))
     if (method === ${JSON.stringify(tries)}) {
-      const done = Object.entries(params).map(([name, [how, place]]) => {
-        try {
+      const done = []
+      for (const [name, [how, named]] of Object.entries(params)) {
+        // "(attached)": the picture the turn was given.
+        const place = named === "(attached)" ? input.find((item) => item.type === "localImage")?.path : named
+        if (how === "connect") {
+          // (By a short name, from its folder: a socket's whole path can be too long.)
+          const here = process.cwd()
+          process.chdir(require("node:path").dirname(place))
+          const socket = require("node:net").createConnection(require("node:path").basename(place))
+          process.chdir(here)
+          done.push(name + "=" + (await new Promise((resolve) => {
+            socket.on("connect", () => (socket.destroy(), resolve("yes")))
+            socket.on("error", () => resolve("no"))
+          })))
+          continue
+        }
+        done.push((() => { try {
           if (how === "write") require("node:fs").writeFileSync(place, "x")
           else require("node:fs").readFileSync(place)
           return name + "=yes"
         } catch {
           return name + "=no"
-        }
-      })
+        } })())
+      }
       send({ method: "item/completed", params: inTurn({ item: { type: "agentMessage", id: "m1", text: done.join(" ") } }) })
       continue
     }
@@ -88,6 +105,7 @@ process.stdin.on("data", (chunk) => {
     if (message.method === undefined) answered.get(message.id)?.()
     else if (message.method === "thread/start") send({ id: message.id, result: { thread: { id: thread } } })
     else if (message.method === "turn/start") {
+      input = message.params.input ?? []
       send({ id: message.id, result: { turn: { id: "u1", status: "inProgress" } } })
       void turn()
     } else if (message.method === "turn/interrupt") {
@@ -597,14 +615,14 @@ describe("Codex in the session's modes", () => {
  * The box's sandbox, on, as the box sets it up (link/fence/state.ts): its launcher and its rules in
  * this system's terms, in Kuvo Code's folder `kuvo`, which it hides.
  */
-function realFence(kuvo: string) {
+function realFence(kuvo: string, sockets: string[] = []) {
   const folder = join(kuvo, "run", "fence")
   const platform = process.platform === "darwin" ? "darwin" : "linux"
   const places: FencePlaces = {
     folder, launcher: join(kuvo, "bin", "kuvo-fence"), runner: join(kuvo, "bin", "kuvo-fence.js"), inside: [join(kuvo, "bots")], probe: join(folder, "probe"),
     bots: join(kuvo, "bots"), wakes: join(kuvo, "wakes"), key: join(kuvo, "run", "socket.key"), sshFor: join(kuvo, "run", "ssh-for"), sshAgents: join(kuvo, "run", "ssh"), platform,
   }
-  const policy: FencePolicy = { home: kuvo, kuvo: [kuvo], kuvoPatterns: [], kuvoReadable: [join(kuvo, "bin")], writable: ["/dev"], readOnly: [], secrets: [], ports: [] }
+  const policy: FencePolicy = { home: kuvo, kuvo: [kuvo], kuvoPatterns: [], kuvoReadable: [join(kuvo, "bin")], writable: ["/dev"], readOnly: [], secrets: [], ports: [], sockets }
   mkdirSync(join(folder, "shell"), { recursive: true })
   const write = (file: string, text: string, mode = 0o600) => {
     mkdirSync(dirname(file), { recursive: true })
@@ -635,7 +653,8 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
     writeFileSync(join(kuvo, "secret"), "s")
     writeFileSync(join(home, "config.toml"), "")
     process.env.CODEX_HOME = home
-    process.env.KUVO_FENCE = realFence(kuvo)
+    // (Its home's `ipc`, as your own Codex's: the ChatGPT app's.)
+    process.env.KUVO_FENCE = realFence(kuvo, [join(home, "ipc")])
   })
   afterEach(() => {
     delete process.env.KUVO_FENCE
@@ -648,18 +667,56 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
   test("Codex runs whole in it: what it runs, even a command you allowed, writes only the session's folder and Codex's own state (on a Mac, never its settings, plugins or skills, which run outside the sandbox when you use Codex), never elsewhere, and can't read Kuvo Code's folder", async () => {
     mkdirSync(join(home, "sessions"))
     mkdirSync(join(home, "plugins"))
+    mkdirSync(join(home, "shell_snapshots"))
     const id = await run([[tries, {
       project: ["write", join(root, "made.txt")],
       own: ["write", join(home, "state_5.sqlite-wal")],
       state: ["write", join(home, "sessions", "rollout.jsonl")],
       settings: ["write", join(home, "config.toml")],
       plugin: ["write", join(home, "plugins", "plugin.js")],
+      // What Codex runs or tells its model later, outside a turn: a shell it sources, what each model is told.
+      snapshot: ["write", join(home, "shell_snapshots", "s.sh")],
+      models: ["write", join(home, "models_cache.json")],
       elsewhere: ["write", join(elsewhere, "e.txt")],
       kuvo: ["read", join(kuvo, "secret")],
     }]], { permissions: askFirst })
     // (Linux grants its home whole: there, a machine's, it's Kuvo Code's own copy of Codex's.)
     const mac = process.platform === "darwin" ? "no" : "yes"
-    expect(said(id)).toBe(`project=yes own=yes state=yes settings=${mac} plugin=${mac} elsewhere=no kuvo=no`)
+    expect(said(id)).toBe(`project=yes own=yes state=yes settings=${mac} plugin=${mac} snapshot=${mac} models=${mac} elsewhere=no kuvo=no`)
+  })
+
+  test("what it runs can't ask the ChatGPT app to run something outside it (its socket in Codex's folder), and still reaches other sockets", async () => {
+    const listen = async (folder: string) => {
+      mkdirSync(folder, { recursive: true })
+      const here = process.cwd()
+      process.chdir(folder)
+      const server = createServer((socket) => socket.end())
+      await new Promise<void>((resolve) => server.listen("s.sock", resolve))
+      process.chdir(here)
+      return server
+    }
+    const app = await listen(join(home, "ipc"))
+    const other = await listen(elsewhere)
+    try {
+      const id = await run([[tries, { app: ["connect", join(home, "ipc", "s.sock")], other: ["connect", join(elsewhere, "s.sock")] }]], { permissions: askFirst })
+      // (Linux can't refuse a socket: a machine has no ChatGPT app.)
+      expect(said(id)).toBe(`app=${process.platform === "darwin" ? "no" : "yes"} other=yes`)
+    } finally {
+      app.close()
+      other.close()
+    }
+  })
+
+  test("a one-off answer from your account's Codex (a title) runs in it too: what it runs can't change Codex's plugins or skills", async () => {
+    mkdirSync(join(home, "plugins"))
+    mkdirSync(join(home, "skills"))
+    codex = new TestCodex(fakeCodex(root, [[tries, {
+      plugin: ["write", join(home, "plugins", "plugin.js")],
+      skill: ["write", join(home, "skills", "SKILL.md")],
+      elsewhere: ["write", join(elsewhere, "e.txt")],
+    }]]), root)
+    const mac = process.platform === "darwin" ? "no" : "yes"
+    expect(await codex.generate("A title for this.")).toBe(`plugin=${mac} skill=${mac} elsewhere=no`)
   })
 
   test("an added account's Codex works in it: it keeps its conversations in your Codex's folder, which its own links to, and still can't change what runs outside", async () => {
@@ -791,6 +848,24 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
     const picture = turnStart().input.find((item: any) => item.type === "localImage")
     expect(picture.path).not.toBe(attached)
     expect(readFileSync(picture.path, "utf8")).toBe("png")
+  })
+
+  test("a picture you attach goes only where Codex reads it, wherever a command before put a link", async () => {
+    const attached = join(kuvo, "Attachments", "shot.png")
+    mkdirSync(dirname(attached))
+    writeFileSync(attached, "png")
+    // A command earlier made the conversation's temporary folder a link to elsewhere.
+    const temporary = join(kuvo, "run", "fence", "tmp", createHash("sha256").update(realpathSync(root)).digest("hex").slice(0, 32))
+    mkdirSync(dirname(temporary), { recursive: true })
+    symlinkSync(elsewhere, temporary)
+    codex = new TestCodex(fakeCodex(root, [[tries, { picture: ["read", "(attached)"], change: ["write", "(attached)"] }]]), root)
+    const agent = codex
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
+    const id = sessions.create({ title: "Codex", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [{ mime: "image/png", uri: pathToFileURL(attached).href, name: "shot.png" }], delivery: "steer" })
+    await until(() => ended(id))
+    expect(said(id)).toBe("picture=yes change=no")
+    expect(readdirSync(elsewhere)).toEqual([])
   })
 })
 

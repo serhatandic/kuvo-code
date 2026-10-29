@@ -10334,6 +10334,7 @@ function fencePolicy(ports = []) {
         `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`
       ],
       writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES])],
+      sockets: inHome([".codex/ipc"]),
       secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...sshKeys(home).map(realish), ...ghHosts(home).map(realish)]
     };
   }
@@ -10509,7 +10510,7 @@ var subpath = (folder) => `(subpath ${quote2(folder)})`;
 var regex = (pattern) => `(regex ${quote2(pattern)})`;
 var param = (name) => `(subpath (param ${quote2(name)}))`;
 var GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)/[^/]+$)`;
-var AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/config\.toml|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
+var AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/(config\.toml|hooks\.json|\.env|rules(/.*)?)|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
 var GUARDED = String.raw`(.*/)?(\.git$|\.git/(${GIT_GUARDED})|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
 function seatbeltProfile(policy, options) {
   const mode = options.mode ?? "enforce";
@@ -10560,6 +10561,8 @@ function seatbeltProfile(policy, options) {
   if (options.agent)
     allow("network-outbound", `(remote tcp (string-append "localhost:" (param "PORT")))`);
   deny("network-outbound", ...policy.kuvo.map((folder) => `(remote unix-socket ${subpath(folder)})`), ...policy.kuvoPatterns.map((pattern) => `(remote unix-socket ${regex(pattern)})`));
+  out.push(";; other apps' sockets that run what they're asked outside it");
+  deny("network-outbound", ...(policy.sockets ?? []).map((folder) => `(remote unix-socket ${subpath(folder)})`));
   allow("network-outbound", `(remote unix-socket (literal (param "SSH")))`);
   out.push(";; what would run outside the sandbox: launchd jobs, apps opened (LaunchServices), Apple Events");
   denyAll("job-creation");
@@ -10621,7 +10624,7 @@ function launcherScript(places) {
       `names() { r=; while IFS= read -r n; do case $n in ''|*/*) ;; *) r="$r|$(escaped "$n" | sed 's/\\\\\\*/[^\\/]*/g')" ;; esac; done <<EOF_NAMES`,
       "$1",
       "EOF_NAMES",
-      `if [ -n "$r" ]; then printf '%s' "\${r#|}"; else printf '%s' -; fi; }`
+      `if [ -n "$r" ]; then printf '%s' "\${r#|}"; else printf '%s' -/; fi; }`
     ] : [],
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => `a${at}=$F/none r${at}=-`),
     `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; ${places.platform === "darwin" ? `eval "r$i=\\$(escaped \\"\\$line\\")"; ` : ""}i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
@@ -10848,7 +10851,8 @@ for (const where of [...policy.writable, work, git, ...allowed]) if (where) gran
 // folders) Landlock can't: what it grants a folder it grants all inside, and the agent makes its
 // own files at the top (its databases' journals, its sign-in written anew). Here its homes are Kuvo
 // Code's own copy of it (a machine's agents' homes are in Kuvo Code's folder), never the one you
-// use yourself, and it runs in the sandbox whenever it's on. Its tools' port needs no rule:
+// use yourself. (What a command leaves there while it is on, Codex reads when the sandbox is off
+// too: you turn it off, and that's yours to judge.) Its tools' port needs no rule:
 // Landlock leaves connections to it open.
 const lines = (text) => (text || "").split("\n").filter((line) => line.startsWith("/"));
 for (const where of lines(process.env.KUVO_FENCE_OWN).slice(0, 4)) grantExcept(where, all, kept);
