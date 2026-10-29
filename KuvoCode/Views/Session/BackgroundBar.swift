@@ -104,6 +104,9 @@ struct BarLine: View {
     var progress: String?
     var detail: Text?
     var accessory: AnyView?
+    /// What stands for what's under it while that's hidden, after how far along it is (a goal's
+    /// tracks).
+    var folded: AnyView?
     let showHelp: String
     let hideHelp: String
     @Binding var isHidden: Bool
@@ -160,6 +163,11 @@ struct BarLine: View {
                         Color.clear.frame(width: 0, height: 0)
                     }
                     .layoutPriority(1)
+                }
+                if isHidden, let folded {
+                    folded
+                        .fixedSize()
+                        .layoutPriority(1)
                 }
                 if !opens, let detail {
                     // All it says beyond its title: cut at its end, never dropped.
