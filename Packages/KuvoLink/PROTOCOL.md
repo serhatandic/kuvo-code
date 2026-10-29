@@ -684,7 +684,7 @@ length, a couple of hours or a month, and it takes it end to end. It's the conve
 ("Goals", below: the agents bridge keeps the bot at it turn after turn), with a plan kept here
 beside it.
 - **Tools** (a bot's conversation only): `propose_goal` (`{goal, title?, steps: [text | {text, phase?,
-  after?: [step number]}],
+  site?, after?: [step number]}],
   checks?: [{text, ok?, detail?, url?, button?}], spend?: [{what, cap, currency?, per?:
   day|week|month|goal}], public?: [text], projects?: [name], ends?, digest?:
   day|week|milestones|none}`) puts the card up, replacing one it proposed before (refused while one
@@ -714,16 +714,18 @@ beside it.
   as the plan's (`paused` with `session` the bot's conversation).
 - **`GET kuvo/work/goals`** and **`GET kuvo/work/goals/events`** (ndjson, now and at each change) →
   `{goals: [{id, bot, name, session, goal, title?, state: proposed|running|done|stopped|declined, steps:
-  [{id, text, state, progress?, note?, phase?, after?, sessions?, resumes?}], checks: [{id, text, detail?,
-  state: ok|needs|failed, by: bot|box, action?: {kind: open|projectsFolder, label, url?}}], spend:
+  [{id, text, state, progress?, note?, phase?, site?, after?, sessions?, resumes?}], checks: [{id, text,
+  detail?, state: ok|needs|failed, by: bot|box, site?, action?: {kind: open|projectsFolder, label, url?}}], spend:
   [{what, cap, currency, per, spent, until?}], public: [{id, text, on}], projects, wake, digest,
   ends?, proposed, started?, ended?, waiting: [{id, kind: you|judgment|outside|ask, text, detail?,
-  url?, session?, at}], paused: [{why, until?, session?}], waited, watching, lastDigest?: {at, text},
+  url?, site?, session?, at}], paused: [{why, until?, session?}], waited, watching, lastDigest?: {at, text},
   report?, alone}]}`: each bot's latest, while it's proposed or running, or ended within a day. Kept
   in `run/work/goals.json`; `kuvo/work/events` moves too. While it's proposed, the box's own checks
   come first: `alone` (failed where this box can't work on it alone yet), `power` (a Mac on battery),
   `projectsFolder` (needs, when the plan makes a project and none is picked). `progress` is given only
-  where the bot measured it; a step without it is in progress, not some share of it.
+  where the bot measured it; a step without it is in progress, not some share of it. `site` (a step,
+  a check or what waits, tied to a service: `stripe.com`, from its page's address or as the bot
+  names it) is for the service's own icon, which each client loads from the site itself.
 - **Alone, or with you there**: a goal goes on alone only where the box's commands run in the
   sandbox (`sandboxOn`, false until it's built in; a test box says yes with `KUVO_TEST_SANDBOX_ON=1`,
   never the real app's, `run.kuvo.code/box`, whose app takes it out). Elsewhere it runs all the same,

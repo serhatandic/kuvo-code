@@ -4589,6 +4589,16 @@ var https = (value) => {
     return null;
   }
 };
+var siteOf = (value) => {
+  if (typeof value !== "string" || !value.trim())
+    return null;
+  try {
+    const host = new URL(value.includes("://") ? value.trim() : `https://${value.trim()}`).hostname.toLowerCase();
+    return /^[a-z0-9.-]+\.[a-z]{2,}$/.test(host) ? host : null;
+  } catch {
+    return null;
+  }
+};
 var newID2 = (prefix) => `${prefix}_${crypto6.randomBytes(9).toString("base64url").replace(/[^A-Za-z0-9]/g, "")}`;
 var PERIODS = ["day", "week", "month", "goal"];
 var DIGESTS = ["day", "week", "milestones", "none"];
@@ -4601,7 +4611,8 @@ function stepGiven(each) {
   if (!said)
     return null;
   const after = Array.isArray(each.after) ? each.after.filter((one) => Number.isInteger(one) && one >= 1) : [];
-  return { text: said, ...text(each.phase, 80) ? { phase: text(each.phase, 80) } : {}, ...after.length ? { after } : {} };
+  const site = siteOf(each.site);
+  return { text: said, ...text(each.phase, 80) ? { phase: text(each.phase, 80) } : {}, ...site ? { site } : {}, ...after.length ? { after } : {} };
 }
 var keptSteps = (given, from = 0) => given.filter((each) => Boolean(each)).map((each, at) => {
   const { after, ...rest } = each;
@@ -4632,7 +4643,8 @@ function proposeGoal(bot, given, file = GOALS_FILE) {
       continue;
     const url = https(each.url);
     const state = each.ok === true ? "ok" : "needs";
-    checks.push({ id: `c${checks.length + 1}`, text: said, ...text(each.detail, 300) ? { detail: text(each.detail, 300) } : {}, state, by: "bot", ...url && state === "needs" ? { action: { kind: "open", label: text(each.button, 30) ?? "Open", url } } : {} });
+    const site = siteOf(each.site) ?? siteOf(url);
+    checks.push({ id: `c${checks.length + 1}`, text: said, ...text(each.detail, 300) ? { detail: text(each.detail, 300) } : {}, state, by: "bot", ...site ? { site } : {}, ...url && state === "needs" ? { action: { kind: "open", label: text(each.button, 30) ?? "Open", url } } : {} });
   }
   const spend = [];
   for (const each of Array.isArray(given.spend) ? given.spend.slice(0, 10) : []) {
@@ -4980,7 +4992,8 @@ function goalProgress(bot, given, file = GOALS_FILE) {
     addWaiting(bot, { kind: "outside", text: `Spent on ${what}, which isn't in the plan` }, file);
   if (isObject(given.waiting)) {
     const url = https(given.waiting.url);
-    addWaiting(bot, { kind: given.waiting.kind, text: text(given.waiting.text, 300), ...text(given.waiting.detail, 500) ? { detail: text(given.waiting.detail, 500) } : {}, ...url ? { url } : {} }, file);
+    const site = siteOf(given.waiting.site) ?? siteOf(url);
+    addWaiting(bot, { kind: given.waiting.kind, text: text(given.waiting.text, 300), ...text(given.waiting.detail, 500) ? { detail: text(given.waiting.detail, 500) } : {}, ...url ? { url } : {}, ...site ? { site } : {} }, file);
     notes.push("kept as waiting for the user: carry on with what doesn't depend on it");
   }
   noteWorkChanged(bot);
@@ -8837,6 +8850,7 @@ var GOAL_STEP = object({
   "progress?": number,
   "note?": string,
   "phase?": string,
+  "site?": string,
   "after?": list(string),
   "sessions?": list(string),
   "resumes?": number
@@ -8847,6 +8861,7 @@ var GOAL_CHECK = object({
   "detail?": string,
   state: words("ok", "needs", "failed"),
   by: words("bot", "box"),
+  "site?": string,
   "action?": object({ kind: words("open", "projectsFolder"), label: string, "url?": string })
 });
 var GOAL_WAITING = object({
@@ -8855,6 +8870,7 @@ var GOAL_WAITING = object({
   text: string,
   "detail?": string,
   "url?": string,
+  "site?": string,
   "session?": string,
   at: number
 });

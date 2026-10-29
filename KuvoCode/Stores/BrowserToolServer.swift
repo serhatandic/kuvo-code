@@ -261,14 +261,15 @@ enum BrowserTools {
         tool("list_projects", "List the user's projects here: each one's folder, whether it's a git repository, and who made it, and where new projects go."),
         tool("propose_goal", "For a bot, when the user's message is a goal of many steps (hours, days or weeks of work), or comes as [Goal]: put its plan to them on one card. Plan it and check what it needs first. Never for a small or quick request. The user starts it from the card, or says not now; you're told [Goal started] when they start it, and never start before. Proposing again replaces the card.",
              ["goal": ["type": "string", "description": "The goal, in the user's words."],
-              "steps": ["type": "array", "items": ["anyOf": [["type": "string"], ["type": "object", "properties": ["text": ["type": "string"], "phase": ["type": "string", "description": "The phase it's in, like Build or Launch, for a long plan."], "after": ["type": "array", "items": ["type": "integer"], "description": "The steps it waits for, by number; leave it out for one that can start now."]], "required": ["text"]]]], "description": "The plan's steps, in order, a few words each. Steps that don't wait for each other run side by side."],
+              "steps": ["type": "array", "items": ["anyOf": [["type": "string"], ["type": "object", "properties": ["text": ["type": "string"], "phase": ["type": "string", "description": "The phase it's in, like Build or Launch, for a long plan."], "after": ["type": "array", "items": ["type": "integer"], "description": "The steps it waits for, by number; leave it out for one that can start now."], "site": ["type": "string", "description": "The service it's done at, by its site (stripe.com, cloudflare.com), for its icon; leave it out for a step of your own."]], "required": ["text"]]]], "description": "The plan's steps, in order, a few words each. Steps that don't wait for each other run side by side."],
               "title": ["type": "string", "description": "A short name for the goal, like \"Driftwood's landing page\"."],
               "checks": ["type": "array", "items": ["type": "object", "properties": [
                   "text": ["type": "string", "description": "What's checked, like \"Stripe key works\", or what the user must do, like \"Add a Cloudflare API token\"."],
                   "ok": ["type": "boolean", "description": "true when it's ready; leave it out for what the user must do."],
                   "detail": ["type": "string", "description": "A few words more, like what it's for."],
                   "url": ["type": "string", "description": "An https page where the user does it."],
-                  "button": ["type": "string", "description": "The button's word for that page, like Add or Open Stripe."]], "required": ["text"]],
+                  "button": ["type": "string", "description": "The button's word for that page, like Add or Open Stripe."],
+                  "site": ["type": "string", "description": "The service it's about, by its site, when there's no url."]], "required": ["text"]],
                  "description": "What you checked the goal needs: tools, keys, sign-ins, services."],
               "spend": ["type": "array", "items": ["type": "object", "properties": [
                   "what": ["type": "string"], "cap": ["type": "number"], "currency": ["type": "string", "description": "USD by default."],

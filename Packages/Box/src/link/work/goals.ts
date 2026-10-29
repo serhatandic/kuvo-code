@@ -205,18 +205,29 @@ const https = (value: unknown): string | null => {
     return null;
   }
 };
+// A service's site, for its icon: an address's host, or a site named (`stripe.com`).
+const siteOf = (value: unknown): string | null => {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const host = new URL(value.includes("://") ? value.trim() : `https://${value.trim()}`).hostname.toLowerCase();
+    return /^[a-z0-9.-]+\.[a-z]{2,}$/.test(host) ? host : null;
+  } catch {
+    return null;
+  }
+};
 const newID = (prefix: string) => `${prefix}_${crypto.randomBytes(9).toString("base64url").replace(/[^A-Za-z0-9]/g, "")}`;
 const PERIODS = ["day", "week", "month", "goal"] as const;
 const DIGESTS = ["day", "week", "milestones", "none"] as const;
 
 // A step as given: its words, or {text, phase, after: [step numbers]}.
-function stepGiven(each: unknown): (Pick<GoalStepShape, "text" | "phase"> & { after?: number[] }) | null {
+function stepGiven(each: unknown): (Pick<GoalStepShape, "text" | "phase" | "site"> & { after?: number[] }) | null {
   if (typeof each === "string") return text(each, 300) ? { text: text(each, 300)! } : null;
   if (!isObject(each)) return null;
   const said = text(each.text, 300);
   if (!said) return null;
   const after = Array.isArray(each.after) ? each.after.filter((one): one is number => Number.isInteger(one) && (one as number) >= 1) : [];
-  return { text: said, ...(text(each.phase, 80) ? { phase: text(each.phase, 80)! } : {}), ...(after.length ? { after } : {}) };
+  const site = siteOf(each.site);
+  return { text: said, ...(text(each.phase, 80) ? { phase: text(each.phase, 80)! } : {}), ...(site ? { site } : {}), ...(after.length ? { after } : {}) };
 }
 // Steps as kept: ids in order, and what each comes after by id (only steps before it).
 const keptSteps = (given: ReturnType<typeof stepGiven>[], from = 0): GoalStepShape[] => given.filter((each): each is NonNullable<typeof each> => Boolean(each)).map((each, at) => {
@@ -247,7 +258,8 @@ export function proposeGoal(bot: { bot: string; name: string; session: string },
     if (!said) continue;
     const url = https(each.url);
     const state = each.ok === true ? "ok" : "needs";
-    checks.push({ id: `c${checks.length + 1}`, text: said, ...(text(each.detail, 300) ? { detail: text(each.detail, 300)! } : {}), state, by: "bot", ...(url && state === "needs" ? { action: { kind: "open" as const, label: text(each.button, 30) ?? "Open", url } } : {}) });
+    const site = siteOf(each.site) ?? siteOf(url);
+    checks.push({ id: `c${checks.length + 1}`, text: said, ...(text(each.detail, 300) ? { detail: text(each.detail, 300)! } : {}), state, by: "bot", ...(site ? { site } : {}), ...(url && state === "needs" ? { action: { kind: "open" as const, label: text(each.button, 30) ?? "Open", url } } : {}) });
   }
   const spend: KeptGoal["spend"] = [];
   for (const each of Array.isArray(given.spend) ? given.spend.slice(0, 10) : []) {
@@ -578,7 +590,8 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
   for (const what of unplanned) addWaiting(bot, { kind: "outside", text: `Spent on ${what}, which isn't in the plan` }, file);
   if (isObject(given.waiting)) {
     const url = https(given.waiting.url);
-    addWaiting(bot, { kind: given.waiting.kind as (typeof WAITING_KINDS)[number], text: text(given.waiting.text, 300)!, ...(text(given.waiting.detail, 500) ? { detail: text(given.waiting.detail, 500)! } : {}), ...(url ? { url } : {}) }, file);
+    const site = siteOf(given.waiting.site) ?? siteOf(url);
+    addWaiting(bot, { kind: given.waiting.kind as (typeof WAITING_KINDS)[number], text: text(given.waiting.text, 300)!, ...(text(given.waiting.detail, 500) ? { detail: text(given.waiting.detail, 500)! } : {}), ...(url ? { url } : {}), ...(site ? { site } : {}) }, file);
     notes.push("kept as waiting for the user: carry on with what doesn't depend on it");
   }
   noteWorkChanged(bot);

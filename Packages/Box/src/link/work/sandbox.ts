@@ -2,8 +2,9 @@
 // its bot answering its sessions' asks within the rules, only where the commands its sessions run are
 // kept to their folders (the sandbox), so nothing they run while you're away reaches your keys, your
 // other projects or Kuvo Code itself. Until the sandbox is built into this box, a goal runs with you
-// there: what its sessions ask waits for you. Once it is, this reads `fenceState().on`
-// (`../fence/state.ts`): every command here runs in the sandbox.
+// there: what its sessions ask waits for you. Once it is, this reads `fenceState()`
+// (`../fence/state.ts`): `on`, every command the engine runs here goes through the sandbox, and
+// for a bot on a coding agent (whose CLI runs its own commands) `agents` too.
 
 import path from "node:path";
 import { IN_TEST_FOLDER, K } from "../home";

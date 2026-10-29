@@ -5788,6 +5788,7 @@
             "progress?": "number",
             "note?": "string",
             "phase?": "string",
+            "site?": "string",
             "after?": {
              "list": "string"
             },
@@ -5827,6 +5828,7 @@
               }
              ]
             },
+            "site?": "string",
             "action?": {
              "object": {
               "kind": {
@@ -5929,6 +5931,7 @@
             "text": "string",
             "detail?": "string",
             "url?": "string",
+            "site?": "string",
             "session?": "string",
             "at": "number"
            }
@@ -6025,6 +6028,7 @@
             "progress?": "number",
             "note?": "string",
             "phase?": "string",
+            "site?": "string",
             "after?": {
              "list": "string"
             },
@@ -6064,6 +6068,7 @@
               }
              ]
             },
+            "site?": "string",
             "action?": {
              "object": {
               "kind": {
@@ -6166,6 +6171,7 @@
             "text": "string",
             "detail?": "string",
             "url?": "string",
+            "site?": "string",
             "session?": "string",
             "at": "number"
            }
@@ -6281,6 +6287,7 @@
            "progress?": "number",
            "note?": "string",
            "phase?": "string",
+           "site?": "string",
            "after?": {
             "list": "string"
            },
@@ -6320,6 +6327,7 @@
              }
             ]
            },
+           "site?": "string",
            "action?": {
             "object": {
              "kind": {
@@ -6422,6 +6430,7 @@
            "text": "string",
            "detail?": "string",
            "url?": "string",
+           "site?": "string",
            "session?": "string",
            "at": "number"
           }

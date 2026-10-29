@@ -94,7 +94,7 @@ export const WORK_CHANGED = object({ changed: map(number) });
 
 /** A step of a goal's plan, a track of its own: where it stands, how far along where the bot can
  * measure it (0 to 1; left out where it can't, never guessed), a word on it, the phase it's in, the
- * steps it comes after (by id), the sessions working on it, and, while it waits for a limit to
+ * service it's done at (`site`, its address, for its icon), the steps it comes after (by id), the sessions working on it, and, while it waits for a limit to
  * reset, until when (ms). */
 export const GOAL_STEP = object({
   id: string,
@@ -103,6 +103,7 @@ export const GOAL_STEP = object({
   "progress?": number,
   "note?": string,
   "phase?": string,
+  "site?": string,
   "after?": list(string),
   "sessions?": list(string),
   "resumes?": number,
@@ -118,6 +119,7 @@ export const GOAL_CHECK = object({
   "detail?": string,
   state: words("ok", "needs", "failed"),
   by: words("bot", "box"),
+  "site?": string,
   "action?": object({ kind: words("open", "projectsFolder"), label: string, "url?": string }),
 });
 
@@ -130,6 +132,7 @@ export const GOAL_WAITING = object({
   text: string,
   "detail?": string,
   "url?": string,
+  "site?": string,
   "session?": string,
   at: number,
 });
