@@ -701,7 +701,8 @@ beside it.
   that isn't a bot's.
 - **Only you start it**: `POST kuvo/work/goals/<id>` from a client, `{action: start, public?: {<id>:
   bool}, wake?, digest?, ends?, spend?: [{cap?, per?}] (by line)}`, `{action: decline}` or `{action:
-  stop}` → `{goal}`; while it runs, `{action: change, …the same but start's}` (a cap raised past what's
+  stop}` → `{goal}` (`ends: null` starts it with no end, taking away the one the bot proposed; left
+  out, the bot's stands); while it runs, `{action: change, …the same but start's}` (a cap raised past what's
   spent lets what spends go on; the bot is told `[Goal changed] …`) and `{action: clear, waiting:
   <id>}` (what waited, put away). An end written without a zone (`2026-11-30T18:00`) is in yours
   (`KUVO_TZ`, else the computer's). Never a tool, an agent's message or another computer's mail. 400 for one in the

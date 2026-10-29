@@ -278,6 +278,23 @@ test("only you start the goal, with your switches, its end and its caps; the bot
   assert.match((await tool("propose_goal", PLAN, { session: "ses_site" })).text, /Only a bot takes a goal/);
 });
 
+test("an end the bot proposed is taken away when you start with no end (ends: null), and kept when you say nothing of it", async () => {
+  const proposedEnd = Date.now() + 3 * 86_400_000;
+  await tool("propose_goal", { ...PLAN, ends: proposedEnd });
+  const [card] = await goals();
+  assert.equal(card.ends, proposedEnd);
+  const started = await route("POST", `kuvo/work/goals/${card.id}`, { action: "start", ends: null });
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  assert.equal(started.body.goal.ends, undefined, "None on the card: no end");
+  assert.doesNotMatch(prompts.at(-1).text, /It ends at/);
+  assert.equal((await route("POST", `kuvo/work/goals/${card.id}`, { action: "stop" })).status, 200);
+
+  await tool("propose_goal", { ...PLAN, ends: proposedEnd });
+  const [again] = (await goals()).filter(each => each.state === "proposed");
+  const kept = await route("POST", `kuvo/work/goals/${again.id}`, { action: "start" });
+  assert.equal(kept.body.goal.ends, proposedEnd, "nothing said of it: the bot's end stands");
+});
+
 test("/goal in a bot's chat asks it for a plan at once, and Not Now tells it", async () => {
   const asked = await route("POST", "kuvo/work/goals/ask", { session: "ses_pixel", goal: "Ship the Driftwood site this week" });
   assert.equal(asked.status, 200);

@@ -4738,6 +4738,8 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
       goal.digest = given.digest;
     if (ends !== undefined)
       goal.ends = ends;
+    if (given.ends === null)
+      delete goal.ends;
     goal.spend = capsGiven(goal.spend, given.spend);
     freshPeriods(goal);
     return goal;

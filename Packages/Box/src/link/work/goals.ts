@@ -315,7 +315,7 @@ export interface GoalRefusal {
 }
 
 /** Your answer to the goal `id`: `start` (with your switches for its public steps, `public: {id:
- * on}`, `wake`, `digest`, an end, `ends`, and each spend line's cap and period, `spend: [{cap,
+ * on}`, `wake`, `digest`, an end, `ends` (null for none, taking away the bot's), and each spend line's cap and period, `spend: [{cap,
  * per}]`), `decline` or `stop`. */
 export async function answerGoal(id: string, given: Record<string, unknown>, targets: () => Target[], file = GOALS_FILE): Promise<{ goal: GoalPlanShape } | { refused: GoalRefusal }> {
   const action = given.action;
@@ -349,6 +349,8 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
     goal.wake = given.wake === true;
     if (DIGESTS.includes(given.digest as (typeof DIGESTS)[number])) goal.digest = given.digest as (typeof DIGESTS)[number];
     if (ends !== undefined) goal.ends = ends;
+    // No end on the card (null): the bot's proposed one goes.
+    if (given.ends === null) delete goal.ends;
     goal.spend = capsGiven(goal.spend, given.spend);
     freshPeriods(goal);
     return goal;
