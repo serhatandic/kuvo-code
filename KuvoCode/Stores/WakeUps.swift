@@ -435,32 +435,46 @@ final class WakeUps {
 
     /// What each machine was given: this copy's kuvo-wake, and your time zone.
     @ObservationIgnored private var shared: [String: String] = [:]
+    /// Each machine's sessions that kept wake-ups when it was last read, by key.
+    @ObservationIgnored private var readOn: [String: Set<String>] = [:]
 
     /// Gives a machine this copy's kuvo-wake, once a run of the app (an engine started before has
     /// an older one, which its watchdog runs), and your time zone for its sessions' wake-ups, in
-    /// the folder above theirs, whenever it changes.
+    /// the folder above theirs, whenever it changes; and reads its sessions' wake-ups again, as it
+    /// connects and each minute after (one changed there, from a phone, shows here).
     func share(with engine: MachineEngine) async {
         let machine = engine.machine.id
         let zone = TimeZone.current.identifier
-        guard shared[machine] != zone else { return }
-        try? await Wakes.install(on: engine.machine.connection)
-        let root = Self.shell(Self.machineRoot)
-        var script = "mkdir -p \(root) && printf '%s' \(SSHConnection.quoted(zone)) >\(root)/timezone"
-        if let rules = Self.zoneRules(zone) {
-            script += " && { printf '%s' \(SSHConnection.quoted(rules.base64EncodedString())) | base64 -d >\(root)/zoneinfo 2>/dev/null || rm -f \(root)/zoneinfo; }"
+        if shared[machine] != zone {
+            try? await Wakes.install(on: engine.machine.connection)
+            let root = Self.shell(Self.machineRoot)
+            var script = "mkdir -p \(root) && printf '%s' \(SSHConnection.quoted(zone)) >\(root)/timezone"
+            if let rules = Self.zoneRules(zone) {
+                script += " && { printf '%s' \(SSHConnection.quoted(rules.base64EncodedString())) | base64 -d >\(root)/zoneinfo 2>/dev/null || rm -f \(root)/zoneinfo; }"
+            }
+            if await Task.detached(operation: { RemoteShell.run(script, on: machine) }).value != nil { shared[machine] = zone }
         }
-        if await Task.detached(operation: { RemoteShell.run(script, on: machine) }).value != nil { shared[machine] = zone }
         await readSessions(on: machine)
     }
 
-    /// The wake-ups of a machine's sessions that keep some, read as it connects: the sidebar's
-    /// signs, and the phone's Now and Cancel, have them without their conversations being opened.
+    /// The wake-ups of a machine's sessions that keep some: the sidebar's signs, and the phone's
+    /// Now and Cancel, have them without their conversations being opened. One that keeps none
+    /// now (all sent or canceled there) has none here either.
     private func readSessions(on machine: String) async {
         struct Listing: Decodable { struct Entry: Decodable { var session: String }; var sessions: [Entry] }
-        guard let listing = try? await app?.box(machine).value(Listing.self, "GET", "kuvo/wakes") else { return }
+        guard let app, let listing = try? await app.box(machine).value(Listing.self, "GET", "kuvo/wakes") else { return }
+        var keys: Set<String> = []
         for entry in listing.sessions {
-            if let session = app?.workspace.session(entry.session), RemoteFolder.machine(of: session.location.directory) == machine { await read(Self.owner(of: session)) }
+            if let session = app.workspace.session(entry.session), RemoteFolder.machine(of: session.location.directory) == machine {
+                let owner = Self.owner(of: session)
+                keys.insert(owner.key)
+                await read(owner)
+            }
         }
+        for key in readOn[machine, default: []].subtracting(keys) {
+            if let session = app.workspace.session(key), RemoteFolder.machine(of: session.location.directory) == machine { forget(key: key) }
+        }
+        readOn[machine] = keys
     }
 
     /// A time zone's rules as this Mac has them (a TZif file, which Linux reads too), if small.

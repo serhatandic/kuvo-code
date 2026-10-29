@@ -150,6 +150,32 @@ import Testing
         #expect(!app.chats.discussing.contains("grp_conn000001"))
     }
 
+    /// A session's wake-up there, canceled from a phone (straight to the machine) while it's
+    /// connected: its mark goes from the sidebar at the next look, not at the next launch.
+    @Test func aMachinesWakeUpCanceledThereLeavesTheSidebar() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        let session = try #require(sessions(on: id).first)
+        // Its box answers each route with this: the list of sessions with wake-ups, and the
+        // session's own (each read takes what it knows of it).
+        let answer = WakesThere()
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            if script.contains(" box route") { return answer.routed }
+            return script.contains("timezone") ? "" : nil
+        }
+        let due = Wakes.name(due: .now.addingTimeInterval(7200), every: nil)
+        answer.set(["sessions": [["session": session.id, "next": 1, "watching": false]], "wakes": [["id": due, "note": "Check the deploy"]], "watches": [], "paused": false])
+        await app.wakeUps.share(with: engine)
+        #expect(app.wakeUps.wakes[session.id]?.map(\.note) == ["Check the deploy"])
+
+        answer.set(["sessions": [], "wakes": [], "watches": [], "paused": false])
+        await app.wakeUps.share(with: engine)
+        #expect(app.wakeUps.wakes[session.id]?.isEmpty != false)
+    }
+
     /// Removed while its engine starts over (its Settings › Engine), before it connects again: it
     /// doesn't connect again, and nothing more goes there.
     @Test func removedWhileItsEngineStartsOverItDoesntConnectAgain() async throws {
@@ -397,6 +423,21 @@ import Testing
 @MainActor
 final class Reachable {
     var apis: [String: OpenCodeAPI] = [:]
+}
+
+/// What a machine's box answers its routes, as `kuvo-link.js box route` prints it.
+nonisolated final class WakesThere: @unchecked Sendable {
+    private let lock = NSLock()
+    private var body = "{}"
+
+    func set(_ json: [String: Any]) {
+        let text = String(decoding: try! JSONSerialization.data(withJSONObject: json), as: UTF8.self)
+        lock.withLock { body = text }
+    }
+
+    var routed: String {
+        lock.withLock { String(decoding: try! JSONSerialization.data(withJSONObject: ["status": 200, "body": body]), as: UTF8.self) }
+    }
 }
 
 /// What went to machines over SSH, by the address it went to.
