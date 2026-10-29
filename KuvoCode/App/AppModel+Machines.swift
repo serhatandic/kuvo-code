@@ -219,7 +219,7 @@ extension AppModel {
         default: break
         }
         engine.disconnect()
-        workspace.forget(engine.machine.id)
+        connectionClosed(engine.machine.id)
         // COMPAT(0.7 engine-stop): Connect Now starts an engine an older Mac stopped. Goes 3 months after 0.8.0.
         if engine.isStopped { engine.startWanted = true }
         return connect(engine)
@@ -284,7 +284,7 @@ extension AppModel {
     /// Starts a machine's engine stopped on purpose (Start), and connects to it.
     func startEngine(_ engine: MachineEngine) {
         engine.disconnect()
-        workspace.forget(engine.machine.id)
+        connectionClosed(engine.machine.id)
         engine.startWanted = true
         connect(engine)
     }
@@ -293,7 +293,7 @@ extension AppModel {
     @discardableResult
     func restartEngine(_ engine: MachineEngine) -> Task<Void, Never> {
         engine.disconnect()
-        workspace.forget(engine.machine.id)
+        connectionClosed(engine.machine.id)
         return Task {
             _ = try? await RemoteServer.restartEngine(on: engine.machine.connection)
             await connect(engine).value
@@ -326,7 +326,7 @@ extension AppModel {
         engine.movingHomeFrom = engine.otherMac ?? .init()
         defer { engine.movingHomeFrom = nil }
         engine.disconnect()
-        workspace.forget(engine.machine.id)
+        connectionClosed(engine.machine.id)
         engine.takingHome = true
         await connect(engine).value
         engine.takingHome = false
@@ -393,8 +393,7 @@ extension AppModel {
             self.connect(engine)
         }
         engine.onExit = { [weak self] in
-            self?.workspace.forget(machine)
-            self?.boxGroups.disconnected(machine)
+            self?.connectionClosed(machine)
             // One way back at a time: a connection lost while one is tried is that one's to retry.
             guard !engine.isRetrying else { return }
             engine.isRetrying = true
@@ -494,7 +493,14 @@ extension AppModel {
         // What runs for its connection ends now, a test copy's too, whose engine stops after.
         engine.endConnection()
         if leavesMachinesRunning || workspace.isRunning(on: engine.machine.id) { engine.disconnect() } else { Task { await engine.shutDown() } }
-        workspace.forget(engine.machine.id)
+        connectionClosed(engine.machine.id)
+    }
+
+    /// Its connection closed here, lost or on purpose: its sessions' live state goes, and its group
+    /// chats show as last seen, nothing talking, until it's back.
+    private func connectionClosed(_ machine: String) {
+        workspace.forget(machine)
+        boxGroups.disconnected(machine)
     }
 
     /// Stops a machine's engine and forgets the machine, and its sessions' tabs with it. Its

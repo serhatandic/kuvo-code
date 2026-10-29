@@ -135,6 +135,21 @@ import Testing
         #expect(Array(ssh.scripts(to: one).dropFirst(sent)) == [], "nothing went to the one disconnected")
     }
 
+    /// A group chat there talking when you disconnect: it shows as last seen, nothing talking (no Stop that can't reach it), as when the connection is lost.
+    @Test func disconnectedItsGroupChatsStopShowingTalk() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        let group: [String: Any] = ["id": "grp_conn000001", "name": "Crew", "members": ["bot_pal"], "seats": [:], "heard": [:], "created": "2026-10-21T09:00:00Z"]
+        app.boxGroups.handle(try machine.event("kuvo.group.updated", ["id": "grp_conn000001", "group": group, "status": "active",
+                                                                      "state": ["speaking": "bot_pal", "discussing": true, "paused": false]]), machine: id)
+        #expect(app.chats.speaking["grp_conn000001"] == "bot_pal")
+        app.disconnect(engine)
+        #expect(app.chats.speaking["grp_conn000001"] == nil)
+        #expect(!app.chats.discussing.contains("grp_conn000001"))
+    }
+
     /// Removed while its engine starts over (its Settings › Engine), before it connects again: it
     /// doesn't connect again, and nothing more goes there.
     @Test func removedWhileItsEngineStartsOverItDoesntConnectAgain() async throws {
