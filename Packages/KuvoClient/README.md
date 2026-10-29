@@ -36,6 +36,13 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
 - `ReviewList`: "/review"'s lists over the message field (What to review, a commit or a folder for
   it, Look for), their rows and sizes from what the box measured, and loading those.
 
+## ClientVault
+
+A computer's vault as its box answers `kuvo/vault` (KuvoLink's PROTOCOL.md, "Vault"): its items
+without their values, who may use which (`Vault.how`, a bot's own `items(of:)`), the sign-ins for a
+page's site, what agents ask for (`VaultAsk`, a card's title), the activity as one sentence each
+(`VaultActivity.sentence`), and the routes' paths. Rules and shapes only: no views, no app state.
+
 ## ClientChanges
 
 A project's changes as both apps' Changes show them, from git's diff (a box's `kuvo/git/changes`,

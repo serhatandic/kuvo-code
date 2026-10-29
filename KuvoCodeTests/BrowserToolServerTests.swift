@@ -84,6 +84,24 @@ import Testing
         #expect(((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? [String: Any])?["code"] as? Int == -32700)
     }
 
+    /// While this Mac's vault isn't open to agents (their commands don't run sandboxed yet), they
+    /// aren't offered what only the vault could answer, so they never call a tool that sends them
+    /// back to the one they just called: no browser_fill, no vault item to name when signing in.
+    @Test func withoutTheVaultOpenToAgentsTheyArentOfferedItsFills() async throws {
+        let url = try await server.start()
+        let start = try await call(url, token: token, body: ["jsonrpc": "2.0", "id": 1, "method": "initialize", "params": ["protocolVersion": "2025-06-18"]])
+        let instructions = ((start.json as? [String: Any])?["result"] as? [String: Any])?["instructions"] as? String ?? ""
+        #expect(instructions.contains("browser_sign_in"))
+        #expect(!instructions.contains("vault_items"))
+        let list = try await call(url, token: token, body: ["jsonrpc": "2.0", "id": 2, "method": "tools/list"])
+        let tools = ((list.json as? [String: Any])?["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
+        #expect(!tools.contains { $0["name"] as? String == "browser_fill" })
+        let signIn = try #require(tools.first { $0["name"] as? String == "browser_sign_in" })
+        let properties = (signIn["inputSchema"] as? [String: Any])?["properties"] as? [String: Any] ?? [:]
+        #expect(properties["password"] != nil)
+        #expect(properties["item"] == nil)
+    }
+
     /// The engine is told to call its tools directly (not behind Code Mode), with no sign-in.
     @Test func theEngineCallsItsToolsDirectly() async throws {
         _ = try await server.start()

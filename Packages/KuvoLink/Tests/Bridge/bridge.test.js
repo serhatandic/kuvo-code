@@ -772,6 +772,21 @@ test("a relay that isn't there ends the attempt, so the bridge tries again", asy
   assert.ok(Date.now() - started < 5000);
 });
 
+test("a box whose relay connection drops right after its welcome waits longer each time, as one that never came up; one that held a minute tries again soon", () => {
+  // Another copy on the same address replacing it each time, say: it doesn't come back each second.
+  let attempt = 0;
+  const waits = [];
+  for (let i = 0; i < 4; i++) {
+    const next = link.nextTry(attempt, true, 2_000);
+    attempt = next.attempt;
+    waits.push(next.wait);
+  }
+  assert.deepEqual(waits, [2_000, 4_000, 8_000, 16_000]);
+  assert.deepEqual(link.nextTry(attempt, false, 0), { attempt: 5, wait: 32_000 }, "never came up: the same");
+  assert.deepEqual(link.nextTry(attempt, true, 60_000), { attempt: 0, wait: 1_000 }, "held a minute: well again");
+  assert.equal(link.nextTry(20, false, 0).wait, 60_000, "a minute at most");
+});
+
 test("a session the host doesn't know is closed, and tampering ends one", async () => {
   const hostKey = link.newKey();
   const host = new link.LinkHost({ key: hostKey, hello: { v: 1, kind: "machine", name: "m", app: "0" }, authorize: () => true, handle: async function* () {} });
@@ -1211,6 +1226,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "agent-tools": ["POST", "kuvo/agent-tools"], "sessions.start": ["POST", "kuvo/sessions"],
     // What its agents' mail says it takes (a letter that reads a conversation), on the agents' tools.
     "letters-read": ["POST", "kuvo/agent-tools"], queue: ["GET", "kuvo/sessions/ses_none/queue"], work: ["GET", "kuvo/work"], "work.projects": ["GET", "kuvo/work/settings"],
+    vault: ["GET", "kuvo/vault/tools"],
   };
   const named = (await answer(handle, "GET", "kuvo/info")).json.features;
   assert.deepEqual([...named].sort(), Object.keys(routes).sort(), "every name has a route here, and every route here its name");

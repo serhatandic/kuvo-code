@@ -219,7 +219,8 @@ private struct FileTreeView: View {
             .frame(height: 30)
             .background(Color.primary.opacity(0.05), in: .rect(cornerRadius: 8))
             .padding(10)
-            .task(id: tree.filter.isEmpty) { if !tree.filter.isEmpty { await tree.loadAllFiles() } }
+            // Filtering, the files are read (again, after Reload).
+            .task(id: !tree.filter.isEmpty && tree.allFiles == nil) { if !tree.filter.isEmpty { await tree.loadAllFiles() } }
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {

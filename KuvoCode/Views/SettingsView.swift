@@ -153,9 +153,9 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 
     case general, appearance, notifications, shortcuts, phone
     case accounts, auto, usage
-    case agents, permissions, commands, skills, integrations, mcp, engine
+    case agents, permissions, commands, skills, integrations, vault, mcp, engine
     case git, worktrees, machines
-    case panel, browser, passwords
+    case panel, browser
     case privacy, storage, archived
 
     var id: String { rawValue }
@@ -167,7 +167,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 
     /// The pages each computer has of its own, a machine as this Mac: its engine's settings, its
     /// accounts and its models. The rest are the app's, on this Mac.
-    static let boxPages: [SettingsPage] = [.accounts, .auto, .agents, .permissions, .commands, .skills, .integrations, .mcp, .engine, .worktrees]
+    static let boxPages: [SettingsPage] = [.accounts, .auto, .agents, .permissions, .commands, .skills, .integrations, .vault, .mcp, .engine, .worktrees]
 
     /// The pages that are a computer's engine settings, and nothing else: they wait for them to be
     /// read. (Engine shows its status too, and says so in a group.)
@@ -197,9 +197,9 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         switch self {
         case .general, .appearance, .notifications, .shortcuts, .phone: .app
         case .accounts, .auto, .usage: .models
-        case .agents, .permissions, .commands, .skills, .integrations, .mcp, .engine: .agent
+        case .agents, .permissions, .commands, .skills, .integrations, .vault, .mcp, .engine: .agent
         case .git, .worktrees, .machines: .projects
-        case .panel, .browser, .passwords: .panel
+        case .panel, .browser: .panel
         case .privacy, .storage, .archived: .data
         }
     }
@@ -229,7 +229,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .machines: "Machines"
         case .panel: "Panel"
         case .browser: "Browser"
-        case .passwords: "Passwords"
+        case .vault: "Vault"
         }
     }
 
@@ -258,7 +258,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .machines: "server.rack"
         case .panel: "sidebar.right"
         case .browser: "safari"
-        case .passwords: "key"
+        case .vault: "lock.shield"
         }
     }
 
@@ -288,7 +288,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .machines: "Linux servers whose sessions run there, over SSH."
         case .panel: "What the side panel starts with, and its new tab page."
         case .browser: "The panel's browser: search, history and website data."
-        case .passwords: "Sign-ins the panel's browser saved, in your Keychain."
+        case .vault: "Sign-ins, keys, files and notes your agents use without ever seeing them."
         }
     }
 
@@ -318,7 +318,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .machines: "remote ssh server vps linux"
         case .panel: "side panel new tab page tools suggestions"
         case .browser: "search engine history cookies website data sites"
-        case .passwords: "logins sign in keychain autofill"
+        case .vault: "vault passwords logins sign in keychain autofill secrets api keys files notes"
         }
     }
 
@@ -353,7 +353,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .machines: MachinesSettings()
         case .panel: PanelSettingsView()
         case .browser: BrowserSettings()
-        case .passwords: PasswordsSettings()
+        case .vault: VaultSettings()
         }
     }
 }

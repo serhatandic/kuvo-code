@@ -16,6 +16,10 @@ import KuvoLink
 @MainActor
 final class HostInterface {
     private let password = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+    /// What the vault's calls need besides the password, which is in a file an agent's command can
+    /// read: given to this Mac's box alone, in its environment as it starts (`boxEnvironment`), which
+    /// no other process can read, and never written down.
+    let vaultSecret = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
     private lazy var server: LoopbackServer = {
         let server = LoopbackServer { [weak self] request in await self?.respond(to: request) ?? .init(status: 503) }
         // Gone by itself: started again, so the box's keys aren't out of reach until the app quits;
@@ -140,10 +144,30 @@ final class HostInterface {
 
     /// The box's nonce, with where it reached it (`127.0.0.1:<port>`), signed with the password
     /// (HMAC-SHA256, hex), as it checks it: relayed from another port, it's wrong there.
-    nonisolated static func proof(of nonce: String, at address: String, password: String) -> String {
-        let signed = Data("kuvo-host-hello\u{0}\(nonce)\u{0}\(address)".utf8)
+    nonisolated static func proof(of nonce: String, at address: String, password: String, tag: String = "kuvo-host-hello") -> String {
+        let signed = Data("\(tag)\u{0}\(nonce)\u{0}\(address)".utf8)
         let code = HMAC<SHA256>.authenticationCode(for: signed, using: SymmetricKey(data: Data(password.utf8)))
         return code.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Vault calls' proofs taken already, until they'd be too old anyway: each works once.
+    private var usedVaultProofs: [String: Date] = [:]
+
+    /// Whether a vault call carries the box's proof of it: an HMAC with the vault's secret of the
+    /// call, its body and when it was made (within a minute), not used before.
+    private func vaultCallProved(_ request: HTTPRequest) -> Bool {
+        guard let auth = request.headers["x-kuvo-vault-auth"], let at = request.headers["x-kuvo-vault-at"].flatMap(Double.init),
+              abs(Date().timeIntervalSince1970 * 1000 - at) < 60_000 else { return false }
+        let call = String(request.path.dropFirst())
+        let body = SHA256.hash(data: request.body).map { String(format: "%02x", $0) }.joined()
+        let signed = Data("kuvo-host-vault-call\u{0}\(call)\u{0}\(body)\u{0}\(request.headers["x-kuvo-vault-at"] ?? "")".utf8)
+        let expected = HMAC<SHA256>.authenticationCode(for: signed, using: SymmetricKey(data: Data(vaultSecret.utf8))).map { String(format: "%02x", $0) }.joined()
+        guard samePassword(auth, expected) else { return false }
+        let now = Date()
+        usedVaultProofs = usedVaultProofs.filter { now.timeIntervalSince($0.value) < 120 }
+        guard usedVaultProofs[auth] == nil else { return false }
+        usedVaultProofs[auth] = now
+        return true
     }
 
     /// The names it answers for: Kuvo Code's own keys.
@@ -192,7 +216,10 @@ final class HostInterface {
             let given = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any]) ?? [:]
             guard let nonce = given["nonce"] as? String, (16...256).contains(nonce.count) else { return .init(status: 400) }
             guard let port = server.port else { return .init(status: 503) }
-            return .json(["proof": Self.proof(of: nonce, at: "127.0.0.1:\(port)", password: password)])
+            var answer = ["proof": Self.proof(of: nonce, at: "127.0.0.1:\(port)", password: password)]
+            // For the vault's calls, the same with the vault's secret, which only the box was given.
+            if given["vault"] as? Bool == true { answer["vaultProof"] = Self.proof(of: nonce, at: "127.0.0.1:\(port)", password: vaultSecret, tag: "kuvo-host-vault") }
+            return .json(answer)
         }
         guard let authorization = request.headers["authorization"], authorization.hasPrefix("Bearer "),
               samePassword(String(authorization.dropFirst(7)), password) else { return .init(status: 401) }
@@ -215,6 +242,33 @@ final class HostInterface {
         case "/keys/delete":
             guard let name, Self.isKey(name) else { return .init(status: 400) }
             return await Task.detached(operation: { IntegrationKeys.set(nil, for: name) }).value ? .json([:]) : Self.failed
+        case "/vault/generations":
+            // The box's signed files' newest generations, kept here where agents can't put them back.
+            guard vaultCallProved(request) else { return .init(status: 403) }
+            if let file = given["file"] as? String, ["items", "grants", "paused"].contains(file), let generation = given["generation"] as? Int {
+                guard await Task.detached(operation: { VaultValues.remember(file, generation: generation) }).value else { return Self.failed }
+            }
+            guard let kept = await Task.detached(operation: { VaultValues.generations() }).value else {
+                var answer = HTTPResponse.json(["message": "This Mac’s Keychain can’t be read now, so its vault waits. Unlock your Mac, then try again."])
+                answer.status = 503
+                return answer
+            }
+            return .json(["generations": kept.generations, "adopt": kept.adopt])
+        case "/vault/get", "/vault/set", "/vault/delete":
+            // The vault's values, by item, in the Keychain: the box keeps everything else about them.
+            // Only to the box, which has the secret no file holds: each call with its own proof of it.
+            guard vaultCallProved(request) else { return .init(status: 403) }
+            guard let id = given["id"] as? String, VaultValues.isItem(id) else { return .init(status: 400) }
+            switch request.path {
+            case "/vault/get":
+                guard let values = await Task.detached(operation: { VaultValues.values(id) }).value else { return .init(status: 404) }
+                return .json(["values": values])
+            case "/vault/set":
+                guard let values = given["values"] as? [String: String] else { return .init(status: 400) }
+                return await Task.detached(operation: { VaultValues.set(values, for: id) }).value ? .json([:]) : Self.failed
+            default:
+                return await Task.detached(operation: { VaultValues.remove(id) }).value ? .json([:]) : Self.failed
+            }
         case "/sites/signed-in":
             // Whether the panel's browser is signed in to the sites the agent uses there, as their
             // cookies say (read again once they've changed): only those it can tell.
