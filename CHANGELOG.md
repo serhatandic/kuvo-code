@@ -157,6 +157,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Escape stops the agent in the conversation you're looking at, even while Find is still open in one you've left.
 - A conversation whose agent gave the browser an impossible element or tab number opens again instead of crashing.
 - Find in a conversation highlights the place you're on in a message sent with a keyword, finds a name shown with its face, and stays quick in a long pasted log.
+- A machine running a newer Kuvo Code still shows its bots and group chats: a bot's look or a chat message this copy doesn't know shows plainly or is left out, instead of the whole list going missing.
 
 ## 0.7.2
 
