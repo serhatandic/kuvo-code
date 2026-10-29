@@ -109,25 +109,7 @@ final class Vaults {
     // MARK: Changing
 
     /// What an item is made or changed with.
-    struct Given {
-        var kind: VaultItem.Kind
-        var name: String
-        var sites: [String] = []
-        var username: String?
-        var fileName: String?
-        var readable: Bool?
-        /// Values by field; nil takes one away (a change only).
-        var values: [String: String?] = [:]
-
-        var json: [String: Any] {
-            var body: [String: Any] = ["kind": kind.rawValue, "name": name, "sites": sites]
-            body["username"] = username ?? ""
-            if kind == .file { body["fileName"] = fileName ?? "" }
-            if kind == .note { body["readable"] = readable == true }
-            if !values.isEmpty { body["values"] = values.mapValues { $0 as Any? ?? NSNull() } }
-            return body
-        }
-    }
+    typealias Given = VaultDraft
 
     @discardableResult
     func add(_ given: Given, on box: String) async throws -> VaultItem {

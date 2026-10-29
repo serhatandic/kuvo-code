@@ -271,6 +271,38 @@ public struct VaultActivity: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// What an item is made or changed with (`POST kuvo/vault/items`, `PATCH kuvo/vault/items/<id>`).
+public struct VaultDraft: Sendable {
+    public var kind: VaultItem.Kind
+    public var name: String
+    public var sites: [String]
+    public var username: String?
+    public var fileName: String?
+    public var readable: Bool?
+    /// Values by field; nil takes one away (a change only).
+    public var values: [String: String?]
+
+    public init(kind: VaultItem.Kind, name: String, sites: [String] = [], username: String? = nil, fileName: String? = nil, readable: Bool? = nil, values: [String: String?] = [:]) {
+        self.kind = kind
+        self.name = name
+        self.sites = sites
+        self.username = username
+        self.fileName = fileName
+        self.readable = readable
+        self.values = values
+    }
+
+    /// Its body.
+    public var json: [String: Any] {
+        var body: [String: Any] = ["kind": kind.rawValue, "name": name, "sites": sites]
+        body["username"] = username ?? ""
+        if kind == .file { body["fileName"] = fileName ?? "" }
+        if kind == .note { body["readable"] = readable == true }
+        if !values.isEmpty { body["values"] = values.mapValues { $0 as Any? ?? NSNull() } }
+        return body
+    }
+}
+
 /// The routes, as a client calls them.
 public enum VaultRoutes {
     public static let vault = "kuvo/vault"
