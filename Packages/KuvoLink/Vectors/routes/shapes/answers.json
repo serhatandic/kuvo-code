@@ -2356,6 +2356,9 @@
             "literal": "sandbox"
            },
            {
+            "literal": "sandbox.check"
+           },
+           {
             "literal": "accounts.ended"
            },
            {
@@ -2608,6 +2611,9 @@
            },
            {
             "literal": "sandbox"
+           },
+           {
+            "literal": "sandbox.check"
            }
           ]
          }
@@ -4707,7 +4713,85 @@
       "why?": "string",
       "wanted": "bool",
       "able": "bool",
-      "agents": "bool"
+      "agents": "bool",
+      "reason?": {
+       "oneOf": [
+        {
+         "literal": "off"
+        },
+        {
+         "literal": "kernel"
+        },
+        {
+         "literal": "macos"
+        },
+        {
+         "literal": "engineMissing"
+        },
+        {
+         "literal": "checking"
+        },
+        {
+         "literal": "checkFailed"
+        },
+        {
+         "literal": "plugin"
+        },
+        {
+         "literal": "engineDown"
+        },
+        {
+         "literal": "waiting"
+        }
+       ]
+      },
+      "action?": {
+       "oneOf": [
+        {
+         "literal": "turnOn"
+        },
+        {
+         "literal": "help"
+        },
+        {
+         "literal": "softwareUpdate"
+        },
+        {
+         "literal": "retry"
+        },
+        {
+         "literal": "fix"
+        },
+        {
+         "literal": "restartEngine"
+        }
+       ]
+      },
+      "route?": "string",
+      "needs?": "string",
+      "check?": {
+       "oneOf": [
+        {
+         "literal": "folder"
+        },
+        {
+         "literal": "tempFiles"
+        },
+        {
+         "literal": "readsOwn"
+        },
+        {
+         "literal": "writesOwn"
+        },
+        {
+         "literal": "didntRun"
+        },
+        {
+         "literal": "setup"
+        }
+       ]
+      },
+      "failures?": "number"
      }
     }
    }
@@ -4721,7 +4805,177 @@
       "why?": "string",
       "wanted": "bool",
       "able": "bool",
-      "agents": "bool"
+      "agents": "bool",
+      "reason?": {
+       "oneOf": [
+        {
+         "literal": "off"
+        },
+        {
+         "literal": "kernel"
+        },
+        {
+         "literal": "macos"
+        },
+        {
+         "literal": "engineMissing"
+        },
+        {
+         "literal": "checking"
+        },
+        {
+         "literal": "checkFailed"
+        },
+        {
+         "literal": "plugin"
+        },
+        {
+         "literal": "engineDown"
+        },
+        {
+         "literal": "waiting"
+        }
+       ]
+      },
+      "action?": {
+       "oneOf": [
+        {
+         "literal": "turnOn"
+        },
+        {
+         "literal": "help"
+        },
+        {
+         "literal": "softwareUpdate"
+        },
+        {
+         "literal": "retry"
+        },
+        {
+         "literal": "fix"
+        },
+        {
+         "literal": "restartEngine"
+        }
+       ]
+      },
+      "route?": "string",
+      "needs?": "string",
+      "check?": {
+       "oneOf": [
+        {
+         "literal": "folder"
+        },
+        {
+         "literal": "tempFiles"
+        },
+        {
+         "literal": "readsOwn"
+        },
+        {
+         "literal": "writesOwn"
+        },
+        {
+         "literal": "didntRun"
+        },
+        {
+         "literal": "setup"
+        }
+       ]
+      },
+      "failures?": "number"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sandbox/check",
+   "answers": {
+    "200": {
+     "object": {
+      "on": "bool",
+      "why?": "string",
+      "wanted": "bool",
+      "able": "bool",
+      "agents": "bool",
+      "reason?": {
+       "oneOf": [
+        {
+         "literal": "off"
+        },
+        {
+         "literal": "kernel"
+        },
+        {
+         "literal": "macos"
+        },
+        {
+         "literal": "engineMissing"
+        },
+        {
+         "literal": "checking"
+        },
+        {
+         "literal": "checkFailed"
+        },
+        {
+         "literal": "plugin"
+        },
+        {
+         "literal": "engineDown"
+        },
+        {
+         "literal": "waiting"
+        }
+       ]
+      },
+      "action?": {
+       "oneOf": [
+        {
+         "literal": "turnOn"
+        },
+        {
+         "literal": "help"
+        },
+        {
+         "literal": "softwareUpdate"
+        },
+        {
+         "literal": "retry"
+        },
+        {
+         "literal": "fix"
+        },
+        {
+         "literal": "restartEngine"
+        }
+       ]
+      },
+      "route?": "string",
+      "needs?": "string",
+      "check?": {
+       "oneOf": [
+        {
+         "literal": "folder"
+        },
+        {
+         "literal": "tempFiles"
+        },
+        {
+         "literal": "readsOwn"
+        },
+        {
+         "literal": "writesOwn"
+        },
+        {
+         "literal": "didntRun"
+        },
+        {
+         "literal": "setup"
+        }
+       ]
+      },
+      "failures?": "number"
      }
     }
    }

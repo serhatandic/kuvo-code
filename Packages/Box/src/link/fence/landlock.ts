@@ -10,11 +10,11 @@ import type { FencePolicy } from "./policy";
 
 /** What the Linux script reads: the policy's parts it needs. */
 export function landlockPolicy(policy: FencePolicy): string {
-  return JSON.stringify({ hidden: [...policy.kuvo, ...policy.secrets], readable: policy.kuvoReadable, writable: policy.writable }) + "\n";
+  return JSON.stringify({ hidden: [...policy.kuvo, ...policy.secrets], readable: policy.kuvoReadable, writable: policy.writable, readOnly: policy.readOnly }) + "\n";
 }
 
 /**
- * The script: `kuvo-fence.js <policy.json> <WORK> <GIT> <TMP> <shell> [args…]`. Fails closed: when
+ * The script: `kuvo-fence.js <policy.json> <WORK> <GIT> <TMP> <WAKES> <shell> [args…]`. Fails closed: when
  * the kernel can't, the command doesn't run (the box knows before, and says so).
  */
 export const LANDLOCK_RUNNER = String.raw`// Kuvo Code writes this each time its box starts: changes here don't last.
@@ -23,7 +23,7 @@ import { dlopen, FFIType, ptr, read } from "bun:ffi";
 import fs from "node:fs";
 import path from "node:path";
 
-const [policyFile, work, git, tmp, shell, ...args] = process.argv.slice(2);
+const [policyFile, work, git, tmp, wakes, shell, ...args] = process.argv.slice(2);
 const fail = (why) => { process.stderr.write("This command can't run in the sandbox here: " + why + "\n"); process.exit(126); };
 let policy;
 try { policy = JSON.parse(fs.readFileSync(policyFile, "utf8")); } catch { fail("its settings can't be read."); }
@@ -67,22 +67,30 @@ function grant(where, access) {
 }
 const real = (where) => { try { return fs.realpathSync(where); } catch { return path.resolve(where); } };
 const hidden = new Set(policy.hidden.map(real));
+// What's written leaves out, besides: what's only read (granted reading with everything else).
+const kept = new Set([...hidden, ...(policy.readOnly || []).map(real)]);
 const inside = (child, top) => child === top || child.startsWith(top === "/" ? "/" : top + "/");
-// Grants access under top, except what's hidden: a folder with something hidden in it is only
+// Grants access under top, except what's left out: a folder with something left out in it is only
 // listed, and each thing in it granted the same way.
-function grantExcept(top, access) {
+function grantExcept(top, access, out = hidden) {
   top = real(top);
-  if (hidden.has(top)) return;
-  if (![...hidden].some(h => inside(h, top))) return grant(top, access);
+  if (out.has(top)) return;
+  if (![...out].some(h => inside(h, top))) return grant(top, access);
   grant(top, READ_DIR);
   let names = [];
   try { names = fs.readdirSync(top); } catch { return; }
-  for (const name of names) grantExcept(path.join(top, name), access);
+  for (const name of names) grantExcept(path.join(top, name), access, out);
 }
 grantExcept("/", READS);
 for (const where of policy.readable) grant(where, READS);
-for (const where of [...policy.writable, work, git]) if (where) grantExcept(where, all);
+for (const where of [...policy.writable, work, git]) if (where) grantExcept(where, all, kept);
 if (tmp) { fs.mkdirSync(tmp, { recursive: true }); grant(tmp, all); }
+// Its conversation's wake-ups and watches (kuvo-wake): read, and only its inbox written, which the box
+// takes in, out of its reach.
+if (wakes && fs.existsSync(wakes)) {
+  grant(wakes, READS);
+  grant(path.join(wakes, "inbox"), all);
+}
 
 const keep = [];
 const text = (s) => { const b = Buffer.from(s + "\0"); keep.push(b); return b; };

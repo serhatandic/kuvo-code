@@ -559,7 +559,7 @@ final class PhoneLink {
             try JSONEncoder().encode(Setup(relay: relay.absoluteString, name: machine.name, mac: given.mac, macSign: given.macSign,
                                            docs: given.docs, id: machine.id)).write(to: settings)
             let output = try await machine.connection.run(RemoteEngineInstaller.script("""
-                KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$E" "$K/bin/\(Bridge.fileName)" setup
+                KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$E" --config=/dev/null --no-env-file "$K/bin/\(Bridge.fileName)" setup
                 """), input: settings)
             struct Answer: Decodable { var address: String?; var key: String?; var peers: Bool?; var sign: String?; var docs: [Documents.Envelope]? }
             let answer = try? JSONDecoder().decode(Answer.self, from: Data(output.utf8))
@@ -973,7 +973,7 @@ final class PhoneLink {
         "accounts.credentials", "accounts.found", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply", "engine.restart",
         "file", "folders", "git", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves",
         "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.parts", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
-        "personalities.events", "skills.trash", "sandbox", "vault", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
+        "personalities.events", "skills.trash", "sandbox", "sandbox.check", "vault", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
         "agent-tools", "sessions.start", "letters-read", "queue", "work", "work.projects",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",

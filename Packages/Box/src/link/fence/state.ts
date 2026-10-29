@@ -13,8 +13,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { textOf, writePrivate } from "../files";
-import { BOTS, BOX, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN } from "../home";
+import { listOf, textOf, writePrivate } from "../files";
+import { BOTS, BOX, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SESSION_WAKES, SOCKET_KEY_FILE } from "../home";
 import { launcherScript, pluginScript, type FencePlaces } from "./files";
 import { LANDLOCK_RUNNER, landlockPolicy } from "./landlock";
 import { fencePolicy, realish } from "./policy";
@@ -31,13 +31,38 @@ export interface FenceState {
   able: boolean;
   /** The coding agents' own programs' commands are sandboxed too. Not yet. */
   agents: boolean;
+  /** Why not, for a client to map without reading `why`, and what you can do about it. */
+  reason?: FenceReason;
+  action?: FenceAction;
+  /** The box's route that does it, where there's one. */
+  route?: string;
+  /** What this computer needs first (`kernel`): "Linux 5.13". */
+  needs?: string;
+  /** Which part of the check failed (`checkFailed`). */
+  check?: FenceCheck;
+  /** Checks failed in a row (`checkFailed`, `checking`). */
+  failures?: number;
 }
+
+export type FenceReason = "off" | "kernel" | "macos" | "engineMissing" | "checking" | "checkFailed" | "plugin" | "engineDown" | "waiting";
+export type FenceAction = "turnOn" | "help" | "softwareUpdate" | "retry" | "fix" | "restartEngine";
+export type FenceCheck = "folder" | "tempFiles" | "readsOwn" | "writesOwn" | "didntRun" | "setup";
+
+const TURN_ON = "PATCH kuvo/sandbox";
+const CHECK = "POST kuvo/sandbox/check";
+const RESTART = "POST kuvo/engine/restart";
 
 const FOLDER = realish(path.join(RUN, "fence"));
 const SETTING = path.join(BOX, "sandbox.json");
 const PLUGIN = path.join(ENGINE_CONFIG || path.join(K, "config"), "opencode", "plugins", "kuvo-sandbox.js");
 const NOTE = path.join(FOLDER, "engine.json");
 const PROBE = path.join(FOLDER, "probe");
+// Tells kuvo-wake its watches' checks run in the sandbox, as commands do: there while the engine has
+// the plugin.
+const ON = path.join(FOLDER, "on");
+// And that it's set up and checked here, so a check waits while it isn't on yet rather than run
+// without it (where the box can't set it up, commands run as before, and checks with them).
+const READY = path.join(FOLDER, "ready");
 const platform: "darwin" | "linux" = process.platform === "darwin" ? "darwin" : "linux";
 
 const places: FencePlaces = {
@@ -46,6 +71,9 @@ const places: FencePlaces = {
   runner: path.join(K, "bin", "kuvo-fence.js"),
   inside: [realish(BOTS), realish(CHATS)],
   probe: PROBE,
+  bots: BOTS,
+  wakes: SESSION_WAKES,
+  key: SOCKET_KEY_FILE,
   platform,
 };
 const VERSION = crypto.createHash("sha256")
@@ -57,19 +85,22 @@ export function fenceWanted(): boolean {
   try { return JSON.parse(fs.readFileSync(SETTING, "utf8")).on === true; } catch { return false; }
 }
 
-let checked: { able: boolean; passed: boolean; why?: string } = { able: false, passed: false, why: "It hasn't been checked yet." };
+type Checked = { able: boolean; passed: boolean; why?: string; reason?: FenceReason; needs?: string; check?: FenceCheck };
+let checked: Checked = { able: false, passed: false, why: "It hasn't been checked yet.", reason: "checking" };
+let failures = 0;
 let lastProfiles = "";
 
 /** Whether the sandbox is on here: read each time from what the box knows, without waiting. */
 export function fenceState(): FenceState {
   const wanted = fenceWanted();
   const base = { wanted, able: checked.able, agents: false };
-  if (!wanted) return { ...base, on: false, why: "It's off." };
-  if (!checked.passed) return { ...base, on: false, why: checked.why };
-  if (textOf(PLUGIN) !== pluginScript(places, VERSION)) return { ...base, on: false, why: "Its plugin for the engine was changed or removed." };
+  // Off where it can't be on: why it can't, rather than a switch that does nothing.
+  if (!wanted && (checked.able || checked.reason === "checking")) return { ...base, on: false, why: "It's off.", reason: "off", action: "turnOn", route: TURN_ON };
+  if (!checked.passed) return { ...base, on: false, ...cannot(checked) };
+  if (textOf(PLUGIN) !== pluginScript(places, VERSION)) return { ...base, on: false, why: "Its plugin for the engine was changed or removed.", reason: "plugin", action: "fix", route: CHECK };
   let engine: { pid?: number } = {};
   try { engine = JSON.parse(fs.readFileSync(ENGINE_FILE, "utf8")); } catch {
-    return { ...base, on: false, why: "The engine isn't running." };
+    return { ...base, on: false, why: "The engine isn't running.", reason: "engineDown", action: "restartEngine", route: RESTART };
   }
   let note: { pid?: number; version?: string } = {};
   try { note = JSON.parse(fs.readFileSync(NOTE, "utf8")); } catch {}
@@ -79,7 +110,19 @@ export function fenceState(): FenceState {
   try {
     if (fs.statSync(PLUGIN).mtimeMs <= fs.statSync(ENGINE_FILE).mtimeMs) return { ...base, on: true };
   } catch {}
-  return { ...base, on: false, why: "Waiting for the engine to load it." };
+  return { ...base, on: false, why: "Waiting for the engine to load it.", reason: "waiting", action: "restartEngine", route: RESTART };
+}
+
+// Why a box that wants it, or can't have it, doesn't have it on, and what you can do.
+function cannot(why: Checked): Partial<FenceState> {
+  const said = why.why ? { why: why.why } : {};
+  switch (why.reason) {
+    case "kernel": return { ...said, reason: "kernel", action: "help", needs: why.needs };
+    case "macos": return { ...said, reason: "macos", action: "softwareUpdate" };
+    case "engineMissing": return { ...said, reason: "engineMissing", action: "retry", route: CHECK };
+    case "checkFailed": return { ...said, reason: "checkFailed", check: why.check, action: "retry", route: CHECK, failures };
+    default: return { ...said, reason: "checking", action: "retry", route: CHECK, failures };
+  }
 }
 
 /** Turns the sandbox on or off here (kept on the box), and sets it up as it says. */
@@ -125,7 +168,7 @@ function writeProfiles(): void {
   const policy = fencePolicy(platform === "darwin" ? kuvoPorts() : []);
   const files: [string, string][] = platform === "darwin"
     ? [["project.sb", seatbeltProfile(policy, { inside: false })], ["inside.sb", seatbeltProfile(policy, { inside: true })]]
-    : [["policy.json", landlockPolicy(policy)]];
+    : [["policy.json", landlockPolicy(policy)], ["runtime", runtime() ?? ""]];
   const text = files.map(([name, body]) => name + body).join("");
   if (text === lastProfiles) return;
   for (const [name, body] of files) writePrivate(path.join(FOLDER, name), body);
@@ -139,20 +182,20 @@ function writeExecutable(file: string, text: string): void {
 }
 
 /** Whether this computer can sandbox commands at all, and why not. */
-function able(): { able: boolean; why?: string } {
-  if (platform === "darwin") return fs.existsSync("/usr/bin/sandbox-exec") ? { able: true } : { able: false, why: "macOS's sandbox isn't on this Mac." };
-  if (!runtime()) return { able: false, why: "The engine isn't installed here yet." };
+function able(): Checked {
+  if (platform === "darwin") return fs.existsSync("/usr/bin/sandbox-exec") ? { able: true, passed: false } : { able: false, passed: false, why: "macOS's sandbox isn't on this Mac.", reason: "macos" };
+  if (!runtime()) return { able: false, passed: false, why: "The engine isn't installed here yet.", reason: "engineMissing" };
   if (!fs.existsSync("/sys/kernel/security/landlock") && !/landlock/.test(textOf("/sys/kernel/security/lsm") ?? "landlock")) {
-    return { able: false, why: `Linux ${os.release().split("-")[0]} can't sandbox commands: it needs Landlock (Linux 5.13 or later, with it on).` };
+    return { able: false, passed: false, why: `Linux ${os.release().split("-")[0]} can't sandbox commands: it needs Landlock (Linux 5.13 or later, with it on).`, reason: "kernel", needs: "Linux 5.13" };
   }
-  return { able: true };
+  return { able: true, passed: false };
 }
 
 /**
  * Runs one command through the launcher, as the engine would, and checks what the sandbox must
  * do: it writes in its folder and its temporary folder, and can neither read nor write Kuvo Code's.
  */
-function probe(): { passed: boolean; why?: string } {
+function probe(): { passed: boolean; why?: string; check?: FenceCheck } {
   fs.rmSync(PROBE, { recursive: true, force: true });
   fs.mkdirSync(PROBE, { recursive: true, mode: 0o700 });
   const hidden = path.join(FOLDER, "hidden");
@@ -171,21 +214,30 @@ function probe(): { passed: boolean; why?: string } {
   const bun = runtime();
   if (bun) env.KUVO_FENCE_RUNTIME = bun;
   const run = spawnSync(places.launcher, ["-c", script, PROBE, hidden, escaped], { env, encoding: "utf8", timeout: 20_000 });
-  const reasons: Record<number, string> = {
-    10: "a command couldn't go to its own folder", 11: "a command couldn't write in its own folder",
-    12: "a command couldn't write its temporary files", 13: "a command could read Kuvo Code's own files",
+  const reasons: Record<number, [FenceCheck, string]> = {
+    10: ["folder", "a command couldn't go to its own folder"], 11: ["folder", "a command couldn't write in its own folder"],
+    12: ["tempFiles", "a command couldn't write its temporary files"], 13: ["readsOwn", "a command could read Kuvo Code's own files"],
   };
   try {
-    if (fs.existsSync(escaped)) return { passed: false, why: "Its check failed: a command could write in Kuvo Code's own folder." };
+    if (fs.existsSync(escaped)) return { passed: false, check: "writesOwn", why: "Its check failed: a command could write in Kuvo Code's own folder." };
     if (run.status === 0) return { passed: true };
-    const reason = run.status !== null ? reasons[run.status] : undefined;
+    const [check, reason] = (run.status !== null ? reasons[run.status] : undefined) ?? ["didntRun", undefined];
     const said = (run.stderr || "").trim().split("\n").pop();
-    return { passed: false, why: `Its check failed: ${reason ?? said ?? run.error?.message ?? "the command didn't run"}.` };
+    return { passed: false, check, why: `Its check failed: ${reason ?? said ?? run.error?.message ?? "the command didn't run"}.` };
   } finally {
     fs.rmSync(PROBE, { recursive: true, force: true });
     fs.rmSync(escaped, { force: true });
     fs.rmSync(hidden, { force: true });
   }
+}
+
+/** The engine's plugin taken away, and kuvo-wake told: commands run as before. What the engine
+ * noted of the plugin goes too, so it's on again only once the engine has loaded it again. */
+function withdraw(): void {
+  fs.rmSync(PLUGIN, { force: true });
+  fs.rmSync(ON, { force: true });
+  fs.rmSync(READY, { force: true });
+  fs.rmSync(NOTE, { force: true });
 }
 
 /**
@@ -194,14 +246,16 @@ function probe(): { passed: boolean; why?: string } {
  * rather than not at all.
  */
 export function setUpFence(): FenceState {
+  // Whether it can be on here, known while it's off too.
+  const can = able();
   if (!fenceWanted()) {
-    fs.rmSync(PLUGIN, { force: true });
+    withdraw();
+    checked = can;
     return fenceState();
   }
-  const can = able();
   if (!can.able) {
-    fs.rmSync(PLUGIN, { force: true });
-    checked = { able: false, passed: false, why: can.why };
+    withdraw();
+    checked = can;
     return fenceState();
   }
   try {
@@ -211,29 +265,75 @@ export function setUpFence(): FenceState {
     lastProfiles = "";
     writeProfiles();
     const result = probe();
-    checked = { able: true, ...result };
+    checked = { able: true, ...result, ...(result.passed ? {} : { reason: "checkFailed" as const }) };
+    failures = result.passed ? 0 : failures + 1;
     if (!result.passed) {
-      fs.rmSync(PLUGIN, { force: true });
+      withdraw();
       return fenceState();
     }
+    if (!fs.existsSync(READY)) writePrivate(READY, "");
     const plugin = pluginScript(places, VERSION);
-    if (textOf(PLUGIN) !== plugin) writePrivate(PLUGIN, plugin);
+    if (textOf(PLUGIN) !== plugin) {
+      fs.rmSync(NOTE, { force: true });
+      writePrivate(PLUGIN, plugin);
+    }
+    if (!fs.existsSync(ON)) writePrivate(ON, "");
   } catch (error) {
-    fs.rmSync(PLUGIN, { force: true });
-    checked = { able: true, passed: false, why: `It couldn't be set up: ${(error as Error).message}` };
+    withdraw();
+    checked = { able: true, passed: false, why: `It couldn't be set up: ${(error as Error).message}`, reason: "checkFailed", check: "setup" };
+    failures += 1;
   }
   return fenceState();
 }
 
+/**
+ * The launcher makes each conversation's wake folder as it first runs a command there (kuvo-wake
+ * can't, in the sandbox): those that never got a wake-up or a watch go a day after their last use.
+ */
+// Whether a folder has anything but empty folders in it (a link counts).
+function holdsFiles(folder: string): boolean {
+  return fs.readdirSync(folder, { withFileTypes: true }).some(entry => !entry.isDirectory() || holdsFiles(path.join(folder, entry.name)));
+}
+
+export function sweepWakeFolders(now = Date.now()): void {
+  // And commands' temporary folders, a week after their conversation's last command.
+  const tmp = path.join(FOLDER, "tmp");
+  for (const name of listOf(tmp)) {
+    const folder = path.join(tmp, name);
+    try { if (now - fs.statSync(folder).mtimeMs > 7 * 24 * 60 * 60 * 1000) fs.rmSync(folder, { recursive: true, force: true }); } catch {}
+  }
+  let names: string[] = [];
+  try { names = fs.readdirSync(SESSION_WAKES); } catch { return; }
+  for (const name of names) {
+    if (!/^ses_[A-Za-z0-9_]+$/.test(name)) continue;
+    const folder = path.join(SESSION_WAKES, name);
+    try {
+      const kept = fs.readdirSync(folder);
+      // (Held while its conversation's archived: nothing's waiting all the same.)
+      if (kept.includes("paused") && textOf(path.join(folder, "paused")) !== "archived") continue;
+      if (kept.some(entry => !["session", "directory", "wakes", "watches", "inbox", "paused"].includes(entry))) continue;
+      const parts = ["wakes", "watches", "inbox"].filter(part => kept.includes(part)).map(part => path.join(folder, part));
+      if (parts.some(holdsFiles)) continue;
+      const used = Math.max(...[folder, ...parts].map(where => fs.statSync(where).mtimeMs));
+      if (now - used < 24 * 60 * 60 * 1000) continue;
+      fs.rmSync(folder, { recursive: true, force: true });
+    } catch {}
+  }
+}
+
 /** Set up as the box starts, and kept so: Kuvo Code's servers' ports in its rules as they change
- * (macOS), and its plugin put back if it went. */
+ * (macOS), its plugin put back if it went, and the wake folders no one used cleared away. */
 export function keepFence(): void {
   try { setUpFence(); } catch {}
+  let rounds = 0;
   setInterval(() => {
+    const round = rounds++;
+    if (round % 60 === 0) sweepWakeFolders();
     if (!fenceWanted()) return;
     try {
       if (checked.passed) writeProfiles();
-      if (!checked.passed || textOf(PLUGIN) !== pluginScript(places, VERSION)) setUpFence();
+      // A failed check, tried again each minute (it holds the box up while it runs).
+      if (checked.passed ? textOf(PLUGIN) !== pluginScript(places, VERSION) : round % 6 === 0) setUpFence();
     } catch {}
   }, 10_000).unref?.();
 }

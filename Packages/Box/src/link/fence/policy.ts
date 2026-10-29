@@ -28,6 +28,9 @@ export interface FencePolicy {
   kuvoReadable: string[];
   /** Written besides WORK, GIT and TMP: the system's temporary folders, devices, tools' caches. */
   writable: string[];
+  /** Inside those, what's only read: what runs later outside the sandbox (tools' own programs and
+   * settings, scripts they run as they start). */
+  readOnly: string[];
   /** Never read: your secrets (folders or files). */
   secrets: string[];
   /** Kuvo Code's own servers on 127.0.0.1, refused where the system can (macOS); everywhere their
@@ -37,8 +40,14 @@ export interface FencePolicy {
 
 // Tools' caches, written by installs and builds in any project.
 const CACHES = [".npm", ".bun", ".cache", ".cargo", ".rustup", ".swiftpm", ".gradle", ".m2", "go/pkg", ".pnpm-store",
-  ".yarn", ".node-gyp", ".local/share/pnpm", ".local/state", ".deno", ".pub-cache", ".nuget/packages", ".dotnet"];
-const MAC_CACHES = ["Library/pnpm", "Library/Caches", "Library/Developer"];
+  ".yarn", ".node-gyp", ".local/state", ".deno", ".pub-cache", ".nuget/packages", ".dotnet"];
+const MAC_CACHES = ["Library/pnpm/store", "Library/Caches", "Library/Developer"];
+const LINUX_CACHES = [".local/share/pnpm/store"];
+// In them, what you run later, outside the sandbox: installed programs (on your PATH), tools'
+// settings that name programs, scripts they run as they start, packages npx runs as they are.
+const RUNS_LATER = [".cargo/bin", ".cargo/config", ".cargo/config.toml", ".bun/bin", ".bun/install/global", ".deno/bin",
+  ".dotnet/tools", ".gradle/init.d", ".gradle/init.gradle", ".gradle/init.gradle.kts", ".gradle/gradle.properties",
+  ".m2/settings.xml", ".npm/_npx", ".cache/pre-commit", ".rustup/settings.toml", ".rustup/toolchains", ".pub-cache/bin", "go/bin"];
 
 // Your secrets (each a folder or a file in your home folder).
 const SECRETS = [".aws", ".config/gcloud", ".azure", ".kube", ".docker/config.json", ".oci", ".config/doctl",
@@ -84,34 +93,36 @@ function macFolders(home: string): { kuvo: string[]; readable: string[] } {
   return { kuvo, readable: [path.join(app, "bin")] };
 }
 
-/** This box's policy, as its folders, your home folder and your SSH keys are now. */
+/**
+ * This box's policy, as its folders, your home folder and your SSH keys are now: this Mac's app's
+ * folders on this Mac's box, a machine's folder on a machine's; the system's own paths and secrets
+ * as the computer it runs on has them.
+ */
 export function fencePolicy(ports: number[] = []): FencePolicy {
   const home = realish(os.userInfo().homedir);
-  const inHome = (names: string[]) => names.map(name => path.join(home, name));
-  if (IS_MAC) {
-    const { kuvo, readable } = macFolders(home);
+  const inHome = (names: string[]) => names.map(name => realish(path.join(home, name)));
+  // A machine's folder, and the real one if this is a test's own.
+  const own = IS_MAC ? macFolders(home) : { kuvo: [K, path.join(home, ".kuvo-code")], readable: [path.join(K, "bin")] };
+  const kuvo = [...new Set(own.kuvo.map(realish))];
+  const kuvoReadable = own.readable.map(realish);
+  const readOnly = inHome(RUNS_LATER);
+  if (process.platform === "darwin") {
     return {
-      home,
-      kuvo: kuvo.map(realish),
+      home, kuvo, kuvoReadable, readOnly, ports,
+      // Every copy's (`run.kuvo.code…`), wherever the system keeps an app's.
       kuvoPatterns: [
         `^${escapeRegex(home)}/Library/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
         `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
       ],
-      kuvoReadable: readable.map(realish),
-      writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES]).map(realish)],
-      secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...sshKeys(home), ...ghHosts(home)].map(realish),
-      ports,
+      writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES])],
+      secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...sshKeys(home).map(realish), ...ghHosts(home).map(realish)],
     };
   }
   return {
-    home,
-    // A machine's folder, and the real one if this is a test's own.
-    kuvo: [...new Set([realish(K), realish(path.join(home, ".kuvo-code"))])],
+    home, kuvo, kuvoReadable, readOnly, ports,
     kuvoPatterns: [],
-    kuvoReadable: [realish(path.join(K, "bin"))],
-    writable: ["/tmp", "/var/tmp", "/dev", "/dev/shm", ...inHome(CACHES)],
+    writable: ["/tmp", "/var/tmp", "/dev", "/dev/shm", ...inHome([...CACHES, ...LINUX_CACHES])],
     secrets: [...inHome([...SECRETS, ...LINUX_SECRETS]), ...sshKeys(home), ...ghHosts(home)],
-    ports,
   };
 }
 

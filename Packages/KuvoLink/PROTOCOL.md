@@ -1956,6 +1956,8 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `sign-in.return` | `POST kuvo/sign-in/return` |
 | `skills` | `kuvo/skills…` and `kuvo/skill-library…` |
 | `skills.trash` | `kuvo/skill-trash…`: Recently Deleted, and restoring from it |
+| `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.113) |
+| `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
@@ -2439,7 +2441,9 @@ then pauses everyone, and so does its being gone. The state says `tampered`. Val
 
 **The process that holds it.** The box's long-running process (`run` on a machine, `serve` on a
 Mac) holds the vault. A `box route` passes `kuvo/vault…` to it over `run/vault.sock` (`0600`, owned
-by the user, which the route checks first), one request a connection: `{"hello": <nonce>}`, answered
+by the user, which the route checks first), one request a connection: `{"hello": <nonce>, "key"}`
+(`key`, the box's socket key: the text of `run/socket.key`, `0600`, made by whichever of the box's
+processes needs it first; a connection without it gets nothing and is closed), answered
 `{"nonce", "proof"?}` (`proof`, while the holder has the unlock key: HMAC-SHA256 with it of
 `kuvo-vault-holder\0<the route's nonce>`, base64url); then a line of `{"method", "path", "headers",
 "body"}` (base64) there, `{"status", "type", "body"}` back. A request with the unlock key sends, to
@@ -2549,16 +2553,53 @@ and as a box starts.
 
 Each box can run its agents' commands in a sandbox (`sandbox` in `features`, bridge 0.9.113), off
 until you turn it on. On, each command the engine runs (an agent's shell tool, and yours with `!`)
-writes only in its conversation's folder, that folder's git repository (but on macOS never its
-hooks or config, nor the engine's settings in the folder: `.opencode/`, `opencode.json`), its own
-temporary folder (`TMPDIR`), the system's temporary folders, devices and tools' caches. It can't read
+writes only in its conversation's folder, that folder's git repository (a real one: a `.git` that's
+a link, or names a folder that isn't a repository or a worktree the repository doesn't name back,
+counts for nothing; on macOS never its hooks or config, its submodules' or its worktrees', nor the
+engine's settings in the folder: `.opencode/`, `opencode.json`), its conversation's own temporary
+folder (`TMPDIR`), its conversation's wake-ups' inbox (below), the system's temporary folders, devices and tools'
+caches, but not what in them runs later outside the sandbox (installed programs like
+`~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, npx's packages). It can't read
 Kuvo Code's own folders (on a machine `~/.kuvo-code`; on this Mac the app's folders under `Library`,
 any `run.kuvo.code…` copy's, its temporary folder and `/tmp/kuvo-ssh-<uid>`) but its `bin`, nor your
 secrets (cloud, package and git tokens, browsers' and password managers' data, private SSH keys:
 every file in `~/.ssh` but its config, known hosts and public keys; gh's `hosts.yml` when it holds
-the token). A bot's or a chat's command gets its own folder back, and not its neighbours'. On macOS
-it also can't reach Kuvo Code's own servers on `127.0.0.1` (the engine's, the bridge's, the box's,
-the host interface) or sockets in its folders; on Linux their passwords are in files it can't read.
+the token). A bot's or a chat's command gets its own folder back, and not its neighbours'. Its
+environment has none of the engine's `OPENCODE_…` (but `OPENCODE_SESSION_ID`), no `KUVO_…` password,
+secret, token or key, and no `SSH_AUTH_SOCK`.
+On macOS it also can't reach Kuvo Code's own servers on `127.0.0.1` (the engine's, the bridge's,
+the box's, the host interface) or sockets in its folders, start launchd jobs, open apps
+(LaunchServices) or send Apple Events; on Linux the servers' passwords are in files it can't read,
+and its sockets (the vault's `run/vault.sock`, the browser keeper's `run/browser.sock`), which a
+command can still connect to there, serve only a connection that gives the box's socket key first
+(`run/socket.key`, which it can't read): the vault's in its hello, above; the keeper's as
+`{"method": "Kuvo.key", "params": {"key"}}`, before it says its own hello. Any other hears nothing
+from the vault, and from the keeper (within a few seconds and a short first line) only a
+`Kuvo.error` saying to update Kuvo Code, which is what an older Kuvo Code on a Mac shows; then it's
+closed.
+The engine's plugin makes a new key as that engine first sends commands through the sandbox (before
+any of them runs), so one a command read before opens nothing after. (A process a command started
+while the sandbox was off, or before the engine took it in, still runs outside it.)
+So neither a command nor what it starts can route a request to the vault (`box route` included),
+take a sign-in's fill, or drive, stop or answer the browser.
+
+**Wake-ups.** A command schedules its own conversation's (`kuvo-wake add` and `watch`, the
+conversation as the engine names it in `OPENCODE_SESSION_ID`), never another's: it reads its
+conversation's wake folder (its bot's, or its own in the box's `wakes`, which the launcher makes
+with its `session` and `directory` before the command runs, and which goes a day after it was last
+used if it never got a wake-up or a watch, or its conversation's archived) and writes only its
+`inbox/`. The launcher names that folder to kuvo-wake in `KUVO_WAKE_FOLDER`, and kuvo-wake puts what's
+asked there (wake-ups in `inbox/wakes`, watches in `inbox/watches`, cancels in `inbox/cancel`), each
+written whole under a `.new-` name first and then put in place, and lists them with what's kept. The
+box's round of wake-ups (`kuvo-wake fire`, each minute) takes the inbox in, unless it's empty or a
+`.new-` there is under a minute old: it moves it out of the commands' reach first (a link moves as the
+link), then keeps copies of only plain files (no link, no second name for a file, 64 KB at most)
+under the names kuvo-wake gives them, and clears the rest; what it keeps (`wakes/`, `watches/`, a
+watch's readings) no command writes. While the sandbox is on (`run/fence/on`), each watch's check
+runs in the sandbox, in its conversation's folder (none when that's gone), whether at its time or by
+Check Now (`kuvo-wake try`), what it prints going to a file; set up and checked (`run/fence/ready`)
+but not on, or its launcher missing, checks wait. Where the box can't set it up, checks run as
+commands do.
 
 **How.** The box writes, as it starts and when you turn it on: `bin/kuvo-fence` (the shell the
 engine runs a command with) and, on Linux, `bin/kuvo-fence.js`; the rules in `run/fence/`
@@ -2568,7 +2609,8 @@ the engine's own Bun sets up through `bun:ffi`, Linux 5.13 or later); and the en
 opens, that folder (the engine's own, never the command's) and its repository, and sends each
 command's shell through `bin/kuvo-fence`, which refuses to run one without a folder (exit `126`). The
 box first runs a command through it and checks that it can't read or write what's hidden; only then
-does it give the engine the plugin, and it takes it away when you turn the sandbox off or a check
+does it give the engine the plugin, and it takes it away (with what the engine noted of it, so
+it's `on` again only once the engine has loaded it again) when you turn the sandbox off or a check
 fails, so commands run as before rather than not at all. It puts it back if it goes, and keeps
 Kuvo Code's own ports in the macOS rules as they change.
 
@@ -2580,7 +2622,27 @@ Kuvo Code's own ports in the macOS rules as they change.
   `box/sandbox.json`, which a command in the sandbox can't change). `agents`: the coding agents' own
   programs' commands (Claude Code, Codex…, which don't go through the engine) are in it too; `false`
   for now, so on doesn't yet cover them.
+  When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
+  you can do (`action`) and the box's route that does it (`route`, where there is one):
+
+  | `reason` | when | `action` | `route` |
+  | --- | --- | --- | --- |
+  | `off` | you haven't turned it on, and this computer can have it | `turnOn` | `PATCH kuvo/sandbox` |
+  | `kernel` | Linux without Landlock; `needs`: `"Linux 5.13"` | `help` | |
+  | `macos` | this macOS has no sandbox | `softwareUpdate` | |
+  | `engineMissing` | a machine without its engine yet | `retry` | `POST kuvo/sandbox/check` |
+  | `checking` | not checked yet | `retry` | `POST kuvo/sandbox/check` |
+  | `checkFailed` | its check failed; `check`: `folder`, `tempFiles`, `readsOwn`, `writesOwn`, `didntRun` or `setup` | `retry` | `POST kuvo/sandbox/check` |
+  | `plugin` | its plugin for the engine was changed or removed | `fix` | `POST kuvo/sandbox/check` |
+  | `engineDown` | the engine isn't running | `restartEngine` | `POST kuvo/engine/restart` |
+  | `waiting` | the engine hasn't loaded it yet | `restartEngine` | `POST kuvo/engine/restart` |
+
+  `kernel`, `macos` and `engineMissing` come whether or not you turned it on. `failures`, with
+  `checking` and `checkFailed`: checks failed in a row (the box tries again each minute). A box
+  without `sandbox.check` in its features gives none of these; without `sandbox`, it has no sandbox
+  (an older Kuvo Code, to update).
 - `PATCH kuvo/sandbox {on: true | false}` → the state, after setting it up (`400` for anything else).
+- `POST kuvo/sandbox/check` → the state, after setting it up and checking it again.
 
 ### Paired phones
 
