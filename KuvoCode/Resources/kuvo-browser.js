@@ -56,11 +56,24 @@ const TAB_IDLE = Number(process.env.KUVO_BROWSER_TAB_IDLE || 3600) * 1000;
 
 // Goes up with every change to the keeper (host mode): a newer one replaces one that's running
 // (its pages close, its sign-ins stay), and an older one never replaces a newer.
-const KEEPER = 37;
+const KEEPER = 38;
 // Passkeys: none yet, as in the panel's browser on the Mac (Passkeys.swift, the same script).
-const NO_PASSKEYS = "(() => {\n  try {\n    // How the app (WebKit's message handler) or a machine's keeper (Chrome's binding) hears that\n    // a passkey was asked for, taken before the page can change them.\n    const handlers = window.webkit && window.webkit.messageHandlers, handler = handlers && handlers.kuvoPasskey;\n    const binding = window.kuvoPasskeyAsked;\n    // (Chrome's binding comes back a moment after the page does, so it's looked for a while.)\n    const tell = (tries = 20) => {\n      try {\n        const chrome = binding || window.kuvoPasskeyAsked;\n        if (handler) handler.postMessage(\"\");\n        else if (typeof chrome === \"function\") chrome(\"\");\n        else if (tries > 0) setTimeout(() => tell(tries - 1), 100);\n      } catch {}\n    };\n    const none = (options) => {\n      // Asked of you, not looked for quietly as the page loads.\n      if (options.mediation !== \"conditional\") tell();\n      return Promise.reject(new DOMException(\"Passkeys can't be used in this browser.\", \"NotAllowedError\"));\n    };\n    const Container = window.CredentialsContainer;\n    if (Container && Container.prototype) {\n      const prototype = Container.prototype, get = prototype.get, create = prototype.create;\n      if (get) prototype.get = function (options) { return options && options.publicKey ? none(options) : get.call(this, options); };\n      if (create) prototype.create = function (options) { return options && options.publicKey ? none(options) : create.call(this, options); };\n    }\n    const Credential = window.PublicKeyCredential;\n    if (Credential) {\n      Credential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);\n      if (Credential.isConditionalMediationAvailable) Credential.isConditionalMediationAvailable = () => Promise.resolve(false);\n    }\n  } catch {}\n})();";
-// The binding it tells a passkey was asked for through.
+const NO_PASSKEYS = "(() => {\n  try {\n    // Says a passkey was asked for with an event only this launch's listener, in a world of its\n    // own, knows the name of: nothing of it is left in the page's world. (Taken before the page\n    // can change them.)\n    const dispatch = EventTarget.prototype.dispatchEvent, Made = Event;\n    const tell = () => {\n      try {\n        dispatch.call(window, new Made(\"KUVO_PASSKEY_EVENT\"));\n      } catch {}\n    };\n    const none = (options) => {\n      // Asked of you, not looked for quietly as the page loads.\n      if (options.mediation !== \"conditional\") tell();\n      return Promise.reject(new DOMException(\"Passkeys can't be used in this browser.\", \"NotAllowedError\"));\n    };\n    const Container = window.CredentialsContainer;\n    if (Container && Container.prototype) {\n      const prototype = Container.prototype, get = prototype.get, create = prototype.create;\n      if (get) prototype.get = function (options) { return options && options.publicKey ? none(options) : get.call(this, options); };\n      if (create) prototype.create = function (options) { return options && options.publicKey ? none(options) : create.call(this, options); };\n    }\n    const Credential = window.PublicKeyCredential;\n    if (Credential) {\n      Credential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);\n      if (Credential.isConditionalMediationAvailable) Credential.isConditionalMediationAvailable = () => Promise.resolve(false);\n    }\n  } catch {}\n})();";
+// The event it fires when a passkey is asked for (a name of this keeper's, which only the
+// listener knows), the world of the keeper's own the listener runs in, and the binding it tells
+// the keeper through there: nothing of them is in the page's world.
+const PASSKEY_EVENT = "kuvo-" + crypto.randomUUID();
+const PASSKEY_WORLD = "kuvo-passkeys";
 const PASSKEY_BINDING = "kuvoPasskeyAsked";
+// (The binding comes back a moment after a new page does, so it's looked for a while.)
+const PASSKEY_LISTENER = `window.addEventListener(${JSON.stringify(PASSKEY_EVENT)}, () => {
+  const tell = (tries) => {
+    const binding = globalThis.${PASSKEY_BINDING};
+    if (typeof binding === "function") binding("");
+    else if (tries > 0) setTimeout(() => tell(tries - 1), 100);
+  };
+  tell(20);
+});`;
 // What the agent's look at a page says when its site asked for one (as BrowserAgent.swift's).
 const PASSKEY_NOTE = "This site asked for a passkey, which this browser can't use. Don't choose its passkey option again: sign in another way (a password, a code or an email link), or ask the user.";
 
@@ -501,6 +514,10 @@ async function host() {
   const askedPasskeyLately = (host) => Date.now() - (passkeySites.get(host) ?? 0) < 10 * 60_000;
   // And the site of each page that asked, for a client that connects later (the agent's tools).
   const passkeyPages = new Map();
+  // A page that's left that site, or closed: clients stop saying it.
+  const passkeyCleared = (targetId) => {
+    if (passkeyPages.delete(targetId)) broadcast({ method: "Kuvo.passkeyCleared", params: { targetId } });
+  };
   // Downloads under way: their temporary names, and the names their sites gave them.
   const downloads = new Map();
   const browserIdentity = identity();
@@ -671,7 +688,7 @@ async function host() {
     // Chrome gives a new document a binding only with its Runtime domain on (which sites notice):
     // each of the keeper's pages and frames gets it again as it navigates.
     if (message.method === "Page.frameNavigated" && message.sessionId && isOwn(message.sessionId)) {
-      toChrome({ id: next++, method: "Runtime.addBinding", params: { name: PASSKEY_BINDING }, sessionId: message.sessionId });
+      toChrome({ id: next++, method: "Runtime.addBinding", params: { name: PASSKEY_BINDING, executionContextName: PASSKEY_WORLD }, sessionId: message.sessionId });
     }
     // A page (or a frame of another site in it) asked for a passkey: its site as Chrome has it.
     if (message.method === "Runtime.bindingCalled" && message.params?.name === PASSKEY_BINDING) {
@@ -680,7 +697,8 @@ async function host() {
       // of another site in it asked.
       const page = pageOf(message.sessionId);
       const host = page && hostOf(addresses.get(page) ?? "");
-      if (!host) return;
+      // Asked again by the same page: said already.
+      if (!host || passkeyPages.get(page) === host) return;
       for (const site of passkeySites.keys()) if (!askedPasskeyLately(site)) passkeySites.delete(site);
       passkeySites.set(host, Date.now());
       let changed = false;
@@ -713,9 +731,11 @@ async function host() {
       // dialog, which no one sees in the live view, holding the page still (Passkeys.swift). The
       // page domain first: without it Chrome takes the script and never runs it.
       toChrome({ id: next++, method: "Page.enable", params: {}, sessionId });
-      // How the script says a passkey was asked for (no Runtime domain needed, which sites notice).
-      toChrome({ id: next++, method: "Runtime.addBinding", params: { name: PASSKEY_BINDING }, sessionId });
-      toChrome({ id: next++, method: "Page.addScriptToEvaluateOnNewDocument", params: { source: NO_PASSKEYS, runImmediately: true }, sessionId });
+      // How the script says a passkey was asked for: its listener in a world of the keeper's, and
+      // the binding there (no Runtime domain needed, which sites notice).
+      toChrome({ id: next++, method: "Runtime.addBinding", params: { name: PASSKEY_BINDING, executionContextName: PASSKEY_WORLD }, sessionId });
+      toChrome({ id: next++, method: "Page.addScriptToEvaluateOnNewDocument", params: { source: PASSKEY_LISTENER, worldName: PASSKEY_WORLD, runImmediately: true }, sessionId });
+      toChrome({ id: next++, method: "Page.addScriptToEvaluateOnNewDocument", params: { source: NO_PASSKEYS.replace("KUVO_PASSKEY_EVENT", PASSKEY_EVENT), runImmediately: true }, sessionId });
       // Its frames of other sites run on their own: the same for them (a sign-in button from
       // another site, say).
       toChrome({ id: next++, method: "Target.setAutoAttach", params: { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId });
@@ -753,12 +773,12 @@ async function host() {
       firstPage ??= message.params.targetInfo.targetId;
       // A page that's left the site that asked for a passkey: nothing's said of it any more.
       const asked = passkeyPages.get(message.params.targetInfo.targetId);
-      if (asked && hostOf(message.params.targetInfo.url) !== asked) passkeyPages.delete(message.params.targetInfo.targetId);
+      if (asked && hostOf(message.params.targetInfo.url) !== asked) passkeyCleared(message.params.targetInfo.targetId);
     }
     if (message.method === "Target.targetDestroyed") {
       targets.delete(message.params.targetId);
       addresses.delete(message.params.targetId);
-      passkeyPages.delete(message.params.targetId);
+      passkeyCleared(message.params.targetId);
       own.delete(message.params.targetId);
       claims.delete(message.params.targetId);
       seen.delete(message.params.targetId);
@@ -1189,6 +1209,9 @@ async function openLink() {
         break;
       case "Kuvo.passkeyAsked":
         if (message.params?.targetId) passkeyPages.set(message.params.targetId, message.params.host);
+        break;
+      case "Kuvo.passkeyCleared":
+        passkeyPages.delete(message.params?.targetId);
         break;
       case "Target.detachedFromTarget":
         for (const [target, session] of sessions) if (session === message.params.sessionId) sessions.delete(target);

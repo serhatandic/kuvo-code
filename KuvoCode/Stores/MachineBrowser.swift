@@ -197,7 +197,17 @@ final class MachineBrowser {
     @ObservationIgnored var onPasskeyAsked: (String) -> Void = { _ in }
     /// The site of each page (by target) that asked for a passkey, for its note in the live view,
     /// until you close it (or the page is on another site).
-    var passkeyPages: [String: String] = [:]
+    private(set) var passkeyPages: [String: String] = [:]
+
+    /// Notes you closed, by page and site: the keeper's hello after a reconnect (a sleep) doesn't
+    /// bring them back.
+    @ObservationIgnored private var closedPasskeyNotes: Set<String> = []
+
+    /// You closed a page's note about a passkey.
+    func closePasskeyNote(_ page: String) {
+        guard let site = passkeyPages.removeValue(forKey: page) else { return }
+        closedPasskeyNotes.insert(page + "|" + site)
+    }
 
     /// A page's site as the keeper names it (and asks do): its host, "http://host" over http.
     static func site(of address: String) -> String? {
@@ -496,7 +506,7 @@ final class MachineBrowser {
             for page in myHolds { link?.fire("Kuvo.hold", ["targetId": page, "on": true, "mac": MachineEngine.macID]) }
             for ask in params["asks"] as? [[String: Any]] ?? [] { asked(ask) }
             // Pages whose site asked for a passkey before this connection.
-            for (page, site) in params["passkeys"] as? [String: String] ?? [:] { passkeyPages[page] = site }
+            for (page, site) in params["passkeys"] as? [String: String] ?? [:] where !closedPasskeyNotes.contains(page + "|" + site) { passkeyPages[page] = site }
             Task { await begin() }
         case "Kuvo.asked":
             asked(params)
@@ -519,8 +529,14 @@ final class MachineBrowser {
             #endif
         case "Kuvo.passkeyAsked":
             guard let host = params["host"] as? String else { return }
-            if let page = params["targetId"] as? String { passkeyPages[page] = host }
+            // (Asked anew: the page left the site and came back, so a note you closed shows again.)
+            if let page = params["targetId"] as? String {
+                closedPasskeyNotes.remove(page + "|" + host)
+                passkeyPages[page] = host
+            }
             onPasskeyAsked(host)
+        case "Kuvo.passkeyCleared":
+            if let page = params["targetId"] as? String { passkeyPages[page] = nil }
         case "Kuvo.askClosed":
             if let id = params["id"] as? String, openAsks.remove(id) != nil { onAskClosed(id) }
         case "Kuvo.error":

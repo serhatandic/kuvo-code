@@ -52,11 +52,15 @@ import WebKit
         PasskeyAsks.shared.onAsked = { site in
             told.append(site)
             asks.passkeyAsked(host: site, machine: nil)
+            TestPulse.beat()
         }
         defer { PasskeyAsks.shared.onAsked = { _ in } }
         let tab = BrowserSession()
         tab.webView.loadHTMLString("<!doctype html><title>Sign in</title><body>Sign in</body>", baseURL: URL(string: "https://accounts.example.com/login")!)
         try await until { !tab.isLoading && tab.url != nil }
+        // Nothing of it in the page's own world: a site that looks for an app's message handlers
+        // (as some do, to turn in-app browsers away) finds none.
+        #expect(try await tab.webView.callAsyncJavaScript("return typeof window.webkit", contentWorld: .page) as? String == "undefined")
         asks.add(BrowserAsks.Ask(id: "open", kind: .action(instruction: "Sign in"), host: "accounts.example.com", machine: nil, session: "ses_a")) { _ in }
         asks.add(BrowserAsks.Ask(id: "elsewhere", kind: .action(instruction: "Sign in"), host: "accounts.example.com", machine: "box", session: "ses_b")) { _ in }
 
@@ -70,9 +74,14 @@ import WebKit
         asks.add(BrowserAsks.Ask(id: "later", kind: .code(prompt: ""), host: "accounts.example.com", machine: nil, session: "ses_a")) { _ in }
         #expect(asks.asks.last?.passkey == true)
 
-        // Gone once you leave the site.
-        tab.webView.loadHTMLString("<!doctype html><title>Home</title>", baseURL: URL(string: "https://example.org/")!)
-        try await until { tab.passkeySite == nil }
+        // Asked again by the same page: said once.
+        _ = try? await tab.webView.callAsyncJavaScript("await navigator.credentials.get({ publicKey: \(publicKey) }).catch(() => {})", contentWorld: .page)
+
+        // Gone once you leave the site; a page there asking is said for its own site.
+        tab.webView.loadHTMLString("<!doctype html><title>Home</title><script>navigator.credentials.get({ publicKey: \(publicKey) }).catch(() => {})</script>", baseURL: URL(string: "https://example.org/")!)
+        try await until { told.count == 2 }
+        #expect(told == ["accounts.example.com", "example.org"])
+        try await until { tab.passkeySite == "example.org" }
     }
 }
 

@@ -8,21 +8,18 @@ import WebKit
 /// every way of asking reaches it, `CredentialsContainer.prototype.get.call(…)` too, which goes
 /// round anything put on `navigator.credentials` itself.
 nonisolated enum Passkeys {
-    /// Run in the page's own world before anything else, in every frame.
-    static let script = #"""
+    /// Run in the page's own world before anything else, in every frame (as a machine's Chrome
+    /// gets it too, `NO_PASSKEYS`), with this launch's event name in it.
+    static let template = #"""
     (() => {
       try {
-        // How the app (WebKit's message handler) or a machine's keeper (Chrome's binding) hears that
-        // a passkey was asked for, taken before the page can change them.
-        const handlers = window.webkit && window.webkit.messageHandlers, handler = handlers && handlers.kuvoPasskey;
-        const binding = window.kuvoPasskeyAsked;
-        // (Chrome's binding comes back a moment after the page does, so it's looked for a while.)
-        const tell = (tries = 20) => {
+        // Says a passkey was asked for with an event only this launch's listener, in a world of its
+        // own, knows the name of: nothing of it is left in the page's world. (Taken before the page
+        // can change them.)
+        const dispatch = EventTarget.prototype.dispatchEvent, Made = Event;
+        const tell = () => {
           try {
-            const chrome = binding || window.kuvoPasskeyAsked;
-            if (handler) handler.postMessage("");
-            else if (typeof chrome === "function") chrome("");
-            else if (tries > 0) setTimeout(() => tell(tries - 1), 100);
+            dispatch.call(window, new Made("KUVO_PASSKEY_EVENT"));
           } catch {}
         };
         const none = (options) => {
@@ -45,7 +42,23 @@ nonisolated enum Passkeys {
     })();
     """#
 
-    /// The message handler the script tells a passkey was asked for through.
+    /// The event the script fires when a passkey is asked for: a name of this launch's, which only
+    /// the listener knows.
+    static let eventName = "kuvo-" + UUID().uuidString.lowercased()
+    static let script = template.replacingOccurrences(of: "KUVO_PASSKEY_EVENT", with: eventName)
+
+    /// The world the listener runs in, apart from the page's: its message handler is seen there
+    /// only (in the page's own, a site would see `window.webkit.messageHandlers`).
+    @MainActor static let world = WKContentWorld.world(name: "KuvoPasskeys")
+
+    /// Hears the script's event in each frame, and tells the app.
+    static let listener = """
+    window.addEventListener("\(eventName)", () => {
+      try { window.webkit.messageHandlers.\(messageName).postMessage(""); } catch {}
+    });
+    """
+
+    /// The message handler the listener tells a passkey was asked for through.
     static let messageName = "kuvoPasskey"
 
     /// Adds the script and its message handler to a configuration (once; windows a page opens
@@ -54,7 +67,8 @@ nonisolated enum Passkeys {
         let controller = configuration.userContentController
         guard !controller.userScripts.contains(where: { $0.source == script }) else { return }
         controller.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
-        controller.add(PasskeyAsks.shared, contentWorld: .page, name: messageName)
+        controller.addUserScript(WKUserScript(source: listener, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: world))
+        controller.add(PasskeyAsks.shared, contentWorld: world, name: messageName)
     }
 }
 
@@ -83,13 +97,18 @@ final class PasskeyAsks: NSObject, WKScriptMessageHandler {
     }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let site = Self.site(of: message.frameInfo.securityOrigin) else { return }
+        let frame = message.frameInfo
+        guard let site = Self.site(of: frame.securityOrigin) else { return }
         // A frame of another site in the page (a sign-in button) asking counts for the page too:
-        // an ask names the page's site.
-        let page = message.webView.flatMap { BrowserAgent.site(of: $0.url) } ?? site
+        // an ask names the page's site, the one the frame was loaded in (not wherever the tab
+        // has gone since).
+        let page = frame.isMainFrame ? site : frame.request.mainDocumentURL.flatMap { BrowserAgent.site(of: $0) } ?? site
+        let session = message.webView.flatMap { webView in sessions.allObjects.first { $0.webView === webView } }
+        // Asked again by the same page: said already.
+        if let session, session.passkeySite == page { return }
         onAsked(page)
         if page != site { onAsked(site) }
-        guard let webView = message.webView, let session = sessions.allObjects.first(where: { $0.webView === webView }) else { return }
-        session.passkeySite = page
+        // Its note, while the tab's still on that site.
+        if let session, BrowserAgent.site(of: session.webView.url) == page { session.passkeySite = page }
     }
 }
