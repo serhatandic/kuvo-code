@@ -485,12 +485,12 @@ its own, which a `SIGTERM` stops waiting.
     ("Peers"). Without a conversation to answer, or off the relay, a letter isn't waited for.
     `read_conversation` reads one here, or asks a peer with `letters-read` for it by letter.
 - **`POST kuvo/sessions`** `{task, title?, folder? | project? | chat?, worktree?, model?, effort?,
-  mode?, approval?, wake?, startedBy?, beside? = true, wait? = false}` →
-  `{session, title, folder, project, beside, answer?}` (`project` null for a chat; `answer` with
+  mode?, approval?, wake?, startedBy?, wait? = false}` →
+  `{session, title, folder, project, answer?}` (`project` null for a chat; `answer` with
   `wait`, its first answer in ten minutes, else null). `start_session` is this route, from the
   calling conversation.
   - From a conversation (`startedBy`, its root found as above): in its folder unless `folder` names
-    another (a bot's own folder is its chats), on its model and in its mode (Plan stays Plan), on the engine or coding agents' bridge
+    another (a bot's own folder is its chats), on its model and in its mode (Plan stays Plan) unless `model`, `effort` or `mode` names another, on the engine or coding agents' bridge
     it runs on, with its approval made again with this box's Settings › Permissions (Ask First isn't
     got around), its metadata `kuvo: {startedBy}` (it opens nothing by itself: clients list it under that
     conversation), and the task as a message from it.
@@ -563,7 +563,7 @@ what it may do itself, and stops them. Every box does this alike, with no client
 client shows it from the same routes.
 
 - **Marked as its work**: a session a bot starts, and every one under it, has metadata
-  `kuvo: {startedBy, beside, by: {bot, name}, depth, wake?}`: the bot it works for, how deep it is
+  `kuvo: {startedBy, by: {bot, name}, depth, wake?}`: the bot it works for, how deep it is
   (1 for one the bot started), and what its starter hears of it (a bot: both, or only its asks
   when it waited for the answer). What a starter hears is gathered a few seconds and sent as one
   message (an ask to be read at its next step), kept in `run/work/wakes.json` until it's sent. Clients mark rows by `kuvo.by`.
