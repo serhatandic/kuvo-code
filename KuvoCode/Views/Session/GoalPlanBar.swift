@@ -432,7 +432,7 @@ struct GoalLanes: View {
             let after = step.after.compactMap { id in plan.steps.first { $0.id == id }?.text }
             return (after.isEmpty ? "Not started" : "After \(after.formatted(.list(type: .and)))", AnyShapeStyle(.tertiary))
         case .doing:
-            return (step.note ?? step.progress.map { "\(Int(($0 * 100).rounded()))%" } ?? "Under way", AnyShapeStyle(.secondary))
+            return (GoalPlanWords.underWay(step), AnyShapeStyle(.secondary))
         }
     }
 

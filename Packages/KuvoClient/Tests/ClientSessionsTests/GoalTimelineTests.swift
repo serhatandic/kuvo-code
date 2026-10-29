@@ -149,6 +149,18 @@ struct GoalTimelineTests {
         #expect(days.start >= open.start && days.end <= open.end, "the days shown are all on the axis")
     }
 
+    @Test func aStepUnderWaySaysWhatTheBotCountedNeverABarePercentage() {
+        let counted = GoalPlan.Step(id: "s1", text: "Subscriber portal", state: .doing, progress: 0.6, note: "3 of 5 screens")
+        #expect(GoalPlanWords.underWay(counted) == "3 of 5 screens", "beside the lane: the count, as the bot gave it")
+        #expect(GoalPlanWords.spoken(counted) == "Subscriber portal, 3 of 5 screens")
+        let uncounted = GoalPlan.Step(id: "s2", text: "DNS", state: .doing)
+        #expect(GoalPlanWords.underWay(uncounted) == "Under way")
+        #expect(GoalPlanWords.spoken(uncounted) == "DNS, in progress")
+        // A plan kept before counts were asked for: its share, said as about so much.
+        let older = GoalPlan.Step(id: "s3", text: "Press kit", state: .doing, progress: 0.5)
+        #expect(GoalPlanWords.underWay(older) == "About half")
+    }
+
     @Test func aLongPlanIsSaidInAFewNamesAndHowManyMore() {
         let steps = (1...30).map { GoalPlan.Step(id: "s\($0)", text: "Step \($0)", state: .todo) }
         let outline = GoalPlanWords.outline(plan(steps))

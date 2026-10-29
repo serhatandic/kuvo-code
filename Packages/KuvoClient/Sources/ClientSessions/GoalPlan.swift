@@ -467,6 +467,20 @@ public enum GoalPlanWords {
     /// How many wait for you: "1 waits for you".
     public static func waiting(_ count: Int) -> String { count == 1 ? "1 waits for you" : "\(count) wait for you" }
 
+    /// What a step under way is at, beside its lane: what the bot counted ("3 of 5 screens"), as
+    /// the box asks it to with every share. A plan kept before that has only its share, said roughly
+    /// ("About half"), never as a bare percentage.
+    public static func underWay(_ step: GoalPlan.Step) -> String {
+        if let note = step.note { return note }
+        guard let progress = step.progress else { return "Under way" }
+        switch progress {
+        case ..<0.15: return "Just started"
+        case 0.4...0.6: return "About half"
+        case 0.85...: return "Nearly done"
+        default: return "About \(Int((progress * 10).rounded()) * 10)%"
+        }
+    }
+
     /// A track as VoiceOver reads it: "DNS, half done", "Deploy, paused until 15:20", "Build the
     /// site, in progress".
     public static func spoken(_ step: GoalPlan.Step, now: Date = .now) -> String {
@@ -477,6 +491,7 @@ public enum GoalPlanWords {
         case .waiting: return "\(step.text), waiting for you"
         case .paused: return step.resumesDate.map { "\(step.text), paused until \($0.formatted(date: .omitted, time: .shortened))" } ?? "\(step.text), paused"
         case .doing:
+            if let note = step.note { return "\(step.text), \(note)" }
             guard let progress = step.progress else { return "\(step.text), in progress" }
             switch progress {
             case ..<0.15: return "\(step.text), just started"

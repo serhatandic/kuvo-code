@@ -74,21 +74,21 @@ extension GoalPlans {
                         "Driftwood’s landing page is live at driftwood.coffee, with checkout in test mode until Stripe’s identity check is done.", true)
         case "month":
             let day = 24.0 * 60
-            let step = { (id: String, text: String, phase: String, state: GoalPlan.Step.State, from: Double?, to: Double?, progress: Double?, site: String?) in
-                GoalPlan.Step(id: id, text: text, state: state, progress: progress, phase: phase, site: site, began: from.map { ms($0 * day) }, ended: to.map { ms($0 * day) })
+            let step = { (id: String, text: String, phase: String, state: GoalPlan.Step.State, from: Double?, to: Double?, progress: Double?, site: String?, note: String?) in
+                GoalPlan.Step(id: id, text: text, state: state, progress: progress, note: note, phase: phase, site: site, began: from.map { ms($0 * day) }, ended: to.map { ms($0 * day) })
             }
             let steps: [GoalPlan.Step] = [
-                step("m1", "Research", "Research", .done, -9, -8.5, nil, nil),
-                step("m2", "Brand and copy", "Research", .done, -8.5, -7, nil, nil),
-                step("m3", "Domain", "Build", .done, -8, -7.8, nil, cloudflare),
-                step("m4", "DNS", "Build", .done, -7.8, -7.2, nil, cloudflare),
-                step("m5", "Site", "Build", .done, -7, -3, nil, nil),
-                step("m6", "Pricing page", "Build", .done, -4, -1.5, nil, nil),
-                step("m7", "Deploy", "Build", .done, -1.5, -0.8, nil, cloudflare),
-                step("m8", "Subscriber portal", "Build", .doing, -2, nil, 0.6, nil),
-                step("m9", "Search setup", "Build", .paused, -0.6, nil, nil, nil),
-                step("m10", "Stripe live", "Launch", .waiting, -0.5, nil, nil, stripe),
-                step("m11", "Press kit", "Launch", .doing, -1.4, nil, 0.5, nil),
+                step("m1", "Research", "Research", .done, -9, -8.5, nil, nil, nil),
+                step("m2", "Brand and copy", "Research", .done, -8.5, -7, nil, nil, nil),
+                step("m3", "Domain", "Build", .done, -8, -7.8, nil, cloudflare, nil),
+                step("m4", "DNS", "Build", .done, -7.8, -7.2, nil, cloudflare, nil),
+                step("m5", "Site", "Build", .done, -7, -3, nil, nil, nil),
+                step("m6", "Pricing page", "Build", .done, -4, -1.5, nil, nil, nil),
+                step("m7", "Deploy", "Build", .done, -1.5, -0.8, nil, cloudflare, nil),
+                step("m8", "Subscriber portal", "Build", .doing, -2, nil, 0.6, nil, "3 of 5 screens"),
+                step("m9", "Search setup", "Build", .paused, -0.6, nil, nil, nil, nil),
+                step("m10", "Stripe live", "Launch", .waiting, -0.5, nil, nil, stripe, nil),
+                step("m11", "Press kit", "Launch", .doing, -1.4, nil, 0.5, nil, "2 of 4 assets"),
                 GoalPlan.Step(id: "m12", text: "Launch post", state: .todo, phase: "Launch", after: ["m11"]),
                 GoalPlan.Step(id: "m13", text: "Newsletter", state: .todo, phase: "Grow", after: ["m12"]),
                 GoalPlan.Step(id: "m14", text: "Ads", state: .todo, phase: "Grow", after: ["m12"]),
