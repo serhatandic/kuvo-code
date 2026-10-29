@@ -2556,7 +2556,9 @@ until you turn it on. On, each command the engine runs (an agent's shell tool, a
 writes only in its conversation's folder, that folder's git repository (a real one: a `.git` that's
 a link, or names a folder that isn't a repository or a worktree the repository doesn't name back,
 counts for nothing; on macOS never its hooks or config, its submodules' or its worktrees', nor the
-engine's settings in the folder: `.opencode/`, `opencode.json`), its conversation's own temporary
+engine's settings in the folder: `.opencode/`, `opencode.json`, nor the coding agents', whose hooks
+and servers they run as they start there: `.claude/`, `.mcp.json`, `.codex/`, `.cursor/`, `.grok/`,
+`.gemini/`), its conversation's own temporary
 folder (`TMPDIR`), its conversation's wake-ups' inbox (below), the system's temporary folders, devices and tools'
 caches, but not what in them runs later outside the sandbox (installed programs like
 `~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, npx's packages). It can't read

@@ -214,7 +214,7 @@ test("on, a command writes in its own project, git works there, and Kuvo Code's 
   }
 });
 
-test("a command can't change what git runs on its own, or the engine's settings, from its project", { skip: linux && "Linux can't refuse inside a folder it lets a command write: the box checks after each command instead" }, async () => {
+test("a command can't change what git runs on its own, the engine's settings or the coding agents', from its project", { skip: linux && "Linux's Landlock can't refuse a file inside a folder it lets a command write" }, async () => {
   const box = boxAt("guards");
   const project = path.join(root, "guarded");
   fs.mkdirSync(project);
@@ -222,6 +222,8 @@ test("a command can't change what git runs on its own, or the engine's settings,
   // A submodule's repository and a worktree's, as git keeps them in the project's.
   fs.mkdirSync(path.join(project, ".git", "modules", "lib", "hooks"), { recursive: true });
   fs.mkdirSync(path.join(project, ".git", "worktrees", "spare"), { recursive: true });
+  fs.mkdirSync(path.join(project, ".claude"));
+  fs.writeFileSync(path.join(project, ".claude", "settings.local.json"), "{}\n");
   const running = await start(box);
   try {
     assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
@@ -234,13 +236,22 @@ test("a command can't change what git runs on its own, or the engine's settings,
       ["make a branch", "mkdir -p .git/refs/heads && echo 0 > .git/refs/heads/topic"],
       ["add the engine's settings", `echo '{}' > opencode.json`],
       ["add the engine's plugins", "mkdir -p .opencode/plugin && echo x > .opencode/plugin/x.js"],
+      ["add Claude Code's hooks", `mkdir -p .claude && echo '{"hooks":{}}' > .claude/settings.json`],
+      ["change Claude Code's own settings", `echo '{"hooks":{}}' > .claude/settings.local.json`],
+      ["add Claude Code's servers", `echo '{"mcpServers":{}}' > .mcp.json`],
+      ["add Codex's settings", "mkdir -p .codex && echo 'x = 1' > .codex/config.toml"],
+      ["add Cursor's hooks", "mkdir -p app/.cursor && echo '{}' > app/.cursor/hooks.json"],
+      ["write the project's notes for agents", "echo ok > CLAUDE.md"],
       ["write a source file", "echo ok > index.js"],
     ]));
     const seen = outcome(ran.out);
     assert.deepEqual(seen, {
       "add a git hook": "refused", "change git's settings": "refused", "add a submodule's hook": "refused", "change a submodule's settings": "refused",
-      "change a worktree's settings": "refused", "make a branch": "allowed", "add the engine's settings": "refused", "add the engine's plugins": "refused", "write a source file": "allowed",
+      "change a worktree's settings": "refused", "make a branch": "allowed", "add the engine's settings": "refused", "add the engine's plugins": "refused",
+      "add Claude Code's hooks": "refused", "change Claude Code's own settings": "refused", "add Claude Code's servers": "refused", "add Codex's settings": "refused",
+      "add Cursor's hooks": "refused", "write the project's notes for agents": "allowed", "write a source file": "allowed",
     }, ran.out);
+    assert.equal(fs.readFileSync(path.join(project, ".claude", "settings.local.json"), "utf8"), "{}\n");
   } finally {
     await running.stop();
   }

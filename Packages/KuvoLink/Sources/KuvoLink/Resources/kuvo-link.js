@@ -10576,7 +10576,7 @@ var subpath = (folder) => `(subpath ${quote2(folder)})`;
 var regex = (pattern) => `(regex ${quote2(pattern)})`;
 var param = (name) => `(subpath (param ${quote2(name)}))`;
 var GIT_GUARDED = String.raw`((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$)`;
-var GUARDED = String.raw`(.*/)?(\.git/${GIT_GUARDED}|\.opencode(/|$)|opencode\.jsonc?$)`;
+var GUARDED = String.raw`(.*/)?(\.git/${GIT_GUARDED}|\.(opencode|claude|codex|cursor|grok|gemini)(/|$)|opencode\.jsonc?$|\.mcp\.json$)`;
 function seatbeltProfile(policy, options) {
   const mode = options.mode ?? "enforce";
   const tag = quote2(options.tag ?? "kuvo-sandbox");
