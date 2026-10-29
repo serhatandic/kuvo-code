@@ -229,7 +229,7 @@ private struct BottomStack: View {
 
     /// A card over the composer asks you something: it's what needs you, and the bars fold.
     private var isAsking: Bool {
-        !model.permissions.isEmpty || !forms.isEmpty || !app.browserAsks.asks(for: model.session.id).isEmpty
+        !model.permissions.isEmpty || !forms.isEmpty || !app.browserAsks.asks(for: model.session.id).isEmpty || !app.botAsks.asks(for: model.session.id).isEmpty
     }
 
     /// Whether a bar is folded: its own way with fewer than three, the card's with more.
@@ -334,8 +334,10 @@ private struct BottomStack: View {
                     BrowserAskCard(ask: ask)
                         .modifier(ComposerSurface())
                 }
-                ForEach(app.botAsks.asks(for: model.session.id), id: \.ask.id) { item in
-                    WorkAskCard(ask: item.ask, box: item.box)
+                ForEach(Array(app.botAsks.asks(for: model.session.id).enumerated()), id: \.element.ask.id) { index, item in
+                    WorkAskCard(ask: item.ask, box: item.box) { model.failure = $0 }
+                        // Return and Escape answer the first card only.
+                        .environment(\.takesCardKeys, takesCardKeys && index == 0 && model.permissions.isEmpty && forms.isEmpty)
                         .modifier(ComposerSurface())
                 }
                 // What went wrong, over the composer rather than in an alert you must click away.

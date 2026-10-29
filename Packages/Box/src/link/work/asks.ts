@@ -16,7 +16,7 @@ import { HERE } from "../home";
 import { placeOfSession } from "../letters/letter";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { folderName, madeWords, makeProject, projectPlace, shownPath } from "./projects";
-import { projectsFolder, setProjectsFolder, suggestedFolder } from "./settings";
+import { folderGiven, projectsFolder, setProjectsFolder, suggestedFolder } from "./settings";
 import type { Target } from "../../shared/records";
 import type { WorkAskShape } from "../../shared/routes/work";
 
@@ -56,7 +56,9 @@ function changeKept<T>(change: (asks: KeptAsk[]) => T, file = WORK_ASKS): T {
   const result = locked(LOCK, () => {
     const asks = readKept(file);
     const value = change(asks);
-    const kept = asks.filter(each => !each.answered || Date.now() - each.answered.at < 15 * 60_000);
+    // Answered ones once their tool has had them; unanswered ones of a bot that's gone, or asked a
+    // week ago and more.
+    const kept = asks.filter(each => (each.answered ? Date.now() - each.answered.at < 15 * 60_000 : (!each.bot || botHere(each.bot)) && Date.now() - each.at < 7 * 86_400_000));
     writePrivate(file, JSON.stringify({ asks: kept }, null, 2));
     return value;
   });
@@ -148,17 +150,19 @@ export async function answerOf(id: string, { wait = 10 * 60_000, every = 1000, s
   const until = Date.now() + wait;
   while (!signal?.aborted) {
     const ask = readKept(file).find(each => each.id === id);
-    if (!ask) return null;
+    // (Its bot gone: there's no one to answer for.)
+    if (!ask || (ask.bot && !botHere(ask.bot))) return null;
     if (ask.answered) return ask.answered;
     if (Date.now() >= until) break;
     await pause(Math.min(every, until - Date.now()), signal);
   }
-  // No longer waited for: told to its conversation once answered.
-  changeKept(asks => {
+  // No longer waited for: told to its conversation once answered; one answered just now, here.
+  return changeKept(asks => {
     const ask = asks.find(each => each.id === id);
-    if (ask && !ask.answered) ask.late = true;
+    if (ask?.answered) return ask.answered;
+    if (ask) ask.late = true;
+    return null;
   }, file);
-  return null;
 }
 
 /** What the asked action does, in its maker's words; done now. */
@@ -183,12 +187,13 @@ export async function answerWork(id: string, given: Record<string, unknown>, tar
   if (!ask) return { refused: { status: 404, message: "That's been answered, or it isn't asked any more." } };
   const answer = given.answer;
   if (answer !== "allow" && answer !== "always" && answer !== "deny") return { refused: { status: 400, message: "Answer allow, always or deny." } };
-  if (answer !== "deny") {
-    if (given.folder !== undefined && given.folder !== null) {
-      const set = setProjectsFolder(given.folder);
-      if ("refused" in set) return { refused: { status: 400, message: set.refused } };
-    }
-    if (!projectsFolder()) return { refused: { status: 400, message: "Pick the folder new projects go in." } };
+  // The projects folder, picked with the first: only where none is, and kept once it's claimed.
+  let picked: string | null = null;
+  if (answer !== "deny" && !projectsFolder()) {
+    if (given.folder === undefined || given.folder === null) return { refused: { status: 400, message: "Pick the folder new projects go in." } };
+    const checked = folderGiven(given.folder);
+    if ("refused" in checked) return { refused: { status: 400, message: checked.refused } };
+    picked = checked.folder;
   }
   // One answer at a time: another given meanwhile (from a phone, say) finds it taken.
   const claimed = changeKept(asks => {
@@ -204,8 +209,14 @@ export async function answerWork(id: string, given: Record<string, unknown>, tar
   if (answer === "deny") {
     outcome = { text: `The user said no to ${what}. Don't ask again for it: go on without it, or ask them in a line what they'd like instead.`, isError: true };
   } else {
-    if (answer === "always" && ask.bot) allowAlways(ask.bot, ask.action);
-    outcome = await doWork(ask.action, ask.given, asker);
+    // Whatever goes wrong is its answer, so the ask is never left half answered.
+    try {
+      if (picked && !projectsFolder()) setProjectsFolder(picked);
+      if (answer === "always" && ask.bot) allowAlways(ask.bot, ask.action);
+      outcome = await doWork(ask.action, ask.given, asker);
+    } catch (error) {
+      outcome = { text: `Couldn't do it: ${String((error as Error | null)?.message ?? error)}`, isError: true };
+    }
   }
   const answered = { answer, ...outcome, at: Date.now() } as NonNullable<KeptAsk["answered"]>;
   const late = changeKept(asks => {
@@ -250,7 +261,8 @@ export async function watchWorkAsks(
         answered(id);
       }
       for (const ask of asks) {
-        if (told.has(ask.id)) continue;
+        // (One asked a while ago was told by the bridge before this one.)
+        if (told.has(ask.id) || Date.now() - ask.at > 30 * 60_000) continue;
         if (tell({ ...workAskWords(ask), category: "ask", thread: ask.session, data: { session: ask.session, ask: ask.id, answerable: "0" } })) told.add(ask.id);
       }
     } catch {}

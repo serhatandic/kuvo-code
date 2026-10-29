@@ -53,6 +53,11 @@ final class BotWork {
         }
         guard status == 200, let report = try? JSONDecoder().decode(BotWorkReport.self, from: data), report != reports[bot.id] else { return }
         reports[bot.id] = report
+        // Something it asks you that this Mac hasn't heard of yet (a machine's are asked for only
+        // now and then): read now.
+        if let asks = app?.botAsks, report.asks.contains(where: { ask in !asks.asks(for: ask.session).contains { $0.ask.id == ask.id } }) {
+            await asks.read(bot.box)
+        }
         // A project it made on a machine since its projects were read there: read again.
         if let machine = bot.machine, let workspace = app?.workspace,
            report.projects.contains(where: { !workspace.folders.contains(RemoteFolder.folder($0.directory, on: machine)) }) {

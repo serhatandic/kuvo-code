@@ -10,14 +10,21 @@ struct WorkAskCard: View {
     let ask: WorkAsk
     /// The box it's asked on: "mac", or a machine's id.
     let box: String
+    /// What went wrong doing it (the folder taken, git failing), for the conversation to show once
+    /// the card's gone: the bot is told too.
+    var failed: (String) -> Void = { _ in }
     @Environment(AppModel.self) private var app
     @Environment(\.takesCardKeys) private var takesKeys
     /// Where projects go, picked as it's answered (the first time on its computer).
     @State private var picked: String?
     /// Choosing a machine's folder, in a sheet of its own.
     @State private var browsing = false
-    @State private var answering: WorkAskAnswer?
+    /// The answer on its way, from this card.
+    @State private var sent: WorkAskAnswer?
     @State private var failure: String?
+
+    /// Being answered, here or on another of its cards.
+    private var isAnswering: Bool { app.botAsks.answering.contains(ask.id) }
 
     private var onThisMac: Bool { box == BoxClient.mac }
     private var computer: String { onThisMac ? "this Mac" : app.machines.engine(box)?.machine.name ?? box }
@@ -75,13 +82,13 @@ struct WorkAskCard: View {
                 Button("Deny", role: .cancel) { send(.deny) }
                     .keyboardShortcut(takesKeys ? .cancelAction : nil)
                 Spacer()
-                if answering != nil, answering != .deny {
+                if isAnswering, sent != .deny {
                     Spinner()
                         .accessibilityLabel(ask.action == .cloneProject ? "Cloning" : "Making the project")
                 }
                 if ask.bot != nil {
-                    Button(WorkWords.always(ask)) { send(.always) }
-                        .help("Let \(ask.name) make projects without asking from now on. Edit Bot › Work takes it back.")
+                    Button { send(.always) } label: { Text(WorkWords.always(ask)).lineLimit(1) }
+                        .help("Let \(ask.name) \(WorkWords.allowed(ask.action).lowercased()) without asking from now on. Edit Bot › Work takes it back.")
                         .disabled(projectsFolder == nil)
                 }
                 Button("Allow") { send(.allow) }
@@ -91,7 +98,7 @@ struct WorkAskCard: View {
             }
             .buttonStyle(.glass)
             .controlSize(.large)
-            .disabled(answering != nil)
+            .disabled(isAnswering)
         }
         .padding(16)
         .onAppear { if picked == nil { picked = ask.suggested } }
@@ -119,14 +126,15 @@ struct WorkAskCard: View {
                 Menu {
                     if let suggested = ask.suggested, suggested != picked {
                         Button(shown(suggested)) { picked = suggested }
+                        Divider()
                     }
-                    if picked != nil { Divider() }
                     Button("Choose a Folder…", action: choose)
                 } label: {
                     Label(picked.map { ($0 as NSString).lastPathComponent } ?? "Choose…", systemImage: "folder")
                 }
                 .fixedSize()
                 .help(picked.map(shown) ?? "Choose where new projects go")
+                .disabled(isAnswering)
             }
             Text("For every bot on \(computer). You can change it in Settings › Worktrees.")
                 .font(.caption)
@@ -141,15 +149,7 @@ struct WorkAskCard: View {
         }
         // Once the menu has closed.
         DispatchQueue.main.async {
-            let panel = NSOpenPanel()
-            panel.canChooseDirectories = true
-            panel.canChooseFiles = false
-            panel.canCreateDirectories = true
-            panel.prompt = "Choose"
-            panel.message = "Choose where new projects go. Each one is a folder in it."
-            if let start = picked ?? ask.suggested { panel.directoryURL = URL(filePath: start) }
-            guard panel.runModal() == .OK, let url = panel.url else { return }
-            picked = url.path
+            if let folder = ProjectsFolderPanel.choose(start: picked ?? ask.suggested) { picked = folder }
         }
     }
 
@@ -159,14 +159,15 @@ struct WorkAskCard: View {
     }
 
     private func send(_ answer: WorkAskAnswer) {
-        answering = answer
+        sent = answer
         failure = nil
         Task {
             do {
-                try await app.botAsks.answer(ask, on: box, answer, folder: ask.needsFolder && answer != .deny ? picked : nil)
+                // Done, or answered meanwhile elsewhere: the card goes. What failed in the doing
+                // shows on the conversation.
+                if let done = try await app.botAsks.answer(ask, on: box, answer, folder: picked), done.isError, answer != .deny { failed(done.text) }
             } catch {
                 failure = error.localizedDescription
-                answering = nil
             }
         }
     }

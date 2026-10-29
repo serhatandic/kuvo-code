@@ -34,19 +34,26 @@ export function suggestedFolder(home = homeFolder()): string | null {
   return ["Developer", "Projects", "projects", "dev", "code"].map(name => path.join(home, name)).find(isFolder) ?? null;
 }
 
-/** `folder` (written with `~` or in full) as the projects folder, or why it can't be. */
-export function setProjectsFolder(given: unknown, file = WORK_SETTINGS_FILE): { folder: string | null } | { refused: string } {
-  if (given === null) {
-    writeSettings({ projectsFolder: null }, file);
-    return { folder: null };
-  }
+/** `given` (written with `~` or in full) as a projects folder, or why it can't be one. */
+export function folderGiven(given: unknown): { folder: string } | { refused: string } {
   if (typeof given !== "string" || !given.trim()) return { refused: "Say which folder (projectsFolder), as a full path." };
   const written = given.trim().replace(/^~(?=$|\/)/, homeFolder());
   if (!path.isAbsolute(written)) return { refused: "Give a full path to the folder." };
   const folder = path.resolve(written);
   if (!isFolder(folder)) return { refused: `There's no folder at ${given.trim()}.` };
-  writeSettings({ projectsFolder: folder }, file);
   return { folder };
+}
+
+/** `given` as the projects folder (null for none), or why it can't be. */
+export function setProjectsFolder(given: unknown, file = WORK_SETTINGS_FILE): { folder: string | null } | { refused: string } {
+  if (given === null) {
+    writeSettings({ projectsFolder: null }, file);
+    return { folder: null };
+  }
+  const checked = folderGiven(given);
+  if ("refused" in checked) return checked;
+  writeSettings({ projectsFolder: checked.folder }, file);
+  return checked;
 }
 
 function writeSettings(change: Record<string, unknown>, file: string) {

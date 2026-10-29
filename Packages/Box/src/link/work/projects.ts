@@ -54,7 +54,7 @@ export function folderName(name: string): string | null {
  * `ssh://`). Never a path here, or a command in disguise. */
 export function cloneable(address: string): boolean {
   if (address.startsWith("-")) return false;
-  return /^https:\/\/[^\s/]+\/\S+$/.test(address) || /^ssh:\/\/[^\s/]+\/\S+$/.test(address) || /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[^\s]+$/.test(address);
+  return /^https:\/\/[A-Za-z0-9][^\s/]*\/\S+$/.test(address) || /^ssh:\/\/[A-Za-z0-9][^\s/]*\/\S+$/.test(address) || /^[A-Za-z0-9._-]+@[A-Za-z0-9][A-Za-z0-9.-]*:[^\s]+$/.test(address);
 }
 
 /** Where a project called `name` would go here (null without a projects folder, or a name that
@@ -69,7 +69,7 @@ export function shownPath(folder: string, home = homeFolder()): string {
   return folder === home || folder.startsWith(home + "/") ? "~" + folder.slice(home.length) : folder;
 }
 
-const isEmptyFolder = (folder: string) => {
+export const isEmptyFolder = (folder: string) => {
   try {
     return fs.readdirSync(folder).filter(name => name !== ".DS_Store").length === 0;
   } catch {
@@ -80,7 +80,10 @@ const isEmptyFolder = (folder: string) => {
 // git clone, without holding up the box, for as long as a big repository takes (ten minutes at most).
 function cloneInto(address: string, folder: string): Promise<string | null> {
   return new Promise(resolve => {
-    execFile("git", ["clone", "--quiet", "--", address, folder], { encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: "ssh -o BatchMode=yes" }, timeout: 600_000 }, (error, _stdout, stderr) => {
+    // Never asking anything: ssh too, unless you set how git runs it.
+    const ownSSH = Boolean(process.env.GIT_SSH_COMMAND || process.env.GIT_SSH) || gitIn(path.dirname(folder), ["config", "--get", "core.sshCommand"]) !== null;
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(ownSSH ? {} : { GIT_SSH_COMMAND: "ssh -o BatchMode=yes" }) };
+    execFile("git", ["clone", "--quiet", "--", address, folder], { encoding: "utf8", env, timeout: 600_000 }, (error, _stdout, stderr) => {
       resolve(error ? (String(stderr ?? "").trim().split("\n").pop() || String(error.message)) : null);
     });
   });

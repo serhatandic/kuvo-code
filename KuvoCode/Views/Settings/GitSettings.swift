@@ -66,6 +66,7 @@ struct WorktreesSettings: View {
     /// Choosing a machine's folder for new worktrees, or new projects, in the page's place.
     @State private var choosingFolder = false
     @State private var choosingProjectsFolder = false
+    @State private var chosenProjectsFolder: String?
     /// A machine's: asked for them as they are now (`reading`), and whether it couldn't be.
     @State private var reading = false
     @State private var unreached = false
@@ -86,7 +87,7 @@ struct WorktreesSettings: View {
 
     var body: some View {
         ScrollingSettingsForm {
-            ProjectsFolderSection(choosing: $choosingProjectsFolder)
+            ProjectsFolderSection(choosing: $choosingProjectsFolder, chosen: $chosenProjectsFolder)
             WorktreesFolderSection(choosing: $choosingFolder)
 
             Section {
@@ -163,8 +164,8 @@ struct WorktreesSettings: View {
         }
         .settingsDetail(isPresented: $choosingProjectsFolder, title: "Choose a Folder for Projects") {
             BoxFolderBrowser(box: box.machine ?? BoxClient.mac, start: nil, primary: "Choose") { path, _ in
+                chosenProjectsFolder = path
                 choosingProjectsFolder = false
-                Task { try? await app.box(box.machine ?? BoxClient.mac).setProjectsFolder(path) }
             } cancel: {
                 choosingProjectsFolder = false
             }
@@ -185,8 +186,9 @@ struct WorktreesSettings: View {
 /// Where new projects go on this computer: the folder bots make them in (`make_project`), picked
 /// the first time one asks, or here; none until then. On a machine, its own folders.
 private struct ProjectsFolderSection: View {
-    /// Choosing a machine's folder, which the page opens in its place.
+    /// Choosing a machine's folder, which the page opens in its place, and the one chosen there.
     @Binding var choosing: Bool
+    @Binding var chosen: String?
     @Environment(AppModel.self) private var app
     @Environment(\.settingsBox) private var box
     @State private var settings: WorkSettings?
@@ -225,7 +227,12 @@ private struct ProjectsFolderSection: View {
             Text("Where projects your bots make go. A bot asks you before it makes one, and Kuvo Code never deletes them.")
                 .foregroundStyle(.secondary)
         }
-        .task(id: "\(boxID) \(app.isReady(box)) \(choosing)") { await read() }
+        .task(id: "\(boxID) \(app.isReady(box))") { await read() }
+        .onChange(of: chosen) {
+            guard let folder = chosen else { return }
+            chosen = nil
+            set(folder)
+        }
     }
 
     private func read() async {
@@ -259,15 +266,7 @@ private struct ProjectsFolderSection: View {
         }
         // Once the menu has closed.
         DispatchQueue.main.async {
-            let panel = NSOpenPanel()
-            panel.canChooseDirectories = true
-            panel.canChooseFiles = false
-            panel.canCreateDirectories = true
-            panel.prompt = "Choose"
-            panel.message = "Choose where new projects go. Each one is a folder in it."
-            if let start = settings?.projectsFolder ?? settings?.suggested { panel.directoryURL = URL(filePath: start) }
-            guard panel.runModal() == .OK, let url = panel.url else { return }
-            set(url.path)
+            if let folder = ProjectsFolderPanel.choose(start: settings?.projectsFolder ?? settings?.suggested) { set(folder) }
         }
     }
 
@@ -276,6 +275,22 @@ private struct ProjectsFolderSection: View {
         Task {
             do { settings = try await app.box(boxID).setProjectsFolder(folder) } catch { failure = error.localizedDescription }
         }
+    }
+}
+
+/// Where new projects go on this Mac, chosen in a folder panel (Settings › Worktrees, and a bot's
+/// asking card the first time).
+enum ProjectsFolderPanel {
+    static func choose(start: String?) -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose"
+        panel.message = "Choose where new projects go. Each one is a folder in it."
+        if let start { panel.directoryURL = URL(filePath: start) }
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url?.path
     }
 }
 

@@ -228,3 +228,51 @@ test("list_projects says where each project is and who made it", async () => {
   assert.doesNotMatch(said.text, /gone/, "a removed project isn't listed");
   assert.match(said.text, /New ones go in ~\/Developer\./);
 });
+
+test("what would fail anyway isn't asked even without Always: a folder with files in it already", async () => {
+  write(path.join(home, "box", "work.json"), JSON.stringify({ projectsFolder: developer }));
+  write(path.join(developer, "notes", "todo.md"), "mine");
+  const said = await tool("make_project", { name: "Notes" });
+  assert.equal(said.isError, true);
+  assert.match(said.text, /There's a folder at ~\/Developer\/notes already, with files in it/);
+  assert.deepEqual((await route("GET", "kuvo/work/asks")).body.asks, [], "you're never asked about it");
+});
+
+test("a project that can't be made is the bot's answer, and the ask isn't left half answered", async () => {
+  write(path.join(home, "box", "work.json"), JSON.stringify({ projectsFolder: developer }));
+  fs.chmodSync(developer, 0o555);
+  try {
+    const making = tool("make_project", { name: "Tidepool" });
+    const [ask] = await asked();
+    const answer = await route("POST", `kuvo/work/asks/${ask.id}`, { answer: "allow" });
+    assert.equal(answer.status, 200);
+    assert.equal(answer.body.isError, true);
+    const said = await making;
+    assert.equal(said.isError, true);
+    assert.match(said.text, /Couldn't do it/);
+    assert.deepEqual((await route("GET", "kuvo/work/asks")).body.asks, [], "answered: no other client finds it stuck");
+  } finally {
+    fs.chmodSync(developer, 0o755);
+  }
+});
+
+test("a folder sent with an answer once one is picked doesn't move it", async () => {
+  write(path.join(home, "box", "work.json"), JSON.stringify({ projectsFolder: developer }));
+  const elsewhere = path.join(home, "Elsewhere");
+  fs.mkdirSync(elsewhere, { recursive: true });
+  const making = tool("make_project", { name: "Tidepool" });
+  const [ask] = await asked();
+  assert.equal((await route("POST", `kuvo/work/asks/${ask.id}`, { answer: "allow", folder: elsewhere })).status, 200);
+  assert.equal((await making).isError, false);
+  assert.ok(fs.existsSync(path.join(developer, "tidepool")), "made where projects go");
+  assert.deepEqual((await route("GET", "kuvo/work/settings")).body, { projectsFolder: developer });
+  fs.rmSync(elsewhere, { recursive: true, force: true });
+});
+
+test("a bot deleted while it asks leaves nothing asked", async () => {
+  const making = tool("make_project", { name: "Tidepool" });
+  await asked();
+  fs.rmSync(pixelFolder, { recursive: true, force: true });
+  assert.equal((await making).isError, false, "its tool stops waiting");
+  assert.deepEqual((await route("GET", "kuvo/work/asks")).body.asks, []);
+});

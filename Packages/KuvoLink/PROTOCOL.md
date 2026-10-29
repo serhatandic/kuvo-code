@@ -517,6 +517,7 @@ folder you pick once per box, after asking you.
   and a projects folder is picked. The ask is kept in `run/work/asks.json` until you answer; the
   tool waits up to ten minutes, then says it stays asked, and the conversation gets
   `[The user answered] …` as a message when you do.
+  - An ask goes with its bot (deleted), or after a week unanswered.
   - `GET kuvo/work/asks` and `GET kuvo/work/asks/events` (ndjson, a line now and at each change)
     → `{asks: [{id, action: makeProject|cloneProject, session, name, bot?, project, clone?,
     folderName, folder: string|null, suggested?, at}]}`: `session` and `name` are the
@@ -524,8 +525,9 @@ folder you pick once per box, after asking you.
     (null with no projects folder yet). A bot's are in its `kuvo/work` too, as `asks`, with the
     projects it made, as `projects`.
   - `POST kuvo/work/asks/<id>` `{answer: allow|always|deny, folder?}` → `{answer, text, isError}`:
-    what's asked is done there and then, `text` in the words its asker reads. `folder` picks the
-    projects folder too (needed to allow while there's none: 400 "Pick the folder…"). Always keeps
+    what's asked is done there and then, `text` in the words its asker reads (`isError` when it
+    couldn't be: the ask is answered all the same). `folder` picks the projects folder while none
+    is picked (needed to allow then: 400 "Pick the folder…"), and is ignored once one is. Always keeps
     `work.allowed: [makeProject|cloneProject]` in its bot.json (`allowed` in `kuvo/bots`; `PATCH
     kuvo/bots/<id>` `{work: {allowed}}` takes it back, and `{work: {limits}}` alone leaves it). 404
     for one answered already, from another client say.

@@ -63,8 +63,8 @@ import Testing
         #expect(WorkWords.askLine(ask) == "Pixel wants to make Tidepool.")
         #expect(app.workspace.needsAttention("ses_pixel"), "the bot waits on you in the sidebar")
 
-        let said = try await app.botAsks.answer(ask, on: box, .allow, folder: projects.path)
-        #expect(said.hasPrefix("Made Tidepool at"), "\(said)")
+        let said = try #require(try await app.botAsks.answer(ask, on: box, .allow, folder: projects.path))
+        #expect(!said.isError && said.text.hasPrefix("Made Tidepool at"), "\(said.text)")
         #expect(FileManager.default.fileExists(atPath: projects.appending(path: "tidepool/.git").path))
         #expect(app.botAsks.asks(for: "ses_pixel").isEmpty)
         #expect(!app.workspace.needsAttention("ses_pixel"))
@@ -94,5 +94,20 @@ import Testing
         try await app.botAsks.answer(ask, on: box, .deny)
         #expect(!FileManager.default.fileExists(atPath: projects.appending(path: "tidepool").path))
         #expect(try await machine.client.workSettings().projectsFolder == nil, "a no picks no folder")
+    }
+
+    @Test func oneAnsweredOnAnotherClientFirstJustGoes() async throws {
+        let (machine, projects) = try await lab()
+        defer { done(machine) }
+        await app.botAsks.read("lab")
+        let (box, ask) = try #require(app.botAsks.asks(for: "ses_pixel").first)
+        // Your phone answers it first.
+        let (status, _) = try await machine.client.send("POST", "kuvo/work/asks/wak_1", body: Data(#"{"answer": "allow", "folder": "\#(projects.path)"}"#.utf8))
+        #expect(status == 200)
+        let late = try await app.botAsks.answer(ask, on: box, .deny)
+        #expect(late == nil, "no failure to show: it's done")
+        #expect(app.botAsks.asks(for: "ses_pixel").isEmpty)
+        #expect(!app.workspace.needsAttention("ses_pixel"))
+        #expect(FileManager.default.fileExists(atPath: projects.appending(path: "tidepool").path), "what the phone allowed stands")
     }
 }

@@ -12,12 +12,16 @@ final class BotAsks {
     @ObservationIgnored weak var app: AppModel?
     /// What's asked on each box, by its id ("mac", or a machine's).
     private(set) var asked: [String: [WorkAsk]] = [:]
+    /// Those being answered now, by id: their cards wait, wherever they show.
+    private(set) var answering: Set<String> = []
     /// A box's client (a test's own); the app's otherwise.
     @ObservationIgnored var boxes: ((String) -> BoxClient)?
     /// The conversations asking now, for their marks in the sidebar and the Dock's count.
     @ObservationIgnored var onChange: ((Set<String>) -> Void)?
     /// What's been told, so each ask is told once.
     @ObservationIgnored private var told: Set<String> = []
+    /// Each box's follow now, so one that ended (a reconnect) leaves the next one's asks alone.
+    @ObservationIgnored private var following: [String: UUID] = [:]
 
     private func client(_ box: String) -> BoxClient? {
         boxes?(box) ?? app?.box(box)
@@ -25,23 +29,31 @@ final class BotAsks {
 
     /// What the conversation `session` asks now, with the box it's asked on.
     func asks(for session: String) -> [(box: String, ask: WorkAsk)] {
+        all.flatMap { box, asks in asks.filter { $0.session == session }.map { (box: box, ask: $0) } }.sorted { $0.ask.at < $1.ask.at }
+    }
+
+    private var all: [String: [WorkAsk]] {
         var all = asked
         #if DEBUG
         if !demo.isEmpty { all[BoxClient.mac, default: []] += demo }
         #endif
-        return all.flatMap { box, asks in asks.filter { $0.session == session }.map { (box: box, ask: $0) } }.sorted { $0.ask.at < $1.ask.at }
+        return all
     }
 
     #if DEBUG
     /// An ask on this Mac, for a look at its card (KUVO_DEMO_BOT_ASK): beside what its box asks.
     var demo: [WorkAsk] = [] {
-        didSet { onChange?(Set((asked.values.joined() + demo).map(\.session))) }
+        didSet { changed() }
     }
     #endif
 
-    /// What `box` asks, from now on, until the task following it ends (a machine disconnecting);
-    /// a box from before bots made projects is asked again only now and then.
+    /// What `box` asks, from now on, until the task following it ends (a machine disconnecting).
+    /// This Mac's box tells each change as it's made; a machine's, reached over SSH, is asked
+    /// again every half minute, and as a bot's work there says it asks something. A box from
+    /// before bots made projects is asked again only now and then.
     func follow(_ box: String) async {
+        let me = UUID()
+        following[box] = me
         while !Task.isCancelled {
             var older = false
             if let client = client(box) {
@@ -54,19 +66,24 @@ final class BotAsks {
                     older = refusal.status == 404 || refusal.status == 403
                 } catch {}
             }
-            try? await Task.sleep(for: .seconds(older ? 300 : 2))
+            try? await Task.sleep(for: .seconds(older ? 300 : box == BoxClient.mac ? 2 : 30))
         }
         // Gone with its connection: nothing it asked can be answered from here now.
-        take([], from: box)
+        if following[box] == me {
+            following[box] = nil
+            take([], from: box)
+        }
     }
 
-    /// What `box` asks now, read once.
+    /// What `box` asks now, read once (as a bot's work there says it asks something new).
     func read(_ box: String) async {
         guard let client = client(box), let list = try? await client.value(WorkAskList.self, "GET", "kuvo/work/asks") else { return }
         take(list.asks, from: box)
     }
 
-    /// What `box` asks now, in place of what it asked before: each new one told once.
+    /// What `box` asks now, in place of what it asked before: each new one told once, and each
+    /// gone (answered here, on a phone, or no longer asked) taken off Notification Center and
+    /// your phones.
     func take(_ asks: [WorkAsk], from box: String) {
         let before = asked[box] ?? []
         guard asks != before else { return }
@@ -75,36 +92,53 @@ final class BotAsks {
             told.insert(ask.id)
             tell(ask, on: box)
         }
-        onChange?(Set(asked.values.joined().map(\.session)))
+        for gone in before where !asks.contains(where: { $0.id == gone.id }) {
+            Notifier.shared.clear(request: gone.id)
+        }
+        changed()
     }
 
-    // A notification for it: this Mac's sends your phones theirs; a machine sends its own.
+    private func changed() {
+        onChange?(Set(all.values.joined().map(\.session)))
+    }
+
+    // A notification for it: this Mac's box tells your phones its own; a machine tells them itself.
     private func tell(_ ask: WorkAsk, on box: String) {
         let title = ask.action == .cloneProject ? "\(ask.name) asks to clone a project" : "\(ask.name) asks to make a project"
-        let body = ask.folder.map { BoxPaths.display($0, home: box == BoxClient.mac ? NSHomeDirectory() : nil) } ?? ask.project
-        Notifier.shared.notify(session: ask.session, title: title, body: body, push: box == BoxClient.mac ? .init(.ask, ask: ask.id, answerable: false) : nil)
+        let body = ask.folder.map { box == BoxClient.mac ? ($0 as NSString).abbreviatingWithTildeInPath : $0 } ?? ask.project
+        Notifier.shared.notify(session: ask.session, title: title, body: body, push: .init(.ask, ask: ask.id, machine: box == BoxClient.mac ? nil : box, answerable: false))
     }
 
-    /// Your answer, on its box, where what's asked is done: what was done, in words (what went
-    /// wrong, if it did, which the bot is told too). `folder`: where projects go on that box from now on, picked as
-    /// you answer the first one there.
+    /// How an answer went: what was done, in words (the bot is told too), and whether it failed.
+    struct Answered: Decodable {
+        var text: String
+        var isError: Bool
+    }
+
+    /// Your answer, on its box, where what's asked is done. `folder`: where projects go on that box
+    /// from now on, picked as you answer the first one there. Nil for one answered meanwhile on
+    /// another client (or no longer asked), which is gone here then too.
     @discardableResult
-    func answer(_ ask: WorkAsk, on box: String, _ answer: WorkAskAnswer, folder: String? = nil) async throws -> String {
+    func answer(_ ask: WorkAsk, on box: String, _ answer: WorkAskAnswer, folder: String? = nil) async throws -> Answered? {
         guard let client = client(box) else { throw CancellationError() }
+        guard answering.insert(ask.id).inserted else { return nil }
+        defer { answering.remove(ask.id) }
         struct Given: Encodable {
             var answer: WorkAskAnswer
             var folder: String?
         }
-        struct Answered: Decodable {
-            var text: String
-            var isError: Bool
+        let done: Answered?
+        do {
+            done = try await client.value(Answered.self, "POST", "kuvo/work/asks/\(ask.id)", body: Given(answer: answer, folder: ask.needsFolder && answer != .deny ? folder : nil))
+        } catch let refusal as BoxRefusal where refusal.status == 404 {
+            done = nil
         }
-        let done = try await client.value(Answered.self, "POST", "kuvo/work/asks/\(ask.id)", body: Given(answer: answer, folder: folder))
         // Gone here at once; its box's next line says so too.
         take((asked[box] ?? []).filter { $0.id != ask.id }, from: box)
+        guard let done else { return nil }
         if answer == .always { await app?.bots.refresh(box) }
         // A machine's projects are read as it connects: the new one, now. (This Mac's are followed.)
         if answer != .deny, box != BoxClient.mac { await app?.workspace.loadProjects(on: box) }
-        return done.text
+        return done
     }
 }

@@ -1119,8 +1119,6 @@ struct BotWorkLimits: View {
                                         .help("\(bot.name) asks you again before it does this.")
                                 }
                             }
-                            .accessibilityElement(children: .combine)
-                            .accessibilityValue("Without asking")
                         }
                     }
                     .disabled(isSaving)
