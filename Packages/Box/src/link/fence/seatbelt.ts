@@ -28,11 +28,12 @@ const param = (name: string) => `(subpath (param ${quote(name)}))`;
 
 // Inside a folder commands write: what would run outside the sandbox (git's hooks, its config, which
 // can name programs: the repository's, its submodules' and its worktrees'; the coding agents' own
-// settings in a project, whose hooks and servers they run as they start there: Claude Code's,
-// Codex's, Cursor's, Grok's and Gemini's folders, and Claude Code's `.mcp.json`) or change what the
-// engine does (its settings, its plugins).
+// settings files in a project, whose hooks and servers they run as they start there, but not the rest
+// of their folders, like rules and commands, which run nothing) or change what the engine does (its
+// settings, its plugins).
 const GIT_GUARDED = String.raw`((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$)`;
-const GUARDED = String.raw`(.*/)?(\.git/${GIT_GUARDED}|\.(opencode|claude|codex|cursor|grok|gemini)(/|$)|opencode\.jsonc?$|\.mcp\.json$)`;
+const AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/config\.toml|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json`;
+const GUARDED = String.raw`(.*/)?(\.git/${GIT_GUARDED}|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
 
 export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): string {
   const mode = options.mode ?? "enforce";

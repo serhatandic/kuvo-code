@@ -205,8 +205,8 @@ export function agentsNote(platform: "darwin" | "linux"): string {
   return [
     "# Commands run in a sandbox here",
     "",
-    "Each command you run with the shell tool runs in Kuvo Code's sandbox. It writes only in this conversation's folder, its git repository, its temporary folder (`$TMPDIR`) and tools' caches, and it can't read Kuvo Code's own folders or the user's secrets (private SSH keys, cloud and package tokens)." +
-      (mac ? " Nor can it change git's hooks or config, or the settings of opencode and the coding agents in a project (`.opencode`, `opencode.json`, `.claude`, `.mcp.json`, `.codex`, `.cursor`, `.grok`, `.gemini`)." : ""),
+    "Each command you run with the shell tool runs in Kuvo Code's sandbox. It writes only in this conversation's folder, its git repository, temporary folders (`$TMPDIR`, `/tmp`) and tools' caches, and it can't read Kuvo Code's own folders or the user's secrets (private SSH keys, cloud and package tokens)." +
+      (mac ? " Nor can it change git's hooks or config, or the settings opencode and the coding agents start with in a project (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like). If a task needs one changed, ask the user." : ""),
     ...(mac
       ? [
           "",

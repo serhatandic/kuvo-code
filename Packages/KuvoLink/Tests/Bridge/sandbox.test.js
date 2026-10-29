@@ -30,7 +30,7 @@ const opening = 'public static let script = #"""\n';
 const from = swift.indexOf(opening) + opening.length;
 const wakeScript = swift.slice(from, swift.indexOf('\n    """#', from)).split("\n").map(line => line.replace(/^ {4}/, "")).join("\n") + "\n";
 const base = { ...process.env, HOME: root };
-for (const name of ["KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "KUVO_KEYS", "KUVO_KEYS_ON_HOST", "KUVO_BOX", "KUVO_ENGINE_CONFIG", "KUVO_VAULT_AGENTS"]) delete base[name];
+for (const name of ["KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "KUVO_KEYS", "KUVO_KEYS_ON_HOST", "KUVO_BOX", "KUVO_ENGINE_CONFIG", "KUVO_VAULT_AGENTS", "KUVO_SANDBOX"]) delete base[name];
 
 // A box of its own: a machine's (its folder `.kuvo-code`), or this Mac's (`KUVO_BOX=mac`, in an
 // app's folder, its engine's settings beside it).
@@ -54,8 +54,9 @@ function boxAt(name, mac = false) {
   return { app, home, config, env, plugin: path.join(config, "opencode", "plugins", "kuvo-sandbox.js"), bots: mac ? path.join(app, "bots") : path.join(home, "bots"), wakes: path.join(home, "wakes") };
 }
 
-async function start(box) {
-  const child = spawn(process.execPath, [script, "serve"], { env: { ...box.env, OPENCODE_PASSWORD: "box-pw" }, stdio: ["pipe", "pipe", "pipe"] });
+// `env`: what else the box starts with (`KUVO_SANDBOX: "off"`, Kuvo Code's own kill switch).
+async function start(box, env = {}) {
+  const child = spawn(process.execPath, [script, "serve"], { env: { ...box.env, ...env, OPENCODE_PASSWORD: "box-pw" }, stdio: ["pipe", "pipe", "pipe"] });
   let out = "", err = "";
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
@@ -135,21 +136,16 @@ function changeIn(folder, done) {
   });
 }
 
-test("off until you turn it on: commands run as before, and the engine has none of the sandbox's plugin", async () => {
-  const box = boxAt("off");
-  const project = path.join(root, "off-project");
-  fs.mkdirSync(project);
+test("on wherever it can run, from the box's start, with no switch to turn it off", async () => {
+  const box = boxAt("always");
   const running = await start(box);
   try {
     const state = (await running.ask("GET", "kuvo/sandbox")).value;
-    assert.equal(state.on, false);
-    assert.equal(state.wanted, false);
-    assert.equal(state.why, "It's off.");
-    // What a client offers: turning it on, where it can be.
-    assert.deepEqual([state.able, state.reason, state.action, state.route], [true, "off", "turnOn", "PATCH kuvo/sandbox"]);
-    assert.equal(fs.existsSync(box.plugin), false);
-    const ran = await engineRuns(box, project, `cat ${JSON.stringify(path.join(box.home, "run", "engine.json"))}`);
-    assert.equal(ran.status, 0, "without it, a command reads what it could before");
+    assert.equal(state.able, true, state.why);
+    assert.equal("wanted" in state, false);
+    assert.equal(fs.existsSync(box.plugin), true, "the engine has its plugin as the box starts");
+    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: false })).status, 405);
+    assert.equal(fs.existsSync(box.plugin), true);
   } finally {
     await running.stop();
   }
@@ -162,14 +158,12 @@ test("on, a command writes in its own project, git works there, and Kuvo Code's 
   assert.equal(spawnSync("git", ["init", "-q", project]).status, 0);
   const running = await start(box);
   try {
-    let state = (await running.ask("PATCH", "kuvo/sandbox", { on: true })).value;
-    assert.equal(state.wanted, true);
+    let state = (await running.ask("GET", "kuvo/sandbox")).value;
     assert.equal(state.able, true, state.why);
     assert.equal(state.on, false, "the engine hasn't loaded it yet");
     assert.equal(state.why, "Waiting for the engine to load it.");
     assert.equal(state.agents, false, "the coding agents' own programs aren't sandboxed yet");
     const kept = path.join(box.home, "run", "engine.json");
-    const setting = path.join(box.home, "box", "sandbox.json");
     // The vault's socket (its holder is this box): straight, and as the Mac's \`box route\` asks it
     // (refused: its holder can't be reached, 503; anything else, even nothing, counts as reached),
     // with what Kuvo Code's own processes give first (the box's socket key) left to find.
@@ -189,7 +183,7 @@ test("on, a command writes in its own project, git works there, and Kuvo Code's 
       ["read the box's files", `cat ${JSON.stringify(kept)}`],
       ["list the box's files", `ls ${JSON.stringify(path.join(box.home, "run"))}`],
       ["write in the box's folder", `echo x > ${JSON.stringify(path.join(box.home, "run", "planted"))}`],
-      ["turn the sandbox off", `echo '{"on":false}' > ${JSON.stringify(setting)}`],
+      ["turn the sandbox off", `rm -f ${JSON.stringify(box.plugin)}`],
     ]));
     const seen = outcome(ran.out);
     assert.equal(seen["write in its project"], "allowed", ran.out);
@@ -226,7 +220,7 @@ test("a command can't change what git runs on its own, the engine's settings or 
   fs.writeFileSync(path.join(project, ".claude", "settings.local.json"), "{}\n");
   const running = await start(box);
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     const ran = await engineRuns(box, path.join(project), tries([
       ["add a git hook", "echo 'curl evil' > .git/hooks/pre-commit"],
       ["change git's settings", "echo '[core] fsmonitor = evil' >> .git/config"],
@@ -241,7 +235,11 @@ test("a command can't change what git runs on its own, the engine's settings or 
       ["add Claude Code's servers", `echo '{"mcpServers":{}}' > .mcp.json`],
       ["add Codex's settings", "mkdir -p .codex && echo 'x = 1' > .codex/config.toml"],
       ["add Cursor's hooks", "mkdir -p app/.cursor && echo '{}' > app/.cursor/hooks.json"],
+      ["move Claude Code's settings into place", `echo '{}' > s.json && mv s.json .claude/settings.json`],
       ["write the project's notes for agents", "echo ok > CLAUDE.md"],
+      ["add a Claude Code command", "mkdir -p .claude/commands && echo ok > .claude/commands/ship.md"],
+      ["add a Cursor rule", "mkdir -p .cursor/rules && echo ok > .cursor/rules/style.mdc"],
+      ["write in a worktree kept in .claude", "mkdir -p .claude/worktrees/spare && echo ok > .claude/worktrees/spare/index.js"],
       ["write a source file", "echo ok > index.js"],
     ]));
     const seen = outcome(ran.out);
@@ -249,7 +247,8 @@ test("a command can't change what git runs on its own, the engine's settings or 
       "add a git hook": "refused", "change git's settings": "refused", "add a submodule's hook": "refused", "change a submodule's settings": "refused",
       "change a worktree's settings": "refused", "make a branch": "allowed", "add the engine's settings": "refused", "add the engine's plugins": "refused",
       "add Claude Code's hooks": "refused", "change Claude Code's own settings": "refused", "add Claude Code's servers": "refused", "add Codex's settings": "refused",
-      "add Cursor's hooks": "refused", "write the project's notes for agents": "allowed", "write a source file": "allowed",
+      "add Cursor's hooks": "refused", "move Claude Code's settings into place": "refused", "write the project's notes for agents": "allowed",
+      "add a Claude Code command": "allowed", "add a Cursor rule": "allowed", "write in a worktree kept in .claude": "allowed", "write a source file": "allowed",
     }, ran.out);
     assert.equal(fs.readFileSync(path.join(project, ".claude", "settings.local.json"), "utf8"), "{}\n");
   } finally {
@@ -269,7 +268,11 @@ test("agents are told how commands run in the sandbox while it's on, and nothing
   assert.ok(note && path.isAbsolute(note), JSON.stringify(config.instructions));
   const running = await start(box);
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    // Nothing yet while the engine hasn't loaded its plugin: its commands still run as before.
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.reason, "waiting");
+    assert.equal(fs.readFileSync(note, "utf8"), "");
+    await engineRuns(box, project, "true");
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.on, true);
     const told = fs.readFileSync(note, "utf8");
     assert.match(told, /runs in Kuvo Code's sandbox/);
     if (linux) assert.doesNotMatch(told, /--disable-sandbox|pgrep/);
@@ -280,10 +283,16 @@ test("agents are told how commands run in the sandbox while it's on, and nothing
       const ran = await engineRuns(box, project, tries([["ps", "ps -ax"], ["pgrep", "pgrep -fl sh"]]));
       assert.deepEqual(outcome(ran.out), { ps: "refused", pgrep: "allowed" }, ran.out);
     }
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: false })).value.on, false);
-    assert.equal(fs.readFileSync(note, "utf8"), "");
   } finally {
     await running.stop();
+  }
+  // Turned off (Kuvo Code's own kill switch), agents are told nothing.
+  const off = await start(box, { KUVO_SANDBOX: "off" });
+  try {
+    assert.equal((await off.ask("GET", "kuvo/sandbox")).value.on, false);
+    assert.equal(fs.readFileSync(note, "utf8"), "");
+  } finally {
+    await off.stop();
   }
 });
 
@@ -293,7 +302,7 @@ test("a bot's command writes in its own folder, and another bot's is hidden from
   fs.writeFileSync(path.join(box.bots, "bot_scout", "workspace", "notes.md"), "Scout's own\n");
   const running = await start(box);
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     const ship = path.join(box.bots, "bot_ship", "workspace");
     const ran = await engineRuns(box, ship, tries([
       ["write in its folder", "echo ok > plan.md && cat plan.md"],
@@ -306,21 +315,22 @@ test("a bot's command writes in its own folder, and another bot's is hidden from
   }
 });
 
-test("turned off, the engine's plugin goes, and commands run as before", async () => {
+test("with Kuvo Code's own kill switch, the engine's plugin goes, and commands run as before", async () => {
   const box = boxAt("toggled");
   const project = path.join(root, "toggled-project");
   fs.mkdirSync(project);
   const running = await start(box);
+  await running.stop();
+  assert.equal(fs.existsSync(box.plugin), true);
+  const off = await start(box, { KUVO_SANDBOX: "off" });
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
-    assert.equal(fs.existsSync(box.plugin), true);
-    const state = (await running.ask("PATCH", "kuvo/sandbox", { on: false })).value;
-    assert.deepEqual([state.on, state.wanted, state.why], [false, false, "It's off."]);
+    const state = (await off.ask("GET", "kuvo/sandbox")).value;
+    // Nothing a client offers: there's nothing you can do about it.
+    assert.deepEqual([state.on, state.reason, state.action], [false, undefined, undefined]);
     assert.equal(fs.existsSync(box.plugin), false);
     assert.equal((await engineRuns(box, project, `cat ${JSON.stringify(path.join(box.home, "run", "engine.json"))}`)).status, 0);
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: "yes" })).status, 400);
   } finally {
-    await running.stop();
+    await off.stop();
   }
 });
 
@@ -333,7 +343,7 @@ test("this Mac's box hides its app's whole folder, its chats but the conversatio
   fs.writeFileSync(path.join(box.app, "Attachments", "photo.txt"), "yours\n");
   const running = await start(box);
   try {
-    const state = (await running.ask("PATCH", "kuvo/sandbox", { on: true })).value;
+    const state = (await running.ask("GET", "kuvo/sandbox")).value;
     assert.equal(state.able, true, state.why);
     assert.equal(fs.existsSync(box.plugin), true, "in the engine's own settings folder");
     const ran = await engineRuns(box, path.join(chats, "chat_a"), tries([
@@ -360,7 +370,7 @@ test("a .git that names another folder doesn't let a command write there", async
   fs.writeFileSync(path.join(named, ".git"), `gitdir: ${elsewhere}\n`);
   const running = await start(box);
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     for (const project of [linked, named]) {
       const ran = await engineRuns(box, project, tries([["write where its .git points", `echo x > ${JSON.stringify(path.join(elsewhere, "planted"))}`]]));
       assert.deepEqual(outcome(ran.out), { "write where its .git points": "refused" }, `${path.basename(project)}: ${ran.out}`);
@@ -377,7 +387,7 @@ test("Kuvo Code's passwords and your SSH agent stay out of a command's environme
   fs.mkdirSync(project);
   const running = await start(box);
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     const input = { command: "env", cwd: project, timeout: 0, shell: "/bin/sh", env: { PATH: process.env.PATH, HOME: root, OPENCODE_PASSWORD: "engine-pw", OPENCODE_SERVER_PASSWORD: "server-pw", SSH_AUTH_SOCK: "/tmp/agent.sock", OPENCODE_CLIENT: "desktop" } };
     const plugin = (await import(`${pathToFileURL(box.plugin)}?${Math.random()}`)).default;
     let hook;
@@ -398,12 +408,17 @@ test("a socket key a command kept from before the sandbox was on opens nothing o
   const box = boxAt("old-key");
   const project = path.join(root, "old-key-project");
   fs.mkdirSync(project);
+  const keyFile = path.join(box.home, "run", "socket.key");
+  const off = await start(box, { KUVO_SANDBOX: "off" });
+  try {
+    assert.equal((await engineRuns(box, project, `cat ${JSON.stringify(keyFile)} > kept.key`)).status, 0);
+  } finally {
+    await off.stop();
+  }
+  assert.match(fs.readFileSync(path.join(project, "kept.key"), "utf8"), /^[0-9a-f]{64}$/m, "kept while it was off");
   const running = await start(box);
   try {
-    const keyFile = path.join(box.home, "run", "socket.key");
-    assert.equal((await engineRuns(box, project, `cat ${JSON.stringify(keyFile)} > kept.key`)).status, 0);
-    assert.match(fs.readFileSync(path.join(project, "kept.key"), "utf8"), /^[0-9a-f]{64}$/m, "kept while it was off");
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     const runtime = `BUN_BE_BUN=1 ${JSON.stringify(process.execPath)}`;
     const withKept = `const key = require("fs").readFileSync("kept.key", "utf8").trim(); const s = require("net").createConnection(${JSON.stringify(path.join(box.home, "run", "vault.sock"))}); let h = ""; s.on("connect", () => s.write(JSON.stringify({ hello: "x", key }) + "\\n")); s.on("data", c => { h += c; s.destroy(); }); s.on("error", () => process.exit(1)); s.on("close", () => process.exit(h ? 0 : 1));`;
     const ran = await engineRuns(box, project, tries([
@@ -447,7 +462,7 @@ test("a bunfig.toml or .env an agent leaves in its project runs nothing outside 
   fs.writeFileSync(path.join(project, ".env"), "BUN_OPTIONS=--preload ./pre.js\n");
   const running = await start(box);
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     const ran = await engineRuns(box, project, "echo ran");
     assert.match(ran.out, /ran/);
     assert.equal(fs.existsSync(escaped), false, "its preload ran outside the sandbox");
@@ -462,7 +477,7 @@ test("each conversation's temporary files are its own", async () => {
   for (const folder of [one, two]) fs.mkdirSync(folder);
   const running = await start(box);
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     const first = await engineRuns(box, one, `echo mine > "$TMPDIR/note" && printf '%s' "$TMPDIR"`);
     assert.equal(first.status, 0, first.out);
     const ran = await engineRuns(box, two, tries([["read another's temporary files", `cat ${JSON.stringify(path.join(first.out.trim(), "note"))}`]]));
@@ -476,13 +491,17 @@ test("turned off and on again, it isn't on until the engine has loaded it again"
   const box = boxAt("again");
   const project = path.join(root, "again-project");
   fs.mkdirSync(project);
+  const first = await start(box);
+  try {
+    await engineRuns(box, project, "true");
+    assert.equal((await first.ask("GET", "kuvo/sandbox")).value.on, true);
+  } finally {
+    await first.stop();
+  }
+  await (await start(box, { KUVO_SANDBOX: "off" })).stop();
   const running = await start(box);
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
-    await engineRuns(box, project, "true");
-    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.on, true);
-    await running.ask("PATCH", "kuvo/sandbox", { on: false });
-    const state = (await running.ask("PATCH", "kuvo/sandbox", { on: true })).value;
+    const state = (await running.ask("GET", "kuvo/sandbox")).value;
     assert.deepEqual([state.on, state.why], [false, "Waiting for the engine to load it."]);
     assert.deepEqual([state.reason, state.action, state.route], ["waiting", "restartEngine", "POST kuvo/engine/restart"]);
     // Its plugin changed under it: checked again, it's put back as it was.
@@ -522,7 +541,7 @@ test("on macOS, a command can't start what runs outside it, nor read another cop
   const label = `run.kuvo.code.sandbox-test-${process.pid}`;
   const running = await start(box);
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     const ran = await engineRuns(box, project, tries([
       ["read another copy's files", `cat ${JSON.stringify(path.join(copy, "secret"))}`],
       ["start a launchd job", `launchctl submit -l ${label} -- /bin/sh -c 'echo x > ${outside}'`],
@@ -561,7 +580,7 @@ test("a command reaches its own conversation's SSH agent from the sandbox (the v
   }
   const running = await start(box);
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     const theirs = (await engineRuns(box, other, `printf '%s\\n' "$SSH_AUTH_SOCK"`)).out.trim();
     assert.ok(theirs.startsWith(agents + "/") && theirs.endsWith(".sock"), theirs);
     // `ssh-add -l`: 1 is an agent with no keys (none in this vault), 2 one it can't reach.
@@ -599,7 +618,7 @@ test("a conversation schedules its own wake-ups from the sandbox, and only its o
   }
   const running = await start(box);
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     const wake = path.join(box.home, "bin", "kuvo-wake");
     let ran = await engineRuns(box, project, tries([
       ["its own", `${wake} add +1h 'Check the build'`],
@@ -643,7 +662,7 @@ test("a watch's check runs in the sandbox when its time comes, as its conversati
   const outside = path.join(root, "watch-escaped");
   const running = await start(box);
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     // An agent's command adds a watch whose check writes outside its conversation's folder.
     const wake = path.join(box.home, "bin", "kuvo-wake");
     const added = await engineRuns(box, project, `${wake} watch 5m 'echo planted > ${outside}; echo ok > checked' 'The build'`, "ses_watch");
@@ -672,7 +691,7 @@ test("a link, or another name for a file, left where wake-ups are kept is never 
   const engine = await engineServer(box);
   const running = await start(box);
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     const wake = path.join(box.home, "bin", "kuvo-wake");
     // Its folder made, as its first command makes it.
     await engineRuns(box, project, "true", "ses_links");
@@ -722,7 +741,7 @@ test("a wake-up the box took in stays as it was when it was taken, whatever stil
   const engine = await engineServer(box);
   const running = await start(box);
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     assert.equal((await engineRuns(box, project, `mkdir -p "$KUVO_WAKE_FOLDER/inbox/wakes" && printf 'Look later' > "$KUVO_WAKE_FOLDER/inbox/wakes/9999999999-held"`, "ses_held")).status, 0);
     const own = path.join(box.wakes, "ses_held");
     // (Held open here, as a process the command left running would.)
@@ -747,7 +766,7 @@ test("what a command is still writing to its inbox waits for the next round, and
   const engine = await engineServer(box);
   const running = await start(box);
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     assert.equal((await engineRuns(box, project, `mkdir -p "$KUVO_WAKE_FOLDER/inbox/wakes" "$KUVO_WAKE_FOLDER/inbox/.new-abc" && echo 'Look again' > "$KUVO_WAKE_FOLDER/inbox/wakes/1-due"`, "ses_writing")).status, 0);
     const inbox = path.join(box.wakes, "ses_writing", "inbox");
     await fire(box);
@@ -769,7 +788,7 @@ test("Check Now runs a watch's check in the sandbox, and none whose folder is go
   const outside = path.join(root, "check-now-escaped");
   const running = await start(box);
   try {
-    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     const wake = path.join(box.home, "bin", "kuvo-wake");
     assert.equal((await engineRuns(box, project, `${wake} watch 1d 'echo planted > ${outside}; echo ok > checked; echo seen' 'The build'`, "ses_now")).status, 0);
     await fire(box);

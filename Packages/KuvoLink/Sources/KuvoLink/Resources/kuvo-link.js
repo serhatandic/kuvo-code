@@ -10310,7 +10310,7 @@ function agentsNote(platform) {
   return [
     "# Commands run in a sandbox here",
     "",
-    "Each command you run with the shell tool runs in Kuvo Code's sandbox. It writes only in this conversation's folder, its git repository, its temporary folder (`$TMPDIR`) and tools' caches, and it can't read Kuvo Code's own folders or the user's secrets (private SSH keys, cloud and package tokens)." + (mac ? " Nor can it change git's hooks or config, or the settings of opencode and the coding agents in a project (`.opencode`, `opencode.json`, `.claude`, `.mcp.json`, `.codex`, `.cursor`, `.grok`, `.gemini`)." : ""),
+    "Each command you run with the shell tool runs in Kuvo Code's sandbox. It writes only in this conversation's folder, its git repository, temporary folders (`$TMPDIR`, `/tmp`) and tools' caches, and it can't read Kuvo Code's own folders or the user's secrets (private SSH keys, cloud and package tokens)." + (mac ? " Nor can it change git's hooks or config, or the settings opencode and the coding agents start with in a project (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like). If a task needs one changed, ask the user." : ""),
     ...mac ? [
       "",
       "On this Mac:",
@@ -10603,7 +10603,8 @@ var subpath = (folder) => `(subpath ${quote2(folder)})`;
 var regex = (pattern) => `(regex ${quote2(pattern)})`;
 var param = (name) => `(subpath (param ${quote2(name)}))`;
 var GIT_GUARDED = String.raw`((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$)`;
-var GUARDED = String.raw`(.*/)?(\.git/${GIT_GUARDED}|\.(opencode|claude|codex|cursor|grok|gemini)(/|$)|opencode\.jsonc?$|\.mcp\.json$)`;
+var AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/config\.toml|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json`;
+var GUARDED = String.raw`(.*/)?(\.git/${GIT_GUARDED}|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
 function seatbeltProfile(policy, options) {
   const mode = options.mode ?? "enforce";
   const tag = quote2(options.tag ?? "kuvo-sandbox");
@@ -10652,11 +10653,9 @@ function seatbeltProfile(policy, options) {
 }
 
 // Packages/Box/src/link/fence/state.ts
-var TURN_ON = "PATCH kuvo/sandbox";
 var CHECK = "POST kuvo/sandbox/check";
 var RESTART = "POST kuvo/engine/restart";
 var FOLDER = realish(path49.join(RUN, "fence"));
-var SETTING = path49.join(BOX, "sandbox.json");
 var PLUGIN = path49.join(ENGINE_CONFIG || path49.join(K, "config"), "opencode", "plugins", "kuvo-sandbox.js");
 var NOTE = path49.join(FOLDER, "engine.json");
 var PROBE = path49.join(FOLDER, "probe");
@@ -10678,20 +10677,15 @@ var places = {
 };
 var VERSION = crypto20.createHash("sha256").update(launcherScript(places)).update(LANDLOCK_RUNNER).update(pluginScript(places, "")).digest("hex").slice(0, 16);
 function fenceWanted() {
-  try {
-    return JSON.parse(fs49.readFileSync(SETTING, "utf8")).on === true;
-  } catch {
-    return false;
-  }
+  return process.env.KUVO_SANDBOX !== "off";
 }
 var checked = { able: false, passed: false, why: "It hasn't been checked yet.", reason: "checking" };
 var failures = 0;
 var lastProfiles = "";
 function fenceState() {
-  const wanted = fenceWanted();
-  const base = { wanted, able: checked.able, agents: false };
-  if (!wanted && (checked.able || checked.reason === "checking"))
-    return { ...base, on: false, why: "It's off.", reason: "off", action: "turnOn", route: TURN_ON };
+  const base = { able: checked.able, agents: false };
+  if (!fenceWanted())
+    return { ...base, on: false, why: "Kuvo Code has it turned off on this computer for now." };
   if (!checked.passed)
     return { ...base, on: false, ...cannot(checked) };
   if (textOf(PLUGIN) !== pluginScript(places, VERSION))
@@ -10728,12 +10722,6 @@ function cannot(why) {
     default:
       return { ...said, reason: "checking", action: "retry", route: CHECK, failures };
   }
-}
-function setFenceWanted(on) {
-  writePrivate(SETTING, JSON.stringify({ on }) + `
-`);
-  setUpFence();
-  return fenceState();
 }
 var ownPort = null;
 function fenceOwnPort(port) {
@@ -10838,7 +10826,7 @@ function probe() {
     fs49.rmSync(hidden, { force: true });
   }
 }
-function tellAgents(on) {
+function tellAgents(on = fenceState().on) {
   const note = on ? agentsNote(platform) : "";
   if (textOf(SANDBOX_NOTE) !== note)
     writePrivate(SANDBOX_NOTE, note);
@@ -10887,7 +10875,6 @@ function setUpFence() {
     }
     if (!fs49.existsSync(ON))
       writePrivate(ON, "");
-    tellAgents(true);
   } catch (error) {
     withdraw();
     checked = { able: true, passed: false, why: `It couldn't be set up: ${error.message}`, reason: "checkFailed", check: "setup" };
@@ -10937,11 +10924,17 @@ function keepFence() {
   try {
     setUpFence();
   } catch {}
+  try {
+    tellAgents();
+  } catch {}
   let rounds = 0;
   setInterval(() => {
     const round = rounds++;
     if (round % 60 === 0)
       sweepWakeFolders();
+    try {
+      tellAgents();
+    } catch {}
     if (!fenceWanted())
       return;
     try {
@@ -10952,7 +10945,7 @@ function keepFence() {
     } catch {}
   }, 1e4).unref?.();
 }
-var fenceFiles = { folder: FOLDER, plugin: PLUGIN, setting: SETTING, launcher: places.launcher, version: VERSION };
+var fenceFiles = { folder: FOLDER, plugin: PLUGIN, launcher: places.launcher, version: VERSION };
 
 // Packages/Box/src/link/vault/gate.ts
 var agentsUseVault = () => {
@@ -15613,8 +15606,11 @@ async function* programsRoute(context) {
 
 // Packages/Box/src/link/areas/sandbox.ts
 var shown = () => {
-  const { on, wanted, able, agents, ...not } = fenceState();
-  return { on, wanted, able, agents, ...Object.fromEntries(Object.entries(not).filter(([, value]) => value !== undefined)) };
+  const { on, able, agents, ...not } = fenceState();
+  try {
+    tellAgents(on);
+  } catch {}
+  return { on, able, agents, ...Object.fromEntries(Object.entries(not).filter(([, value]) => value !== undefined)) };
 };
 async function* sandboxRoute({ request, json, route }) {
   const method = request.method.toUpperCase();
@@ -15624,14 +15620,8 @@ async function* sandboxRoute({ request, json, route }) {
     setUpFence();
     return yield* json(200, shown());
   }
-  if (method === "GET")
-    return yield* json(200, shown());
-  if (method !== "PATCH")
+  if (method !== "GET")
     return yield* json(405, {});
-  const given = parsed(request.body);
-  if (!isObject(given) || typeof given.on !== "boolean")
-    return yield* json(400, { message: "Send {on}: true or false." });
-  setFenceWanted(given.on);
   return yield* json(200, shown());
 }
 
@@ -18634,9 +18624,9 @@ async function serve() {
   try {
     socketKey();
   } catch {}
-  console.log(JSON.stringify({ url: `http://127.0.0.1:${server.address().port}` }));
   fenceOwnPort(server.address().port);
   keepFence();
+  console.log(JSON.stringify({ url: `http://127.0.0.1:${server.address().port}` }));
   holdVault(engineHandler(readEngineFile, { name: os12.hostname() }, readBridgeFile));
   if (IS_MAC)
     (async () => {

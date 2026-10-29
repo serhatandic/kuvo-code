@@ -297,7 +297,7 @@ async function run(): Promise<void> {
   // Moves to and from your other computers, carried on the same connection.
   watchMoves(() => current);
   watchAsks(tell, { answered });
-  // Agents' commands, in the sandbox while you want it (fence/state.ts), set up before the vault
+  // Agents' commands, in the sandbox wherever it can run (fence/state.ts), set up before the vault
   // goes by it.
   keepFence();
   // The vault, held here: its key in this process's memory, its asks told to your phones.
@@ -526,13 +526,12 @@ async function serve(): Promise<void> {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
-  // The key to its sockets, there before it says where it is (holdVault makes it too, after).
+  // The key to its sockets, and agents' commands in the sandbox (fence/state.ts), which refuses them
+  // this server too, there before it says where it is (holdVault makes the key too, after).
   try { socketKey(); } catch {}
-  console.log(JSON.stringify({ url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }));
-  // Agents' commands, in the sandbox while you want it (fence/state.ts), which refuses them this
-  // server too.
   fenceOwnPort((server.address() as AddressInfo).port);
   keepFence();
+  console.log(JSON.stringify({ url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }));
   // The vault, held here (on a machine, `run` holds it; a test's box serves alone), its asks told
   // to your phones through this Mac's link.
   holdVault(engineHandler(readEngineFile, { name: os.hostname() }, readBridgeFile));

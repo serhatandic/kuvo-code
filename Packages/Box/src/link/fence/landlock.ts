@@ -3,8 +3,9 @@
 // new ships for each architecture. Landlock only grants: reads everywhere but what's hidden, by
 // granting each neighbour on the way down to it; writes in the conversation's folder, its
 // repository, the temporary folders, devices and tools' caches; signals and abstract sockets only
-// inside the sandbox (from Linux's Landlock 6). What it can't refuse inside a folder it writes
-// (git's hooks, the engine's settings), the box checks after each command instead.
+// inside the sandbox (from Linux's Landlock 6). What it can't refuse inside a folder it writes (git's
+// hooks, the engine's and the coding agents' settings there), it doesn't: Landlock grants a folder
+// whole.
 
 import type { FencePolicy } from "./policy";
 

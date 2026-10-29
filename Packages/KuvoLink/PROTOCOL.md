@@ -2551,14 +2551,16 @@ and as a box starts.
 
 ### Sandbox
 
-Each box can run its agents' commands in a sandbox (`sandbox` in `features`, bridge 0.9.113), off
-until you turn it on. On, each command the engine runs (an agent's shell tool, and yours with `!`)
+Each box runs its agents' commands in a sandbox (`sandbox` in `features`, bridge 0.9.113) wherever
+it can, with no switch: the way out is per command (the card that asks you about one it refused).
+On, each command the engine runs (an agent's shell tool, and yours with `!`)
 writes only in its conversation's folder, that folder's git repository (a real one: a `.git` that's
 a link, or names a folder that isn't a repository or a worktree the repository doesn't name back,
 counts for nothing; on macOS never its hooks or config, its submodules' or its worktrees', nor the
-engine's settings in the folder: `.opencode/`, `opencode.json`, nor the coding agents', whose hooks
-and servers they run as they start there: `.claude/`, `.mcp.json`, `.codex/`, `.cursor/`, `.grok/`,
-`.gemini/`), its conversation's own temporary
+engine's settings in the folder: `.opencode/`, `opencode.json`, nor the coding agents' settings
+files, whose hooks and servers they run as they start there: `.claude/settings.json` and
+`settings.local.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and `mcp.json`,
+`.gemini/settings.json`, `.grok/settings.json`), its conversation's own temporary
 folder (`TMPDIR`), its conversation's wake-ups' inbox (below), the system's temporary folders, devices and tools'
 caches, but not what in them runs later outside the sandbox (installed programs like
 `~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, npx's packages). It can't read
@@ -2625,7 +2627,7 @@ beside them; on Linux, which can't refuse a socket and shows every folder's name
 conversation's commands could reach another's agent, so there an agent offers only the keys you
 keep for everyone, until it can tell which conversation a connection comes from.
 
-**How.** The box writes, as it starts and when you turn it on: `bin/kuvo-fence` (the shell the
+**How.** The box writes, before it says where it is as it starts: `bin/kuvo-fence` (the shell the
 engine runs a command with) and, on Linux, `bin/kuvo-fence.js`; the rules in `run/fence/`
 (`project.sb` and `inside.sb` for macOS's `sandbox-exec`, `policy.json` for Linux's Landlock, which
 the engine's own Bun sets up through `bun:ffi`, Linux 5.13 or later); and the engine's plugin,
@@ -2634,21 +2636,21 @@ opens, that folder (the engine's own, never the command's) and its repository, a
 command's shell through `bin/kuvo-fence`, which refuses to run one without a folder (exit `126`). The
 box first runs a command through it and checks that it can't read or write what's hidden; only then
 does it give the engine the plugin, and it takes it away (with what the engine noted of it, so
-it's `on` again only once the engine has loaded it again) when you turn the sandbox off or a check
-fails, so commands run as before rather than not at all. It puts it back if it goes, and keeps
+it's `on` again only once the engine has loaded it again) when a check fails, so commands run as
+before rather than not at all. (Kuvo Code's own kill switch, for a rollout, does the same: the box
+started with `KUVO_SANDBOX=off`. No client shows a reason for it.) It puts it back if it goes, and keeps
 Kuvo Code's own ports in the macOS rules as they change.
 Agents are told: each box starts its engine with `run/fence/agents.md` among its instructions
-(`engine-config`, beside what it's given), which the engine reads again as it changes. While the
-plugin is given it says what commands can't do, and how builds and tools that would fail run (on a
+(`engine-config`, beside what it's given), which the engine reads again as it changes. While it's
+`on` (the engine has loaded the plugin) it says what commands can't do, and how builds and tools that would fail run (on a
 Mac: `swift … --disable-sandbox`, xcodebuild's package flags, `pgrep` rather than `ps`); otherwise
 it's empty.
 
-- `GET kuvo/sandbox` → `{on, why?, wanted, able, agents}`. `on`: every command the engine runs here
+- `GET kuvo/sandbox` → `{on, why?, able, agents}`. `on`: every command the engine runs here
   goes through the sandbox, checked (the engine loaded this box's plugin). `why`, when it isn't, in
-  words for Settings: `It's off.`, why this computer can't (`able: false`: no Landlock, no engine
+  words for Settings: why this computer can't (`able: false`: no Landlock, no engine
   yet), a failed check, `Its plugin for the engine was changed or removed.`, `The engine isn't
-  running.`, `Waiting for the engine to load it.`. `wanted`: you turned it on (kept in
-  `box/sandbox.json`, which a command in the sandbox can't change). `agents`: the coding agents' own
+  running.`, `Waiting for the engine to load it.`. `agents`: the coding agents' own
   programs' commands (Claude Code, Codex…, which don't go through the engine) are in it too; `false`
   for now, so on doesn't yet cover them.
   When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
@@ -2656,7 +2658,6 @@ it's empty.
 
   | `reason` | when | `action` | `route` |
   | --- | --- | --- | --- |
-  | `off` | you haven't turned it on, and this computer can have it | `turnOn` | `PATCH kuvo/sandbox` |
   | `kernel` | Linux without Landlock; `needs`: `"Linux 5.13"` | `help` | |
   | `macos` | this macOS has no sandbox | `softwareUpdate` | |
   | `engineMissing` | a machine without its engine yet | `retry` | `POST kuvo/sandbox/check` |
@@ -2666,11 +2667,10 @@ it's empty.
   | `engineDown` | the engine isn't running | `restartEngine` | `POST kuvo/engine/restart` |
   | `waiting` | the engine hasn't loaded it yet | `restartEngine` | `POST kuvo/engine/restart` |
 
-  `kernel`, `macos` and `engineMissing` come whether or not you turned it on. `failures`, with
+  `failures`, with
   `checking` and `checkFailed`: checks failed in a row (the box tries again each minute). A box
   without `sandbox.check` in its features gives none of these; without `sandbox`, it has no sandbox
   (an older Kuvo Code, to update).
-- `PATCH kuvo/sandbox {on: true | false}` → the state, after setting it up (`400` for anything else).
 - `POST kuvo/sandbox/check` → the state, after setting it up and checking it again.
 
 ### Paired phones

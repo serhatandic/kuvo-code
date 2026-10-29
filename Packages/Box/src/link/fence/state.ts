@@ -14,7 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { listOf, textOf, writePrivate } from "../files";
-import { BOTS, BOX, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SANDBOX_NOTE, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
+import { BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SANDBOX_NOTE, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
 import { agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
 import { LANDLOCK_RUNNER, landlockPolicy } from "./landlock";
 import { fencePolicy, realish } from "./policy";
@@ -25,8 +25,6 @@ export interface FenceState {
   on: boolean;
   /** Why not, in words for the box's page in Settings. */
   why?: string;
-  /** You want it on (Settings › Permissions › Sandbox). */
-  wanted: boolean;
   /** This computer can sandbox commands at all. */
   able: boolean;
   /** The coding agents' own programs' commands are sandboxed too. Not yet. */
@@ -44,16 +42,14 @@ export interface FenceState {
   failures?: number;
 }
 
-export type FenceReason = "off" | "kernel" | "macos" | "engineMissing" | "checking" | "checkFailed" | "plugin" | "engineDown" | "waiting";
-export type FenceAction = "turnOn" | "help" | "softwareUpdate" | "retry" | "fix" | "restartEngine";
+export type FenceReason = "kernel" | "macos" | "engineMissing" | "checking" | "checkFailed" | "plugin" | "engineDown" | "waiting";
+export type FenceAction = "help" | "softwareUpdate" | "retry" | "fix" | "restartEngine";
 export type FenceCheck = "folder" | "tempFiles" | "readsOwn" | "writesOwn" | "didntRun" | "setup";
 
-const TURN_ON = "PATCH kuvo/sandbox";
 const CHECK = "POST kuvo/sandbox/check";
 const RESTART = "POST kuvo/engine/restart";
 
 const FOLDER = realish(path.join(RUN, "fence"));
-const SETTING = path.join(BOX, "sandbox.json");
 const PLUGIN = path.join(ENGINE_CONFIG || path.join(K, "config"), "opencode", "plugins", "kuvo-sandbox.js");
 const NOTE = path.join(FOLDER, "engine.json");
 const PROBE = path.join(FOLDER, "probe");
@@ -82,9 +78,10 @@ const VERSION = crypto.createHash("sha256")
   .update(launcherScript(places)).update(LANDLOCK_RUNNER).update(pluginScript(places, ""))
   .digest("hex").slice(0, 16);
 
-/** You want the sandbox on (off until you turn it on, for now). */
+/** The sandbox is on wherever it can run, with no switch: only Kuvo Code's own kill switch, for a
+ * rollout (`KUVO_SANDBOX=off` in the box's environment as it starts), turns it off. */
 export function fenceWanted(): boolean {
-  try { return JSON.parse(fs.readFileSync(SETTING, "utf8")).on === true; } catch { return false; }
+  return process.env.KUVO_SANDBOX !== "off";
 }
 
 type Checked = { able: boolean; passed: boolean; why?: string; reason?: FenceReason; needs?: string; check?: FenceCheck };
@@ -94,10 +91,9 @@ let lastProfiles = "";
 
 /** Whether the sandbox is on here: read each time from what the box knows, without waiting. */
 export function fenceState(): FenceState {
-  const wanted = fenceWanted();
-  const base = { wanted, able: checked.able, agents: false };
-  // Off where it can't be on: why it can't, rather than a switch that does nothing.
-  if (!wanted && (checked.able || checked.reason === "checking")) return { ...base, on: false, why: "It's off.", reason: "off", action: "turnOn", route: TURN_ON };
+  const base = { able: checked.able, agents: false };
+  // Kuvo Code's own kill switch: no reason a client shows, as there's nothing you can do.
+  if (!fenceWanted()) return { ...base, on: false, why: "Kuvo Code has it turned off on this computer for now." };
   if (!checked.passed) return { ...base, on: false, ...cannot(checked) };
   if (textOf(PLUGIN) !== pluginScript(places, VERSION)) return { ...base, on: false, why: "Its plugin for the engine was changed or removed.", reason: "plugin", action: "fix", route: CHECK };
   let engine: { pid?: number } = {};
@@ -115,7 +111,7 @@ export function fenceState(): FenceState {
   return { ...base, on: false, why: "Waiting for the engine to load it.", reason: "waiting", action: "restartEngine", route: RESTART };
 }
 
-// Why a box that wants it, or can't have it, doesn't have it on, and what you can do.
+// Why a box doesn't have it on, and what you can do.
 function cannot(why: Checked): Partial<FenceState> {
   const said = why.why ? { why: why.why } : {};
   switch (why.reason) {
@@ -125,13 +121,6 @@ function cannot(why: Checked): Partial<FenceState> {
     case "checkFailed": return { ...said, reason: "checkFailed", check: why.check, action: "retry", route: CHECK, failures };
     default: return { ...said, reason: "checking", action: "retry", route: CHECK, failures };
   }
-}
-
-/** Turns the sandbox on or off here (kept on the box), and sets it up as it says. */
-export function setFenceWanted(on: boolean): FenceState {
-  writePrivate(SETTING, JSON.stringify({ on }) + "\n");
-  setUpFence();
-  return fenceState();
 }
 
 /** Kuvo Code's own servers here, whose ports the sandbox refuses where the system can (macOS). */
@@ -233,9 +222,9 @@ function probe(): { passed: boolean; why?: string; check?: FenceCheck } {
   }
 }
 
-// What the engine tells its agents of the sandbox: kept there, empty while it's off, as the engine
-// watches the file it was named.
-function tellAgents(on: boolean): void {
+// What the engine tells its agents of the sandbox, as the engine watches the file it was named: what
+// it does once commands really run in it (the engine has loaded its plugin), and nothing until then.
+export function tellAgents(on = fenceState().on): void {
   const note = on ? agentsNote(platform) : "";
   if (textOf(SANDBOX_NOTE) !== note) writePrivate(SANDBOX_NOTE, note);
 }
@@ -251,9 +240,9 @@ function withdraw(): void {
 }
 
 /**
- * Sets the sandbox up as you want it: on, its files written and checked, then its plugin given to
- * the engine; off (or when the check fails), the plugin taken away, so commands run as before
- * rather than not at all.
+ * Sets the sandbox up: its files written and checked, then its plugin given to the engine; where it
+ * can't run or the check fails (or with the kill switch), the plugin taken away, so commands run as
+ * before rather than not at all.
  */
 export function setUpFence(): FenceState {
   // Whether it can be on here, known while it's off too.
@@ -288,7 +277,6 @@ export function setUpFence(): FenceState {
       writePrivate(PLUGIN, plugin);
     }
     if (!fs.existsSync(ON)) writePrivate(ON, "");
-    tellAgents(true);
   } catch (error) {
     withdraw();
     checked = { able: true, passed: false, why: `It couldn't be set up: ${(error as Error).message}`, reason: "checkFailed", check: "setup" };
@@ -333,13 +321,17 @@ export function sweepWakeFolders(now = Date.now()): void {
 }
 
 /** Set up as the box starts, and kept so: Kuvo Code's servers' ports in its rules as they change
- * (macOS), its plugin put back if it went, and the wake folders no one used cleared away. */
+ * (macOS), its plugin put back if it went, what agents are told as it's on or not, and the wake
+ * folders no one used cleared away. */
 export function keepFence(): void {
   try { setUpFence(); } catch {}
+  try { tellAgents(); } catch {}
   let rounds = 0;
   setInterval(() => {
     const round = rounds++;
     if (round % 60 === 0) sweepWakeFolders();
+    // Agents told once the engine has loaded the plugin, and no longer once it's gone.
+    try { tellAgents(); } catch {}
     if (!fenceWanted()) return;
     try {
       if (checked.passed) writeProfiles();
@@ -349,4 +341,4 @@ export function keepFence(): void {
   }, 10_000).unref?.();
 }
 
-export const fenceFiles = { folder: FOLDER, plugin: PLUGIN, setting: SETTING, launcher: places.launcher, version: VERSION };
+export const fenceFiles = { folder: FOLDER, plugin: PLUGIN, launcher: places.launcher, version: VERSION };
