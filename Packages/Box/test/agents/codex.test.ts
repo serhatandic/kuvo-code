@@ -5,7 +5,8 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
-import { existsSync, mkdirSync, realpathSync } from "node:fs"
+import { existsSync, mkdirSync, realpathSync, symlinkSync } from "node:fs"
+import { createHash } from "node:crypto"
 import { CodexAgent } from "../../src/agents/agents/codex"
 import { agentShellScript, launcherScript, type FencePlaces } from "../../src/link/fence/files"
 import { LANDLOCK_RUNNER, landlockPolicy } from "../../src/link/fence/landlock"
@@ -123,8 +124,14 @@ class TestCodex extends CodexAgent {
   constructor(
     readonly launcher: string,
     home: string,
+    account?: { id: string; home: string },
+    /** Your own Codex's folder, which an added account's links to. */
+    readonly yours?: string,
   ) {
-    super({ home, temporary: home, deps: {} as any })
+    super({ home, temporary: home, deps: {} as any }, account)
+  }
+  override get yourCodex() {
+    return this.yours ?? super.yourCodex
   }
   override executable() {
     return this.launcher
@@ -638,17 +645,98 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
   /** What Codex said it could do (`tries`). */
   const said = (id: string) => steps(id).flatMap((step) => step.content.filter((content: any) => content.type === "text").map((content: any) => content.text)).join("")
 
-  test("Codex runs whole in it: what it runs, even a command you allowed, writes only the session's folder and Codex's own home (on a Mac, never Codex's settings), never elsewhere, and can't read Kuvo Code's folder", async () => {
+  test("Codex runs whole in it: what it runs, even a command you allowed, writes only the session's folder and Codex's own state (on a Mac, never its settings, plugins or skills, which run outside the sandbox when you use Codex), never elsewhere, and can't read Kuvo Code's folder", async () => {
+    mkdirSync(join(home, "sessions"))
+    mkdirSync(join(home, "plugins"))
     const id = await run([[tries, {
       project: ["write", join(root, "made.txt")],
-      own: ["write", join(home, "sessions.jsonl")],
+      own: ["write", join(home, "state_5.sqlite-wal")],
+      state: ["write", join(home, "sessions", "rollout.jsonl")],
       settings: ["write", join(home, "config.toml")],
+      plugin: ["write", join(home, "plugins", "plugin.js")],
       elsewhere: ["write", join(elsewhere, "e.txt")],
       kuvo: ["read", join(kuvo, "secret")],
     }]], { permissions: askFirst })
     // (Linux grants its home whole: there, a machine's, it's Kuvo Code's own copy of Codex's.)
-    const settings = process.platform === "darwin" ? "no" : "yes"
-    expect(said(id)).toBe(`project=yes own=yes settings=${settings} elsewhere=no kuvo=no`)
+    const mac = process.platform === "darwin" ? "no" : "yes"
+    expect(said(id)).toBe(`project=yes own=yes state=yes settings=${mac} plugin=${mac} elsewhere=no kuvo=no`)
+  })
+
+  test("an added account's Codex works in it: it keeps its conversations in your Codex's folder, which its own links to, and still can't change what runs outside", async () => {
+    const yours = realpathSync(mkdtempSync(join(base, "your-codex-")))
+    mkdirSync(join(yours, "sessions"))
+    mkdirSync(join(yours, "skills"))
+    writeFileSync(join(yours, "config.toml"), "")
+    const added = join(kuvo, "agents", "codex-work")
+    codex = new TestCodex(fakeCodex(root, [[tries, {
+      signin: ["write", join(added, "auth.json")],
+      state: ["write", join(added, "sessions", "rollout.jsonl")],
+      settings: ["write", join(added, "config.toml")],
+      skill: ["write", join(yours, "skills", "SKILL.md")],
+    }]]), root, { id: "work", home: added }, yours)
+    const agent = codex
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
+    const id = sessions.create({ title: "Codex", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    expect(existsSync(join(yours, "sessions", "rollout.jsonl"))).toBe(true)
+    const mac = process.platform === "darwin" ? "no" : "yes"
+    expect(said(id)).toBe(`signin=yes state=yes settings=${mac} skill=${mac}`)
+  })
+
+  test("turned off while your account's Codex is busy signing in: a session's turn runs in its own folder, outside the sandbox, not in that Codex", async () => {
+    codex = new TestCodex(fakeCodex(root, reply), root)
+    const agent = codex
+    await agent.signIn()
+    delete process.env.KUVO_FENCE
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
+    const id = sessions.create({ title: "Codex", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: root }, permissions: askFirst }).id
+    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    expect(said(id)).toBe("Done.")
+    expect(turnStart().sandboxPolicy.type).toBe("workspaceWrite")
+  })
+
+  test("a session's own Codex stops when the session closes", async () => {
+    const other = realpathSync(mkdtempSync(join(base, "other-project-")))
+    codex = new TestCodex(fakeCodex(root, reply), root)
+    const agent = codex
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
+    const id = sessions.create({ title: "Codex", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: other } }).id
+    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    // (The fake names its thread by its process.)
+    const there = readFileSync(join(other, "sent.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line))
+    const pid = Number(there.find((message) => message.method === "turn/start").params.threadId.slice(2))
+    const running = () => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    expect(running()).toBe(true)
+    sessions.closeAll()
+    await until(() => !running())
+  })
+
+  test("you let the project's commands write another folder while an agent Codex spawned still works: it goes on, in the same Codex, and the session's next turn too", async () => {
+    codex = new TestCodex(messagedCodex(root, true, false), root)
+    const agent = codex
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
+    const id = sessions.create({ title: "Spawn", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    const child = tools(id)[0].state.metadata.sessionID as string
+    // Also Allowed, as the box writes it for this project.
+    const allowed = join(kuvo, "run", "fence", "allowed", createHash("sha256").update(realpathSync(root)).digest("hex").slice(0, 32))
+    mkdirSync(dirname(allowed), { recursive: true })
+    writeFileSync(allowed, elsewhere + "\n")
+    sessions.prompt(id, { id: "msg_codex_test_002", text: "more", files: [], delivery: "steer" })
+    await until(() => sent().filter((message) => message.method === "turn/start").length === 2 && sessions.messages(id).filter((message) => message.type === "idle").length === 2)
+    expect(sent().filter((message) => message.method === "initialize")).toHaveLength(1)
+    expect(sessions.messages(child).some((message: any) => message.type === "idle" && message.outcome === "interrupted")).toBe(false)
   })
 
   test("Ask First asks before its commands as Codex does, and Approve All only what Codex's own rules ask about, with Codex's own sandbox off (one can't run inside another)", async () => {

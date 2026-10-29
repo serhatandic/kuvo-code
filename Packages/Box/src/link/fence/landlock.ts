@@ -90,18 +90,16 @@ let allowed = [];
 // (Each by the real path the box keeps: one that's become a link since, to anywhere, isn't given.)
 try { allowed = fs.readFileSync(allowedFile, "utf8").split("\n").filter((line) => line.startsWith("/") && real(line) === line); } catch {}
 for (const where of [...policy.writable, work, git, ...allowed]) if (where) grantExcept(where, all, kept);
-// A coding agent run whole in it: its own folders (its sign-in and state), whole, but one it's
-// given only to read (KUVO_FENCE_KEPT names it too: the skills it's given). What macOS keeps only
-// read inside them (its settings) Landlock can't: carved out, the agent couldn't make its own files
-// beside them (its databases' journals, its sign-in written anew). Here they're Kuvo Code's own
-// copy of it (a machine's agents' homes are in Kuvo Code's folder), never the one you use yourself.
-// Its tools' port needs no rule: Landlock leaves connections to it open.
+// A coding agent run whole in it: its homes (its sign-in and state), whole, and the folders it only
+// reads (the skills it's given). What macOS keeps from it in its homes (its settings, its other
+// folders) Landlock can't: what it grants a folder it grants all inside, and the agent makes its
+// own files at the top (its databases' journals, its sign-in written anew). Here its homes are Kuvo
+// Code's own copy of it (a machine's agents' homes are in Kuvo Code's folder), never the one you
+// use yourself, and it runs in the sandbox whenever it's on. Its tools' port needs no rule:
+// Landlock leaves connections to it open.
 const lines = (text) => (text || "").split("\n").filter((line) => line.startsWith("/"));
-const onlyRead = new Set(lines(process.env.KUVO_FENCE_KEPT).slice(0, 8).map(real));
-for (const where of lines(process.env.KUVO_FENCE_OWN).slice(0, 4)) {
-  if (onlyRead.has(real(where))) grant(where, READS);
-  else grantExcept(where, all, kept);
-}
+for (const where of lines(process.env.KUVO_FENCE_OWN).slice(0, 4)) grantExcept(where, all, kept);
+for (const where of lines(process.env.KUVO_FENCE_READ).slice(0, 4)) grant(where, READS);
 if (tmp) { fs.mkdirSync(tmp, { recursive: true }); grant(tmp, all); }
 // Its conversation's wake-ups and watches (kuvo-wake): read, and only its inbox written, which the box
 // takes in, out of its reach.
@@ -113,7 +111,7 @@ if (wakes && fs.existsSync(wakes)) {
 const keep = [];
 const text = (s) => { const b = Buffer.from(s + "\0"); keep.push(b); return b; };
 const list = (items) => { const b = new BigUint64Array(items.length + 1); items.forEach((s, i) => { b[i] = BigInt(ptr(text(s))); }); keep.push(b); return b; };
-const env = Object.entries(process.env).filter(([k]) => k !== "BUN_BE_BUN" && k !== "BUN_RUNTIME_TRANSPILER_CACHE_PATH" && k !== "KUVO_FENCE_OWN" && k !== "KUVO_FENCE_KEPT").map(([k, v]) => k + "=" + v);
+const env = Object.entries(process.env).filter(([k]) => k !== "BUN_BE_BUN" && k !== "BUN_RUNTIME_TRANSPILER_CACHE_PATH" && k !== "KUVO_FENCE_OWN" && k !== "KUVO_FENCE_READ").map(([k, v]) => k + "=" + v);
 if (libc.prctl(38, 1n, 0n, 0n, 0n) !== 0) fail("Linux refused to keep it (" + errno() + ").");
 if (Number(libc.syscall(RESTRICT, ruleset, 0, 0, 0)) < 0) fail("Linux refused to start it (" + errno() + ").");
 libc.close(ruleset);

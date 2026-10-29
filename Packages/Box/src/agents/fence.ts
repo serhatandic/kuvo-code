@@ -3,8 +3,8 @@
 // sandbox on here (`run/fence/on`). Claude Code runs its commands through the launcher, as the
 // engine does; Codex runs whole in it.
 
-import { createHash } from "node:crypto"
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs"
+import { createHash, randomBytes } from "node:crypto"
+import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { machineHome } from "./machine"
 
@@ -135,34 +135,50 @@ export function fenceShell(directory: string): { shell: string; work: string; gi
   return { shell, work, git: repositoryOf(work), temporary }
 }
 
-/** How many folders of its own, and files it only reads in them, an agent run whole has (link/fence/seatbelt.ts). */
+/** How many homes of its own, and folders it only reads, an agent run whole has (each; link/fence/seatbelt.ts). */
 const AGENT_FOLDERS = 4
-const AGENT_KEPT = 8
+
+/** An agent's own places, as it runs whole in the sandbox (`fenceAgent`). */
+export interface AgentPlaces {
+  /** Its homes: what's at their top read and written, but `kept`; their folders only read, but `state`. */
+  homes: string[]
+  /** The folders in its homes it writes whole (its databases, conversations, logs), by name. */
+  state: string[]
+  /** What at its homes' top it never writes (its settings), by name (`*` for any letters). */
+  kept: string[]
+  /** Folders it only reads (in Kuvo Code's, hidden from commands: the skills it's given). */
+  read: string[]
+  /** Its Kuvo Code tools' port (the relay's). */
+  port?: number
+}
 
 /**
  * For an agent run whole in the sandbox (Codex): the launcher that runs it (`run/fence/shell/run`)
- * and what it's told: its program, the conversation's folder and repository, its own folders
- * (`own`: its sign-in and state, written), what in them it only reads (`kept`: its settings, what
- * runs outside the sandbox when you use it yourself), and its Kuvo Code tools' port. A folder in
- * both is read, never written. Undefined while the sandbox is off here.
+ * and what it's told: its program, the conversation's folder and repository, and its own places.
+ * (On a Mac, its homes but their state and the files at their top only read: what runs outside
+ * the sandbox when you use it yourself, its plugins and skills, stays as it was. On Linux, its
+ * homes whole: Landlock can't keep folders apart inside one it lets the agent make files in.)
+ * Undefined while the sandbox is off here.
  */
-export function fenceAgent(program: string, directory: string, mine: { own: string[]; kept: string[]; port?: number }): { command: string; env: Record<string, string> } | undefined {
+export function fenceAgent(program: string, directory: string, mine: AgentPlaces): { command: string; env: Record<string, string> } | undefined {
   const where = folder()
   if (!where || !fenceRules()) return undefined
   const command = join(where, "shell", "run")
   if (!existsSync(command)) return undefined
   const work = real(directory)
   // By their real place, which the sandbox goes by (one not made yet, as it's named).
-  const own = mine.own.map(real).slice(0, AGENT_FOLDERS)
-  const kept = mine.kept.map(real).slice(0, AGENT_KEPT)
+  const places = (list: string[]) => [...new Set(list.map(real))].slice(0, AGENT_FOLDERS).join("\n")
+  const names = (list: string[]) => list.filter((name) => name && !name.includes("/") && !name.includes("\n")).join("\n")
   return {
     command,
     env: {
       KUVO_FENCE_SHELL: program,
       KUVO_FENCE_WORK: work,
       KUVO_FENCE_GIT: repositoryOf(work),
-      KUVO_FENCE_OWN: own.join("\n"),
-      KUVO_FENCE_KEPT: kept.join("\n"),
+      KUVO_FENCE_OWN: places(mine.homes),
+      KUVO_FENCE_READ: places(mine.read),
+      KUVO_FENCE_STATE: names(mine.state),
+      KUVO_FENCE_KEPT: names(mine.kept),
       KUVO_FENCE_PORT: String(mine.port ?? 0),
     },
   }
@@ -170,16 +186,18 @@ export function fenceAgent(program: string, directory: string, mine: { own: stri
 
 /**
  * A file you attached, for an agent run whole in the sandbox, which hides Kuvo Code's folder where
- * it's kept: a copy in the conversation's temporary folder, which its commands read and write.
- * (The file itself where that can't be made.)
+ * it's kept: a copy in the conversation's temporary folder, which its commands read and write. Made
+ * anew each time, under a name no command could have known to put a link at; the file itself where
+ * that can't be made.
  */
 export function fenceCopy(directory: string, file: string): string {
   const where = folder()
   if (!where) return file
-  const copy = join(where, "tmp", sum(real(directory)), "attachments", sum(file).slice(0, 12), basename(file))
+  const temporary = join(where, "tmp", sum(real(directory)))
+  const copy = join(temporary, `attached-${randomBytes(8).toString("hex")}-${basename(file)}`)
   try {
-    mkdirSync(dirname(copy), { recursive: true, mode: 0o700 })
-    copyFileSync(file, copy)
+    mkdirSync(temporary, { recursive: true, mode: 0o700 })
+    copyFileSync(file, copy, constants.COPYFILE_EXCL)
     return copy
   } catch {
     return file

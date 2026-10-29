@@ -63,7 +63,9 @@ async function answer(request: Request): Promise<Response> {
       if (value) headers[name] = value
     }
     try {
-      const response = await fetch(tools.url, { method: request.method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(tools.timeout) })
+      // Given up with the agent's own request; a call, not a stream of what comes, after the tools' time.
+      const signal = request.method === "POST" ? AbortSignal.any([request.signal, AbortSignal.timeout(tools.timeout)]) : request.signal
+      const response = await fetch(tools.url, { method: request.method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal })
       const back = new Headers()
       for (const name of ["content-type", "mcp-session-id"]) {
         const value = response.headers.get(name)
@@ -82,10 +84,15 @@ async function answer(request: Request): Promise<Response> {
     programs.set(sessionID, program)
   }
   const messages: any[] = Array.isArray(body) ? body : [body]
-  const answers = await Promise.all(messages.map((message) => program!.send(message, tools.timeout)))
+  // Each of its connections (Codex has one a thread) by a name of the relay's, given as it starts:
+  // their requests are told apart by it.
+  const starts = messages.some((message) => message?.method === "initialize")
+  const connection = starts ? randomBytes(12).toString("hex") : (request.headers.get("mcp-session-id") ?? "")
+  const answers = await Promise.all(messages.map((message) => program!.send(message, tools.timeout, connection)))
   const replies = answers.filter((each) => each !== undefined)
-  if (!replies.length) return new Response(null, { status: 202 })
-  return Response.json(Array.isArray(body) ? replies : replies[0])
+  const headers = starts ? { "mcp-session-id": connection } : undefined
+  if (!replies.length) return new Response(null, { status: 202, headers })
+  return Response.json(Array.isArray(body) ? replies : replies[0], { headers })
 }
 
 /** A message with its calls named as the session's own, whatever they said. */
@@ -137,19 +144,19 @@ class Program {
     })
   }
 
-  /** Sends a message; a request's answer comes back (undefined for a notification). */
-  send(message: any, timeout: number): Promise<unknown> {
+  /** Sends a connection's message; a request's answer comes back (undefined for a notification). */
+  send(message: any, timeout: number, connection: string): Promise<unknown> {
     if (this.stopped) return Promise.resolve(message?.id === undefined ? undefined : failed(message.id, "Kuvo Code's tools stopped."))
     if (message?.id === undefined || message.id === null) {
       // A cancel names the request as the program knows it.
       const requestId = message?.params?.requestId
-      const ours = requestId === undefined ? undefined : this.ours.get(JSON.stringify(requestId))
+      const ours = requestId === undefined ? undefined : this.ours.get(connection + " " + JSON.stringify(requestId))
       if (message?.method === "notifications/cancelled" && ours === undefined) return Promise.resolve(undefined)
       this.write(ours === undefined ? message : { ...message, params: { ...message.params, requestId: ours } })
       return Promise.resolve(undefined)
     }
     const id = this.next++
-    const known = JSON.stringify(message.id)
+    const known = connection + " " + JSON.stringify(message.id)
     this.ours.set(known, id)
     return new Promise((resolve) => {
       const timer = setTimeout(() => {

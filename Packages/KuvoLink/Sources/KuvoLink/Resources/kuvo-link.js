@@ -10504,7 +10504,6 @@ function writeRuleWouldBe(where) {
 
 // Packages/Box/src/link/fence/seatbelt.ts
 var AGENT_FOLDERS = 4;
-var AGENT_KEPT = 8;
 var quote2 = (text) => `"${text.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
 var subpath = (folder) => `(subpath ${quote2(folder)})`;
 var regex = (pattern) => `(regex ${quote2(pattern)})`;
@@ -10534,13 +10533,18 @@ function seatbeltProfile(policy, options) {
   allow("file-write*", ...policy.writable.map(subpath), param("WORK"), param("GIT"));
   allow("file-write*", ...Array.from({ length: MOST_FOLDERS }, (_, at) => param(`ALLOW${at}`)));
   deny("file-write*", ...policy.readOnly.map(subpath));
-  const own = Array.from({ length: AGENT_FOLDERS }, (_, at) => param(`OWN${at}`));
-  allow("file-write*", ...own);
   out.push(";; Kuvo Code's own folders: neither read nor written; its helpers run");
   const HIDDEN = "file-read-data file-write*";
   deny(HIDDEN, ...policy.kuvo.map(subpath), ...policy.kuvoPatterns.map(regex));
   allow("file-read-data", ...policy.kuvoReadable.map(subpath));
-  allow(HIDDEN, ...own);
+  const homes = Array.from({ length: AGENT_FOLDERS }, (_, at) => `OWN${at}`);
+  allow("file-read-data", ...homes.map(param), ...Array.from({ length: AGENT_FOLDERS }, (_, at) => param(`READ${at}`)));
+  const inHome = (home, rest) => `(regex (string-append "^" (param ${quote2(`${home}_RE`)}) ${rest}))`;
+  allow("file-write*", ...homes.flatMap((home) => [
+    `(require-all ${under(`${home}_RE`, "/[^/]+$")} (vnode-type REGULAR-FILE))`,
+    `(require-all ${inHome(home, `"/(" (param "STATE") ")$"`)} (vnode-type DIRECTORY))`,
+    inHome(home, `"/(" (param "STATE") ")/"`)
+  ]));
   allow(HIDDEN, param("TMP"));
   if (options.inside)
     allow(HIDDEN, param("WORK"));
@@ -10548,7 +10552,7 @@ function seatbeltProfile(policy, options) {
   allow(HIDDEN, `(subpath (string-append (param "WAKES") "/inbox"))`);
   out.push(";; what runs outside the sandbox, or changes the engine");
   deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED), ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
-  deny("file-write*", ...Array.from({ length: AGENT_KEPT }, (_, at) => param(`KEPT${at}`)));
+  deny("file-write*", ...homes.map((home) => inHome(home, `"/(" (param "KEPT") ")(/|$)"`)));
   out.push(";; your secrets");
   deny("file-read*", ...policy.secrets.map(subpath));
   out.push(";; Kuvo Code's own servers and sockets");
@@ -10574,11 +10578,11 @@ function launcherScript(places) {
     `for c_last; do :; done`,
     `c_sum=$( (printf '%s' "\${c_last-}" | shasum -a 256) 2>/dev/null | cut -c 1-16)`,
     `case \${OPENCODE_SESSION_ID-} in ses_*[!A-Za-z0-9_]*|ses_|'') tag="kuvo-sandbox" ;; *) tag="kuvo-sandbox $OPENCODE_SESSION_ID $c_sum" ;; esac`,
-    `exec /usr/bin/sandbox-exec -D TAG="$tag" -D WORK="$work" -D GIT="$git" -D TMP="$tmp" -D WAKES="$own" -D SSH="$ssh" -D WORK_RE="$(escaped "$work")" -D GIT_RE="$(escaped "$git")" ${Array.from({ length: MOST_FOLDERS }, (_, at) => `-D ALLOW${at}="$a${at}" -D ALLOW${at}_RE="$r${at}"`).join(" ")} ${Array.from({ length: AGENT_FOLDERS }, (_, at) => `-D OWN${at}="$o${at}"`).join(" ")} ${Array.from({ length: AGENT_KEPT }, (_, at) => `-D KEPT${at}="$k${at}"`).join(" ")} -D PORT="$port" -f "$F/$profile$agent.sb" "$shell" "$@"`
+    `exec /usr/bin/sandbox-exec -D TAG="$tag" -D WORK="$work" -D GIT="$git" -D TMP="$tmp" -D WAKES="$own" -D SSH="$ssh" -D WORK_RE="$(escaped "$work")" -D GIT_RE="$(escaped "$git")" ${Array.from({ length: MOST_FOLDERS }, (_, at) => `-D ALLOW${at}="$a${at}" -D ALLOW${at}_RE="$r${at}"`).join(" ")} ${Array.from({ length: AGENT_FOLDERS }, (_, at) => `-D OWN${at}="$o${at}" -D OWN${at}_RE="$q${at}" -D READ${at}="$k${at}"`).join(" ")} -D STATE="$(names "$state_list")" -D KEPT="$(names "$kept_list")" -D PORT="$port" -f "$F/$profile$agent.sb" "$shell" "$@"`
   ] : [
     `[ -n "$runtime" ] || runtime=$(cat "$F/runtime" 2>/dev/null)`,
     `[ -x "$runtime" ] || { echo "This command can't run in the sandbox here: the engine's runtime wasn't given." >&2; exit 126; }`,
-    `KUVO_FENCE_OWN="$own_list" KUVO_FENCE_KEPT="$kept_list" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 exec "$runtime" --config=/dev/null --no-env-file ${sh(places.runner)} "$F/policy.json" "$work" "$git" "$tmp" "$own" "$allowed" "$shell" "$@"`
+    `KUVO_FENCE_OWN="$own_list" KUVO_FENCE_READ="$read_list" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 exec "$runtime" --config=/dev/null --no-env-file ${sh(places.runner)} "$F/policy.json" "$work" "$git" "$tmp" "$own" "$allowed" "$shell" "$@"`
   ];
   return [
     "#!/bin/sh",
@@ -10587,18 +10591,17 @@ function launcherScript(places) {
     "# shell, in the sandbox. Its plugin (kuvo-sandbox.js) names the conversation's folder.",
     `F=${sh(places.folder)}`,
     `shell=\${KUVO_FENCE_SHELL:-/bin/sh} work=\${KUVO_FENCE_WORK-} git=\${KUVO_FENCE_GIT-} runtime=\${KUVO_FENCE_RUNTIME-}`,
-    `own_list=\${KUVO_FENCE_OWN-} kept_list=\${KUVO_FENCE_KEPT-} port=\${KUVO_FENCE_PORT:-0}`,
-    "unset KUVO_FENCE_SHELL KUVO_FENCE_WORK KUVO_FENCE_GIT KUVO_FENCE_RUNTIME KUVO_FENCE_OWN KUVO_FENCE_KEPT KUVO_FENCE_PORT",
+    `own_list=\${KUVO_FENCE_OWN-} read_list=\${KUVO_FENCE_READ-} state_list=\${KUVO_FENCE_STATE-} kept_list=\${KUVO_FENCE_KEPT-} port=\${KUVO_FENCE_PORT:-0}`,
+    "unset KUVO_FENCE_SHELL KUVO_FENCE_WORK KUVO_FENCE_GIT KUVO_FENCE_RUNTIME KUVO_FENCE_OWN KUVO_FENCE_READ KUVO_FENCE_STATE KUVO_FENCE_KEPT KUVO_FENCE_PORT",
     `case $port in *[!0-9]*|'') port=0 ;; esac`,
     `agent=; [ "$port" = 0 ] || agent=-agent`,
-    ...Array.from({ length: AGENT_FOLDERS }, (_, at) => `o${at}=$F/none`),
-    ...Array.from({ length: AGENT_KEPT }, (_, at) => `k${at}=$F/none`),
+    ...Array.from({ length: AGENT_FOLDERS }, (_, at) => `o${at}=$F/none q${at}=- k${at}=$F/none`),
     `i=0; while IFS= read -r line; do [ $i -lt ${AGENT_FOLDERS} ] || break; case $line in /*) eval "o$i=\\$line"; i=$((i + 1)) ;; esac; done <<EOF_OWN`,
     "$own_list",
     "EOF_OWN",
-    `i=0; while IFS= read -r line; do [ $i -lt ${AGENT_KEPT} ] || break; case $line in /*) eval "k$i=\\$line"; i=$((i + 1)) ;; esac; done <<EOF_KEPT`,
-    "$kept_list",
-    "EOF_KEPT",
+    `i=0; while IFS= read -r line; do [ $i -lt ${AGENT_FOLDERS} ] || break; case $line in /*) eval "k$i=\\$line"; i=$((i + 1)) ;; esac; done <<EOF_READ`,
+    "$read_list",
+    "EOF_READ",
     `for v in $(env | sed -n 's/^\\(OPENCODE_[A-Za-z0-9_]*\\)=.*/\\1/p; s/^\\(KUVO_[A-Za-z0-9_]*\\)=.*/\\1/p'); do`,
     `  case $v in OPENCODE_SESSION_ID) ;; OPENCODE_*|*PASSWORD*|*SECRET*|*TOKEN*|*KEY*|KUVO_HOST_*|KUVO_VAULT_*) unset "$v" ;; esac`,
     `done`,
@@ -10612,7 +10615,14 @@ function launcherScript(places) {
     `case $sum in ????????????????????????????????) ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
     `tmp=$F/tmp/$sum`,
     `allowed=$F/allowed/$sum`,
-    ...places.platform === "darwin" ? [`escaped() { printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\\\&/g'; }`] : [],
+    ...places.platform === "darwin" ? [
+      `escaped() { printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\\\&/g'; }`,
+      ...Array.from({ length: AGENT_FOLDERS }, (_, at) => `q${at}=$(escaped "$o${at}")`),
+      `names() { r=; while IFS= read -r n; do case $n in ''|*/*) ;; *) r="$r|$(escaped "$n" | sed 's/\\\\\\*/[^\\/]*/g')" ;; esac; done <<EOF_NAMES`,
+      "$1",
+      "EOF_NAMES",
+      `if [ -n "$r" ]; then printf '%s' "\${r#|}"; else printf '%s' -; fi; }`
+    ] : [],
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => `a${at}=$F/none r${at}=-`),
     `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; ${places.platform === "darwin" ? `eval "r$i=\\$(escaped \\"\\$line\\")"; ` : ""}i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
@@ -10833,18 +10843,16 @@ let allowed = [];
 // (Each by the real path the box keeps: one that's become a link since, to anywhere, isn't given.)
 try { allowed = fs.readFileSync(allowedFile, "utf8").split("\n").filter((line) => line.startsWith("/") && real(line) === line); } catch {}
 for (const where of [...policy.writable, work, git, ...allowed]) if (where) grantExcept(where, all, kept);
-// A coding agent run whole in it: its own folders (its sign-in and state), whole, but one it's
-// given only to read (KUVO_FENCE_KEPT names it too: the skills it's given). What macOS keeps only
-// read inside them (its settings) Landlock can't: carved out, the agent couldn't make its own files
-// beside them (its databases' journals, its sign-in written anew). Here they're Kuvo Code's own
-// copy of it (a machine's agents' homes are in Kuvo Code's folder), never the one you use yourself.
-// Its tools' port needs no rule: Landlock leaves connections to it open.
+// A coding agent run whole in it: its homes (its sign-in and state), whole, and the folders it only
+// reads (the skills it's given). What macOS keeps from it in its homes (its settings, its other
+// folders) Landlock can't: what it grants a folder it grants all inside, and the agent makes its
+// own files at the top (its databases' journals, its sign-in written anew). Here its homes are Kuvo
+// Code's own copy of it (a machine's agents' homes are in Kuvo Code's folder), never the one you
+// use yourself, and it runs in the sandbox whenever it's on. Its tools' port needs no rule:
+// Landlock leaves connections to it open.
 const lines = (text) => (text || "").split("\n").filter((line) => line.startsWith("/"));
-const onlyRead = new Set(lines(process.env.KUVO_FENCE_KEPT).slice(0, 8).map(real));
-for (const where of lines(process.env.KUVO_FENCE_OWN).slice(0, 4)) {
-  if (onlyRead.has(real(where))) grant(where, READS);
-  else grantExcept(where, all, kept);
-}
+for (const where of lines(process.env.KUVO_FENCE_OWN).slice(0, 4)) grantExcept(where, all, kept);
+for (const where of lines(process.env.KUVO_FENCE_READ).slice(0, 4)) grant(where, READS);
 if (tmp) { fs.mkdirSync(tmp, { recursive: true }); grant(tmp, all); }
 // Its conversation's wake-ups and watches (kuvo-wake): read, and only its inbox written, which the box
 // takes in, out of its reach.
@@ -10856,7 +10864,7 @@ if (wakes && fs.existsSync(wakes)) {
 const keep = [];
 const text = (s) => { const b = Buffer.from(s + "\0"); keep.push(b); return b; };
 const list = (items) => { const b = new BigUint64Array(items.length + 1); items.forEach((s, i) => { b[i] = BigInt(ptr(text(s))); }); keep.push(b); return b; };
-const env = Object.entries(process.env).filter(([k]) => k !== "BUN_BE_BUN" && k !== "BUN_RUNTIME_TRANSPILER_CACHE_PATH" && k !== "KUVO_FENCE_OWN" && k !== "KUVO_FENCE_KEPT").map(([k, v]) => k + "=" + v);
+const env = Object.entries(process.env).filter(([k]) => k !== "BUN_BE_BUN" && k !== "BUN_RUNTIME_TRANSPILER_CACHE_PATH" && k !== "KUVO_FENCE_OWN" && k !== "KUVO_FENCE_READ").map(([k, v]) => k + "=" + v);
 if (libc.prctl(38, 1n, 0n, 0n, 0n) !== 0) fail("Linux refused to keep it (" + errno() + ").");
 if (Number(libc.syscall(RESTRICT, ruleset, 0, 0, 0)) < 0) fail("Linux refused to start it (" + errno() + ").");
 libc.close(ruleset);

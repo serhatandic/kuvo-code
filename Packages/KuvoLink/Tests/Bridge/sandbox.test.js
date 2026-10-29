@@ -318,7 +318,7 @@ test("Claude Code's commands, run with the box's shell for it as Claude Code run
   }
 });
 
-test("a coding agent run whole in the sandbox keeps its own sign-in and state, but not what it runs as it starts, and reaches its own Kuvo Code tools", async () => {
+test("a coding agent run whole in the sandbox keeps its own sign-in and state, but not what it runs as it starts or its plugins, reads the skills it's given, and reaches its own Kuvo Code tools", async () => {
   const box = boxAt("whole", !linux);
   const project = path.join(root, "whole-project");
   fs.mkdirSync(project);
@@ -327,6 +327,11 @@ test("a coding agent run whole in the sandbox keeps its own sign-in and state, b
   fs.mkdirSync(path.join(own, "sessions"), { recursive: true });
   fs.writeFileSync(path.join(own, "auth.json"), "signed in\n");
   fs.writeFileSync(path.join(own, "config.toml"), "model = 'x'\n");
+  fs.mkdirSync(path.join(own, "plugins"));
+  // The skills it's given, in Kuvo Code's own folder.
+  const skills = path.join(box.home, "agents", "skills");
+  fs.mkdirSync(skills, { recursive: true });
+  fs.writeFileSync(path.join(skills, "SKILL.md"), "a skill\n");
   const running = await start(box);
   try {
     assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
@@ -337,16 +342,22 @@ test("a coding agent run whole in the sandbox keeps its own sign-in and state, b
       ["make its own files beside its settings", `echo x > ${JSON.stringify(path.join(own, "state.sqlite-wal"))}`],
       ["read its settings", `cat ${JSON.stringify(path.join(own, "config.toml"))}`],
       ["change its settings", `echo 'hook = 1' >> ${JSON.stringify(path.join(own, "config.toml"))}`],
+      ["add a plugin", `echo x > ${JSON.stringify(path.join(own, "plugins", "p.js"))}`],
+      ["put a link at its top", `ln -s / ${JSON.stringify(path.join(own, "elsewhere"))}`],
+      ["read the skills it's given", `cat ${JSON.stringify(path.join(skills, "SKILL.md"))}`],
+      ["change the skills it's given", `echo x >> ${JSON.stringify(path.join(skills, "SKILL.md"))}`],
       ["write in its project", "echo ok > made.txt"],
       ["read the box's files", `cat ${JSON.stringify(path.join(box.home, "run", "engine.json"))}`],
       ["reach its tools", `curl -s -m 2 -o /dev/null http://127.0.0.1:${toolsPort}/kuvo/info`],
-    ])], { cwd: project, encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, KUVO_FENCE_SHELL: "/bin/sh", KUVO_FENCE_WORK: project, KUVO_FENCE_OWN: own, KUVO_FENCE_KEPT: path.join(own, "config.toml"), ...(port ? { KUVO_FENCE_PORT: port } : {}) } });
+    ])], { cwd: project, encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, KUVO_FENCE_SHELL: "/bin/sh", KUVO_FENCE_WORK: project, KUVO_FENCE_OWN: own, KUVO_FENCE_STATE: "sessions\nlogs", KUVO_FENCE_KEPT: "*.toml\nhooks.json", KUVO_FENCE_READ: skills, ...(port ? { KUVO_FENCE_PORT: port } : {}) } });
     const ran = whole(toolsPort);
-    // (Linux grants its folders whole: what macOS keeps only read there, it can't, without stopping
+    // (Linux grants its homes whole: what macOS keeps only read there, it can't, without stopping
     // the agent making its own files beside it. A machine's agents' homes are Kuvo Code's own.)
+    const mac = linux ? "allowed" : "refused";
     assert.deepEqual(outcome(ran.stdout), {
       "read its sign-in": "allowed", "write its sessions": "allowed", "make its own files beside its settings": "allowed", "read its settings": "allowed",
-      "change its settings": linux ? "allowed" : "refused", "write in its project": "allowed", "read the box's files": "refused", "reach its tools": "allowed",
+      "change its settings": mac, "add a plugin": mac, "put a link at its top": mac, "read the skills it's given": "allowed", "change the skills it's given": "refused",
+      "write in its project": "allowed", "read the box's files": "refused", "reach its tools": "allowed",
     }, ran.stdout + ran.stderr);
     if (!linux) assert.equal(fs.readFileSync(path.join(own, "config.toml"), "utf8"), "model = 'x'\n");
     // (Linux leaves local ports open to every command.)

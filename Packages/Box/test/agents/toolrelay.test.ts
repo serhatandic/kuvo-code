@@ -2,7 +2,7 @@
 // call is its own session's, whatever it says, and reaches the tools where the sandbox can't.
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setToolProgram, setToolServer } from "../../src/agents/kuvotools"
@@ -52,6 +52,43 @@ process.stdin.on("data", (chunk) => {
     expect(mine.body).toEqual({ jsonrpc: "2.0", id: 7, result: { content: [{ type: "text", text: "ses_one" }] } })
     expect(claimed.body.result.content[0].text).toBe("ses_one")
     expect(theirs.body.result.content[0].text).toBe("ses_two")
+  })
+
+  test("two of its connections (Codex has one a thread) using the same request's number: a cancel stops only its own connection's call", async () => {
+    // The program, holding each call until it's cancelled, then saying so (and noting each it holds).
+    const program = join(base, "holds.js")
+    const holding = join(base, "holding.txt")
+    writeFileSync(program, `let buffer = ""
+const held = new Set()
+process.stdin.on("data", (chunk) => {
+  buffer += chunk
+  let at
+  while ((at = buffer.indexOf("\\n")) >= 0) {
+    const message = JSON.parse(buffer.slice(0, at))
+    buffer = buffer.slice(at + 1)
+    if (message.method === "initialize") process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} }) + "\\n")
+    else if (message.method === "tools/call") held.add(message.id) && require("node:fs").appendFileSync(${JSON.stringify(holding)}, message.id + "\\n")
+    else if (message.method === "notifications/cancelled" && held.delete(message.params.requestId)) process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.params.requestId, result: { content: [{ type: "text", text: "cancelled" }] } }) + "\\n")
+  }
+})
+`)
+    setToolProgram(JSON.stringify({ mcp: { servers: { "kuvo-browser": { command: [process.execPath, program], environment: {} } } } }))
+    const tools = relayedTools("ses_one")!
+    const post = (body: unknown, connection?: string) =>
+      fetch(tools.url, { method: "POST", headers: { ...tools.headers, "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...(connection ? { "mcp-session-id": connection } : {}) }, body: JSON.stringify(body) })
+    const connect = async () => (await post({ jsonrpc: "2.0", id: 0, method: "initialize", params: {} })).headers.get("mcp-session-id")!
+    const [first, second] = [await connect(), await connect()]
+    expect(first).not.toBe(second)
+    const call = (connection: string) => post({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "show_in_panel", arguments: {} } }, connection).then((response) => response.json())
+    let secondDone = false
+    const firstCall = call(first)
+    const secondCall = call(second).then((answer) => ((secondDone = true), answer))
+    while ((existsSync(holding) ? readFileSync(holding, "utf8").trim().split("\n").length : 0) < 2) await Bun.sleep(5)
+    await post({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 1 } }, first)
+    expect((await firstCall).result.content[0].text).toBe("cancelled")
+    expect(secondDone).toBe(false)
+    await post({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 1 } }, second)
+    expect((await secondCall).result.content[0].text).toBe("cancelled")
   })
 
   test("a key it didn't give, or one whose session is done, reaches nothing", async () => {

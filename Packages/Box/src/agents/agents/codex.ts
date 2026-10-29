@@ -31,11 +31,14 @@ const places = ["/opt/homebrew/bin", "/usr/local/bin", join(homedir(), ".local/b
 const outputLimit = 30_000
 /**
  * While the box's sandbox is on, Codex runs whole in it, with its commands and all it starts (its
- * own sandbox off: one can't be made inside another): what it writes besides the session's folder
- * is its own home (its sign-in, its conversations), and of that, its settings and rules only read,
- * which run as it starts, outside the sandbox, when you use Codex yourself.
+ * own sandbox off: one can't be made inside another). Besides the session's folder it writes its
+ * home's state: the files at its top (its sign-in, its databases) and these folders (its
+ * conversations, logs, caches), never its settings there (`KEPT_IN_HOME`) nor its other folders
+ * (plugins, skills, what drives your computer), which run outside the sandbox when you use Codex
+ * yourself.
  */
-const KEPT_IN_HOME = ["config.toml", "rules", "hooks.json", "AGENTS.md", "AGENTS.override.md"]
+const STATE_IN_HOME = ["sessions", "archived_sessions", "log", "logs", ".tmp", "tmp", "cache", "shell_snapshots", "sqlite", "thread-writer-locks", "ipc", "generated_images", "memories"]
+const KEPT_IN_HOME = ["*.toml", "*.md", ".env", "hooks.json", "rules"]
 
 /**
  * Codex's plugins that drive your computer (ChatGPT's Computer Use), off for every thread here
@@ -44,8 +47,10 @@ const KEPT_IN_HOME = ["config.toml", "rules", "hooks.json", "AGENTS.md", "AGENTS
  */
 const noComputerUse = ["unified-computer-use@openai-bundled", "computer-use@openai-bundled"]
 
-/** Your account's app-server, among each session's (`CodexAgent.slots`). */
-const ACCOUNT = ""
+/** The app-server outside the box's sandbox, while it's off: your account's, and every session's (`CodexAgent.slots`). */
+const SHARED = ""
+/** Your account's app-server while the box's sandbox is on, run whole in it, in Codex's home. */
+const ACCOUNT = "account"
 
 /** An app-server, as it runs now. */
 interface Slot {
@@ -67,9 +72,10 @@ export class CodexAgent implements Agent {
   /** OpenAI's installer, as its docs give it (it needs no Node). */
   install = "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
   /**
-   * Its app-servers: your account's (`ACCOUNT`: its sign-in, its models, one-off answers, and while
-   * the box's sandbox is off every session's thread), and while it's on, each session's own, run
-   * whole in it (`fenceAgent`), with that session's folder, wake-ups and Kuvo Code tools.
+   * Its app-servers: while the box's sandbox is off, one for all (`SHARED`); while it's on, your
+   * account's (`ACCOUNT`: its sign-in, its models, one-off answers) and each session's own, run
+   * whole in it (`fenceAgent`), with that session's folder, wake-ups and Kuvo Code tools. A
+   * session's turn never goes to another's, nor to your account's.
    */
   private slots = new Map<string, Slot>()
   /** The app-servers run whole in the box's sandbox. */
@@ -155,7 +161,7 @@ export class CodexAgent implements Agent {
 
   /** Whether something but `starting`'s turn (not on it yet) uses `server`: a turn, a sign-in, a one-off answer. */
   private busy(key: string, server: RPC, starting?: CodexThread): boolean {
-    if (key === ACCOUNT && (this.logins.size || this.oneOffs.size)) return true
+    if ((key === SHARED || key === ACCOUNT) && (this.logins.size || [...this.oneOffs.values()].some((oneOff) => oneOff.rpc === server))) return true
     return [...this.threads.values()].some((thread) => thread !== starting && thread.server === server && (thread.isRunning || thread.keepsWorking))
   }
 
@@ -172,7 +178,7 @@ export class CodexAgent implements Agent {
     slot.outdated = undefined
     this.stop(key)
     // What the old one listed meanwhile, asked anew.
-    if (key !== ACCOUNT) return
+    if (key !== SHARED && key !== ACCOUNT) return
     this.modelList = undefined
     emit("model.updated", {})
   }
@@ -193,53 +199,65 @@ export class CodexAgent implements Agent {
    */
   async rpc(thread?: CodexThread, starting = false): Promise<RPC> {
     if (thread && !starting && thread.server && !thread.server.isClosed) return thread.server
-    const key = thread && fenceRules() ? thread.session.id : ACCOUNT
+    // A turn starting while agents it spawned still work in the Codex its thread is in: there, as
+    // long as that's as safe (one outside the box's sandbox, now that it's on, isn't).
+    if (thread && starting && thread.server && !thread.server.isClosed && thread.keepsWorking && (this.isFenced(thread.server) || !fenceRules())) return thread.server
+    const key = !fenceRules() ? SHARED : thread ? thread.session.id : ACCOUNT
     const slot = this.slot(key)
     slot.lastUse = Date.now()
-    // Stopped when nothing has used it for a while: a session's, or your account's with no session in it.
+    // Stopped when nothing has used it for a while: a session's, or your account's with no session
+    // in it. (One at work stays in use.)
     this.idleCheck ??= setInterval(() => {
       for (const [each, slot] of this.slots) {
         this.restartIfQuiet(each)
         const server = slot.server
-        if (!server || this.busy(each, server) || Date.now() - slot.lastUse < 15 * 60_000) continue
-        if (each === ACCOUNT && [...this.threads.values()].some((thread) => thread.server === server)) continue
-        this.stop(each)
+        if (!server) continue
+        if (this.busy(each, server) || (each === SHARED && [...this.threads.values()].some((thread) => thread.server === server))) {
+          slot.lastUse = Date.now()
+          continue
+        }
+        if (Date.now() - slot.lastUse >= 15 * 60_000) this.stop(each)
       }
     }, 60_000)
-    // The box's sandbox changed (on, off, its rules, the folders you let this session's commands
-    // write in): Codex starts again with it once it's quiet.
-    const fence = key === ACCOUNT ? fenceKey() : fenceKey() + JSON.stringify(allowedFolders(thread!.session.location.directory))
+    // The box's sandbox changed (its rules, the folders you let this session's commands write in):
+    // Codex starts again with it once it's quiet.
+    const fence = key === SHARED ? "" : key === ACCOUNT ? fenceKey() : fenceKey() + JSON.stringify(allowedFolders(thread!.session.location.directory))
     if (slot.server && !slot.server.isClosed && slot.fence !== fence) slot.outdated ??= slot.server
     this.restartIfQuiet(key, starting ? thread : undefined)
     if (slot.server && !slot.server.isClosed) return slot.server
-    slot.starting ??= this.start(key, fence, thread).finally(() => (slot.starting = undefined))
+    slot.starting ??= this.start(key, slot, fence, thread).finally(() => (slot.starting = undefined))
     return slot.starting
   }
 
-  /** Its own folders, as it runs whole in the box's sandbox: its home, and the skills it's given (only read). */
+  /**
+   * Its own places, as it runs whole in the box's sandbox: its home (an added account's, and your
+   * Codex's, which it links to), and the skills it's given (only read).
+   */
   private fenced(directory: string, sessionID?: string) {
     const skills = skillsRoot()
     if (skills) mkdirSync(skills, { recursive: true, mode: 0o700 })
     const relayed = sessionID ? relayedTools(sessionID) : undefined
+    const homes = [this.home, ...(this.instance.home && !onMachine ? [this.yourCodex] : [])]
     return fenceAgent(this.executable()!, directory, {
-      own: [this.home, ...(skills ? [skills] : [])],
-      kept: [...KEPT_IN_HOME.map((name) => join(this.home, name)), ...(skills ? [skills] : [])],
+      homes,
+      state: STATE_IN_HOME,
+      kept: KEPT_IN_HOME,
+      read: skills ? [skills] : [],
       port: relayed ? relayPort() : undefined,
     })
   }
 
-  private async start(key: string, fenceNow: string, thread?: CodexThread): Promise<RPC> {
+  private async start(key: string, slot: Slot, fenceNow: string, thread?: CodexThread): Promise<RPC> {
     const executable = this.executable()
     if (!executable) throw new Error(`Install Codex first: ${this.install}`)
     // An added account's own CODEX_HOME, with your Codex settings in it: only its sign-in is its
     // own. (On a machine, nothing of the machine's own Codex.)
-    if (this.instance.home && !onMachine) shadowHome(this.instance.home)
-    const slot = this.slot(key)
+    if (this.instance.home && !onMachine) shadowHome(this.instance.home, this.yourCodex)
     // While the box's sandbox is on, Codex runs whole in it: a session's in its folder, your
     // account's in its home.
-    const directory = thread?.session.location.directory ?? this.home
-    const fence = fenceRules() ? this.fenced(directory, thread?.session.id) : undefined
-    if (fenceRules() && !fence) throw new Error("Codex runs in the sandbox here, and it isn't ready: restart Kuvo Code.")
+    const directory = key === ACCOUNT ? this.home : (thread?.session.location.directory ?? this.home)
+    const fence = key === SHARED ? undefined : this.fenced(directory, key === ACCOUNT ? undefined : key)
+    if (key !== SHARED && !fence) throw new Error("Codex runs in the sandbox here, and it isn't ready: restart Kuvo Code.")
     const args = ["app-server", ...noComputerUse.flatMap((plugin) => ["-c", `plugins.${plugin}.enabled=false`])]
     const env = { ...(this.instance.home ? { CODEX_HOME: this.instance.home } : {}), ...(thread ? { OPENCODE_SESSION_ID: thread.session.id } : {}), ...fence?.env }
     const rpc = new RPC(fence ? [fence.command, ...args] : [executable, ...args], { cwd: fence ? directory : this.context.temporary, env })
@@ -253,7 +271,7 @@ export class CodexAgent implements Agent {
       // Stopped on purpose: the threads were told then (they may be on a newer one by now).
       if (slot.server !== rpc) return
       slot.server = undefined
-      for (const each of this.threads.values()) if (each.server === rpc) each.serverStopped()
+      for (const each of this.threads.values()) each.serverStopped(rpc)
     }
     try {
       await rpc.request("initialize", { clientInfo: { name: "kuvo-code", title: "Kuvo Code", version: "1" }, capabilities: { experimentalApi: true, optOutNotificationMethods: ["turn/diff/updated"] } }, 30_000)
@@ -261,6 +279,11 @@ export class CodexAgent implements Agent {
       // One that won't start isn't left running: the next ask starts another.
       rpc.kill()
       throw error
+    }
+    // Its session closed meanwhile: not left running.
+    if (this.slots.get(key) !== slot) {
+      rpc.kill()
+      throw new Error("Codex stopped.")
     }
     rpc.notify("initialized")
     slot.server = rpc
@@ -274,11 +297,9 @@ export class CodexAgent implements Agent {
     if (!slot || !server) return
     slot.server = undefined
     server.kill()
-    for (const thread of this.threads.values()) if (thread.server === server) thread.serverStopped()
-    if (key !== ACCOUNT) {
-      this.slots.delete(key)
-      dropRelayed(key)
-    }
+    for (const thread of this.threads.values()) thread.serverStopped(server)
+    // Its Kuvo Code tools' program too (started again with it).
+    if (key !== SHARED && key !== ACCOUNT) dropRelayed(key)
   }
 
 
@@ -475,7 +496,7 @@ export class CodexAgent implements Agent {
       cursor = page?.nextCursor ?? undefined
     } while (cursor)
     // Not kept from the old Codex's app-server: asked again of the new one.
-    if (rpc !== this.slots.get(ACCOUNT)?.outdated) this.modelList = { at: Date.now(), models }
+    if (rpc !== this.slots.get(SHARED)?.outdated && rpc !== this.slots.get(ACCOUNT)?.outdated) this.modelList = { at: Date.now(), models }
     return models
   }
 
@@ -540,7 +561,12 @@ export class CodexAgent implements Agent {
 
   /** Its home (CODEX_HOME): an added account's own, or yours. */
   get home(): string {
-    return this.instance.home ?? process.env.CODEX_HOME ?? join(homedir(), ".codex")
+    return this.instance.home ?? process.env.CODEX_HOME ?? this.yourCodex
+  }
+
+  /** Your own Codex's folder, which an added account's links to (on this Mac). */
+  get yourCodex(): string {
+    return join(homedir(), ".codex")
   }
 
   /** A session's skills folder, for its app-server (told again when that started again). */
@@ -573,6 +599,7 @@ export class CodexAgent implements Agent {
     // The agents it spawned go with it, and its own app-server.
     for (const [spawn, owner] of this.spawned) if (owner === thread) this.spawned.delete(spawn)
     this.stop(sessionID)
+    this.slots.delete(sessionID)
     dropRelayed(sessionID)
   }
 }
@@ -630,9 +657,10 @@ function citationsOf(lane: Lane, item: string): CodexCitations {
 /** An agent Codex spawned: its thread's work, told in a session of its own. */
 interface SubagentLane extends Lane {
   run: SubagentRun
-  /** Its thread, and the turn it's on there (to stop it). */
+  /** Its thread, and the turn it's on there (to stop it), in the Codex it runs in. */
   threadID: string
   turnID?: string
+  server?: RPC
   /** The spawn call that started it. */
   call: string
   title: string
@@ -724,11 +752,15 @@ class CodexThread implements Thread {
     return this.agent.isFenced(rpc) ? this.session.location.directory : undefined
   }
 
-  /** The app-server stopped: a thread must be loaded again, and a turn under way is over, and the agents it left at work. */
-  serverStopped() {
+  /** An app-server stopped: the agents it left at work there are over; if it's its thread's, it must be loaded again, and a turn under way is over. */
+  serverStopped(server: RPC) {
+    for (const [threadID, lane] of this.backgroundLanes) {
+      if ((lane.server ?? this.server) !== server) continue
+      this.endSubagent(lane, "interrupted")
+      this.backgroundLanes.delete(threadID)
+    }
+    if (this.server !== server) return
     this.loaded = false
-    for (const lane of this.backgroundLanes.values()) this.endSubagent(lane, "interrupted")
-    this.backgroundLanes.clear()
     const active = this.active
     if (!active) return
     this.active = undefined
@@ -764,6 +796,9 @@ class CodexThread implements Thread {
     // turned on or off), where its thread is loaded again.
     const rpc = await this.agent.rpc(this, true)
     if (rpc !== this.server) {
+      // Let go of where it was, unless agents it spawned still work there.
+      const left = this.server
+      if (left && !left.isClosed && this.nativeID && this.loaded && !this.keepsWorking) void left.request("thread/unsubscribe", { threadId: this.nativeID }).catch(() => {})
       this.server = rpc
       this.loaded = false
     }
@@ -871,8 +906,10 @@ class CodexThread implements Thread {
       } catch {
         return false
       }
-      const items = codexInput(input, this.fencedIn(rpc))
       const lane = this.active?.subagents.get(threadID) ?? this.backgroundLanes.get(threadID)
+      // At work: into its turn, in the Codex it runs in.
+      if (lane && !lane.ended && lane.server && !lane.server.isClosed) rpc = lane.server
+      const items = codexInput(input, this.fencedIn(rpc))
       if (lane && !lane.ended) {
         try {
           await rpc.request("turn/steer", { threadId: threadID, input: items, ...(lane.turnID ? { expectedTurnId: lane.turnID } : {}) }, 30_000)
@@ -1315,7 +1352,7 @@ class CodexThread implements Thread {
     // It works on its own, past the turn that spawned it.
     const run = active.hooks.subagent(call, { title, prompt: prompt ?? input.prompt, background: true, messages: this.messagesFor(threadID) })
     run.stop = () => this.stopSubagent(threadID)
-    const lane: SubagentLane = { turn: run.turn, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, run, threadID, call, title, ended: false }
+    const lane: SubagentLane = { turn: run.turn, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, run, threadID, call, title, ended: false, server: this.server }
     active.subagents.set(threadID, lane)
     this.rememberSpawn(threadID, { call, title, sessionID: run.sessionID, ...(this.agent.directInput.has(threadID) ? { direct: this.agent.directInput.get(threadID) } : {}) })
     // Its approvals come to this session's.
@@ -1332,7 +1369,7 @@ class CodexThread implements Thread {
     if (!resume) return undefined
     const run = resume()
     run.stop = () => this.stopSubagent(threadID)
-    const lane: SubagentLane = { turn: run.turn, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, run, threadID, call, title, ended: false }
+    const lane: SubagentLane = { turn: run.turn, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, run, threadID, call, title, ended: false, server: this.server }
     this.backgroundLanes.set(threadID, lane)
     return lane
   }
@@ -1340,7 +1377,7 @@ class CodexThread implements Thread {
   private continueSubagent(active: Active, threadID: string, call: string, title: string, sessionID: string): SubagentLane {
     const run = active.hooks.subagent(call, { title, sessionID, background: true, messages: this.messagesFor(threadID) })
     run.stop = () => this.stopSubagent(threadID)
-    const next: SubagentLane = { turn: run.turn, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, run, threadID, call, title, ended: false }
+    const next: SubagentLane = { turn: run.turn, streamed: new Set(), changes: new Map(), output: new Map(), toolsSinceText: false, run, threadID, call, title, ended: false, server: this.server }
     active.subagents.set(threadID, next)
     return next
   }
@@ -1348,7 +1385,7 @@ class CodexThread implements Thread {
   /** A spawned agent stopped from Kuvo Code: its turn on its thread is interrupted (it then says so). */
   private async stopSubagent(threadID: string) {
     const lane = this.active?.subagents.get(threadID) ?? this.backgroundLanes.get(threadID)
-    if (lane && !lane.ended) await this.interruptLane(threadID, lane, this.server)
+    if (lane && !lane.ended) await this.interruptLane(threadID, lane, lane.server ?? this.server)
   }
 
   /** Interrupts a spawned agent's turn, through `rpc`, the Codex its thread is in (none running: nothing to stop). */
@@ -1951,8 +1988,7 @@ export function agentTitle(path: unknown): string {
  * An added account's Codex folder: your own Codex's settings, instructions, skills and history in
  * it as links (as T3 Code makes one), but its own sign-in and its own list of models.
  */
-function shadowHome(home: string) {
-  const own = join(homedir(), ".codex")
+function shadowHome(home: string, own: string) {
   const kept = new Set(["auth.json", "models_cache.json"])
   mkdirSync(home, { recursive: true, mode: 0o700 })
   const wanted = existsSync(own) ? readdirSync(own).filter((name) => !kept.has(name)) : []
