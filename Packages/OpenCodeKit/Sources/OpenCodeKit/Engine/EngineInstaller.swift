@@ -15,13 +15,18 @@ public struct EngineRelease: Sendable, Equatable {
     public var integrity: String
     /// The Apple team that signs opencode's binaries.
     public var teamIdentifier: String
+    /// The binary's own SHA-256 (hex), as that tarball holds it: what's run is checked against it
+    /// before each start, as an older build of opencode's, put in its place, carries the same
+    /// signature. None for Linux builds, which this Mac only uploads.
+    public var binarySHA256: String? = nil
 
     /// The build this version of the app is written against.
     public static let pinned = EngineRelease(
         version: OpenCodeEngine.version,
         tarball: URL(string: "https://registry.npmjs.org/@opencode/cli-darwin-arm64/-/cli-darwin-arm64-2.2.0.tgz")!,
         integrity: "sha512-y3q/sghk/xCengTlv1pH2+5t9j0cuxXcEAY9yvyM7loKLQIYE1eSLEkDacCAVNyfnATd3D2JpueFSEB/i6A0Qg==",
-        teamIdentifier: "5NZ4Q7NXJ4"
+        teamIdentifier: "5NZ4Q7NXJ4",
+        binarySHA256: "0614b30fd17c27258b16cd6ea9ab03e1160fa9897e4cefd2d9a5d86f71a0af11"
     )
 
     /// The same version for Linux machines reached over SSH, by `uname -m`. Linux builds carry no
@@ -107,11 +112,25 @@ public struct EngineInstaller: Sendable {
         root.appending(path: release.version).appending(path: "opencode")
     }
 
-    /// The installed binary, if it's there and still carries opencode's signature.
+    /// The installed binary, if it's there and still the pinned build: opencode's signature, and
+    /// the pinned binary's own hash. One that isn't is moved aside, so it's downloaded again.
     public func installed() -> URL? {
         let url = executable
         guard FileManager.default.isExecutableFile(atPath: url.path) else { return nil }
-        return (try? verifySignature(of: url)) != nil ? url : nil
+        if Self.isPinnedBuild(url, release: release) { return url }
+        try? FileManager.default.moveItem(at: url, to: url.deletingLastPathComponent().appending(path: "opencode.replaced-\(UUID().uuidString.prefix(8))"))
+        return nil
+    }
+
+    /// Whether `binary` is the pinned build: opencode's signature, and the binary's own hash.
+    public static func isPinnedBuild(_ binary: URL, release: EngineRelease = .pinned) -> Bool {
+        guard carriesSignature(binary, release: release) else { return false }
+        guard let expected = release.binarySHA256 else { return true }
+        guard let handle = try? FileHandle(forReadingFrom: binary) else { return false }
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined() == expected
     }
 
     /// Downloads, verifies and unpacks the pinned release. `progress` gets the fraction downloaded.
@@ -132,6 +151,7 @@ public struct EngineInstaller: Sendable {
 
         let binary = staging.appending(path: "package/bin/opencode")
         try verifySignature(of: binary)
+        guard Self.isPinnedBuild(binary, release: release) else { throw EngineInstallError.integrityMismatch }
         let destination = executable.deletingLastPathComponent()
         try? fm.removeItem(at: destination)
         try fm.createDirectory(at: destination, withIntermediateDirectories: true)

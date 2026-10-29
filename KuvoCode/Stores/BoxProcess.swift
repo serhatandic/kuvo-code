@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import KuvoLink
 import OpenCodeKit
@@ -276,14 +275,15 @@ final class BoxProcess {
     }
 }
 
-/// What this Mac's box runs, checked before each start: its engine's Bun is opencode's own and the
-/// build this Mac first ran of that version (an older one of opencode's, put in its place, would
-/// carry the same signature), and the app's bundle, with the box's script in it, is as it was sealed.
-/// (Checked, then run: something that swaps a file in between gets in; fenced agents won't reach them.)
+/// What this Mac's box runs, checked before each start: its engine's Bun is the pinned build
+/// (opencode's signature, and the binary's own hash, which an older build of opencode's put in its
+/// place wouldn't have), and the app's bundle, with the box's script in it, is the one this app was
+/// signed as. (Checked, then run: something that swaps a file in between gets in; fenced agents won't
+/// reach them.)
 nonisolated enum BoxIntegrity {
     static func trouble(engine: URL) -> String? {
-        guard EngineInstaller.carriesSignature(engine), pinned(engine) else {
-            return "Kuvo Code’s engine on this Mac isn’t the one it downloaded any more, so its background service didn’t start. Quit Kuvo Code and open it again to download it."
+        guard EngineInstaller.isPinnedBuild(engine) else {
+            return "Kuvo Code’s engine on this Mac isn’t the one it downloaded any more, so it didn’t start. Quit Kuvo Code and open it again to download it."
         }
         guard appIsSealed() else {
             return "Kuvo Code on this Mac was changed since it was installed, so its background service didn’t start. Install Kuvo Code again."
@@ -291,31 +291,18 @@ nonisolated enum BoxIntegrity {
         return nil
     }
 
-    /// Whether the app's bundle is as it was signed: its code and every resource (the box's script).
+    /// Whether the app's bundle on disk, its code and every resource (the box's script), is what
+    /// this running app was signed as: its own designated requirement (its team and identifier; an
+    /// ad-hoc build, its own hash), so one changed and signed again by anyone else fails.
     static func appIsSealed() -> Bool {
-        var code: SecStaticCode?
-        guard SecStaticCodeCreateWithPath(Bundle.main.bundleURL as CFURL, [], &code) == errSecSuccess, let code else { return false }
-        return SecStaticCodeCheckValidity(code, [], nil) == errSecSuccess
-    }
-
-    /// Whether `engine` is the build this Mac first ran of its version: its hash then is kept in
-    /// the Keychain, by version, and each start's must match it.
-    static func pinned(_ engine: URL) -> Bool {
-        guard let handle = try? FileHandle(forReadingFrom: engine) else { return false }
-        defer { try? handle.close() }
-        var hasher = SHA256()
-        while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
-        let hash = Data(hasher.finalize()).base64EncodedString()
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: (Bundle.main.bundleIdentifier ?? "run.kuvo.code") + ".engine",
-                                    kSecAttrAccount as String: engine.deletingLastPathComponent().lastPathComponent]
-        var found = query
-        found[kSecReturnData as String] = true
-        var result: CFTypeRef?
-        if Keychain.copyMatching(found, &result) == errSecSuccess, let kept = result as? Data { return String(decoding: kept, as: UTF8.self) == hash }
-        var item = query
-        item[kSecValueData as String] = Data(hash.utf8)
-        item[kSecAttrLabel as String] = "Kuvo Code engine"
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        return Keychain.add(item) == errSecSuccess
+        var running: SecCode?
+        var signed: SecStaticCode?
+        var requirement: SecRequirement?
+        var bundle: SecStaticCode?
+        guard SecCodeCopySelf([], &running) == errSecSuccess, let running,
+              SecCodeCopyStaticCode(running, [], &signed) == errSecSuccess, let signed,
+              SecCodeCopyDesignatedRequirement(signed, [], &requirement) == errSecSuccess, let requirement,
+              SecStaticCodeCreateWithPath(Bundle.main.bundleURL as CFURL, [], &bundle) == errSecSuccess, let bundle else { return false }
+        return SecStaticCodeCheckValidity(bundle, [], requirement) == errSecSuccess
     }
 }

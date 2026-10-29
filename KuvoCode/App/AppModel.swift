@@ -404,6 +404,12 @@ final class AppModel {
                 guard launch == self.launch else { return }
             }
 
+            // Neither the engine nor the box starts from an app changed since it was signed (the
+            // box's script is in it): the engine itself was checked as it was found or downloaded.
+            if Self.engineOverride == nil, await !Task.detached(operation: { BoxIntegrity.appIsSealed() }).value {
+                engine = .failed("Kuvo Code on this Mac was changed since it was installed, so its engine didn’t start. Install Kuvo Code again.")
+                return
+            }
             engineBinary = binary
             engine = .starting
             stage = "launch"
