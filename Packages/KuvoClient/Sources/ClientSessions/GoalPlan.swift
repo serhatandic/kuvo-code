@@ -373,22 +373,43 @@ public struct GoalPlanAnswer: Encodable, Sendable {
     public let digest: GoalPlan.Cadence?
     /// An end you set, in ms since 1970.
     public let ends: Double?
+    /// The end taken away (sent as `"ends": null`); with neither, the end stays as it was.
+    public let clearsEnd: Bool
     public let spend: [SpendChange]?
     /// What waits for you, put away (`clear`).
     public let waiting: String?
 
-    public static func start(public switches: [String: Bool], wake: Bool, digest: GoalPlan.Cadence? = nil, ends: Date? = nil, spend: [SpendChange]? = nil) -> GoalPlanAnswer {
-        GoalPlanAnswer(action: .start, public: switches, wake: wake, digest: digest, ends: ends.map { $0.timeIntervalSince1970 * 1000 }, spend: spend, waiting: nil)
+    /// Start it. `ends`: the end you picked; `clearsEnd`: you picked none where the bot had
+    /// proposed one, which takes it away (left out, the bot's stays).
+    public static func start(public switches: [String: Bool], wake: Bool, digest: GoalPlan.Cadence? = nil, ends: Date? = nil, clearsEnd: Bool = false, spend: [SpendChange]? = nil) -> GoalPlanAnswer {
+        GoalPlanAnswer(action: .start, public: switches, wake: wake, digest: digest, ends: ends.map { $0.timeIntervalSince1970 * 1000 }, clearsEnd: ends == nil && clearsEnd, spend: spend, waiting: nil)
     }
-    /// A running goal's limits changed: only what's given.
-    public static func change(public switches: [String: Bool]? = nil, wake: Bool? = nil, digest: GoalPlan.Cadence? = nil, ends: Date? = nil, spend: [SpendChange]? = nil) -> GoalPlanAnswer {
-        GoalPlanAnswer(action: .change, public: switches, wake: wake, digest: digest, ends: ends.map { $0.timeIntervalSince1970 * 1000 }, spend: spend, waiting: nil)
+    /// A running goal's limits changed: only what's given (`clearsEnd` takes its end away).
+    public static func change(public switches: [String: Bool]? = nil, wake: Bool? = nil, digest: GoalPlan.Cadence? = nil, ends: Date? = nil, clearsEnd: Bool = false, spend: [SpendChange]? = nil) -> GoalPlanAnswer {
+        GoalPlanAnswer(action: .change, public: switches, wake: wake, digest: digest, ends: ends.map { $0.timeIntervalSince1970 * 1000 }, clearsEnd: ends == nil && clearsEnd, spend: spend, waiting: nil)
     }
     public static func clear(waiting id: String) -> GoalPlanAnswer {
-        GoalPlanAnswer(action: .clear, public: nil, wake: nil, digest: nil, ends: nil, spend: nil, waiting: id)
+        GoalPlanAnswer(action: .clear, public: nil, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: id)
     }
-    public static let decline = GoalPlanAnswer(action: .decline, public: nil, wake: nil, digest: nil, ends: nil, spend: nil, waiting: nil)
-    public static let stop = GoalPlanAnswer(action: .stop, public: nil, wake: nil, digest: nil, ends: nil, spend: nil, waiting: nil)
+    public static let decline = GoalPlanAnswer(action: .decline, public: nil, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
+    public static let stop = GoalPlanAnswer(action: .stop, public: nil, wake: nil, digest: nil, ends: nil, clearsEnd: false, spend: nil, waiting: nil)
+
+    private enum CodingKeys: String, CodingKey { case action, `public`, wake, digest, ends, spend, waiting }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(action, forKey: .action)
+        try container.encodeIfPresent(self.public, forKey: .public)
+        try container.encodeIfPresent(wake, forKey: .wake)
+        try container.encodeIfPresent(digest, forKey: .digest)
+        if let ends {
+            try container.encode(ends, forKey: .ends)
+        } else if clearsEnd {
+            try container.encodeNil(forKey: .ends)
+        }
+        try container.encodeIfPresent(spend, forKey: .spend)
+        try container.encodeIfPresent(waiting, forKey: .waiting)
+    }
 }
 
 /// What both apps say of a goal: the words the drafts settle are filled in once picked.
@@ -420,7 +441,9 @@ public enum GoalPlanWords {
     /// plan with them.
     public static func outline(_ goal: GoalPlan) -> String {
         let names = goal.phases.count > 1 ? goal.phases : goal.steps.map(\.text)
-        return names.formatted(.list(type: .and))
+        // A long plan: its first few, and how many more.
+        let shown = names.count > 6 ? Array(names.prefix(6)) + ["\(names.count - 6) more"] : names
+        return shown.formatted(.list(type: .and))
     }
 
     /// A service's name from its site, for its mark's letter and its buttons: "stripe.com" is

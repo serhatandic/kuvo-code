@@ -148,4 +148,24 @@ struct GoalTimelineTests {
         #expect(days.contains(open.now))
         #expect(days.start >= open.start && days.end <= open.end, "the days shown are all on the axis")
     }
+
+    @Test func aLongPlanIsSaidInAFewNamesAndHowManyMore() {
+        let steps = (1...30).map { GoalPlan.Step(id: "s\($0)", text: "Step \($0)", state: .todo) }
+        let outline = GoalPlanWords.outline(plan(steps))
+        #expect(outline.contains("Step 6") && !outline.contains("Step 7"))
+        #expect(outline.hasSuffix("24 more"))
+    }
+
+    @Test func startingWithNoEndTakesTheBotsEndAwayAndLeavingItAloneKeepsIt() throws {
+        let json = { (answer: GoalPlanAnswer) throws -> [String: Any] in
+            try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(answer)) as? [String: Any])
+        }
+        let cleared = try json(.start(public: [:], wake: false, clearsEnd: true))
+        #expect(cleared.keys.contains("ends") && cleared["ends"] is NSNull, "None picked: \"ends\": null")
+        let untouched = try json(.start(public: [:], wake: false))
+        #expect(!untouched.keys.contains("ends"), "left out: the bot's end stands")
+        let picked = try json(.start(public: [:], wake: false, ends: Date(timeIntervalSince1970: 1_800_000_000), clearsEnd: true))
+        #expect(picked["ends"] as? Double == 1_800_000_000_000, "an end picked wins")
+        #expect(try json(.change(clearsEnd: true))["ends"] is NSNull)
+    }
 }
