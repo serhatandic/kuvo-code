@@ -44,6 +44,7 @@ import Testing
         app.bots.reachable = { $0 == "lab" }
         app.botWork.boxes = box
         app.botAsks.boxes = box
+        app.botAsks.connected = { $0 == "lab" }
         await app.bots.refresh("lab")
         return (machine, projects)
     }

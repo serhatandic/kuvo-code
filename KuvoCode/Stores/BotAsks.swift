@@ -47,15 +47,23 @@ final class BotAsks {
     }
     #endif
 
-    /// What `box` asks, from now on, until the task following it ends (a machine disconnecting).
-    /// This Mac's box tells each change as it's made; a machine's, reached over SSH, is asked
-    /// again every half minute, and as a bot's work there says it asks something. A box from
+    /// What `box` asks, from now on, until the task following it ends (a machine disconnecting,
+    /// or removed). This Mac's box tells each change as it's made; a machine's, reached over SSH,
+    /// is read as it connects (`read`, one of its connection's steps), then again every half
+    /// minute while it's connected, and as a bot's work there says it asks something. A box from
     /// before bots made projects is asked again only now and then.
     func follow(_ box: String) async {
         let me = UUID()
         following[box] = me
+        let onThisMac = box == BoxClient.mac
+        var older = false
         while !Task.isCancelled {
-            var older = false
+            if !onThisMac {
+                try? await Task.sleep(for: .seconds(older ? 300 : 30))
+                // Not while it's away or starting over: nothing goes to it then.
+                guard !Task.isCancelled, isConnected(box) else { continue }
+            }
+            older = false
             if let client = client(box) {
                 do {
                     for try await line in client.follow("kuvo/work/asks/events") {
@@ -66,7 +74,7 @@ final class BotAsks {
                     older = refusal.status == 404 || refusal.status == 403
                 } catch {}
             }
-            try? await Task.sleep(for: .seconds(older ? 300 : box == BoxClient.mac ? 2 : 30))
+            if onThisMac { try? await Task.sleep(for: .seconds(older ? 300 : 2)) }
         }
         // Gone with its connection: nothing it asked can be answered from here now.
         if following[box] == me {
@@ -75,9 +83,16 @@ final class BotAsks {
         }
     }
 
-    /// What `box` asks now, read once (as a bot's work there says it asks something new).
+    /// A machine connected and ready, which its asks are read from (a test's own answer).
+    @ObservationIgnored var connected: ((String) -> Bool)?
+    private func isConnected(_ box: String) -> Bool {
+        connected?(box) ?? (app?.machines.engine(box)?.isReady == true)
+    }
+
+    /// What `box` asks now, read once (as it connects, and as a bot's work there says it asks
+    /// something new).
     func read(_ box: String) async {
-        guard let client = client(box), let list = try? await client.value(WorkAskList.self, "GET", "kuvo/work/asks") else { return }
+        guard box == BoxClient.mac || isConnected(box), let client = client(box), let list = try? await client.value(WorkAskList.self, "GET", "kuvo/work/asks") else { return }
         take(list.asks, from: box)
     }
 

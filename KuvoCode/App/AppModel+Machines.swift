@@ -459,6 +459,8 @@ extension AppModel {
             { await self.syncSignInFiles(with: engine) },
             { await self.wakeUps.share(with: engine) },
             { await Utilities.shareTabTidying(on: machine) },
+            // What its bots ask you (making a project), then followed while it's connected.
+            { await self.botAsks.read(machine) },
         ]) else { return }
         connection.every(600, "sign-ins", [
             { await self.syncSignIns(with: engine) },
@@ -469,7 +471,6 @@ extension AppModel {
         ])
         // Settings changed here while it connected, after it took the ones it has.
         connection.run("settings") { [weak self] in await self?.keepSettingsCurrent(engine) }
-        // What its bots ask you (making a project), for as long as it's connected.
         connection.run("bot-asks") { [weak self] in await self?.botAsks.follow(machine) }
     }
 
