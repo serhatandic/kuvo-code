@@ -25,7 +25,9 @@ final class Vaults {
     @ObservationIgnored var client: (String) -> BoxClient? = { _ in nil }
     /// The Mac's proof for a machine it set up (`PhoneLink.vaultProof`).
     @ObservationIgnored var proof: (String) -> [String: Any]? = { _ in nil }
-    @ObservationIgnored private var following: [String: Task<Void, Never>] = [:]
+    /// Goes up with each read of a box, and as it's forgotten: a read that comes back after a
+    /// later one, or after the box was forgotten, is dropped.
+    @ObservationIgnored private var reads: [String: Int] = [:]
 
     subscript(box: String) -> Shown { shown[box] ?? Shown() }
 
@@ -34,22 +36,28 @@ final class Vaults {
     private func headers(for box: String) async throws -> [String: String] {
         guard box != BoxClient.mac else { return [:] }
         if let key = VaultKeys.key(for: box) { return ["x-kuvo-vault-key": key] }
-        // Not kept yet: the machine gives it (making its vault, the first time) to the Mac that set it up.
+        return ["x-kuvo-vault-key": try await keyFromMachine(box)]
+    }
+
+    /// The machine's unlock key, which it gives (making its vault, the first time) to the Mac that
+    /// set it up; kept once it's given.
+    private func keyFromMachine(_ box: String) async throws -> String {
         guard let proof = proof(box), let client = client(box) else { throw BoxRefusal(status: 503, message: "This Mac can't reach that machine's vault now. Try again in a moment.") }
         let (status, data) = try await client.send("POST", VaultRoutes.key, body: try JSONSerialization.data(withJSONObject: proof))
         guard status == 200, let key = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["key"] as? String else { throw BoxRefusal(status: status, data: data) }
         VaultKeys.keep(key, for: box)
-        return ["x-kuvo-vault-key": key]
+        return key
     }
 
     /// `method path` on `box`'s vault, its answer's JSON as `T`.
     func ask<T: Decodable>(_ type: T.Type = T.self, _ method: String, _ path: String, body: [String: Any]? = nil, on box: String) async throws -> T {
         guard let client = client(box) else { throw BoxRefusal(status: 503, message: "Kuvo Code isn't ready yet.") }
-        var (status, data) = try await client.send(method, path, body: try body.map { try JSONSerialization.data(withJSONObject: $0) }, headers: try await headers(for: box))
-        // A key that isn't the machine's any more (its vault made again): asked for afresh, once.
-        if status == 403, box != BoxClient.mac, VaultKeys.key(for: box) != nil {
-            VaultKeys.forget(box)
-            (status, data) = try await client.send(method, path, body: try body.map { try JSONSerialization.data(withJSONObject: $0) }, headers: try await headers(for: box))
+        let sent = try body.map { try JSONSerialization.data(withJSONObject: $0) }
+        var (status, data) = try await client.send(method, path, body: sent, headers: try await headers(for: box))
+        // A key that isn't the machine's any more (its vault made again): asked for afresh, once,
+        // the old one kept until there's a new one.
+        if status == 403, box != BoxClient.mac, let old = VaultKeys.key(for: box), let fresh = try? await keyFromMachine(box), fresh != old {
+            (status, data) = try await client.send(method, path, body: sent, headers: ["x-kuvo-vault-key": fresh])
         }
         guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
         return try JSONDecoder().decode(T.self, from: data)
@@ -63,8 +71,15 @@ final class Vaults {
 
     // MARK: Reading
 
+    private func nextRead(_ box: String) -> Int {
+        let read = (reads[box] ?? 0) + 1
+        reads[box] = read
+        return read
+    }
+
     /// Reads `box`'s vault, its asks and its latest activity again.
     func refresh(_ box: String) async {
+        let read = nextRead(box)
         var now = self[box]
         do {
             now.vault = try await ask(Vault.self, "GET", VaultRoutes.vault, on: box)
@@ -74,45 +89,54 @@ final class Vaults {
         } catch {
             now.failure = error.localizedDescription
         }
+        guard reads[box] == read else { return }
         shown[box] = now
     }
 
-    /// Follows `box`'s asks while something shows them: read again every few seconds (a machine's
-    /// box answers once over SSH; this Mac's is quick).
-    func follow(_ box: String) {
-        guard following[box] == nil else { return }
-        following[box] = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                if let asks = try? await ask(Asks.self, "GET", VaultRoutes.asks, on: box).asks, asks != self[box].asks {
-                    var now = self[box]
-                    now.asks = asks
-                    shown[box] = now
-                }
-                try? await Task.sleep(for: .seconds(box == BoxClient.mac ? 1 : 4))
+    /// Follows `box` while the caller's task runs (a view's): what its agents ask, read again
+    /// every second on this Mac (with its vault every few, which the browser and agents' sign-ins
+    /// read) and every ten on a machine, whose box answers once over SSH. A machine's only once
+    /// this Mac keeps its key: following never makes a vault. A box without a vault stops it.
+    func follow(_ box: String) async {
+        var round = 0
+        while !Task.isCancelled {
+            if box == BoxClient.mac, round % 5 == 0 {
+                await refresh(box)
+            } else if box == BoxClient.mac || VaultKeys.key(for: box) != nil {
+                // Dropped if a whole read began meanwhile, which has the asks too.
+                let read = reads[box]
+                do {
+                    let asks = try await ask(Asks.self, "GET", VaultRoutes.asks, on: box).asks
+                    if reads[box] == read, asks != self[box].asks {
+                        var now = self[box]
+                        now.asks = asks
+                        shown[box] = now
+                    }
+                } catch let refusal as BoxRefusal where [403, 404, 405].contains(refusal.status) {
+                    return
+                } catch {}
             }
+            round += 1
+            try? await Task.sleep(for: .seconds(box == BoxClient.mac ? 1 : 10))
         }
     }
 
-    /// Forgets what's shown of `box`'s vault and stops following it; a machine's unlock key too
-    /// (the machine removed from this Mac).
+    /// Forgets what's shown of `box`'s vault (a read still on its way is dropped); a machine's
+    /// unlock key too (the machine removed from this Mac).
     func forget(_ box: String) {
-        following.removeValue(forKey: box)?.cancel()
+        _ = nextRead(box)
         shown[box] = nil
         if box != BoxClient.mac { VaultKeys.forget(box) }
     }
 
-    func activity(on box: String, item: String? = nil, bot: String? = nil, limit: Int = 100) async -> [VaultActivity] {
-        (try? await ask(Entries.self, "GET", VaultRoutes.activity(item: item, bot: bot, limit: limit), on: box).entries) ?? []
+    func activity(on box: String, item: String? = nil, bot: String? = nil, limit: Int = 100) async throws -> [VaultActivity] {
+        try await ask(Entries.self, "GET", VaultRoutes.activity(item: item, bot: bot, limit: limit), on: box).entries
     }
 
     // MARK: Changing
 
-    /// What an item is made or changed with.
-    typealias Given = VaultDraft
-
     @discardableResult
-    func add(_ given: Given, on box: String) async throws -> VaultItem {
+    func add(_ given: VaultDraft, on box: String) async throws -> VaultItem {
         let made = try await ask(Made.self, "POST", VaultRoutes.items, body: given.json, on: box)
         if let key = made.key, box != BoxClient.mac { VaultKeys.keep(key, for: box) }
         await refresh(box)
@@ -120,7 +144,7 @@ final class Vaults {
     }
 
     @discardableResult
-    func change(_ item: VaultItem, to given: Given, on box: String) async throws -> VaultItem {
+    func change(_ item: VaultItem, to given: VaultDraft, on box: String) async throws -> VaultItem {
         let changed = try await ask(Made.self, "PATCH", VaultRoutes.item(item.id), body: given.json, on: box)
         await refresh(box)
         return changed.item
