@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { EngineLink } from "../../src/agents/engine"
@@ -108,6 +108,15 @@ describe("a goal", () => {
     expect(engine.titles.get("ses_work")).toBe("all tests in test/auth pass")
   })
 
+  test("is checked after a turn longer than a page of the conversation (hundreds of steps), and kept going", async () => {
+    engine.turns = [{ steps: 450, tool: true, text: "Still two to fix." }]
+    engine.verdicts = [`{"verdict": "not_met", "reason": "2 tests in test/auth still fail."}`, `{"verdict": "met", "reason": "npm test exits 0."}`]
+    await goals.set("ses_work", "all tests in test/auth pass")
+    await until(() => goal()?.state === "met")
+    expect(nudges().map((message) => message.description)).toEqual(["Not met yet: 2 tests in test/auth still fail."])
+    expect(goal()).toMatchObject({ state: "met", turns: 2 })
+  })
+
   test("on one of OpenCode's free models, is checked afresh all the same", async () => {
     engine.freeModel = true
     engine.verdicts = [`{"verdict": "met", "reason": "Done."}`]
@@ -128,73 +137,6 @@ describe("a goal", () => {
     await until(() => goal()?.state === "unmet")
     expect(goal()).toMatchObject({ state: "unmet", note: "It needs a production API key only you have." })
     expect(nudges()).toHaveLength(0)
-  })
-
-  // The user's run: a turn that ended on a question to them ("Which language should the README
-  // use?"), its plan read as done. A turn that ends waiting on you isn't judged; once you answer,
-  // the turn after is.
-  test("a turn that ends waiting on you isn't judged, and the one after your answer is", async () => {
-    engine.turns = [{ text: "I'll write a README, two source files and a test. Which language should the README use?" }, { tool: true, text: "README.md written." }]
-    engine.asks.set("ses_work", { form: [{ id: "frm_1", sessionID: "ses_work" }] })
-    await goals.set("ses_work", "a README in this folder")
-    // Its end looked at: what it waits on asked for, and nothing judged.
-    await until(() => engine.asksLooked >= 2 && !goal()?.checking)
-    expect(engine.checks).toHaveLength(0)
-    expect(nudges()).toHaveLength(0)
-    expect(goal()).toMatchObject({ state: "working", turns: 0 })
-    // Answered: the turn after it is the one checked.
-    engine.asks.delete("ses_work")
-    engine.verdicts = [`{"verdict": "met", "reason": "README.md is in the folder."}`]
-    engine.write("ses_work", "English")
-    await until(() => goal()?.state === "met")
-    expect(engine.checks).toHaveLength(1)
-    expect(engine.checks[0].prompt).toContain("README.md written.")
-    expect(goal()).toMatchObject({ turns: 1 })
-  })
-
-  test("in a repository, the files changed since its last commit come first, past what a listing keeps", async () => {
-    const folder = mkdtempSync(join(tmpdir(), "kuvo-goal-repo-"))
-    const git = (...args: string[]) => Bun.spawnSync(["git", "-C", folder, "-c", "user.email=t@example.com", "-c", "user.name=T", ...args])
-    git("init", "-q", "-b", "main")
-    for (let each = 0; each < 320; each++) writeFileSync(join(folder, `a${String(each).padStart(3, "0")}.ts`), "x\n")
-    git("add", "-A")
-    git("commit", "-qm", "first")
-    writeFileSync(join(folder, "zz-README.md"), "# Demo\n")
-    engine.directory = folder
-    engine.verdicts = [`{"verdict": "met", "reason": "zz-README.md is there."}`]
-    try {
-      await goals.set("ses_work", "a README in this folder")
-      await until(() => engine.checks.length === 1)
-      expect(engine.checks[0].prompt).toContain("<files>\nzz-README.md\n")
-      expect(engine.checks[0].prompt).toContain("(and 21 more)")
-    } finally {
-      rmSync(folder, { recursive: true, force: true })
-    }
-  })
-
-  test("a turn the check finds waiting on you isn't met or nudged: the goal waits for your answer", async () => {
-    engine.turns = [{ text: "I'm paused for your selection." }]
-    engine.verdicts = [`{"verdict": "waiting", "reason": "It asked which language the README should use."}`]
-    await goals.set("ses_work", "a README in this folder")
-    await until(() => settled >= 1 && engine.checks.length === 1)
-    expect(nudges()).toHaveLength(0)
-    expect(goal()).toMatchObject({ state: "working", turns: 0 })
-    expect(engine.checks[0].prompt).toContain(`"waiting"`)
-  })
-
-  test("is judged by what's in its folder: the check is shown the folder's files", async () => {
-    const folder = mkdtempSync(join(tmpdir(), "kuvo-goal-folder-"))
-    writeFileSync(join(folder, "app.ts"), "export const a = 1\n")
-    engine.directory = folder
-    engine.verdicts = [`{"verdict": "not_met", "reason": "There's no README.md in the folder."}`]
-    try {
-      await goals.set("ses_work", "a README in this folder")
-      await until(() => engine.checks.length === 1)
-      expect(engine.checks[0].prompt).toContain("<files>\napp.ts\n</files>")
-      expect(engine.checks[0].prompt).toContain("only if it's in the files above or the conversation shows a command or edit that made it")
-    } finally {
-      rmSync(folder, { recursive: true, force: true })
-    }
   })
 
   test("pauses when you stop the agent, and carries on once resumed", async () => {

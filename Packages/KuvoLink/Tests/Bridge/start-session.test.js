@@ -1,7 +1,8 @@
-// A session an agent starts on a machine (its start_session tool, `kuvo-browser.js`) is marked as
-// started by the conversation it works for (`kuvo.startedBy`), so every client shows it under that
-// one: the conversation itself, a subagent's, and an engine run of a coding agent's (Auto's) all
-// name the conversation. Only the engine is a stand-in.
+// A session an agent starts on a machine (its start_session tool, `kuvo-browser.js`, which its box
+// answers through `kuvo-link.js box route`) is marked as started by the conversation it works for
+// (`kuvo.startedBy`), so every client shows it under that one: the conversation itself, a
+// subagent's, and an engine run of a coding agent's (Auto's) all name the conversation. The real
+// tool and box script; only the engine is a stand-in.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/start-session.test.js`.
 import assert from "node:assert/strict";
@@ -16,6 +17,8 @@ import { fileURLToPath } from "node:url";
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-start-session-")));
 after(() => fs.rmSync(home, { recursive: true, force: true }));
 const tool = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+fs.mkdirSync(path.join(home, "bin"), { recursive: true });
+fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url), path.join(home, "bin", "kuvo-link.js"));
 
 // The engine: a conversation, a subagent it started, an engine run it works through, and what
 // each new session was marked with.
@@ -74,6 +77,6 @@ test("a session started from a conversation, its subagent or its engine run is m
     assert.equal(result.isError ?? false, false, result.content?.[0]?.text);
     const started = result.content[0].text.match(/\(address (ses_\w+)\)/)?.[1];
     assert.ok(started, result.content[0].text);
-    assert.deepEqual(marked.get(started), { kuvo: { startedBy: "ses_lead", beside: true } }, `started from ${caller}`);
+    assert.deepEqual(marked.get(started), { kuvo: { startedBy: "ses_lead" } }, `started from ${caller}`);
   }
 });

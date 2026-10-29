@@ -68,10 +68,11 @@ private struct PressableLabel<Label: View>: View {
     @ViewBuilder let label: () -> Label
     @State private var isHovering = false
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.showsHover) private var showsHover
 
     var body: some View {
         label()
-            .foregroundStyle(isHovering && isEnabled || !dimsAtRest ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+            .foregroundStyle((isHovering || showsHover) && isEnabled || !dimsAtRest ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
             .background(fill, in: .rect(cornerRadius: cornerRadius))
             .contentShape(.rect(cornerRadius: cornerRadius))
             .opacity(isEnabled ? 1 : 0.45)
@@ -83,8 +84,13 @@ private struct PressableLabel<Label: View>: View {
     private var fill: Color {
         guard isEnabled else { return .clear }
         if configuration.isPressed { return Pressable.pressedFill }
-        return isHovering ? Pressable.hoverFill : .clear
+        return isHovering || showsHover ? Pressable.hoverFill : .clear
     }
+}
+
+extension EnvironmentValues {
+    /// Buttons drawn as with the pointer over them, for a screenshot.
+    @Entry var showsHover = false
 }
 
 /// The clear (×) button at the end of a search field: it brightens under the pointer, as the
@@ -204,6 +210,36 @@ struct FilledButtonStyle<S: Shape>: ButtonStyle {
             configuration.label
                 .background(Color.primary.opacity(configuration.isPressed ? rest + 0.1 : isHovering ? rest + 0.05 : rest), in: shape)
                 .contentShape(shape)
+                .onHover { isHovering = $0 }
+                .clickablePointer()
+                .animation(.easeOut(duration: 0.12), value: isHovering)
+        }
+    }
+}
+
+/// A small capsule button that's an action of its own on a line, like a review's Fix All…: an
+/// outline and a faint fill that deepens under the pointer, or, `tinted`, the accent's.
+struct ChipButtonStyle: ButtonStyle {
+    var tinted = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        Chip(configuration: configuration, tinted: tinted)
+    }
+
+    private struct Chip: View {
+        let configuration: ButtonStyleConfiguration
+        let tinted: Bool
+        @State private var isHovering = false
+
+        var body: some View {
+            let deeper = configuration.isPressed ? 0.1 : isHovering ? 0.05 : 0
+            configuration.label
+                .foregroundStyle(tinted ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .padding(.horizontal, 9)
+                .frame(height: 22)
+                .background(Capsule().fill(tinted ? AnyShapeStyle(.tint.opacity(0.14 + deeper)) : AnyShapeStyle(Color.primary.opacity(0.04 + deeper))))
+                .overlay(Capsule().strokeBorder(tinted ? AnyShapeStyle(.clear) : AnyShapeStyle(Color.primary.opacity(0.12)), lineWidth: 1))
+                .contentShape(Capsule())
                 .onHover { isHovering = $0 }
                 .clickablePointer()
                 .animation(.easeOut(duration: 0.12), value: isHovering)

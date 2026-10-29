@@ -22,6 +22,7 @@ import { LinkHost } from "../relay/host";
 import { AGENTS } from "../server/forward";
 import { engineHandler } from "../server/router";
 import { macLink, readLink } from "../state";
+import { QUEUE_ROUTE } from "../areas/queue";
 import { macKeys, macLinkCheck, macLinkWait, macNeeded, setLinkStatus, tellUntold } from "./link";
 import type { EngineRecord } from "../../shared/records";
 import type { AnswerPiece, Asker, LinkHandler, LinkRequest } from "../server/context";
@@ -31,10 +32,11 @@ import type { LinkState } from "../state";
 // `boxRoutes`), and its phones. The rest the app answers, through the host.
 export const MAC_BOX_ROUTES = ["kuvo/artifacts", "kuvo/projects", "kuvo/worktrees", "kuvo/plugins", "kuvo/folders", "kuvo/programs", "kuvo/providers", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library",
   "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities", "kuvo/phones", "kuvo/attention", "kuvo/accounts/ended",
-  "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/moves"];
-// (A plan signed out from a phone, `kuvo/accounts/<id>/forget`, and a command stopped,
-// `kuvo/shell/<id>/stop`: the box's too.)
-const macAnswersAlso = (route: string): boolean => /^kuvo\/accounts\/[^/]+\/forget$/.test(route) || /^kuvo\/shell\/[^/]+\/stop$/.test(route);
+  "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/agent-tools", "kuvo/moves"];
+// (A plan signed out from a phone, `kuvo/accounts/<id>/forget`, a command stopped,
+// `kuvo/shell/<id>/stop`, a session started with a task and a session's queue: the box's too.)
+const macAnswersAlso = (route: string): boolean => /^kuvo\/accounts\/[^/]+\/forget$/.test(route) || /^kuvo\/shell\/[^/]+\/stop$/.test(route)
+  || route === "kuvo/sessions" || QUEUE_ROUTE.test(route);
 export const macAnswers = (route: string): boolean => MAC_BOX_ROUTES.some(area => route === area || route.startsWith(`${area}/`)) || macAnswersAlso(route);
 
 const APP_NOT_ANSWERING = "Kuvo Code on this Mac isn't answering. Try again in a moment.";

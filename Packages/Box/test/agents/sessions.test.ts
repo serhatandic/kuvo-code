@@ -2,7 +2,7 @@
 // Auto down its list, and what a session keeps. Each test has a folder of its own, removed after.
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AcpThread } from "../../src/agents/acp"
@@ -11,7 +11,7 @@ import type { Agent, RunInput, RunResult, Thread, TurnHooks } from "../../src/ag
 import { Auto } from "../../src/agents/auto"
 import { subscribe } from "../../src/agents/events"
 import type { Roster } from "../../src/agents/roster"
-import { Sessions, timing } from "../../src/agents/sessions"
+import { Sessions, shellProcesses, timing } from "../../src/agents/sessions"
 import { Snapshots } from "../../src/agents/snapshots"
 import { Store } from "../../src/agents/store"
 import type { Turn } from "../../src/agents/turn"
@@ -141,6 +141,7 @@ afterEach(() => {
   unsubscribe()
   sessions.closeAll()
   timing.stopGrace = 8_000
+  timing.shellGrace = 5_000
 })
 
 async function until(condition: () => boolean, ms = 3_000) {
@@ -385,6 +386,21 @@ describe("permissions", () => {
     }
     const id = create()
     sessions.update(id, { permissions: [{ action: "shell", resource: "rm *", effect: "deny" }] })
+    send(id, "go")
+    await settled(id, 1)
+    expect(seen).toEqual([false, "reject", "once"])
+  })
+
+  test("Approve All with a rule of a kind a newer engine set (one this app doesn't know) holds back what it matches, as Don't Allow does", async () => {
+    const seen: (boolean | string)[] = []
+    a.script = async (_input, _turn, hooks) => {
+      seen.push(hooks.approvesAll())
+      seen.push(await hooks.permission({ action: "shell", resources: ["rm -rf /"] }))
+      seen.push(await hooks.permission({ action: "shell", resources: ["ls"] }))
+      return { outcome: "succeeded" }
+    }
+    const id = create()
+    sessions.update(id, { permissions: [{ action: "shell", resource: "rm *", effect: "deny-forever" as any }] })
     send(id, "go")
     await settled(id, 1)
     expect(seen).toEqual([false, "reject", "once"])
@@ -761,6 +777,31 @@ describe("undo", () => {
     expect(events.some((event) => event.type === "session.revert.committed")).toBe(true)
     expect(readFileSync(join(folder, "a.txt"), "utf8")).toBe("one\n")
     expect(a.threads.length).toBe(2)
+  })
+})
+
+describe("what an undo would put back", () => {
+  test("is the files' own lines, whatever your git settings say about blank lines or converting files to text", async () => {
+    const folder = mkdtempSync(join(root, "repo-"))
+    const settings = join(root, "gitconfig")
+    // Unchanged blank lines written as nothing; .txt files shown through a converter.
+    writeFileSync(settings, "[diff]\n\tsuppressBlankEmpty = true\n[diff \"shout\"]\n\ttextconv = tr a-z A-Z <\n")
+    const was = process.env.GIT_CONFIG_GLOBAL
+    process.env.GIT_CONFIG_GLOBAL = settings
+    try {
+      Bun.spawnSync(["git", "-C", folder, "init", "-q"])
+      writeFileSync(join(folder, ".gitattributes"), "*.txt diff=shout\n")
+      writeFileSync(join(folder, "a.txt"), "one\n\ntwo\n")
+      const snapshots = new Snapshots(join(root, "snapshots"))
+      const before = await snapshots.take(folder)
+      writeFileSync(join(folder, "a.txt"), "one\n\nthree\n")
+      const after = await snapshots.take(folder)
+      const [diff] = await snapshots.changes(folder, before!, after!, ["a.txt"])
+      expect(diff.patch).toContain("\n one\n \n-two\n+three")
+    } finally {
+      if (was === undefined) delete process.env.GIT_CONFIG_GLOBAL
+      else process.env.GIT_CONFIG_GLOBAL = was
+    }
   })
 })
 
@@ -1387,6 +1428,63 @@ describe("commands you run yourself", () => {
     expect(shells()[0].output.output).toContain("done-here")
     expect(shells()[1].output.truncated).toBe(true)
     expect(shells()[1].output.output.length).toBeLessThanOrEqual(50_000)
+  })
+
+  test("one still running stops with its session, deleted or the bridge closing: a server it left in the background too, and one that won't stop when asked", async () => {
+    timing.shellGrace = 50
+    const running = (pid: number) => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    for (const end of ["deleted", "closed"] as const) {
+      const folder = mkdtempSync(join(root, "project-"))
+      const id = sessions.create({ model: { providerID: "alpha", id: "one" }, location: { directory: folder } }).id
+      // A server you started in the background (the command itself ends at once), and one that
+      // takes no notice of being asked to stop.
+      sessions.runShell(id, "sleep 60 & echo $! > server")
+      sessions.runShell(id, "sh -c 'trap \"\" TERM; exec sleep 60' & echo $! > stubborn")
+      const shells = () => sessions.messages(id).filter((message) => message.type === "shell") as any[]
+      await until(() => shells().length === 2 && shells().every((shell) => shell.status !== "running"), 10_000)
+      const pids = ["server", "stubborn"].map((name) => Number(readFileSync(join(folder, name), "utf8")))
+      expect(pids.every(running)).toBe(true)
+      if (end === "deleted") await sessions.remove(id)
+      else sessions.closeAll()
+      await until(() => !pids.some(running))
+    }
+  })
+
+  test("deleting a session never stops another's: a group of its whose number another command took since is left alone", async () => {
+    // Process group 4242, as the system would give its number: to one session's command, then,
+    // once that's gone, to another session's.
+    const group = 4242
+    const signalled: (NodeJS.Signals | 0)[] = []
+    const { spawn, kill } = shellProcesses
+    shellProcesses.spawn = ((...args: Parameters<typeof spawn>) => Object.defineProperty(spawn(...args), "pid", { value: group })) as typeof spawn
+    shellProcesses.kill = (pid, signal) => {
+      if (pid !== -group) return kill(pid, signal)
+      if (signal !== 0) signalled.push(signal)
+    }
+    try {
+      const folder = mkdtempSync(join(root, "project-"))
+      const first = sessions.create({ model: { providerID: "alpha", id: "one" }, location: { directory: folder } }).id
+      const second = sessions.create({ model: { providerID: "alpha", id: "one" }, location: { directory: folder } }).id
+      const ended = (id: string) => (sessions.messages(id).filter((message) => message.type === "shell") as any[]).every((shell) => shell.status !== "running")
+      // Its command left something running in its group…
+      sessions.runShell(first, "true")
+      await until(() => sessions.messages(first).some((message) => message.type === "shell") && ended(first))
+      // …which ended; then another session's command got the same number.
+      sessions.runShell(second, "true")
+      await until(() => sessions.messages(second).some((message) => message.type === "shell") && ended(second))
+      await sessions.remove(first)
+      expect(signalled).toEqual([])
+    } finally {
+      shellProcesses.spawn = spawn
+      shellProcesses.kill = kill
+    }
   })
 
   test("one run while the agent works reaches it with your next message", async () => {
@@ -2240,6 +2338,21 @@ process.stdin.on("data", (chunk) => {
     expect(held.until - Date.now()).toBeGreaterThan(2 * 60_000)
   })
 
+  test("a limit hit while its file can't be written (a full disk) is still held, and stops nothing", () => {
+    // Its folder where a file is: nothing can be written there, whoever runs it.
+    const blocked = join(mkdtempSync(join(root, "auto-")), "file")
+    writeFileSync(blocked, "")
+    const held = new Auto(join(blocked, "auto"))
+    const error = console.error
+    console.error = () => {}
+    try {
+      held.hold({ providerID: "alpha", modelID: "one" }, { scope: "model", resetsAt: Date.now() + 60_000 })
+      expect(held.isHeld({ providerID: "alpha", modelID: "one" })).toBeTruthy()
+    } finally {
+      console.error = error
+    }
+  })
+
   test("an empty list can't be picked", () => {
     expect(() => create({ providerID: "auto", id: "auto" })).toThrow("Settings › Custom Auto")
   })
@@ -2652,5 +2765,28 @@ describe("what comes in while a turn starts, ends or is stopped, step by step", 
     expect(revert.files?.map((file) => file.file)).toEqual(["a.txt"])
     expect(snapshots.restored).toEqual(["tree1"])
     expect(sessions.get(id).revert?.messageID).toBe(first)
+  })
+})
+
+describe("a command you type with !", () => {
+  test("on a machine, runs with the machine's own folders (where gh and git keep their settings), as in your terminal there", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "kuvo-shell-"))
+    try {
+      const script = join(folder, "run.ts")
+      writeFileSync(script, [
+        `import { takeOwnFolders } from ${JSON.stringify(join(import.meta.dir, "../../src/agents/machine"))}`,
+        `import { runCommand } from ${JSON.stringify(join(import.meta.dir, "../../src/agents/sessions"))}`,
+        "takeOwnFolders()",
+        `const ran = await runCommand('printf "%s|%s" "$XDG_CONFIG_HOME" "\${XDG_DATA_HOME-unset}"', process.cwd())`,
+        "process.stdout.write(ran.output)",
+      ].join("\n"))
+      // As a machine's engine started the bridge: its folders pointed into Kuvo Code's, the machine's own kept aside.
+      const env = { ...process.env, KUVO_HOME: folder, KUVO_AGENTS_REMOTE: "1", XDG_CONFIG_HOME: join(folder, "config"), XDG_DATA_HOME: join(folder, "data"), KUVO_OWN_XDG_CONFIG_HOME: "/home/me/.config", KUVO_OWN_XDG_DATA_HOME: "" }
+      const ran = Bun.spawnSync([process.execPath, script], { cwd: folder, env, stderr: "pipe" })
+      expect(ran.stderr.toString()).toBe("")
+      expect(ran.stdout.toString()).toBe("/home/me/.config|unset")
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
   })
 })

@@ -2,7 +2,8 @@ import Foundation
 import OpenCodeKit
 
 /// "/review"'s lists over the message field, as both apps show them: What to review (and the commit
-/// or folder it starts with), then Look for, whose pick starts the review. Each row says how much
+/// or folder it starts with; or your own words for it, the list closed), then Look for, whose pick
+/// starts the review. Each row says how much
 /// it reads, from what the box measured, and is found by the words it writes as they're typed.
 public struct ReviewList: Equatable, Sendable {
     public struct Row: Identifiable, Equatable, Sendable {
@@ -11,6 +12,8 @@ public struct ReviewList: Equatable, Sendable {
             case write(String)
             /// Its words written (none for anything wrong), and the review starts.
             case start(String)
+            /// Nothing written: the list closes for words of your own.
+            case ownWords
         }
 
         public let id: String
@@ -27,8 +30,6 @@ public struct ReviewList: Equatable, Sendable {
     }
 
     public let title: String
-    /// "1 of 2": there are two to answer.
-    public let step: String?
     public let rows: [Row]
 
     /// What the box said about the conversation's folder.
@@ -63,10 +64,10 @@ public struct ReviewList: Equatable, Sendable {
         guard known.readsScopes else { return nil }
         let list: ReviewList
         switch asking {
-        case .what(let typed): list = ReviewList(title: "What to review", step: "1 of 2", rows: what(known).filter { $0.isFound(by: typed) })
-        case .commit(let typed): list = ReviewList(title: "Start with", step: "1 of 2", rows: commits(known, typed: typed, now: now))
-        case .folder(let typed): list = ReviewList(title: "Folder", step: "1 of 2", rows: folders(known, typed: typed))
-        case .lookFor(let typed): list = ReviewList(title: "Look for", step: "2 of 2", rows: lookFor.filter { $0.isFound(by: typed) })
+        case .what(let typed): list = ReviewList(title: "What to review", rows: what(known).filter { $0.isFound(by: typed) })
+        case .commit(let typed): list = ReviewList(title: "Start with", rows: commits(known, typed: typed, now: now))
+        case .folder(let typed): list = ReviewList(title: "Folder", rows: folders(known, typed: typed))
+        case .lookFor(let typed): list = ReviewList(title: "Look for", rows: lookFor.filter { $0.isFound(by: typed) })
         }
         return list.rows.isEmpty ? nil : list
     }
@@ -99,8 +100,14 @@ public struct ReviewList: Equatable, Sendable {
         rows.append(Row(id: "project", symbol: "cube", title: "The whole project",
                         note: known.note(known.project) { size($0).text }, warns: known.project.map { size($0).warns } ?? false,
                         pick: .write(ReviewCommand.phrase(.project) + " "), words: [ReviewCommand.phrase(.project), "whole project", "project"]))
+        // (Only from a box that finds the files words describe.)
+        if choices?.describes == true {
+            rows.append(Row(id: "described", symbol: "pencil", title: "Something else…", note: "say what to review",
+                            pick: .ownWords, words: ["something else"]))
+        }
         return rows
     }
+
 
     private static func commits(_ known: Known, typed: String, now: Date) -> [Row] {
         let typed = typed.lowercased()
@@ -150,17 +157,6 @@ public struct ReviewList: Equatable, Sendable {
 }
 
 extension ReviewList {
-    /// Under the field while a list is answered: what comes next. `listed`: the list shows.
-    public static func hint(_ command: ReviewCommand, listed: Bool, reader: String, isAgent: Bool) -> String? {
-        switch command.asking {
-        case .commit: return "It reads that commit and every one after it."
-        case .folder: return "It reads the folder’s files as they are now."
-        case .what where listed: return isAgent ? "Then what to look for." : "Then what to look for. “with” and a model’s name has another model read it."
-        case .lookFor where listed: return "Picking one starts the review, read by \(reader)."
-        default: return nil
-        }
-    }
-
     /// What "/review" still needs before it can be read, said as the composer says it; nil when
     /// nothing.
     public static func unfinished(_ command: ReviewCommand) -> String? {
@@ -170,12 +166,6 @@ extension ReviewList {
         case .folder(""): return "Write the folder to review after “folder”."
         default: return nil
         }
-    }
-
-    /// What it will do, once all of it is written.
-    public static func summary(_ command: ReviewCommand, reader: String) -> String {
-        let looking = command.focusAsked == nil ? "" : command.focus.isEmpty ? command.preset.map { ", looking for \($0.title.lowercased())" } ?? "" : ", looking especially at what you wrote"
-        return "\(reader) reads \((command.scope ?? .uncommitted).said) with fresh eyes, without this conversation\(looking), and lists what it finds."
     }
 
     /// The line under what a review found: what it covered and who read it ("The whole project ·
@@ -236,5 +226,47 @@ extension ReviewList.Known {
         known.measured = true
         if Task.isCancelled { return }
         await update(known)
+    }
+}
+
+/// A review's parts, as both apps list them in its card: each part's name and its line, which
+/// says what it's doing while it reads ("Reading src/a.ts"), then what it found.
+extension Review.Part {
+    /// "Part 2"; "The reviewer" when it's the only one.
+    public var title: String { of > 1 ? "Part \(n)" : "The reviewer" }
+
+    /// Its line: what it's doing now, what it found, or what it will read.
+    public var line: String {
+        let count = fileCount ?? files.count
+        let reads = count == 1 ? "1 file" : "\(count.formatted()) files"
+        switch state {
+        case .waiting: return reads
+        case .reading: return now ?? "Starting"
+        case .done: return found == 0 ? "\(reads) · found nothing" : "\(reads) · \(found) found"
+        case .failed: return "Couldn’t be read"
+        case .stopped: return found == 0 ? "Stopped" : "Stopped · \(found) found"
+        }
+    }
+
+    /// It can be opened: it reads, or read, in a session of its own.
+    public var opens: Bool { session != nil && state != .waiting }
+}
+
+extension Review {
+    /// Read on a box from before parts: under way, it can't say what each part does.
+    public var hasNoParts: Bool { state == .reviewing && parts == nil }
+}
+
+/// What a review's part that failed says in its own view, in the composer's place: plainly, and
+/// what became of its review.
+public enum ReviewPartWords {
+    /// `alone`: it was the review's only part.
+    public static func failed(stopped: Bool, alone: Bool) -> String {
+        switch (stopped, alone) {
+        case (true, false): "This part was stopped. The review went on with the others."
+        case (false, false): "This part couldn’t be read. The review went on with the others."
+        case (true, true): "Stopped."
+        case (false, true): "The reviewer couldn’t read this, so the review couldn’t be done. Ask for it again."
+        }
     }
 }

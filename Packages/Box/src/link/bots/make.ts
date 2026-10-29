@@ -10,7 +10,7 @@ import { boxProjects } from "../areas/projects";
 import { call } from "../engine/client";
 import { BOTS, HERE, IS_MAC } from "../home";
 import { botPersonalities } from "../personalities/library";
-import { botLook, botModel, DESCRIPTION, isModel, noteBotsChanged } from "./here";
+import { BOT_STEP, botLook, botModel, DESCRIPTION, isModel, noteBotsChanged } from "./here";
 import { firstMessageOf } from "./jobs";
 import { botInstructions, NO_KIT, readKit, runsWithAgents } from "./kit";
 import { listBots } from "./list";
@@ -41,6 +41,8 @@ export interface GivenBot {
   look?: unknown;
   /** A model (BotModel), or null for the template's or the kit's. */
   model?: unknown;
+  /** The client's own id for this New Bot, the same each time it sends it again (`MADE_FOR`). */
+  request?: unknown;
 }
 
 /** What `makeBot` answers: the bot made and its job for your composer, or why not. */
@@ -59,7 +61,30 @@ export async function signInRefusal(model: BotModel, engine: Target, signal?: Ab
 
 // `POST kuvo/bots`, as the Mac's: the bot made here, its folder, conversation and instructions,
 // and the template's job for your composer, or else its greeting, so it writes first.
-export async function makeBot(given: GivenBot | null | undefined, readEngine: () => Target, readBridge: () => Target | null, machine?: string, signal?: AbortSignal): Promise<MadeAnswer> {
+// New Bot sent again with the same `request` (the phone's connection dropped, and it tried again,
+// while the first was made all the same): answered as the first was, while it's being made and for
+// an hour after, rather than made twice. One that wasn't made is tried again.
+const REQUEST = /^[A-Za-z0-9_-]{8,64}$/;
+const MADE_FOR = 3600_000;
+const madeFor = new Map<string, { answer: Promise<MadeAnswer>; at: number }>();
+
+export function makeBot(given: GivenBot | null | undefined, readEngine: () => Target, readBridge: () => Target | null, machine?: string, signal?: AbortSignal): Promise<MadeAnswer> {
+  const request = typeof given?.request === "string" && REQUEST.test(given.request) ? given.request : null;
+  if (!request) return makeOnce(given, readEngine, readBridge, machine, signal);
+  const now = Date.now();
+  for (const [id, made] of madeFor) if (now - made.at > MADE_FOR) madeFor.delete(id);
+  const before = madeFor.get(request);
+  if (before) return before.answer;
+  const answer = makeOnce(given, readEngine, readBridge, machine, signal).then(made => {
+    if (made.status === 201) madeFor.set(request, { answer, at: Date.now() });
+    else madeFor.delete(request);
+    return made;
+  });
+  madeFor.set(request, { answer, at: now });
+  return answer;
+}
+
+async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Target, readBridge: () => Target | null, machine?: string, signal?: AbortSignal): Promise<MadeAnswer> {
   const no = (status: OtherStatus, message: string): MadeAnswer => ({ status, value: { message } });
   const kit = readKit();
   if (!kit) return no(409, NO_KIT);
@@ -115,9 +140,11 @@ export async function makeBot(given: GivenBot | null | undefined, readEngine: ()
     const made = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules }, signal) as Fields<"id"> | null;
     if (typeof made?.id !== "string" || !made.id) throw new Error("No conversation was made.");
     session = { id: made.id };
-    await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { kuvo: { bot: id } } }, signal).catch(() => {});
+    // From here it's made whole (or undone), whatever becomes of the phone's request: a phone that
+    // left finds it listed.
+    await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { kuvo: { bot: id } } }, AbortSignal.timeout(BOT_STEP)).catch(() => {});
     const told = botInstructions(kit, name, folder, personality?.instruction, project as string | undefined);
-    await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, signal);
+    await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, AbortSignal.timeout(BOT_STEP));
     fs.writeFileSync(path.join(folder, "session"), session.id);
     noteTold(folder, { session: session.id, instructions: toldDigest(told), rules: folder });
     fs.writeFileSync(path.join(folder, "directory"), directory);
@@ -129,13 +156,13 @@ export async function makeBot(given: GivenBot | null | undefined, readEngine: ()
     const described = { created: now, id, job: "", kuvo: DESCRIPTION, look, model, name, ...(personality ? { personality: personality.id } : {}), ...(project ? { project: project as string } : {}), updated: now } satisfies BotDescription;
     fs.writeFileSync(path.join(folder, "bot.json"), JSON.stringify(described, null, 2));
   } catch (error) {
-    if (session?.id) await call(target, "DELETE", `/api/session/${encodeURIComponent(session.id)}`, undefined, signal).catch(() => {});
+    if (session?.id) await call(target, "DELETE", `/api/session/${encodeURIComponent(session.id)}`, undefined, AbortSignal.timeout(BOT_STEP)).catch(() => {});
     discard();
     return no(503, `The bot couldn’t be made: ${(error as Error | null)?.message ?? error}`);
   }
   // Without a template's or a shared bot's job for you to send, it writes first.
   const firstMessage = (template ? firstMessageOf(template.job, template.instructions) || null : null) ?? shared;
-  if (!firstMessage) await call(target, "POST", `/api/session/${encodeURIComponent(session.id)}/synthetic`, { text: kit.greeting, description: "A new bot's first message" }, signal).catch(() => {});
+  if (!firstMessage) await call(target, "POST", `/api/session/${encodeURIComponent(session.id)}/synthetic`, { text: kit.greeting, description: "A new bot's first message" }, AbortSignal.timeout(BOT_STEP)).catch(() => {});
   noteBotsChanged();
   // (It lists: it was just made.)
   const bot = listBots(machine).find(each => each.id === id)!;

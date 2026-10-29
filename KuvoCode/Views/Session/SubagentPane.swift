@@ -32,12 +32,13 @@ extension EnvironmentValues {
 }
 
 extension SessionModel {
-    /// Its latest step, in a few words: "Ran a command", "Thinking…".
+    /// Its latest step, in a few words: what it's doing while that runs ("Sleeping", "Running a
+    /// command", "Thinking…"), what it did once it's done ("Ran a command").
     var currentStep: String {
         guard case .assistant(let step)? = transcript.messages.last(where: { if case .assistant = $0 { true } else { false } }),
               let block = step.content.last else { return "Working…" }
         switch block {
-        case .tool(let call): return StepsSummary.summary(of: [call])
+        case .tool(let call): return StepsRow.isUnfinished(block) ? StepsSummary.doing(call) : StepsSummary.summary(of: [call])
         case .reasoning: return "Thinking…"
         case .text: return "Writing…"
         default: return "Working…"
@@ -114,7 +115,7 @@ private struct SubagentsBarRow: View {
             .font(.system(size: 12))
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Open", systemImage: "arrow.turn.down.right") {
+            Button("Open") {
                 app.tabs.openInPlace(subagent.id)
             }
             .buttonStyle(TextButtonStyle())
@@ -124,7 +125,7 @@ private struct SubagentsBarRow: View {
             .help("Open its conversation, to watch it and talk to it")
             // A coding agent's subagent stops with the conversation it works for.
             if !(model.map { OutsideAgents.isAgentSession($0.session) } ?? false) {
-                Button("Stop", systemImage: "stop.circle") { model?.stop() }
+                Button("Stop") { model?.stop() }
                     .buttonStyle(TextButtonStyle())
                     .font(.system(size: 13))
                     .fixedSize()
@@ -165,9 +166,16 @@ struct SubagentPane: View {
                 SubagentConversation(model: model, parent: parent, open: open)
                     .transition(.replacingPlaceholder)
             } else if isMissing {
-                ContentUnavailableView("Subagent Not Found", systemImage: "person.2", description: Text("Its session is gone, or its machine can't be reached. Close this tab."))
-                    .frame(maxHeight: .infinity)
-                    .transition(.replacingPlaceholder)
+                // A review's part goes with its review: said so, not as a subagent missing.
+                Group {
+                    if workspace.isReviewPart(id) {
+                        ContentUnavailableView("Review Part Gone", systemImage: Keyword.review.symbol, description: Text("Its review was put away, and what this part read with it."))
+                    } else {
+                        ContentUnavailableView("Subagent Not Found", systemImage: "person.2", description: Text("Its session is gone, or its machine can't be reached. Close this tab."))
+                    }
+                }
+                .frame(maxHeight: .infinity)
+                .transition(.replacingPlaceholder)
             } else {
                 Placeholder(.lines(count: 8), label: "Loading subagent")
                     .padding(20)
@@ -220,6 +228,7 @@ private struct SubagentConversation: View {
                 // A bot that started it, by its name, as the header says it.
                 .environment(\.subagentStarter, workspace.botName?(parent) ?? SubagentStarter.name(of: workspace.session(parent) ?? workspace.subSession(parent)))
                 .environment(\.isOffline, isOffline)
+                .environment(\.takesNoMessages, !messages.takesMessages)
                 .frame(maxHeight: .infinity)
                 .conversationBar {
                     VStack(spacing: 10) {
@@ -236,21 +245,21 @@ private struct SubagentConversation: View {
                             FailureBar(text: failure) { model.failure = nil }
                                 .modifier(ComposerSurface())
                         }
-                        if !messages.takesMessages, let why = messages.line(parentTitle: parentTitle) {
+                        if !messages.takesMessages, let why = reviewPartFailure ?? messages.line(parentTitle: parentTitle) {
                             // Its agent takes nothing for it from elsewhere: why, in the composer's
                             // place, with Stop while it works, as the composer has.
                             HStack(spacing: 10) {
-                                Label(why, systemImage: "info.circle")
+                                Text(why)
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 if isWorking {
-                                    Button("Stop", systemImage: "stop.circle", action: model.stop)
+                                    Button("Stop", action: model.stop)
                                         .buttonStyle(TextButtonStyle())
                                         .font(.system(size: 13))
                                         .fixedSize()
                                         .disabled(isOffline)
-                                        .help("Stop it: the agent that started it hears it was stopped, and carries on")
+                                        .help(reviewPart == nil ? "Stop it: the agent that started it hears it was stopped, and carries on" : "Stop this part: the review goes on with the others")
                                 }
                             }
                             .padding(.horizontal, 14)
@@ -277,7 +286,7 @@ private struct SubagentConversation: View {
                 } else if let error = model.lastStepError, !error.isInterruption {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
                 } else {
-                    Image(systemName: "person.2").foregroundStyle(.secondary)
+                    Image(systemName: reviewPart == nil ? "person.2" : Keyword.review.symbol).foregroundStyle(.secondary)
                 }
             }
             .frame(width: 18)
@@ -299,9 +308,9 @@ private struct SubagentConversation: View {
                 // That it's a subagent, then its agent and what it's doing.
                 Group {
                     if isWorking {
-                        ShimmerText(text: ["Subagent", agentName, model.currentStep].compactMap { $0 }.joined(separator: " · "))
+                        ShimmerText(text: (kind + [model.currentStep]).joined(separator: " · "))
                     } else {
-                        Text(["Subagent", agentName, status].compactMap { $0 }.joined(separator: " · "))
+                        Text((kind + [status].compactMap { $0 }).joined(separator: " · "))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -314,6 +323,24 @@ private struct SubagentConversation: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .overlay(alignment: .bottom) { Divider().opacity(0.5) }
+    }
+
+    /// A review's part read in it (`kuvo.reviewPart`): which.
+    private var reviewPart: (n: Int, of: Int)? {
+        guard let part = model.session.metadata?["kuvo"]?["reviewPart"], let n = part["part"]?.number, let of = part["of"]?.number else { return nil }
+        return (Int(n), Int(of))
+    }
+
+    /// A review's part that failed, said plainly in the composer's place.
+    private var reviewPartFailure: String? {
+        guard let reviewPart, let error = model.lastStepError, !isWorking else { return nil }
+        return ReviewPartWords.failed(stopped: error.isInterruption, alone: reviewPart.of == 1)
+    }
+
+    /// What it is: a subagent and its agent, or a review's part.
+    private var kind: [String] {
+        if let reviewPart { return [reviewPart.of > 1 ? "Review, part \(reviewPart.n) of \(reviewPart.of)" : "Review"] }
+        return ["Subagent", agentName].compactMap { $0 }
     }
 
     private var parentTitle: String {

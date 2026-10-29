@@ -142,7 +142,9 @@ export class Snapshots {
     return this.exclusive(repository, async () => {
       const files: FileDiff[] = []
       for (const path of paths.slice(0, fileLimit)) {
-        const ran = await this.git(repository, ["diff", "--no-color", "--no-renames", "--no-ext-diff", from, to, "--", path]).catch(() => undefined)
+        // The files' own lines, whatever your settings: not through a converter (textconv), and an
+        // unchanged blank line written as " " (diff.suppressBlankEmpty).
+        const ran = await this.git(repository, ["-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-renames", "--no-ext-diff", "--no-textconv", from, to, "--", path]).catch(() => undefined)
         if (ran?.code !== 0) continue
         const patch = ran.stdout.length > patchLimit ? ran.stdout.slice(0, patchLimit) : ran.stdout
         const status = /^new file mode/m.test(patch) ? "added" : /^deleted file mode/m.test(patch) ? "deleted" : "modified"

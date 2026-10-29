@@ -33,6 +33,12 @@ import Testing
         painted(output, command: command).filter { $0.paint == paint }.map(\.text)
     }
 
+    /// A search's output whose numbers are as big as numbers go is colored like any other.
+    @Test func theBiggestLineNumberIsReadLikeAnyOther() {
+        let output = "9223372036854775807:let x = foo()\n12:foo()\n"
+        #expect(texts(.number, in: output, command: "rg -n foo").contains("12"))
+    }
+
     @Test func ripgrepsHeadingsNumbersAndMatches() {
         let output = "src/app.swift\n12:let x = foo()\n14:  foo()\n\nREADME.md\n3:foo bar\n"
         let command = "rg -n foo"

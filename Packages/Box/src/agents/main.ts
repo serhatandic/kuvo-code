@@ -218,7 +218,8 @@ let artifacts: ArtifactStore | undefined
 let noted: ((session: string, path: string, via: string) => Promise<boolean>) | undefined
 if (artifactsFolder) {
   try {
-    artifacts = new ArtifactStore(artifactsFolder, { bots: botsFolder })
+    // With the files Codex's kept replies cited as what it made, read as the bridge started: shown.
+    artifacts = new ArtifactStore(artifactsFolder, { bots: botsFolder, shown: sessions.cited })
     const { recorder } = recordArtifacts(artifacts, { bots: botsFolder })
     const engineSource: Source = {
       name: "engine",
@@ -275,6 +276,7 @@ self = requester(`http://127.0.0.1:${server.port}`, password)
 void link.whenReady().then(() => {
   goals.start()
   sideQuestions.start()
+  reviews.resume()
   try {
     groups?.runner.start()
     groups?.peers.server.start()

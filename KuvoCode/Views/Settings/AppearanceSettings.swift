@@ -11,6 +11,7 @@ struct AppearanceSettings: View {
     @AppStorage(Look.textSizeKey) private var textSize = 14.0
     @AppStorage(Look.fontKey) private var typeface = Look.Typeface.system
     @AppStorage(StepsDetail.key) private var steps = StepsDetail.summary
+    @AppStorage(ReviewLayout.key) private var reviewLayout = ReviewLayout.list
 
     private var modes: some View {
         ForEach(Appearance.allCases, id: \.self) { option in
@@ -81,6 +82,18 @@ struct AppearanceSettings: View {
                     Text("Agent’s steps")
                     Text(stepsCaption)
                 }
+                LabeledContent {
+                    Picker("Review findings", selection: $reviewLayout) {
+                        Text("As a List").tag(ReviewLayout.list)
+                        Text("One at a Time").tag(ReviewLayout.single)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                } label: {
+                    Text("Review findings")
+                    Text("How /review shows what it found.")
+                }
                 ConversationPreview(font: MessageFont(size: textSize, typeface: typeface))
             } header: {
                 Text("Messages")
@@ -96,8 +109,9 @@ struct AppearanceSettings: View {
                         textSize = 14
                         typeface = .system
                         steps = .summary
+                        reviewLayout = .list
                     }
-                    .disabled(mode == .system && accent == Look.Accent.system.rawValue && window == .glass && textSize == 14 && typeface == .system && steps == .summary)
+                    .disabled(mode == .system && accent == Look.Accent.system.rawValue && window == .glass && textSize == 14 && typeface == .system && steps == .summary && reviewLayout == .list)
                 }
             }
         }
@@ -106,7 +120,7 @@ struct AppearanceSettings: View {
     private var stepsCaption: String {
         switch steps {
         case .each: "Every step the agent takes, as it takes it."
-        case .summary: "Its steps between replies in a line, like “Ran 6 commands, read 3 files”, that opens to each."
+        case .summary: "Its steps between replies in a line, like “Worked for 40s”, that opens to each."
         case .minimal: "Only how many steps it took, to open if you want."
         }
     }

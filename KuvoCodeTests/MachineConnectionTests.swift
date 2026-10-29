@@ -95,17 +95,14 @@ import Testing
         let engine = add(id, at: machine)
         await app.connect(engine).value
         try await until { clock.waits == [60, 600] }
-        #expect(clock.waits == [60, 600], "its agents' mail each minute, its sign-ins every ten")
+        #expect(clock.waits == [60, 600], "its wake-ups each minute, its sign-ins every ten")
         await app.reconnectNow(engine)?.value
         try await until { clock.waits == [60, 600] }
         #expect(clock.waits == [60, 600], "one set of syncs, not two")
-        // A minute on: one round, which collects what its agents left for others once.
-        let sent = ssh.scripts(to: id).count
-        let collected = { self.ssh.scripts(to: id).dropFirst(sent).filter { $0.contains("/run/outbox") }.count }
+        // A minute on: one round, then waiting for the next one, still one set.
         clock.pass(60)
-        try await until { clock.waits == [60, 600] && collected() >= 1 }
+        try await until { clock.waits == [60, 600] }
         #expect(clock.waits == [60, 600])
-        #expect(collected() == 1)
     }
 
     /// Your personalities changed, so each connected machine's round begins a moment later:
@@ -235,6 +232,134 @@ import Testing
         #expect(link.setupFailed[id] != nil)
         app.removeMachine(id)
         #expect(link.setupFailed[id] == nil)
+    }
+
+    /// A chat on a machine moved into one of its projects that has other folders works in them
+    /// there: its rules and what its agent is told name the machine's own paths, never this Mac's
+    /// names for them (`ssh://…`), which nothing on the machine matches.
+    @Test func aChatMovedIntoAMachinesProjectWorksInItsOtherFoldersThere() async throws {
+        defer { done() }
+        let id = Self.name()
+        let prefix = RemoteFolder.prefix(for: id)
+        machine.list([StubEngine.session("ses_mchat", title: "Question", directory: "/home/tests/.kuvo-code/chats")])
+        await app.connect(add(id, at: machine)).value
+        try await until { app.workspace.session("ses_mchat") != nil }
+        app.workspace.saveProject(prefix + "/home/tests/app", settings: Workspace.ProjectSettings(folders: [prefix + "/home/tests/shared"]))
+        machine.on("GET", "/api/session/ses_mchat", json: ["data": StubEngine.session("ses_mchat", title: "Question", directory: "/home/tests/app")])
+        machine.on("POST", "/api/session/ses_mchat/move", json: [:])
+        machine.on("PATCH", "/api/session/ses_mchat", json: ["data": [:]])
+        machine.on("PUT", "/api/experimental/session/ses_mchat/instructions/entries/*", json: [:])
+        try await app.workspace.move("ses_mchat", toProject: prefix + "/home/tests/app")
+
+        let rules = try #require(machine.requests("PATCH", "/api/session/ses_mchat").last?.body["permissions"] as? [[String: Any]])
+        #expect(rules.contains { $0["action"] as? String == "external_directory" && $0["resource"] as? String == "/home/tests/shared/*" })
+        #expect(!rules.contains { ($0["resource"] as? String)?.contains("ssh://") == true })
+        let told = try #require(machine.requests("PUT", "/api/experimental/session/ses_mchat/instructions/entries/\(ProjectFolders.instructionKey)").last?.body["value"] as? String)
+        #expect(told.contains("/home/tests/shared") && !told.contains("ssh://"))
+    }
+
+    /// A machine uninstalled while it's still being set up for your phones and other computers
+    /// stays gone: the setup finishing after doesn't name it to them again.
+    @Test func aMachineUninstalledWhileItsSetUpForYourPhonesStaysGone() async throws {
+        defer { done() }
+        UserDefaults.standard.set(true, forKey: "phoneLink")
+        UserDefaults.standard.set("ws://127.0.0.1:9", forKey: "phoneLink.relay")
+        defer {
+            for key in ["phoneLink", "phoneLink.relay"] { UserDefaults.standard.removeObject(forKey: key) }
+            try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "phone-link.json"))
+            _ = Keychain.delete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: PhoneLink.keychainService])
+        }
+        let box = try await SettingsBox(port: 47_964, alongside: true)
+        defer { box.stop() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        let link = app.phoneLink
+        let client = box.client
+        link.box = { client }
+        link.hasMachines = { true }
+        box.box.host.phoneLink = link
+        link.start(endpoint: ServerEndpoint(url: URL(string: box.engine.url)!, password: "test"))
+        defer { link.stop() }
+        try await until { if case .failed(let reason) = link.status { reason.contains("relay") } else { false } }
+        // Its setup answers once let through, as a slow machine does.
+        let held = Gate(), reached = Gate()
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            guard script.contains(" setup") else { return "" }
+            reached.open()
+            held.wait()
+            return #"{"address":"\#(Data(repeating: 7, count: 16).base64URL)","key":"\#(LinkKey().publicBytes.base64URL)","peers":true,"docs":[]}"#
+        }
+        let connecting = Task { await app.connect(engine).value }
+        try await until { reached.isOpen }
+        app.removeMachine(id, uninstall: true)
+        held.open()
+        await connecting.value
+        #expect(link.machineHosts[id] == nil, "named to your phones and other computers again")
+    }
+
+    /// A new session in a machine's project that has other folders works in them there from its
+    /// start: its rules and what its agent is told name the machine's own paths.
+    @Test func aNewSessionInAMachinesProjectWorksInItsOtherFoldersThere() async throws {
+        defer { done() }
+        let id = Self.name()
+        let prefix = RemoteFolder.prefix(for: id)
+        await app.connect(add(id, at: machine)).value
+        app.workspace.saveProject(prefix + "/home/tests/app", settings: Workspace.ProjectSettings(folders: [prefix + "/home/tests/shared"]))
+        machine.on("POST", "/api/session", json: ["data": StubEngine.session("ses_mnew", title: "New", directory: "/home/tests/app")])
+        machine.on("PUT", "/api/experimental/session/ses_mnew/instructions/entries/*", json: [:])
+        _ = try await app.workspace.createSession(in: prefix + "/home/tests/app", model: nil, agent: nil)
+
+        let rules = try #require(machine.requests("POST", "/api/session").last?.body["permissions"] as? [[String: Any]])
+        #expect(rules.contains { $0["action"] as? String == "external_directory" && $0["resource"] as? String == "/home/tests/shared/*" })
+        #expect(!rules.contains { ($0["resource"] as? String)?.contains("ssh://") == true })
+        let told = try #require(machine.requests("PUT", "/api/experimental/session/ses_mnew/instructions/entries/\(ProjectFolders.instructionKey)").last?.body["value"] as? String)
+        #expect(told.contains("/home/tests/shared") && !told.contains("ssh://"))
+    }
+
+    /// A machine's session carried on with a coding agent there, in a project with other folders:
+    /// its agent is told the machine's own paths for them.
+    @Test func aMachinesSessionCarriedOnWithACodingAgentWorksInItsOtherFoldersThere() async throws {
+        defer { done() }
+        let id = Self.name()
+        let prefix = RemoteFolder.prefix(for: id)
+        let bridge = StubEngine(port: 47943, alongside: true)
+        defer { bridge.stop() }
+        let session = StubEngine.session("ses_mcarry", title: "Release", directory: "/home/tests/app")
+        machine.list([session])
+        machine.on("GET", "/api/session/ses_mcarry", json: ["data": session])
+        machine.conversation("ses_mcarry", [["id": "msg_01", "type": "user", "time": ["created": 1], "text": "Ship it"]])
+        machine.on("GET", "/api/session/ses_mcarry/inbox", json: ["data": []])
+        machine.on("PATCH", "/api/session/ses_mcarry", json: [:])
+        bridge.on("POST", "/api/session/import", json: ["data": StubEngine.session("ses_mcarried", title: "Release", directory: "/home/tests/app")])
+        bridge.on("PUT", "/api/experimental/session/ses_mcarried/instructions/entries/*", json: [:])
+        let engine = add(id, at: machine)
+        engine.agents.connect(bridge.api.client.endpoint, folderPrefix: prefix)
+        defer { engine.agents.disconnect() }
+        await app.connect(engine).value
+        try await until { app.workspace.session("ses_mcarry") != nil }
+        app.workspace.saveProject(prefix + "/home/tests/app", settings: Workspace.ProjectSettings(folders: [prefix + "/home/tests/shared"]))
+        _ = try await app.workspace.carryToAgents("ses_mcarry", model: ModelRef(id: "sonnet", providerID: "claude-code"))
+
+        let told = try #require(bridge.requests("PUT", "/api/experimental/session/ses_mcarried/instructions/entries/\(ProjectFolders.instructionKey)").last?.body["value"] as? String)
+        #expect(told.contains("/home/tests/shared") && !told.contains("ssh://"))
+    }
+
+    /// A machine's session waiting on you keeps counting while the machine is away and this Mac's
+    /// own engine is read again (the Mac waking up): it isn't dropped, to be told again as news once
+    /// the machine is back.
+    @Test func whatAMachinesSessionAsksStaysWhileTheMachineIsAway() async throws {
+        defer { done() }
+        let id = Self.name()
+        let asked: [String: Any] = ["id": "per_push", "sessionID": "ses_masks", "action": "shell", "resources": ["git push"]]
+        machine.list([StubEngine.session("ses_masks", title: "Release", directory: "/home/tests/project")], running: ["ses_masks"])
+        machine.on("GET", "/api/session/ses_masks/permission", json: ["data": [asked]])
+        machine.on("GET", "/api/session/ses_masks/form", json: ["data": []])
+        await app.connect(add(id, at: machine)).value
+        try await until { app.workspace.waitingCount == 1 }
+        app.workspace.forget(id)
+        await app.workspace.resync()
+        #expect(app.workspace.waitingCount == 1)
     }
 
     /// `id` added, its engine `stub` once it connects.

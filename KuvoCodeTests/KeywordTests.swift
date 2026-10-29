@@ -24,10 +24,41 @@ import Testing
         engine.on("GET", "/api/session/\(id)/message", json: ["data": [["id": "msg_0001", "type": "user", "text": "Make the timer pause on blur.", "time": ["created": 1]]]])
         engine.on("POST", "/api/experimental/generate") { _ in StubWeb.json(["data": ["text": answers.next()]]) }
         engine.on("POST", "/api/session/\(id)/generate") { _ in StubWeb.json(["data": ["text": answers.next()]]) }
+        // A review's parts, each read in a session of its own: made, told its part, and answering
+        // with the next answer; its end is read back as the box does after its feed came back.
+        let parts = Parts()
+        engine.on("POST", "/api/session") { _ in StubWeb.json(["data": ["id": parts.make()]]) }
+        for part in Parts.ids {
+            engine.on("POST", "/api/session/\(part)/prompt") { _ in
+                parts.answer(part, answers.next())
+                return StubWeb.json(["data": [:]])
+            }
+            engine.on("GET", "/api/session/\(part)/message") { _ in
+                // Newest first, as the engine lists them: its answer, then its turn's end.
+                var messages: [[String: Any]] = []
+                if let text = parts.answer(of: part) {
+                    messages = [["id": "msg_9", "type": "idle", "outcome": "succeeded"],
+                                ["id": "msg_8", "type": "assistant", "content": [["type": "text", "text": text]]]]
+                }
+                return StubWeb.json(["data": messages])
+            }
+            engine.on("DELETE", "/api/session/\(part)", json: ["data": [:]])
+        }
         engine.on("GET", "/api/session/active", json: ["data": [:]])
         engine.on("GET", "/api/event") { _ in StubWeb.Answer(status: 200, body: Data()) }
         engine.on("GET", "/api/provider", json: ["data": []])
         engine.on("GET", "/api/integration", json: ["data": []])
+    }
+
+    /// A review's parts' sessions, as the engine made them, and what each answered.
+    nonisolated final class Parts: @unchecked Sendable {
+        static let ids = (1...6).map { "ses_part\($0)" }
+        private let lock = NSLock()
+        private var made = 0
+        private var answers: [String: String] = [:]
+        func make() -> String { lock.withLock { made += 1; return Self.ids[min(made, Self.ids.count) - 1] } }
+        func answer(_ part: String, _ text: String) { lock.withLock { answers[part] = text } }
+        func answer(of part: String) -> String? { lock.withLock { answers[part] } }
     }
 
     nonisolated final class Answers: @unchecked Sendable {
@@ -217,6 +248,31 @@ import Testing
         #expect(try await bridge.api?.reviews().isEmpty == true)
     }
 
+    // "/review" and what to review in your own words (What to review › Something else…), sent as
+    // written: the box finds the files they mean and reads those, and the review says which.
+    @Test func aReviewOfWhatYouDescribeReadsTheFilesFoundForIt() async throws {
+        defer { clean() }
+        let repository = try TestRepository()
+        try repository.write("src/timer.ts", "export const tick = 1000\n")
+        try repository.write("src/billing.ts", "export const charge = 1\n")
+        try repository.write("test/timer.test.ts", "expect(tick)\n")
+        try repository.git("add", "-A")
+        try repository.git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "a")
+        serve(directory: repository.path, answers: [#"{"paths": ["src/timer.ts", "test/"]}"#, #"{"summary": "Fine.", "findings": []}"#])
+        let model = try session(directory: repository.path)
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+
+        model.draftText = "/review the timer and its tests"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { model.review?.state == .done }
+        let review = try #require(model.review)
+        #expect(review.scope == .described("the timer and its tests", paths: ["src/timer.ts", "test/timer.test.ts"]))
+        #expect(review.focus == nil)
+        #expect(review.summary == "Fine.")
+        #expect(ReviewList.footnote(review, readerName: nil) == "“the timer and its tests”")
+    }
+
     @Test func aReviewPutAwayCanBeBroughtBackAndOneFindingCanBeFixedAlone() async throws {
         defer { clean() }
         let repository = try TestRepository()
@@ -318,8 +374,8 @@ import Testing
         await ReviewList.Known.load(session: id, api: try #require(bridge.agents.api)) { known = $0 }
         // On main, with nothing uncommitted: no branch of its own, and the changes say so.
         let what = try #require(ReviewList.make(.what(""), known: known))
-        #expect(what.rows.map(\.title) == ["Changes not committed yet", "Commits…", "A folder…", "The whole project"])
-        #expect(what.rows.map(\.note) == ["nothing to review", "pick where to start", "src", "1 file"])
+        #expect(what.rows.map(\.title) == ["Changes not committed yet", "Commits…", "A folder…", "The whole project", "Something else…"])
+        #expect(what.rows.map(\.note) == ["nothing to review", "pick where to start", "src", "1 file", "say what to review"])
         let commits = try #require(ReviewList.make(.commit(""), known: known))
         #expect(commits.rows.map(\.title) == ["Log the sign-in", "Check the password"])
 
@@ -334,8 +390,9 @@ import Testing
         #expect(model.review?.scope == .commits(from: first + "^", to: nil))
         #expect(model.review?.focus == "security")
         #expect(model.review?.findings.map(\.title) == ["The password is written to the log"])
-        // The model read both commits, from nothing before the first, and was told what to look for.
-        let asked = (engine.requests("POST", "/generate").map { "\($0.body)" }).joined()
+        // Its reviewer read both commits, from nothing before the first, and was told what to look for
+        // (in its part's session).
+        let asked = (engine.requests("POST", "/prompt").map { "\($0.body)" }).joined()
         #expect(asked.contains("+check(password)") && asked.contains("+log(password)"))
         #expect(asked.contains("security holes"))
     }

@@ -1,7 +1,7 @@
 // This Mac's box and one of its machines, each with agents of its own, over the relay (PROTOCOL.md,
 // "Peers"): each tells the other who its agents are; a letter from one of this Mac's conversations
-// reaches the machine's, and its answer comes back to the one waiting, or, once it stopped
-// waiting, as a message; a letter from the machine reaches this Mac's; this Mac's group chats' mail
+// (its send_message, which this Mac's box answers) reaches the machine's, and its answer comes back
+// to the one waiting, or, once it stopped waiting, as a message; a letter from the machine reaches this Mac's; this Mac's group chats' mail
 // reaches the machine's and is said to be there; and what an earlier Kuvo Code kept itself (its
 // letters on their way) goes on from the box. This Mac's box is `serve`'s
 // link, here; the machine is `kuvo-link.js run`, a process of its own, set up as the app sets one up
@@ -9,7 +9,7 @@
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/mac-peers.test.js`.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
@@ -258,11 +258,9 @@ test("each box tells the other who its agents are, with what this Mac answers", 
 test("a letter from this Mac's conversation reaches the machine's, and its answer comes back to the one waiting", { timeout: 60_000 }, async t => {
   signal = t.signal;
   labEngine.seen.answers.set("ses_lab1", "Shipped this morning.");
-  const answer = await ask("POST", "kuvo/link/letters", { peer: lab.key, from: "ses_mac1", to: "ses_lab1", text: "Is the API out?", wait: true });
+  const answer = await ask("POST", "kuvo/agent-tools", { name: "send_message", arguments: { to: "ses_lab1", text: "Is the API out?", wait: true }, session: "ses_mac1" });
   assert.equal(answer.status, 200);
-  // Kept first (so one cut off after knows it went), then answered.
-  assert.match(answer.lines[0].id, /^ltr_/);
-  assert.equal(answer.json.text, "Shipped this morning.");
+  assert.deepEqual(answer.json, { text: "API work answered:\n\nShipped this morning.", isError: false });
   const prompt = labEngine.seen.prompts.find(each => each.session === "ses_lab1");
   assert.match(prompt.text, /^\[Message from Release notes · ses_mac1\] \(They're waiting for your reply/);
   assert.match(prompt.text, /Is the API out\?$/);
@@ -275,11 +273,11 @@ test("an answer that comes after this Mac's conversation stopped waiting reaches
   labEngine.seen.answers.set("ses_lab1", "Later, but done.");
   const prompted = labEngine.seen.prompts.length;
   const stop = new AbortController();
-  const asking = ask("POST", "kuvo/link/letters", { peer: lab.key, from: "ses_mac1", to: "ses_lab1", text: "And the docs?", wait: true }, { abort: stop.signal });
+  const asking = ask("POST", "kuvo/agent-tools", { name: "send_message", arguments: { to: "ses_lab1", text: "And the docs?", wait: true }, session: "ses_mac1" }, { abort: stop.signal });
   // There, and its turn stopped before the answer.
   await arrived(() => labEngine.seen.prompts.length > prompted);
   stop.abort();
-  assert.equal((await asking).json.text, null);
+  assert.equal((await asking).json.text, "API work hasn't answered yet. It may still write back with send_message.");
   const message = await arrived(() => macEngine.seen.prompts.find(each => each.text.includes("Later, but done.")));
   assert.equal(message.session, "ses_mac1");
   assert.match(message.text, /^\[Message from API work · ses_lab1\]/);
@@ -327,8 +325,6 @@ test("letters an earlier Kuvo Code had on their way go on from this Mac's box, a
   write(run("outbox/sending/ltr_delivered1.json"), { from: "ses_lab1", to: "ses_mac1", text: "Twice?", wait: false, at });
   await eventually(() => !sending(machineHome).includes("ltr_delivered1.json"));
   assert.equal(macEngine.seen.prompts.length, before);
-  // For a computer that isn't one of this Mac's: nothing kept.
-  assert.equal((await ask("POST", "kuvo/link/letters", { peer: "someone", to: "ses_lab1", text: "Hi." })).status, 404);
 });
 
 test("a letter for this Mac's conversation while it moves to another computer isn't delivered: it comes again", { timeout: 60_000 }, async t => {
@@ -363,10 +359,9 @@ test("a letter left while this Mac's box is off the relay says so at once, and g
   signal = t.signal;
   link.stopMacLink();
   await arrived(() => !relay.has(macAddress));
-  const left = await ask("POST", "kuvo/link/letters", { peer: lab.key, from: "ses_mac1", to: "ses_lab1", text: "Sent while away.", wait: true });
+  const left = await ask("POST", "kuvo/agent-tools", { name: "send_message", arguments: { to: "ses_lab1", text: "Sent while away.", wait: true }, session: "ses_mac1" });
   assert.equal(left.status, 200);
-  assert.match(left.json.note, /can't be reached through the relay now/);
-  assert.equal(left.json.text, undefined, "not waited for");
+  assert.deepEqual(left.json, { text: "Your other computers can't be reached through the relay now: it goes once this Mac's back on it, and its answer comes to you as a message.", isError: false });
   link.runMacLink();
   await arrived(() => labEngine.seen.prompts.find(each => each.text.includes("Sent while away.")));
 });
@@ -381,4 +376,49 @@ test("the coding agents' bridge going and coming back: this Mac's box follows it
   await arrived(() => macBridge.seen.streams.size > 0 && macBridge.seen.peers.length > told);
   macBridge.give({ id: "seat_again1", to: lab.key, mail: { kind: "turn", chat: "grp_2", text: "Still there?" }, durable: true });
   await arrived(() => labBridge.seen.mail.find(each => each.mail.chat === "grp_2"));
+});
+
+// An agent's tool call as a machine's tools ask its box: a process of its own (`box route`).
+function machineTool(name, args, session) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [script, "box", "route"], { env: { PATH: process.env.PATH, HOME: support, KUVO_HOME: machineHome, TMPDIR: machineHome }, stdio: ["pipe", "pipe", "inherit"] });
+    let out = "";
+    child.stdout.on("data", chunk => { out += chunk; });
+    child.on("error", reject);
+    child.on("close", () => resolve(JSON.parse(JSON.parse(out.trim().split("\n").pop()).body)));
+    child.stdin.end(JSON.stringify({ method: "POST", path: "kuvo/agent-tools", body: { name, arguments: args, session } }));
+  });
+}
+
+test("a Mac conversation writes to the machine's agent by its name, and gets its answer", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  labEngine.seen.answers.set("ses_lab1", "Deployed at noon.");
+  const said = (await ask("POST", "kuvo/agent-tools", { name: "send_message", arguments: { to: "&api work", text: "When did it go out?", wait: true }, session: "ses_mac1" })).json;
+  assert.deepEqual(said, { text: "API work answered:\n\nDeployed at noon.", isError: false });
+  const prompt = labEngine.seen.prompts.findLast(each => each.session === "ses_lab1");
+  assert.match(prompt.text, /^\[Message from Release notes · ses_mac1\] \(They're waiting for your reply: just answer, in your words\.\)\n\nWhen did it go out\?$/);
+  const listed = (await ask("POST", "kuvo/agent-tools", { name: "list_agents", arguments: {}, session: "ses_mac1" })).json;
+  assert.match(listed.text, /- API work \(session, on lab, in work\) address: ses_lab1/);
+});
+
+test("a Mac conversation reads the machine's agent's conversation, which comes by mail", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  const prompted = labEngine.seen.prompts.length;
+  const said = (await ask("POST", "kuvo/agent-tools", { name: "read_conversation", arguments: { of: "API work" }, session: "ses_mac1" })).json;
+  assert.equal(said.isError, false, said.text);
+  assert.match(said.text, /^API work's conversation \(session, on lab, in work, address ses_lab1\), oldest first\./);
+  assert.match(said.text, /\n\n# API work\n\n\*\*API work\*\*\n\nDeployed at noon\.\n$/);
+  assert.equal(labEngine.seen.prompts.length, prompted, "reading it says nothing to it");
+});
+
+test("a machine's conversation writes to a Mac's agent with its tool, and gets its answer; one that can't share its conversations yet says so", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  macEngine.seen.answers.set("ses_mac1", "Notes are done.");
+  const said = await machineTool("send_message", { to: "Release notes", text: "Are the notes ready?", wait: true }, "ses_lab1");
+  assert.deepEqual(said, { text: "Release notes answered:\n\nNotes are done.", isError: false });
+  const prompt = macEngine.seen.prompts.findLast(each => each.session === "ses_mac1");
+  assert.match(prompt.text, /^\[Message from API work · ses_lab1\] \(They're waiting for your reply/);
+  // This Mac's app here doesn't say it shares them (an older one).
+  const read = await machineTool("read_conversation", { of: "Release notes" }, "ses_lab1");
+  assert.deepEqual(read, { text: "Release notes's computer doesn't share its conversations yet (it runs an older Kuvo Code). Ask it what you need with send_message.", isError: true });
 });

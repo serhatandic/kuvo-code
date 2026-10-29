@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 import Testing
 @testable import KuvoCode
@@ -22,7 +23,7 @@ import Testing
         override var canBecomeMain: Bool { false }
     }
 
-    let window = TestWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 1100, height: 700), styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+    let window = TestWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 1700, height: 700), styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
     /// Tells `until` each time the keyboard moves in the window.
     private let watch: NSKeyValueObservation
     let folder = "/tmp/kuvo-tests-window-focus"
@@ -31,6 +32,7 @@ import Testing
 
     init() async throws {
         TestEnvironment.prepare()
+        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
         app.workspace.api = engine.api
         engine.list([StubEngine.session(lamp, title: "The lamp", directory: folder, created: 2),
                      StubEngine.session(harbor, title: "The harbor", directory: folder, created: 1)])
@@ -51,7 +53,7 @@ import Testing
             .environment(app.bots)
             .environment(app.chats)
             .environment(Updates())
-            .frame(width: 1100, height: 700)
+            .frame(width: 1700, height: 700)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: view)
         watch = window.observe(\.firstResponder) { _, _ in TestPulse.beat() }
@@ -66,6 +68,8 @@ import Testing
     }
 
     private func done() {
+        app.utilities.closeAll()
+        try? FileManager.default.removeItem(atPath: folder)
         engine.stop()
         window.orderOut(nil)
         window.close()
@@ -163,6 +167,143 @@ import Testing
         try await until { handled.isHandled }
         #expect(app.tabs.focus == .conversation)
     }
+    /// Whether the conversation's composer has the keyboard.
+    private var composerHasKeys: Bool {
+        (window.firstResponder as? MessageTextView)?.accessibilityIdentifier() == "composer"
+    }
+
+    /// Everything queued so far handled (layout passes and focus changes they set off).
+    private func settle() async throws {
+        let handled = TestClick()
+        NSApp.postEvent(handled.marker(in: window), atStart: false)
+        try await until { handled.isHandled }
+        window.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    /// Settled, and what the window queued on the main queue as it did (where the keyboard goes
+    /// next) done too: the main queue runs in order.
+    private func drain() async throws {
+        try await settle()
+        await withCheckedContinuation { done in DispatchQueue.main.async { done.resume() } }
+    }
+
+    /// The composers in view, left to right: the conversation's, then the one beside it.
+    private var composers: [MessageTextView] {
+        window.contentView?.layoutSubtreeIfNeeded()
+        return all(MessageTextView.self, in: window.contentView)
+            .filter { $0.accessibilityIdentifier() == "composer" && !$0.visibleRect.isEmpty }
+            .sorted { $0.convert($0.bounds, to: nil).minX < $1.convert($1.bounds, to: nil).minX }
+    }
+
+    /// The panel open with a terminal, and the keyboard in it, as a click there puts it.
+    private func terminalInThePanel() async throws -> TerminalSession {
+        withAnimation(.ui) { app.tabs.showPanel(true) }
+        app.utilities.newTerminal(in: folder, environment: [:])
+        let terminal = try #require(app.utilities.terminals.values.first)
+        try await until { terminal.view.window === window }
+        try await settle()
+        window.makeFirstResponder(terminal.view)
+        #expect(window.firstResponder === terminal.view)
+        return terminal
+    }
+
+    /// Typing in the conversation, the panel opened and closed again (its button, or ⌥⌘0): the
+    /// keyboard stays in the composer both times.
+    @Test func thePanelOpenedAndClosedLeavesTheKeyboardInTheComposer() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        #expect(composerHasKeys)
+        withAnimation(.ui) { app.tabs.showPanel(true) }
+        try await drain()
+        #expect(composerHasKeys, "opening the panel leaves the keyboard where it was")
+        withAnimation(.ui) { app.tabs.showPanel(false) }
+        try await drain()
+        #expect(composerHasKeys)
+    }
+
+    /// Typing in a terminal in the panel, then closing the panel: the keyboard goes back to the
+    /// composer, rather than to nothing (the user's report). The panel opened again, with its
+    /// terminal, leaves the keyboard in the composer you type in.
+    @Test func closingThePanelGivesTheKeyboardBackToTheComposer() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        let terminal = try await terminalInThePanel()
+
+        withAnimation(.ui) { app.tabs.showPanel(false) }
+        try await until { composerHasKeys }
+        #expect(app.tabs.focus == .conversation)
+
+        withAnimation(.ui) { app.tabs.showPanel(true) }
+        try await until { terminal.view.window === window }
+        try await drain()
+        #expect(composerHasKeys, "the panel back with its terminal leaves the keyboard in the composer")
+        #expect(app.tabs.focus == .conversation)
+    }
+
+    /// With a session beside the conversation, the keyboard goes back to the half you worked in:
+    /// here the session beside.
+    @Test func closingThePanelInASplitGivesTheKeyboardBackToTheHalfYouWorkedIn() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        app.tabs.openBeside(harbor)
+        try await until { composers.count == 2 }
+        let beside = try #require(composers.last)
+        window.makeFirstResponder(beside)
+        try await until { app.tabs.focus == .split }
+
+        _ = try await terminalInThePanel()
+        withAnimation(.ui) { app.tabs.showPanel(false) }
+        try await until { window.firstResponder === beside }
+        #expect(app.tabs.focus == .split)
+    }
+
+    /// What has the keyboard and stays in view keeps it: the panel's terminal as the panel grown
+    /// over the conversation goes back beside it, and the sidebar's search as the panel closes.
+    @Test func whatStaysInViewKeepsTheKeyboard() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        let terminal = try await terminalInThePanel()
+        withAnimation(.ui) { app.tabs.panelExpanded = true }
+        try await settle()
+        withAnimation(.ui) { app.tabs.panelExpanded = false }
+        try await drain()
+        #expect(window.firstResponder === terminal.view, "the terminal keeps the keyboard")
+
+        let search = try #require(all(NSTextField.self, in: window.contentView).first { field in
+            field.isEditable && field.convert(field.bounds, to: nil).midX < 300
+        }, "the sidebar's search field")
+        window.makeFirstResponder(search)
+        let editor = try #require(window.firstResponder as? NSTextView)
+        withAnimation(.ui) { app.tabs.showPanel(false) }
+        try await drain()
+        #expect(window.firstResponder === editor, "the sidebar's search keeps the keyboard")
+    }
+
+    /// Nothing left with the keyboard, as Settings or the panel grown over the conversation leave
+    /// it: once they're put away, it's back in the composer.
+    @Test func settingsAndTheExpandedPanelPutAwayGiveTheKeyboardBack() async throws {
+        defer {
+            app.showsSettings = false
+            done()
+        }
+        _ = try #require(reply)
+        app.showsSettings = true
+        try await settle()
+        // What the app does as Settings come in (to its main window, which the tests' never is).
+        window.makeFirstResponder(nil)
+        app.showsSettings = false
+        try await until { composerHasKeys }
+
+        withAnimation(.ui) {
+            app.tabs.showPanel(true)
+            app.tabs.panelExpanded = true
+        }
+        try await settle()
+        window.makeFirstResponder(nil)
+        withAnimation(.ui) { app.tabs.panelExpanded = false }
+        try await until { composerHasKeys }
+    }
+
 }
 
 /// An event queued after a test's clicks: once it's handled, so are they.

@@ -61,6 +61,9 @@ export const CONFIG_LOCK = path.join(RUN, ".config.lock");
 // A Mac's box finds them where its app keeps them, as the engine does (KUVO_BOTS, KUVO_WAKES, and the
 // app's own kuvo-wake); a machine's, in its folder.
 export const BOTS = process.env.KUVO_BOTS || path.join(K, "bots");
+// Its chats (conversations of no project): where a Mac's app keeps them (KUVO_CHATS), a machine's in
+// its folder.
+export const CHATS = process.env.KUVO_CHATS || path.join(K, "chats");
 
 // This Mac's box (BoxProcess says so as it starts it, `KUVO_BOX=mac`): its bots are the Mac's own,
 // made with the kit its app gives it and told they run on this Mac; it names no machine, keeps no

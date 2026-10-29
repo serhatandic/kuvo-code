@@ -253,8 +253,6 @@ private struct QuestionPager: View {
 
     private func header(_ field: FormField) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: "questionmark.bubble")
-                .foregroundStyle(.secondary)
             // The question tool's short header, when it has one.
             Text(field.description != nil ? field.title ?? "Question" : "Question")
                 .foregroundStyle(.secondary)
@@ -535,9 +533,6 @@ private struct FormCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
-                Image(systemName: "questionmark.bubble.fill")
-                    .font(.title3)
-                    .foregroundStyle(.tint)
                 Text(title)
                     .font(.headline)
                 Spacer()

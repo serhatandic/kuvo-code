@@ -48,6 +48,7 @@ import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
 import { IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, VERSION_FILE, homeFolder } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
+import { noteRelay } from "./letters/leave";
 import { deliverLeftAnswers, sendOutbox } from "./letters/outbox";
 import { macLinkCheck } from "./mac/link";
 import { macNoticeHold, macTell } from "./mac/notices";
@@ -90,6 +91,7 @@ export { FEATURES } from "../shared/features";
 export { messageID } from "./engine/sessions";
 export { forgetMovesInMemory, keepMoving, sendMovesWith, takeMoveMail, watchMoves } from "./moves/move";
 export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
+export { queueOf, queueWatcher, readQueues, scanQueues } from "./engine/queue";
 export { macLink, readLink, updateLink, writeLink } from "./state";
 export { searchPlugins } from "./areas/plugins";
 export { listFolders, makeFolder } from "./areas/folders";
@@ -138,9 +140,9 @@ export { peerOf, readPeerAgents, takeAgents } from "./peers/directory";
 export { composeLetter } from "./letters/letter";
 export { composeAgents } from "./peers/directory";
 export { nameAgents, namedAgents, namesIn } from "./peers/naming";
-export { carrySeat, seatPayloads, seatPeers, takeSeat, tellSeatPeers, watchSeats } from "./peers/seats";
+export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeSeat, tellSeatPeers, watchSeats } from "./peers/seats";
 export { announce, ownAgents, refreshOwn, writeAgents } from "./peers/agents";
-export { deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
+export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
 export { takeLetter } from "./letters/take";
 export { answerPersonalities, retellBots, takePersonalities, takePersonalitiesDocument } from "./personalities/take";
 export { docsChanged, macDocsChanged, receiveDocs } from "./documents/exchange";
@@ -315,6 +317,7 @@ async function run(): Promise<void> {
   setInterval(() => {
     if (current?.welcomed && docsNoted()) try { docsChanged(current, { tell: true }); } catch {}
     if (current?.welcomed) lastWelcomed = Date.now();
+    noteRelay(Boolean(current?.welcomed), lastWelcomed);
     try { sendOutbox(current ?? { send() {} }, undefined, Date.now(), current?.welcomed ? 0 : Date.now() - lastWelcomed); } catch {}
     deliverLeftAnswers().catch(() => {});
   }, 3_000);
@@ -404,8 +407,10 @@ async function box(command: string): Promise<void> {
       let status = 502;
       let type = "";
       const chunks: Buffer[] = [];
-      // A route that follows something answers with what it says now: its first line.
+      // A route that follows something answers with what it says now: its first line. Stopped by
+      // its caller (an agent's tool call that waits, cancelled), it stops waiting and answers.
       const stop = new AbortController();
+      process.once("SIGTERM", () => stop.abort());
       for await (const part of handle(request, {}, stop.signal) as AsyncIterable<AnyPiece>) {
         if (part.head) {
           status = part.head.status;

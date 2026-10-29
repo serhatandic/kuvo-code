@@ -63,7 +63,7 @@ public enum TerminalColors {
             guard !text.isEmpty, !text.hasPrefix(" "), Self.located(text, files: files)?.file == nil,
                   let under = Self.located(line(index + 1), files: files), under.file == nil,
                   let next = number(index + 1) else { return false }
-            return number(index).map { $0 + 1 != next } ?? true
+            return number(index).map { $0 != next - 1 } ?? true
         }
         for (index, range) in lines.enumerated() {
             let line = source.substring(with: range)

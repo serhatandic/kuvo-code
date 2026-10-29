@@ -1,5 +1,6 @@
 import ClientDesign
 import Foundation
+import KuvoLink
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -88,6 +89,36 @@ import Testing
         #expect(Beta1.jobs(in: botsFile)[bot.id] == "Sorts my inbox twice a day")
     }
 
+    /// New Bot's Create clicked again after its answer was lost on the way back (the box made the
+    /// bot, the connection dropped): one bot, the one it made; another New Bot makes another.
+    @Test func oneNewBotSentAgainMakesOneBot() async throws {
+        let box = try await TestBox(engine: engine.url)
+        defer { done(box) }
+        let real = box.client(engine: engine.url)
+        let lost = LosesFirstAnswer(to: real.transport, path: "kuvo/bots")
+        app.bots.boxes = { _ in BoxClient(box: real.box, transport: lost) }
+        engine.on("POST", "/api/session") { request in
+            StubWeb.json(["data": StubEngine.session("ses_" + UUID().uuidString.prefix(8).lowercased(), title: request.body["title"] as? String ?? "", directory: (request.body["location"] as? [String: Any])?["directory"] as? String ?? "")])
+        }
+        let made = { engine.requests("POST", "/api/session").count }
+        engine.on("GET", "/api/session/*") { request in StubWeb.json(["data": StubEngine.session(String(request.path.split(separator: "/").last ?? ""), title: "Inbox Helper", directory: "/")]) }
+        await app.workspace.refresh()
+        let look = BotLook(color: .mint, shape: .round, face: .calm), model = ModelRef(id: "big-pickle", providerID: "opencode")
+
+        let sheet = Bots.NewBotRequest()
+        await #expect(throws: (any Error).self) {
+            try await sheet.make(with: app.bots, name: "Inbox Helper", look: look, model: model, machine: nil, project: nil)
+        }
+        let again = try await sheet.make(with: app.bots, name: "Inbox Helper", look: look, model: model, machine: nil, project: nil)
+        #expect(made() == 1, "made once")
+        #expect(app.bots.list.map(\.id) == [again.bot.id])
+
+        // Another New Bot, the same name: another bot.
+        let other = try await Bots.NewBotRequest().make(with: app.bots, name: "Inbox Helper", look: look, model: model, machine: nil, project: nil)
+        #expect(other.bot.id != again.bot.id)
+        #expect(made() == 2)
+    }
+
     /// The engine couldn't make its conversation: no bot, and no folder left of it.
     @Test func oneThatCouldntBeMadeLeavesNothing() async throws {
         let box = try await TestBox(engine: engine.url)
@@ -134,5 +165,31 @@ enum Beta1 {
             return line.trimmingCharacters(in: .whitespaces).hasPrefix("#") && (title == "job" || title == "my job" || title == "the job" || title.hasPrefix("job:"))
         }) else { return nil }
         return lines[(start + 1)...].map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty && !$0.hasPrefix("#") } ?? ""
+    }
+}
+
+/// A box whose first answer to `path` is lost on the way back: it did what was asked, and the
+/// connection dropped before its answer came.
+private final class LosesFirstAnswer: BoxTransport, @unchecked Sendable {
+    let inner: any BoxTransport
+    let path: String
+    private let lock = NSLock()
+    private var lost = false
+
+    init(to inner: any BoxTransport, path: String) {
+        self.inner = inner
+        self.path = path
+    }
+
+    func send(_ request: LinkRequest) -> AsyncThrowingStream<LinkResponsePart, Error> {
+        let loses = request.path == path && lock.withLock { lost ? false : { lost = true; return true }() }
+        guard loses else { return inner.send(request) }
+        let answer = inner.send(request)
+        return AsyncThrowingStream { continuation in
+            Task {
+                do { for try await _ in answer {} } catch {}
+                continuation.finish(throwing: URLError(.networkConnectionLost))
+            }
+        }
     }
 }

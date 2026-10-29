@@ -117,7 +117,7 @@ async function engineWith(sessions) {
 }
 
 // A coding agents' bridge with its group chats (`{group, messages, status}` by ID), as the link
-// holds, brings in, starts and lets go of one (`api/kuvo/groups`).
+// holds, brings in, starts and lets go of one (`api/kuvo/groups`), and no sessions of its own.
 async function bridgeWith(groups = new Map()) {
   const server = http.createServer(async (request, response) => {
     const given = await body(request);
@@ -143,6 +143,8 @@ async function bridgeWith(groups = new Map()) {
       if (match[2] === "release") groups.delete(match[1]);
       return send(200, { data: match[2] === "hold" ? { group: chat.group, messages: chat.messages } : true });
     }
+    // None of its own sessions: a message for one isn't for it.
+    if (request.url.startsWith("/api/session/")) return send(404, { message: "No such session." });
     return send(200, {});
   });
   const port = await listening(server);
@@ -318,8 +320,13 @@ test("a chat moves from this Mac to the machine, with its wake-ups; here it's go
 
 test("the chat that moved takes messages where it lives now", { timeout: 60_000 }, async t => {
   signal = t.signal;
-  const sent = await ask("POST", "kuvo/link/letters", { peer: lab.key, from: "ses_chat2", to: "ses_chat1", text: "Did you book it?", wait: false });
+  // Once the machine has said the chat is one of its agents now.
+  await eventually(() => {
+    try { return JSON.parse(fs.readFileSync(path.join(macHome, "run", "peer-agents.json"), "utf8"))[lab.key]?.list.some(agent => agent.session === "ses_chat1"); } catch { return false; }
+  });
+  const sent = await ask("POST", "kuvo/agent-tools", { name: "send_message", arguments: { to: "ses_chat1", text: "Did you book it?", wait: false }, session: "ses_chat2" });
   assert.equal(sent.status, 200);
+  assert.equal(sent.json.isError, false, sent.json.text);
   const prompt = await eventually(() => labEngine.prompts.find(each => each.session === "ses_chat1"));
   assert.match(prompt.text, /Did you book it\?$/);
 });

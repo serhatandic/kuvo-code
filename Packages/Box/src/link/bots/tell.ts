@@ -188,13 +188,16 @@ export async function freshenBots(target: Target): Promise<void> {
 // What "Ask First" asks about (the Mac's ToolApproval.askFirst): a conversation that asks before
 // running commands asks first.
 const ASK_FIRST: string[] = ["edit", "write", "patch", "shell", "webfetch", "external_directory", "kuvo-browser_browser_save_pdf", "kuvo-browser_browser_upload", "kuvo-browser_watch_for_change"];
-const isRule = (rule: unknown): rule is KitRule => isObject(rule) && typeof rule.action === "string" && typeof rule.resource === "string" && ["allow", "deny", "ask"].includes(rule.effect as string);
+const isRule = (rule: unknown): rule is KitRule => isObject(rule) && typeof rule.action === "string" && typeof rule.resource === "string" && typeof rule.effect === "string" && rule.effect !== "";
+// What a rule holds back: Don't Allow, or one a newer engine set that this box doesn't know (the
+// Mac's `holdsBack`), which goes on as it is.
+const holdsBack = (rule: KitRule): boolean => rule.effect !== "allow" && rule.effect !== "ask";
 // A folder a conversation may work in, of its own (the Mac's ToolApproval.isParticular).
 const isParticular = (rule: KitRule): boolean => rule.action === "external_directory" && rule.effect === "allow" && rule.resource !== "*";
 
 // This box's Settings › Permissions (its settings' `permissions`), or null where they can't be read,
 // or aren't its own yet (a machine whose Mac hasn't made them so, which runs with what its Mac gave it).
-function permissionsHere(): KitRule[] | null {
+export function permissionsHere(): KitRule[] | null {
   if (!ownsSettings()) return null;
   const { settings } = readSettings();
   if (!settings) return null;
@@ -208,13 +211,13 @@ function permissionsHere(): KitRule[] | null {
 // still lets through what Settings allows, and both keep what Settings doesn't allow.
 export function refreshedRules(current: KitRule[], settings: KitRule[]): KitRule[] {
   const asks = current.some(rule => rule.action === "shell" && rule.effect === "ask");
-  const denied = settings.filter(rule => rule.effect === "deny");
+  const denied = settings.filter(holdsBack);
   let made: KitRule[];
   if (asks) {
     const everywhere = settings.findLast(rule => rule.action === "external_directory" && rule.resource === "*")?.effect === "allow";
     made = [
       ...ASK_FIRST.filter(action => everywhere || action !== "external_directory").map(action => ({ action, resource: "*", effect: "ask" as const })),
-      ...settings.filter(rule => rule.effect !== "deny" && rule.resource !== "*" && rule.action !== "external_directory"),
+      ...settings.filter(rule => !holdsBack(rule) && rule.resource !== "*" && rule.action !== "external_directory"),
       ...denied,
     ];
   } else {

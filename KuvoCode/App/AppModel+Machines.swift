@@ -43,13 +43,13 @@ extension AppModel {
             return ToolApproval(rules: found.permissions) == .approveAll
         }
         BrowserTools.isInView = { [weak self] session in self?.utilities.isInView(session) ?? false }
-        // Agents writing to each other, here and on machines (and with machines this Mac isn't
-        // connected to, through this Mac's box: `wirePhoneLink`).
+        // Agents writing to each other: this Mac's box answers its conversations' tools, as every
+        // box does, and says who there is, for "&".
         if mailTick == nil {
             mailTick = Task {
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(60))
                     await AgentMail.shared.tick()
+                    try? await Task.sleep(for: .seconds(60))
                 }
             }
         }
@@ -70,11 +70,6 @@ extension AppModel {
         }
         // The browser sends agents from the sites of integrations you added to their tools.
         BrowserTools.integrationSites = { [weak self] in self.map { Integrations.sites(Integrations.added(in: $0.engineConfig)) } ?? [] }
-        // An agent on a machine left a message for one elsewhere: on its way at once.
-        workspace.onAgentMessage = { [weak self] machine in
-            guard let engine = self?.machines.engine(machine) else { return }
-            Task { await AgentMail.shared.collect(from: engine) }
-        }
         // An agent showing you a file or folder: in the panel, beside its conversation.
         workspace.onShowInPanel = { [weak self] session, machine, path, isFolder in
             let url = machine.map { RemoteFolder.url(RemoteFolder.folder(path, on: $0)) } ?? URL(filePath: path, directoryHint: isFolder ? .isDirectory : .notDirectory)
@@ -462,9 +457,6 @@ extension AppModel {
             // What you signed in to here works there too, kept in step while it's connected.
             { await self.syncSignIns(with: engine) },
             { await self.syncSignInFiles(with: engine) },
-            { await AgentMail.shared.share(with: engine) },
-            { await AgentMail.shared.collect(from: engine) },
-            { await AgentMail.shared.deliverWaiting(to: engine) },
             { await self.wakeUps.share(with: engine) },
             { await Utilities.shareTabTidying(on: machine) },
         ]) else { return }
@@ -472,12 +464,7 @@ extension AppModel {
             { await self.syncSignIns(with: engine) },
             { await self.syncSignInFiles(with: engine) },
         ])
-        connection.every(60, "agents", [
-            { await AgentMail.shared.share(with: engine) },
-            { await AgentMail.shared.collect(from: engine) },
-            // What waited for it and couldn't go as it connected (its coding agents' bridge was
-            // still starting): now, not at its next connection.
-            { await AgentMail.shared.deliverWaiting(to: engine) },
+        connection.every(60, "wake-ups", [
             { await self.wakeUps.share(with: engine) },
         ])
         // Settings changed here while it connected, after it took the ones it has.
@@ -510,16 +497,12 @@ extension AppModel {
         // Settings' tabs of the name that went.
         settingsTabs.closeTabs(notOn: Set(machines.list.map(\.id)), machines: machines)
         bots.fold(address, into: machine)
-        AgentMail.shared.fold(address, into: machine)
         boxGroups.fold(address, into: machine)
         // Its sessions listed again, now under one name; not connected (its own address doesn't
         // answer): now, at whichever does.
         if let engine = machines.engine(machine) {
             if engine.isReady {
-                Task {
-                    _ = await workspace.refresh(engine)
-                    await AgentMail.shared.deliverWaiting(to: engine)
-                }
+                Task { _ = await workspace.refresh(engine) }
             } else {
                 reconnectNow(engine)
             }
@@ -537,7 +520,6 @@ extension AppModel {
         utilities.closeMachineBrowser(id)
         machines.remove(id, uninstall: uninstall)
         if uninstall { phoneLink.forget(machine: id) } else { phoneLink.machineRemoved(id) }
-        AgentMail.shared.machineRemoved(id)
         workspace.machines = Set(machines.list.map(\.id))
         workspace.forget(id, forGood: true)
         boxGroups.forget(machine: id)

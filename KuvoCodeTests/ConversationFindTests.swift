@@ -79,4 +79,16 @@ import Testing
         #expect(!find.isOn)
         #expect(!ConversationFind.closeOpen())
     }
+
+    /// Find left open in a conversation you've gone from (kept, out of view) isn't Esc's: Esc in the
+    /// one in view stops its agent at once.
+    @Test func findOpenInAConversationOutOfViewIsntEscs() async {
+        let left = await found("config")
+        left.isShown = false
+        #expect(!ConversationFind.hasOpen)
+        #expect(!ConversationFind.closeOpen())
+        #expect(left.isOn, "still open there, for going back to it")
+        left.isShown = true
+        #expect(ConversationFind.closeOpen())
+    }
 }

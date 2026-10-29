@@ -2,14 +2,10 @@
 // As a machine's link does it (`run`): its agents told to them, its letters sent and their answers
 // waited for, its group chats' mail carried, and whether this Mac's in use.
 
-import fs from "node:fs";
-import path from "node:path";
 import { isObject } from "../../shared/json";
 import type { Body } from "../../shared/json";
 import { readEngineFile } from "../engine/client";
-import { writePrivate } from "../files";
-import { SENDING } from "../letters/letter";
-import { macWaiting, sendOutbox } from "../letters/outbox";
+import { givenUp, macWaiting, sendOutbox } from "../letters/outbox";
 import { attentionGiven } from "../notices/hold";
 import { announce, refreshOwn } from "../peers/agents";
 import { mailFor, peersOf } from "../peers/known";
@@ -77,15 +73,15 @@ export function macSendOutbox(): void {
 
 // How long one of this Mac's conversations waits for a letter's answer at most.
 export const LETTER_WAIT = 660_000;
-export const OFFLINE_LETTER = "Your other computers can't be reached through the relay now: it goes once this Mac's back on it, and its answer comes to you as a message.";
 
 // The answer to letter `id` (`macWaiting`): its words; or how it went, when it didn't get there or
 // its answer can't come; or `{text: null}` once it's waited `most`, or its asker went (`signal`).
 // Then it goes on without waiting, and an answer that comes later reaches the conversation as a
 // message.
-export function macLetterAnswer(id: string, signal?: AbortSignal | null, most = LETTER_WAIT): Promise<MacLetterAnswer> {
+// `cut`: how much of its answer it takes.
+export function macLetterAnswer(id: string, signal?: AbortSignal | null, most = LETTER_WAIT, cut?: number): Promise<MacLetterAnswer> {
   return new Promise<MacLetterAnswer>(resolve => {
-    const waiter: MacWaiter = { sentTo: null, gone: () => Boolean(signal?.aborted), done: value => finish(value) };
+    const waiter: MacWaiter = { sentTo: null, gone: () => Boolean(signal?.aborted), done: value => finish(value), ...(cut ? { most: cut } : {}) };
     const timer = setTimeout(() => finish(null), most);
     const abort = () => finish(null);
     signal?.addEventListener("abort", abort, { once: true });
@@ -94,12 +90,11 @@ export function macLetterAnswer(id: string, signal?: AbortSignal | null, most = 
       macWaiting.delete(id);
       clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
-      if (!value) {
-        const file = path.join(SENDING, `${id}.json`);
-        try { writePrivate(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), wait: false })); } catch {}
-      }
+      if (!value) givenUp(id);
       resolve(value ?? { text: null });
     }
     macWaiting.set(id, waiter);
+    // Its asker gone already: nothing waits.
+    if (signal?.aborted) finish(null);
   });
 }
