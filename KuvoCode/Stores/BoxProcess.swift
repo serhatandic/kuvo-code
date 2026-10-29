@@ -1,7 +1,9 @@
+import CryptoKit
 import Foundation
 import KuvoLink
 import OpenCodeKit
 import os
+import Security
 
 private let log = Logger(subsystem: "run.kuvo.code", category: "box")
 
@@ -101,10 +103,14 @@ final class BoxProcess {
             env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
         }
         if checksRuntime {
-            // And the engine's Bun is opencode's own, checked again each time, as one replaced in
-            // the app's folder would run as the box.
-            guard EngineInstaller.carriesSignature(runtime) else {
-                failure = "Kuvo Code’s engine on this Mac isn’t opencode’s own any more, so its background service didn’t start. Quit Kuvo Code and open it again to download it."
+            // And what it runs is what it was: the engine's Bun opencode's own, the very build this
+            // Mac first ran of that version, and the box's script the app's own, sealed with it.
+            // Checked again each time, as a file replaced in the app's folder or its bundle (both
+            // yours to write, so an agent's command's too) would run as the box. (Off the main
+            // thread: reading them takes a second or so.)
+            let engine = runtime
+            if let trouble = await Task.detached(operation: { BoxIntegrity.trouble(engine: engine) }).value {
+                failure = trouble
                 return
             }
         }
@@ -267,5 +273,49 @@ final class BoxProcess {
         } catch {
             log.error("Couldn't tell this Mac's box where \(name, privacy: .public) is: \(error.localizedDescription, privacy: .public)")
         }
+    }
+}
+
+/// What this Mac's box runs, checked before each start: its engine's Bun is opencode's own and the
+/// build this Mac first ran of that version (an older one of opencode's, put in its place, would
+/// carry the same signature), and the app's bundle, with the box's script in it, is as it was sealed.
+/// (Checked, then run: something that swaps a file in between gets in; fenced agents won't reach them.)
+nonisolated enum BoxIntegrity {
+    static func trouble(engine: URL) -> String? {
+        guard EngineInstaller.carriesSignature(engine), pinned(engine) else {
+            return "Kuvo Code’s engine on this Mac isn’t the one it downloaded any more, so its background service didn’t start. Quit Kuvo Code and open it again to download it."
+        }
+        guard appIsSealed() else {
+            return "Kuvo Code on this Mac was changed since it was installed, so its background service didn’t start. Install Kuvo Code again."
+        }
+        return nil
+    }
+
+    /// Whether the app's bundle is as it was signed: its code and every resource (the box's script).
+    static func appIsSealed() -> Bool {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(Bundle.main.bundleURL as CFURL, [], &code) == errSecSuccess, let code else { return false }
+        return SecStaticCodeCheckValidity(code, [], nil) == errSecSuccess
+    }
+
+    /// Whether `engine` is the build this Mac first ran of its version: its hash then is kept in
+    /// the Keychain, by version, and each start's must match it.
+    static func pinned(_ engine: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: engine) else { return false }
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+        let hash = Data(hasher.finalize()).base64EncodedString()
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: (Bundle.main.bundleIdentifier ?? "run.kuvo.code") + ".engine",
+                                    kSecAttrAccount as String: engine.deletingLastPathComponent().lastPathComponent]
+        var found = query
+        found[kSecReturnData as String] = true
+        var result: CFTypeRef?
+        if Keychain.copyMatching(found, &result) == errSecSuccess, let kept = result as? Data { return String(decoding: kept, as: UTF8.self) == hash }
+        var item = query
+        item[kSecValueData as String] = Data(hash.utf8)
+        item[kSecAttrLabel as String] = "Kuvo Code engine"
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        return Keychain.add(item) == errSecSuccess
     }
 }
