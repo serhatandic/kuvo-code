@@ -44,8 +44,9 @@ export interface Goal {
   last?: { verdict: Verdict; reason: string; at: number }
   /** Paused at a model's limit: when it carries on by itself (ms since 1970). */
   resumesAt?: number
-  /** A bot's goal with a plan (`kuvo/work/goals`): no cap on its turns, never "stalled" by turns that
-   * wait on its sessions, and not told to carry on while they're at work (they wake it). */
+  /** A bot's goal with a plan (`kuvo/work/goals`): its box's plan tells the bot what to do and when
+   * to carry on, so here it's only kept, shown, and paused at a model's limit until the reset; its
+   * turns aren't checked, capped or followed by a nudge. */
   long?: boolean
 }
 
@@ -77,8 +78,6 @@ export interface GoalPlaces {
   bridge: GoalPlace
   /** Whether a session is one of this bridge's (a coding agent's), not the engine's. */
   isBridge(session: string): boolean
-  /** Whether work a conversation started (its sessions) is at it now, which will wake it. */
-  inFlight?(session: string): Promise<boolean>
 }
 
 /** How long a goal paused at a limit that didn't say when it resets waits before trying again. */
@@ -170,7 +169,8 @@ export class Goals {
     this.changed(goal)
     // A conversation that starts with its goal has no message of yours to be named from: it's named after the goal.
     if (!found?.data?.title) await place.api.request("PATCH", at(session), { title: line(text, 60) }).catch(() => {})
-    try {
+    // (A bot's long goal is briefed by its plan as it starts: nothing more to say here.)
+    if (!long) try {
       await place.api.request("POST", at(session) + "/synthetic", { text: brief(text), description: `Goal: ${line(text)}` })
     } catch (error: any) {
       this.pause(goal, "error", `The goal couldn't be given to the agent: ${error?.message ?? error}`)
@@ -195,13 +195,17 @@ export class Goals {
    * Lets it go again. Idle now, its last turn is checked (however it ended): met meanwhile, it's
    * met; not, it carries on. At work, the turn under way is checked when it ends.
    */
-  async resume(session: string): Promise<Goal> {
+  async resume(session: string, { atLimit: onlyAtLimit = false }: { atLimit?: boolean } = {}): Promise<Goal> {
     const goal = this.found(session)
     if (goal.state === "met" || goal.state === "unmet") throw new GoalError(409, "That goal is over: set it again to carry on.")
     if (goal.state === "paused") {
       const messages = await this.messages(session, this.place(session)).catch(() => undefined)
       if (!messages) throw new GoalError(503, "The conversation can't be reached now.")
       if (this.goals.get(session) !== goal || goal.state !== "paused") return shown(goal)
+      // (Carried on at a reset, but you paused it meanwhile: it stays as you left it.)
+      if (onlyAtLimit && goal.pausedBy !== "limit") return shown(goal)
+      // At a model's limit, its last turn is the one that failed: nothing to check, only to carry on.
+      const atLimit = goal.pausedBy === "limit" && goal.resumesAt !== undefined
       goal.state = "working"
       goal.epoch = (goal.epoch ?? 0) + 1
       this.cancelResume(session)
@@ -211,6 +215,14 @@ export class Goals {
       goal.quiet = 0
       goal.limit = goal.turns + turnLimit
       const idle = lastIdle(messages)
+      if (atLimit) {
+        if (idle) goal.checkedIdle = idle.id
+        this.follow(session)
+        this.changed(goal)
+        const words = goal.long ? "[Limit reset] The model's limit has reset. Carry on with the goal." : nudge(goal.condition, "The model's limit has reset: carry on where you stopped.")
+        await this.place(session).api.request("POST", at(session) + "/synthetic", { text: words, description: "The limit has reset" }).catch(() => this.pauseUntil(goal, this.now() + unknownReset, ""))
+        return shown(goal)
+      }
       if (idle && !atWork(messages, idle)) {
         goal.recheck = idle.id
         delete goal.checkedIdle
@@ -342,10 +354,16 @@ export class Goals {
     }
     if (!resumed && idle.outcome === "failed") {
       settle()
-      // A model's limit isn't a failure: it waits for the reset, and carries on by itself then.
+      // A model's limit isn't a failure: it waits for the reset (from when the turn ended, said in
+      // its words, or a while), and carries on by itself then.
       const words = idle.error?.message ? String(idle.error.message) : ""
-      if (isLimit(words)) return this.pauseUntil(goal, resetsIn(words, this.now()) ?? this.now() + unknownReset, words)
+      if (isLimit(words)) return this.pauseUntil(goal, resetsIn(words, Number(idle.time?.created) || this.now()) ?? this.now() + unknownReset, words)
       return this.pause(goal, "error", words ? `The turn failed: ${sentence(words)}` : "The turn failed.")
+    }
+    // A bot's long goal: its plan says what's next; a turn here is only kept.
+    if (goal.long) {
+      settle()
+      return this.save()
     }
     const worked = turn.some((message) => message.type === "assistant" && (message.content ?? []).some((part: any) => part?.type === "tool"))
     goal.checking = true
@@ -357,7 +375,10 @@ export class Goals {
       goal.checking = false
       if (!current()) return void this.changed(goal)
       settle()
-      return this.pause(goal, "error", `The goal couldn't be checked: ${sentence(String(error?.message ?? error))}`)
+      const words = String(error?.message ?? error)
+      // The check met a model's limit: the goal waits for the reset as the agent's turn would.
+      if (isLimit(words)) return this.pauseUntil(goal, resetsIn(words, this.now()) ?? this.now() + unknownReset, words)
+      return this.pause(goal, "error", `The goal couldn't be checked: ${sentence(words)}`)
     }
     goal.checking = false
     // Taken away, paused or resumed while it was checked: as it is now.
@@ -374,19 +395,13 @@ export class Goals {
       return void this.changed(goal)
     }
     goal.quiet = worked ? 0 : goal.quiet + 1
-    if (!goal.long && goal.quiet >= quietLimit) {
+    if (goal.quiet >= quietLimit) {
       settle()
       return this.pause(goal, "stalled", `It stopped making progress: ${quietLimit} turns in a row without doing anything.`)
     }
-    if (!goal.long && goal.turns >= goal.limit) {
+    if (goal.turns >= goal.limit) {
       settle()
       return this.pause(goal, "limit", `It's taken ${goal.turns} turns.`)
-    }
-    // A long goal's work at it elsewhere wakes it when there's news: nothing to tell it now.
-    if (goal.long && (await this.places.inFlight?.(session).catch(() => false))) {
-      if (!current()) return void this.changed(goal)
-      settle()
-      return void this.changed(goal)
     }
     // Someone wrote to it meanwhile: that turn is checked when it ends, rather than sending another.
     const now = await this.messages(session, place).catch(() => undefined)
@@ -446,7 +461,7 @@ export class Goals {
       if (!goal || goal.state !== "paused" || goal.pausedBy !== "limit") return
       // (A reset further off than a timer reaches: waited for again.)
       if (goal.resumesAt && goal.resumesAt > this.now()) return this.resumeAt(session, goal.resumesAt)
-      this.resume(session).catch(() => {
+      this.resume(session, { atLimit: true }).catch(() => {
         const later = this.now() + unknownReset
         goal.resumesAt = later
         this.changed(goal)
@@ -465,7 +480,7 @@ export class Goals {
 
   /** A paused-at-a-limit goal carried on now (a test's clock moved past its reset). */
   resumeDue() {
-    for (const goal of this.goals.values()) if (goal.state === "paused" && goal.pausedBy === "limit" && goal.resumesAt && goal.resumesAt <= this.now()) void this.resume(goal.session).catch(() => {})
+    for (const goal of this.goals.values()) if (goal.state === "paused" && goal.pausedBy === "limit" && goal.resumesAt && goal.resumesAt <= this.now()) void this.resume(goal.session, { atLimit: true }).catch(() => {})
   }
 
   private found(session: string): Kept {

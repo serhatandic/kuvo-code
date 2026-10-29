@@ -18,6 +18,7 @@ import { stopBotWork } from "../work/stop";
 import { botLimits } from "../work/limits";
 import { answerWork, askFollowers, workAsks } from "../work/asks";
 import { madeWords, makeProject } from "../work/projects";
+import { startOfDay } from "../work/clock";
 import { setProjectsFolder, workSettings } from "../work/settings";
 import { answerGoal, askGoal, goalFollowers, goalPlans } from "../work/goals";
 import { readProjects } from "./projects";
@@ -43,7 +44,7 @@ async function botWork(bot: string, context: RouteContext): Promise<BotWork> {
     sessions.push(...await Promise.all(shown.slice(at, at + 8).map(each => describeWork(each, working, { replies: true, signal: signal ?? undefined }))));
   }
   const answered: WorkAnswer[] = work.flatMap(each => answersOn(each.data.metadata).map(answer => ({ ...answer, session: each.data.id }))).sort((a, b) => b.at - a.at).slice(0, 100);
-  const midnight = new Date().setHours(0, 0, 0, 0);
+  const midnight = startOfDay(Date.now());
   const today = work.filter(each => (each.data.time?.created ?? 0) >= midnight);
   const cost = today.reduce((sum, each) => sum + (typeof each.data.cost === "number" ? each.data.cost : 0), 0);
   return {

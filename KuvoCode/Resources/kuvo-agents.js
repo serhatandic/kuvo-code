@@ -3316,11 +3316,12 @@ class Goals {
     this.changed(goal);
     if (!found?.data?.title)
       await place.api.request("PATCH", at2(session), { title: line2(text, 60) }).catch(() => {});
-    try {
-      await place.api.request("POST", at2(session) + "/synthetic", { text: brief(text), description: `Goal: ${line2(text)}` });
-    } catch (error) {
-      this.pause(goal, "error", `The goal couldn't be given to the agent: ${error?.message ?? error}`);
-    }
+    if (!long)
+      try {
+        await place.api.request("POST", at2(session) + "/synthetic", { text: brief(text), description: `Goal: ${line2(text)}` });
+      } catch (error) {
+        this.pause(goal, "error", `The goal couldn't be given to the agent: ${error?.message ?? error}`);
+      }
     return shown(goal);
   }
   pauseByYou(session) {
@@ -3335,7 +3336,7 @@ class Goals {
     }
     return shown(goal);
   }
-  async resume(session) {
+  async resume(session, { atLimit: onlyAtLimit = false } = {}) {
     const goal = this.found(session);
     if (goal.state === "met" || goal.state === "unmet")
       throw new GoalError(409, "That goal is over: set it again to carry on.");
@@ -3347,6 +3348,9 @@ class Goals {
         throw new GoalError(503, "The conversation can't be reached now.");
       if (this.goals.get(session) !== goal || goal.state !== "paused")
         return shown(goal);
+      if (onlyAtLimit && goal.pausedBy !== "limit")
+        return shown(goal);
+      const atLimit = goal.pausedBy === "limit" && goal.resumesAt !== undefined;
       goal.state = "working";
       goal.epoch = (goal.epoch ?? 0) + 1;
       this.cancelResume(session);
@@ -3356,6 +3360,15 @@ class Goals {
       goal.quiet = 0;
       goal.limit = goal.turns + turnLimit;
       const idle = lastIdle(messages);
+      if (atLimit) {
+        if (idle)
+          goal.checkedIdle = idle.id;
+        this.follow(session);
+        this.changed(goal);
+        const words = goal.long ? "[Limit reset] The model's limit has reset. Carry on with the goal." : nudge(goal.condition, "The model's limit has reset: carry on where you stopped.");
+        await this.place(session).api.request("POST", at2(session) + "/synthetic", { text: words, description: "The limit has reset" }).catch(() => this.pauseUntil(goal, this.now() + unknownReset2, ""));
+        return shown(goal);
+      }
       if (idle && !atWork(messages, idle)) {
         goal.recheck = idle.id;
         delete goal.checkedIdle;
@@ -3479,8 +3492,12 @@ class Goals {
       settle();
       const words = idle.error?.message ? String(idle.error.message) : "";
       if (isLimit(words))
-        return this.pauseUntil(goal, resetsIn(words, this.now()) ?? this.now() + unknownReset2, words);
+        return this.pauseUntil(goal, resetsIn(words, Number(idle.time?.created) || this.now()) ?? this.now() + unknownReset2, words);
       return this.pause(goal, "error", words ? `The turn failed: ${sentence(words)}` : "The turn failed.");
+    }
+    if (goal.long) {
+      settle();
+      return this.save();
     }
     const worked = turn.some((message) => message.type === "assistant" && (message.content ?? []).some((part) => part?.type === "tool"));
     goal.checking = true;
@@ -3493,7 +3510,10 @@ class Goals {
       if (!current())
         return void this.changed(goal);
       settle();
-      return this.pause(goal, "error", `The goal couldn't be checked: ${sentence(String(error?.message ?? error))}`);
+      const words = String(error?.message ?? error);
+      if (isLimit(words))
+        return this.pauseUntil(goal, resetsIn(words, this.now()) ?? this.now() + unknownReset2, words);
+      return this.pause(goal, "error", `The goal couldn't be checked: ${sentence(words)}`);
     }
     goal.checking = false;
     if (!current())
@@ -3511,19 +3531,13 @@ class Goals {
       return void this.changed(goal);
     }
     goal.quiet = worked ? 0 : goal.quiet + 1;
-    if (!goal.long && goal.quiet >= quietLimit) {
+    if (goal.quiet >= quietLimit) {
       settle();
       return this.pause(goal, "stalled", `It stopped making progress: ${quietLimit} turns in a row without doing anything.`);
     }
-    if (!goal.long && goal.turns >= goal.limit) {
+    if (goal.turns >= goal.limit) {
       settle();
       return this.pause(goal, "limit", `It's taken ${goal.turns} turns.`);
-    }
-    if (goal.long && await this.places.inFlight?.(session).catch(() => false)) {
-      if (!current())
-        return void this.changed(goal);
-      settle();
-      return void this.changed(goal);
     }
     const now = await this.messages(session, place).catch(() => {
       return;
@@ -3576,7 +3590,7 @@ class Goals {
         return;
       if (goal.resumesAt && goal.resumesAt > this.now())
         return this.resumeAt(session, goal.resumesAt);
-      this.resume(session).catch(() => {
+      this.resume(session, { atLimit: true }).catch(() => {
         const later = this.now() + unknownReset2;
         goal.resumesAt = later;
         this.changed(goal);
@@ -3595,7 +3609,7 @@ class Goals {
   resumeDue() {
     for (const goal of this.goals.values())
       if (goal.state === "paused" && goal.pausedBy === "limit" && goal.resumesAt && goal.resumesAt <= this.now())
-        this.resume(goal.session).catch(() => {});
+        this.resume(goal.session, { atLimit: true }).catch(() => {});
   }
   found(session) {
     const goal = this.goals.get(session);
@@ -20558,24 +20572,10 @@ var places4 = {
     } catch {
       return false;
     }
-  },
-  inFlight: async (session) => {
-    const engine = places4.engine.api;
-    const active = await engine.request("GET", "/api/session/active").catch(() => {
-      return;
-    });
-    const ids = Object.keys(active?.data ?? {}).filter((id) => id !== session);
-    for (const id of ids.slice(0, 40)) {
-      const found = await engine.request("GET", "/api/session/" + encodeURIComponent(id)).catch(() => {
-        return;
-      });
-      if (found?.data?.metadata?.kuvo?.startedBy === session)
-        return true;
-    }
-    return false;
   }
 };
 var goals = new Goals(join25(home2, "goals.json"), places4);
+setInterval(() => goals.resumeDue(), 60000).unref?.();
 var sideQuestions = new SideQuestions(join25(home2, "side-questions.json"), places4);
 var handoffs = new Handoffs(places4);
 var reviews = new Reviews(join25(home2, "reviews.json"), places4);
@@ -20688,4 +20688,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 7dc7f369f75d1b3e319aa1c7c986ace604fea4200069e7e020a6f30476b54976
+// Built from Packages/Box/src/agents 0d178e932de0d8fa7237380f88916ffe66a95d2430ce9ed6194cceaa4b7d1e19

@@ -23,6 +23,7 @@ import { botLimits, pastLimit } from "../work/limits";
 import { pickModel, usableModels } from "../work/models";
 import { withAlwaysAsk } from "../work/always";
 import { linkSession, pauseGoal, runningGoal } from "../work/goals";
+import { nextMidnight, startOfDay } from "../work/clock";
 import { botOfConversation, depthOf, ofBot, workingNow, workSessions, worksFor } from "../work/tree";
 import type { WorksFor } from "../../shared/routes/work";
 import type { Target } from "../../shared/records";
@@ -239,17 +240,16 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
       const targets = [engine, bridge].filter((each): each is Target => Boolean(each));
       const work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
       const working = await workingNow(targets, place.signal);
-      const midnight = new Date().setHours(0, 0, 0, 0);
+      const midnight = startOfDay(Date.now());
       const today = work.filter(each => (each.data.time?.created ?? 0) >= midnight);
       const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
       const past = pastLimit(limits, { depth, working: work.filter(each => working.has(each.data.id)).length, started: today.length, tokens });
-      // A day's limit, during a goal: the goal waits for midnight, when the bot is woken to carry on.
-      if (past && goal && (past.includes(" a day ") || past.includes("tokens a day"))) {
-        const midnight = new Date(new Date().setHours(24, 0, 0, 0)).getTime();
-        pauseGoal(bot.bot, { why: "your daily limit", until: midnight });
-        return no(429, `${past.replace(/ Ask the user to raise it \(Edit Bot › Work\), or go on tomorrow\.$/, "")} Your goal waits for it to reset at midnight, and you're woken then: carry on meanwhile with what doesn't start a session.`);
+      // A day's limit, during a goal: new sessions wait for midnight, when the bot is woken.
+      if (past?.daily && goal) {
+        pauseGoal(bot.bot, { why: "your daily limit", until: nextMidnight(Date.now()) });
+        return no(429, `${past.words} New sessions for your goal wait for it to reset at midnight, and you're woken then: carry on meanwhile with what doesn't start a session.`);
       }
-      if (past) return no(429, past);
+      if (past) return no(429, past.daily ? `${past.words} Ask the user to raise it (Edit Bot › Work), or go on tomorrow.` : past.words);
     }
   }
   // A few at a time: an agent shouldn't fill the window with sessions unattended. A bot's work is

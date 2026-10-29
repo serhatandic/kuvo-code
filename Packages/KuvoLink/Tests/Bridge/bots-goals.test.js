@@ -42,7 +42,7 @@ const tokens = () => ({ input: 0, output: 0, reasoning: 0, cache: { read: 0, wri
 function resetEngine() {
   sessions = new Map([
     ["ses_pixel", { id: "ses_pixel", title: "Pixel", location: { directory: path.join(pixelFolder, "workspace") }, permissions: [], time: { created: 1, updated: 5 }, cost: 0, tokens: tokens() }],
-    ["ses_site", { id: "ses_site", title: "Build the site", location: { directory: driftwood }, permissions: [], time: { created: 2, updated: 6 }, cost: 0, tokens: tokens(), metadata: { kuvo: { startedBy: "ses_pixel", by, depth: 1, wake: ["finished", "asks"] } } }],
+    ["ses_site", { id: "ses_site", title: "Build the site", location: { directory: driftwood }, permissions: [], time: { created: Date.now(), updated: Date.now() }, cost: 0, tokens: tokens(), metadata: { kuvo: { startedBy: "ses_pixel", by, depth: 1, wake: ["finished", "asks"] } } }],
   ]);
   prompts = [];
   made = [];
@@ -124,8 +124,33 @@ await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
 after(() => { engine.closeAllConnections(); engine.close(); });
 const target = () => [{ port: engine.address().port, password: "p" }];
 
+// The agents bridge, beside the engine: the conversation's goal (its loop), as it's set, taken away
+// and read.
+let loops;
+const bridge = http.createServer((request, response) => {
+  let body = "";
+  request.on("data", chunk => { body += chunk; });
+  request.on("end", () => {
+    const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+    const found = new URL(request.url, "http://x").pathname.match(/^\/api\/kuvo\/goals\/([^/]+)$/);
+    if (!found) return reply({ message: "Not here." }, 404);
+    const session = decodeURIComponent(found[1]);
+    if (request.method === "PUT") {
+      loops.set(session, { session, ...JSON.parse(body), state: "working" });
+      return reply({ data: loops.get(session) });
+    }
+    if (request.method === "DELETE") return loops.delete(session) ? reply({}) : reply({ message: "That conversation has no goal." }, 404);
+    return loops.has(session) ? reply({ data: loops.get(session) }) : reply({ message: "That conversation has no goal." }, 404);
+  });
+});
+await new Promise(resolve => bridge.listen(0, "127.0.0.1", resolve));
+// A process the box takes for the bridge's (by its name).
+const bridgeProcess = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9)", "kuvo-agents"], { stdio: "ignore" });
+after(() => { bridge.closeAllConnections(); bridge.close(); bridgeProcess.kill(); });
+
 beforeEach(() => {
   resetEngine();
+  loops = new Map();
   for (const each of ["box", "run", "Developer", "bots", "bin", "work"]) fs.rmSync(path.join(home, each), { recursive: true, force: true });
   fs.mkdirSync(driftwood, { recursive: true });
   spawnSync("git", ["init", "-q", driftwood], { env: { ...process.env, HOME: home } });
@@ -135,6 +160,7 @@ beforeEach(() => {
   write(path.join(pixelFolder, "session"), "ses_pixel");
   fs.mkdirSync(path.join(pixelFolder, "workspace"), { recursive: true });
   write(path.join(home, "run", "engine.json"), JSON.stringify({ port: engine.address().port, password: "p", version: "0.0.0" }));
+  write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "p", pid: bridgeProcess.pid }));
   fs.mkdirSync(path.join(home, "bin"), { recursive: true });
   fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/bot-words.json", import.meta.url), path.join(home, "bin", "bot-words.json"));
 });
@@ -163,7 +189,8 @@ const tool = async (name, args, { session = "ses_pixel", ...rest } = {}) => (awa
 // The landing-page goal, as Pixel puts it.
 const PLAN = {
   goal: "Launch a landing page for my coffee subscription, Driftwood. Get a domain, and add Stripe checkout.",
-  steps: ["Build the site", "Buy the domain", "Set up DNS", { text: "Deploy", phase: "Launch" }, { text: "Add checkout", phase: "Launch" }],
+  title: "Driftwood's landing page",
+  steps: ["Build the site", "Buy the domain", { text: "Set up DNS", after: [2] }, { text: "Deploy", phase: "Launch", after: [1, 3] }, { text: "Add checkout", phase: "Launch" }],
   checks: [
     { text: "Add a Cloudflare API token", detail: "for the domain, DNS and hosting", url: "https://dash.cloudflare.com/profile/api-tokens", button: "Add" },
     { text: "Stripe key works", ok: true },
@@ -202,7 +229,8 @@ test("a bot puts its goal to you on one card: the plan with its phases, what it 
   assert.equal(goal.state, "proposed");
   assert.equal(goal.name, "Pixel");
   assert.equal(goal.session, "ses_pixel");
-  assert.deepEqual(goal.steps.map(each => [each.id, each.text, each.state, each.phase ?? null]), [["s1", "Build the site", "todo", null], ["s2", "Buy the domain", "todo", null], ["s3", "Set up DNS", "todo", null], ["s4", "Deploy", "todo", "Launch"], ["s5", "Add checkout", "todo", "Launch"]]);
+  assert.equal(goal.title, "Driftwood's landing page");
+  assert.deepEqual(goal.steps.map(each => [each.id, each.text, each.state, each.phase ?? null, each.after ?? []]), [["s1", "Build the site", "todo", null, []], ["s2", "Buy the domain", "todo", null, []], ["s3", "Set up DNS", "todo", null, ["s2"]], ["s4", "Deploy", "todo", "Launch", ["s1", "s3"]], ["s5", "Add checkout", "todo", "Launch", []]], "what each waits for, so the rest run side by side");
   assert.equal(goal.alone, false);
   const alone = goal.checks.find(each => each.id === "alone");
   assert.deepEqual([alone.text, alone.state, alone.by], ["This machine can't work on its own yet", "failed", "box"]);
@@ -316,11 +344,11 @@ test("a session that hits a model's limit is paused until the reset, kept throug
 
 test("a daily limit you set pauses the goal until midnight, and the bot is woken to carry on then", async () => {
   await startedGoal();
-  fs.writeFileSync(path.join(pixelFolder, "bot.json"), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(pixelFolder, "bot.json"), "utf8")), work: { limits: { perDay: 1 } } }));
+  fs.writeFileSync(path.join(pixelFolder, "bot.json"), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(pixelFolder, "bot.json"), "utf8")), work: { limits: { perDay: 2 } } }));
   assert.equal((await tool("start_session", { task: "One.", project: "Driftwood" })).isError, false);
   const refused = await tool("start_session", { task: "Two.", project: "Driftwood" });
   assert.equal(refused.isError, true);
-  assert.match(refused.text, /Your goal waits for it to reset at midnight, and you're woken then/);
+  assert.match(refused.text, /New sessions for your goal wait for it to reset at midnight, and you're woken then/);
   const goal = (await goals())[0];
   const midnight = new Date(new Date().setHours(24, 0, 0, 0)).getTime();
   assert.deepEqual(goal.paused, [{ why: "your daily limit", until: midnight }]);
@@ -371,7 +399,7 @@ test("the goal as it goes: tracks with real progress only, steps added as the pl
   await look();
   const reports = told.filter(each => each.category === "report");
   assert.equal(reports.length, 1, "the report is told once");
-  assert.deepEqual([reports[0].title, reports[0].subtitle], ["Pixel finished its goal", "1 thing needs you"]);
+  assert.deepEqual([reports[0].title, reports[0].subtitle], ["Pixel finished Driftwood's landing page", "1 thing needs you"]);
 });
 
 test("a long goal's digest says how it goes as often as you asked, with how long it waited at limits", async () => {
@@ -379,7 +407,7 @@ test("a long goal's digest says how it goes as often as you asked, with how long
   keep(goal => { goal.started = Date.now() - 2 * 86_400_000 - 60_000; goal.waited = 2 * 3_600_000; goal.steps[0].state = "done"; });
   await look();
   const [digest] = told.filter(each => each.category === "report");
-  assert.match(digest.body, /^Day 3: 1 of 5 steps done, waited 2 h at limits\./);
+  assert.match(digest.body, /^Day 2: 1 step done \(1 of 5 in all\), waited 2 h at limits in all\./);
   assert.equal(digest.data.quiet, "1");
   assert.equal((await goals())[0].lastDigest.text, digest.body);
   await look();
@@ -538,4 +566,82 @@ test("what always comes to you is never the bot's to allow, whatever it's asked 
   assert.equal(last("git config *"), "ask");
   assert.equal(last("rm -rf *"), "deny", "what you don't allow stays not allowed");
   assert.ok(rules.findLastIndex(rule => rule.resource === "rm -rf *" && rule.effect === "deny") > rules.findLastIndex(rule => rule.resource === "rm *"), "after the asks, so it wins");
+});
+
+test("the goal is the conversation's own goal: set as it starts (briefed by the plan, not twice), set again if the bridge lost it, and taken away once it ends", async () => {
+  const goal = await startedGoal();
+  assert.deepEqual([loops.get("ses_pixel").long, /Launch a landing page/.test(loops.get("ses_pixel").condition)], [true, true]);
+  // The bridge started over without it: the box's watch sets it again.
+  loops.clear();
+  await look();
+  assert.ok(loops.has("ses_pixel"));
+  // The bot's own turn waits for a model's limit: shown as the goal's pause.
+  const resumesAt = Date.now() + 3_600_000;
+  loops.set("ses_pixel", { ...loops.get("ses_pixel"), state: "paused", pausedBy: "limit", resumesAt });
+  await look();
+  assert.deepEqual((await goals())[0].paused, [{ why: "the model's limit", until: resumesAt, session: "ses_pixel" }]);
+  loops.set("ses_pixel", { ...loops.get("ses_pixel"), state: "working", pausedBy: undefined, resumesAt: undefined });
+  await look();
+  assert.deepEqual((await goals())[0].paused, []);
+  await route("POST", `kuvo/work/goals/${goal.id}`, { action: "stop" });
+  assert.equal(loops.has("ses_pixel"), false, "stopped, its conversation's goal goes too");
+});
+
+test("with nothing of the goal at work, the bot is told to carry on after a while, longer each time, and not at all while all that's left waits for you", async () => {
+  await startedGoal();
+  const nudges = () => prompts.filter(each => each.to === "ses_pixel" && each.text.startsWith("[Goal] Nothing of the goal is at work"));
+  const now = Date.now();
+  await look(now);
+  await look(now + 5 * 60_000);
+  assert.equal(nudges().length, 0, "a quiet moment isn't a stall");
+  await look(now + 11 * 60_000);
+  assert.equal(nudges().length, 1);
+  await look(now + 31 * 60_000);
+  assert.equal(nudges().length, 1, "the next waits longer");
+  await look(now + 42 * 60_000);
+  assert.equal(nudges().length, 2);
+  // At work again: the wait starts over.
+  active.add("ses_pixel");
+  await look(now + 50 * 60_000);
+  active.delete("ses_pixel");
+  // All that's left waits for you: nothing to tell it.
+  await tool("goal_progress", { steps: [1, 2, 3, 4, 5].map(step => ({ step, state: "waiting" })) });
+  await look(now + 10 * 3_600_000);
+  await look(now + 30 * 3_600_000);
+  assert.equal(nudges().length, 2);
+});
+
+test("only the goal's own sessions are its: an old session that failed at a limit isn't brought back", async () => {
+  sessions.get("ses_site").time = { created: Date.now() - 86_400_000, updated: Date.now() - 86_400_000 };
+  sessions.get("ses_site").model = { providerID: "anthropic", id: "claude-opus-5-5" };
+  failures.set("ses_site", "You've hit your usage limit. Your limit resets in 1h.");
+  await startedGoal();
+  await look();
+  await look(Date.now() + 2 * 3_600_000);
+  assert.deepEqual((await goals())[0].paused, []);
+  assert.equal(prompts.filter(each => each.to === "ses_site").length, 0);
+});
+
+test("what waits for you goes once it's dealt with, by the bot or by you, and you can raise a cap on the goal", async () => {
+  const goal = await startedGoal();
+  await tool("goal_progress", { waiting: { kind: "you", text: "Finish Stripe's identity check" } });
+  await tool("goal_progress", { waiting: { kind: "judgment", text: "Is the logo too close to Blue Bottle's?" } });
+  await tool("goal_progress", { resolved: ["finish stripe's identity check"] });
+  let [current] = await goals();
+  assert.deepEqual(current.waiting.map(each => each.text), ["Is the logo too close to Blue Bottle's?"]);
+  const cleared = await route("POST", `kuvo/work/goals/${goal.id}`, { action: "clear", waiting: current.waiting[0].id });
+  assert.equal(cleared.status, 200);
+  assert.deepEqual(cleared.body.goal.waiting, []);
+
+  await tool("goal_progress", { spent: { what: "ads", amount: 20 } });
+  assert.match((await tool("may_spend", { what: "ads", amount: 5 })).text, /^No/);
+  const raised = await route("POST", `kuvo/work/goals/${goal.id}`, { action: "change", spend: [{}, { cap: 40 }] });
+  assert.equal(raised.status, 200);
+  assert.equal(raised.body.goal.spend[1].cap, 40);
+  assert.match((await tool("may_spend", { what: "ads", amount: 5 })).text, /^Yes/, "raised past what's spent, it goes on");
+  assert.match(prompts.at(-1).text, /^\[Goal changed\]/);
+  // Spent on what isn't a spend line: kept for you.
+  await tool("goal_progress", { spent: { what: "a logo", amount: 50 } });
+  [current] = await goals();
+  assert.ok(current.waiting.some(each => each.kind === "outside" && /a logo/.test(each.text)));
 });

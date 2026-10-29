@@ -5738,6 +5738,7 @@
          "name": "string",
          "session": "string",
          "goal": "string",
+         "title?": "string",
          "state": {
           "oneOf": [
            {
@@ -5787,6 +5788,9 @@
             "progress?": "number",
             "note?": "string",
             "phase?": "string",
+            "after?": {
+             "list": "string"
+            },
             "sessions?": {
              "list": "string"
             },
@@ -5971,6 +5975,7 @@
          "name": "string",
          "session": "string",
          "goal": "string",
+         "title?": "string",
          "state": {
           "oneOf": [
            {
@@ -6020,6 +6025,9 @@
             "progress?": "number",
             "note?": "string",
             "phase?": "string",
+            "after?": {
+             "list": "string"
+            },
             "sessions?": {
              "list": "string"
             },
@@ -6223,6 +6231,7 @@
         "name": "string",
         "session": "string",
         "goal": "string",
+        "title?": "string",
         "state": {
          "oneOf": [
           {
@@ -6272,6 +6281,9 @@
            "progress?": "number",
            "note?": "string",
            "phase?": "string",
+           "after?": {
+            "list": "string"
+           },
            "sessions?": {
             "list": "string"
            },

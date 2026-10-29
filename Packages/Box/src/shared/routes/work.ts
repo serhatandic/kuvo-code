@@ -94,7 +94,8 @@ export const WORK_CHANGED = object({ changed: map(number) });
 
 /** A step of a goal's plan, a track of its own: where it stands, how far along where the bot can
  * measure it (0 to 1; left out where it can't, never guessed), a word on it, the phase it's in, the
- * sessions working on it, and, while it waits for a limit to reset, until when (ms). */
+ * steps it comes after (by id), the sessions working on it, and, while it waits for a limit to
+ * reset, until when (ms). */
 export const GOAL_STEP = object({
   id: string,
   text: string,
@@ -102,6 +103,7 @@ export const GOAL_STEP = object({
   "progress?": number,
   "note?": string,
   "phase?": string,
+  "after?": list(string),
   "sessions?": list(string),
   "resumes?": number,
 });
@@ -151,6 +153,7 @@ export const GOAL_PLAN = object({
   name: string,
   session: string,
   goal: string,
+  "title?": string,
   state: words("proposed", "running", "done", "stopped", "declined"),
   steps: list(GOAL_STEP),
   checks: list(GOAL_CHECK),

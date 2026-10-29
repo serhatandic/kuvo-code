@@ -119,6 +119,14 @@ var scriptIs = (file) => {
 // Packages/Box/src/link/engine/client.ts
 var readEngineFile = () => JSON.parse(fs2.readFileSync(ENGINE_FILE, "utf8"));
 var readBridgeFile = () => JSON.parse(fs2.readFileSync(BRIDGE_FILE, "utf8"));
+function bridgeTarget() {
+  try {
+    const bridge = readBridgeFile();
+    return bridge?.port && bridge?.password && processRuns(bridge.pid, "kuvo-agents") ? bridge : null;
+  } catch {
+    return null;
+  }
+}
 function peerTargets() {
   const targets = [];
   try {
@@ -2433,6 +2441,85 @@ var ALWAYS_ASK_RULES = [
   { action: "edit", resource: "*.env.example", effect: "allow" }
 ];
 
+// Packages/Box/src/link/work/clock.ts
+function zone2() {
+  const name = process.env.KUVO_TZ;
+  if (!name)
+    return;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: name });
+    return name;
+  } catch {
+    return;
+  }
+}
+function wall(at, timeZone = zone2()) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date(at));
+  const part = (type) => Number(parts.find((each) => each.type === type)?.value ?? 0);
+  return { year: part("year"), month: part("month"), day: part("day"), hour: part("hour"), minute: part("minute"), second: part("second") };
+}
+function instant(year, month, day, hour = 0, minute = 0, timeZone = zone2()) {
+  const wanted = Date.UTC(year, month - 1, day, hour, minute);
+  let guess = wanted;
+  for (let tries = 0;tries < 3; tries++) {
+    const seen = wall(guess, timeZone);
+    const shift = wanted - Date.UTC(seen.year, seen.month - 1, seen.day, seen.hour, seen.minute, seen.second);
+    if (!shift)
+      break;
+    guess += shift;
+  }
+  return guess;
+}
+function startOfDay(at) {
+  const now = wall(at);
+  return instant(now.year, now.month, now.day);
+}
+function nextMidnight(at) {
+  const now = wall(at);
+  return instant(now.year, now.month, now.day + 1);
+}
+function isoWeek(year, month, day) {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  const weekday = (date.getUTCDay() + 6) % 7;
+  date.setUTCDate(date.getUTCDate() + 3 - weekday);
+  const first = new Date(Date.UTC(date.getUTCFullYear(), 0, 4));
+  const week = 1 + Math.round(((date.getTime() - first.getTime()) / 86400000 - 3 + (first.getUTCDay() + 6) % 7) / 7);
+  return `${date.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+function periodOf(per, at) {
+  if (per === "goal")
+    return "goal";
+  const { year, month, day } = wall(at);
+  const pad = (number) => String(number).padStart(2, "0");
+  if (per === "month")
+    return `${year}-${pad(month)}`;
+  if (per === "day")
+    return `${year}-${pad(month)}-${pad(day)}`;
+  return isoWeek(year, month, day);
+}
+function periodEnd(per, at) {
+  if (per === "goal")
+    return;
+  const { year, month, day } = wall(at);
+  if (per === "day")
+    return instant(year, month, day + 1);
+  if (per === "month")
+    return instant(year, month + 1, 1);
+  const weekday = (new Date(Date.UTC(year, month - 1, day)).getUTCDay() + 6) % 7;
+  return instant(year, month, day - weekday + 7);
+}
+function timeGiven(value) {
+  if (typeof value === "number")
+    return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string")
+    return null;
+  const local = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::\d{2})?)?$/);
+  if (local)
+    return instant(Number(local[1]), Number(local[2]), Number(local[3]), Number(local[4] ?? 0), Number(local[5] ?? 0));
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? at : null;
+}
+
 // Packages/Box/src/link/work/answers.ts
 import path21 from "node:path";
 
@@ -3138,13 +3225,13 @@ function pastLimit(limits, { depth, working, started, tokens }) {
     return null;
   const ask = " Wait for one to finish, or ask the user to raise it (Edit Bot › Work).";
   if (limits.depth !== undefined && depth > limits.depth)
-    return `The user set your sessions to go ${limits.depth === 1 ? "one level deep" : `${limits.depth} levels deep`} at most, so this one can't start another. Do it in this session, or ask the user.`;
+    return { daily: false, words: `The user set your sessions to go ${limits.depth === 1 ? "one level deep" : `${limits.depth} levels deep`} at most, so this one can't start another. Do it in this session, or ask the user.` };
   if (limits.atOnce !== undefined && working >= limits.atOnce)
-    return `The user set you to ${limits.atOnce} session${limits.atOnce === 1 ? "" : "s"} at once at most, and that many are working.` + ask;
+    return { daily: false, words: `The user set you to ${limits.atOnce} session${limits.atOnce === 1 ? "" : "s"} at once at most, and that many are working.` + ask };
   if (limits.perDay !== undefined && started >= limits.perDay)
-    return `The user set you to ${limits.perDay} new session${limits.perDay === 1 ? "" : "s"} a day at most, and you've started that many today. Ask the user to raise it (Edit Bot › Work), or go on tomorrow.`;
+    return { daily: true, words: `The user set you to ${limits.perDay} new session${limits.perDay === 1 ? "" : "s"} a day at most, and you've started that many today.` };
   if (limits.tokensPerDay !== undefined && tokens >= limits.tokensPerDay)
-    return `Your sessions have used the ${limits.tokensPerDay.toLocaleString("en-US")} tokens a day the user set. Ask the user to raise it (Edit Bot › Work), or go on tomorrow.`;
+    return { daily: true, words: `Your sessions have used the ${limits.tokensPerDay.toLocaleString("en-US")} tokens a day the user set.` };
   return null;
 }
 
@@ -4428,7 +4515,8 @@ function changeKept2(change, file = GOALS_FILE) {
     for (const goal of goals)
       if (botHere(goal.bot) && (!latest.has(goal.bot) || latest.get(goal.bot).proposed <= goal.proposed))
         latest.set(goal.bot, goal);
-    writePrivate(file, JSON.stringify({ goals: [...latest.values()] }, null, 2));
+    const kept = goals.filter((goal) => botHere(goal.bot) && (latest.get(goal.bot) === goal || goal.report && !goal.reportTold && goal.state !== "running"));
+    writePrivate(file, JSON.stringify({ goals: kept }, null, 2));
     return value;
   });
   for (const tell of goalFollowers)
@@ -4448,14 +4536,25 @@ function boxChecks(goal) {
   return checks;
 }
 var shown = (goal) => {
-  const { periods: _, asksSeen: __, limitsSeen: ___, pauseSince: ____, told: _____, reportTold: ______, endTold: _______, phasesDone: ________, ...rest } = goal;
-  return { ...rest, checks: goal.state === "proposed" ? [...boxChecks(goal), ...goal.checks] : goal.checks, alone: sandboxOn() };
+  const { periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, ...rest } = goal;
+  const steps = goal.steps.map((step) => {
+    const paused = goal.state === "running" && step.state !== "done" && step.state !== "skipped" ? goal.paused.find((each) => each.session && step.sessions?.includes(each.session)) : undefined;
+    return paused ? { ...step, state: "paused", ...paused.until ? { resumes: paused.until } : {} } : step;
+  });
+  return { ...rest, steps, checks: goal.state === "proposed" ? [...boxChecks(goal), ...goal.checks] : goal.checks, alone: sandboxOn() };
 };
 function goalPlans(file = GOALS_FILE) {
   const now = Date.now();
-  return readKept2(file).filter((goal) => botHere(goal.bot) && (goal.state === "running" || now - (goal.ended ?? goal.proposed) < SHOWN)).sort((a, b) => b.proposed - a.proposed).map(shown);
+  return latestOf(readKept2(file)).filter((goal) => botHere(goal.bot) && (goal.state === "running" || now - (goal.ended ?? goal.proposed) < SHOWN)).sort((a, b) => b.proposed - a.proposed).map(shown);
 }
 var runningGoal = (bot, file = GOALS_FILE) => bot ? readKept2(file).find((goal) => goal.bot === bot && goal.state === "running") ?? null : null;
+var latestOf = (goals) => {
+  const latest = new Map;
+  for (const goal of goals)
+    if (!latest.has(goal.bot) || latest.get(goal.bot).proposed <= goal.proposed)
+      latest.set(goal.bot, goal);
+  return [...latest.values()];
+};
 function isHere(file = HERE_FILE) {
   try {
     const kept = JSON.parse(fs23.readFileSync(file, "utf8"));
@@ -4463,32 +4562,6 @@ function isHere(file = HERE_FILE) {
   } catch {
     return false;
   }
-}
-function periodOf(per, at) {
-  const date = new Date(at);
-  const pad = (number) => String(number).padStart(2, "0");
-  if (per === "goal")
-    return "goal";
-  if (per === "month")
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
-  if (per === "day")
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-  const day = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  day.setDate(day.getDate() + 3 - (day.getDay() + 6) % 7);
-  const first = new Date(day.getFullYear(), 0, 4);
-  const week = 1 + Math.round(((day.getTime() - first.getTime()) / DAY - 3 + (first.getDay() + 6) % 7) / 7);
-  return `${day.getFullYear()}-W${pad(week)}`;
-}
-function periodEnd(per, at) {
-  const date = new Date(at);
-  if (per === "goal")
-    return;
-  if (per === "day")
-    return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime();
-  if (per === "month")
-    return new Date(date.getFullYear(), date.getMonth() + 1, 1).getTime();
-  const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate() - (date.getDay() + 6) % 7);
-  return new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 7).getTime();
 }
 function freshPeriods(goal, now = Date.now()) {
   let changed = false;
@@ -4527,13 +4600,19 @@ function stepGiven(each) {
   const said = text(each.text, 300);
   if (!said)
     return null;
-  return { text: said, ...text(each.phase, 80) ? { phase: text(each.phase, 80) } : {} };
+  const after = Array.isArray(each.after) ? each.after.filter((one) => Number.isInteger(one) && one >= 1) : [];
+  return { text: said, ...text(each.phase, 80) ? { phase: text(each.phase, 80) } : {}, ...after.length ? { after } : {} };
 }
+var keptSteps = (given, from = 0) => given.filter((each) => Boolean(each)).map((each, at) => {
+  const { after, ...rest } = each;
+  const ids = (after ?? []).filter((number) => number - 1 < from + at).map((number) => `s${number}`);
+  return { id: `s${from + at + 1}`, ...rest, ...ids.length ? { after: ids } : {}, state: "todo" };
+});
 function endGiven(value, now = Date.now()) {
   if (value === undefined || value === null || value === "")
     return;
-  const at = typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : NaN;
-  return Number.isFinite(at) && at > now ? at : null;
+  const at = timeGiven(value);
+  return at !== null && at > now ? at : null;
 }
 function proposeGoal(bot, given, file = GOALS_FILE) {
   const goal = text(given.goal, 2000);
@@ -4577,8 +4656,9 @@ function proposeGoal(bot, given, file = GOALS_FILE) {
       name: bot.name,
       session: bot.session,
       goal,
+      ...text(given.title, 80) ? { title: text(given.title, 80) } : {},
       state: "proposed",
-      steps: steps.map((each, at) => ({ id: `s${at + 1}`, ...each, state: "todo" })),
+      steps: keptSteps(steps),
       checks,
       spend,
       public: publics,
@@ -4605,8 +4685,10 @@ function proposeGoal(bot, given, file = GOALS_FILE) {
 }
 async function answerGoal(id, given, targets, file = GOALS_FILE) {
   const action = given.action;
+  if (action === "change" || action === "clear")
+    return changeGoal(id, action, given, targets, file);
   if (action !== "start" && action !== "decline" && action !== "stop")
-    return { refused: { status: 400, message: "Say start, decline or stop (action)." } };
+    return { refused: { status: 400, message: "Say start, change, clear, decline or stop (action)." } };
   const before = readKept2(file).find((goal) => goal.id === id);
   if (!before || !botHere(before.bot))
     return { refused: { status: 404, message: "There's no such goal here." } };
@@ -4644,14 +4726,7 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
       goal.digest = given.digest;
     if (ends !== undefined)
       goal.ends = ends;
-    if (Array.isArray(given.spend)) {
-      goal.spend = goal.spend.map((line, at) => {
-        const yours = given.spend instanceof Array ? given.spend[at] : null;
-        if (!isObject(yours))
-          return line;
-        return { ...line, ...typeof yours.cap === "number" && yours.cap > 0 ? { cap: yours.cap } : {}, ...PERIODS.includes(yours.per) ? { per: yours.per } : {} };
-      });
-    }
+    goal.spend = capsGiven(goal.spend, given.spend);
     freshPeriods(goal);
     return goal;
   }, file);
@@ -4669,18 +4744,72 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
   }
   return { goal: shown(changed) };
 }
+function capsGiven(lines, given) {
+  if (!Array.isArray(given))
+    return lines;
+  return lines.map((line, at) => {
+    const yours = given[at];
+    if (!isObject(yours))
+      return line;
+    const next = { ...line, ...typeof yours.cap === "number" && yours.cap > 0 ? { cap: yours.cap } : {}, ...PERIODS.includes(yours.per) ? { per: yours.per } : {} };
+    if (next.spent < next.cap)
+      delete next.until;
+    return next;
+  });
+}
+async function changeGoal(id, action, given, targets, file) {
+  const ends = action === "change" ? endGiven(given.ends) : undefined;
+  if (ends === null)
+    return { refused: { status: 400, message: "The end (ends) is a date and time to come." } };
+  const changed = changeKept2((all) => {
+    const goal = all.find((each) => each.id === id);
+    if (!goal)
+      return { status: 404, message: "There's no such goal here." };
+    if (goal.state !== "running")
+      return { status: 400, message: "That goal isn't running." };
+    if (action === "clear") {
+      if (typeof given.waiting !== "string" || !goal.waiting.some((each) => each.id === given.waiting))
+        return { status: 404, message: "That isn't waiting any more." };
+      goal.waiting = goal.waiting.filter((each) => each.id !== given.waiting);
+      return goal;
+    }
+    if (isObject(given.public))
+      goal.public = goal.public.map((each) => ({ ...each, on: typeof given.public[each.id] === "boolean" ? given.public[each.id] : each.on }));
+    if (typeof given.wake === "boolean")
+      goal.wake = given.wake;
+    if (DIGESTS.includes(given.digest))
+      goal.digest = given.digest;
+    if (ends !== undefined)
+      goal.ends = ends;
+    if (given.ends === null)
+      delete goal.ends;
+    goal.spend = capsGiven(goal.spend, given.spend);
+    return goal;
+  }, file);
+  if (!("id" in changed))
+    return { refused: changed };
+  noteWorkChanged(changed.bot);
+  if (action === "change")
+    await tellBot2(changed, `[Goal changed] The user changed the goal's limits. ${changed.spend.length ? `What you may spend now: ${changed.spend.map((each) => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}. ` : ""}Switched on: ${changed.public.filter((each) => each.on).map((each) => `"${each.text}"`).join(", ") || "nothing"}.${changed.ends ? ` It ends at ${resetTime(changed.ends)}.` : ""}`, targets);
+  return { goal: shown(changed) };
+}
 var loopCondition = (goal) => `${goal.goal}
 
 It's met once the work is done and ${goal.name} has given its report with finish_goal, or the user stops it.`;
-async function setGoalLoop(goal, condition, targets) {
-  const bridge = targets()[1];
+async function setGoalLoop(goal, condition, _targets, file = GOALS_FILE) {
+  const bridge = bridgeTarget();
   if (!bridge)
-    return;
+    return false;
   const at = `/api/kuvo/goals/${encodeURIComponent(goal.session)}`;
-  if (condition)
-    await call(bridge, "PUT", at, { condition: condition.slice(0, 4000), long: true }).catch(() => {});
-  else
-    await call(bridge, "DELETE", at).catch(() => {});
+  const done = condition ? await call(bridge, "PUT", at, { condition: condition.slice(0, 4000), long: true }).then(() => true, () => false) : await call(bridge, "DELETE", at).then(() => true, (error) => error?.status === 404);
+  if (done) {
+    changeKept2((all) => {
+      const kept = all.find((each) => each.id === goal.id);
+      if (kept)
+        kept.loop = Boolean(condition);
+    }, file);
+  }
+  return done;
 }
 function startWords(goal) {
   const on = goal.public.filter((each) => each.on).map((each) => `"${each.text}"`);
@@ -4744,14 +4873,9 @@ function pauseGoal(bot, pause, file = GOALS_FILE) {
     if (!goal)
       return false;
     const key = pause.session ?? "bot";
+    if (!goal.paused.length)
+      goal.pausedSince = Date.now();
     goal.paused = [...goal.paused.filter((each) => (each.session ?? "bot") !== key), pause];
-    goal.pauseSince = { ...goal.pauseSince ?? {}, [key]: goal.pauseSince?.[key] ?? Date.now() };
-    for (const step of goal.steps)
-      if (step.state === "doing" && (!pause.session || step.sessions?.includes(pause.session))) {
-        step.state = "paused";
-        if (pause.until)
-          step.resumes = pause.until;
-      }
     return true;
   }, file);
   if (done)
@@ -4794,7 +4918,9 @@ function goalProgress(bot, given, file = GOALS_FILE) {
   for (const each of spent)
     if (!isObject(each) || !text(each.what, 200) || typeof each.amount !== "number" || !(each.amount > 0))
       return { refused: "What's spent is {what, amount}." };
+  const resolved = (Array.isArray(given.resolved) ? given.resolved : []).map((each) => text(each, 300)).filter((each) => Boolean(each));
   const notes = [];
+  const unplanned = [];
   changeKept2((all) => {
     const goal = all.find((each) => each.bot === bot && each.state === "running");
     if (!goal)
@@ -4820,8 +4946,8 @@ function goalProgress(bot, given, file = GOALS_FILE) {
       goal.steps[at] = next;
       notes.push(`step ${at + 1} ${next.state}`);
     }
-    for (const step of added) {
-      goal.steps.push({ id: `s${goal.steps.length + 1}`, ...step, state: "todo" });
+    for (const step of keptSteps(added, goal.steps.length)) {
+      goal.steps.push(step);
       notes.push(`step ${goal.steps.length} added`);
     }
     if (Array.isArray(given.watching)) {
@@ -4829,10 +4955,19 @@ function goalProgress(bot, given, file = GOALS_FILE) {
       notes.push(goal.watching.length ? `watching ${goal.watching.length}` : "watching nothing");
     }
     freshPeriods(goal);
+    if (resolved.length) {
+      const before = goal.waiting.length;
+      goal.waiting = goal.waiting.filter((item) => item.kind === "ask" || !resolved.some((each) => each === item.id || each.toLowerCase() === item.text.toLowerCase()));
+      if (goal.waiting.length < before)
+        notes.push(`${before - goal.waiting.length} no longer waiting`);
+    }
+    delete goal.idleSince;
+    goal.nudges = 0;
     for (const each of spent) {
       const line = goal.spend.find((line) => line.what.toLowerCase() === String(each.what).trim().toLowerCase());
       if (!line) {
-        notes.push(`${String(each.what)} isn't one of the plan's spend lines: it waits for the user`);
+        unplanned.push(String(each.what).trim());
+        notes.push(`${String(each.what)} isn't one of the plan's spend lines: it's kept as waiting for the user`);
         continue;
       }
       line.spent += each.amount;
@@ -4841,6 +4976,8 @@ function goalProgress(bot, given, file = GOALS_FILE) {
       notes.push(`${line.what}: ${line.spent} of ${line.cap} ${line.currency}${line.until ? `, the cap is reached until ${resetTime(line.until)}` : line.per === "goal" && line.spent >= line.cap ? ", the cap is reached" : ""}`);
     }
   }, file);
+  for (const what of unplanned)
+    addWaiting(bot, { kind: "outside", text: `Spent on ${what}, which isn't in the plan` }, file);
   if (isObject(given.waiting)) {
     const url = https(given.waiting.url);
     addWaiting(bot, { kind: given.waiting.kind, text: text(given.waiting.text, 300), ...text(given.waiting.detail, 500) ? { detail: text(given.waiting.detail, 500) } : {}, ...url ? { url } : {} }, file);
@@ -4877,7 +5014,7 @@ function maySpend(bot, given, file = GOALS_FILE) {
   if (amount <= left)
     return { said: `Yes: ${amount} ${line.currency} fits (${left} ${line.currency} left${line.per === "goal" ? "" : ` this ${line.per}`}). Report it with goal_progress spent once it's paid.` };
   const end = periodEnd(line.per, Date.now());
-  return { said: `No: only ${Math.max(0, left)} ${line.currency} is left${end ? ` until ${resetTime(end)}, when it starts again: carry on with what doesn't spend, and it can wait till then` : ": keep it as waiting for the user, who can raise the cap"}.` };
+  return { said: `No: only ${Math.max(0, left)} ${line.currency} is left${end ? ` until ${resetTime(end)}, when it starts again: carry on with what doesn't spend, and it can wait till then` : ": keep it as waiting for the user, who can raise the cap on the goal"}.` };
 }
 async function finishGoal(bot, given, targets, file = GOALS_FILE) {
   const report = text(given.report, 6000);
@@ -4913,24 +5050,28 @@ async function failedTurn(target, session, signal) {
     if (message.outcome !== "failed")
       return null;
     const error = isObject(message.error) ? String(message.error.message ?? "") : "";
-    return { idle: String(message.id ?? ""), error };
+    const at = isObject(message.time) && typeof message.time.created === "number" ? message.time.created : null;
+    return { idle: String(message.id ?? ""), at, error };
   }
   return null;
 }
-function digestWords(goal, since, now) {
-  const doneSince = goal.steps.filter((step) => step.state === "done").length;
-  const day = Math.max(1, Math.floor((now - (goal.started ?? now)) / DAY) + 1);
-  const parts = [`${doneSince} of ${goal.steps.length} steps done`];
+function digestWords(goal, now) {
+  const done = goal.steps.filter((step) => step.state === "done" || step.state === "skipped").length;
+  const since = Math.max(0, done - (goal.doneAtDigest ?? 0));
+  const day = Math.max(1, Math.floor((now - (goal.started ?? now)) / DAY));
+  const parts = [`${since} ${since === 1 ? "step" : "steps"} done (${done} of ${goal.steps.length} in all)`];
   if (goal.waiting.length)
     parts.push(`${goal.waiting.length} ${goal.waiting.length === 1 ? "waits" : "wait"} for you`);
-  if (goal.waited > 0) {
-    const hours = Math.round(goal.waited / 3600000);
-    parts.push(hours >= 1 ? `waited ${hours} h at limits` : `waited ${Math.max(1, Math.round(goal.waited / 60000))} min at limits`);
+  const waited = goal.waited + (goal.paused.length && goal.pausedSince ? now - goal.pausedSince : 0);
+  if (waited > 0) {
+    const hours = Math.round(waited / 3600000);
+    parts.push(hours >= 1 ? `waited ${hours} h at limits in all` : `waited ${Math.max(1, Math.round(waited / 60000))} min at limits in all`);
   }
   if (goal.paused.length)
     parts.push(`paused: ${goal.paused.map((each) => `${each.why}${each.until ? ` until ${resetTime(each.until)}` : ""}`).join(", ")}`);
-  return `${since ? `Day ${day}` : "So far"}: ${parts.join(", ")}.`;
+  return `${goal.digest === "week" ? `Week ${Math.max(1, Math.floor(day / 7))}` : `Day ${day}`}: ${parts.join(", ")}.`;
 }
+var NUDGE_AFTER = [10, 30, 60, 120, 240, 480, 720].map((minutes) => minutes * 60000);
 async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.now(), signal } = {}) {
   if (here) {
     try {
@@ -4958,16 +5099,37 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
       if (ended) {
         noteWorkChanged(goal.bot);
         await stopBotWork(goal.bot, targets(), signal).catch(() => 0);
-        await setGoalLoop(goal, null, targets);
       }
     }
+  }
+  const bridge = bridgeTarget();
+  for (const goal of readKept2(file).filter((each) => botHere(each.bot) && each.state !== "proposed" && each.state !== "declined")) {
+    if (goal.state !== "running") {
+      if (goal.loop)
+        await setGoalLoop(goal, null, targets, file);
+      continue;
+    }
+    if (!bridge)
+      continue;
+    const loop = await call(bridge, "GET", `/api/kuvo/goals/${encodeURIComponent(goal.session)}`, undefined, signal).then((data) => isObject(data) ? data : null, () => null);
+    if (!loop) {
+      await setGoalLoop(goal, loopCondition(goal), targets, file);
+      continue;
+    }
+    const atLimit = loop.state === "paused" && loop.pausedBy === "limit" && typeof loop.resumesAt === "number";
+    const shownPause = goal.paused.find((each) => each.session === goal.session);
+    if (atLimit && shownPause?.until !== loop.resumesAt)
+      pauseGoal(goal.bot, { why: "the model's limit", until: loop.resumesAt, session: goal.session }, file);
+    if (!atLimit && shownPause)
+      unpause(goal.id, goal.session, now, file);
   }
   const running = readKept2(file).filter((goal) => goal.state === "running" && botHere(goal.bot));
   const sessions = running.length ? await workSessions(targets(), signal).catch(() => []) : [];
   const working = running.length ? await workingNow(targets(), signal).catch(() => new Set) : new Set;
-  keepAwake(running.some((goal) => working.has(goal.session) || ofBot(goal.bot, sessions).some((each) => working.has(each.data.id))));
+  const workOf = (goal) => ofBot(goal.bot, sessions).filter((each) => (each.data.time?.created ?? 0) >= (goal.started ?? goal.proposed) - 60000);
+  keepAwake(running.some((goal) => working.has(goal.session) || workOf(goal).some((each) => working.has(each.data.id))));
   for (const goal of running) {
-    const work = ofBot(goal.bot, sessions);
+    const work = workOf(goal);
     const own = await placeOfSession(goal.session, targets()).catch(() => null);
     const publishing = !goal.public.some((step) => step.on);
     for (const place of [...own ? [{ target: own.target, id: goal.session, rules: own.data.permissions }] : [], ...work.map((each) => ({ target: each.target, id: each.data.id, rules: each.data.permissions }))]) {
@@ -4983,54 +5145,80 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
       if (!failed || limitsSeen[each.data.id] === failed.idle || !isLimit(failed.error))
         continue;
       limitsSeen[each.data.id] = failed.idle;
-      pauseGoal(goal.bot, { why: limitName(each.data.model), until: resetsIn(failed.error, now) ?? now + UNKNOWN_RESET, session: each.data.id }, file);
+      pauseGoal(goal.bot, { why: limitName(each.data.model), until: resetsIn(failed.error, failed.at ?? now) ?? now + UNKNOWN_RESET, session: each.data.id }, file);
     }
     const kept = readKept2(file).find((each) => each.id === goal.id);
     for (const paused of kept?.paused ?? []) {
+      if (paused.session === goal.session)
+        continue;
+      if (paused.session) {
+        const place = await placeOfSession(paused.session, targets()).catch(() => {
+          return;
+        });
+        if (place === null || place?.data.metadata?.kuvo?.archived === true) {
+          unpause(goal.id, paused.session, now, file);
+          continue;
+        }
+        if (!paused.until || now < paused.until || !place)
+          continue;
+        const carried = await asked(place.target, "POST", `api/session/${encodeURIComponent(paused.session)}/prompt`, { id: messageID(), text: `[Limit reset] ${paused.why} has reset. Carry on where you stopped.`, delivery: "queue" }).then(() => true, () => false);
+        if (carried)
+          unpause(goal.id, paused.session, now, file);
+        continue;
+      }
       if (!paused.until || now < paused.until)
         continue;
-      const key = paused.session ?? "bot";
-      const carried = paused.session ? await placeOfSession(paused.session, targets()).catch(() => null).then((place) => place ? asked(place.target, "POST", `api/session/${encodeURIComponent(paused.session)}/prompt`, { id: messageID(), text: `[Limit reset] ${paused.why} has reset. Carry on where you stopped.`, delivery: "queue" }).then(() => true, () => false) : false) : await tellBot2(goal, `[Limit reset] ${paused.why} has reset. Carry on with the goal.`, targets);
-      if (!carried)
-        continue;
-      changeKept2((all) => {
-        const live = all.find((each) => each.id === goal.id);
-        if (!live)
-          return;
-        live.paused = live.paused.filter((each) => (each.session ?? "bot") !== key);
-        live.waited += Math.max(0, now - (live.pauseSince?.[key] ?? now));
-        if (live.pauseSince)
-          delete live.pauseSince[key];
-        for (const step of live.steps)
-          if (step.state === "paused" && (!paused.session || step.sessions?.includes(paused.session) || !step.sessions?.length)) {
-            step.state = "doing";
-            delete step.resumes;
-          }
-      }, file);
-      noteWorkChanged(goal.bot);
+      if (await tellBot2(goal, `[Limit reset] ${paused.why} has reset. Carry on with the goal.`, targets))
+        unpause(goal.id, undefined, now, file);
     }
     const asksSeen = {};
     const open = new Set;
-    for (const each of work) {
-      const { permissions, questions } = await asksIn(each.target, each.data.id, signal).catch(() => ({ permissions: [], questions: [] }));
+    const askers = [...work.map((each) => ({ target: each.target, id: each.data.id, title: each.data.title || "New Session" })), ...own ? [{ target: own.target, id: goal.session, title: goal.name }] : []];
+    for (const each of askers) {
+      const { permissions, questions } = await asksIn(each.target, each.id, signal).catch(() => ({ permissions: [], questions: [] }));
       for (const ask of [...permissions.map((one) => ({ id: one.id, what: permissionWords(one).replace(/\.$/, "") })), ...questions.map((one) => ({ id: one.id, what: `Asks: ${one.text}` }))]) {
-        const key = `${each.data.id}:${ask.id}`;
+        const key = `${each.id}:${ask.id}`;
         open.add(key);
         asksSeen[key] = kept?.asksSeen?.[key] ?? now;
-        if (now - asksSeen[key] >= ASK_SETTLES)
-          addWaiting(goal.bot, { kind: "ask", text: `${each.data.title || "New Session"}: ${ask.what}`, session: each.data.id }, file, `ask:${key}`);
+        if (each.id === goal.session || now - asksSeen[key] >= ASK_SETTLES)
+          addWaiting(goal.bot, { kind: "ask", text: `${each.title}: ${ask.what}`, session: each.id }, file, `ask:${key}`);
       }
     }
+    const live = readKept2(file).find((each) => each.id === goal.id);
+    const atWork = working.has(goal.session) || work.some((each) => working.has(each.data.id));
+    const left = (live?.steps ?? []).filter((step) => step.state !== "done" && step.state !== "skipped");
+    const pausedSessions = new Set((live?.paused ?? []).map((each) => each.session).filter(Boolean));
+    const canGoOn = !(live?.paused ?? []).some((each) => !each.session || each.session === goal.session) && left.some((step) => step.state !== "waiting" && !(step.sessions?.length && step.sessions.every((id) => pausedSessions.has(id))));
+    let nudge = false;
     changeKept2((all) => {
-      const live = all.find((each) => each.id === goal.id);
-      if (!live)
+      const kept = all.find((each) => each.id === goal.id);
+      if (!kept)
         return;
-      live.asksSeen = asksSeen;
-      live.limitsSeen = limitsSeen;
-      live.waiting = live.waiting.filter((item) => item.kind !== "ask" || open.has(item.id.replace(/^ask:/, "")));
-      if (freshPeriods(live, now))
-        noteWorkChanged(live.bot);
+      kept.asksSeen = asksSeen;
+      kept.limitsSeen = limitsSeen;
+      kept.waiting = kept.waiting.filter((item) => item.kind !== "ask" || open.has(item.id.replace(/^ask:/, "")));
+      if (freshPeriods(kept, now))
+        noteWorkChanged(kept.bot);
+      if (atWork || !canGoOn) {
+        if (atWork) {
+          delete kept.idleSince;
+          kept.nudges = 0;
+        }
+        return;
+      }
+      if (kept.idleSince === undefined) {
+        kept.idleSince = now;
+        return;
+      }
+      const wait = NUDGE_AFTER[Math.min(kept.nudges ?? 0, NUDGE_AFTER.length - 1)];
+      if (now - kept.idleSince < wait)
+        return;
+      kept.idleSince = now;
+      kept.nudges = (kept.nudges ?? 0) + 1;
+      nudge = true;
     }, file);
+    if (nudge)
+      await tellBot2(goal, "[Goal] Nothing of the goal is at work now. Carry on with the next step that doesn't wait on the user (goal_progress shows the plan as it stands). If all that's left waits on them, say so in a line and stop until they answer. Once it's all done, end with finish_goal.", targets);
   }
   for (const goal of readKept2(file).filter((each) => botHere(each.bot) && each.state !== "proposed" && each.state !== "declined")) {
     const told = new Set(goal.told ?? []);
@@ -5048,15 +5236,17 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
       const done = phases.filter((phase) => goal.steps.filter((step) => step.phase === phase).every((step) => step.state === "done" || step.state === "skipped"));
       const milestone = goal.digest === "milestones" && done.some((phase) => !(goal.phasesDone ?? []).includes(phase));
       if (every && now - last >= every || milestone) {
-        const words = `${milestone ? `${done.filter((phase) => !(goal.phasesDone ?? []).includes(phase)).join(", ")} done. ` : ""}${digestWords(goal, last, now)}`;
-        if (tell({ title: goal.goal.length > 60 ? `${goal.goal.slice(0, 59)}…` : goal.goal, subtitle: goal.name, body: words, category: "report", thread: goal.session, data: { session: goal.session, quiet: "1" } })) {
+        const words = `${milestone ? `${done.filter((phase) => !(goal.phasesDone ?? []).includes(phase)).join(", ")} done. ` : ""}${digestWords(goal, now)}`;
+        const title = goal.title ?? (goal.goal.length > 60 ? `${goal.goal.slice(0, 59)}…` : goal.goal);
+        if (tell({ title, subtitle: goal.name, body: words, category: "report", thread: goal.session, data: { session: goal.session, quiet: "1" } })) {
           digest = { at: now, text: words };
           phasesDone = done;
         }
       }
     }
     if (goal.state !== "running" && !reportTold && goal.report) {
-      reportTold = tell({ title: goal.state === "done" ? `${goal.name} finished its goal` : `${goal.name}'s goal ended`, subtitle: goal.waiting.length ? `${goal.waiting.length} ${goal.waiting.length === 1 ? "thing needs" : "things need"} you` : undefined, body: goal.report, category: "report", thread: goal.session, data: { session: goal.session } });
+      const title = goal.title ?? goal.name;
+      reportTold = tell({ title: goal.state === "done" ? `${goal.name} finished ${goal.title ?? "its goal"}` : `${goal.name}'s goal ended`, subtitle: goal.waiting.length ? `${goal.waiting.length} ${goal.waiting.length === 1 ? "thing needs" : "things need"} you` : title === goal.name ? undefined : title, body: goal.report, category: "report", thread: goal.session, data: { session: goal.session } });
     }
     if (told.size !== (goal.told ?? []).length || reportTold !== (goal.reportTold === true) || digest) {
       changeKept2((all) => {
@@ -5065,8 +5255,10 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
           return;
         kept.told = [...told];
         kept.reportTold = reportTold;
-        if (digest)
+        if (digest) {
           kept.lastDigest = digest;
+          kept.doneAtDigest = kept.steps.filter((step) => step.state === "done" || step.state === "skipped").length;
+        }
         if (phasesDone)
           kept.phasesDone = phasesDone;
       }, file);
@@ -5074,6 +5266,24 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
         noteWorkChanged(goal.bot);
     }
   }
+}
+function unpause(id, session, now, file) {
+  const done = changeKept2((all) => {
+    const kept = all.find((each) => each.id === id);
+    if (!kept)
+      return null;
+    const before = kept.paused.length;
+    kept.paused = kept.paused.filter((each) => each.session !== session);
+    if (kept.paused.length === before)
+      return null;
+    if (!kept.paused.length) {
+      kept.waited += Math.max(0, now - (kept.pausedSince ?? now));
+      delete kept.pausedSince;
+    }
+    return kept.bot;
+  }, file);
+  if (done)
+    noteWorkChanged(done);
 }
 async function watchGoals(tell, targets, { signal, every = 30000, here } = {}) {
   let soon = false;
@@ -8627,6 +8837,7 @@ var GOAL_STEP = object({
   "progress?": number,
   "note?": string,
   "phase?": string,
+  "after?": list(string),
   "sessions?": list(string),
   "resumes?": number
 });
@@ -8654,6 +8865,7 @@ var GOAL_PLAN = object({
   name: string,
   session: string,
   goal: string,
+  "title?": string,
   state: words("proposed", "running", "done", "stopped", "declined"),
   steps: list(GOAL_STEP),
   checks: list(GOAL_CHECK),
@@ -13621,17 +13833,16 @@ async function startSession(given, by, place) {
       const targets = [engine, bridge].filter((each) => Boolean(each));
       const work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
       const working = await workingNow(targets, place.signal);
-      const midnight = new Date().setHours(0, 0, 0, 0);
+      const midnight = startOfDay(Date.now());
       const today = work.filter((each) => (each.data.time?.created ?? 0) >= midnight);
       const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
       const past = pastLimit(limits, { depth, working: work.filter((each) => working.has(each.data.id)).length, started: today.length, tokens });
-      if (past && goal && (past.includes(" a day ") || past.includes("tokens a day"))) {
-        const midnight = new Date(new Date().setHours(24, 0, 0, 0)).getTime();
-        pauseGoal(bot.bot, { why: "your daily limit", until: midnight });
-        return no(429, `${past.replace(/ Ask the user to raise it \(Edit Bot › Work\), or go on tomorrow\.$/, "")} Your goal waits for it to reset at midnight, and you're woken then: carry on meanwhile with what doesn't start a session.`);
+      if (past?.daily && goal) {
+        pauseGoal(bot.bot, { why: "your daily limit", until: nextMidnight(Date.now()) });
+        return no(429, `${past.words} New sessions for your goal wait for it to reset at midnight, and you're woken then: carry on meanwhile with what doesn't start a session.`);
       }
       if (past)
-        return no(429, past);
+        return no(429, past.daily ? `${past.words} Ask the user to raise it (Edit Bot › Work), or go on tomorrow.` : past.words);
     }
   }
   const kind = bot ? "botSessions" : "sessions";
@@ -15152,7 +15363,7 @@ import fs62 from "node:fs";
 import path64 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.111";
+var BRIDGE_VERSION = "0.9.112";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -15743,7 +15954,7 @@ async function botWork(bot, context) {
     sessions.push(...await Promise.all(shown.slice(at, at + 8).map((each) => describeWork(each, working, { replies: true, signal: signal ?? undefined }))));
   }
   const answered = work.flatMap((each) => answersOn(each.data.metadata).map((answer) => ({ ...answer, session: each.data.id }))).sort((a, b) => b.at - a.at).slice(0, 100);
-  const midnight = new Date().setHours(0, 0, 0, 0);
+  const midnight = startOfDay(Date.now());
   const today = work.filter((each) => (each.data.time?.created ?? 0) >= midnight);
   const cost = today.reduce((sum, each) => sum + (typeof each.data.cost === "number" ? each.data.cost : 0), 0);
   return {
