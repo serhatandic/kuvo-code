@@ -1958,6 +1958,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `skills.trash` | `kuvo/skill-trash…`: Recently Deleted, and restoring from it |
 | `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.113) |
 | `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
+| `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.114) |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
@@ -2551,7 +2552,7 @@ and as a box starts.
 
 ### Sandbox
 
-Each box runs its agents' commands in a sandbox (`sandbox` in `features`, bridge 0.9.113) wherever
+Each box runs its agents' commands in a sandbox (`sandbox` in `features`, bridge 0.9.113; its asks, `sandbox.asks`, 0.9.114) wherever
 it can, with no switch: the way out is per command (the card that asks you about one it refused).
 On, each command the engine runs (an agent's shell tool, and yours with `!`)
 writes only in its conversation's folder, that folder's git repository (a real one: a `.git` that's
@@ -2675,6 +2676,71 @@ it's empty.
   without `sandbox.check` in its features gives none of these; without `sandbox`, it has no sandbox
   (an older Kuvo Code, to update).
 - `POST kuvo/sandbox/check` → the state, after setting it up and checking it again.
+
+#### Asks
+
+When the sandbox stops a command a task needs, the agent asks with its tool `sandbox_ask` (`command`,
+`why`, and what it printed, `error`; `timeout`, how long it may run, 300 seconds unless it says, at
+most 600). Every client is asked; on Allow Once or Always for This, **the box runs that one command
+itself**, outside the sandbox: with your login shell (`-lc`), in the conversation's folder (the
+engine's record of it, never the command's), with the box's environment but without the passwords
+and secrets of Kuvo Code's own processes, and hands back what it printed (the last 64 KB) and how it ended. The
+agent's text starts `Ran outside the sandbox · Allowed once` or `· Always for this`; on Don't Allow,
+`The user said no: …`, and nothing runs. An ask nobody answers in 15 minutes counts as no. The agent
+never lets a command out itself, and no tool answers an ask (a bot neither): only a client.
+
+The tool is the box's, so an agent has it on every box (`sandbox.asks`): this Mac's tool server and a
+machine's (`kuvo-browser.js mcp`, through `box route`) list what `GET kuvo/sandbox/tools` gives (only
+while the sandbox is `on`) and pass a call to `POST kuvo/sandbox/tools` `{session, name, arguments}`
+→ `{text, isError}`, which, as the vault's, the box carries out only while that conversation is
+making that call. The asks, the tool and the answers live in the box's long-running process, as the
+vault does (`run/vault.sock`); another passes them on.
+
+- `GET kuvo/sandbox/asks` → `{asks: [ask]}`, oldest first; `kuvo/sandbox/asks/events`, NDJSON, the
+  same at once and on every change. An ask: `{id, at, session?, sessionName?, bot?, botName?,
+  project, command, why, stopped?, error?, always?, machine?}`. `session` is the conversation's root
+  (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
+  that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,
+  `job`, `app` or `other`; `path`, the file, folder or address). `always`: what Always for This would
+  keep, `{kind: "write", path}` (the one place it was stopped writing, when it's one that may be
+  given, below) or `{kind: "outside", prefix}` (the command's first words, for a simple command);
+  without it, the command can only be allowed once. `machine`: the machine's name, on a machine.
+- `POST kuvo/sandbox/asks/<id>` `{answer: "once" | "always" | "no"}` → `200`, `404` for one that
+  isn't open, `400` for another answer. `always` without `always` in the ask counts as once.
+- Each open ask is also a notice to your phones (as the vault's are): `<who> wants to run a command
+  outside the sandbox`, the command and why, `category` `ask`, `data.sandboxAsk` its id.
+
+On macOS the launcher tags each command's refusals in the system's log
+(`kuvo-sandbox <session> <first 16 hex of the command's SHA-256>`, as `sandbox-exec`'s message), and
+the box reads them for `stopped` (`log show`, the last 3 minutes). Linux's Landlock logs nothing, so
+there an ask has only what the agent says (`error`), and `always` is a command's first words.
+
+#### Also Allowed
+
+What you let a project's commands do beyond the sandbox, from Always for This or added in Settings,
+kept in the box's own `box/sandbox-allowed.json`, which no command can write. A rule:
+`{id, project, kind, path?, prefix?, at, by?}` (`project`: the folder's real path; `by`: `Mac` or
+the phone's name).
+
+- `write`, a folder (or file) its commands write in the sandbox (at most 8 a project). The launcher
+  reads a project's as each command starts, from `run/fence/allowed/<sum>` (one path a line; `sum`,
+  the first 32 hex of the SHA-256 of the project's real path, as the launcher names its temporary
+  folder). Never your home folder or the whole disk, a folder of Kuvo Code's, a secret or a folder
+  that holds one, nor what runs later outside the sandbox (your shells' startup files, SSH's and
+  GnuPG's folders, git's settings, the coding agents' settings folders, `~/.local/bin`, `~/bin`,
+  `Library/LaunchAgents` and the like, and the places the sandbox already keeps read-only), in your
+  account's own home whatever `HOME` says: those `400`, and can only be allowed once.
+- `outside`, a command that runs outside the sandbox without asking, by its first words: its program,
+  and the next word when it isn't an option (`npm install`, `./scripts/setup.sh`). Only a simple
+  command matches: nothing chained, piped or redirected, no quotes, no `$(…)`, no `VAR=` before it.
+  A program that runs whatever it's given (`sh`, `env`, `node`, `python`, `npx`, `open`, `sudo` and
+  the like) is never allowed by its name alone.
+
+- `GET kuvo/sandbox/allowed[?project=<folder>]` → `{allowed: [rule]}`, every project's without one.
+- `POST kuvo/sandbox/allowed` `{project, kind: "write", path}` or `{project, kind: "outside", prefix}`
+  → `{allowed}`, that project's; `400` with `message` for one that can't be given. The same rule again
+  is the one there.
+- `DELETE kuvo/sandbox/allowed/<id>` → `{allowed}`, that project's; `404` for one that isn't there.
 
 ### Paired phones
 

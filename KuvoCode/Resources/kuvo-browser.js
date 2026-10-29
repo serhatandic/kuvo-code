@@ -2030,7 +2030,8 @@ function boxRoute(request, { timeout = 30_000, cancelled = () => false } = {}) {
   });
 }
 
-/// One of the vault's routes on this machine's box (PROTOCOL.md, "Vault"): `{status, value}`, or
+/// One of the vault's or the sandbox's routes on this machine's box (PROTOCOL.md, "Vault",
+/// "Sandbox"): `{status, value}`, or
 /// null when its script didn't answer. Its process stops with the tool call, and waits as long as
 /// the box may (one that asks you waits for you).
 function vaultRoute(request, call, timeout = 60_000) {
@@ -2083,6 +2084,16 @@ async function vaultTools() {
   const answer = await vaultRoute({ method: "GET", path: "kuvo/vault/tools" }, null, 15_000);
   if (answer?.status === 200 && Array.isArray(answer.value?.tools)) vaultToolList = answer.value.tools;
   return vaultToolList ?? [];
+}
+
+/// The sandbox's way out (`sandbox_ask`), as this machine's box lists it while its commands run in
+/// the sandbox: kept once it's listed, asked again while it isn't.
+let sandboxToolList = null;
+async function sandboxTools() {
+  if (sandboxToolList) return sandboxToolList;
+  const answer = await vaultRoute({ method: "GET", path: "kuvo/sandbox/tools" }, null, 15_000);
+  if (answer?.status === 200 && Array.isArray(answer.value?.tools) && answer.value.tools.length) sandboxToolList = answer.value.tools;
+  return sandboxToolList ?? [];
 }
 
 /// What the vault fills on the page `p` (at `origin`) for this conversation: `{status, value}` (200
@@ -2640,10 +2651,11 @@ async function mcp() {
       case "ping":
         return reply({});
       case "tools/list":
-        // With the vault's, in this machine's box's own words (none from a box without one).
-        // (browser_fill, and browser_sign_in's vault item, only with them: none while the vault
-        // isn't open to agents here, when a sign-in fills only one you let agents make on their own.)
-        return vaultTools().then((more) => reply({ tools: [...(more.length ? CONFIG.tools : closedVaultTools(CONFIG.tools)), ...more] }));
+        // With the vault's and the sandbox's, in this machine's box's own words (none from a box
+        // without them). (browser_fill, and browser_sign_in's vault item, only with the vault's: none
+        // while the vault isn't open to agents here, when a sign-in fills only one you let agents
+        // make on their own.)
+        return Promise.all([vaultTools(), sandboxTools()]).then(([more, sandbox]) => reply({ tools: [...(more.length ? CONFIG.tools : closedVaultTools(CONFIG.tools)), ...more, ...sandbox] }));
       case "tools/call": {
         // The session it's for: the engine says so with each call; an agent of the agents bridge
         // starts this for one session, named in KUVO_SESSION.
@@ -2655,10 +2667,13 @@ async function mcp() {
           wake(params.name, params.arguments || {}, params._meta?.["ai.opencode/sessionID"] ?? null).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
           return;
         }
-        if (typeof params.name === "string" && params.name.startsWith("vault_")) {
+        // The vault's and the sandbox's, which this machine's box carries out (and may ask you).
+        const boxTool = typeof params.name === "string" && (params.name.startsWith("vault_") ? ["kuvo/vault/tools", "This machine's vault can't be reached now. Try again in a moment."]
+          : params.name.startsWith("sandbox_") ? ["kuvo/sandbox/tools", "This machine's box can't be reached now. Try again in a moment."] : null);
+        if (boxTool) {
           const asked = call;
-          vaultRoute({ method: "POST", path: "kuvo/vault/tools", body: { name: params.name, arguments: params.arguments || {}, session: asked.session } }, asked, 16 * 60_000)
-            .then((answer) => reply(answer?.status === 200 && typeof answer.value?.text === "string" ? text(answer.value.text, answer.value.isError === true) : text(answer?.value?.message || "This machine's vault can't be reached now. Try again in a moment.", true)));
+          vaultRoute({ method: "POST", path: boxTool[0], body: { name: params.name, arguments: params.arguments || {}, session: asked.session } }, asked, 16 * 60_000)
+            .then((answer) => reply(answer?.status === 200 && typeof answer.value?.text === "string" ? text(answer.value.text, answer.value.isError === true) : text(answer?.value?.message || boxTool[1], true)));
           return;
         }
         if (params.name === "set_job") {

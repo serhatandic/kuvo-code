@@ -14,7 +14,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { script } from "./bot-keys-scenarios.js";
 
 // In the folder tests keep in your home (not the temporary folders, which commands may write), so
@@ -136,10 +136,49 @@ before(async () => {
 });
 after(() => box?.stop());
 
-test("the sandbox_ask tool is listed while the sandbox is on, for both tool servers to give agents", async () => {
-  const tools = (await box.ask("GET", "kuvo/sandbox/tools")).value.tools;
-  assert.deepEqual(tools.map(tool => tool.name), ["sandbox_ask"]);
-  assert.deepEqual(tools[0].inputSchema.required, ["command", "why"]);
+// An agent on a machine: its tool server there (`kuvo-browser.js mcp`, as the engine starts it), which
+// passes sandbox_ask to the box's long-running process through `box route`.
+function machineTools() {
+  // (Which runs the box's script where a machine keeps it.)
+  fs.mkdirSync(path.join(home, "bin"), { recursive: true });
+  fs.copyFileSync(script, path.join(home, "bin", "kuvo-link.js"));
+  const server = spawn(process.execPath, [fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-browser.js", import.meta.url)), "mcp"], { env, stdio: ["pipe", "pipe", "ignore"] });
+  const answers = new Map();
+  let buffer = "";
+  let next = 1;
+  server.stdout.on("data", chunk => {
+    buffer += chunk;
+    for (let end; (end = buffer.indexOf("\n")) >= 0; buffer = buffer.slice(end + 1)) {
+      const message = JSON.parse(buffer.slice(0, end));
+      answers.get(message.id)?.(message.result);
+    }
+  });
+  const ask = (method, params) => new Promise(resolve => {
+    const id = next++;
+    answers.set(id, resolve);
+    server.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+  });
+  return { ask, stop: () => server.kill() };
+}
+
+test("an agent on a machine has sandbox_ask while the sandbox is on, and its call asks you there and runs once allowed", async () => {
+  assert.deepEqual((await box.ask("GET", "kuvo/sandbox/tools")).value.tools.map(tool => tool.name), ["sandbox_ask"]);
+  const tools = machineTools();
+  after(() => tools.stop());
+  const listed = (await tools.ask("tools/list", {})).tools;
+  const tool = listed.find(each => each.name === "sandbox_ask");
+  assert.ok(tool, "listed with the browser's tools");
+  assert.deepEqual(tool.inputSchema.required, ["command", "why"]);
+
+  const args = { command: "echo from the machine", why: "To see the tool server pass it on." };
+  calling.ses_shop2 = [{ type: "tool", id: `call_${++calls}`, name: "kuvo-browser_sandbox_ask", state: { status: "running", input: args } }];
+  const called = tools.ask("tools/call", { name: "sandbox_ask", arguments: args, _meta: { "ai.opencode/sessionID": "ses_shop2" } });
+  const [open] = await asked(box);
+  assert.equal(open.command, "echo from the machine");
+  assert.equal((await fromMac("POST", `kuvo/sandbox/asks/${open.id}`, { answer: "once" })).status, 200);
+  const result = await called;
+  assert.equal(result.isError, false, result.content[0].text);
+  assert.match(result.content[0].text, /^Ran outside the sandbox · Allowed once\n\nfrom the machine\n/);
 });
 
 test("a command the sandbox stopped runs outside it once you allow it once; the next time it asks again, and Don't Allow runs nothing", async () => {
