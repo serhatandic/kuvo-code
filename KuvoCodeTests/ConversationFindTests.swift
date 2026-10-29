@@ -1,5 +1,8 @@
 import ClientDesign
+import ClientText
 import Foundation
+import OpenCodeKit
+import SwiftUI
 import Testing
 @testable import KuvoCode
 
@@ -90,5 +93,31 @@ import Testing
         #expect(left.isOn, "still open there, for going back to it")
         left.isShown = true
         #expect(ConversationFind.closeOpen())
+    }
+
+    /// A message sent with a keyword shows it in front of its words: Find counts the places in
+    /// both, as many as the bubble marks, so the place you're on is the one marked.
+    @Test func aKeywordInFrontOfYourWordsIsFoundAsShown() async throws {
+        let json: [String: Any] = ["id": "you-1", "type": "user", "time": ["created": 1],
+                                   "text": SentWithKeyword.message("Review the tests", typed: "/review")]
+        guard case .user(let message) = try JSONDecoder().decode(Message.self, from: JSONSerialization.data(withJSONObject: json)) else {
+            Issue.record("not a user message"); return
+        }
+        let find = await found("review", in: [.init(id: "you-1", parts: Row.user(message).findParts)])
+        var drawn = MessageMentions.keyword("/review", before: AttributedString("Review the tests"))
+        FindText.mark(&drawn, try #require(find.highlight(for: "you-1")))
+        #expect(find.places.count == 2)
+        #expect(marks(in: drawn) == find.places.count)
+    }
+
+    /// The places marked in `text`, as drawn.
+    private func marks(in text: AttributedString) -> Int {
+        var count = 0, inMark = false
+        for run in text.runs {
+            let marked = [FindText.place, FindText.currentPlace].contains(run.swiftUI.backgroundColor)
+            if marked, !inMark { count += 1 }
+            inMark = marked
+        }
+        return count
     }
 }

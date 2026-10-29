@@ -575,9 +575,9 @@ enum Row: Identifiable, Hashable {
             if let mail = AgentMail.parse(text) { return [.markdown(mail.text)] }
             if text.hasPrefix(Wakes.marker) { return [.plain(String(text.dropFirst(Wakes.marker.count)))] }
             if let work = GroupWork.parse(text) { return [.markdown(work.task)] }
-            return UserBubble.findParts(UserBubble.words(of: text)).map(ConversationFind.Part.plain)
+            return UserBubble.findParts(UserBubble.words(of: text), keyword: SentMessage.keyword(of: text)).map(ConversationFind.Part.plain)
         case .pending(let item):
-            return UserBubble.findParts(UserBubble.words(of: item.text)).map(ConversationFind.Part.plain)
+            return UserBubble.findParts(UserBubble.words(of: item.text), keyword: SentMessage.keyword(of: item.text)).map(ConversationFind.Part.plain)
         case .assistant(let message, _), .more(let message, _):
             return message.content.compactMap { if case .text(let part) = $0 { .markdown(part.text) } else { nil } }
         case .shell(let shell):
@@ -843,9 +843,15 @@ struct UserBubble: View {
         }
     }
 
-    /// What Find reads in the bubble, in the order it's shown.
-    static func findParts(_ text: String) -> [String] {
-        parts(text).map(\.text)
+    /// What Find reads in the bubble, in the order it's shown: the keyword it was sent with in
+    /// front of its words, as drawn.
+    static func findParts(_ text: String, keyword: String? = nil) -> [String] {
+        let parts = parts(text)
+        let answer = parts.firstIndex { !$0.isQuote }
+        return parts.indices.map { index in
+            guard let keyword, index == answer else { return parts[index].text }
+            return String(MessageMentions.keyword(keyword, before: AttributedString(parts[index].text)).characters)
+        }
     }
 
     var body: some View {
