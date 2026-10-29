@@ -946,7 +946,7 @@ final class Machines {
         let leave = linkKey().map { key in
             """
             L=$(ls -d "$K"/engine/*/opencode 2>/dev/null | tail -n 1)
-            if [ -x "$L" ] && [ -f "$K/bin/kuvo-link.js" ]; then (cd "$K" && KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$L" "$K/bin/kuvo-link.js" leave '\(key)') >/dev/null 2>&1 || true; fi
+            if [ -x "$L" ] && [ -f "$K/bin/kuvo-link.js" ]; then (cd "$K" && KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$L" --config=/dev/null --no-env-file "$K/bin/kuvo-link.js" leave '\(key)') >/dev/null 2>&1 || true; fi
 
             """
         } ?? ""

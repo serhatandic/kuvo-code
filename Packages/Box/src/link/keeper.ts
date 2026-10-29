@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { processRuns as runs } from "../shared/platform";
 import { textOf } from "./files";
-import { K, NEEDED_FILE, PID_FILE, RUN, SCRIPT } from "./home";
+import { K, NEEDED_FILE, PID_FILE, OWN_RUNTIME, RUN, SCRIPT } from "./home";
 import { peersOf } from "./peers/known";
 import { readLink } from "./state";
 import { isMade as vaultMade } from "./vault/store";
@@ -62,7 +62,7 @@ export function runningBridge() {
 // Starts the bridge on its own, outliving this command, from the machine's workspace.
 export function startBridge() {
   const workspace = path.join(K, "workspace");
-  const child = spawn(process.execPath, [SCRIPT, "run"], {
+  const child = spawn(process.execPath, [...OWN_RUNTIME, SCRIPT, "run"], {
     detached: true,
     stdio: "ignore",
     cwd: fs.existsSync(workspace) ? workspace : K,

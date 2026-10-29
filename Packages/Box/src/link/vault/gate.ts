@@ -9,18 +9,11 @@
 // only: never the real box's (your account's own `~/.kuvo-code`, or this Mac's `run.kuvo.code…/box`),
 // where a line an agent's command added to your shell's profile could set it.
 
-import os from "node:os";
-import path from "node:path";
 import { fenceState } from "../fence/state";
-import { K } from "../home";
-
-const realBox = (): boolean => {
-  const home = path.resolve(K);
-  return home === path.join(os.userInfo().homedir, ".kuvo-code") || path.basename(path.dirname(home)).startsWith("run.kuvo.code");
-};
+import { REAL_BOX } from "../home";
 
 export const agentsUseVault = (): boolean => {
-  if (process.env.KUVO_VAULT_AGENTS === "1" && !realBox()) return true;
+  if (process.env.KUVO_VAULT_AGENTS === "1" && !REAL_BOX) return true;
   const sandbox = fenceState();
   return sandbox.on && sandbox.agents;
 };

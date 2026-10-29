@@ -466,7 +466,7 @@ final class AppModel {
             guard launch == self.launch else { return }
             // What some providers need until opencode handles it, on top, as this Mac's box learned
             // it from its engine (as a machine's start adds it).
-            shell["OPENCODE_CONFIG_CONTENT"] = await BoxProcess.engineConfig(engine: binary, content: shell["OPENCODE_CONFIG_CONTENT"], environment: shell)
+            shell["OPENCODE_CONFIG_CONTENT"] = await box.engineConfig(engine: binary, content: shell["OPENCODE_CONFIG_CONTENT"], environment: shell)
             // COMPAT(0.7 provider-compatibility): what the app learned before its box did, gone. Goes 3 months after 0.8.0.
             UserDefaults.standard.removeObject(forKey: "copilotClaudeModels")
             #if DEBUG

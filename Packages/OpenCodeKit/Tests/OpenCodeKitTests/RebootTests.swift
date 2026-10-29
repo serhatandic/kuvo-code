@@ -40,8 +40,14 @@ import Testing
         try FileManager.default.createDirectory(at: engine.deletingLastPathComponent(), withIntermediateDirectories: true)
         try write(engine, """
             #!/bin/sh
+            # As Bun (BUN_BE_BUN): a .env in the folder it starts in is loaded, unless it's told not to.
+            if [ "$BUN_BE_BUN" = 1 ]; then
+              [ "$1" = --config=/dev/null ] && shift
+              if [ "$1" = --no-env-file ]; then shift; elif [ -f .env ]; then set -a; . ./.env; set +a; fi
+            fi
             case "$1 ${2-}" in *"kuvo-link.js engine-config")
               [ -f "$KUVO_HOME/bin/.old-link" ] && { echo "Usage: kuvo-link.js run | serve" >&2; exit 2; }
+              env | sort >"$HOME/engine-config.env"
               printf '{"learned":"%s","given":%s}' "$KUVO_HOME" "${OPENCODE_CONFIG_CONTENT:-null}"; exit 0 ;;
             esac
             case "$1" in *kuvo-link.js) env | sort >"$HOME/link.env"; echo $$ >"$KUVO_HOME/run/link.pid"; while :; do /bin/sleep 1; done ;; esac
@@ -306,6 +312,27 @@ import Testing
         let environment = try String(contentsOf: home.appending(path: "link.env"), encoding: .utf8)
         #expect(environment.contains("XDG_CACHE_HOME=\(root.path)/cache") && environment.contains("TMPDIR=\(root.path)/tmp"))
         #expect(environment.contains("LANG=tr_TR.UTF-8"), "as Kuvo Code last started it")
+    }
+
+    /// A `.env` in the box's folders (which an agent's command can write) sets nothing for its
+    /// phone link or what it asks before the engine starts: the engine's Bun would load one before
+    /// the link's code runs.
+    @Test func aDotEnvInTheBoxsFoldersSetsNothingForIt() throws {
+        defer { cleanUp() }
+        try write(root.appending(path: "bin/kuvo-link.js"), "// the phone link\n")
+        try write(run.appending(path: "link.needed"), "")
+        let workspace = root.appending(path: "workspace")
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        for folder in [root, workspace] {
+            try write(folder.appending(path: ".env"), "KUVO_VAULT_FILE_KEY=forged\nKUVO_TEST_GITHUB=http://127.0.0.1:9\n")
+        }
+        #expect(try start() == 0)
+        until { pid("link.pid").map(alive) ?? false }
+        let link = try String(contentsOf: home.appending(path: "link.env"), encoding: .utf8)
+        #expect(link.contains("KUVO_HOME="), "the link started")
+        #expect(!link.contains("forged") && !link.contains("KUVO_TEST_GITHUB"))
+        let asked = try String(contentsOf: home.appending(path: "engine-config.env"), encoding: .utf8)
+        #expect(!asked.contains("forged") && !asked.contains("KUVO_TEST_GITHUB"))
     }
 
     /// Wake-ups run in the box's own folders, as the engine does, and beside the keeper's rounds:
