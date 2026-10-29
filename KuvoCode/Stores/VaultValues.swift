@@ -50,6 +50,8 @@ nonisolated enum VaultValues {
     private struct Files: Codable {
         var key: String
         var generations: [String: Int] = [:]
+        /// Kept by a build from before the generations were: the files' own are taken, once.
+        var adopt: Bool?
     }
 
     private static func readFiles() -> (Files?, OSStatus) {
@@ -57,7 +59,11 @@ nonisolated enum VaultValues {
         var result: CFTypeRef?
         let status = Keychain.copyMatching(query, &result)
         guard status == errSecSuccess, let data = result as? Data else { return (nil, status) }
-        return (try? JSONDecoder().decode(Files.self, from: data), status)
+        if let files = try? JSONDecoder().decode(Files.self, from: data) { return (files, status) }
+        // The key alone, as a build from before kept it: kept with its generations from now on.
+        guard data.count == 32 else { return (nil, errSecDecode) }
+        let moved = Files(key: data.base64URL, adopt: true)
+        return (keep(moved) ? moved : nil, status)
     }
 
     private static func keep(_ files: Files) -> Bool {
@@ -83,16 +89,22 @@ nonisolated enum VaultValues {
 
     /// The newest generation of each of the box's signed files (`items`, `grants`, `paused`), as it
     /// told the app it wrote them: so a copy put back while the box was stopped is caught as it starts.
-    static func generations() -> [String: Int] {
-        readFiles().0?.generations ?? [:]
+    /// `adopt`: none kept yet by an older build, so the files' own are taken, once. Nil when the
+    /// Keychain can't be read now (not none: the box waits).
+    static func generations() -> (generations: [String: Int], adopt: Bool)? {
+        let (files, status) = readFiles()
+        if let files { return (files.generations, files.adopt == true) }
+        return status == errSecItemNotFound ? ([:], false) : nil
     }
 
     /// Notes a file's newer generation (never an older one).
     static func remember(_ file: String, generation: Int) -> Bool {
         guard var files = readFiles().0 else { return false }
-        guard generation > files.generations[file] ?? 0 else { return true }
-        files.generations[file] = generation
-        return keep(files)
+        let adopting = files.adopt != nil
+        files.adopt = nil
+        let newer = generation > files.generations[file] ?? 0
+        if newer { files.generations[file] = generation }
+        return newer || adopting ? keep(files) : true
     }
 
     /// Takes the file key and generations away (a test's, as it ends: the next starts afresh).

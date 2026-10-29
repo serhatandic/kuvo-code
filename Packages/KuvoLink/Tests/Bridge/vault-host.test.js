@@ -142,6 +142,29 @@ test("an older copy of the vault's files put back while the box was stopped coun
   await box.route("POST", "kuvo/vault/grants", { item: item.id, who: { bot: "bot_ship" }, how: "own" });
 });
 
+test("an app from before the generations were has its files' own taken once; a Keychain that can't be read keeps agents waiting, and says why", async () => {
+  // As an older app left it: the files signed, no generations kept.
+  await box.stop();
+  host.generations = {};
+  host.adopt = true;
+  box = await startBox();
+  const adopted = (await box.route("GET", "kuvo/vault")).value;
+  assert.notEqual(adopted.state.tampered, true, "its files as they are, this once");
+  assert.ok(adopted.items.length > 0);
+  assert.ok(host.generations.items > 0, "and kept from now on");
+  // Its Keychain locked as the box starts: agents wait, told why.
+  await box.stop();
+  host.unreadable = true;
+  box = await startBox();
+  try {
+    const filled = await box.route("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://admin.shop.example", purpose: "sign-in" });
+    assert.equal(filled.status, 403);
+    assert.match(filled.value.message, /Keychain can't be read/);
+  } finally {
+    host.unreadable = false;
+  }
+});
+
 test("with the app not answering, what needs the Keychain says so; removing an item takes its values from the Keychain", async () => {
   host.down = true;
   const stalled = await box.route("GET", `kuvo/vault/items/${item.id}/values`);

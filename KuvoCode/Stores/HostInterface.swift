@@ -248,7 +248,12 @@ final class HostInterface {
             if let file = given["file"] as? String, ["items", "grants", "paused"].contains(file), let generation = given["generation"] as? Int {
                 guard await Task.detached(operation: { VaultValues.remember(file, generation: generation) }).value else { return Self.failed }
             }
-            return .json(["generations": await Task.detached(operation: { VaultValues.generations() }).value])
+            guard let kept = await Task.detached(operation: { VaultValues.generations() }).value else {
+                var answer = HTTPResponse.json(["message": "This Mac’s Keychain can’t be read now, so its vault waits. Unlock your Mac, then try again."])
+                answer.status = 503
+                return answer
+            }
+            return .json(["generations": kept.generations, "adopt": kept.adopt])
         case "/vault/get", "/vault/set", "/vault/delete":
             // The vault's values, by item, in the Keychain: the box keeps everything else about them.
             // Only to the box, which has the secret no file holds: each call with its own proof of it.

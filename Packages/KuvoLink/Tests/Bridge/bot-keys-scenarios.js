@@ -120,9 +120,14 @@ export async function standInHost(password) {
     switch (request.url) {
       // The vault files' newest generations, as the app keeps them in the Keychain.
       case "/vault/generations":
+        // (`unreadable`: its Keychain locked; `adopt`: kept by an app from before the generations were.)
+        if (host.unreadable) return answer(503, { message: "This Mac's Keychain can't be read now, so its vault waits." });
         host.generations ??= {};
-        if (typeof given.file === "string" && given.generation > (host.generations[given.file] ?? 0)) host.generations[given.file] = given.generation;
-        return answer(200, { generations: host.generations });
+        if (typeof given.file === "string") {
+          host.adopt = false;
+          if (given.generation > (host.generations[given.file] ?? 0)) host.generations[given.file] = given.generation;
+        }
+        return answer(200, { generations: host.generations, ...(host.adopt ? { adopt: true } : {}) });
       case "/vault/get":
         return host.vault?.has(given.id) ? answer(200, { values: host.vault.get(given.id) }) : answer(404, {});
       case "/vault/set":

@@ -76,6 +76,12 @@ const newest = new Map<string, number>();
 // the box was stopped is caught as it starts: until they're read from it, agents' use waits.
 let primed = false;
 const STARTING = "This Mac's vault is starting. Try again in a moment.";
+// Why the generations couldn't be read (its Keychain locked, say), said while agents wait.
+let primeTrouble: string | null = null;
+/** Notes why this Mac's generations couldn't be read. */
+export const notePrimeTrouble = (why: string) => {
+  primeTrouble = why;
+};
 
 /** This Mac's newest generations, from its app (once, as the box starts). */
 export async function primeGenerations(): Promise<void> {
@@ -84,18 +90,25 @@ export async function primeGenerations(): Promise<void> {
   const kept = isObject(answer?.generations) ? answer.generations : {};
   for (const file of [ITEMS, GRANTS, PAUSED]) {
     const generation = kept[path.basename(file, ".json")];
+    const onDisk = Number(readJSON<{ gen?: unknown } | null>(file, null)?.gen) || 0;
     if (typeof generation === "number") newest.set(file, Math.max(newest.get(file) ?? 0, generation));
+    // None kept yet by an older app: the files' own, taken once, and kept from now on.
+    else if (answer?.adopt === true && onDisk > 0) {
+      newest.set(file, onDisk);
+      rememberGeneration(file, onDisk);
+    }
     // A file there whose generation the app doesn't have (it was taken out of the Keychain):
     // not taken as a first run, but as changed.
     else if (fs.existsSync(file)) newest.set(file, Number.MAX_SAFE_INTEGER);
   }
   primed = true;
+  primeTrouble = null;
 }
 
 // What's been told to this Mac's app, in order: a change is answered once its app has it. One it
 // couldn't keep pauses agents' use until one is kept (a copy put back then couldn't be caught).
 let told: Promise<unknown> = Promise.resolve();
-let unkept = false;
+const unkept = new Set<string>();
 const UNKEPT = "This Mac's vault couldn't keep what it changed last in the Keychain. Try again in a moment.";
 
 /** Tells this Mac's app a file's newest generation. */
@@ -103,12 +116,12 @@ const rememberGeneration = (file: string, generation: number) => {
   if (!onHost()) return;
   const found = appHost();
   if (!found) {
-    unkept = true;
+    unkept.add(file);
     return;
   }
   told = told
     .then(() => askHost(found, "vault/generations", { file: path.basename(file, ".json"), generation }))
-    .then(() => { unkept = false; }, () => { unkept = true; });
+    .then(() => { unkept.delete(file); }, () => { unkept.add(file); });
 };
 
 /** Once this Mac's app has every generation told it so far. */
@@ -542,8 +555,8 @@ export function setPaused(paused: boolean, who?: string, why = "Paused by you.")
 
 /** Why agents can't use the vault now, for a bot or a conversation (its root session): null when they may. */
 export function pausedFor(bot: string | undefined, root?: string): string | null {
-  if (onHost() && !primed) return STARTING;
-  if (onHost() && unkept) return UNKEPT;
+  if (onHost() && !primed) return primeTrouble ?? STARTING;
+  if (onHost() && unkept.size) return UNKEPT;
   const now = readPaused();
   if (now.all) return tampered.has(PAUSED) ? TAMPERED : "The user paused the vault on this computer.";
   if (bot && now.bots?.[bot]) return `The user paused this bot's use of the vault: ${now.bots[bot]}`;

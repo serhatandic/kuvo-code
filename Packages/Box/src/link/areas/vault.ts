@@ -18,7 +18,7 @@ import { answer as answerAsk, listAsks, onAsksChanged } from "../vault/asks";
 import { fill } from "../vault/fill";
 import { askHolder, holdsVault } from "../vault/holder";
 import {
-  addItem, changeItem, currentUnlockKey, generationsTold, givenWho, isLocked, isMade, itemByID, LOCKED, makeVault, onHost, primeGenerations, readGrants, readItems,
+  addItem, changeItem, currentUnlockKey, generationsTold, givenWho, notePrimeTrouble, isLocked, isMade, itemByID, LOCKED, makeVault, onHost, primeGenerations, readGrants, readItems,
   removeItem, setGrant, setPaused, unlockWith, valuesOf, VaultRefusal, vaultState,
 } from "../vault/store";
 import { callTool, VAULT_TOOLS } from "../vault/tools";
@@ -103,7 +103,7 @@ export async function* vaultRoute(context: RouteContext): AsyncGenerator<AnswerP
   try {
     // This Mac's newest generations from its app before anything is read (vault/store.ts), and a
     // change answered once its app has the new ones.
-    if (onHost()) await primeGenerations().catch(() => {});
+    if (onHost()) await primeGenerations().catch(error => notePrimeTrouble(String((error as Error)?.message ?? error)));
     let first = true;
     for await (const piece of answerVault(context)) {
       if (first && onHost()) await generationsTold();

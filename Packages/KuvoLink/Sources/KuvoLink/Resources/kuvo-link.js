@@ -6862,6 +6862,10 @@ var tampered = new Set;
 var newest = new Map;
 var primed = false;
 var STARTING = "This Mac's vault is starting. Try again in a moment.";
+var primeTrouble = null;
+var notePrimeTrouble = (why) => {
+  primeTrouble = why;
+};
 async function primeGenerations() {
   if (!onHost() || primed)
     return;
@@ -6869,28 +6873,33 @@ async function primeGenerations() {
   const kept = isObject(answer?.generations) ? answer.generations : {};
   for (const file of [ITEMS, GRANTS, PAUSED]) {
     const generation = kept[path34.basename(file, ".json")];
+    const onDisk = Number(readJSON(file, null)?.gen) || 0;
     if (typeof generation === "number")
       newest.set(file, Math.max(newest.get(file) ?? 0, generation));
-    else if (fs34.existsSync(file))
+    else if (answer?.adopt === true && onDisk > 0) {
+      newest.set(file, onDisk);
+      rememberGeneration(file, onDisk);
+    } else if (fs34.existsSync(file))
       newest.set(file, Number.MAX_SAFE_INTEGER);
   }
   primed = true;
+  primeTrouble = null;
 }
 var told = Promise.resolve();
-var unkept = false;
+var unkept = new Set;
 var UNKEPT = "This Mac's vault couldn't keep what it changed last in the Keychain. Try again in a moment.";
 var rememberGeneration = (file, generation) => {
   if (!onHost())
     return;
   const found = appHost();
   if (!found) {
-    unkept = true;
+    unkept.add(file);
     return;
   }
   told = told.then(() => askHost(found, "vault/generations", { file: path34.basename(file, ".json"), generation })).then(() => {
-    unkept = false;
+    unkept.delete(file);
   }, () => {
-    unkept = true;
+    unkept.add(file);
   });
 };
 var generationsTold = () => told;
@@ -7273,8 +7282,8 @@ function setPaused(paused, who, why = "Paused by you.") {
 }
 function pausedFor(bot, root) {
   if (onHost() && !primed)
-    return STARTING;
-  if (onHost() && unkept)
+    return primeTrouble ?? STARTING;
+  if (onHost() && unkept.size)
     return UNKEPT;
   const now = readPaused();
   if (now.all)
@@ -11940,7 +11949,7 @@ async function* vaultRoute(context) {
   }
   try {
     if (onHost())
-      await primeGenerations().catch(() => {});
+      await primeGenerations().catch((error) => notePrimeTrouble(String(error?.message ?? error)));
     let first = true;
     for await (const piece of answerVault(context)) {
       if (first && onHost())

@@ -1,5 +1,6 @@
 import ClientVault
 import Foundation
+import KuvoLink
 import Security
 import Testing
 @testable import KuvoCode
@@ -162,6 +163,21 @@ import Testing
         // Paused: these from now on.
         Vaults.remember(machine, ["items": 4, "grants": 2, "paused": 1], replacing: true)
         #expect(!Vaults.wentBack(machine, to: ["items": 4, "grants": 3, "paused": 1]))
+    }
+
+    /// The vault's file key as a build from before kept it, alone: kept with its generations from
+    /// now on, its files' own taken once, rather than its vault refused for good.
+    @Test func theVaultsKeyFromAnEarlierBuildIsKeptWithItsGenerations() {
+        defer { done() }
+        VaultValues.forgetFiles()
+        let earlier = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+        Keychain.add([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: (Bundle.main.bundleIdentifier ?? "run.kuvo.code") + ".vault",
+                      kSecAttrAccount as String: "files", kSecValueData as String: earlier])
+        #expect(VaultValues.fileKey() == earlier.base64URL, "the same key")
+        #expect(VaultValues.generations()?.adopt == true, "its files' own taken once")
+        #expect(VaultValues.remember("items", generation: 4))
+        #expect(VaultValues.generations()?.adopt == false)
+        #expect(VaultValues.generations()?.generations == ["items": 4])
     }
 
     @Test func aMacWithNothingSavedBeforeHasAnEmptyVault() async throws {
