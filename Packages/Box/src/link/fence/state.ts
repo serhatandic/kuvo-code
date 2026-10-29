@@ -92,25 +92,41 @@ let lastProfiles = "";
 
 /** Whether the sandbox is on here: read each time from what the box knows, without waiting. */
 export function fenceState(): FenceState {
-  const base = { able: checked.able, agents: false };
+  const base = { able: checked.able, agents: agentsCommandsInSandbox() };
   // Kuvo Code's own kill switch: no reason a client shows, as there's nothing you can do.
   if (!fenceWanted()) return { ...base, on: false, why: "Kuvo Code has it turned off on this computer for now." };
   if (!checked.passed) return { ...base, on: false, ...cannot(checked) };
-  if (textOf(PLUGIN) !== pluginScript(places, VERSION)) return { ...base, on: false, why: "Its plugin for the engine was changed or removed.", reason: "plugin", action: "fix", route: CHECK };
+  return { ...base, ...loaded() };
+}
+
+/** Whether the engine has the sandbox's plugin, as it is now: on, or why not. */
+function loaded(): Pick<FenceState, "on" | "why" | "reason" | "action" | "route"> {
+  if (textOf(PLUGIN) !== pluginScript(places, VERSION)) return { on: false, why: "Its plugin for the engine was changed or removed.", reason: "plugin", action: "fix", route: CHECK };
   let engine: { pid?: number } = {};
   try { engine = JSON.parse(fs.readFileSync(ENGINE_FILE, "utf8")); } catch {
-    return { ...base, on: false, why: "The engine isn't running.", reason: "engineDown", action: "restartEngine", route: RESTART };
+    return { on: false, why: "The engine isn't running.", reason: "engineDown", action: "restartEngine", route: RESTART };
   }
   let note: { pid?: number; version?: string } = {};
   try { note = JSON.parse(fs.readFileSync(NOTE, "utf8")); } catch {}
-  if (note.pid === engine.pid && note.version === VERSION) return { ...base, on: true };
+  if (note.pid === engine.pid && note.version === VERSION) return { on: true };
   // An engine that started after the plugin was there loads it for each folder it opens, before
   // any command runs in it.
   try {
-    if (fs.statSync(PLUGIN).mtimeMs <= fs.statSync(ENGINE_FILE).mtimeMs) return { ...base, on: true };
+    if (fs.statSync(PLUGIN).mtimeMs <= fs.statSync(ENGINE_FILE).mtimeMs) return { on: true };
   } catch {}
-  return { ...base, on: false, why: "Waiting for the engine to load it.", reason: "waiting", action: "restartEngine", route: RESTART };
+  return { on: false, why: "Waiting for the engine to load it.", reason: "waiting", action: "restartEngine", route: RESTART };
 }
+
+/** Whether the engine's commands run in the sandbox now, as any of the box's processes can tell
+ * (only the one that set it up knows why not): set up and checked (`run/fence/on`, which goes as a
+ * check fails), and loaded by the engine. */
+export function engineCommandsInSandbox(): boolean {
+  return fenceWanted() && fs.existsSync(ON) && loaded().on;
+}
+
+/** Whether the coding agents' own programs' commands (Claude Code, Codex…, which don't go through
+ * the engine) run in it too: not yet. */
+export const agentsCommandsInSandbox = (): boolean => false;
 
 // Why a box doesn't have it on, and what you can do.
 function cannot(why: Checked): Partial<FenceState> {

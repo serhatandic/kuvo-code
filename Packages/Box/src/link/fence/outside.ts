@@ -145,7 +145,8 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   } else {
     // (By the command as it ran, whitespace and all.)
     const stopped = caller.session ? stopsFor(caller.session, String(args.command)) : [];
-    const always = alwaysFor(command, stopped);
+    // (A group chat's seat: once, or not at all.)
+    const always = caller.seat ? undefined : alwaysFor(command, stopped);
     const answered = await book.ask({
       ...(caller.root ? { session: caller.root, ...(caller.sessionName ? { sessionName: caller.sessionName } : {}) } : {}),
       ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}),

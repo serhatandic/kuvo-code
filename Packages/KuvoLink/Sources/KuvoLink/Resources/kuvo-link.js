@@ -10938,31 +10938,38 @@ var checked = { able: false, passed: false, why: "It hasn't been checked yet.", 
 var failures = 0;
 var lastProfiles = "";
 function fenceState() {
-  const base = { able: checked.able, agents: false };
+  const base = { able: checked.able, agents: agentsCommandsInSandbox() };
   if (!fenceWanted())
     return { ...base, on: false, why: "Kuvo Code has it turned off on this computer for now." };
   if (!checked.passed)
     return { ...base, on: false, ...cannot(checked) };
+  return { ...base, ...loaded() };
+}
+function loaded() {
   if (textOf(PLUGIN) !== pluginScript(places, VERSION))
-    return { ...base, on: false, why: "Its plugin for the engine was changed or removed.", reason: "plugin", action: "fix", route: CHECK };
+    return { on: false, why: "Its plugin for the engine was changed or removed.", reason: "plugin", action: "fix", route: CHECK };
   let engine = {};
   try {
     engine = JSON.parse(fs50.readFileSync(ENGINE_FILE, "utf8"));
   } catch {
-    return { ...base, on: false, why: "The engine isn't running.", reason: "engineDown", action: "restartEngine", route: RESTART };
+    return { on: false, why: "The engine isn't running.", reason: "engineDown", action: "restartEngine", route: RESTART };
   }
   let note = {};
   try {
     note = JSON.parse(fs50.readFileSync(NOTE, "utf8"));
   } catch {}
   if (note.pid === engine.pid && note.version === VERSION)
-    return { ...base, on: true };
+    return { on: true };
   try {
     if (fs50.statSync(PLUGIN).mtimeMs <= fs50.statSync(ENGINE_FILE).mtimeMs)
-      return { ...base, on: true };
+      return { on: true };
   } catch {}
-  return { ...base, on: false, why: "Waiting for the engine to load it.", reason: "waiting", action: "restartEngine", route: RESTART };
+  return { on: false, why: "Waiting for the engine to load it.", reason: "waiting", action: "restartEngine", route: RESTART };
 }
+function engineCommandsInSandbox() {
+  return fenceWanted() && fs50.existsSync(ON) && loaded().on;
+}
+var agentsCommandsInSandbox = () => false;
 function cannot(why) {
   const said = why.why ? { why: why.why } : {};
   switch (why.reason) {
@@ -14194,13 +14201,42 @@ var NAMED = {
   bundle: "installing",
   brew: "installing"
 };
+var WRAPPERS = new Set(["sudo", "doas", "env", "nohup", "time", "exec", "command", "nice", "xargs", "timeout", "npx", "bunx", "pnpx", "uvx"]);
+var OUTWARD = {
+  ...Object.fromEntries(Object.entries(NAMED).filter(([, what]) => ["deploying", "sending to a store", "your keys and sign-ins", "reaching another computer"].includes(what))),
+  sftp: "reaching another computer",
+  ftp: "reaching another computer",
+  gh: "using your GitHub account",
+  glab: "using your GitLab account"
+};
+function outwardRefusal(line) {
+  for (const part of line.split(/[;&|\n(){}`]|\$\(/)) {
+    let words = part.trim().split(/\s+/).map((word) => word.replace(/^["']+|["']+$/g, "")).filter(Boolean);
+    while (words.length && (WRAPPERS.has(path59.basename(words[0])) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]) || /^[-0-9]/.test(words[0])))
+      words = words.slice(1);
+    const [program, ...rest] = words;
+    if (!program)
+      continue;
+    const name = path59.basename(program);
+    if (OUTWARD[name])
+      return OUTWARD[name];
+    if (/(deploy|release|publish)/i.test(name))
+      return "releasing or deploying";
+    const sub = rest.filter((word, at) => !word.startsWith("-") && !(name === "git" && ["-C", "-c"].includes(rest[at - 1] ?? "")))[0];
+    if (name === "git" && sub === "push")
+      return "pushing";
+    if (sub === "publish" || sub === "deploy" || sub === "release" && name !== "git")
+      return sub === "publish" ? "publishing" : "releasing or deploying";
+  }
+  return null;
+}
 function partsOf2(line) {
   const read = readLine(line);
   return "unreadable" in read ? [line] : read.parts.map((part) => part.text);
 }
 var EDITS = new Set(["edit", "write", "patch", "multiedit"]);
 var EDIT_TOOLS = new Set(["edit", "write", "patch", "multiedit", "apply_patch"]);
-function allowRefusal(action, resources, folders, rules, ruleFor, seen) {
+function allowRefusal(action, resources, folders, rules, ruleFor, seen, sandboxed = false) {
   const asked = resources.length ? resources : ["*"];
   if (!folders.length)
     return "working outside the project";
@@ -14208,6 +14244,14 @@ function allowRefusal(action, resources, folders, rules, ruleFor, seen) {
     const command = typeof seen?.input.command === "string" ? seen.input.command : null;
     if (!command)
       return `${CANT} (it can't see the whole command)`;
+    if (sandboxed) {
+      for (const line of [command, ...asked.filter((each) => each !== "*")]) {
+        const why = outwardRefusal(line);
+        if (why)
+          return why;
+      }
+      return [...partsOf2(command), ...asked].every((part) => ruleFor(rules, action, part) === "allow") ? null : "above";
+    }
     const where = [seen.input.workdir, seen.input.cwd, seen.input.directory].find((each) => each !== undefined && each !== null && each !== "");
     if (where !== undefined && (typeof where !== "string" || realOf(path59.resolve(realOf(folders[0]), where)) !== realOf(folders[0])))
       return "a command run somewhere other than the project";
@@ -14306,6 +14350,13 @@ async function stopSessionTool(caller, args, targets, signal) {
   }
   return said(`Stopped "${data.title || "New Session"}".`);
 }
+function commandsInSandbox(target) {
+  let engine = false;
+  try {
+    engine = readEngineFile().port === target.port;
+  } catch {}
+  return engine ? engineCommandsInSandbox() : agentsCommandsInSandbox();
+}
 var projectFolders = (folder) => readProjects().find((each) => each.directory === folder)?.folders ?? [];
 async function answerAskTool(caller, args, targets, signal) {
   const found = await oneOfMine(caller, args.session, targets, "answer", signal);
@@ -14347,7 +14398,7 @@ async function answerAskTool(caller, args, targets, signal) {
     const folder = data.location?.directory ?? data.directory ?? "";
     const rules = rulesOf(caller.place.data.permissions ?? []);
     const seen = await callOf(target, permission, signal);
-    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen);
+    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, commandsInSandbox(target));
     const user = `The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`;
     if (why === "above")
       return refused(`You can't allow that: you'd have to ask the user about it yourself. ${user}`);
@@ -16126,7 +16177,7 @@ async function askToRun(caller, args, signal) {
     how = "always";
   } else {
     const stopped = caller.session ? stopsFor(caller.session, String(args.command)) : [];
-    const always = alwaysFor(command, stopped);
+    const always = caller.seat ? undefined : alwaysFor(command, stopped);
     const answered = await book.ask({
       ...caller.root ? { session: caller.root, ...caller.sessionName ? { sessionName: caller.sessionName } : {} } : {},
       ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {},
@@ -16568,7 +16619,8 @@ async function callerOf(session, readEngine, readBridge) {
     root,
     ...current?.title ? { sessionName: current.title } : {},
     ...folder ? { folder: path70.resolve(folder) } : {},
-    ...bot ? { bot: bot.id, botName: bot.name } : {}
+    ...bot ? { bot: bot.id, botName: bot.name } : {},
+    ...current?.metadata?.kuvo?.seat ? { seat: true } : {}
   };
 }
 var ordered = (value) => Array.isArray(value) ? value.map(ordered) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, ordered(value[key])])) : value;

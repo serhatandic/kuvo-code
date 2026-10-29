@@ -602,6 +602,17 @@ client shows it from the same routes.
       allowing a build or a test run allows the project's code as it is then.
     - A file can change between the check and the run, and a hard link looks like any file.
     - git follows the diff, textconv and LFS settings the user already has.
+- **Answering asks in the sandbox** (`work/policy.ts`): where the session's commands run in the
+  sandbox ("Sandbox": the engine's, while it's `on`; the coding agents' own programs', once
+  `agents`), which holds what they write and read, a bot may allow any of its commands, wherever it
+  runs, within the engine's rules as above; but never one that acts beyond this computer with your
+  accounts, read as plainly as the line allows (any part, past `sudo`, `env`, `npx` and the like):
+  `git push`, publishing (`npm publish`, `cargo publish`…), deploying or releasing (`vercel`,
+  `netlify`, `firebase`, `fastlane`, a program named for it…), reaching another computer (`ssh`,
+  `scp`, `rsync`, `sftp`), `gh` and `glab`, and `security`. Those, and every edit (which the engine
+  makes itself, outside the sandbox: as above), go to the user. A command a bot allows still can't
+  get out of the sandbox: only you can let one out (`sandbox_ask`, "Asks"), and no tool answers
+  that.
   Each answer is kept on the session, `kuvo.answers: [{ask, call?, what, decision, reason, by:
   {bot?, name}, at}]` (the latest 40), where clients show it on the ask's tool call ("Allowed by
   Pixel") and in the bot's work.
@@ -2687,7 +2698,8 @@ engine's record of it, never the command's), with the box's environment but with
 and secrets of Kuvo Code's own processes, and hands back what it printed (the last 64 KB) and how it ended. The
 agent's text starts `Ran outside the sandbox · Allowed once` or `· Always for this`; on Don't Allow,
 `The user said no: …`, and nothing runs. An ask nobody answers in 15 minutes counts as no. The agent
-never lets a command out itself, and no tool answers an ask (a bot neither): only a client.
+never lets a command out itself, and no tool answers an ask (a bot neither): only a client. A bot's
+seat in a group chat is asked once only, never with Always.
 
 The tool is the box's, so an agent has it on every box (`sandbox.asks`): this Mac's tool server and a
 machine's (`kuvo-browser.js mcp`, through `box route`) list what `GET kuvo/sandbox/tools` gives (only

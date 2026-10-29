@@ -565,3 +565,56 @@ test("a bot never lets a session change what the user's own tools run later, nor
   asked.set(session, files.map((file, at) => ({ id: `per_${at}`, sessionID: session, action: "edit", resources: [path.join(tidepool, file)] })));
   await Promise.all(files.map(async (file, at) => assert.equal((await tool("answer_ask", { session, ask: `per_${at}`, decision: "allow", reason: "Tidy." }, "ses_pixel")).isError, true, file)));
 });
+
+test("where its sessions' commands run in the sandbox, a bot allows them beyond reading, but never one that acts beyond this computer, nor an edit outside the project", { timeout: 120_000 }, async () => {
+  // The sandbox, set up as the box's own process sets it up as it starts (on Linux, run by the
+  // engine's Bun), and loaded by the engine.
+  if (process.platform === "linux") {
+    const bun = process.versions.bun ? process.execPath : spawnSync("sh", ["-c", "command -v bun"], { encoding: "utf8" }).stdout.trim();
+    assert.ok(bun, "the sandbox runs on Bun on Linux: run this with the engine (BUN_BE_BUN=1) or with Bun on the PATH");
+    fs.mkdirSync(path.join(home, "engine", "test"), { recursive: true });
+    fs.rmSync(path.join(home, "engine", "test", "opencode"), { force: true });
+    fs.symlinkSync(bun, path.join(home, "engine", "test", "opencode"));
+  }
+  const env = { ...process.env, KUVO_HOME: home, HOME: home, TMPDIR: home, OPENCODE_PASSWORD: "box-pw" };
+  delete env.KUVO_SANDBOX;
+  const box = spawn(process.execPath, [script, "serve"], { env, stdio: ["pipe", "pipe", "inherit"] });
+  const exited = new Promise(resolve => box.once("exit", resolve));
+  const plugin = path.join(home, "config", "opencode", "plugins", "kuvo-sandbox.js");
+  try {
+    await new Promise(resolve => box.stdout.once("data", resolve));
+    assert.ok(fs.existsSync(path.join(home, "run", "fence", "on")), "the sandbox is set up and checked here");
+    fs.utimesSync(plugin, 0, 0);
+
+    const session = startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel"));
+    const commands = {
+      install: "npm install && npm test 2>&1 | tail -n 20",
+      build: "cd ios && xcodebuild -scheme Tidepool build",
+      push: "git -C . push origin main",
+      deploy: "npx vercel deploy --prod",
+      publish: "npm publish",
+      remote: "rsync -a dist/ server:/srv/tidepool",
+    };
+    asked.set(session, [...Object.entries(commands).map(([id, command]) => ({ id, sessionID: session, action: "shell", resources: [command] })),
+      { id: "edit_out", sessionID: session, action: "edit", resources: [path.join(home, ".zshrc")], tool: "write", input: { filePath: path.join(home, ".zshrc"), content: "" } }]);
+    const answer = ask => tool("answer_ask", { session, ask, decision: "allow", reason: "Part of the plan." }, "ses_pixel");
+    assert.deepEqual(await answer("install"), { text: `Allowed: ${commands.install}.`, isError: false });
+    assert.equal((await answer("build")).isError, false);
+    for (const [ask, why] of [["push", /pushing/], ["deploy", /deploying/], ["publish", /publishing/], ["remote", /reaching another computer/], ["edit_out", /always comes to the user/]]) {
+      const said = await answer(ask);
+      assert.equal(said.isError, true, ask);
+      assert.match(said.text, why, ask);
+    }
+    assert.deepEqual(replied.map(each => each.permission), ["install", "build"]);
+  } finally {
+    box.kill("SIGTERM");
+    await exited;
+    // The sandbox gone again, for what comes after.
+    fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true });
+    fs.rmSync(plugin, { force: true });
+  }
+  // Without it, what a bot can't read as safe goes to you again.
+  const session = startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel"));
+  asked.set(session, [{ id: "install", sessionID: session, action: "shell", resources: ["npm install"] }]);
+  assert.match((await tool("answer_ask", { session, ask: "install", decision: "allow", reason: "Part of the plan." }, "ses_pixel")).text, /always comes to the user/);
+});

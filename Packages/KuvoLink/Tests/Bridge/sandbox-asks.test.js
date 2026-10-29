@@ -40,6 +40,8 @@ const sessions = {
   ses_shop: { id: "ses_shop", title: "Fix checkout", location: { directory: shop } },
   ses_shop2: { id: "ses_shop2", title: "Install hooks", location: { directory: shop } },
   ses_blog: { id: "ses_blog", title: "Write a post", location: { directory: blog } },
+  // A bot's seat in a group chat.
+  ses_seat: { id: "ses_seat", title: "Standup", location: { directory: shop }, metadata: { kuvo: { seat: "seat_1" } } },
 };
 const calling = {};
 let calls = 0;
@@ -282,6 +284,16 @@ test("a folder in Also Allowed is one a project's commands write in the sandbox,
   const rule = (await fromMac("GET", `kuvo/sandbox/allowed?project=${encodeURIComponent(shop)}`)).value.allowed.find(each => each.kind === "write");
   assert.equal((await fromMac("DELETE", `kuvo/sandbox/allowed/${rule.id}`)).status, 200);
   assert.notEqual((await engineRuns(shop, write.replace("made", "again"), "ses_shop")).status, 0);
+});
+
+test("a group chat's seat is asked about once only: nobody's there to answer for it for good", async () => {
+  const args = { command: "./tools/lint.sh", why: "To check the post before the standup." };
+  const called = sandboxAsk(box, "ses_seat", args);
+  const [open] = await asked(box);
+  assert.equal(open.session, "ses_seat");
+  assert.equal(open.always, undefined, "no Always for This");
+  assert.equal((await fromMac("POST", `kuvo/sandbox/asks/${open.id}`, { answer: "no" })).status, 200);
+  assert.match((await called).value.text, /^The user said no/);
 });
 
 test("only a conversation's own call asks: one it isn't making, or a command naming it, gets nothing", async () => {
