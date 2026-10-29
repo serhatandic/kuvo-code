@@ -177,7 +177,8 @@ function writeProfiles(): void {
   // (policy.json on both: Linux's sandbox reads it, and the coding agents' bridge gives each agent
   // the same rules in its own terms.)
   const files: [string, string][] = platform === "darwin"
-    ? [["project.sb", seatbeltProfile(policy, { inside: false })], ["inside.sb", seatbeltProfile(policy, { inside: true })], ["policy.json", landlockPolicy(policy)]]
+    ? [["project.sb", seatbeltProfile(policy, { inside: false })], ["inside.sb", seatbeltProfile(policy, { inside: true })],
+        ["project-agent.sb", seatbeltProfile(policy, { inside: false, agent: true })], ["inside-agent.sb", seatbeltProfile(policy, { inside: true, agent: true })], ["policy.json", landlockPolicy(policy)]]
     : [["policy.json", landlockPolicy(policy)], ["runtime", runtime() ?? ""]];
   const text = files.map(([name, body]) => name + body).join("");
   if (text === lastProfiles) return;
@@ -289,6 +290,7 @@ export function setUpFence(): FenceState {
     // The shells Claude Code's commands run with (the coding agents' bridge picks one).
     fs.mkdirSync(path.join(FOLDER, "shell"), { recursive: true, mode: 0o700 });
     for (const [name, real] of AGENT_SHELLS) if (real) writeExecutable(path.join(FOLDER, "shell", name), agentShellScript(places, real));
+    writeExecutable(path.join(FOLDER, "shell", "run"), agentShellScript(places));
     lastProfiles = "";
     writeProfiles();
     tellLauncher();

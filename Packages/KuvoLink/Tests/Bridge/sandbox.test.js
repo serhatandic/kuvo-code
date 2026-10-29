@@ -318,6 +318,41 @@ test("Claude Code's commands, run with the box's shell for it as Claude Code run
   }
 });
 
+test("a coding agent run whole in the sandbox keeps its own sign-in and state, but not what it runs as it starts, and reaches its own Kuvo Code tools", async () => {
+  const box = boxAt("whole", !linux);
+  const project = path.join(root, "whole-project");
+  fs.mkdirSync(project);
+  // Its own folder (an added account's, in Kuvo Code's own, which commands never see).
+  const own = path.join(box.home, "agents", "grok-1");
+  fs.mkdirSync(path.join(own, "sessions"), { recursive: true });
+  fs.writeFileSync(path.join(own, "auth.json"), "signed in\n");
+  fs.writeFileSync(path.join(own, "config.toml"), "model = 'x'\n");
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const toolsPort = new URL(running.url).port;
+    const whole = (port) => spawnSync(path.join(box.home, "run", "fence", "shell", "run"), ["-c", tries([
+      ["read its sign-in", `cat ${JSON.stringify(path.join(own, "auth.json"))}`],
+      ["write its sessions", `echo x > ${JSON.stringify(path.join(own, "sessions", "s1"))}`],
+      ["read its settings", `cat ${JSON.stringify(path.join(own, "config.toml"))}`],
+      ["change its settings", `echo 'hook = 1' >> ${JSON.stringify(path.join(own, "config.toml"))}`],
+      ["write in its project", "echo ok > made.txt"],
+      ["read the box's files", `cat ${JSON.stringify(path.join(box.home, "run", "engine.json"))}`],
+      ["reach its tools", `curl -s -m 2 -o /dev/null http://127.0.0.1:${toolsPort}/kuvo/info`],
+    ])], { cwd: project, encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, KUVO_FENCE_SHELL: "/bin/sh", KUVO_FENCE_WORK: project, KUVO_FENCE_OWN: own, KUVO_FENCE_KEPT: path.join(own, "config.toml"), ...(port ? { KUVO_FENCE_PORT: port } : {}) } });
+    const ran = whole(toolsPort);
+    assert.deepEqual(outcome(ran.stdout), {
+      "read its sign-in": "allowed", "write its sessions": "allowed", "read its settings": "allowed", "change its settings": "refused",
+      "write in its project": "allowed", "read the box's files": "refused", "reach its tools": "allowed",
+    }, ran.stdout + ran.stderr);
+    assert.equal(fs.readFileSync(path.join(own, "config.toml"), "utf8"), "model = 'x'\n");
+    // (Linux leaves local ports open to every command.)
+    if (!linux) assert.equal(outcome(whole().stdout)["reach its tools"], "refused", "only the agent's own port, only for it");
+  } finally {
+    await running.stop();
+  }
+});
+
 test("agents are told how commands run in the sandbox while it's on, and nothing once it's off", async () => {
   const box = boxAt("told");
   const project = path.join(root, "told-project");

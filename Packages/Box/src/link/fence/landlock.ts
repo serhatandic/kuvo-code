@@ -90,6 +90,13 @@ let allowed = [];
 // (Each by the real path the box keeps: one that's become a link since, to anywhere, isn't given.)
 try { allowed = fs.readFileSync(allowedFile, "utf8").split("\n").filter((line) => line.startsWith("/") && real(line) === line); } catch {}
 for (const where of [...policy.writable, work, git, ...allowed]) if (where) grantExcept(where, all, kept);
+// A coding agent run whole in it: its own folders (its sign-in and state), but what's only read in
+// them (what it runs as it starts, outside, when you use it yourself). Its tools' port needs no
+// rule: Landlock leaves connections to it open.
+const lines = (text) => (text || "").split("\n").filter((line) => line.startsWith("/"));
+const ownKept = lines(process.env.KUVO_FENCE_KEPT).slice(0, 8).map(real);
+for (const where of lines(process.env.KUVO_FENCE_OWN).slice(0, 4)) grantExcept(where, all, new Set([...kept, ...ownKept]));
+for (const where of ownKept) grant(where, READS);
 if (tmp) { fs.mkdirSync(tmp, { recursive: true }); grant(tmp, all); }
 // Its conversation's wake-ups and watches (kuvo-wake): read, and only its inbox written, which the box
 // takes in, out of its reach.
@@ -101,7 +108,7 @@ if (wakes && fs.existsSync(wakes)) {
 const keep = [];
 const text = (s) => { const b = Buffer.from(s + "\0"); keep.push(b); return b; };
 const list = (items) => { const b = new BigUint64Array(items.length + 1); items.forEach((s, i) => { b[i] = BigInt(ptr(text(s))); }); keep.push(b); return b; };
-const env = Object.entries(process.env).filter(([k]) => k !== "BUN_BE_BUN" && k !== "BUN_RUNTIME_TRANSPILER_CACHE_PATH").map(([k, v]) => k + "=" + v);
+const env = Object.entries(process.env).filter(([k]) => k !== "BUN_BE_BUN" && k !== "BUN_RUNTIME_TRANSPILER_CACHE_PATH" && k !== "KUVO_FENCE_OWN" && k !== "KUVO_FENCE_KEPT").map(([k, v]) => k + "=" + v);
 if (libc.prctl(38, 1n, 0n, 0n, 0n) !== 0) fail("Linux refused to keep it (" + errno() + ").");
 if (Number(libc.syscall(RESTRICT, ruleset, 0, 0, 0)) < 0) fail("Linux refused to start it (" + errno() + ").");
 libc.close(ruleset);

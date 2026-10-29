@@ -10502,6 +10502,70 @@ function writeRuleWouldBe(where) {
   }
 }
 
+// Packages/Box/src/link/fence/seatbelt.ts
+var AGENT_FOLDERS = 4;
+var AGENT_KEPT = 8;
+var quote2 = (text) => `"${text.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
+var subpath = (folder) => `(subpath ${quote2(folder)})`;
+var regex = (pattern) => `(regex ${quote2(pattern)})`;
+var param = (name) => `(subpath (param ${quote2(name)}))`;
+var GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)/[^/]+$)`;
+var AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/config\.toml|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
+var GUARDED = String.raw`(.*/)?(\.git$|\.git/(${GIT_GUARDED})|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
+function seatbeltProfile(policy, options) {
+  const mode = options.mode ?? "enforce";
+  const tag = options.tag ? quote2(options.tag) : `(param "TAG")`;
+  const out = ["(version 1)", "(allow default)"];
+  const deny = (operations, ...filters) => denyIn(false, operations, ...filters);
+  const denyAll = (operations) => denyIn(true, operations);
+  const denyIn = (whole, operations, ...filters) => {
+    if (!whole && !filters.length)
+      return;
+    const where = filters.length ? " " + filters.join(" ") : "";
+    out.push(mode === "enforce" ? `(deny ${operations} (with message ${tag})${where})` : `(allow ${operations} (with report) (with message ${tag})${where})`);
+  };
+  const allow = (operations, ...filters) => {
+    if (filters.length)
+      out.push(`(allow ${operations} ${filters.join(" ")})`);
+  };
+  const under = (base, rest) => `(regex (string-append "^" (param ${quote2(base)}) ${quote2(rest)}))`;
+  out.push(";; writes: its folder, its repository, temporary folders, devices and tools' caches");
+  deny("file-write*", subpath("/"));
+  allow("file-write*", ...policy.writable.map(subpath), param("WORK"), param("GIT"));
+  allow("file-write*", ...Array.from({ length: MOST_FOLDERS }, (_, at) => param(`ALLOW${at}`)));
+  deny("file-write*", ...policy.readOnly.map(subpath));
+  const own = Array.from({ length: AGENT_FOLDERS }, (_, at) => param(`OWN${at}`));
+  allow("file-write*", ...own);
+  out.push(";; Kuvo Code's own folders: neither read nor written; its helpers run");
+  const HIDDEN = "file-read-data file-write*";
+  deny(HIDDEN, ...policy.kuvo.map(subpath), ...policy.kuvoPatterns.map(regex));
+  allow("file-read-data", ...policy.kuvoReadable.map(subpath));
+  allow(HIDDEN, ...own);
+  allow(HIDDEN, param("TMP"));
+  if (options.inside)
+    allow(HIDDEN, param("WORK"));
+  allow("file-read-data", param("WAKES"));
+  allow(HIDDEN, `(subpath (string-append (param "WAKES") "/inbox"))`);
+  out.push(";; what runs outside the sandbox, or changes the engine");
+  deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED), ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
+  deny("file-write*", ...Array.from({ length: AGENT_KEPT }, (_, at) => param(`KEPT${at}`)));
+  out.push(";; your secrets");
+  deny("file-read*", ...policy.secrets.map(subpath));
+  out.push(";; Kuvo Code's own servers and sockets");
+  deny("network-outbound", ...policy.ports.map((port) => `(remote tcp ${quote2(`localhost:${port}`)})`));
+  if (options.agent)
+    allow("network-outbound", `(remote tcp (string-append "localhost:" (param "PORT")))`);
+  deny("network-outbound", ...policy.kuvo.map((folder) => `(remote unix-socket ${subpath(folder)})`), ...policy.kuvoPatterns.map((pattern) => `(remote unix-socket ${regex(pattern)})`));
+  allow("network-outbound", `(remote unix-socket (literal (param "SSH")))`);
+  out.push(";; what would run outside the sandbox: launchd jobs, apps opened (LaunchServices), Apple Events");
+  denyAll("job-creation");
+  deny("mach-lookup", `(global-name "com.apple.coreservices.launchservicesd")`, `(global-name-prefix "com.apple.lsd.")`, `(global-name "com.apple.coreservices.quarantine-resolver")`);
+  denyAll("appleevent-send");
+  return out.join(`
+`) + `
+`;
+}
+
 // Packages/Box/src/link/fence/files.ts
 var sh = (text) => `'${text.replace(/'/g, `'\\''`)}'`;
 function launcherScript(places) {
@@ -10510,11 +10574,11 @@ function launcherScript(places) {
     `for c_last; do :; done`,
     `c_sum=$( (printf '%s' "\${c_last-}" | shasum -a 256) 2>/dev/null | cut -c 1-16)`,
     `case \${OPENCODE_SESSION_ID-} in ses_*[!A-Za-z0-9_]*|ses_|'') tag="kuvo-sandbox" ;; *) tag="kuvo-sandbox $OPENCODE_SESSION_ID $c_sum" ;; esac`,
-    `exec /usr/bin/sandbox-exec -D TAG="$tag" -D WORK="$work" -D GIT="$git" -D TMP="$tmp" -D WAKES="$own" -D SSH="$ssh" -D WORK_RE="$(escaped "$work")" -D GIT_RE="$(escaped "$git")" ${Array.from({ length: MOST_FOLDERS }, (_, at) => `-D ALLOW${at}="$a${at}" -D ALLOW${at}_RE="$r${at}"`).join(" ")} -f "$F/$profile.sb" "$shell" "$@"`
+    `exec /usr/bin/sandbox-exec -D TAG="$tag" -D WORK="$work" -D GIT="$git" -D TMP="$tmp" -D WAKES="$own" -D SSH="$ssh" -D WORK_RE="$(escaped "$work")" -D GIT_RE="$(escaped "$git")" ${Array.from({ length: MOST_FOLDERS }, (_, at) => `-D ALLOW${at}="$a${at}" -D ALLOW${at}_RE="$r${at}"`).join(" ")} ${Array.from({ length: AGENT_FOLDERS }, (_, at) => `-D OWN${at}="$o${at}"`).join(" ")} ${Array.from({ length: AGENT_KEPT }, (_, at) => `-D KEPT${at}="$k${at}"`).join(" ")} -D PORT="$port" -f "$F/$profile$agent.sb" "$shell" "$@"`
   ] : [
     `[ -n "$runtime" ] || runtime=$(cat "$F/runtime" 2>/dev/null)`,
     `[ -x "$runtime" ] || { echo "This command can't run in the sandbox here: the engine's runtime wasn't given." >&2; exit 126; }`,
-    `BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 exec "$runtime" --config=/dev/null --no-env-file ${sh(places.runner)} "$F/policy.json" "$work" "$git" "$tmp" "$own" "$allowed" "$shell" "$@"`
+    `KUVO_FENCE_OWN="$own_list" KUVO_FENCE_KEPT="$kept_list" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 exec "$runtime" --config=/dev/null --no-env-file ${sh(places.runner)} "$F/policy.json" "$work" "$git" "$tmp" "$own" "$allowed" "$shell" "$@"`
   ];
   return [
     "#!/bin/sh",
@@ -10523,7 +10587,18 @@ function launcherScript(places) {
     "# shell, in the sandbox. Its plugin (kuvo-sandbox.js) names the conversation's folder.",
     `F=${sh(places.folder)}`,
     `shell=\${KUVO_FENCE_SHELL:-/bin/sh} work=\${KUVO_FENCE_WORK-} git=\${KUVO_FENCE_GIT-} runtime=\${KUVO_FENCE_RUNTIME-}`,
-    "unset KUVO_FENCE_SHELL KUVO_FENCE_WORK KUVO_FENCE_GIT KUVO_FENCE_RUNTIME",
+    `own_list=\${KUVO_FENCE_OWN-} kept_list=\${KUVO_FENCE_KEPT-} port=\${KUVO_FENCE_PORT:-0}`,
+    "unset KUVO_FENCE_SHELL KUVO_FENCE_WORK KUVO_FENCE_GIT KUVO_FENCE_RUNTIME KUVO_FENCE_OWN KUVO_FENCE_KEPT KUVO_FENCE_PORT",
+    `case $port in *[!0-9]*|'') port=0 ;; esac`,
+    `agent=; [ "$port" = 0 ] || agent=-agent`,
+    ...Array.from({ length: AGENT_FOLDERS }, (_, at) => `o${at}=$F/none`),
+    ...Array.from({ length: AGENT_KEPT }, (_, at) => `k${at}=$F/none`),
+    `i=0; while IFS= read -r line; do [ $i -lt ${AGENT_FOLDERS} ] || break; case $line in /*) eval "o$i=\\$line"; i=$((i + 1)) ;; esac; done <<EOF_OWN`,
+    "$own_list",
+    "EOF_OWN",
+    `i=0; while IFS= read -r line; do [ $i -lt ${AGENT_KEPT} ] || break; case $line in /*) eval "k$i=\\$line"; i=$((i + 1)) ;; esac; done <<EOF_KEPT`,
+    "$kept_list",
+    "EOF_KEPT",
     `for v in $(env | sed -n 's/^\\(OPENCODE_[A-Za-z0-9_]*\\)=.*/\\1/p; s/^\\(KUVO_[A-Za-z0-9_]*\\)=.*/\\1/p'); do`,
     `  case $v in OPENCODE_SESSION_ID) ;; OPENCODE_*|*PASSWORD*|*SECRET*|*TOKEN*|*KEY*|KUVO_HOST_*|KUVO_VAULT_*) unset "$v" ;; esac`,
     `done`,
@@ -10579,7 +10654,7 @@ function agentShellScript(places, shell) {
   return [
     "#!/bin/sh",
     "# Kuvo Code writes this each time its box starts: changes here don't last.",
-    `KUVO_FENCE_SHELL=${sh(shell)} exec ${sh(places.launcher)} "$@"`,
+    `${shell ? `KUVO_FENCE_SHELL=${sh(shell)} ` : ""}exec ${sh(places.launcher)} "$@"`,
     ""
   ].join(`
 `);
@@ -10758,6 +10833,13 @@ let allowed = [];
 // (Each by the real path the box keeps: one that's become a link since, to anywhere, isn't given.)
 try { allowed = fs.readFileSync(allowedFile, "utf8").split("\n").filter((line) => line.startsWith("/") && real(line) === line); } catch {}
 for (const where of [...policy.writable, work, git, ...allowed]) if (where) grantExcept(where, all, kept);
+// A coding agent run whole in it: its own folders (its sign-in and state), but what's only read in
+// them (what it runs as it starts, outside, when you use it yourself). Its tools' port needs no
+// rule: Landlock leaves connections to it open.
+const lines = (text) => (text || "").split("\n").filter((line) => line.startsWith("/"));
+const ownKept = lines(process.env.KUVO_FENCE_KEPT).slice(0, 8).map(real);
+for (const where of lines(process.env.KUVO_FENCE_OWN).slice(0, 4)) grantExcept(where, all, new Set([...kept, ...ownKept]));
+for (const where of ownKept) grant(where, READS);
 if (tmp) { fs.mkdirSync(tmp, { recursive: true }); grant(tmp, all); }
 // Its conversation's wake-ups and watches (kuvo-wake): read, and only its inbox written, which the box
 // takes in, out of its reach.
@@ -10769,7 +10851,7 @@ if (wakes && fs.existsSync(wakes)) {
 const keep = [];
 const text = (s) => { const b = Buffer.from(s + "\0"); keep.push(b); return b; };
 const list = (items) => { const b = new BigUint64Array(items.length + 1); items.forEach((s, i) => { b[i] = BigInt(ptr(text(s))); }); keep.push(b); return b; };
-const env = Object.entries(process.env).filter(([k]) => k !== "BUN_BE_BUN" && k !== "BUN_RUNTIME_TRANSPILER_CACHE_PATH").map(([k, v]) => k + "=" + v);
+const env = Object.entries(process.env).filter(([k]) => k !== "BUN_BE_BUN" && k !== "BUN_RUNTIME_TRANSPILER_CACHE_PATH" && k !== "KUVO_FENCE_OWN" && k !== "KUVO_FENCE_KEPT").map(([k, v]) => k + "=" + v);
 if (libc.prctl(38, 1n, 0n, 0n, 0n) !== 0) fail("Linux refused to keep it (" + errno() + ").");
 if (Number(libc.syscall(RESTRICT, ruleset, 0, 0, 0)) < 0) fail("Linux refused to start it (" + errno() + ").");
 libc.close(ruleset);
@@ -10777,62 +10859,6 @@ libc.execve(ptr(text(shell)), ptr(list([shell, ...args])), ptr(list(env)));
 process.stderr.write(shell + ": can't run (" + errno() + ")\n");
 process.exit(127);
 `;
-
-// Packages/Box/src/link/fence/seatbelt.ts
-var quote2 = (text) => `"${text.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
-var subpath = (folder) => `(subpath ${quote2(folder)})`;
-var regex = (pattern) => `(regex ${quote2(pattern)})`;
-var param = (name) => `(subpath (param ${quote2(name)}))`;
-var GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)/[^/]+$)`;
-var AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/config\.toml|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
-var GUARDED = String.raw`(.*/)?(\.git$|\.git/(${GIT_GUARDED})|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
-function seatbeltProfile(policy, options) {
-  const mode = options.mode ?? "enforce";
-  const tag = options.tag ? quote2(options.tag) : `(param "TAG")`;
-  const out = ["(version 1)", "(allow default)"];
-  const deny = (operations, ...filters) => denyIn(false, operations, ...filters);
-  const denyAll = (operations) => denyIn(true, operations);
-  const denyIn = (whole, operations, ...filters) => {
-    if (!whole && !filters.length)
-      return;
-    const where = filters.length ? " " + filters.join(" ") : "";
-    out.push(mode === "enforce" ? `(deny ${operations} (with message ${tag})${where})` : `(allow ${operations} (with report) (with message ${tag})${where})`);
-  };
-  const allow = (operations, ...filters) => {
-    if (filters.length)
-      out.push(`(allow ${operations} ${filters.join(" ")})`);
-  };
-  const under = (base, rest) => `(regex (string-append "^" (param ${quote2(base)}) ${quote2(rest)}))`;
-  out.push(";; writes: its folder, its repository, temporary folders, devices and tools' caches");
-  deny("file-write*", subpath("/"));
-  allow("file-write*", ...policy.writable.map(subpath), param("WORK"), param("GIT"));
-  allow("file-write*", ...Array.from({ length: MOST_FOLDERS }, (_, at) => param(`ALLOW${at}`)));
-  deny("file-write*", ...policy.readOnly.map(subpath));
-  out.push(";; Kuvo Code's own folders: neither read nor written; its helpers run");
-  const HIDDEN = "file-read-data file-write*";
-  deny(HIDDEN, ...policy.kuvo.map(subpath), ...policy.kuvoPatterns.map(regex));
-  allow("file-read-data", ...policy.kuvoReadable.map(subpath));
-  allow(HIDDEN, param("TMP"));
-  if (options.inside)
-    allow(HIDDEN, param("WORK"));
-  allow("file-read-data", param("WAKES"));
-  allow(HIDDEN, `(subpath (string-append (param "WAKES") "/inbox"))`);
-  out.push(";; what runs outside the sandbox, or changes the engine");
-  deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED), ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
-  out.push(";; your secrets");
-  deny("file-read*", ...policy.secrets.map(subpath));
-  out.push(";; Kuvo Code's own servers and sockets");
-  deny("network-outbound", ...policy.ports.map((port) => `(remote tcp ${quote2(`localhost:${port}`)})`));
-  deny("network-outbound", ...policy.kuvo.map((folder) => `(remote unix-socket ${subpath(folder)})`), ...policy.kuvoPatterns.map((pattern) => `(remote unix-socket ${regex(pattern)})`));
-  allow("network-outbound", `(remote unix-socket (literal (param "SSH")))`);
-  out.push(";; what would run outside the sandbox: launchd jobs, apps opened (LaunchServices), Apple Events");
-  denyAll("job-creation");
-  deny("mach-lookup", `(global-name "com.apple.coreservices.launchservicesd")`, `(global-name-prefix "com.apple.lsd.")`, `(global-name "com.apple.coreservices.quarantine-resolver")`);
-  denyAll("appleevent-send");
-  return out.join(`
-`) + `
-`;
-}
 
 // Packages/Box/src/link/fence/state.ts
 var CHECK = "POST kuvo/sandbox/check";
@@ -10948,7 +10974,13 @@ function runtime() {
 }
 function writeProfiles() {
   const policy = fencePolicy(platform === "darwin" ? kuvoPorts() : []);
-  const files = platform === "darwin" ? [["project.sb", seatbeltProfile(policy, { inside: false })], ["inside.sb", seatbeltProfile(policy, { inside: true })], ["policy.json", landlockPolicy(policy)]] : [["policy.json", landlockPolicy(policy)], ["runtime", runtime() ?? ""]];
+  const files = platform === "darwin" ? [
+    ["project.sb", seatbeltProfile(policy, { inside: false })],
+    ["inside.sb", seatbeltProfile(policy, { inside: true })],
+    ["project-agent.sb", seatbeltProfile(policy, { inside: false, agent: true })],
+    ["inside-agent.sb", seatbeltProfile(policy, { inside: true, agent: true })],
+    ["policy.json", landlockPolicy(policy)]
+  ] : [["policy.json", landlockPolicy(policy)], ["runtime", runtime() ?? ""]];
   const text = files.map(([name, body]) => name + body).join("");
   if (text === lastProfiles)
     return;
@@ -11054,6 +11086,7 @@ function setUpFence() {
     for (const [name, real] of AGENT_SHELLS)
       if (real)
         writeExecutable(path50.join(FOLDER, "shell", name), agentShellScript(places, real));
+    writeExecutable(path50.join(FOLDER, "shell", "run"), agentShellScript(places));
     lastProfiles = "";
     writeProfiles();
     tellLauncher();
