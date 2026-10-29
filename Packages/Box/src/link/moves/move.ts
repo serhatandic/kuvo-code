@@ -79,7 +79,18 @@ export const say = {
   noGroups: (place: string) => `Group chats on ${place} aren’t running right now. Try again once they are.`,
   noEngine: (place: string) => `The engine on ${place} isn’t running. Try again once it is.`,
   needsUpdate: (place: string) => `${place} needs a newer Kuvo Code before things can move to or from it.`,
+  botsNotThere: (chat: string, place: string) => `${chat}’s bots don’t all live on ${place}. Move them there first, then the chat can follow.`,
   moving: MOVING,
+};
+
+/** The same, short, for a menu that shows it beside a computer's name. */
+const note = {
+  inProject: "Works in a project",
+  withAgents: "Talks with a coding agent",
+  inBoxGroup: "In a group chat that lives here",
+  needsUpdate: "Needs a newer Kuvo Code",
+  botsNotThere: "Its bots don’t all live there",
+  moving: "Moving already",
 };
 
 /** A move's outcome, for whoever asked for it. */
@@ -166,6 +177,9 @@ interface Movable {
   name: string;
   root?: string;
   why?: string;
+  note?: string;
+  /** A group chat's bots, by their IDs. */
+  members?: string[];
 }
 
 async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Promise<Movable | null> {
@@ -173,15 +187,15 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
     const here = botHere(thing);
     if (!here) return null;
     const name = here.described.name;
-    if (here.described.project) return { name, why: say.inProject(name) };
-    if (here.agents) return { name, why: say.withAgents(name) };
+    if (here.described.project) return { name, why: say.inProject(name), note: note.inProject };
+    if (here.agents) return { name, why: say.withAgents(name), note: note.withAgents };
     // One in a group chat that lives here with its bots, on a machine, stays with it.
     if (!IS_MAC) {
       let bridge: Target | null = null;
       try { bridge = readBridgeFile(); } catch {}
       const listed = bridge ? await askGroups<{ data?: { group?: { id?: string; name?: string; members?: unknown } }[] }>(bridge, "GET", "", undefined, signal).catch(() => null) : null;
       const chat = (listed?.status === 200 && Array.isArray(listed.value?.data) ? listed.value.data : []).find(each => Array.isArray(each?.group?.members) && (each.group.members as unknown[]).includes(thing));
-      if (chat) return { name, root: here.session, why: say.inBoxGroup(name, plainName(chat.group?.name ?? "") || "a group chat") };
+      if (chat) return { name, root: here.session, why: say.inBoxGroup(name, plainName(chat.group?.name ?? "") || "a group chat"), note: note.inBoxGroup };
     }
     return { name, root: here.session };
   }
@@ -193,26 +207,46 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
     const directory = isObject(session.location) ? session.location.directory : session.directory;
     if (directory !== CHATS) return null;
     const kuvo = isObject(session.metadata) && isObject(session.metadata.kuvo) ? session.metadata.kuvo : {};
-    if (kuvo.agents || kuvo.agent) return { name: title, why: say.withAgents(title) };
+    if (kuvo.agents || kuvo.agent) return { name: title, why: say.withAgents(title), note: note.withAgents };
     return { name: title, root: thing };
   }
   let bridge: Target;
   try { bridge = readBridgeFile(); } catch { return null; }
-  const listed = await askGroups<{ data?: { group?: { name?: string } } }>(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, signal).catch(() => null);
+  const listed = await askGroups<{ data?: { group?: { name?: string; members?: unknown } } }>(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, signal).catch(() => null);
   if (listed?.status !== 200) return null;
-  return { name: `“${plainName(listed.value?.data?.group?.name ?? "") || "Group chat"}”` };
+  const members = listed.value?.data?.group?.members;
+  return {
+    name: `“${plainName(listed.value?.data?.group?.name ?? "") || "Group chat"}”`,
+    members: Array.isArray(members) ? members.filter((member): member is string => typeof member === "string") : [],
+  };
+}
+
+/** Whether a group chat's bots all live on the machine `peer`, as the computers say: none here, and
+ * each in that machine's list of its agents. One that hasn't said what it has isn't judged (it
+ * checks itself as the chat comes). */
+function botsLiveOn(members: string[], peer: Peer): boolean {
+  if (members.some(member => botHere(member))) return false;
+  const list = readPeerAgents()[peer.key]?.list;
+  if (!Array.isArray(list)) return true;
+  return members.every(member => list.some(agent => agent.kind === "bot" && agent.id === member));
 }
 
 /** Where `thing` can go: each of your other computers, and why not one where it can't. */
 export async function placesFor(kind: MoveKind, thing: string, signal?: AbortSignal): Promise<MovePlace[] | null> {
   const what = await movable(kind, thing, signal);
   if (!what) return null;
-  const why = moveOf(thing) ? say.moving : what.why;
+  const moving = moveOf(thing) !== null;
   const own = ownKey(readLink() ?? {});
   return peersOf(readLink()).filter(peer => peer.key !== own).map(peer => {
     const name = plainName(peer.name) || (peer.kind === "mac" ? "Mac" : "Machine");
-    const not = why ?? (olderThanMoves(peer.key) ? say.needsUpdate(name) : undefined);
-    return { key: peer.key, name, kind: peer.kind, ok: !not, ...(not ? { why: not } : {}) };
+    // Why not, and the same short: the thing's own reason first, then that computer's.
+    const not: [string, string] | null = moving ? [say.moving, note.moving]
+      : what.why ? [what.why, what.note ?? what.why]
+      : olderThanMoves(peer.key) ? [say.needsUpdate(name), note.needsUpdate]
+      // A group chat goes to a machine only where all its bots live (to a Mac, they stay put).
+      : kind === "group" && peer.kind === "machine" && !botsLiveOn(what.members ?? [], peer) ? [say.botsNotThere(what.name, name), note.botsNotThere]
+      : null;
+    return { key: peer.key, name, kind: peer.kind, ok: !not, ...(not ? { why: not[0], note: not[1] } : {}) };
   });
 }
 

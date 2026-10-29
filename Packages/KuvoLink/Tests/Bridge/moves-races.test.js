@@ -545,7 +545,7 @@ test("a computer with a Kuvo Code from before moves says it needs a newer one, a
   fs.writeFileSync(file, JSON.stringify({ [peerKey]: { at: Date.now(), kind: "machine", list: [], features: ["sessions", "bots"] } }));
   try {
     const places = (await ask("GET", "kuvo/moves/places?kind=chat&id=ses_old2")).json.places;
-    assert.deepEqual(places.find(place => place.key === peerKey), { key: peerKey, name: "lab", kind: "machine", ok: false, why: "lab needs a newer Kuvo Code before things can move to or from it." });
+    assert.deepEqual(places.find(place => place.key === peerKey), { key: peerKey, name: "lab", kind: "machine", ok: false, why: "lab needs a newer Kuvo Code before things can move to or from it.", note: "Needs a newer Kuvo Code" });
     assert.equal(places.find(place => place.key === studio.key)?.ok, true, "one that hasn't said what it answers is tried");
     const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_old2", to: peerKey });
     assert.equal(moved.status, 409);

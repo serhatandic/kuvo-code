@@ -380,12 +380,14 @@ Move to Computer (bridge 0.9.108, feature `moves`): a bot, a chat or a group cha
 another of your computers, the boxes doing it between themselves over peer mail ("Peers", `move`).
 A client asks the box it lives on once, and watches; the move goes on with no client there.
 
-- `GET kuvo/moves/places?kind=bot|chat|group&id=…` → `200 {places: [{key, name, kind, ok, why?}]}`:
-  each of your other computers (its box's key, its name, `mac` or `machine`), and whether it can go
-  there now, with why not in words to show (it works in a project, talks with a coding agent, is in
-  a group chat that lives here with its bots, is moving already; that computer's box is from before
-  moves, as the `features` its agents' mail last gave say). `404 {message}` when it isn't here.
-  A group chat's places say `ok` for every computer: the one it goes to checks its bots live there.
+- `GET kuvo/moves/places?kind=bot|chat|group&id=…` → `200 {places: [{key, name, kind, ok, why?,
+  note?}]}`: each of your other computers (its box's key, its name, `mac` or `machine`), and whether
+  it can go there now, with why not in words to show (it works in a project, talks with a coding
+  agent, is in a group chat that lives here with its bots, is moving already; that computer's box is
+  from before moves, as the `features` its agents' mail last gave say; a group chat's bots don't all
+  live on that machine, as its agents' mail says, none of them here) and `note`, the same in a few
+  words for beside the computer's name in a menu. `404 {message}` when it isn't here. A group chat
+  can go to any Mac (its bots stay where they are); the machine it goes to checks again.
 - `POST kuvo/moves {kind, id, to}` (`to`: the box's key, as `places` gives it) answers once the move
   ends: `200 {move}` (it lives there now); `409 {message}` refused or taken back, as it was (working,
   messages still on their way, kept getting messages while it moved, too big, refused there);

@@ -9005,7 +9005,16 @@ var say = {
   noGroups: (place) => `Group chats on ${place} aren’t running right now. Try again once they are.`,
   noEngine: (place) => `The engine on ${place} isn’t running. Try again once it is.`,
   needsUpdate: (place) => `${place} needs a newer Kuvo Code before things can move to or from it.`,
+  botsNotThere: (chat, place) => `${chat}’s bots don’t all live on ${place}. Move them there first, then the chat can follow.`,
   moving: MOVING
+};
+var note = {
+  inProject: "Works in a project",
+  withAgents: "Talks with a coding agent",
+  inBoxGroup: "In a group chat that lives here",
+  needsUpdate: "Needs a newer Kuvo Code",
+  botsNotThere: "Its bots don’t all live there",
+  moving: "Moving already"
 };
 var waiting = new Map;
 var outcomeFile = (id) => path47.join(MOVES, `${id}.outcome.json`);
@@ -9085,9 +9094,9 @@ async function movable(kind, thing, signal) {
       return null;
     const name = here.described.name;
     if (here.described.project)
-      return { name, why: say.inProject(name) };
+      return { name, why: say.inProject(name), note: note.inProject };
     if (here.agents)
-      return { name, why: say.withAgents(name) };
+      return { name, why: say.withAgents(name), note: note.withAgents };
     if (!IS_MAC) {
       let bridge = null;
       try {
@@ -9096,7 +9105,7 @@ async function movable(kind, thing, signal) {
       const listed = bridge ? await askGroups(bridge, "GET", "", undefined, signal).catch(() => null) : null;
       const chat = (listed?.status === 200 && Array.isArray(listed.value?.data) ? listed.value.data : []).find((each) => Array.isArray(each?.group?.members) && each.group.members.includes(thing));
       if (chat)
-        return { name, root: here.session, why: say.inBoxGroup(name, plainName(chat.group?.name ?? "") || "a group chat") };
+        return { name, root: here.session, why: say.inBoxGroup(name, plainName(chat.group?.name ?? "") || "a group chat"), note: note.inBoxGroup };
     }
     return { name, root: here.session };
   }
@@ -9115,7 +9124,7 @@ async function movable(kind, thing, signal) {
       return null;
     const kuvo = isObject(session.metadata) && isObject(session.metadata.kuvo) ? session.metadata.kuvo : {};
     if (kuvo.agents || kuvo.agent)
-      return { name: title, why: say.withAgents(title) };
+      return { name: title, why: say.withAgents(title), note: note.withAgents };
     return { name: title, root: thing };
   }
   let bridge;
@@ -9127,18 +9136,30 @@ async function movable(kind, thing, signal) {
   const listed = await askGroups(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, signal).catch(() => null);
   if (listed?.status !== 200)
     return null;
-  return { name: `“${plainName(listed.value?.data?.group?.name ?? "") || "Group chat"}”` };
+  const members = listed.value?.data?.group?.members;
+  return {
+    name: `“${plainName(listed.value?.data?.group?.name ?? "") || "Group chat"}”`,
+    members: Array.isArray(members) ? members.filter((member) => typeof member === "string") : []
+  };
+}
+function botsLiveOn(members, peer) {
+  if (members.some((member) => botHere(member)))
+    return false;
+  const list = readPeerAgents()[peer.key]?.list;
+  if (!Array.isArray(list))
+    return true;
+  return members.every((member) => list.some((agent) => agent.kind === "bot" && agent.id === member));
 }
 async function placesFor(kind, thing, signal) {
   const what = await movable(kind, thing, signal);
   if (!what)
     return null;
-  const why = moveOf(thing) ? say.moving : what.why;
+  const moving = moveOf(thing) !== null;
   const own = ownKey(readLink() ?? {});
   return peersOf(readLink()).filter((peer) => peer.key !== own).map((peer) => {
     const name = plainName(peer.name) || (peer.kind === "mac" ? "Mac" : "Machine");
-    const not = why ?? (olderThanMoves(peer.key) ? say.needsUpdate(name) : undefined);
-    return { key: peer.key, name, kind: peer.kind, ok: !not, ...not ? { why: not } : {} };
+    const not = moving ? [say.moving, note.moving] : what.why ? [what.why, what.note ?? what.why] : olderThanMoves(peer.key) ? [say.needsUpdate(name), note.needsUpdate] : kind === "group" && peer.kind === "machine" && !botsLiveOn(what.members ?? [], peer) ? [say.botsNotThere(what.name, name), note.botsNotThere] : null;
+    return { key: peer.key, name, kind: peer.kind, ok: !not, ...not ? { why: not[0], note: not[1] } : {} };
   });
 }
 function olderThanMoves(key) {

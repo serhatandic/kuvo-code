@@ -3306,7 +3306,8 @@
           ]
          },
          "ok": "bool",
-         "why?": "string"
+         "why?": "string",
+         "note?": "string"
         }
        }
       }
