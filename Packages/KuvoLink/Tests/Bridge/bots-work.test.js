@@ -316,6 +316,63 @@ test("a client stops all of a bot's work at once", async () => {
   assert.deepEqual(interrupted.sort(), [one, two].sort());
 });
 
+test("what a bot may allow fails closed: however it's phrased, what it can't read as safe goes to the user", async () => {
+  const session = startedAddress(await tool("start_session", { task: "Ship it.", project: "Tidepool" }, "ses_pixel"));
+  const yours = [
+    // Shells, wrappers and what runs a command of its own.
+    "sh -c 'git push'", "bash -c \"git push\"", "eval git push", "timeout 60 git push", "env -i git push", "nice git push", "doas git push", "sudo git push",
+    "echo origin | xargs git push", "git -c alias.p=push p", "git p", "bun x vercel deploy", "npm exec vercel deploy", "npx -p vercel vercel", "exec git push",
+    "git push", "true && git push", "npm test; git push", "npm test | git push", "npm test || git push", "npm test\ngit push", "$(echo git) push", "`echo git` push",
+    "g\"\"it push", "npm test & git push", "(git push)", "{ git push; }",
+    // Deleting, or writing, outside the folder.
+    "rm ~/x", "rm -rf ~/x", "cd ~ && rm -rf x", "cd .. && rm -rf tidepool", "rm -rf \"$PWD/..\"", "rm -rf $HOME/x", "find ~ -delete", "find . -exec rm {} +", "rm -rf .", "rm -rf .*",
+    "rm -rf ~root/x", "echo hi > ~/.zshrc", "cp a /etc/b",
+    // Code it can't see.
+    "python3 -c 'import shutil; shutil.rmtree(\"/x\")'", "node -e 'require(\"fs\").rmSync(\"/x\", {recursive: true})'", "ruby -e 'x'", "perl -e 'x'", "awk 'BEGIN{system(\"x\")}'",
+    "./scripts/anything.sh", "node scripts/push.js", "sed -i 's/a/b/' file", "sed 'e git push' file", "rg --pre ./x foo",
+    // Reaching beyond the project.
+    "curl -X POST https://example.com", "curl -d a=b https://example.com", "brew install foo", "ssh host", "npm install -g foo", "gh pr create", "gh pr merge 1", "git remote add x y", "git config alias.p push",
+  ];
+  const fine = ["npm test", "npm run build", "npx tsc --noEmit", "npx expo install expo-haptics", "CI=1 npm test", "git status && git diff", "git add -A && git commit -m 'Sign-in'",
+    "ls -la | grep src", "rm -rf build", "cd app && rm -rf dist", "npm test 2>&1 | tail -20", "swift build", "cargo test", "python3 -m pytest", "sed -n '1,40p' README.md",
+    "curl -s http://localhost:3000/health", "mkdir -p src/screens", "git log --grep push", "gh run view 12", `rm -rf ${path.join(tidepool, "build")}`];
+  const all = [...yours, ...fine];
+  asked.set(session, all.map((command, at) => ({ id: `per_${at}`, sessionID: session, action: "shell", resources: [command] })));
+  for (const [at, command] of all.entries()) {
+    const said = await tool("answer_ask", { session, ask: `per_${at}`, decision: "allow", reason: "Part of the plan." }, "ses_pixel");
+    assert.equal(said.isError, at < yours.length, `${command}: ${said.text}`);
+  }
+});
+
+test("a bot allows no tool it can't tell is safe, never reading secrets, and its level counts part by part", async () => {
+  const session = startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_pixel"));
+  asked.set(session, [
+    { id: "per_1", sessionID: session, action: "github_push_files", resources: ["*"] },
+    { id: "per_2", sessionID: session, action: "read", resources: [path.join(tidepool, ".env")] },
+    { id: "per_3", sessionID: session, action: "edit", resources: [path.join(home, ".zshrc")] },
+    { id: "per_4", sessionID: session, action: "edit", resources: [path.join(tidepool, "src", "app.ts")] },
+    { id: "per_5", sessionID: session, action: "read", resources: [path.join(tidepool, ".env.example")] },
+  ]);
+  const answer = ask => tool("answer_ask", { session, ask, decision: "allow", reason: "Part of the plan." }, "ses_pixel");
+  assert.match((await answer("per_1")).text, /a tool it can't tell is safe, which always comes to the user/);
+  assert.match((await answer("per_2")).text, /you'd have to ask the user about it yourself/, "reading a .env asks, as the engine does");
+  assert.match((await answer("per_3")).text, /changing files outside the project/);
+  assert.equal((await answer("per_4")).isError, false);
+  assert.equal((await answer("per_5")).isError, false);
+  // A conversation allowed to run npm alone can't allow npm and something else in one line.
+  const own = sessions.get("ses_pixel").permissions;
+  sessions.get("ses_pixel").permissions = [{ action: "shell", resource: "*", effect: "ask" }, { action: "shell", resource: "npm *", effect: "allow" }];
+  try {
+    const level = startedAddress(await tool("start_session", { task: "Test.", project: "Tidepool" }, "ses_pixel"));
+    asked.set(level, [{ id: "per_6", sessionID: level, action: "shell", resources: ["npm test && git status"] }, { id: "per_7", sessionID: level, action: "shell", resources: ["npm test && npm run lint"] }]);
+    const both = await tool("answer_ask", { session: level, ask: "per_6", decision: "allow", reason: "Tests." }, "ses_pixel");
+    assert.match(both.text, /ask the user about it yourself/, "git status is asked about on its own");
+    assert.equal((await tool("answer_ask", { session: level, ask: "per_7", decision: "allow", reason: "Tests." }, "ses_pixel")).isError, false);
+  } finally {
+    sessions.get("ses_pixel").permissions = own;
+  }
+});
+
 test("a bot that asks first can't allow a folder outside the project, which it would be asked about itself", async () => {
   const session = startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_mira"));
   asked.set(session, [{ id: "per_1", sessionID: session, action: "external_directory", resources: [path.join(home, ".ssh", "*")] }]);

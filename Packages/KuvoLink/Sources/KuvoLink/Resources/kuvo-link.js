@@ -5,7 +5,7 @@ import { spawn as spawn6 } from "node:child_process";
 import crypto23 from "node:crypto";
 import fs64 from "node:fs";
 import os8 from "node:os";
-import path66 from "node:path";
+import path67 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // Packages/Box/src/shared/wait.ts
@@ -7868,128 +7868,6 @@ import path43 from "node:path";
 
 // Packages/Box/src/link/work/answers.ts
 import path42 from "node:path";
-function commandsOf(line) {
-  const commands = [];
-  let words = [], word = "", quote = null, has = false;
-  const end = () => {
-    if (has)
-      words.push(word);
-    word = "";
-    has = false;
-  };
-  for (let i = 0;i < line.length; i++) {
-    const char = line[i];
-    if (quote) {
-      if (char === quote)
-        quote = null;
-      else if (char === "\\" && quote === '"' && i + 1 < line.length)
-        word += line[++i];
-      else
-        word += char;
-      continue;
-    }
-    if (char === "'" || char === '"') {
-      quote = char;
-      has = true;
-    } else if (char === "\\" && i + 1 < line.length) {
-      word += line[++i];
-      has = true;
-    } else if (/\s/.test(char)) {
-      end();
-    } else if (";|&\n()`".includes(char) || char === "$" && line[i + 1] === "(") {
-      end();
-      if (words.length)
-        commands.push(words);
-      words = [];
-    } else {
-      word += char;
-      has = true;
-    }
-  }
-  end();
-  if (words.length)
-    commands.push(words);
-  return commands;
-}
-function ownWords(words) {
-  let at = 0;
-  while (at < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[at]) || ["sudo", "env", "command", "time", "nohup", "exec", "xargs"].includes(words[at])))
-    at++;
-  return words.slice(at);
-}
-function outside(target, folders) {
-  const written = target.replace(/^~(?=$|\/)/, homeFolder()).replace(/^\$\{?HOME\}?(?=$|\/)/, homeFolder());
-  if (!folders.length)
-    return path42.isAbsolute(written) || written.startsWith("..");
-  return !folders.some((folder) => {
-    const full = path42.resolve(folder, written);
-    return full === folder || full.startsWith(folder.endsWith("/") ? folder : folder + "/");
-  });
-}
-var RELEASE_WORD = /(^|[^a-z])(deploy|release|publish)([^a-z]|$)/i;
-function yoursFor(words, folders) {
-  const own = ownWords(words);
-  if (!own.length)
-    return null;
-  const program = path42.basename(own[0]);
-  const rest = own.slice(1);
-  if (["npx", "bunx"].includes(program) || ["pnpm", "yarn"].includes(program) && rest[0] === "dlx") {
-    const runs = (program === "pnpm" || program === "yarn" ? rest.slice(1) : rest).filter((word, at, all) => !word.startsWith("-") || all.slice(0, at).some((each) => !each.startsWith("-")));
-    if (runs.length)
-      return yoursFor(runs, folders);
-  }
-  if (program === "git") {
-    let at = 0;
-    while (at < rest.length && rest[at].startsWith("-"))
-      at += ["-C", "-c", "--git-dir", "--work-tree", "--namespace"].includes(rest[at]) ? 2 : 1;
-    if (rest[at] === "push")
-      return "pushing";
-  }
-  if (program === "gh") {
-    const [area, action] = rest;
-    if (area === "repo" && ["create", "delete", "edit", "rename", "archive", "fork"].includes(action))
-      return "changing what's on GitHub";
-    if (area === "release" && action !== "list" && action !== "view" && action !== "download")
-      return "changing what's on GitHub";
-    if (area === "pr" && action === "merge" || area === "secret" || area === "workflow" && action === "run" || area === "variable")
-      return "changing what's on GitHub";
-    if (area === "api" && rest.some((word, at) => /^(-X|--method)$/.test(word) ? !/^get$/i.test(rest[at + 1] ?? "") : /^--method=(?!get$)/i.test(word) || /^-X(?!get$)./i.test(word)))
-      return "changing what's on GitHub";
-    if (area === "api" && rest.some((word) => /^(-f|-F|--field|--raw-field|--input)$/.test(word)))
-      return "changing what's on GitHub";
-  }
-  if (["npm", "pnpm", "yarn", "bun"].includes(program) && rest[0] === "publish")
-    return "publishing";
-  if (program === "cargo" && rest[0] === "publish" || program === "pod" && rest[0] === "trunk" && rest[1] === "push" || program === "gem" && rest[0] === "push" || program === "twine" && rest[0] === "upload" || program === "docker" && rest[0] === "push")
-    return "publishing";
-  if (program === "fastlane" && rest.some((word) => /^(deliver|pilot|beta|release|supply|submit|upload_to_\w+)$/.test(word)))
-    return "sending to a store";
-  if (program === "eas" && rest[0] === "submit" || program === "xcrun" && (rest[0] === "altool" || rest[0] === "notarytool" && rest[1] === "submit"))
-    return "sending to a store";
-  if (["vercel", "netlify", "wrangler", "firebase", "flyctl", "fly", "heroku", "terraform", "kubectl", "pulumi", "railway", "render"].includes(program) && rest.some((word) => /^(deploy|publish|up|apply|destroy|delete|rollout|--prod)$/.test(word)))
-    return "deploying";
-  if (program === "rm") {
-    const recursive = rest.some((word) => /^-[a-zA-Z]*[rR]/.test(word) || word === "--recursive");
-    const targets = rest.filter((word) => !word.startsWith("-"));
-    if (recursive && targets.some((target) => outside(target, folders)))
-      return "deleting outside the project";
-  }
-  const task = ["make", "just", "task", "rake", "invoke", "gradle", "gradlew", "mix"].includes(program) ? rest.find((word) => !word.startsWith("-")) : ["npm", "pnpm", "bun"].includes(program) && rest[0] === "run" ? rest[1] : program === "yarn" ? rest[0] === "run" ? rest[1] : rest[0] : undefined;
-  if ([own[0], task].some((word) => word && !word.startsWith("-") && RELEASE_WORD.test(path42.basename(word))))
-    return "releasing or deploying";
-  return null;
-}
-function alwaysYours(action, resources, folders = []) {
-  if (!["shell", "bash"].includes(action))
-    return null;
-  for (const resource of resources)
-    for (const words of commandsOf(resource)) {
-      const why = yoursFor(words, folders);
-      if (why)
-        return why;
-    }
-  return null;
-}
 var matches = (pattern, resource) => new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[\\s\\S]*").replace(/\?/g, ".")}$`).test(resource);
 function ruleFor(rules, action, resource) {
   let effect = "allow";
@@ -7998,9 +7876,15 @@ function ruleFor(rules, action, resource) {
       effect = rule.effect;
   return effect;
 }
-var ENGINE_DEFAULTS = [{ action: "external_directory", resource: "*", effect: "ask" }];
+var ENGINE_DEFAULTS = [
+  { action: "*", resource: "*", effect: "allow" },
+  { action: "read", resource: "*.env", effect: "ask" },
+  { action: "read", resource: "*.env.*", effect: "ask" },
+  { action: "read", resource: "*.env.example", effect: "allow" },
+  { action: "external_directory", resource: "*", effect: "ask" },
+  { action: "doom_loop", resource: "*", effect: "ask" }
+];
 var rulesOf = (own) => [...ENGINE_DEFAULTS, ...permissionsHere() ?? [], ...own];
-var withinLevel = (rules, action, resources) => (resources.length ? resources : ["*"]).every((resource) => ruleFor(rules, action, resource) === "allow");
 async function askersOf(target, session, signal) {
   const found = [session];
   for (let at = 0;at < found.length && at < 40; at++) {
@@ -8053,7 +7937,7 @@ async function noteSession(target, session, change) {
     const metadata = isObject(data?.metadata) ? { ...data.metadata } : {};
     const kuvo = change(isObject(metadata.kuvo) ? { ...metadata.kuvo } : {}, metadata);
     await call(target, "PATCH", at, { metadata: { ...metadata, kuvo } });
-  });
+  }, { stale: 120000, wait: 30000 });
 }
 async function keepAnswer(target, session, answer) {
   await noteSession(target, session, (kuvo) => {
@@ -11998,9 +11882,414 @@ function startedWords(outcome, waits) {
 ${answer}` : "It hasn't answered yet; it may still write back with send_message."), isError: false };
 }
 
+// Packages/Box/src/link/work/policy.ts
+import path55 from "node:path";
+function readLine(line) {
+  const parts = [];
+  let words = [], writes = [], word = "", has = false, quote = null, start = 0;
+  let redirect = null;
+  const no = (what) => ({ unreadable: what });
+  const endWord = () => {
+    if (has) {
+      if (redirect === "write")
+        writes.push(word);
+      else if (redirect !== "read")
+        words.push(word);
+      redirect = null;
+    }
+    word = "";
+    has = false;
+  };
+  const endPart = (at) => {
+    endWord();
+    if (redirect)
+      return false;
+    const text = line.slice(start, at).trim();
+    if (words.length)
+      parts.push({ words, writes, text });
+    else if (text)
+      return false;
+    words = [];
+    writes = [];
+    return true;
+  };
+  for (let i = 0;i < line.length; i++) {
+    const char = line[i];
+    if (quote === "'") {
+      if (char === "'")
+        quote = null;
+      else
+        word += char;
+      continue;
+    }
+    if (quote === '"') {
+      if (char === '"')
+        quote = null;
+      else if (char === "$" || char === "`")
+        return no("something the shell fills in");
+      else if (char === "\\" && i + 1 < line.length)
+        word += line[++i];
+      else
+        word += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      has = true;
+    } else if (char === "\\" && i + 1 < line.length) {
+      if (line[i + 1] === `
+`)
+        i++;
+      else {
+        word += line[++i];
+        has = true;
+      }
+    } else if (char === "$" || char === "`") {
+      return no("something the shell fills in");
+    } else if ("(){}".includes(char)) {
+      return no("a group of commands");
+    } else if (char === "~" && !has && !["/", " ", "\t", `
+`, undefined].includes(line[i + 1])) {
+      return no("another user's folder");
+    } else if (char === "#" && !has) {
+      return no("a comment");
+    } else if (/\s/.test(char) && char !== `
+`) {
+      endWord();
+    } else if (char === `
+` || char === ";") {
+      if (!endPart(i))
+        return no("a part it can't read");
+      start = i + 1;
+    } else if (char === "|" || char === "&") {
+      const pair = line[i + 1] === char;
+      if (char === "&" && !pair) {
+        if (line[i - 1] === ">" && /[0-9]/.test(line[i + 1] ?? "")) {
+          i++;
+          redirect = null;
+          continue;
+        }
+        return no("something running in the background");
+      }
+      if (char === "|" && line[i + 1] === "&")
+        return no("a part it can't read");
+      if (!endPart(i))
+        return no("a part it can't read");
+      if (pair)
+        i++;
+      start = i + 1;
+    } else if (char === ">" || char === "<") {
+      if (has && /^[0-9]$/.test(word)) {
+        word = "";
+        has = false;
+      } else
+        endWord();
+      if (char === "<" && line[i + 1] === "<")
+        return no("text written into the command");
+      if (char === ">" && line[i + 1] === ">")
+        i++;
+      if (char === "<" && line[i + 1] === ">")
+        return no("a part it can't read");
+      if (line[i + 1] === "&")
+        continue;
+      redirect = char === ">" ? "write" : "read";
+    } else {
+      word += char;
+      has = true;
+    }
+  }
+  if (quote)
+    return no("an unclosed quote");
+  if (!endPart(line.length))
+    return no("a part it can't read");
+  return { parts };
+}
+var written2 = (target) => target.replace(/^~(?=$|\/)/, homeFolder());
+var resolved = (target, place) => path55.resolve(place.cwd, written2(target));
+var under2 = (full, folder) => full.startsWith(folder.endsWith("/") ? folder : folder + "/");
+function insideFolders(target, place, strictly = false) {
+  if (target === "/dev/null")
+    return !strictly;
+  const full = resolved(target, place);
+  return place.folders.some((folder) => under2(full, path55.resolve(folder)) || !strictly && full === path55.resolve(folder));
+}
+var CANT = "a command it can't tell is safe";
+var plain2 = (rest) => rest.filter((word) => !word.startsWith("-"));
+var noneOf = (rest, banned) => !rest.some((word) => banned.test(word));
+var reads2 = (banned) => (rest) => banned && !noneOf(rest, banned) ? CANT : null;
+var changes = (strictly) => (rest, place) => {
+  if (plain2(rest).some((target) => /(^|\/)\.[*?[]/.test(target)))
+    return CANT;
+  return plain2(rest).every((target) => insideFolders(target, place, strictly)) ? null : strictly ? "deleting outside the project" : "changing files outside the project";
+};
+var SAFE_SCRIPTS = /^(test|tests|build|lint|typecheck|type-check|check|format|fmt|dev|start|compile|tsc|prettier|eslint)(:[a-z0-9-]+)?$/;
+var SAFE_PACKAGES = {
+  tsc: () => true,
+  typescript: () => true,
+  eslint: () => true,
+  prettier: () => true,
+  jest: () => true,
+  vitest: () => true,
+  knip: () => true,
+  depcheck: () => true,
+  biome: (rest) => ["check", "format", "lint", "ci"].includes(plain2(rest)[0] ?? ""),
+  "@biomejs/biome": (rest) => ["check", "format", "lint", "ci"].includes(plain2(rest)[0] ?? ""),
+  playwright: (rest) => ["test", "install"].includes(plain2(rest)[0] ?? ""),
+  "@playwright/test": (rest) => ["test", "install"].includes(plain2(rest)[0] ?? ""),
+  expo: (rest) => ["install", "doctor", "lint", "start", "export", "prebuild", "customize"].includes(plain2(rest)[0] ?? ""),
+  tailwindcss: () => true,
+  "@tailwindcss/cli": () => true
+};
+function runsPackage(rest) {
+  const at = rest.findIndex((word) => !word.startsWith("-"));
+  if (at < 0 || rest.slice(0, at).some((word) => !/^(-y|--yes|--no-install|--quiet|-q)$/.test(word)))
+    return CANT;
+  const name = rest[at].replace(/(?<=.)@[^/]*$/, "");
+  const check = SAFE_PACKAGES[name];
+  if (!check)
+    return /^(vercel|netlify|wrangler|firebase(-tools)?|eas(-cli)?|surge|gh-pages|np|release-it|semantic-release|changeset)$/.test(name) ? "deploying or publishing" : CANT;
+  return check(rest.slice(at + 1)) ? null : CANT;
+}
+function packageManager(program) {
+  return (rest) => {
+    const [first, ...more] = rest.filter((word) => !/^(--silent|-s|--loglevel=\w+|--frozen-lockfile|--prefer-offline)$/.test(word));
+    if (first === undefined || ["--version", "-v", "ls", "list", "outdated", "view", "info", "why", "audit", "doctor"].includes(first))
+      return first === "audit" && more.includes("fix") ? CANT : null;
+    if (["install", "i", "ci", "add", "remove", "rm", "uninstall", "update", "up", "upgrade"].includes(first))
+      return more.some((word) => /^(--global|-g)$/.test(word)) ? "installing on the computer itself" : null;
+    if (first === "test" || first === "t")
+      return null;
+    if (first === "publish" || first === "pm" && more[0] === "publish")
+      return "publishing";
+    if (program === "npm" && first === "exec" || program === "pnpm" && (first === "dlx" || first === "exec") || program === "yarn" && first === "dlx" || program === "bun" && first === "x")
+      return runsPackage(more);
+    const script = first === "run" || first === "run-script" ? more[0] : program === "yarn" || program === "pnpm" ? first : undefined;
+    if (script !== undefined)
+      return SAFE_SCRIPTS.test(script) ? null : /(deploy|release|publish)/i.test(script) ? "releasing or deploying" : CANT;
+    return CANT;
+  };
+}
+var GIT_SAFE = new Set(["status", "diff", "log", "show", "add", "commit", "checkout", "switch", "restore", "branch", "stash", "fetch", "pull", "merge", "rebase", "init", "rev-parse", "ls-files", "blame", "grep", "tag", "describe", "shortlog", "cherry-pick", "revert", "reset", "mv", "rm", "clean", "worktree", "remote", "config", "submodule", "reflog", "show-ref", "cat-file", "diff-tree", "merge-base", "rev-list", "count-objects", "version"]);
+var git = (rest, place) => {
+  let at = 0;
+  while (at < rest.length && rest[at].startsWith("-")) {
+    if (rest[at] === "-C") {
+      if (!rest[at + 1] || !insideFolders(rest[at + 1], place))
+        return "changing files outside the project";
+      at += 2;
+    } else if (["--no-pager", "--no-optional-locks", "--paginate", "-P"].includes(rest[at]))
+      at++;
+    else
+      return CANT;
+  }
+  const command = rest[at];
+  const args = rest.slice(at + 1);
+  if (command === "push")
+    return "pushing";
+  if (!command || !GIT_SAFE.has(command))
+    return CANT;
+  if (args.some((word) => /^(--exec|--upload-pack|--receive-pack|--config|--ext-diff|--open-files-in-pager)/.test(word) || command === "rebase" && /^-x/.test(word)))
+    return CANT;
+  if (command === "remote" && !(args.length === 0 || ["-v", "show", "get-url"].includes(args[0])))
+    return CANT;
+  if (command === "config" && !(args.length && args.every((word) => /^(--get|--get-all|--list|-l|--show-origin|--local|--global)$/.test(word) || !word.startsWith("-")) && args.some((word) => /^(--get|--get-all|--list|-l)$/.test(word))))
+    return CANT;
+  if (command === "submodule" && !["status", "update", "init", "foreach"].includes(args[0] ?? "status"))
+    return CANT;
+  if (command === "submodule" && args[0] === "foreach")
+    return CANT;
+  if (command === "worktree" && !["list", "add", "prune"].includes(args[0] ?? ""))
+    return CANT;
+  return null;
+};
+var gh = (rest) => {
+  const [area, action] = plain2(rest);
+  if (area === "api") {
+    if (plain2(rest)[1] === "graphql")
+      return CANT;
+    return rest.some((word, at) => /^(-X|--method)$/.test(word) ? !/^get$/i.test(rest[at + 1] ?? "") : /^--method=(?!get$)/i.test(word) || /^-X(?!get$)./i.test(word) || /^(-f|-F|--field|--raw-field|--input)/.test(word)) ? "changing what's on GitHub" : null;
+  }
+  const reading = { pr: ["view", "list", "status", "diff", "checks"], issue: ["view", "list", "status"], run: ["view", "list", "watch"], repo: ["view"], release: ["view", "list"], workflow: ["view", "list"], auth: ["status"] };
+  if (reading[area ?? ""]?.includes(action ?? ""))
+    return null;
+  return area && ["repo", "release", "pr", "secret", "workflow", "variable", "issue"].includes(area) ? "changing what's on GitHub" : CANT;
+};
+var PROGRAMS = {
+  ls: reads2(),
+  cat: reads2(),
+  head: reads2(),
+  tail: reads2(),
+  wc: reads2(),
+  echo: reads2(),
+  printf: reads2(),
+  pwd: reads2(),
+  which: reads2(),
+  whoami: reads2(),
+  date: reads2(),
+  true: reads2(),
+  false: reads2(),
+  test: reads2(),
+  "[": reads2(),
+  diff: reads2(),
+  cmp: reads2(),
+  uniq: reads2(),
+  cut: reads2(),
+  tr: reads2(),
+  jq: reads2(),
+  file: reads2(),
+  stat: reads2(),
+  du: reads2(),
+  df: reads2(),
+  tree: reads2(),
+  basename: reads2(),
+  dirname: reads2(),
+  realpath: reads2(),
+  nl: reads2(),
+  column: reads2(),
+  comm: reads2(),
+  md5: reads2(),
+  shasum: reads2(),
+  sha256sum: reads2(),
+  uname: reads2(),
+  sleep: reads2(),
+  grep: reads2(),
+  egrep: reads2(),
+  fgrep: reads2(),
+  rg: reads2(/^--pre/),
+  sort: reads2(/^(-o|--output)/),
+  find: reads2(/^-(delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/),
+  sed: (rest) => {
+    const options = rest.filter((word) => word.startsWith("-"));
+    const others = rest.filter((word) => !word.startsWith("-"));
+    if (!options.every((word) => /^-[nEr]+$/.test(word)) || !others.length)
+      return CANT;
+    return /^([0-9]+(,([0-9]+|\$))?|\$|\/[^/]*\/)p$/.test(others[0]) ? null : CANT;
+  },
+  mkdir: changes(false),
+  touch: changes(false),
+  cp: changes(false),
+  mv: changes(false),
+  ln: changes(false),
+  chmod: changes(false),
+  rm: changes(true),
+  rmdir: changes(true),
+  unlink: changes(true),
+  cd: (rest, place) => rest.length === 1 && rest[0] !== "-" && insideFolders(rest[0], place) ? null : CANT,
+  git,
+  gh,
+  npm: packageManager("npm"),
+  pnpm: packageManager("pnpm"),
+  yarn: packageManager("yarn"),
+  bun: packageManager("bun"),
+  npx: runsPackage,
+  bunx: runsPackage,
+  pip: (rest) => ["install", "list", "show", "freeze", "--version"].includes(plain2(rest)[0] ?? rest[0] ?? "") && !rest.some((word) => /^(--user|--target|-t|--prefix|--root)$/.test(word)) ? null : CANT,
+  python: (rest) => python(rest),
+  python3: (rest) => python(rest),
+  node: (rest) => rest.length === 1 && /^(-v|--version)$/.test(rest[0]) ? null : CANT,
+  swift: (rest) => ["build", "test", "package", "--version"].includes(rest[0] ?? "") && (rest[0] !== "package" || ["resolve", "update", "describe", "show-dependencies", "dump-package"].includes(rest[1] ?? "")) ? null : CANT,
+  xcodebuild: (rest) => rest.some((word) => /^-exportArchive$/.test(word)) ? "sending to a store" : null,
+  xcrun: (rest) => rest[0] === "simctl" && ["list", "boot", "install", "launch", "terminate", "shutdown", "io", "ui", "openurl", "get_app_container"].includes(rest[1] ?? "") ? null : rest[0] === "altool" || rest[0] === "notarytool" ? "sending to a store" : CANT,
+  cargo: (rest) => ["build", "check", "test", "fmt", "clippy", "doc", "tree", "metadata", "add", "remove", "update", "fetch", "bench", "--version"].includes(rest[0] ?? "") ? null : rest[0] === "publish" ? "publishing" : CANT,
+  go: (rest) => ["build", "test", "vet", "fmt", "list", "version", "env", "generate"].includes(rest[0] ?? "") || rest[0] === "mod" && ["tidy", "download", "verify", "graph", "why"].includes(rest[1] ?? "") ? rest[0] === "generate" ? CANT : null : CANT,
+  make: (rest) => {
+    const target = plain2(rest)[0] ?? "";
+    if (rest.some((word) => /^(-f|--file|-C|--directory|-e)$/.test(word)))
+      return CANT;
+    return ["", "test", "build", "check", "lint", "all", "fmt", "format", "clean"].includes(target) ? null : /(deploy|release|publish)/i.test(target) ? "releasing or deploying" : CANT;
+  },
+  pod: (rest) => ["install", "update", "--version"].includes(rest[0] ?? "") ? null : rest[0] === "trunk" ? "publishing" : CANT,
+  bundle: (rest) => ["install", "check", "--version"].includes(rest[0] ?? "") ? null : CANT,
+  curl: (rest, place) => {
+    if (rest.some((word) => /^(-d|--data|--data-\w+|-F|--form|--form-string|-T|--upload-file|--json|-K|--config|-u|--user)/.test(word)))
+      return CANT;
+    if (rest.some((word, at) => /^(-X|--request)$/.test(word) ? !/^(get|head)$/i.test(rest[at + 1] ?? "") : /^-X(?!get$|head$)./i.test(word)))
+      return CANT;
+    const outputs = rest.flatMap((word, at) => /^(-o|--output)$/.test(word) ? [rest[at + 1] ?? ""] : []);
+    if (rest.some((word) => /^(-O|--remote-name)/.test(word)))
+      return null;
+    return outputs.every((target) => insideFolders(target, place)) ? null : "changing files outside the project";
+  },
+  docker: (rest) => ["ps", "images", "logs", "inspect", "version", "info"].includes(rest[0] ?? "") ? null : rest[0] === "push" ? "publishing" : CANT
+};
+function python(rest) {
+  if (rest.length === 1 && /^(-V|--version)$/.test(rest[0]))
+    return null;
+  if (rest[0] !== "-m")
+    return CANT;
+  const [module, ...more] = rest.slice(1);
+  if (["pytest", "unittest", "mypy", "ruff", "black", "py_compile", "compileall"].includes(module ?? ""))
+    return null;
+  if (module === "pip")
+    return PROGRAMS.pip(more, { cwd: "/", folders: [] });
+  if (module === "venv")
+    return null;
+  return CANT;
+}
+var SAFE_SETTINGS = /^(CI|NODE_ENV|FORCE_COLOR|NO_COLOR|RUST_BACKTRACE|DEBUG|PORT|TZ|LANG|LC_ALL|TERM)=/;
+function commandRefusal(line, folders) {
+  const read = readLine(line);
+  if ("unreadable" in read)
+    return `${CANT} (${read.unreadable})`;
+  if (!read.parts.length)
+    return CANT;
+  if (!folders.length)
+    return CANT;
+  const place = { cwd: path55.resolve(folders[0]), folders };
+  for (const part of read.parts) {
+    let at = 0;
+    while (at < part.words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(part.words[at])) {
+      if (!SAFE_SETTINGS.test(part.words[at]))
+        return CANT;
+      at++;
+    }
+    const [program, ...rest] = part.words.slice(at);
+    if (!program)
+      return CANT;
+    if (program.includes("/"))
+      return /(deploy|release|publish)/i.test(path55.basename(program)) ? "releasing or deploying" : CANT;
+    const check = PROGRAMS[program];
+    if (!check)
+      return CANT;
+    const why = check(rest, place);
+    if (why)
+      return why;
+    if (!part.writes.every((target) => insideFolders(target, place)))
+      return "changing files outside the project";
+    if (program === "cd")
+      place.cwd = resolved(rest[0], place);
+  }
+  return null;
+}
+function partsOf2(line) {
+  const read = readLine(line);
+  return "unreadable" in read ? [line] : read.parts.map((part) => part.text);
+}
+var READS = new Set(["read", "list", "glob", "grep", "webfetch", "websearch", "codesearch", "lsp", "todowrite", "todoread", "question"]);
+var EDITS = new Set(["edit", "write", "patch", "multiedit"]);
+var STARTS = new Set(["subagent", "task", "doom_loop"]);
+function allowRefusal(action, resources, folders, rules, ruleFor) {
+  const asked = resources.length ? resources : ["*"];
+  if (action === "shell" || action === "bash") {
+    for (const resource of asked) {
+      const why = commandRefusal(resource, folders);
+      if (why)
+        return why;
+      if (!partsOf2(resource).every((part) => ruleFor(rules, action, part) === "allow"))
+        return "above";
+    }
+    return null;
+  }
+  if (!READS.has(action) && !EDITS.has(action) && !STARTS.has(action))
+    return action === "external_directory" ? "working outside the project" : "a tool it can't tell is safe";
+  if (EDITS.has(action) && !asked.every((resource) => resource !== "*" && insideFolders(resource, { cwd: path55.resolve(folders[0] ?? "/"), folders })))
+    return "changing files outside the project";
+  return asked.every((resource) => ruleFor(rules, action, resource) === "allow") ? null : "above";
+}
+
 // Packages/Box/src/link/work/tools.ts
 import fs54 from "node:fs";
-import path55 from "node:path";
+import path56 from "node:path";
 var said = (text) => ({ text, isError: false });
 var refused = (text) => ({ text, isError: true });
 var why = (error) => String(error?.message ?? error);
@@ -12070,6 +12359,7 @@ async function stopSessionTool(caller, args, targets, signal) {
   }
   return said(`Stopped "${data.title || "New Session"}".`);
 }
+var projectFolders = (folder) => readProjects().find((each) => each.directory === folder)?.folders ?? [];
 async function answerAskTool(caller, args, targets, signal) {
   const found = await oneOfMine(caller, args.session, targets, "answer", signal);
   if ("error" in found)
@@ -12108,12 +12398,13 @@ async function answerAskTool(caller, args, targets, signal) {
     return refused("Say allow or deny (decision).");
   if (args.decision === "allow") {
     const folder = data.location?.directory ?? data.directory ?? "";
-    const yours = alwaysYours(permission.action, permission.resources, folder ? [folder] : []);
-    if (yours)
-      return refused(`That's ${yours}, which always comes to the user: you can't allow it. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
     const rules = rulesOf(caller.place.data.permissions ?? []);
-    if (!withinLevel(rules, permission.action, permission.resources))
-      return refused(`You can't allow that: you'd have to ask the user about it yourself. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
+    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor);
+    const user = `The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`;
+    if (why === "above")
+      return refused(`You can't allow that: you'd have to ask the user about it yourself. ${user}`);
+    if (why)
+      return refused(`That's ${why}, which always comes to the user: you can't allow it. ${user}`);
   }
   try {
     await call(target, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, args.decision === "allow" ? { decision: "once" } : { decision: "reject", message: `${by.name}: ${reason}` }, signal);
@@ -12139,7 +12430,7 @@ async function makeProjectTool(caller, args, { signal, wait, every } = {}) {
   const place = projectPlace(name);
   const listed = place ? readProjects().find((each) => each.directory === place && !each.removed) : null;
   if (listed)
-    return refused(`There's a project at ${shownPath(place)} already: ${listed.name ?? path55.basename(place)}. Start sessions in it with start_session.`);
+    return refused(`There's a project at ${shownPath(place)} already: ${listed.name ?? path56.basename(place)}. Start sessions in it with start_session.`);
   if (place && fs54.existsSync(place) && !isEmptyFolder(place))
     return refused(`There's a folder at ${shownPath(place)} already, with files in it. Pick another name.`);
   const bot = botOfConversation(caller.session);
@@ -12164,7 +12455,7 @@ function listProjectsTool() {
     return said(`There are no projects on ${HERE} yet.${folder}`);
   const lines = projects.slice(0, 60).map((each) => {
     const git = gitIn(each.directory, ["rev-parse", "--is-inside-work-tree"]) === "true" ? "git" : "not git";
-    return `- ${each.name ?? path55.basename(each.directory)}: ${shownPath(each.directory)} (${git})${each.madeBy ? `, made by ${each.madeBy.name}` : ""}`;
+    return `- ${each.name ?? path56.basename(each.directory)}: ${shownPath(each.directory)} (${git})${each.madeBy ? `, made by ${each.madeBy.name}` : ""}`;
   });
   return said(`Projects on ${HERE}:
 ${lines.join(`
@@ -12451,10 +12742,10 @@ async function* startRoute(context) {
 
 // Packages/Box/src/link/areas/found.ts
 import { readFileSync } from "node:fs";
-import path56 from "node:path";
+import path57 from "node:path";
 function opencodeAuthFile(home = homeFolder(), env = process.env) {
-  const own = "KUVO_OWN_XDG_DATA_HOME" in env ? env.KUVO_OWN_XDG_DATA_HOME : env.XDG_DATA_HOME && !path56.resolve(env.XDG_DATA_HOME).startsWith(path56.resolve(K)) ? env.XDG_DATA_HOME : undefined;
-  return path56.join(own || path56.join(home, ".local", "share"), "opencode", "auth.json");
+  const own = "KUVO_OWN_XDG_DATA_HOME" in env ? env.KUVO_OWN_XDG_DATA_HOME : env.XDG_DATA_HOME && !path57.resolve(env.XDG_DATA_HOME).startsWith(path57.resolve(K)) ? env.XDG_DATA_HOME : undefined;
+  return path57.join(own || path57.join(home, ".local", "share"), "opencode", "auth.json");
 }
 var readFrom = () => process.env.KUVO_DEMO_OPENCODE_AUTH || opencodeAuthFile();
 function readOpencode(file) {
@@ -12553,7 +12844,7 @@ async function* foundRoute(context) {
 
 // Packages/Box/src/link/areas/search.ts
 import fs55 from "node:fs";
-import path57 from "node:path";
+import path58 from "node:path";
 var MOST = 50;
 var MOST_TEXT = 400000;
 var MOST_OUTPUT = 2000;
@@ -12666,7 +12957,7 @@ function textOf2(place, target, session) {
 }
 function fromDisk(name) {
   try {
-    const kept = JSON.parse(fs55.readFileSync(path57.join(SEARCH, name + ".json"), "utf8"));
+    const kept = JSON.parse(fs55.readFileSync(path58.join(SEARCH, name + ".json"), "utf8"));
     if (typeof kept.updated !== "number" || typeof kept.text !== "string" || typeof kept.folded !== "string")
       return null;
     texts.set(name, { updated: kept.updated, folded: kept.folded });
@@ -12676,7 +12967,7 @@ function fromDisk(name) {
   }
 }
 function toDisk(name, kept) {
-  const file = path57.join(SEARCH, name + ".json");
+  const file = path58.join(SEARCH, name + ".json");
   const writing = `${file}.${process.pid}.writing`;
   try {
     fs55.mkdirSync(SEARCH, { recursive: true });
@@ -12694,9 +12985,9 @@ function forgetGone(known, places) {
   try {
     for (const file of fs55.readdirSync(SEARCH)) {
       const name = file.slice(0, -5);
-      const gone = file.endsWith(".json") ? listed(name) && !known.has(name) : file.endsWith(".writing") && Date.now() - fs55.statSync(path57.join(SEARCH, file)).mtimeMs > 60000;
+      const gone = file.endsWith(".json") ? listed(name) && !known.has(name) : file.endsWith(".writing") && Date.now() - fs55.statSync(path58.join(SEARCH, file)).mtimeMs > 60000;
       if (gone)
-        fs55.rmSync(path57.join(SEARCH, file), { force: true });
+        fs55.rmSync(path58.join(SEARCH, file), { force: true });
     }
   } catch {}
 }
@@ -12716,7 +13007,7 @@ function searchText(messages, directory) {
         blocks.push(work[2].trim());
       else {
         const files = (Array.isArray(message.files) ? message.files : []).map((file) => file.name).filter((name) => typeof name === "string" && !!name);
-        blocks.push([ownWords2(written), files.join(", ")].filter(Boolean).join(`
+        blocks.push([ownWords(written), files.join(", ")].filter(Boolean).join(`
 
 `));
       }
@@ -12743,7 +13034,7 @@ function searchText(messages, directory) {
 
 `);
 }
-function ownWords2(written) {
+function ownWords(written) {
   let words = written.trim();
   const kept = [];
   for (;; ) {
@@ -12759,7 +13050,7 @@ function ownWords2(written) {
       kept.unshift(inside);
     if (block[0] === "<attached-files>")
       kept.unshift(inside.split(`
-`).map((line) => path57.basename(line.trim())).filter(Boolean).join(", "));
+`).map((line) => path58.basename(line.trim())).filter(Boolean).join(", "));
     words = words.slice(0, open).trim();
   }
   return [words, ...kept].filter(Boolean).join(`
@@ -12785,11 +13076,11 @@ function snippet(text, at, length) {
 import { execFile as execFile4, execFileSync, spawn as spawn5 } from "node:child_process";
 import fs57 from "node:fs";
 import os5 from "node:os";
-import path59 from "node:path";
+import path60 from "node:path";
 
 // Packages/Box/src/link/areas/file.ts
 import fs56 from "node:fs";
-import path58 from "node:path";
+import path59 from "node:path";
 import { fileURLToPath } from "node:url";
 var FILE_LIMIT = 25 * 1024 * 1024;
 var TYPES = {
@@ -12834,7 +13125,7 @@ async function* fileAt(requestPath, json) {
     return yield* json(413, { message: "That file is too big to open here." });
   if (Number.isFinite(max) && stat.size > max)
     return yield* json(413, { message: "That file is too big to show here." });
-  const type = TYPES[path58.extname(file).slice(1).toLowerCase()] ?? "application/octet-stream";
+  const type = TYPES[path59.extname(file).slice(1).toLowerCase()] ?? "application/octet-stream";
   let handle;
   try {
     handle = await fs56.promises.open(file, "r");
@@ -12857,7 +13148,7 @@ var HASHED = 500;
 var AUTHOR = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"];
 var SCOPES = ["uncommitted", "unstaged", "staged", "branch"];
 var STATUSES = ["added", "deleted", "modified", "renamed"];
-function git(folder, args, changing = false, more = {}) {
+function git2(folder, args, changing = false, more = {}) {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...changing ? {} : { GIT_OPTIONAL_LOCKS: "0" }, ...more };
   if (!changing) {
     return new Promise((resolve) => {
@@ -12879,11 +13170,11 @@ function git(folder, args, changing = false, more = {}) {
   });
 }
 var text = async (folder, args) => {
-  const ran = await git(folder, args);
+  const ran = await git2(folder, args);
   return ran.ok ? ran.out.toString("utf8") : null;
 };
 function folderAt(value) {
-  if (typeof value !== "string" || !path59.isAbsolute(value))
+  if (typeof value !== "string" || !path60.isAbsolute(value))
     return null;
   try {
     return fs57.statSync(value).isDirectory() ? value : null;
@@ -12892,7 +13183,7 @@ function folderAt(value) {
   }
 }
 function inRepository(value) {
-  if (typeof value !== "string" || path59.isAbsolute(value))
+  if (typeof value !== "string" || path60.isAbsolute(value))
     return null;
   const name = value.endsWith("/") ? value.slice(0, -1) : value;
   return name && name.split("/").every((part) => part && part !== "." && part !== "..") ? name : null;
@@ -12909,14 +13200,14 @@ async function changesIn(directory, scope, base) {
   if (!top)
     return { repository: false };
   const root = top;
-  let against = (await git(root, ["rev-parse", "--verify", "-q", "HEAD"])).ok ? "HEAD" : EMPTY_TREE;
+  let against = (await git2(root, ["rev-parse", "--verify", "-q", "HEAD"])).ok ? "HEAD" : EMPTY_TREE;
   if (scope === "branch" && base) {
     const fork = (await text(root, ["merge-base", "HEAD", base]))?.trim();
     if (fork)
       against = fork;
   }
-  const relative = path59.relative(realOr2(root), realOr2(directory));
-  const limit = relative && !relative.startsWith("..") ? relative.split(path59.sep).join("/") : ".";
+  const relative = path60.relative(realOr2(root), realOr2(directory));
+  const limit = relative && !relative.startsWith("..") ? relative.split(path60.sep).join("/") : ".";
   const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
   if (scope === "uncommitted" || scope === "branch")
     args.push(against);
@@ -12945,20 +13236,20 @@ async function changesIn(directory, scope, base) {
   return { repository: true, root, against, patch, untracked, hashes, uncommitted: status === null || status.length > 0 };
 }
 function trash(file) {
-  const name = path59.basename(file);
+  const name = path60.basename(file);
   let into;
   if (process.platform === "darwin" && !process.env.KUVO_CHANGES_TRASH) {
     if (fs57.existsSync("/usr/bin/trash"))
       return void execFileSync("/usr/bin/trash", [file], { stdio: "ignore" });
-    const bin = path59.join(os5.homedir(), ".Trash");
-    into = path59.join(bin, name);
+    const bin = path60.join(os5.homedir(), ".Trash");
+    into = path60.join(bin, name);
     for (let n = 2;fs57.existsSync(into); n++)
-      into = path59.join(bin, `${name} ${n}`);
+      into = path60.join(bin, `${name} ${n}`);
   } else {
     const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").replace(/\..*/, "");
-    into = path59.join(process.env.KUVO_CHANGES_TRASH || path59.join(K, "trash"), `${stamp}-${process.pid}-${Math.random().toString(36).slice(2, 6)}`, name);
+    into = path60.join(process.env.KUVO_CHANGES_TRASH || path60.join(K, "trash"), `${stamp}-${process.pid}-${Math.random().toString(36).slice(2, 6)}`, name);
   }
-  fs57.mkdirSync(path59.dirname(into), { recursive: true });
+  fs57.mkdirSync(path60.dirname(into), { recursive: true });
   try {
     fs57.renameSync(file, into);
   } catch (error) {
@@ -12979,7 +13270,7 @@ function inTheWay(root, name) {
   const folders = name.split("/").slice(0, -1);
   let at = root;
   for (const folder of folders) {
-    at = path59.join(at, folder);
+    at = path60.join(at, folder);
     const found = kind(at);
     if (!found)
       return null;
@@ -12990,14 +13281,14 @@ function inTheWay(root, name) {
 }
 async function perform(action, root, file, scope) {
   const paths = [file.path, ...file.oldPath ? [file.oldPath] : []];
-  const on = async (args) => (await git(root, ["--literal-pathspecs", ...args], true)).ok;
+  const on = async (args) => (await git2(root, ["--literal-pathspecs", ...args], true)).ok;
   const run = async (args) => await on(args) ? null : `git couldn’t ${args[0] ?? "do that"} ${file.path}.`;
   const away = (target) => {
     try {
       trash(target);
       return null;
     } catch {
-      return `Couldn’t move ${path59.basename(target)} out of the way.`;
+      return `Couldn’t move ${path60.basename(target)} out of the way.`;
     }
   };
   if (action === "stage") {
@@ -13021,7 +13312,7 @@ async function perform(action, root, file, scope) {
           return failed;
         continue;
       }
-      const target = path59.join(root, name);
+      const target = path60.join(root, name);
       if (!kind(target)?.isDirectory())
         continue;
       const kept = await text(root, ["--literal-pathspecs", ...scope === "unstaged" ? ["ls-files", "-s"] : ["ls-tree", "HEAD"], "--", name]);
@@ -13035,7 +13326,7 @@ async function perform(action, root, file, scope) {
     }
     return null;
   };
-  const gone = (name) => kind(path59.join(root, name)) ? away(path59.join(root, name)) : null;
+  const gone = (name) => kind(path60.join(root, name)) ? away(path60.join(root, name)) : null;
   if (file.status === "added")
     return await untrack(file.path) ?? gone(file.path);
   if (file.status === "renamed" && file.oldPath) {
@@ -13052,7 +13343,7 @@ async function commit(directory, message, push, author) {
   if (!root)
     return "Not a git repository.";
   const said = async (args) => {
-    const ran = await git(root, args, true, author);
+    const ran = await git2(root, args, true, author);
     if (ran.ok)
       return null;
     const words = (ran.out.toString("utf8") + `
@@ -13060,7 +13351,7 @@ async function commit(directory, message, push, author) {
     return words || `git ${args[0]} failed.`;
   };
   if (!await hasStaged(root)) {
-    const relative = path59.relative(realOr2(root), realOr2(directory));
+    const relative = path60.relative(realOr2(root), realOr2(directory));
     const failed = await said(["add", "-A", "--", relative && !relative.startsWith("..") ? relative : "."]);
     if (failed)
       return failed;
@@ -13074,7 +13365,7 @@ async function commit(directory, message, push, author) {
   return pushed && `Committed, but the push didn’t go through:
 ${pushed}`;
 }
-var hasStaged = async (directory) => !(await git(directory, ["diff", "--cached", "--quiet"])).ok;
+var hasStaged = async (directory) => !(await git2(directory, ["diff", "--cached", "--quiet"])).ok;
 async function commitDiff(directory, limit = 40000) {
   const staged = await hasStaged(directory);
   let diff;
@@ -13102,12 +13393,12 @@ async function* changesRoute(context) {
     const object = asked.get("object") ?? "";
     if (!root || !/^[0-9A-Za-z_.\-~^/]*:[^\0]+$/.test(object) || object.startsWith("-"))
       return yield* json(400, { message: "Name a repository and a file in it." });
-    const ran = await git(root, ["cat-file", "-s", object]);
+    const ran = await git2(root, ["cat-file", "-s", object]);
     if (!ran.ok)
       return yield* json(404, { message: "git has no such file." });
     if (Number(ran.out.toString().trim()) > FILE_LIMIT)
       return yield* json(413, { message: "That file is too big to open here." });
-    const shown = await git(root, ["cat-file", "blob", object]);
+    const shown = await git2(root, ["cat-file", "blob", object]);
     if (!shown.ok)
       return yield* json(404, { message: "git has no such file." });
     return yield* [{ head: { status: 200, headers: { "content-type": "application/octet-stream", "content-length": String(shown.out.length) } } }, { body: shown.out }];
@@ -13260,15 +13551,15 @@ async function* botsRoute(context) {
 
 // Packages/Box/src/link/areas/folders.ts
 import fs58 from "node:fs";
-import path60 from "node:path";
+import path61 from "node:path";
 function listFolders(requestPath) {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
   const home = homeFolder();
   const given = (query.get("path") ?? "").trim();
-  const folder = !given || given === "~" ? home : given.startsWith("~/") ? path60.join(home, given.slice(2)) : given;
-  if (!path60.isAbsolute(folder))
+  const folder = !given || given === "~" ? home : given.startsWith("~/") ? path61.join(home, given.slice(2)) : given;
+  if (!path61.isAbsolute(folder))
     return { status: 400, value: { message: "Send a folder's full path, or one that starts with ~/." } };
-  const at = path60.resolve(folder);
+  const at = path61.resolve(folder);
   let entries;
   try {
     entries = fs58.readdirSync(at, { withFileTypes: true });
@@ -13281,29 +13572,29 @@ function listFolders(requestPath) {
   const asks = at === home ? promptedFolders() : new Set;
   const isFolder = (entry) => entry.isDirectory() || entry.isSymbolicLink() && (() => {
     try {
-      return fs58.statSync(path60.join(at, entry.name)).isDirectory();
+      return fs58.statSync(path61.join(at, entry.name)).isDirectory();
     } catch {
       return false;
     }
   })();
-  const folders = entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && isFolder(entry)).map((entry) => !asks.has(entry.name) && fs58.existsSync(path60.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
-  return { status: 200, value: { path: at, home, parent: at === path60.dirname(at) ? null : path60.dirname(at), folders } };
+  const folders = entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && isFolder(entry)).map((entry) => !asks.has(entry.name) && fs58.existsSync(path61.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+  return { status: 200, value: { path: at, home, parent: at === path61.dirname(at) ? null : path61.dirname(at), folders } };
 }
 function makeFolder(body) {
   const given = typeof body?.path === "string" ? body.path.trim() : "";
   const home = homeFolder();
-  const folder = given.startsWith("~/") ? path60.join(home, given.slice(2)) : given;
-  if (!path60.isAbsolute(folder))
+  const folder = given.startsWith("~/") ? path61.join(home, given.slice(2)) : given;
+  if (!path61.isAbsolute(folder))
     return { status: 400, value: { message: "Send the new folder's full path, or one that starts with ~/." } };
-  const at = path60.resolve(folder);
+  const at = path61.resolve(folder);
   if (fs58.existsSync(at))
-    return { status: 409, value: { message: `There's already something called ${path60.basename(at)} there.` } };
+    return { status: 409, value: { message: `There's already something called ${path61.basename(at)} there.` } };
   try {
     fs58.mkdirSync(at);
   } catch (error) {
     if (error?.code === "ENOENT")
-      return { status: 404, value: { message: `There's no folder ${path60.dirname(at)} here.` } };
-    return { status: 403, value: { message: `A folder can't be made in ${path60.dirname(at)} here.` } };
+      return { status: 404, value: { message: `There's no folder ${path61.dirname(at)} here.` } };
+    return { status: 403, value: { message: `A folder can't be made in ${path61.dirname(at)} here.` } };
   }
   return { status: 200, value: { path: at } };
 }
@@ -13360,7 +13651,7 @@ async function* artifactsRoute(context) {
 
 // Packages/Box/src/link/areas/info.ts
 import fs59 from "node:fs";
-import path61 from "node:path";
+import path62 from "node:path";
 
 // Packages/Box/src/link/version.ts
 var BRIDGE_VERSION = "0.9.110";
@@ -13378,8 +13669,8 @@ async function* infoRoute(context) {
       started = fs59.statSync(ENGINE_FILE).mtimeMs / 1000;
     } catch {}
   const running = Boolean(engine.pid && processRuns(engine.pid, `${K}/engine/`));
-  const stopped = fs59.existsSync(path61.join(RUN, "stopped"));
-  const chats = path61.join(K, "chats");
+  const stopped = fs59.existsSync(path62.join(RUN, "stopped"));
+  const chats = path62.join(K, "chats");
   try {
     fs59.mkdirSync(chats, { recursive: true });
   } catch {}
@@ -13404,13 +13695,13 @@ async function* namedRoute(context) {
 }
 
 // Packages/Box/src/link/areas/personalities.ts
-import path62 from "node:path";
+import path63 from "node:path";
 async function* personalityEventsRoute(context) {
   const { request, signal, json } = context;
   if (request.method.toUpperCase() !== "GET")
     return yield* json(405, {});
   yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-  return yield* followed(() => ({ personalities: readPersonalities().personalities }), personalityFollowers, signal, { folders: [path62.dirname(PERSONALITIES_FILE)], recursive: false });
+  return yield* followed(() => ({ personalities: readPersonalities().personalities }), personalityFollowers, signal, { folders: [path63.dirname(PERSONALITIES_FILE)], recursive: false });
 }
 async function* personalitiesDocumentRoute(context) {
   const { request, route, readEngine, readBridge, json } = context;
@@ -13587,7 +13878,7 @@ async function* pluginSearchRoute(context) {
 
 // Packages/Box/src/link/areas/programs.ts
 import fs60 from "node:fs";
-import path63 from "node:path";
+import path64 from "node:path";
 function findProgram(requestPath, PATH = process.env.PATH ?? "") {
   const name = (new URLSearchParams(requestPath.split("?")[1] ?? "").get("name") ?? "").trim();
   if (!name)
@@ -13603,10 +13894,10 @@ function findProgram(requestPath, PATH = process.env.PATH ?? "") {
   if (/^\.\.?\//.test(name) || name.includes("$") || /^~[^/]/.test(name))
     return { status: 200, value: { name, path: null, unknown: true } };
   if (name.includes("/")) {
-    const file = name.startsWith("~/") ? path63.join(homeFolder(), name.slice(2)) : name;
-    return { status: 200, value: { name, path: path63.isAbsolute(file) && runnable(file) ? file : null } };
+    const file = name.startsWith("~/") ? path64.join(homeFolder(), name.slice(2)) : name;
+    return { status: 200, value: { name, path: path64.isAbsolute(file) && runnable(file) ? file : null } };
   }
-  const found = PATH.split(path63.delimiter).filter(Boolean).map((folder) => path63.join(folder, name)).find(runnable);
+  const found = PATH.split(path64.delimiter).filter(Boolean).map((folder) => path64.join(folder, name)).find(runnable);
   return { status: 200, value: { name, path: found ?? null } };
 }
 async function* programsRoute(context) {
@@ -13677,7 +13968,7 @@ import fs62 from "node:fs";
 
 // Packages/Box/src/link/areas/mcp-catalog.ts
 import fs61 from "node:fs";
-import path64 from "node:path";
+import path65 from "node:path";
 
 // Packages/Box/src/shared/routes/settings.ts
 var CONFIG = map(any);
@@ -13710,7 +14001,7 @@ var accessOf = (server) => {
   return MCP_ACCESS.includes(access) ? access : null;
 };
 var offered = (server, mac) => typeof server?.id === "string" && (mac || !server.macOnly) && accessOf(server) !== null;
-var CATALOG_FILE = path64.join(K, "bin", "mcp-catalog.json");
+var CATALOG_FILE = path65.join(K, "bin", "mcp-catalog.json");
 function mcpCatalog(settings, file = CATALOG_FILE, mac = IS_MAC) {
   let servers = [];
   try {
@@ -14066,7 +14357,7 @@ async function* newProjectRoute(context) {
 
 // Packages/Box/src/link/mac/routes.ts
 import fs63 from "node:fs";
-import path65 from "node:path";
+import path66 from "node:path";
 var macPhones = () => {
   const link = readLink();
   return {
@@ -14227,7 +14518,7 @@ async function* macLinkRoute(route, request, signal) {
             peer: letter.peer,
             ...typeof letter.answers === "string" ? { answers: letter.answers } : {}
           };
-          writePrivate(path65.join(SENDING, `${letter.id}.json`), JSON.stringify(kept));
+          writePrivate(path66.join(SENDING, `${letter.id}.json`), JSON.stringify(kept));
         }
         if (isObject(given.seen)) {
           locked(PEER_LOCK, () => {
@@ -14604,7 +14895,7 @@ async function run2() {
   fs64.writeFileSync(PID_FILE, String(process.pid), { mode: 384 });
   fs64.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 384 });
   for (const folder of ["present", "connected"])
-    fs64.rmSync(path66.join(RUN, folder), { recursive: true, force: true });
+    fs64.rmSync(path67.join(RUN, folder), { recursive: true, force: true });
   try {
     keepJobs();
   } catch {}
@@ -14886,7 +15177,7 @@ async function serve() {
   sendWakes();
   if (IS_MAC)
     runMacLink().catch(() => {});
-  const testsAlone = process.env.KUVO_TEST_NO_PEERS && path66.basename(path66.dirname(path66.resolve(K))) !== "run.kuvo.code";
+  const testsAlone = process.env.KUVO_TEST_NO_PEERS && path67.basename(path67.dirname(path67.resolve(K))) !== "run.kuvo.code";
   if (IS_MAC && !testsAlone)
     runMacPeers();
   keepSkillTrashClear();
@@ -15062,7 +15353,7 @@ if (main) {
   else if (mode === "update") {
     const args = process.argv.slice(3);
     const option = (name) => args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined;
-    const test = option("--url") && option("--key") && path66.resolve(K) !== path66.join(homeFolder(), ".kuvo-code");
+    const test = option("--url") && option("--key") && path67.resolve(K) !== path67.join(homeFolder(), ".kuvo-code");
     const outcome = await update({ now: args.includes("--now"), step: (running) => noteUpdate({ running }), ...test ? { url: option("--url"), keys: [option("--key")], blocked: null } : {} });
     noteUpdate({ running: null, ...outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } } });
     if (outcome.result === "updated") {

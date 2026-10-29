@@ -8,7 +8,8 @@ import { call } from "../engine/client";
 import { stopSession } from "../engine/queue";
 import { holdArchived } from "../areas/wakes";
 import { noteWorkChanged } from "./changes";
-import { alwaysYours, keepAnswer, noteSession, pendingAsk, permissionWords, rulesOf, withinLevel } from "./answers";
+import { keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, rulesOf } from "./answers";
+import { allowRefusal } from "./policy";
 import fs from "node:fs";
 import path from "node:path";
 import { readProjects } from "../areas/projects";
@@ -103,6 +104,9 @@ export async function stopSessionTool(caller: Caller, args: Record<string, unkno
   return said(`Stopped "${data.title || "New Session"}".`);
 }
 
+// A project's other folders, which its sessions work in as in its own.
+const projectFolders = (folder: string): readonly string[] => readProjects().find(each => each.directory === folder)?.folders ?? [];
+
 /** answer_ask: what one of the caller's sessions asks, answered. A permission it may allow only
  * where it could go ahead itself and never what always comes to the user; it may always say no. A
  * question it answers in words. Kept on the session, with why. */
@@ -137,10 +141,11 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
   if (args.decision !== "allow" && args.decision !== "deny") return refused("Say allow or deny (decision).");
   if (args.decision === "allow") {
     const folder = data.location?.directory ?? data.directory ?? "";
-    const yours = alwaysYours(permission.action, permission.resources, folder ? [folder] : []);
-    if (yours) return refused(`That's ${yours}, which always comes to the user: you can't allow it. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
     const rules = rulesOf((caller.place.data.permissions ?? []) as KitRule[]);
-    if (!withinLevel(rules, permission.action, permission.resources)) return refused(`You can't allow that: you'd have to ask the user about it yourself. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
+    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor);
+    const user = `The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`;
+    if (why === "above") return refused(`You can't allow that: you'd have to ask the user about it yourself. ${user}`);
+    if (why) return refused(`That's ${why}, which always comes to the user: you can't allow it. ${user}`);
   }
   try {
     await call(target, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, args.decision === "allow" ? { decision: "once" } : { decision: "reject", message: `${by.name}: ${reason}` }, signal);

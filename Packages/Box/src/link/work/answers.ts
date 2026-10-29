@@ -1,7 +1,8 @@
 // A bot answering what its sessions ask (answer_ask, PROTOCOL.md "Work"): a permission it may allow
-// only where it could go ahead itself (the engine's rules for its own conversation allow it), never
-// what always comes to you (pushing, publishing, releasing, deploying, deleting outside the
-// project), and saying no is always its to do. An ask one of a session's subagents makes is the
+// only where it could go ahead itself (the engine's rules for its own conversation allow it, part
+// by part) and what it allows reads as safe (`policy.ts`: what it can't tell is safe, pushing,
+// publishing, deploying and deleting outside the project come to you), and saying no is always its
+// to do. An ask one of a session's subagents makes is the
 // session's. Each answer is kept on the session (`kuvo.answers`), for every client to show it on
 // the step that asked ("Allowed by Pixel") and in the bot's work. A question it answers in words.
 
@@ -18,120 +19,6 @@ import type { WorkAnswer } from "../../shared/routes/work";
 import type { KitRule } from "../bots/kit";
 import type { EngineSession } from "../engine/sessions";
 
-// The parts of a command line: each simple command's words, quotes taken off.
-function commandsOf(line: string): string[][] {
-  const commands: string[][] = [];
-  let words: string[] = [], word = "", quote: string | null = null, has = false;
-  const end = () => {
-    if (has) words.push(word);
-    word = "";
-    has = false;
-  };
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    if (quote) {
-      if (char === quote) quote = null;
-      else if (char === "\\" && quote === "\"" && i + 1 < line.length) word += line[++i];
-      else word += char;
-      continue;
-    }
-    if (char === "'" || char === "\"") {
-      quote = char;
-      has = true;
-    } else if (char === "\\" && i + 1 < line.length) {
-      word += line[++i];
-      has = true;
-    } else if (/\s/.test(char)) {
-      end();
-    } else if (";|&\n()`".includes(char) || (char === "$" && line[i + 1] === "(")) {
-      end();
-      if (words.length) commands.push(words);
-      words = [];
-    } else {
-      word += char;
-      has = true;
-    }
-  }
-  end();
-  if (words.length) commands.push(words);
-  return commands;
-}
-
-// A command's own words: what it runs, past `VAR=…`, `sudo`, `env`, `command`, `time`, `nohup`.
-function ownWords(words: string[]): string[] {
-  let at = 0;
-  while (at < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[at]) || ["sudo", "env", "command", "time", "nohup", "exec", "xargs"].includes(words[at]))) at++;
-  return words.slice(at);
-}
-
-// Whether a path the command names is outside `folders` (or anywhere, with none).
-function outside(target: string, folders: readonly string[]): boolean {
-  const written = target.replace(/^~(?=$|\/)/, homeFolder()).replace(/^\$\{?HOME\}?(?=$|\/)/, homeFolder());
-  if (!folders.length) return path.isAbsolute(written) || written.startsWith("..");
-  return !folders.some(folder => {
-    const full = path.resolve(folder, written);
-    return full === folder || full.startsWith(folder.endsWith("/") ? folder : folder + "/");
-  });
-}
-
-const RELEASE_WORD = /(^|[^a-z])(deploy|release|publish)([^a-z]|$)/i;
-
-/** Why one simple command always comes to you, or null. `folders`: its session's. */
-function yoursFor(words: string[], folders: readonly string[]): string | null {
-  const own = ownWords(words);
-  if (!own.length) return null;
-  const program = path.basename(own[0]);
-  const rest = own.slice(1);
-  // What a package runner runs (`npx vercel --prod`, `pnpm dlx …`), judged as itself.
-  if (["npx", "bunx"].includes(program) || (["pnpm", "yarn"].includes(program) && rest[0] === "dlx")) {
-    const runs = (program === "pnpm" || program === "yarn" ? rest.slice(1) : rest).filter((word, at, all) => !word.startsWith("-") || all.slice(0, at).some(each => !each.startsWith("-")));
-    if (runs.length) return yoursFor(runs, folders);
-  }
-  if (program === "git") {
-    // Its subcommand: the first word past its options (and their values).
-    let at = 0;
-    while (at < rest.length && rest[at].startsWith("-")) at += ["-C", "-c", "--git-dir", "--work-tree", "--namespace"].includes(rest[at]) ? 2 : 1;
-    if (rest[at] === "push") return "pushing";
-  }
-  if (program === "gh") {
-    const [area, action] = rest;
-    if (area === "repo" && ["create", "delete", "edit", "rename", "archive", "fork"].includes(action)) return "changing what's on GitHub";
-    if (area === "release" && action !== "list" && action !== "view" && action !== "download") return "changing what's on GitHub";
-    if ((area === "pr" && action === "merge") || area === "secret" || (area === "workflow" && action === "run") || area === "variable") return "changing what's on GitHub";
-    if (area === "api" && rest.some((word, at) => /^(-X|--method)$/.test(word) ? !/^get$/i.test(rest[at + 1] ?? "") : /^--method=(?!get$)/i.test(word) || /^-X(?!get$)./i.test(word))) return "changing what's on GitHub";
-    if (area === "api" && rest.some(word => /^(-f|-F|--field|--raw-field|--input)$/.test(word))) return "changing what's on GitHub";
-  }
-  if (["npm", "pnpm", "yarn", "bun"].includes(program) && rest[0] === "publish") return "publishing";
-  if ((program === "cargo" && rest[0] === "publish") || (program === "pod" && rest[0] === "trunk" && rest[1] === "push") || (program === "gem" && rest[0] === "push") || (program === "twine" && rest[0] === "upload") || (program === "docker" && rest[0] === "push")) return "publishing";
-  if (program === "fastlane" && rest.some(word => /^(deliver|pilot|beta|release|supply|submit|upload_to_\w+)$/.test(word))) return "sending to a store";
-  if ((program === "eas" && rest[0] === "submit") || (program === "xcrun" && (rest[0] === "altool" || (rest[0] === "notarytool" && rest[1] === "submit")))) return "sending to a store";
-  if (["vercel", "netlify", "wrangler", "firebase", "flyctl", "fly", "heroku", "terraform", "kubectl", "pulumi", "railway", "render"].includes(program)
-    && rest.some(word => /^(deploy|publish|up|apply|destroy|delete|rollout|--prod)$/.test(word))) return "deploying";
-  if (program === "rm") {
-    const recursive = rest.some(word => /^-[a-zA-Z]*[rR]/.test(word) || word === "--recursive");
-    const targets = rest.filter(word => !word.startsWith("-"));
-    if (recursive && targets.some(target => outside(target, folders))) return "deleting outside the project";
-  }
-  // A script or task named for it (`./scripts/publish.sh`, `npm run deploy`, `make release`), not
-  // a flag or an argument (`cargo build --release`).
-  const task = ["make", "just", "task", "rake", "invoke", "gradle", "gradlew", "mix"].includes(program) ? rest.find(word => !word.startsWith("-"))
-    : ["npm", "pnpm", "bun"].includes(program) && rest[0] === "run" ? rest[1]
-    : program === "yarn" ? (rest[0] === "run" ? rest[1] : rest[0]) : undefined;
-  if ([own[0], task].some(word => word && !word.startsWith("-") && RELEASE_WORD.test(path.basename(word)))) return "releasing or deploying";
-  return null;
-}
-
-/** Why a permission always comes to you, or null for one a bot may allow. `folders`: the asking
- * session's, for what deleting outside them is. */
-export function alwaysYours(action: string, resources: readonly string[], folders: readonly string[] = []): string | null {
-  if (!["shell", "bash"].includes(action)) return null;
-  for (const resource of resources) for (const words of commandsOf(resource)) {
-    const why = yoursFor(words, folders);
-    if (why) return why;
-  }
-  return null;
-}
-
 // A rule's resource as the engine matches it: `*` any text, `?` one character.
 const matches = (pattern: string, resource: string) => new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[\\s\\S]*").replace(/\?/g, ".")}$`).test(resource);
 
@@ -143,17 +30,22 @@ export function ruleFor(rules: readonly KitRule[], action: string, resource: str
   return effect;
 }
 
-/** The engine's own, before Settings › Permissions: a folder outside the project asks. */
-const ENGINE_DEFAULTS: KitRule[] = [{ action: "external_directory", resource: "*", effect: "ask" }];
+/** The engine's own, before Settings › Permissions (its default agent's): reading a `.env` file
+ * asks (not `.env.example`), a folder outside the project asks, and so does carrying on after
+ * failing again and again. */
+const ENGINE_DEFAULTS: KitRule[] = [
+  { action: "*", resource: "*", effect: "allow" },
+  { action: "read", resource: "*.env", effect: "ask" },
+  { action: "read", resource: "*.env.*", effect: "ask" },
+  { action: "read", resource: "*.env.example", effect: "allow" },
+  { action: "external_directory", resource: "*", effect: "ask" },
+  { action: "doom_loop", resource: "*", effect: "ask" },
+];
 
 /** The rules a conversation goes by, as the engine applies them: its defaults, this box's Settings ›
  * Permissions, then the conversation's own. */
 export const rulesOf = (own: readonly KitRule[]): KitRule[] => [...ENGINE_DEFAULTS, ...(permissionsHere() ?? []), ...own];
 
-/** Whether a conversation with `rules` (all of them, `rulesOf`) could do all of what's asked without
- * asking itself. */
-export const withinLevel = (rules: readonly KitRule[], action: string, resources: readonly string[]) =>
-  (resources.length ? resources : ["*"]).every(resource => ruleFor(rules, action, resource) === "allow");
 
 /** A permission a session asks (it, or one of its subagents: `asker`), as the engine lists it. */
 export interface PendingPermission {
@@ -223,13 +115,14 @@ const KEPT = 40;
 /** A session's notes changed, one change at a time across processes: the engine keeps them whole,
  * so they're read first and sent back with the change (to its `kuvo`, and to the rest of them). */
 export async function noteSession(target: Target, session: string, change: (kuvo: Record<string, unknown>, metadata: Record<string, unknown>) => Record<string, unknown>): Promise<void> {
+  // (Held for as long as the engine takes to answer twice: never taken from a slow one.)
   await lockedWhile(path.join(WORK_FOLDER, ".notes.lock"), async () => {
     const at = `/api/session/${encodeURIComponent(session)}`;
     const data = await call(target, "GET", at) as Partial<EngineSession> | null;
     const metadata: Record<string, unknown> = isObject(data?.metadata) ? { ...data.metadata } : {};
     const kuvo = change(isObject(metadata.kuvo) ? { ...metadata.kuvo } : {}, metadata);
     await call(target, "PATCH", at, { metadata: { ...metadata, kuvo } });
-  });
+  }, { stale: 120_000, wait: 30_000 });
 }
 
 /** An answer kept on its session, for every client to show. */
