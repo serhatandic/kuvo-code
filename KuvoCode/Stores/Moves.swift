@@ -1,4 +1,4 @@
-import ClientSessions
+import ClientDesign
 import Foundation
 import OpenCodeKit
 
@@ -74,8 +74,6 @@ final class Moves {
         case notConnected(String)
         /// A machine whose box doesn't talk to your other computers yet.
         case needsUpdate(String)
-        /// A machine another Mac set up, which moves things from there.
-        case anotherMacs(String)
         /// What the box said.
         case refused(String)
         /// Something sent to one that's moving.
@@ -84,7 +82,6 @@ final class Moves {
             switch self {
             case .notConnected(let place): "\(place) isn’t connected. Connect to it, then try again."
             case .needsUpdate(let place): "\(place) needs a newer Kuvo Code before things can move to or from it. It updates by itself overnight, or connect to it from this Mac."
-            case .anotherMacs(let place): "\(place) is run from another Mac. Move things to or from it there."
             case .refused(let message): message
             case .moving: "It’s moving to another computer. Try again once it’s there."
             }
@@ -145,13 +142,15 @@ final class Moves {
         return answer.places
     }
 
-    /// The bots' and group chats' places, read ahead so their menus open with them: as Kuvo Code
-    /// starts or a machine connects, and as moves change.
+    /// The bots', chats' and group chats' places, read ahead so their menus open with them (a menu
+    /// that's open isn't drawn again): as Kuvo Code starts or a machine connects, and as moves change.
     private func readPlacesAhead() {
         prefetching?.cancel()
         prefetching = Task { [weak self] in
             guard let app = self?.app else { return }
+            let chats = app.workspace.sessions.filter { $0.parentID == nil && Workspace.isChat($0.location.directory) && !Workspace.isArchived($0) }
             let things = app.bots.list.map { ("bot", $0.id, $0.machine) } + app.chats.list.map { ("group", $0.id, app.chats.machine(of: $0.id)) }
+                + chats.map { ("chat", $0.id, RemoteFolder.machine(of: $0.location.directory)) }
             for (kind, id, machine) in things {
                 guard !Task.isCancelled, let self else { return }
                 await self.loadPlaces(kind, id, from: machine)
@@ -165,18 +164,19 @@ final class Moves {
         machine.flatMap(cantAsk)?.errorDescription
     }
 
+    /// This Mac reaches a machine's box over SSH, one another Mac set up too (it says itself what
+    /// it can move).
     private func cantAsk(_ machine: String) -> Failure? {
         guard let app else { return nil }
         let name = placeName(machine)
         if app.machines.engine(machine)?.isReady != true { return .notConnected(name) }
-        if app.phoneLink.machineIsAnotherMacs(machine) { return .anotherMacs(name) }
-        if app.phoneLink.key(of: machine) == nil { return .needsUpdate(name) }
+        if !app.phoneLink.machineIsAnotherMacs(machine), app.phoneLink.key(of: machine) == nil { return .needsUpdate(name) }
         return nil
     }
 
     /// Your other computers this Mac knows of, for a menu opened before its box has said (each is
-    /// asked again as it's picked): this Mac, and each machine you added (one this Mac can't move
-    /// things with, with why).
+    /// asked again as it's picked): this Mac, and each machine you added (one whose box is from
+    /// before moves, with why). One another Mac set up is that Mac's to tell: the box says.
     func knownPlaces(from machine: String?) -> [Place] {
         guard let app else { return [] }
         var known: [Place] = []
@@ -184,7 +184,7 @@ final class Moves {
         for other in app.machines.list where other.id != machine {
             let name = placeName(other.id)
             if app.phoneLink.machineIsAnotherMacs(other.id) {
-                known.append(Place(key: "?" + other.id, name: name, kind: "machine", ok: false, why: Failure.anotherMacs(name).errorDescription, note: "Run from another Mac"))
+                continue
             } else if let key = app.phoneLink.key(of: other.id) {
                 known.append(Place(key: key, name: name, kind: "machine", ok: true))
             } else {

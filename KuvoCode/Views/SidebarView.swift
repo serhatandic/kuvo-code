@@ -1786,7 +1786,7 @@ private struct MoveToComputerMenu: View {
             if let why = app.moves.whyNotAsked(from: here) {
                 Text(why)
             } else if places.isEmpty {
-                Text("Add a machine in Settings › Machines to move things to it")
+                Text("No other computers to move it to")
             } else if places.count > 1, reasons.count == 1, let one = places.first, !one.ok {
                 // Why it can't go anywhere (it works in a project, it's moving already), once.
                 Text(one.note ?? one.why ?? "")

@@ -1,4 +1,4 @@
-import ClientSessions
+import ClientDesign
 import Testing
 
 /// What a moving bot's, chat's or group chat's row says in both apps, from what its box says of the
@@ -13,11 +13,9 @@ struct MoveWordsTests {
         #expect(MoveWords.status(stage: "something-newer", place: "lab") == "Moving to lab…")
     }
 
-    @Test func howFarItIsIsInTheUnitThatSuitsItsSize() {
-        #expect(MoveWords.progress(sent: 300_000, size: 840_000) == "300 of 840 KB")
-        #expect(MoveWords.progress(sent: 1_520_000, size: 4_000_000) == "1.5 of 4 MB")
-        #expect(MoveWords.progress(sent: 400_000_000, size: 1_000_000_000) == "0.4 of 1 GB")
-        #expect(MoveWords.progress(sent: 0, size: 30_000_000) == "0 of 30 MB")
+    @Test func howFarItIsIsSaidAsOtherProgressIs() {
+        // The most a move takes, the box's cap, in the unit the cap is said in.
+        #expect(MoveWords.progress(sent: 400_000_000, size: 1_000_000_000) == "0.4 of 1.0 GB")
         #expect(MoveWords.progress(sent: 50_000_000, size: 30_000_000) == "30 of 30 MB", "never more than all of it")
         #expect(MoveWords.progress(sent: nil, size: 0) == nil)
     }

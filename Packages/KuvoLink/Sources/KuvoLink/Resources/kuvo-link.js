@@ -8790,7 +8790,7 @@ import { spawn as spawn3 } from "node:child_process";
 import crypto17 from "node:crypto";
 import fs45 from "node:fs";
 import path46 from "node:path";
-var MOST_BUNDLE = 1024 ** 3;
+var MOST_BUNDLE = 1e9;
 var CHATS2 = IS_MAC ? path46.join(path46.dirname(K), "Chats") : path46.join(K, "chats");
 var folderOf = (kind, thing) => kind === "bot" ? path46.join(BOTS, thing) : kind === "chat" ? path46.join(SESSION_WAKES, thing) : null;
 var directoryOf = (kind, thing) => kind === "bot" ? path46.join(BOTS, thing, "workspace") : CHATS2;

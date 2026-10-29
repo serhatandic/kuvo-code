@@ -102,6 +102,10 @@ import Testing
         let following = Task { await app.moves.follow() }
         defer { following.cancel() }
 
+        // Read ahead as Kuvo Code starts, so its menu opens with them (an open menu isn't drawn again).
+        await app.workspace.refresh()
+        await app.moves.reloadAll()
+        try await until { app.moves.places(of: "ses_trip", from: nil) != nil }
         // Its menu: lab, as this Mac's box says, and kept a while.
         let places = try #require(await app.moves.loadPlaces("chat", "ses_trip", from: nil))
         #expect(places.map(\.name) == ["lab"])
