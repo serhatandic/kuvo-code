@@ -8,7 +8,7 @@ import { call } from "../engine/client";
 import { stopSession } from "../engine/queue";
 import { holdArchived } from "../areas/wakes";
 import { noteWorkChanged } from "./changes";
-import { keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, rulesOf } from "./answers";
+import { callOf, keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, rulesOf } from "./answers";
 import { allowRefusal } from "./policy";
 import fs from "node:fs";
 import path from "node:path";
@@ -142,7 +142,8 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
   if (args.decision === "allow") {
     const folder = data.location?.directory ?? data.directory ?? "";
     const rules = rulesOf((caller.place.data.permissions ?? []) as KitRule[]);
-    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor);
+    const seen = await callOf(target, permission, signal);
+    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen);
     const user = `The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`;
     if (why === "above") return refused(`You can't allow that: you'd have to ask the user about it yourself. ${user}`);
     if (why) return refused(`That's ${why}, which always comes to the user: you can't allow it. ${user}`);

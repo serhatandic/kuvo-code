@@ -7931,6 +7931,22 @@ var ENGINE_DEFAULTS = [
   { action: "doom_loop", resource: "*", effect: "ask" }
 ];
 var rulesOf = (own) => [...ENGINE_DEFAULTS, ...permissionsHere() ?? [], ...own];
+async function callOf(target, permission, signal) {
+  if (!permission.call)
+    return null;
+  const page = await call(target, "GET", `/api/session/${encodeURIComponent(permission.asker)}/message?limit=30&order=desc`, undefined, signal).catch(() => null);
+  for (const message of Array.isArray(page) ? page : []) {
+    if (!isObject(message) || permission.message && message.id !== permission.message || !Array.isArray(message.content))
+      continue;
+    for (const part of message.content) {
+      if (!isObject(part) || part.type !== "tool" || part.id !== permission.call)
+        continue;
+      const state = isObject(part.state) ? part.state : {};
+      return { tool: String(part.name ?? ""), input: isObject(state.input) ? state.input : {} };
+    }
+  }
+  return null;
+}
 async function askersOf(target, session, signal) {
   const found = [session];
   for (let at = 0;at < found.length && at < 40; at++) {
@@ -7954,7 +7970,7 @@ async function asksIn(target, session, signal) {
         continue;
       const resources = Array.isArray(each.resources) ? each.resources.filter((one) => typeof one === "string") : [];
       const source = isObject(each.source) ? each.source : null;
-      permissions.push({ id: each.id, asker, action: String(each.action ?? ""), resources, ...typeof source?.id === "string" ? { call: source.id } : {} });
+      permissions.push({ id: each.id, asker, action: String(each.action ?? ""), resources, ...typeof source?.id === "string" ? { call: source.id } : {}, ...typeof source?.messageID === "string" ? { message: source.messageID } : {} });
     }
     const forms = await call(target, "GET", `${at}/form`, undefined, signal).catch(() => null);
     for (const form of Array.isArray(forms) ? forms : []) {
@@ -12309,15 +12325,23 @@ var PROTECTED_NAMES = new Set([
   "bitrise.yml",
   "lefthook.yml",
   "lefthook.yaml",
-  "dangerfile.swift"
+  "dangerfile.swift",
+  "gems.rb",
+  "agents.md",
+  "claude.md",
+  "gemini.md"
 ]);
-var PROTECTED_PATTERN = /(^|\.)(config|conf|workspace|setup|rc)\.|^(gulpfile|gruntfile|jakefile|dangerfile|fastfile|appfile|matchfile|pluginfile|webpack|vite|rollup|esbuild|tsup|metro|babel|jest|vitest|karma|playwright|cypress|next|nuxt|astro|svelte|remix|tailwind|postcss|eslint|prettier|stylelint|commitlint|lint-staged|release|mocha|nodemon|pm2|ecosystem|wrangler|vercel|netlify|serverless)\b/;
-var PROTECTED_FOLDERS = new Set(["node_modules", "hooks", "refs", "objects", "info", "fastlane", "gradle", "buildsrc"]);
+var PROTECTED_PATTERN = /(^|\.)(config|conf|workspace|setup|rc|override)\.|-local\.|requirements[^/]*\.txt$|^tsconfig\..*\.json$|^(rakefile|taskfile|gatsby-)|^(gulpfile|gruntfile|jakefile|dangerfile|fastfile|appfile|matchfile|pluginfile|webpack|vite|rollup|esbuild|tsup|metro|babel|jest|vitest|karma|playwright|cypress|next|nuxt|astro|svelte|remix|tailwind|postcss|eslint|prettier|stylelint|commitlint|lint-staged|release|mocha|nodemon|pm2|ecosystem|wrangler|vercel|netlify|serverless)\b/;
+var PROTECTED_FOLDERS = new Set(["node_modules", "hooks", "refs", "objects", "info", "fastlane", "gradle", "buildsrc", "requirements"]);
 function editRefusal(target, place) {
   const inside = partsInside(target, place);
   if ("refused" in inside)
     return inside.refused === "reading outside the project" ? "changing files outside the project" : inside.refused;
-  const { parts } = inside;
+  const { folder, parts } = inside;
+  try {
+    if (fs55.lstatSync(path55.join(folder, ...parts)).isDirectory())
+      return "a folder, not a file";
+  } catch {}
   const name = (parts[parts.length - 1] ?? "").toLowerCase();
   const extension = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
   if (!EDITABLE.has(extension))
@@ -12436,25 +12460,35 @@ function partsOf2(line) {
   return "unreadable" in read ? [line] : read.parts.map((part) => part.text);
 }
 var EDITS = new Set(["edit", "write", "patch", "multiedit"]);
-function allowRefusal(action, resources, folders, rules, ruleFor) {
+var EDIT_TOOLS = new Set(["edit", "write", "patch", "multiedit", "apply_patch"]);
+function allowRefusal(action, resources, folders, rules, ruleFor, seen) {
   const asked = resources.length ? resources : ["*"];
+  if (!folders.length)
+    return "working outside the project";
   if (action === "shell" || action === "bash") {
-    for (const resource of asked) {
-      const why = commandRefusal(resource, folders);
+    const command = typeof seen?.input.command === "string" ? seen.input.command : null;
+    if (!command)
+      return `${CANT} (it can't see the whole command)`;
+    const where = [seen.input.workdir, seen.input.cwd, seen.input.directory].find((each) => each !== undefined && each !== null && each !== "");
+    if (where !== undefined && (typeof where !== "string" || realOf(path55.resolve(realOf(folders[0]), where)) !== realOf(folders[0])))
+      return "a command run somewhere other than the project";
+    for (const line of [command, ...asked.filter((each) => each !== "*")]) {
+      const why = commandRefusal(line, folders);
       if (why)
         return why;
-      if (!partsOf2(resource).every((part) => ruleFor(rules, action, part) === "allow"))
-        return "above";
     }
+    if (![...partsOf2(command), ...asked].every((part) => ruleFor(rules, action, part) === "allow"))
+      return "above";
     return null;
   }
   if (!EDITS.has(action))
     return action === "external_directory" ? "working outside the project" : "a tool it can't tell is safe";
-  if (!folders.length)
-    return "changing files outside the project";
+  if (!seen || !EDIT_TOOLS.has(seen.tool.toLowerCase()))
+    return "a tool it can't tell is safe";
   const place = { cwd: realOf(folders[0]), folders };
-  for (const resource of asked) {
-    const why = editRefusal(resource, place);
+  const named = [seen.input.filePath, seen.input.path, seen.input.file].filter((each) => typeof each === "string");
+  for (const target of [...asked, ...named]) {
+    const why = editRefusal(target, place);
     if (why)
       return why;
   }
@@ -12573,7 +12607,8 @@ async function answerAskTool(caller, args, targets, signal) {
   if (args.decision === "allow") {
     const folder = data.location?.directory ?? data.directory ?? "";
     const rules = rulesOf(caller.place.data.permissions ?? []);
-    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor);
+    const seen = await callOf(target, permission, signal);
+    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen);
     const user = `The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`;
     if (why === "above")
       return refused(`You can't allow that: you'd have to ask the user about it yourself. ${user}`);

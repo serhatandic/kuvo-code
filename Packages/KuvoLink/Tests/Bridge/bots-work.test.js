@@ -61,6 +61,8 @@ function resetEngine() {
   busy = new Map();
 }
 resetEngine();
+// An ask names the tool call it's for, as the engine's do.
+const withSource = ask => ({ ...ask, source: ask.source ?? { type: "tool", messageID: `msg_${ask.id}`, id: `call_${ask.id}` } });
 const engine = http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
@@ -115,16 +117,19 @@ const engine = http.createServer((request, response) => {
       return reply({});
     }
     if (one?.[2] === "/message") {
-      // Its answer, after the last message it was sent (ids sort by time).
+      // Its answer, after the last message it was sent (ids sort by time); and each tool call it
+      // asks about, whole, in a message of its own, as the engine keeps them.
       const sent = prompts.filter(each => each.to === id).at(-1);
-      return reply({ data: [{ id: sent ? sent.id + "z" : "msg_2", type: "assistant", content: [{ type: "text", text: `Done in ${id}.` }] }] });
+      const calls = (asked.get(id) ?? []).filter(ask => !ask.unseen).map(ask => withSource(ask)).map(ask => ({ id: ask.source.messageID, type: "assistant",
+        content: [{ type: "tool", id: ask.source.id, name: ask.tool ?? (ask.action === "shell" ? "shell" : ask.action), state: { status: "running", input: ask.input ?? (ask.action === "shell" ? { command: ask.resources[0] } : { filePath: ask.resources[0] }) } }] }));
+      return reply({ data: [{ id: sent ? sent.id + "z" : "msg_2", type: "assistant", content: [{ type: "text", text: `Done in ${id}.` }] }, ...calls] });
     }
     if (one?.[2] === "/inbox") return reply({ data: [] });
     if (one?.[2] === "/interrupt") {
       interrupted.push(id);
       return reply({});
     }
-    if (one?.[2] === "/permission") return reply({ data: asked.get(id) ?? [] });
+    if (one?.[2] === "/permission") return reply({ data: (asked.get(id) ?? []).map(withSource) });
     if (one?.[2] === "/form") return reply({ data: [] });
     const answer = one?.[2]?.match(/^\/permission\/([^/]+)\/reply$/);
     if (answer) {
@@ -523,4 +528,40 @@ test("git is a bot's to allow only in the project's own repository, never one ab
   asked.set(session, [{ id: "per_1", sessionID: session, action: "shell", resources: ["git status"] }, { id: "per_2", sessionID: session, action: "shell", resources: ["ls"] }]);
   assert.match((await tool("answer_ask", { session, ask: "per_1", decision: "allow", reason: "Look." }, "ses_pixel")).text, /a repository that isn't the project's own/);
   assert.equal((await tool("answer_ask", { session, ask: "per_2", decision: "allow", reason: "Look." }, "ses_pixel")).isError, false);
+});
+
+test("a bot judges the tool call whole: a cd the engine leaves out of the ask, or another folder to run in, goes to the user", async () => {
+  const session = startedAddress(await tool("start_session", { task: "Look.", project: "Tidepool" }, "ses_pixel"));
+  fs.rmSync(path.join(tidepool, "homelink"), { force: true });
+  fs.symlinkSync(home, path.join(tidepool, "homelink"));
+  fs.mkdirSync(path.join(tidepool, "vendor", "r"), { recursive: true });
+  // What the engine lists (`cat id_rsa`), and what would run.
+  const calls = [
+    { resources: ["cat id_rsa"], input: { command: "cd && cd .ssh && cat id_rsa" } },
+    { resources: ["cat config"], input: { command: "cd .git && cat config" } },
+    { resources: ["git status"], input: { command: "cd vendor/r && git status" } },
+    { resources: ["cat id_rsa"], input: { command: "pushd .ssh && cat id_rsa" } },
+    { resources: ["cat id_rsa"], input: { command: "cat id_rsa", workdir: "homelink/.ssh" } },
+    { resources: ["ls"], input: { command: "ls", workdir: path.join(tidepool, "vendor", "r") } },
+    { resources: ["ls"], input: {} },
+  ];
+  asked.set(session, [...calls.map((each, at) => ({ id: `per_${at}`, sessionID: session, action: "shell", ...each })),
+    { id: "per_here", sessionID: session, action: "shell", resources: ["ls"], input: { command: "ls", workdir: tidepool } },
+    { id: "per_tree", sessionID: session, action: "edit", resources: [path.join(tidepool, "notes.md")], tool: "worktree_remove", input: { path: path.join(tidepool, "notes.md") } },
+    { id: "per_unseen", sessionID: session, action: "edit", resources: [path.join(tidepool, "src", "a.ts")], unseen: true },
+  ]);
+  const answer = ask => tool("answer_ask", { session, ask, decision: "allow", reason: "Look." }, "ses_pixel");
+  for (const [at, each] of calls.entries()) assert.equal((await answer(`per_${at}`)).isError, true, JSON.stringify(each.input));
+  assert.equal((await answer("per_here")).isError, false, "its own folder, named");
+  assert.match((await answer("per_tree")).text, /a tool it can't tell is safe/, "removing a worktree isn't an edit, however it's asked");
+  assert.equal((await answer("per_unseen")).isError, true, "a call it can't find isn't judged");
+});
+
+test("a bot never lets a session change what the user's own tools run later, nor a folder named like a file", async () => {
+  const session = startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_pixel"));
+  fs.mkdirSync(path.join(tidepool, "docs", "x.md"), { recursive: true });
+  const files = ["lefthook-local.yml", "docker-compose.override.yml", "requirements-dev.txt", "dev-requirements.txt", "requirements/base.txt", "gems.rb", "rakefile.rb", "Taskfile.dist.yml",
+    "gatsby-node.js", "tsconfig.build.json", "AGENTS.md", "CLAUDE.md", "docs/x.md"];
+  asked.set(session, files.map((file, at) => ({ id: `per_${at}`, sessionID: session, action: "edit", resources: [path.join(tidepool, file)] })));
+  await Promise.all(files.map(async (file, at) => assert.equal((await tool("answer_ask", { session, ask: `per_${at}`, decision: "allow", reason: "Tidy." }, "ses_pixel")).isError, true, file)));
 });

@@ -575,26 +575,33 @@ client shows it from the same routes.
   (`{session, archive?}`; only one of its own), `answer_ask` (`{session, ask, decision: allow|deny,
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
   an account for here, `provider/model`, with their efforts).
-- **Answering asks, before fencing** (`work/policy.ts`): reading a command can't be made
-  airtight, so until sessions are fenced (phase 5) a bot answers only two kinds of ask, and only
-  where it could go ahead itself, part by part (the engine's rules for its own conversation allow
-  each: the engine's defaults, Settings › Permissions, then the conversation's own):
+- **Answering asks, until the sandbox** (`work/policy.ts`): reading a command can't be made
+  airtight, so until sessions run in the sandbox a bot answers only two kinds of ask, judged by
+  the tool call itself (its whole input, found by the ask's `source`: never only what the ask
+  lists, which leaves out a command's `cd` and the folder it runs in), and only where it could go
+  ahead itself, part by part (the engine's rules for its own conversation allow each: the engine's
+  defaults, Settings › Permissions, then the conversation's own):
   - Making or changing a source or text file inside the session's folder (its project's other
-    folders too): only by its extension from a known list (code, styles, Markdown, data), its path
+    folders too), by a tool that edits (never another tool asked as an edit), never a folder:
+    only by its extension from a known list (code, styles, Markdown, data), its path
     written plainly (letters, digits, `.`, `_`, `-`, `/`), no part hidden (starting with `.`), no
     `..`, nothing reached through a link, never a name a later command runs or reads as settings
     (`package.json`, `tsconfig.json`, `opencode.json`, `*.config.*`, `build.rs`, `Package.swift`…,
     compared without case, as macOS does), never your keys and sign-ins.
   - A few commands that read: `ls`, `cat`, `head`, `tail`, `wc`, and `git status`, `diff` and `log`
-    (only where the folder is its repository's own top level), each with a few options; the line
-    printable ASCII, every part one of those, paths written plainly as above. No redirects,
-    patterns of files, settings before it, `cd`, nor anything a shell expands or runs besides.
+    (only where the folder is its repository's own top level), each with a few options, run in the
+    session's folder (a `workdir` elsewhere goes to the user); the line printable ASCII, every part
+    one of those, paths written plainly as above. No redirects, patterns of files, settings before
+    it, `cd`, `pushd` or `popd`, nor anything a shell expands or runs besides.
   - Everything else goes to the user: reading through the engine, building, testing, installing,
     changing files from the shell, git that changes anything, fetching, integrations' tools. It may
     always deny, with its reason passed on.
-  - What it can't fence: an edit it allowed, then a run the user allows later, runs what was edited.
-    Each is judged alone, so the user allowing a build or a test run allows the project's code as
-    it is then.
+  - What it can't close, until the sandbox:
+    - An edit it allowed, then a run the user allows later, runs what was edited: source reaches
+      `cargo build` and `swift build`, macros, and test runs. Each ask is judged alone, so the user
+      allowing a build or a test run allows the project's code as it is then.
+    - A file can change between the check and the run, and a hard link looks like any file.
+    - git follows the diff, textconv and LFS settings the user already has.
   Each answer is kept on the session, `kuvo.answers: [{ask, call?, what, decision, reason, by:
   {bot?, name}, at}]` (the latest 40), where clients show it on the ask's tool call ("Allowed by
   Pixel") and in the bot's work.

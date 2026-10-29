@@ -1,5 +1,5 @@
-// What a bot may allow its sessions (answer_ask, PROTOCOL.md "Work"): the policy before fencing.
-// Reading a command can't be made airtight, so until sessions are fenced (phase 5) a bot answers
+// What a bot may allow its sessions (answer_ask, PROTOCOL.md "Work"): the policy until the sandbox.
+// Reading a command can't be made airtight, so until sessions run in the sandbox a bot answers
 // only edits inside the session's folder (never what a later command runs) and a handful of
 // commands that read, with literal paths inside the folder. Everything else goes to the user,
 // however it's phrased.
@@ -9,6 +9,7 @@ import path from "node:path";
 import { gitIn } from "../git";
 import { homeFolder, K } from "../home";
 import type { KitRule } from "../bots/kit";
+import type { ToolCallSeen } from "./answers";
 
 /** A command line read as a shell would run it: its parts (separated by `;`, `&&`, `||`, `|` or a
  * new line), each one's words and where its output goes, and each part's own text. */
@@ -94,7 +95,7 @@ export function readLine(line: string): Line | { unreadable: string } {
       if (pair) i++;
       start = i + 1;
     } else if (char === ">" || char === "<") {
-      // Before fencing: where a command reads or writes is only what its words name.
+      // Until the sandbox: where a command reads or writes is only what its words name.
       return no("input or output sent elsewhere");
     } else {
       word += char;
@@ -170,7 +171,7 @@ export function readRefusal(target: string, place: Place): string | null {
   return "refused" in inside ? inside.refused : null;
 }
 
-// What a bot may let a session write, before fencing: source and text files, by their extension,
+// What a bot may let a session write, until the sandbox: source and text files, by their extension,
 // none of them a file a later command runs or reads as settings. Anything else is the user's.
 const EDITABLE = new Set(["ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "go", "rs", "swift", "kt", "kts", "java", "scala", "c", "h", "cc", "cpp", "hpp", "m", "mm", "cs", "php",
   "dart", "lua", "ex", "exs", "erl", "hs", "ml", "clj", "css", "scss", "sass", "less", "html", "htm", "vue", "svelte", "astro", "md", "mdx", "txt", "rst", "json", "yaml", "yml",
@@ -179,15 +180,20 @@ const PROTECTED_NAMES = new Set(["package.json", "package-lock.json", "npm-shrin
   "opencode.json", "opencode.jsonc", "composer.json", "deno.json", "deno.jsonc", "app.json", "eas.json", "firebase.json", "vercel.json", "turbo.json", "nx.json", "lerna.json", "angular.json",
   "project.json", "workspace.json", "renovate.json", "nodemon.json", "devcontainer.json", "cmakelists.txt", "requirements.txt", "constraints.txt", "build.rs", "conftest.py", "setup.py",
   "manage.py", "noxfile.py", "fabfile.py", "tasks.py", "dodo.py", "package.swift", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml", "taskfile.yml", "taskfile.yaml",
-  "azure-pipelines.yml", "bitbucket-pipelines.yml", "appveyor.yml", "mkdocs.yml", "pubspec.yaml", "codemagic.yaml", "bitrise.yml", "lefthook.yml", "lefthook.yaml", "dangerfile.swift"]);
-const PROTECTED_PATTERN = /(^|\.)(config|conf|workspace|setup|rc)\.|^(gulpfile|gruntfile|jakefile|dangerfile|fastfile|appfile|matchfile|pluginfile|webpack|vite|rollup|esbuild|tsup|metro|babel|jest|vitest|karma|playwright|cypress|next|nuxt|astro|svelte|remix|tailwind|postcss|eslint|prettier|stylelint|commitlint|lint-staged|release|mocha|nodemon|pm2|ecosystem|wrangler|vercel|netlify|serverless)\b/;
-const PROTECTED_FOLDERS = new Set(["node_modules", "hooks", "refs", "objects", "info", "fastlane", "gradle", "buildsrc"]);
+  "azure-pipelines.yml", "bitbucket-pipelines.yml", "appveyor.yml", "mkdocs.yml", "pubspec.yaml", "codemagic.yaml", "bitrise.yml", "lefthook.yml", "lefthook.yaml", "dangerfile.swift",
+  "gems.rb", "agents.md", "claude.md", "gemini.md"]);
+const PROTECTED_PATTERN = /(^|\.)(config|conf|workspace|setup|rc|override)\.|-local\.|requirements[^/]*\.txt$|^tsconfig\..*\.json$|^(rakefile|taskfile|gatsby-)|^(gulpfile|gruntfile|jakefile|dangerfile|fastfile|appfile|matchfile|pluginfile|webpack|vite|rollup|esbuild|tsup|metro|babel|jest|vitest|karma|playwright|cypress|next|nuxt|astro|svelte|remix|tailwind|postcss|eslint|prettier|stylelint|commitlint|lint-staged|release|mocha|nodemon|pm2|ecosystem|wrangler|vercel|netlify|serverless)\b/;
+const PROTECTED_FOLDERS = new Set(["node_modules", "hooks", "refs", "objects", "info", "fastlane", "gradle", "buildsrc", "requirements"]);
 
 /** Why a bot can't let a session write `target` (making it, or changing it), or null. */
 export function editRefusal(target: string, place: Place): string | null {
   const inside = partsInside(target, place);
   if ("refused" in inside) return inside.refused === "reading outside the project" ? "changing files outside the project" : inside.refused;
-  const { parts } = inside;
+  const { folder, parts } = inside;
+  // A file, made or changed: never a folder (one named like a file, `x.md`, included).
+  try {
+    if (fs.lstatSync(path.join(folder, ...parts)).isDirectory()) return "a folder, not a file";
+  } catch {}
   const name = (parts[parts.length - 1] ?? "").toLowerCase();
   const extension = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
   if (!EDITABLE.has(extension)) return "a kind of file it can't tell is safe to change";
@@ -197,7 +203,7 @@ export function editRefusal(target: string, place: Place): string | null {
 
 const CANT = "a command it can't tell is safe";
 
-/** What a program may be given, before fencing: its flags (each taking a number, or nothing), the
+/** What a program may be given, until the sandbox: its flags (each taking a number, or nothing), the
  * one-letter flags that may go together, and whether its other words are paths it reads (literal,
  * inside the project) or git's revisions. */
 interface Spec {
@@ -246,12 +252,12 @@ function checkSpec(spec: Spec, words: string[], place: Place): string | null {
 /** Why a bot can't allow running `line` in the session's folder (`folders[0]`; its project's other
  * folders count as inside too), or null.
  *
- * The policy before fencing (phase 5): a bot may allow only a handful of commands that read
+ * The policy until the sandbox: a bot may allow only a handful of commands that read
  * (`ls`, `cat`, `head`, `tail`, `wc`, and `git status`, `diff` and `log` with a few options), each
  * part of the line one of those, with literal paths inside the session's folder, and nothing
  * else: no redirects, no patterns of files, no settings before it, nothing a shell expands or runs
  * besides. Reading a command can't be made airtight, so everything else goes to the user until
- * the session is fenced. */
+ * the sandbox. */
 export function commandRefusal(line: string, folders: readonly string[]): string | null {
   // What a shell would split on, or take apart, beyond a space: never.
   if (!/^[\x20-\x7E]*$/.test(line)) return `${CANT} (a character it can't read plainly)`;
@@ -295,30 +301,42 @@ export function partsOf(line: string): string[] {
 }
 
 const EDITS = new Set(["edit", "write", "patch", "multiedit"]);
+// The tools that make or change files: an ask from any other tool (removing a worktree, say) isn't
+// an edit, whatever it's asked as.
+const EDIT_TOOLS = new Set(["edit", "write", "patch", "multiedit", "apply_patch"]);
 
-/** Why a bot can't allow what's asked (`action` on `resources`), within its `rules` (`rulesOf`),
- * for a session working in `folders`; null when it may.
+/** Why a bot can't allow what's asked (`action` on `resources`, by the tool call `seen`, whole),
+ * within its `rules` (`rulesOf`), for a session working in `folders`; null when it may.
  *
- * Before fencing (phase 5), a bot answers only two kinds of ask: making or changing a source or text
- * file inside the session's folder (`editRefusal`: by extension, never a hidden path, a link, nor a
- * file a later command runs or reads as settings), and the few commands `commandRefusal` reads as
- * safe. Everything else, reading included, goes to the user. */
-export function allowRefusal(action: string, resources: readonly string[], folders: readonly string[], rules: readonly KitRule[], ruleFor: (rules: readonly KitRule[], action: string, resource: string) => KitRule["effect"]): string | null {
+ * Until the sandbox, a bot answers only two kinds of ask, judged by the tool call itself (never
+ * only what the engine lists in the ask, which leaves out a command's `cd` and the folder it runs
+ * in): making or changing a source or text file inside the session's folder (`editRefusal`: by
+ * extension, never a hidden path, a link, a folder, nor a file a later command runs or reads as
+ * settings), and the few commands `commandRefusal` reads as safe, run in the session's folder.
+ * Everything else, reading included, goes to the user. */
+export function allowRefusal(action: string, resources: readonly string[], folders: readonly string[], rules: readonly KitRule[], ruleFor: (rules: readonly KitRule[], action: string, resource: string) => KitRule["effect"], seen: ToolCallSeen | null): string | null {
   const asked = resources.length ? resources : ["*"];
+  if (!folders.length) return "working outside the project";
   if (action === "shell" || action === "bash") {
-    for (const resource of asked) {
-      const why = commandRefusal(resource, folders);
+    // The command as it would run, whole, and where.
+    const command = typeof seen?.input.command === "string" ? seen.input.command : null;
+    if (!command) return `${CANT} (it can't see the whole command)`;
+    const where = [seen!.input.workdir, seen!.input.cwd, seen!.input.directory].find(each => each !== undefined && each !== null && each !== "");
+    if (where !== undefined && (typeof where !== "string" || realOf(path.resolve(realOf(folders[0]), where)) !== realOf(folders[0]))) return "a command run somewhere other than the project";
+    for (const line of [command, ...asked.filter(each => each !== "*")]) {
+      const why = commandRefusal(line, folders);
       if (why) return why;
-      // The engine's rules, for each part as it judges each.
-      if (!partsOf(resource).every(part => ruleFor(rules, action, part) === "allow")) return "above";
     }
+    // The engine's rules, for each part as it judges each.
+    if (![...partsOf(command), ...asked].every(part => ruleFor(rules, action, part) === "allow")) return "above";
     return null;
   }
   if (!EDITS.has(action)) return action === "external_directory" ? "working outside the project" : "a tool it can't tell is safe";
-  if (!folders.length) return "changing files outside the project";
+  if (!seen || !EDIT_TOOLS.has(seen.tool.toLowerCase())) return "a tool it can't tell is safe";
   const place: Place = { cwd: realOf(folders[0]), folders };
-  for (const resource of asked) {
-    const why = editRefusal(resource, place);
+  const named = [seen.input.filePath, seen.input.path, seen.input.file].filter((each): each is string => typeof each === "string");
+  for (const target of [...asked, ...named]) {
+    const why = editRefusal(target, place);
     if (why) return why;
   }
   return asked.every(resource => ruleFor(rules, action, resource) === "allow") ? null : "above";

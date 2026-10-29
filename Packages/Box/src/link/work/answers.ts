@@ -54,6 +54,31 @@ export interface PendingPermission {
   action: string;
   resources: string[];
   call?: string;
+  /** The message its tool call is in. */
+  message?: string;
+}
+
+/** A tool call, as the engine keeps it in its message: its tool and its whole input. */
+export interface ToolCallSeen {
+  tool: string;
+  input: Record<string, unknown>;
+}
+
+/** The tool call a permission asks for (`call` in `message`, of `asker`), whole: never only the
+ * parts the engine lists in the ask (it leaves out a command's `cd`), so what's judged is what
+ * would run. Null when it can't be found. */
+export async function callOf(target: Target, permission: Pick<PendingPermission, "asker" | "call" | "message">, signal?: AbortSignal): Promise<ToolCallSeen | null> {
+  if (!permission.call) return null;
+  const page = await call(target, "GET", `/api/session/${encodeURIComponent(permission.asker)}/message?limit=30&order=desc`, undefined, signal).catch(() => null);
+  for (const message of Array.isArray(page) ? page : []) {
+    if (!isObject(message) || (permission.message && message.id !== permission.message) || !Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (!isObject(part) || part.type !== "tool" || part.id !== permission.call) continue;
+      const state = isObject(part.state) ? part.state : {};
+      return { tool: String(part.name ?? ""), input: isObject(state.input) ? state.input as Record<string, unknown> : {} };
+    }
+  }
+  return null;
 }
 
 /** A question a session asks (it, or a subagent: `asker`): its one field's key. */
@@ -86,7 +111,7 @@ export async function asksIn(target: Target, session: string, signal?: AbortSign
       if (!isObject(each) || typeof each.id !== "string") continue;
       const resources = Array.isArray(each.resources) ? each.resources.filter((one: unknown): one is string => typeof one === "string") : [];
       const source = isObject(each.source) ? each.source : null;
-      permissions.push({ id: each.id, asker, action: String(each.action ?? ""), resources, ...(typeof source?.id === "string" ? { call: source.id } : {}) });
+      permissions.push({ id: each.id, asker, action: String(each.action ?? ""), resources, ...(typeof source?.id === "string" ? { call: source.id } : {}), ...(typeof source?.messageID === "string" ? { message: source.messageID } : {}) });
     }
     const forms = await call(target, "GET", `${at}/form`, undefined, signal).catch(() => null);
     for (const form of Array.isArray(forms) ? forms : []) {
