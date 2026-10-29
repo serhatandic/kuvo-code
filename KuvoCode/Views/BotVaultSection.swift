@@ -115,23 +115,21 @@ struct BotVaultSection: View {
 }
 
 /// What a conversation's agent asks of its computer's vault, over its composer: allow it once or
-/// always, give it an item, or say no.
+/// always, give it an item, or say no. Its conversation follows the box's asks (`Vaults.follow`):
+/// with none, this is nothing, so a task here would never start.
 struct VaultAskCards: View {
     let session: String
     let box: String
 
     var body: some View {
         let shown = Vaults.shared[box]
-        Group {
-            ForEach(shown.asks.filter { $0.session == session }) { asked in
+        ForEach(shown.asks.filter { $0.session == session }) { asked in
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "lock.shield.fill").foregroundStyle(.tint).font(.title3)
                 VaultAskRow(asked: asked, box: box, items: shown.vault?.items ?? [])
             }
-                .padding(14)
-                .modifier(ComposerSurface())
-            }
+            .padding(14)
+            .modifier(ComposerSurface())
         }
-        .task(id: box) { Vaults.shared.follow(box) }
     }
 }

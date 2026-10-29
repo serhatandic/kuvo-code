@@ -60,6 +60,8 @@ struct SessionView: View {
         // machine is read once the machine is back.
         .task(id: model.id) { if !model.isLoaded, !model.waitsForEngine { await model.load() } }
         .task(id: model.session.location.directory) { await catalog.loadCommands(in: model.session.location.directory) }
+        // What its agent asks of its computer's vault, followed while it's open (VaultAskCards).
+        .task(id: Workspace.box(of: model.session.location.directory)) { Vaults.shared.follow(Workspace.box(of: model.session.location.directory)) }
         // Its wake-ups and watches, read again as each run ends (its agent may have set one,
         // or one went); a bot's are its row's to read.
         .task(id: "\(model.id) \(model.isRunning)") {

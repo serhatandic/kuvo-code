@@ -18,7 +18,18 @@ extension AppModel {
         #if DEBUG
         // KUVO_DEMO_VAULT: this Mac's vault with sample items, for a look at its pages.
         if ProcessInfo.processInfo.environment["KUVO_DEMO_VAULT"] != nil {
-            Task { await Self.seedDemoVault() }
+            Task { [weak self] in
+                await Self.seedDemoVault()
+                // KUVO_DEMO_VAULT_ASK: the first bot asks the vault for that, as vault_ask does.
+                guard let need = ProcessInfo.processInfo.environment["KUVO_DEMO_VAULT_ASK"] else { return }
+                for _ in 0..<60 {
+                    if let session = self?.bots.list.first?.sessionID {
+                        _ = await BrowserTools.vault("vault_ask", ["need": need, "why": "To upload tonight’s build to TestFlight.", "site": "appstoreconnect.apple.com"], session)
+                        return
+                    }
+                    try? await Task.sleep(for: .seconds(2))
+                }
+            }
         }
         #endif
         BrowserTools.vaultDefinitions = { [weak self] in
