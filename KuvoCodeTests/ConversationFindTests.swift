@@ -121,14 +121,42 @@ import Testing
         #expect(marks(in: drawn) == 1)
     }
 
+    /// A long message (a pasted log) of many runs, bold and links among them: each place is
+    /// marked, the one you're on orange, and its words and links stay as they were.
+    @Test func everyPlaceInALongMessageIsMarked() {
+        var text = AttributedString()
+        for line in 0..<300 {
+            var bold = AttributedString("Config \(line): ")
+            bold.inlinePresentationIntent = .stronglyEmphasized
+            var link = AttributedString("the config docs")
+            link.link = URL(string: "https://example.com/\(line)")
+            text += bold + link + AttributedString(", then more config.\n")
+        }
+        var marked = text
+        FindText.mark(&marked, FindHighlight(query: "config", current: 451))
+        let places = placeColors(in: marked)
+        #expect(places.count == 900)
+        #expect(places.firstIndex(of: FindText.currentPlace) == 451)
+        #expect(places.count { $0 == FindText.currentPlace } == 1)
+        #expect(String(marked.characters) == String(text.characters))
+        #expect(marked.runs[\.link].compactMap(\.0) == text.runs[\.link].compactMap(\.0))
+        #expect(marked.runs[\.inlinePresentationIntent].compactMap(\.0).count == 300)
+    }
+
     /// The places marked in `text`, as drawn.
     private func marks(in text: AttributedString) -> Int {
-        var count = 0, inMark = false
+        placeColors(in: text).count
+    }
+
+    /// The color each place marked in `text` is drawn in, in order.
+    private func placeColors(in text: AttributedString) -> [Color] {
+        var colors: [Color] = []
+        var inMark = false
         for run in text.runs {
-            let marked = [FindText.place, FindText.currentPlace].contains(run.swiftUI.backgroundColor)
-            if marked, !inMark { count += 1 }
-            inMark = marked
+            let color = run.swiftUI.backgroundColor.flatMap { [FindText.place, FindText.currentPlace].contains($0) ? $0 : nil }
+            if let color, !inMark { colors.append(color) }
+            inMark = color != nil
         }
-        return count
+        return colors
     }
 }

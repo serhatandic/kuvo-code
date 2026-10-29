@@ -253,13 +253,36 @@ nonisolated enum FindText {
             }
         }
         let plain = searchable(text)
-        for (number, range) in ranges(of: highlight.query, in: plain).enumerated() {
-            // From the start each time, as marking may move what an index points at.
-            let lower = text.characters.index(text.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: range.lowerBound))
-            let upper = text.characters.index(lower, offsetBy: plain.distance(from: range.lowerBound, to: range.upperBound))
-            text[lower..<upper].swiftUI.backgroundColor = number == highlight.current ? currentPlace : place
-            text[lower..<upper].swiftUI.foregroundColor = .black
+        let found = ranges(of: highlight.query, in: plain)
+        guard !found.isEmpty else { return }
+        // Each place found on from the one before (a pasted log can have thousands), then all
+        // marked at once, as marking moves what indices point at; the one you're on after, found again.
+        var places: [Range<AttributedString.Index>] = []
+        var current: (offset: Int, length: Int)?
+        var (at, atPlain, offset) = (text.startIndex, plain.startIndex, 0)
+        for (number, range) in found.enumerated() {
+            let gap = plain.distance(from: atPlain, to: range.lowerBound)
+            let length = plain.distance(from: range.lowerBound, to: range.upperBound)
+            let lower = text.characters.index(at, offsetBy: gap)
+            let upper = text.characters.index(lower, offsetBy: length)
+            offset += gap
+            if number == highlight.current { current = (offset, length) } else { places.append(lower..<upper) }
+            offset += length
+            (at, atPlain) = (upper, range.upperBound)
         }
+        text[RangeSet(places)].mergeAttributes(marks(place))
+        if let current {
+            let lower = text.characters.index(text.startIndex, offsetBy: current.offset)
+            text[lower..<text.characters.index(lower, offsetBy: current.length)].mergeAttributes(marks(currentPlace))
+        }
+    }
+
+    /// A place's mark: `color` behind dark letters.
+    private static func marks(_ color: Color) -> AttributeContainer {
+        var marks = AttributeContainer()
+        marks.swiftUI.backgroundColor = color
+        marks.swiftUI.foregroundColor = .black
+        return marks
     }
 
     /// `text`, marked by `highlight` when there is one.
