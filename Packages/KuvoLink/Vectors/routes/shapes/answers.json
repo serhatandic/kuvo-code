@@ -2353,6 +2353,9 @@
             "literal": "vault"
            },
            {
+            "literal": "sandbox"
+           },
+           {
             "literal": "accounts.ended"
            },
            {
@@ -2602,6 +2605,9 @@
            },
            {
             "literal": "vault"
+           },
+           {
+            "literal": "sandbox"
            }
           ]
          }
@@ -4688,6 +4694,34 @@
       "message": "string",
       "archived": "number",
       "kept": "number"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sandbox",
+   "answers": {
+    "200": {
+     "object": {
+      "on": "bool",
+      "why?": "string",
+      "wanted": "bool",
+      "able": "bool",
+      "agents": "bool"
+     }
+    }
+   }
+  },
+  {
+   "route": "PATCH kuvo/sandbox",
+   "answers": {
+    "200": {
+     "object": {
+      "on": "bool",
+      "why?": "string",
+      "wanted": "bool",
+      "able": "bool",
+      "agents": "bool"
      }
     }
    }

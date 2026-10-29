@@ -2508,11 +2508,11 @@ bridge) has a tool call of that name running in it (`api/session/<id>/message`, 
 `running` or `pending`; for `tools`, with the same arguments; for `fill`, `browser_sign_in` or
 `browser_fill`, and one fill for each such call). Any program on the computer could name a session;
 only the conversation's own call uses its grants. (On a machine its browser, and anything that runs
-as you there, can still reach a value a fill puts in a page: until agents' commands are fenced off,
+as you there, can still reach a value a fill puts in a page: until agents' commands are in the sandbox,
 that's what a machine can't keep from them.)
 
-Agents use the vault only on a box whose agents' commands are fenced (not yet on any box; the
-tests open it with `KUVO_VAULT_AGENTS=1`, which a Mac's app never passes its box, and which a box
+Agents use the vault only on a box whose agents' commands are all in the sandbox (below: its state's
+`on` and `agents`, not yet on any box; the tests open it with `KUVO_VAULT_AGENTS=1`, which a Mac's app never passes its box, and which a box
 takes only in a test's own folder, never the account's own `~/.kuvo-code` or a Mac's
 `run.kuvo.code…/box`). Until then `GET kuvo/vault/tools` lists no tools, and a call says the vault
 isn't open to agents. A fill does only what Kuvo Code did before the vault: for `browser_sign_in`
@@ -2544,6 +2544,43 @@ named) asks you and waits. An item you give through `vault_ask` "always" is gran
 (to the bot, or the conversation's project, never a home folder); "once", its next use within
 half an hour goes ahead. A command's copies (`run/vault-run/`) go when it ends, when the box ends,
 and as a box starts.
+
+### Sandbox
+
+Each box can run its agents' commands in a sandbox (`sandbox` in `features`, bridge 0.9.113), off
+until you turn it on. On, each command the engine runs (an agent's shell tool, and yours with `!`)
+writes only in its conversation's folder, that folder's git repository (but on macOS never its
+hooks or config, nor the engine's settings in the folder: `.opencode/`, `opencode.json`), its own
+temporary folder (`TMPDIR`), the system's temporary folders, devices and tools' caches. It can't read
+Kuvo Code's own folders (on a machine `~/.kuvo-code`; on this Mac the app's folders under `Library`,
+any `run.kuvo.code…` copy's, its temporary folder and `/tmp/kuvo-ssh-<uid>`) but its `bin`, nor your
+secrets (cloud, package and git tokens, browsers' and password managers' data, private SSH keys:
+every file in `~/.ssh` but its config, known hosts and public keys; gh's `hosts.yml` when it holds
+the token). A bot's or a chat's command gets its own folder back, and not its neighbours'. On macOS
+it also can't reach Kuvo Code's own servers on `127.0.0.1` (the engine's, the bridge's, the box's,
+the host interface) or sockets in its folders; on Linux their passwords are in files it can't read.
+
+**How.** The box writes, as it starts and when you turn it on: `bin/kuvo-fence` (the shell the
+engine runs a command with) and, on Linux, `bin/kuvo-fence.js`; the rules in `run/fence/`
+(`project.sb` and `inside.sb` for macOS's `sandbox-exec`, `policy.json` for Linux's Landlock, which
+the engine's own Bun sets up through `bun:ffi`, Linux 5.13 or later); and the engine's plugin,
+`kuvo-sandbox.js` in its settings' `opencode/plugins`. The plugin names, for each folder the engine
+opens, that folder (the engine's own, never the command's) and its repository, and sends each
+command's shell through `bin/kuvo-fence`, which refuses to run one without a folder (exit `126`). The
+box first runs a command through it and checks that it can't read or write what's hidden; only then
+does it give the engine the plugin, and it takes it away when you turn the sandbox off or a check
+fails, so commands run as before rather than not at all. It puts it back if it goes, and keeps
+Kuvo Code's own ports in the macOS rules as they change.
+
+- `GET kuvo/sandbox` → `{on, why?, wanted, able, agents}`. `on`: every command the engine runs here
+  goes through the sandbox, checked (the engine loaded this box's plugin). `why`, when it isn't, in
+  words for Settings: `It's off.`, why this computer can't (`able: false`: no Landlock, no engine
+  yet), a failed check, `Its plugin for the engine was changed or removed.`, `The engine isn't
+  running.`, `Waiting for the engine to load it.`. `wanted`: you turned it on (kept in
+  `box/sandbox.json`, which a command in the sandbox can't change). `agents`: the coding agents' own
+  programs' commands (Claude Code, Codex…, which don't go through the engine) are in it too; `false`
+  for now, so on doesn't yet cover them.
+- `PATCH kuvo/sandbox {on: true | false}` → the state, after setting it up (`400` for anything else).
 
 ### Paired phones
 

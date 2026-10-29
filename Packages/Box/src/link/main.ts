@@ -78,6 +78,7 @@ import { BRIDGE_VERSION } from "./version";
 import type { AddressInfo } from "node:net";
 import type { SignedDoc } from "../shared/documents";
 import type { EngineRecord } from "../shared/records";
+import { fenceOwnPort, keepFence } from "./fence/state";
 import type { KeptNotice } from "./notices/hold";
 import type { Notice } from "./notices/notice";
 import type { GivenLibrary } from "./personalities/library";
@@ -296,6 +297,9 @@ async function run(): Promise<void> {
   // Moves to and from your other computers, carried on the same connection.
   watchMoves(() => current);
   watchAsks(tell, { answered });
+  // Agents' commands, in the sandbox while you want it (fence/state.ts), set up before the vault
+  // goes by it.
+  keepFence();
   // The vault, held here: its key in this process's memory, its asks told to your phones.
   holdVault(engineHandler(readEngineFile, { name: os.hostname() }));
   setVaultTell(tell);
@@ -523,6 +527,10 @@ async function serve(): Promise<void> {
     server.listen(0, "127.0.0.1", resolve);
   });
   console.log(JSON.stringify({ url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }));
+  // Agents' commands, in the sandbox while you want it (fence/state.ts), which refuses them this
+  // server too.
+  fenceOwnPort((server.address() as AddressInfo).port);
+  keepFence();
   // The vault, held here (on a machine, `run` holds it; a test's box serves alone), its asks told
   // to your phones through this Mac's link.
   holdVault(engineHandler(readEngineFile, { name: os.hostname() }, readBridgeFile));

@@ -1,0 +1,137 @@
+// What a command an agent runs on this box may do, as one policy that each system's sandbox writes
+// in its own terms (seatbelt.ts on macOS, landlock.ts on Linux). People never see the word "fence":
+// it's the sandbox in Settings and the docs, and plain words on cards.
+//
+// A command writes only in its conversation's folder (and that folder's git repository, but never
+// what git runs on its own: hooks, its config), its own temporary folder, the system's, devices and
+// tools' caches. It never reads or writes Kuvo Code's own folders (its settings, keys, the vault,
+// other bots' folders), and never reads your secrets: cloud and package tokens, browsers' and
+// password managers' data, private SSH keys. The conversation's folder, its repository and its
+// temporary folder aren't known until a command runs, so each sandbox takes them then (WORK, GIT
+// and TMP): from the engine's own record of the conversation's folder, never from the command.
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { IS_MAC, K } from "../home";
+
+export interface FencePolicy {
+  /** The home folder whose secrets are hidden. */
+  home: string;
+  /** Kuvo Code's own folders, neither read nor written (bots', chats' and the conversation's own
+   * folder inside them come back as WORK). */
+  kuvo: string[];
+  /** On macOS, patterns for every copy's folders (`run.kuvo.code…`), wherever the system keeps
+   * an app's: regular expressions over whole paths. */
+  kuvoPatterns: string[];
+  /** Inside them, what commands may run: Kuvo Code's own helpers (`bin`). */
+  kuvoReadable: string[];
+  /** Written besides WORK, GIT and TMP: the system's temporary folders, devices, tools' caches. */
+  writable: string[];
+  /** Never read: your secrets (folders or files). */
+  secrets: string[];
+  /** Kuvo Code's own servers on 127.0.0.1, refused where the system can (macOS); everywhere their
+   * passwords are in files a command can't read. */
+  ports: number[];
+}
+
+// Tools' caches, written by installs and builds in any project.
+const CACHES = [".npm", ".bun", ".cache", ".cargo", ".rustup", ".swiftpm", ".gradle", ".m2", "go/pkg", ".pnpm-store",
+  ".yarn", ".node-gyp", ".local/share/pnpm", ".local/state", ".deno", ".pub-cache", ".nuget/packages", ".dotnet"];
+const MAC_CACHES = ["Library/pnpm", "Library/Caches", "Library/Developer"];
+
+// Your secrets (each a folder or a file in your home folder).
+const SECRETS = [".aws", ".config/gcloud", ".azure", ".kube", ".docker/config.json", ".oci", ".config/doctl",
+  ".terraform.d/credentials.tfrc.json", ".netrc", ".npmrc", ".yarnrc.yml", ".pypirc", ".cargo/credentials.toml",
+  ".cargo/credentials", ".gem/credentials", ".git-credentials", ".gnupg/private-keys-v1.d", ".gnupg/secring.gpg",
+  ".password-store", ".config/op", ".config/hub"];
+const MAC_SECRETS = ["Library/Application Support/Google/Chrome", "Library/Application Support/BraveSoftware",
+  "Library/Application Support/Arc", "Library/Application Support/Firefox", "Library/Application Support/Microsoft Edge",
+  "Library/Safari", "Library/Cookies", "Library/Application Support/1Password", "Library/Group Containers/2BUA8C4S2C.com.1password",
+  "Library/Application Support/Bitwarden", "Library/Keychains"];
+const LINUX_SECRETS = [".config/google-chrome", ".config/chromium", ".config/BraveSoftware", ".mozilla", ".local/share/keyrings"];
+
+/**
+ * Your private SSH keys: every file in `~/.ssh` but its settings, known hosts and public keys,
+ * whatever they're named (not only `id_*`). Read each time a policy's written, so a key added
+ * later is hidden from the next.
+ */
+export function sshKeys(home: string): string[] {
+  const folder = path.join(home, ".ssh");
+  let names: string[] = [];
+  try { names = fs.readdirSync(folder); } catch { return []; }
+  return names.filter(name => !(name === "config" || name === "config.d" || name.startsWith("known_hosts") || name.endsWith(".pub") || name === "authorized_keys"))
+    .map(name => path.join(folder, name));
+}
+
+/** gh's sign-in: hidden only when its file holds the token itself (gh can't start without reading
+ * it; with the token in the Keychain or the keyring, it holds none). */
+function ghHosts(home: string): string[] {
+  const file = path.join(home, ".config", "gh", "hosts.yml");
+  try { return /oauth_token\s*:/.test(fs.readFileSync(file, "utf8")) ? [file] : []; } catch { return []; }
+}
+
+/** This Mac's app's folders, around its box's (`…/Application Support/<bundle>/box`). */
+function macFolders(home: string): { kuvo: string[]; readable: string[] } {
+  const app = path.dirname(path.resolve(K));
+  const bundle = path.basename(app);
+  // The app's temporary folder: the box's own is in it (`…/T/<bundle>/box`).
+  const tmp = path.dirname(path.resolve(os.tmpdir()));
+  const kuvo = [app, path.join(home, "Library", "Caches", bundle), path.join(home, "Library", "Logs", "Kuvo Code"),
+    path.join(home, "Library", "WebKit", bundle), path.join(home, "Library", "HTTPStorages", bundle),
+    path.join(home, "Library", "Preferences", `${bundle}.plist`), `/private/tmp/kuvo-ssh-${os.userInfo().uid}`];
+  if (path.basename(tmp) === bundle) kuvo.push(tmp);
+  return { kuvo, readable: [path.join(app, "bin")] };
+}
+
+/** This box's policy, as its folders, your home folder and your SSH keys are now. */
+export function fencePolicy(ports: number[] = []): FencePolicy {
+  const home = realish(os.userInfo().homedir);
+  const inHome = (names: string[]) => names.map(name => path.join(home, name));
+  if (IS_MAC) {
+    const { kuvo, readable } = macFolders(home);
+    return {
+      home,
+      kuvo: kuvo.map(realish),
+      kuvoPatterns: [
+        `^${escapeRegex(home)}/Library/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
+        `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
+      ],
+      kuvoReadable: readable.map(realish),
+      writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES]).map(realish)],
+      secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...sshKeys(home), ...ghHosts(home)].map(realish),
+      ports,
+    };
+  }
+  return {
+    home,
+    // A machine's folder, and the real one if this is a test's own.
+    kuvo: [...new Set([realish(K), realish(path.join(home, ".kuvo-code"))])],
+    kuvoPatterns: [],
+    kuvoReadable: [realish(path.join(K, "bin"))],
+    writable: ["/tmp", "/var/tmp", "/dev", "/dev/shm", ...inHome(CACHES)],
+    secrets: [...inHome([...SECRETS, ...LINUX_SECRETS]), ...sshKeys(home), ...ghHosts(home)],
+    ports,
+  };
+}
+
+/** This Mac's per-user temporary and cache folders (`/private/var/folders/…/{T,C}`), which builds
+ * write to: everything in them but Kuvo Code's own, which `kuvoPatterns` hides. */
+function userTemporary(): string[] {
+  let t = os.tmpdir();
+  try { t = fs.realpathSync(t); } catch {}
+  const user = t.match(/^(\/private\/var\/folders\/[^/]+\/[^/]+)\//)?.[1];
+  return user ? [user] : [];
+}
+
+/** A path as the system has it, through symlinks (`/tmp` is `/private/tmp` on macOS), as the
+ * sandbox compares them: its deepest folder that's there resolved, the rest as it's named. */
+export function realish(where: string): string {
+  const full = path.resolve(where);
+  for (let at = full, rest = ""; ; rest = path.join(path.basename(at), rest), at = path.dirname(at)) {
+    try { return path.join(fs.realpathSync(at), rest); } catch {}
+    if (at === path.dirname(at)) return full;
+  }
+}
+
+export const escapeRegex = (text: string) => text.replace(/[.^$*+?()[\]{}|\\]/g, "\\$&");
