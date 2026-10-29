@@ -575,30 +575,25 @@ client shows it from the same routes.
   (`{session, archive?}`; only one of its own), `answer_ask` (`{session, ask, decision: allow|deny,
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
   an account for here, `provider/model`, with their efforts).
-- **Answering asks**: a bot may allow what one of its sessions (or a subagent of one) asks only
+- **Answering asks, before fencing** (`work/policy.ts`): reading a command can't be made
+  airtight, so until sessions are fenced (phase 5) a bot answers only two kinds of ask, and only
   where it could go ahead itself, part by part (the engine's rules for its own conversation allow
-  each: the engine's defaults, which ask before reading a `.env` file, Settings › Permissions, then
-  the conversation's own), and only what it can read as safe, failing closed (`work/policy.ts`):
-  - A command only when every part (`;`, `&&`, `||`, `|`, a new line) is a program on a short list
-    (reading files, `git` on this checkout, making and removing files, `curl` fetching a page)
-    with every flag on that program's own list, and nothing a shell expands or runs besides (`$`,
-    backticks, groups, background, text written in, wrappers, `sh -c`, `eval`). Never `git push`,
-    its settings or an alias.
-  - Nothing that builds, tests or installs (`npm`, `npx`, `pip`, `go`, `cargo`, `make`, `swift`,
-    `xcodebuild`, `pytest`…): they run the project's code or a package's. Until a plan the user
-    approved can name a command (phase 4), those always come to the user.
-  - Every path it reads, writes or deletes inside the session's folder (its project's other folders
-    too) by its real place, links followed, with `cd` followed; never a pattern of files (it can't
-    see what it takes in), never your keys and sign-ins (`~/.kuvo-code`'s keys and run state, `~/.ssh`,
-    `~/.aws`, the Keychain…) wherever the folder is.
-  - Besides commands: reading inside the project, editing there, fetching pages and starting
-    subagents. Never an edit to a file later commands run (`.git/`, hooks, `.npmrc`,
-    `package.json`, `Makefile`, `build.rs`, `conftest.py`, `node_modules/.bin`…), anything outside
-    the project, or an integration's tool.
-  - It may always deny, with its reason passed on.
-  - What it can't fence: an edit it allowed, then a run the user allows later, runs what was
-    edited. Each is judged alone, so the user allowing a build or a test run allows the project's
-    code as it is then (phase 5's fencing is meant for that).
+  each: the engine's defaults, Settings › Permissions, then the conversation's own):
+  - An edit to files inside the session's folder (its project's other folders too), by their
+    real place with links followed: never your keys and sign-ins (`~/.kuvo-code`'s keys and run
+    state, `~/.ssh`, `~/.config`, the Keychain…), and never a file a later command runs or reads as
+    settings (anything of git's, wherever it is, as a bare repository makes it: `config`, `HEAD`,
+    hooks; `.husky`, `node_modules`, `.vscode`, `package.json`, `Makefile`, tools' configs…).
+  - A few commands that read: `ls`, `cat`, `head`, `tail`, `wc`, and `git status`, `diff` and `log`,
+    each with a few options and none that write, read settings or run anything; every part of the
+    line one of those, with literal paths inside the folder. No redirects, patterns of files,
+    settings before it, `cd`, nor anything a shell expands or runs besides.
+  - Everything else goes to the user: reading through the engine, building, testing, installing,
+    changing files from the shell, git that changes anything, fetching, integrations' tools. It may
+    always deny, with its reason passed on.
+  - What it can't fence: an edit it allowed, then a run the user allows later, runs what was edited.
+    Each is judged alone, so the user allowing a build or a test run allows the project's code as
+    it is then.
   Each answer is kept on the session, `kuvo.answers: [{ask, call?, what, decision, reason, by:
   {bot?, name}, at}]` (the latest 40), where clients show it on the ask's tool call ("Allowed by
   Pixel") and in the bot's work.
