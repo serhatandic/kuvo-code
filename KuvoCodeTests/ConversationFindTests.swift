@@ -110,6 +110,17 @@ import Testing
         #expect(marks(in: drawn) == find.places.count)
     }
 
+    /// A bot's reply naming an agent with "&" draws a face in the "&"'s place, and a group chat's
+    /// "@Name" too: Find, which reads them as written, marks them where it finds them.
+    @Test func aNameDrawnWithAFaceIsMarkedWhereFound() async throws {
+        let reply = "Ask &Ada about the config."
+        let find = await found("&ada", in: [.init(id: "reply-1", parts: [.markdown(reply)])])
+        let ada = MessageMentions.Agent(reference: .init(name: "Ada", session: "ses_ada"), look: nil)
+        let drawn = try FileLinkingParser(folders: { [] }, agents: [ada], highlight: find.highlight(for: "reply-1")).attributedString(for: reply)
+        #expect(find.places.count == 1)
+        #expect(marks(in: drawn) == 1)
+    }
+
     /// The places marked in `text`, as drawn.
     private func marks(in text: AttributedString) -> Int {
         var count = 0, inMark = false

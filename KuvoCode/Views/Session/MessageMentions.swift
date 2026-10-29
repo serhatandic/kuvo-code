@@ -75,6 +75,7 @@ nonisolated enum MessageMentions {
                 var face = AttributedString("\u{FFFC}", attributes: text[amp].runs.first?.attributes ?? AttributeContainer())
                 face.link = nil
                 face.textual.attachment = mark.look.map { AnyAttachment(MentionFace(look: $0)) } ?? AnyAttachment(ConversationMark())
+                face[FindReadsAs.self] = AgentReferences.trigger
                 text.replaceSubrange(amp, with: face)
             }
         }
