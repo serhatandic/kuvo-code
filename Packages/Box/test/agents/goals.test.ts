@@ -180,10 +180,70 @@ describe("a goal", () => {
   })
 
   test("pauses on a turn that failed, with the error", async () => {
-    engine.turns = [{ outcome: "failed", error: "Rate limited by the provider" }]
+    engine.turns = [{ outcome: "failed", error: "The model refused the request" }]
     await goals.set("ses_work", "the build is green")
     await until(() => goal()?.state === "paused")
-    expect(goal()).toMatchObject({ pausedBy: "error", note: "The turn failed: Rate limited by the provider." })
+    expect(goal()).toMatchObject({ pausedBy: "error", note: "The turn failed: The model refused the request." })
+  })
+
+  test("waits at a model's limit until it resets, and carries on by itself then, a restart in between too", async () => {
+    let clock = Date.parse("2026-10-29T12:00:00Z")
+    goals.stopAll()
+    const timed = (now: () => number) => {
+      const made = new Goals(join(root, "goals.json"), places(), now)
+      made.onSettled = () => {
+        if (goals === made) settled += 1
+        beat()
+      }
+      return made
+    }
+    goals = timed(() => clock)
+    engine.turns = [{ outcome: "failed", error: "You've hit your usage limit. Try again in 2h 30m." }, { tool: true, text: "Carrying on." }]
+    engine.verdicts = [`{"verdict": "not_met", "reason": "The deploy is left."}`]
+    await goals.set("ses_work", "the site is live")
+    await until(() => goal()?.state === "paused")
+    expect(goal()).toMatchObject({ pausedBy: "limit", resumesAt: clock + 2.5 * 3_600_000 })
+    expect(goal()!.note).toStartWith("Paused until ")
+    expect(told()).toMatchObject({ pausedBy: "limit", resumesAt: clock + 2.5 * 3_600_000 })
+    // The box stops while it waits, and starts again once the reset has come: it carries on.
+    goals.stopAll()
+    clock += 3 * 3_600_000
+    goals = timed(() => clock)
+    goals.start()
+    await until(() => goal()?.state === "working" && nudges().length === 1)
+    expect(goal()!.resumesAt).toBeUndefined()
+    expect(nudges()[0].description).toBe("Not met yet: The deploy is left.")
+  })
+
+  test("a limit that doesn't say when it resets is tried again in a while, and pausing it yourself holds it", async () => {
+    engine.turns = [{ outcome: "failed", error: "429 Too Many Requests" }]
+    await goals.set("ses_work", "the site is live")
+    await until(() => goal()?.state === "paused")
+    expect(goal()!.pausedBy).toBe("limit")
+    expect(goal()!.resumesAt! - Date.now()).toBeGreaterThan(25 * 60_000)
+    expect(goals.pauseByYou("ses_work")).toMatchObject({ pausedBy: "you" })
+    expect(goal()!.resumesAt).toBeUndefined()
+  })
+
+  test("a long goal isn't told to carry on while its sessions are at work (they wake it), nor paused for turns that wait on them", async () => {
+    let inFlight = true
+    goals.stopAll()
+    goals = new Goals(join(root, "goals.json"), { ...places(), inFlight: async () => inFlight })
+    goals.onSettled = () => {
+      settled += 1
+      beat()
+    }
+    engine.turns = Array.from({ length: quietLimit + 1 }, () => ({ tool: false, text: "Waiting on the sessions." }))
+    engine.verdicts = Array.from({ length: quietLimit + 2 }, () => `{"verdict": "not_met", "reason": "The site isn't live yet."}`)
+    await goals.set("ses_work", "the site is live", { long: true })
+    await until(() => goal()?.turns === 1 && !goal()?.checking)
+    expect(nudges()).toHaveLength(0)
+    expect(goal()).toMatchObject({ state: "working", long: true, turns: 1 })
+    // Its sessions done, the next turn's check tells it to carry on.
+    inFlight = false
+    engine.write("ses_work", "[Session finished] \"Build the site\"")
+    await until(() => nudges().length === 1)
+    expect(goal()!.state).toBe("working")
   })
 
   test(`pauses once the agent does nothing for ${quietLimit} turns in a row`, async () => {

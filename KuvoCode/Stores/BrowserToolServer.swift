@@ -241,7 +241,8 @@ enum BrowserTools {
               "mode": ["type": "string", "enum": ["build", "plan"], "description": "plan to have it plan first and change nothing until it's told to go on; build by default."],
               "approval": ["type": "string", "enum": ["ask", "approveAll"], "description": "ask to have it ask before running commands and changing files; yours by default, and never more than yours."],
               "wake": ["type": "string", "enum": ["finished", "asks", "both", "none"], "description": "What you're woken with: when it finishes, when it asks for something, both (a bot's default), or none (a session's default)."],
-              "wait": ["type": "boolean", "description": "Wait for its first answer and get it back here (up to ten minutes)."]], required: ["task"]),
+              "wait": ["type": "boolean", "description": "Wait for its first answer and get it back here (up to ten minutes)."],
+              "step": ["type": "integer", "description": "For your goal: the step it works on, by its number, so that step's track follows it."]], required: ["task"]),
         tool("list_sessions", "List the sessions you started (and the ones they started), the latest first, with where each stands: working, asking for something (and what, with the ask's id), finished, failed or stopped; its model, tokens, and the first lines of its last reply."),
         tool("stop_session", "Stop one of the sessions you started, by its address from list_sessions; with archive, also put it away once its work is reported. Only your own: for another, ask the user.",
              ["session": ["type": "string", "description": "Its address."],
@@ -258,36 +259,44 @@ enum BrowserTools {
               "git": ["type": "boolean", "description": "false for a plain folder, without git."],
               "clone": ["type": "string", "description": "A repository to clone into it instead: an https or ssh address."]], required: ["name"]),
         tool("list_projects", "List the user's projects here: each one's folder, whether it's a git repository, and who made it, and where new projects go."),
-        tool("propose_night", "For a bot, when the user gives you a goal to work on overnight: put the night's plan to them on one card (Before you sleep). Plan it and check what it needs first. The user starts the night from the card, or says not tonight; you're told [Night started] when they start it, and never start before. Proposing again replaces the card.",
+        tool("propose_goal", "For a bot, when the user's message is a goal of many steps (hours, days or weeks of work), or comes as [Goal]: put its plan to them on one card. Plan it and check what it needs first. Never for a small or quick request. The user starts it from the card, or says not now; you're told [Goal started] when they start it, and never start before. Proposing again replaces the card.",
              ["goal": ["type": "string", "description": "The goal, in the user's words."],
-              "steps": ["type": "array", "items": ["type": "string"], "description": "The plan's steps, in order, a few words each."],
+              "steps": ["type": "array", "items": ["anyOf": [["type": "string"], ["type": "object", "properties": ["text": ["type": "string"], "phase": ["type": "string", "description": "The phase it's in, like Build or Launch, for a long plan."]], "required": ["text"]]]], "description": "The plan's steps, in order, a few words each."],
               "checks": ["type": "array", "items": ["type": "object", "properties": [
                   "text": ["type": "string", "description": "What's checked, like \"Stripe key works\", or what the user must do, like \"Add a Cloudflare API token\"."],
                   "ok": ["type": "boolean", "description": "true when it's ready; leave it out for what the user must do."],
                   "detail": ["type": "string", "description": "A few words more, like what it's for."],
                   "url": ["type": "string", "description": "An https page where the user does it."],
                   "button": ["type": "string", "description": "The button's word for that page, like Add or Open Stripe."]], "required": ["text"]],
-                 "description": "What you checked the night needs: tools, keys, sign-ins, services."],
+                 "description": "What you checked the goal needs: tools, keys, sign-ins, services."],
               "spend": ["type": "array", "items": ["type": "object", "properties": [
-                  "what": ["type": "string"], "cap": ["type": "number"], "currency": ["type": "string", "description": "USD by default."]], "required": ["what", "cap"]],
+                  "what": ["type": "string"], "cap": ["type": "number"], "currency": ["type": "string", "description": "USD by default."],
+                  "per": ["type": "string", "enum": ["day", "week", "month", "goal"], "description": "The period the cap is for: goal (the whole goal) by default."]], "required": ["what", "cap"]],
                  "description": "What you'd spend, each with a cap. Nothing else may be spent."],
               "public": ["type": "array", "items": ["type": "string"], "description": "Each public step (publishing, submitting, deploying, sending), like \"Publish the site when it's ready\": the user switches each on or off."],
-              "projects": ["type": "array", "items": ["type": "string"], "description": "New projects the plan makes, by name: made without asking once the night starts."]], required: ["goal", "steps"]),
-        tool("night_progress", "During your night: mark the plan's steps as they start and end, keep what only the user can fix (or a judgment call, or something outside the plan) for the morning as a blocker, and say what you're still watching.",
+              "projects": ["type": "array", "items": ["type": "string"], "description": "New projects the plan makes, by name: made without asking once the goal starts."],
+              "ends": ["type": "string", "description": "An end the user named, as a date and time (2026-11-30T18:00). Leave it out otherwise."],
+              "digest": ["type": "string", "enum": ["day", "week", "milestones", "none"], "description": "How often the user hears how it goes: by the plan's size unless they said."]], required: ["goal", "steps"]),
+        tool("goal_progress", "During your goal: mark its steps as they start, move and end (with progress where you can measure it), add steps as the plan changes, keep what only the user can fix (or a judgment call, or something outside the plan) as waiting, report what you spent, and say what you're still watching. It tells you whether the user is here.",
              ["steps": ["type": "array", "items": ["type": "object", "properties": [
                   "step": ["type": "integer", "description": "The step's number, from 1."],
-                  "state": ["type": "string", "enum": ["todo", "doing", "done", "blocked", "skipped"]],
-                  "note": ["type": "string", "description": "A few words, like \"looks again at 2:40\"."]], "required": ["step", "state"]]],
-              "blocker": ["type": "object", "properties": [
+                  "state": ["type": "string", "enum": ["todo", "doing", "done", "waiting", "paused", "skipped"]],
+                  "progress": ["type": "number", "description": "How far along, from 0 to 1, only where you can measure it (3 of 8 pages is 0.375)."],
+                  "note": ["type": "string", "description": "A few words, like \"looks again at 2:40\"."]], "required": ["step"]]],
+              "add": ["type": "array", "items": ["type": "string"], "description": "New steps, as the plan changes."],
+              "waiting": ["type": "object", "properties": [
                   "kind": ["type": "string", "enum": ["you", "judgment", "outside"], "description": "you: only the user can fix it; judgment: a call that's theirs before anything public; outside: not in the plan."],
                   "text": ["type": "string", "description": "What it is, like \"Finish Stripe's identity check\"."],
                   "detail": ["type": "string"],
-                  "url": ["type": "string", "description": "An https page where the user fixes it."]], "required": ["kind", "text"]],
+                  "url": ["type": "string", "description": "An https page where the user does it."]], "required": ["kind", "text"]],
+              "spent": ["type": "array", "items": ["type": "object", "properties": ["what": ["type": "string"], "amount": ["type": "number"]], "required": ["what", "amount"]], "description": "What you spent, by the plan's spend line."],
               "watching": ["type": "array", "items": ["type": "string"], "description": "What you're still watching, like \"DNS for driftwood.coffee\": all of it, as it is now."]]),
-        tool("may_publish", "During your night: whether one of its public steps is switched on, so you may do it once it's ready. Ask before every public step; if it's off, or not one of the night's, prepare it as a draft for the morning.",
+        tool("may_publish", "During your goal: whether one of its public steps is switched on, so you may do it once it's ready. Ask before every public step; if it's off, or not one of the goal's, prepare it as a draft for the user.",
              ["step": ["type": "string", "description": "The public step, by its words or its id."]], required: ["step"]),
-        tool("finish_night", "End your night with the morning report: what needs the user first, then what's done and where, what it spent, and what you're still watching.",
-             ["report": ["type": "string", "description": "The morning report, a few lines."],
+        tool("may_spend", "During your goal: whether a purchase fits the plan's cap for it, in its period now. Ask before every purchase.",
+             ["what": ["type": "string", "description": "The plan's spend line it's for."], "amount": ["type": "number"]], required: ["what", "amount"]),
+        tool("finish_goal", "End your goal with the report: what needs the user first, then what got done and where, what it spent, and what you're still watching.",
+             ["report": ["type": "string", "description": "The report, a few lines."],
               "watching": ["type": "array", "items": ["type": "string"], "description": "What you're still watching."]], required: ["report"]),
     ]
 
@@ -312,7 +321,7 @@ enum BrowserTools {
 
     /// The tools agents write to each other and run their sessions with, answered by this Mac's box
     /// (see `AgentMail`).
-    nonisolated static let mailTools: Set<String> = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_night", "night_progress", "may_publish", "finish_night"]
+    nonisolated static let mailTools: Set<String> = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_publish", "may_spend", "finish_goal"]
     /// Carries out their calls from this Mac's conversations.
     /// The added integrations' sites, which the browser sends the agent away from, to their tools.
     static var integrationSites: () -> [Integrations.Site] = { [] }

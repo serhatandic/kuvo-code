@@ -1604,10 +1604,45 @@ async function watchWorkAsks(tell, { signal, every = 2000, read = workAsks, answ
   }
 }
 
-// Packages/Box/src/link/work/night.ts
+// Packages/Box/src/link/work/goals.ts
 import crypto6 from "node:crypto";
 import fs23 from "node:fs";
 import path26 from "node:path";
+
+// Packages/Box/src/shared/limits.ts
+function resetsIn(text, now = Date.now()) {
+  const found = text?.match(/(?:resets?|try again|available again)\s+in\s+((?:\d+(?:\.\d+)?\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])[\s,]*(?:and\s+)?)+)/i);
+  if (!found)
+    return;
+  const units = { d: 86400000, h: 3600000, m: 60000, s: 1000 };
+  let total = 0;
+  for (const part of found[1].matchAll(/(\d+(?:\.\d+)?)\s*([dhms])/gi))
+    total += Number(part[1]) * (units[part[2].toLowerCase()] ?? 0);
+  return total > 0 ? now + Math.min(total, 31 * 86400000) : undefined;
+}
+function zone() {
+  const name = process.env.KUVO_TZ;
+  if (!name)
+    return;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: name });
+    return name;
+  } catch {
+    return;
+  }
+}
+function resetTime(at) {
+  const timeZone = zone();
+  const day = (date) => date.toLocaleDateString("en-US", { timeZone });
+  const date = new Date(at);
+  const time = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone });
+  if (day(date) === day(new Date))
+    return time;
+  return `${date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone })}, ${time}`;
+}
+function isLimit(text) {
+  return Boolean(text && /\b429\b|rate.?limit|usage limit|limit (?:was |has been )?reached|reached (?:its|your|the) (?:usage )?limit|quota|too many requests|resets? in|try again in|overloaded|capacity/i.test(text));
+}
 
 // Packages/Box/src/link/work/policy.ts
 import fs14 from "node:fs";
@@ -4365,63 +4400,111 @@ async function stopBotWork(bot, targets, signal) {
   return stopped;
 }
 
-// Packages/Box/src/link/work/night.ts
-var NIGHTS_FILE = path26.join(WORK_FOLDER, "nights.json");
-var LOCK5 = path26.join(WORK_FOLDER, ".nights.lock");
-var NIGHT_ASK_WAIT = 15 * 60000;
-var NIGHT_LONGEST = 12 * 3600000;
+// Packages/Box/src/link/work/goals.ts
+var GOALS_FILE = path26.join(WORK_FOLDER, "goals.json");
+var LOCK5 = path26.join(WORK_FOLDER, ".goals.lock");
+var HERE_FILE = path26.join(WORK_FOLDER, "here.json");
 var SHOWN = 24 * 3600000;
-var nightFollowers = new Set;
+var ASK_SETTLES = 2 * 60000;
+var WRAP_UP = 2 * 3600000;
+var UNKNOWN_RESET = 30 * 60000;
+var DAY = 86400000;
+var goalFollowers = new Set;
 var STATES = ["proposed", "running", "done", "stopped", "declined"];
-var readKept2 = (file = NIGHTS_FILE) => {
+var readKept2 = (file = GOALS_FILE) => {
   try {
-    const nights = JSON.parse(textOf(file) ?? "").nights;
-    return Array.isArray(nights) ? nights.filter((each) => isObject(each) && typeof each.id === "string" && typeof each.bot === "string" && STATES.includes(each.state)) : [];
+    const goals = JSON.parse(textOf(file) ?? "").goals;
+    return Array.isArray(goals) ? goals.filter((each) => isObject(each) && typeof each.id === "string" && typeof each.bot === "string" && STATES.includes(each.state)) : [];
   } catch {
     return [];
   }
 };
-function changeKept2(change, file = NIGHTS_FILE) {
+function changeKept2(change, file = GOALS_FILE) {
   fs23.mkdirSync(WORK_FOLDER, { recursive: true });
   const result = locked(LOCK5, () => {
-    const nights = readKept2(file);
-    const value = change(nights);
+    const goals = readKept2(file);
+    const value = change(goals);
     const latest = new Map;
-    for (const night of nights)
-      if (botHere(night.bot) && (!latest.has(night.bot) || latest.get(night.bot).proposed <= night.proposed))
-        latest.set(night.bot, night);
-    writePrivate(file, JSON.stringify({ nights: [...latest.values()] }, null, 2));
+    for (const goal of goals)
+      if (botHere(goal.bot) && (!latest.has(goal.bot) || latest.get(goal.bot).proposed <= goal.proposed))
+        latest.set(goal.bot, goal);
+    writePrivate(file, JSON.stringify({ goals: [...latest.values()] }, null, 2));
     return value;
   });
-  for (const tell of nightFollowers)
+  for (const tell of goalFollowers)
     tell();
   return result;
 }
-function boxChecks(night) {
+var Here = `${HERE[0].toUpperCase()}${HERE.slice(1)}`;
+function boxChecks(goal) {
   const checks = [];
-  const Here = `${HERE[0].toUpperCase()}${HERE.slice(1)}`;
-  checks.push(sandboxOn() ? { id: "unattended", text: `${Here} can run a night`, state: "ok", by: "box" } : { id: "unattended", text: `${Here} can't run a night yet`, detail: `${night.name} can do the same plan with you here instead`, state: "failed", by: "box" });
-  if (keepsAwake()) {
-    const power = onPower();
-    if (power === true)
-      checks.push({ id: "power", text: "Mac on power", detail: "With its lid open, it stays awake till it's done", state: "ok", by: "box" });
-    else if (power === false)
-      checks.push({ id: "power", text: "Plug in your Mac", detail: "It stays awake only on power, with its lid open", state: "needs", by: "box" });
-  }
-  if (night.projects.length && !projectsFolder()) {
-    checks.push({ id: "projectsFolder", text: "Pick where new projects go", detail: `for ${night.projects.join(", ")}`, state: "needs", by: "box", action: { kind: "projectsFolder", label: "Pick" } });
+  if (!sandboxOn())
+    checks.push({ id: "alone", text: `${Here} can't work on its own yet`, detail: `${goal.name} works on it with you here: what it asks waits for you`, state: "failed", by: "box" });
+  if (keepsAwake() && onPower() === false)
+    checks.push({ id: "power", text: "Your Mac is on battery", detail: "If it sleeps, the goal carries on once it wakes", state: "needs", by: "box" });
+  if (goal.projects.length && !projectsFolder()) {
+    checks.push({ id: "projectsFolder", text: "Pick where new projects go", detail: `for ${goal.projects.join(", ")}`, state: "needs", by: "box", action: { kind: "projectsFolder", label: "Pick" } });
   }
   return checks;
 }
-var shown = (night) => {
-  const { waiting: _, told: __, reportTold: ___, ...rest } = night;
-  return { ...rest, checks: night.state === "proposed" ? [...boxChecks(night), ...night.checks] : night.checks, canStart: sandboxOn() };
+var shown = (goal) => {
+  const { periods: _, asksSeen: __, limitsSeen: ___, pauseSince: ____, told: _____, reportTold: ______, endTold: _______, phasesDone: ________, ...rest } = goal;
+  return { ...rest, checks: goal.state === "proposed" ? [...boxChecks(goal), ...goal.checks] : goal.checks, alone: sandboxOn() };
 };
-function nights(file = NIGHTS_FILE) {
+function goalPlans(file = GOALS_FILE) {
   const now = Date.now();
-  return readKept2(file).filter((night) => botHere(night.bot) && (night.state === "running" || now - (night.ended ?? night.proposed) < SHOWN)).sort((a, b) => b.proposed - a.proposed).map(shown);
+  return readKept2(file).filter((goal) => botHere(goal.bot) && (goal.state === "running" || now - (goal.ended ?? goal.proposed) < SHOWN)).sort((a, b) => b.proposed - a.proposed).map(shown);
 }
-var runningNight = (bot, file = NIGHTS_FILE) => bot ? readKept2(file).find((night) => night.bot === bot && night.state === "running") ?? null : null;
+var runningGoal = (bot, file = GOALS_FILE) => bot ? readKept2(file).find((goal) => goal.bot === bot && goal.state === "running") ?? null : null;
+function isHere(file = HERE_FILE) {
+  try {
+    const kept = JSON.parse(fs23.readFileSync(file, "utf8"));
+    return kept?.here === true && Date.now() - Number(kept.at) < 3 * 60000;
+  } catch {
+    return false;
+  }
+}
+function periodOf(per, at) {
+  const date = new Date(at);
+  const pad = (number) => String(number).padStart(2, "0");
+  if (per === "goal")
+    return "goal";
+  if (per === "month")
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
+  if (per === "day")
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  const day = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  day.setDate(day.getDate() + 3 - (day.getDay() + 6) % 7);
+  const first = new Date(day.getFullYear(), 0, 4);
+  const week = 1 + Math.round(((day.getTime() - first.getTime()) / DAY - 3 + (first.getDay() + 6) % 7) / 7);
+  return `${day.getFullYear()}-W${pad(week)}`;
+}
+function periodEnd(per, at) {
+  const date = new Date(at);
+  if (per === "goal")
+    return;
+  if (per === "day")
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime();
+  if (per === "month")
+    return new Date(date.getFullYear(), date.getMonth() + 1, 1).getTime();
+  const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate() - (date.getDay() + 6) % 7);
+  return new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 7).getTime();
+}
+function freshPeriods(goal, now = Date.now()) {
+  let changed = false;
+  goal.periods = goal.spend.map((line, at) => {
+    const period = periodOf(line.per, now);
+    if (goal.periods?.[at] !== period) {
+      if (goal.periods?.[at] !== undefined) {
+        line.spent = 0;
+        delete line.until;
+      }
+      changed = true;
+    }
+    return period;
+  });
+  return changed;
+}
 var text = (value, most) => typeof value === "string" && value.trim() ? value.trim().slice(0, most) : null;
 var https = (value) => {
   if (typeof value !== "string")
@@ -4434,15 +4517,33 @@ var https = (value) => {
   }
 };
 var newID2 = (prefix) => `${prefix}_${crypto6.randomBytes(9).toString("base64url").replace(/[^A-Za-z0-9]/g, "")}`;
-function proposeNight(bot, given, file = NIGHTS_FILE) {
+var PERIODS = ["day", "week", "month", "goal"];
+var DIGESTS = ["day", "week", "milestones", "none"];
+function stepGiven(each) {
+  if (typeof each === "string")
+    return text(each, 300) ? { text: text(each, 300) } : null;
+  if (!isObject(each))
+    return null;
+  const said = text(each.text, 300);
+  if (!said)
+    return null;
+  return { text: said, ...text(each.phase, 80) ? { phase: text(each.phase, 80) } : {} };
+}
+function endGiven(value, now = Date.now()) {
+  if (value === undefined || value === null || value === "")
+    return;
+  const at = typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : NaN;
+  return Number.isFinite(at) && at > now ? at : null;
+}
+function proposeGoal(bot, given, file = GOALS_FILE) {
   const goal = text(given.goal, 2000);
   if (!goal)
     return { refused: "Say the goal, in the user's words (goal)." };
-  const steps = (Array.isArray(given.steps) ? given.steps : []).map((each) => text(each, 300)).filter((each) => Boolean(each));
+  const steps = (Array.isArray(given.steps) ? given.steps : []).map(stepGiven).filter((each) => Boolean(each));
   if (!steps.length)
     return { refused: "Give the plan, as its steps in order (steps)." };
-  if (steps.length > 30)
-    return { refused: "That's more than 30 steps: make them bigger." };
+  if (steps.length > 200)
+    return { refused: "That's more than 200 steps: make them bigger, in phases." };
   const checks = [];
   for (const each of Array.isArray(given.checks) ? given.checks.slice(0, 12) : []) {
     if (!isObject(each))
@@ -4458,327 +4559,539 @@ function proposeNight(bot, given, file = NIGHTS_FILE) {
   for (const each of Array.isArray(given.spend) ? given.spend.slice(0, 10) : []) {
     if (!isObject(each) || !text(each.what, 200) || typeof each.cap !== "number" || !(each.cap > 0))
       return { refused: "Each spend line needs what it's for (what) and a cap above 0 (cap)." };
-    spend.push({ what: text(each.what, 200), cap: each.cap, currency: (text(each.currency, 3) ?? "USD").toUpperCase() });
+    const per = PERIODS.includes(each.per) ? each.per : "goal";
+    spend.push({ what: text(each.what, 200), cap: each.cap, currency: (text(each.currency, 3) ?? "USD").toUpperCase(), per, spent: 0 });
   }
   const publics = (Array.isArray(given.public) ? given.public.slice(0, 8) : []).map((each) => text(each, 200)).filter((each) => Boolean(each)).map((each, at) => ({ id: `p${at + 1}`, text: each, on: false }));
   const projects = (Array.isArray(given.projects) ? given.projects.slice(0, 5) : []).map((each) => text(each, 80)).filter((each) => Boolean(each));
+  const ends = endGiven(given.ends);
+  if (ends === null)
+    return { refused: "An end (ends) is a date and time to come, like 2026-11-30T18:00." };
+  const digest = DIGESTS.includes(given.digest) ? given.digest : steps.length > 12 || steps.some((step) => step.phase) ? "day" : "none";
   const made = changeKept2((all) => {
-    if (all.some((night) => night.bot === bot.bot && night.state === "running"))
+    if (all.some((each) => each.bot === bot.bot && each.state === "running"))
       return null;
-    const night = {
-      id: newID2("night"),
+    const kept = {
+      id: newID2("goal"),
       bot: bot.bot,
       name: bot.name,
       session: bot.session,
       goal,
       state: "proposed",
-      steps: steps.map((each) => ({ text: each, state: "todo" })),
+      steps: steps.map((each, at) => ({ id: `s${at + 1}`, ...each, state: "todo" })),
       checks,
       spend,
       public: publics,
       projects,
       wake: false,
+      digest,
+      ...ends ? { ends } : {},
       proposed: Date.now(),
-      blockers: [],
+      waiting: [],
+      paused: [],
+      waited: 0,
       watching: []
     };
     for (let at = all.length - 1;at >= 0; at--)
       if (all[at].bot === bot.bot && all[at].state === "proposed")
         all.splice(at, 1);
-    all.push(night);
-    return night;
+    all.push(kept);
+    return kept;
   }, file);
   if (!made)
-    return { refused: "A night is running already: report on it with night_progress, and end it with finish_night." };
+    return { refused: "A goal is running already: report on it with goal_progress, and end it with finish_goal." };
   noteWorkChanged(bot.bot);
-  return { night: shown(made) };
+  return { goal: shown(made) };
 }
-async function answerNight(id, given, targets, file = NIGHTS_FILE) {
+async function answerGoal(id, given, targets, file = GOALS_FILE) {
   const action = given.action;
   if (action !== "start" && action !== "decline" && action !== "stop")
     return { refused: { status: 400, message: "Say start, decline or stop (action)." } };
-  const before = readKept2(file).find((night) => night.id === id);
+  const before = readKept2(file).find((goal) => goal.id === id);
   if (!before || !botHere(before.bot))
-    return { refused: { status: 404, message: "There's no such night here." } };
-  if (action === "start" && !sandboxOn())
-    return { refused: { status: 409, message: `${HERE[0].toUpperCase()}${HERE.slice(1)} can't run a night yet.`, needs: "sandbox" } };
+    return { refused: { status: 404, message: "There's no such goal here." } };
   const switches = isObject(given.public) ? given.public : {};
+  const ends = action === "start" ? endGiven(given.ends) : undefined;
+  if (ends === null)
+    return { refused: { status: 400, message: "The end (ends) is a date and time to come." } };
   const changed = changeKept2((all) => {
-    const night = all.find((each) => each.id === id);
-    if (!night)
-      return { status: 404, message: "There's no such night here." };
+    const goal = all.find((each) => each.id === id);
+    if (!goal)
+      return { status: 404, message: "There's no such goal here." };
     if (action === "stop") {
-      if (night.state !== "running")
-        return { status: 400, message: "That night isn't running." };
-      night.state = "stopped";
-      night.ended = Date.now();
-      return night;
+      if (goal.state !== "running")
+        return { status: 400, message: "That goal isn't running." };
+      goal.state = "stopped";
+      goal.ended = Date.now();
+      return goal;
     }
-    if (night.state !== "proposed")
-      return { status: 400, message: night.state === "running" ? "That night is running already." : "That night has ended." };
-    if (action === "start" && Date.now() - night.proposed >= SHOWN)
+    if (goal.state !== "proposed")
+      return { status: 400, message: goal.state === "running" ? "That goal is running already." : "That goal has ended." };
+    if (action === "start" && Date.now() - goal.proposed >= SHOWN)
       return { status: 400, message: "That plan is from more than a day ago: ask for it again." };
     if (action === "decline") {
-      night.state = "declined";
-      night.ended = Date.now();
-      return night;
+      goal.state = "declined";
+      goal.ended = Date.now();
+      return goal;
     }
-    if (all.some((each) => each.bot === night.bot && each.state === "running"))
-      return { status: 400, message: "A night is running for this bot already." };
-    night.state = "running";
-    night.started = Date.now();
-    night.public = night.public.map((each) => ({ ...each, on: switches[each.id] === true }));
-    night.wake = given.wake === true;
-    return night;
+    if (all.some((each) => each.bot === goal.bot && each.state === "running"))
+      return { status: 400, message: "A goal is running for this bot already." };
+    goal.state = "running";
+    goal.started = Date.now();
+    goal.public = goal.public.map((each) => ({ ...each, on: switches[each.id] === true }));
+    goal.wake = given.wake === true;
+    if (DIGESTS.includes(given.digest))
+      goal.digest = given.digest;
+    if (ends !== undefined)
+      goal.ends = ends;
+    if (Array.isArray(given.spend)) {
+      goal.spend = goal.spend.map((line, at) => {
+        const yours = given.spend instanceof Array ? given.spend[at] : null;
+        if (!isObject(yours))
+          return line;
+        return { ...line, ...typeof yours.cap === "number" && yours.cap > 0 ? { cap: yours.cap } : {}, ...PERIODS.includes(yours.per) ? { per: yours.per } : {} };
+      });
+    }
+    freshPeriods(goal);
+    return goal;
   }, file);
   if (!("id" in changed))
     return { refused: changed };
   noteWorkChanged(changed.bot);
-  if (action === "stop")
+  if (action === "stop") {
     await stopBotWork(changed.bot, targets()).catch(() => 0);
-  else
-    await tellBot2(changed, action === "start" ? startWords(changed) : "[Not tonight] The user said not tonight: don't start the night's work. Ask them in a line if they'd like it some other time.", targets);
-  return { night: shown(changed) };
+    await setGoalLoop(changed, null, targets);
+  } else if (action === "decline") {
+    await tellBot2(changed, "[Not now] The user didn't start this goal. Don't start its work: ask them in a line what they'd like instead, if anything.", targets);
+  } else {
+    await setGoalLoop(changed, loopCondition(changed), targets);
+    await tellBot2(changed, startWords(changed), targets);
+  }
+  return { goal: shown(changed) };
 }
-function startWords(night) {
-  const on = night.public.filter((each) => each.on).map((each) => `"${each.text}"`);
-  const off = night.public.filter((each) => !each.on).map((each) => `"${each.text}"`);
+var loopCondition = (goal) => `${goal.goal}
+
+It's met once the work is done and ${goal.name} has given its report with finish_goal, or the user stops it.`;
+async function setGoalLoop(goal, condition, targets) {
+  const bridge = targets()[1];
+  if (!bridge)
+    return;
+  const at = `/api/kuvo/goals/${encodeURIComponent(goal.session)}`;
+  if (condition)
+    await call(bridge, "PUT", at, { condition: condition.slice(0, 4000), long: true }).catch(() => {});
+  else
+    await call(bridge, "DELETE", at).catch(() => {});
+}
+function startWords(goal) {
+  const on = goal.public.filter((each) => each.on).map((each) => `"${each.text}"`);
+  const off = goal.public.filter((each) => !each.on).map((each) => `"${each.text}"`);
   const lines = [
-    `[Night started] The user approved the night and went to sleep. Work through the plan now: ${night.steps.map((each, at) => `${at + 1}. ${each.text}`).join(" ")}`,
+    `[Goal started] The user approved the plan. Work through it now, steps side by side where they don't depend on each other: ${goal.steps.map((each, at) => `${at + 1}. ${each.text}`).join(" ")}`,
     on.length ? `Switched on, so do them when they're ready: ${on.join(", ")}.` : "",
-    off.length ? `Switched off, so prepare them as drafts and leave them for the morning: ${off.join(", ")}.` : "",
-    night.spend.length ? `What you may spend, never more: ${night.spend.map((each) => `${each.what}, up to ${each.cap} ${each.currency}`).join("; ")}.` : "Spend nothing.",
-    night.projects.length ? `You may make these projects without asking: ${night.projects.join(", ")}.` : "",
-    "Report each step with night_progress as it starts and ends, and anything only the user can fix as a blocker (it waits for the morning; never wait on it). End with finish_night and your morning report."
+    off.length ? `Switched off, so prepare them as drafts for the user: ${off.join(", ")}.` : "",
+    goal.spend.length ? `What you may spend, never more: ${goal.spend.map((each) => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}. Ask may_spend before each purchase.` : "Spend nothing.",
+    goal.projects.length ? `You may make these projects without asking: ${goal.projects.join(", ")}.` : "",
+    goal.ends ? `It ends at ${resetTime(goal.ends)}: be done by then, or wrap up and report.` : "",
+    "Mark each step with goal_progress as it starts, moves and ends (with progress where you can measure it), and keep what only the user can fix as waiting (it never stalls the rest: carry on with other steps). End with finish_goal and your report."
   ];
   return lines.filter(Boolean).join(`
 `);
 }
-async function tellBot2(night, said, targets) {
-  const place = await placeOfSession(night.session, targets()).catch(() => null);
+async function tellBot2(goal, said, targets) {
+  const place = await placeOfSession(goal.session, targets()).catch(() => null);
   if (!place)
     return false;
-  return asked(place.target, "POST", `api/session/${encodeURIComponent(night.session)}/prompt`, { id: messageID(), text: said, delivery: "queue" }).then(() => true, () => false);
+  return asked(place.target, "POST", `api/session/${encodeURIComponent(goal.session)}/prompt`, { id: messageID(), text: said, delivery: "queue" }).then(() => true, () => false);
 }
-var STEP_STATES = ["todo", "doing", "done", "blocked", "skipped"];
-var BLOCKER_KINDS = ["you", "judgment", "outside"];
-function addBlocker(bot, blocker, file = NIGHTS_FILE) {
+async function askGoal(session, words, targets) {
+  const said = text(words, 2000);
+  if (!said)
+    return { refused: { status: 400, message: "Say the goal (goal)." } };
+  const place = await placeOfSession(session, targets()).catch(() => null);
+  if (!place)
+    return { refused: { status: 404, message: "There's no such conversation here." } };
+  const sent = await asked(place.target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, {
+    id: messageID(),
+    text: `[Goal] ${said}
+
+(The user asked for this as a goal: plan it, check what it needs, and put it to them with propose_goal before doing any of the work.)`,
+    delivery: "queue"
+  }).then(() => true, () => false);
+  return sent ? { text: "Asked for a plan." } : { refused: { status: 404, message: "The conversation can't be reached now." } };
+}
+var STEP_STATES = ["todo", "doing", "done", "waiting", "paused", "skipped"];
+var WAITING_KINDS = ["you", "judgment", "outside"];
+function addWaiting(bot, item, file = GOALS_FILE, key) {
   const added = changeKept2((all) => {
-    const night = all.find((each) => each.bot === bot && each.state === "running");
-    if (!night)
+    const goal = all.find((each) => each.bot === bot && each.state === "running");
+    if (!goal)
       return null;
-    const same = night.blockers.find((each) => each.text === blocker.text && each.kind === blocker.kind);
+    const same = goal.waiting.find((each) => key ? each.id === key : each.text === item.text && each.kind === item.kind);
     if (same)
       return same;
-    const made = { id: newID2("blk"), ...blocker, at: Date.now() };
-    night.blockers.push(made);
-    night.blockers = night.blockers.slice(-40);
+    const made = { id: key ?? newID2("wait"), ...item, at: Date.now() };
+    goal.waiting.push(made);
+    goal.waiting = goal.waiting.slice(-60);
     return made;
   }, file);
   if (added)
     noteWorkChanged(bot);
   return added;
 }
-function nightProgress(bot, given, file = NIGHTS_FILE) {
-  if (!runningNight(bot, file))
-    return { refused: "No night is running: propose one with propose_night, and the user starts it." };
-  const notes = [];
-  const marks = Array.isArray(given.steps) ? given.steps : given.step !== undefined ? [{ step: given.step, state: given.state, note: given.note }] : [];
-  const steps = runningNight(bot, file).steps.length;
-  for (const mark of marks) {
-    if (!isObject(mark) || typeof mark.step !== "number" || mark.step < 1 || mark.step > steps)
-      return { refused: `There's no step ${isObject(mark) ? String(mark.step) : ""}: the plan has ${steps}.` };
-    if (!STEP_STATES.includes(mark.state))
-      return { refused: "A step's state is todo, doing, done, blocked or skipped." };
-  }
-  if (isObject(given.blocker) && (!text(given.blocker.text, 300) || !BLOCKER_KINDS.includes(given.blocker.kind)))
-    return { refused: "A blocker needs its kind (you, judgment or outside) and what it is (text)." };
-  let wrong = null;
-  changeKept2((all) => {
-    const night = all.find((each) => each.bot === bot && each.state === "running");
-    if (!night)
-      return;
-    for (const mark of marks) {
-      if (!isObject(mark))
-        continue;
-      const at = typeof mark.step === "number" ? mark.step - 1 : -1;
-      if (!night.steps[at]) {
-        wrong = `There's no step ${String(mark.step)}: the plan has ${night.steps.length}.`;
-        continue;
-      }
-      if (!STEP_STATES.includes(mark.state)) {
-        wrong = "A step's state is todo, doing, done, blocked or skipped.";
-        continue;
-      }
-      night.steps[at] = { text: night.steps[at].text, state: mark.state, ...text(mark.note, 300) ? { note: text(mark.note, 300) } : {} };
-      notes.push(`step ${at + 1} ${mark.state}`);
-    }
-    if (Array.isArray(given.watching)) {
-      night.watching = given.watching.map((each) => text(each, 200)).filter((each) => Boolean(each)).slice(0, 10);
-      notes.push(night.watching.length ? `watching ${night.watching.length}` : "watching nothing");
-    }
-  }, file);
-  if (wrong)
-    return { refused: wrong };
-  if (isObject(given.blocker)) {
-    const said = text(given.blocker.text, 300);
-    const kind = given.blocker.kind;
-    if (!said || !BLOCKER_KINDS.includes(kind))
-      return { refused: "A blocker needs its kind (you, judgment or outside) and what it is (text)." };
-    const url = https(given.blocker.url);
-    addBlocker(bot, { kind, text: said, ...text(given.blocker.detail, 500) ? { detail: text(given.blocker.detail, 500) } : {}, ...url ? { url } : {} }, file);
-    notes.push("blocker kept for the morning");
-  }
-  noteWorkChanged(bot);
-  return { said: notes.length ? `Noted: ${notes.join(", ")}.` : "Nothing to note: give steps, a blocker or watching." };
-}
-function mayPublish(bot, given, file = NIGHTS_FILE) {
-  const night = runningNight(bot, file);
-  if (!night)
-    return { refused: "No night is running. While the user is here, ask them." };
-  const asked = text(given.step, 200);
-  if (!asked)
-    return { refused: `Say which public step (step): ${night.public.map((each) => `${each.id} "${each.text}"`).join(", ") || "the plan has none"}.` };
-  const found = night.public.find((each) => each.id === asked || each.text.toLowerCase() === asked.toLowerCase());
-  if (!found)
-    return { said: `"${asked}" isn't one of the night's public steps, so it's not approved: prepare it as a draft for the morning.` };
-  return { said: found.on ? `Yes: "${found.text}" is switched on. Do it once it's ready.` : `No: "${found.text}" is switched off. Prepare it as a draft for the morning.` };
-}
-function finishNight(bot, given, file = NIGHTS_FILE) {
-  const report = text(given.report, 4000);
-  if (!report)
-    return { refused: "Give the morning report (report): what got done and where, what it spent, and what needs the user first." };
+function pauseGoal(bot, pause, file = GOALS_FILE) {
   const done = changeKept2((all) => {
-    const night = all.find((each) => each.bot === bot && each.state === "running");
-    if (!night)
+    const goal = all.find((each) => each.bot === bot && each.state === "running");
+    if (!goal)
       return false;
-    night.state = "done";
-    night.ended = Date.now();
-    night.report = report;
-    if (Array.isArray(given.watching))
-      night.watching = given.watching.map((each) => text(each, 200)).filter((each) => Boolean(each)).slice(0, 10);
+    const key = pause.session ?? "bot";
+    goal.paused = [...goal.paused.filter((each) => (each.session ?? "bot") !== key), pause];
+    goal.pauseSince = { ...goal.pauseSince ?? {}, [key]: goal.pauseSince?.[key] ?? Date.now() };
+    for (const step of goal.steps)
+      if (step.state === "doing" && (!pause.session || step.sessions?.includes(pause.session))) {
+        step.state = "paused";
+        if (pause.until)
+          step.resumes = pause.until;
+      }
     return true;
   }, file);
-  if (!done)
-    return { refused: "No night is running." };
-  noteWorkChanged(bot);
-  return { said: "The night is done. Say the report in your reply too, briefly: the user reads it in the morning." };
+  if (done)
+    noteWorkChanged(bot);
+  return done;
 }
-var ASK_TEXT = "No one could answer this overnight, so it's no for now. Work around it if you can; it waits for the user in the morning report.";
-var QUESTION_TEXT = "No one could answer this overnight. Go on with your best judgment where it's safe, and leave the rest for the morning.";
-async function lookAtNights(tell, targets, { file = NIGHTS_FILE, wait = NIGHT_ASK_WAIT, longest = NIGHT_LONGEST, signal } = {}) {
-  const now = Date.now();
-  for (const night of readKept2(file).filter((each) => each.state === "running" && botHere(each.bot) && now - (each.started ?? each.proposed) >= longest)) {
-    const ended = changeKept2((all) => {
-      const kept = all.find((each) => each.id === night.id && each.state === "running");
-      if (!kept)
-        return false;
-      kept.state = "stopped";
-      kept.ended = now;
-      kept.report = `${kept.name} didn't finish in the night's time, so it stopped: ${kept.steps.filter((step) => step.state === "done" || step.state === "skipped").length} of ${kept.steps.length} steps done. Ask it where things stand.`;
-      return true;
-    }, file);
-    if (ended) {
-      noteWorkChanged(night.bot);
-      await stopBotWork(night.bot, targets(), signal).catch(() => 0);
+function linkSession(bot, step, session, file = GOALS_FILE) {
+  const linked = changeKept2((all) => {
+    const goal = all.find((each) => each.bot === bot && each.state === "running");
+    const at = !goal ? -1 : typeof step === "number" ? step - 1 : goal.steps.findIndex((each) => each.id === step);
+    if (!goal || !goal.steps[at])
+      return false;
+    const each = goal.steps[at];
+    goal.steps[at] = { ...each, state: each.state === "todo" ? "doing" : each.state, sessions: [...new Set([...each.sessions ?? [], session])] };
+    return true;
+  }, file);
+  if (linked)
+    noteWorkChanged(bot);
+  return linked;
+}
+var presence = () => isHere() ? "The user is here now." : "The user is away now: prepare anything public or sent as a draft, unless its switch is on, and carry on with what doesn't need them.";
+function goalProgress(bot, given, file = GOALS_FILE) {
+  const running = runningGoal(bot, file);
+  if (!running)
+    return { refused: "No goal is running: propose one with propose_goal, and the user starts it." };
+  const marks = Array.isArray(given.steps) ? given.steps : given.step !== undefined ? [{ step: given.step, state: given.state, progress: given.progress, note: given.note }] : [];
+  const added = (Array.isArray(given.add) ? given.add : []).map(stepGiven).filter((each) => Boolean(each));
+  const stepAt = (step, steps) => typeof step === "number" ? step - 1 : typeof step === "string" ? steps.findIndex((each) => each.id === step) : -1;
+  for (const mark of marks) {
+    if (!isObject(mark) || !running.steps[stepAt(mark.step, running.steps)])
+      return { refused: `There's no step ${isObject(mark) ? String(mark.step) : ""}: the plan has ${running.steps.length} (add new ones with add).` };
+    if (mark.state !== undefined && !STEP_STATES.includes(mark.state))
+      return { refused: "A step's state is todo, doing, done, waiting, paused or skipped." };
+    if (mark.progress !== undefined && mark.progress !== null && !(typeof mark.progress === "number" && mark.progress >= 0 && mark.progress <= 1))
+      return { refused: "A step's progress is a share from 0 to 1, given only where you can measure it (3 of 8 pages is 0.375)." };
+  }
+  if (isObject(given.waiting) && (!text(given.waiting.text, 300) || !WAITING_KINDS.includes(given.waiting.kind)))
+    return { refused: "What waits needs its kind (you, judgment or outside) and what it is (text)." };
+  const spent = Array.isArray(given.spent) ? given.spent : isObject(given.spent) ? [given.spent] : [];
+  for (const each of spent)
+    if (!isObject(each) || !text(each.what, 200) || typeof each.amount !== "number" || !(each.amount > 0))
+      return { refused: "What's spent is {what, amount}." };
+  const notes = [];
+  changeKept2((all) => {
+    const goal = all.find((each) => each.bot === bot && each.state === "running");
+    if (!goal)
+      return;
+    for (const mark of marks) {
+      const at = stepAt(mark.step, goal.steps);
+      const step = goal.steps[at];
+      const next = { ...step };
+      if (mark.state !== undefined)
+        next.state = mark.state;
+      if (typeof mark.progress === "number")
+        next.progress = mark.progress;
+      if (mark.progress === null)
+        delete next.progress;
+      if (next.state === "done")
+        next.progress = 1;
+      if (text(mark.note, 300))
+        next.note = text(mark.note, 300);
+      else if (mark.note === null || mark.note === "")
+        delete next.note;
+      if (next.state !== "paused")
+        delete next.resumes;
+      goal.steps[at] = next;
+      notes.push(`step ${at + 1} ${next.state}`);
+    }
+    for (const step of added) {
+      goal.steps.push({ id: `s${goal.steps.length + 1}`, ...step, state: "todo" });
+      notes.push(`step ${goal.steps.length} added`);
+    }
+    if (Array.isArray(given.watching)) {
+      goal.watching = given.watching.map((each) => text(each, 200)).filter((each) => Boolean(each)).slice(0, 10);
+      notes.push(goal.watching.length ? `watching ${goal.watching.length}` : "watching nothing");
+    }
+    freshPeriods(goal);
+    for (const each of spent) {
+      const line = goal.spend.find((line) => line.what.toLowerCase() === String(each.what).trim().toLowerCase());
+      if (!line) {
+        notes.push(`${String(each.what)} isn't one of the plan's spend lines: it waits for the user`);
+        continue;
+      }
+      line.spent += each.amount;
+      if (line.spent >= line.cap)
+        line.until = periodEnd(line.per, Date.now());
+      notes.push(`${line.what}: ${line.spent} of ${line.cap} ${line.currency}${line.until ? `, the cap is reached until ${resetTime(line.until)}` : line.per === "goal" && line.spent >= line.cap ? ", the cap is reached" : ""}`);
+    }
+  }, file);
+  if (isObject(given.waiting)) {
+    const url = https(given.waiting.url);
+    addWaiting(bot, { kind: given.waiting.kind, text: text(given.waiting.text, 300), ...text(given.waiting.detail, 500) ? { detail: text(given.waiting.detail, 500) } : {}, ...url ? { url } : {} }, file);
+    notes.push("kept as waiting for the user: carry on with what doesn't depend on it");
+  }
+  noteWorkChanged(bot);
+  return { said: `${notes.length ? `Noted: ${notes.join("; ")}.` : "Nothing to note: give steps, add, waiting, spent or watching."} ${presence()}` };
+}
+function mayPublish(bot, given, file = GOALS_FILE) {
+  const goal = runningGoal(bot, file);
+  if (!goal)
+    return { refused: "No goal is running. Ask the user." };
+  const asked = text(given.step, 200);
+  if (!asked)
+    return { refused: `Say which public step (step): ${goal.public.map((each) => `${each.id} "${each.text}"`).join(", ") || "the plan has none"}.` };
+  const found = goal.public.find((each) => each.id === asked || each.text.toLowerCase() === asked.toLowerCase());
+  if (!found)
+    return { said: `"${asked}" isn't one of the goal's public steps, so it's not approved: prepare it as a draft and keep it as waiting for the user.` };
+  return { said: found.on ? `Yes: "${found.text}" is switched on. Do it once it's ready.` : `No: "${found.text}" is switched off. Prepare it as a draft, and keep it as waiting for the user.` };
+}
+function maySpend(bot, given, file = GOALS_FILE) {
+  const goal = runningGoal(bot, file);
+  if (!goal)
+    return { refused: "No goal is running. Ask the user." };
+  const what = text(given.what, 200);
+  const amount = given.amount;
+  if (!what || typeof amount !== "number" || !(amount > 0))
+    return { refused: "Say what it's for (what) and how much (amount)." };
+  freshPeriods(goal);
+  const line = goal.spend.find((each) => each.what.toLowerCase() === what.toLowerCase());
+  if (!line)
+    return { said: `No: "${what}" isn't one of the plan's spend lines. Keep it as waiting for the user.` };
+  const left = line.cap - (goal.periods?.[goal.spend.indexOf(line)] === periodOf(line.per, Date.now()) ? line.spent : 0);
+  if (amount <= left)
+    return { said: `Yes: ${amount} ${line.currency} fits (${left} ${line.currency} left${line.per === "goal" ? "" : ` this ${line.per}`}). Report it with goal_progress spent once it's paid.` };
+  const end = periodEnd(line.per, Date.now());
+  return { said: `No: only ${Math.max(0, left)} ${line.currency} is left${end ? ` until ${resetTime(end)}, when it starts again: carry on with what doesn't spend, and it can wait till then` : ": keep it as waiting for the user, who can raise the cap"}.` };
+}
+async function finishGoal(bot, given, targets, file = GOALS_FILE) {
+  const report = text(given.report, 6000);
+  if (!report)
+    return { refused: "Give the report (report): what needs the user first, then what got done and where, what it spent, and what you're still watching." };
+  const done = changeKept2((all) => {
+    const goal = all.find((each) => each.bot === bot && each.state === "running");
+    if (!goal)
+      return null;
+    goal.state = "done";
+    goal.ended = Date.now();
+    goal.report = report;
+    if (Array.isArray(given.watching))
+      goal.watching = given.watching.map((each) => text(each, 200)).filter((each) => Boolean(each)).slice(0, 10);
+    return goal;
+  }, file);
+  if (!done)
+    return { refused: "No goal is running." };
+  noteWorkChanged(bot);
+  await setGoalLoop(done, null, targets);
+  return { said: "The goal is done. Say the report in your reply too, briefly." };
+}
+var limitName = (model) => {
+  const provider = isObject(model) && typeof model.providerID === "string" ? model.providerID : "";
+  const names = { anthropic: "Claude", openai: "OpenAI", google: "Gemini", "github-copilot": "Copilot", xai: "Grok", deepseek: "DeepSeek", openrouter: "OpenRouter", opencode: "OpenCode" };
+  return `${names[provider] ?? (provider || "the model")}'s limit`;
+};
+async function failedTurn(target, session, signal) {
+  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=5&order=desc`, undefined, signal).catch(() => null);
+  for (const message of Array.isArray(page) ? page : []) {
+    if (!isObject(message) || message.type !== "idle")
+      continue;
+    if (message.outcome !== "failed")
+      return null;
+    const error = isObject(message.error) ? String(message.error.message ?? "") : "";
+    return { idle: String(message.id ?? ""), error };
+  }
+  return null;
+}
+function digestWords(goal, since, now) {
+  const doneSince = goal.steps.filter((step) => step.state === "done").length;
+  const day = Math.max(1, Math.floor((now - (goal.started ?? now)) / DAY) + 1);
+  const parts = [`${doneSince} of ${goal.steps.length} steps done`];
+  if (goal.waiting.length)
+    parts.push(`${goal.waiting.length} ${goal.waiting.length === 1 ? "waits" : "wait"} for you`);
+  if (goal.waited > 0) {
+    const hours = Math.round(goal.waited / 3600000);
+    parts.push(hours >= 1 ? `waited ${hours} h at limits` : `waited ${Math.max(1, Math.round(goal.waited / 60000))} min at limits`);
+  }
+  if (goal.paused.length)
+    parts.push(`paused: ${goal.paused.map((each) => `${each.why}${each.until ? ` until ${resetTime(each.until)}` : ""}`).join(", ")}`);
+  return `${since ? `Day ${day}` : "So far"}: ${parts.join(", ")}.`;
+}
+async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.now(), signal } = {}) {
+  if (here) {
+    try {
+      writePrivate(HERE_FILE, JSON.stringify({ here: here(), at: Date.now() }));
+    } catch {}
+  }
+  for (const goal of readKept2(file).filter((each) => each.state === "running" && each.ends && now >= each.ends && botHere(each.bot))) {
+    if (!goal.endTold) {
+      changeKept2((all) => {
+        const kept = all.find((each) => each.id === goal.id);
+        if (kept)
+          kept.endTold = now;
+      }, file);
+      await tellBot2(goal, "[Goal's end] The end the user set has come. Finish the step under way, start nothing new, and end with finish_goal and your report.", targets);
+    } else if (now - goal.endTold >= WRAP_UP) {
+      const ended = changeKept2((all) => {
+        const kept = all.find((each) => each.id === goal.id && each.state === "running");
+        if (!kept)
+          return false;
+        kept.state = "stopped";
+        kept.ended = now;
+        kept.report = `${kept.name} reached the end you set: ${kept.steps.filter((step) => step.state === "done" || step.state === "skipped").length} of ${kept.steps.length} steps done. Ask it where things stand.`;
+        return true;
+      }, file);
+      if (ended) {
+        noteWorkChanged(goal.bot);
+        await stopBotWork(goal.bot, targets(), signal).catch(() => 0);
+        await setGoalLoop(goal, null, targets);
+      }
     }
   }
-  const running = readKept2(file).filter((night) => night.state === "running" && botHere(night.bot));
-  keepAwake(running.length > 0);
-  if (running.length && onPower() === false)
-    for (const night of running)
-      addBlocker(night.bot, { kind: "you", text: "Your Mac is on battery", detail: "It may sleep before the work is done. Plug it in to carry on." }, file);
+  const running = readKept2(file).filter((goal) => goal.state === "running" && botHere(goal.bot));
   const sessions = running.length ? await workSessions(targets(), signal).catch(() => []) : [];
-  for (const night of running) {
-    const waiting = {};
-    const work = ofBot(night.bot, sessions);
-    const own = await placeOfSession(night.session, targets()).catch(() => null);
-    const publishing = !night.public.some((step) => step.on);
-    for (const place of [...own ? [{ target: own.target, id: night.session, rules: own.data.permissions }] : [], ...work.map((each) => ({ target: each.target, id: each.data.id, rules: each.data.permissions }))]) {
+  const working = running.length ? await workingNow(targets(), signal).catch(() => new Set) : new Set;
+  keepAwake(running.some((goal) => working.has(goal.session) || ofBot(goal.bot, sessions).some((each) => working.has(each.data.id))));
+  for (const goal of running) {
+    const work = ofBot(goal.bot, sessions);
+    const own = await placeOfSession(goal.session, targets()).catch(() => null);
+    const publishing = !goal.public.some((step) => step.on);
+    for (const place of [...own ? [{ target: own.target, id: goal.session, rules: own.data.permissions }] : [], ...work.map((each) => ({ target: each.target, id: each.data.id, rules: each.data.permissions }))]) {
       if (asksAlways(place.rules, { publishing }))
         continue;
       await call(place.target, "PATCH", `/api/session/${encodeURIComponent(place.id)}`, { permissions: withAlwaysAsk(place.rules ?? [], { publishing }) }, signal).catch(() => {});
     }
-    const places = [...work.map((each) => ({ target: each.target, id: each.data.id, title: each.data.title || "New Session" })), ...own ? [{ target: own.target, id: night.session, title: night.name }] : []];
-    for (const place of places) {
-      const { permissions, questions } = await asksIn(place.target, place.id, signal).catch(() => ({ permissions: [], questions: [] }));
-      for (const permission of permissions) {
-        const key = `${place.id}:${permission.id}`;
-        const first = night.waiting?.[key] ?? now;
-        waiting[key] = first;
-        if (now - first < wait)
-          continue;
-        const said = await call(place.target, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, { decision: "reject", message: ASK_TEXT }, signal).then(() => true, () => false);
-        if (!said)
-          continue;
-        delete waiting[key];
-        const what = permissionWords(permission);
-        await keepAnswer(place.target, place.id, { ask: permission.id, ...permission.call ? { call: permission.call } : {}, what, decision: "deny", reason: "No one answered overnight", by: { name: "Kuvo Code" }, at: now }).catch(() => {});
-        addBlocker(night.bot, { kind: "ask", text: `${place.title}: ${what.replace(/\.$/, "")}`, detail: "No one answered overnight, so it was no", session: place.id }, file);
-      }
-      for (const question of questions) {
-        const key = `${place.id}:${question.id}`;
-        const first = night.waiting?.[key] ?? now;
-        waiting[key] = first;
-        if (now - first < wait)
-          continue;
-        const said = await call(place.target, "DELETE", `/api/session/${encodeURIComponent(question.asker)}/form/${encodeURIComponent(question.id)}?message=${encodeURIComponent(QUESTION_TEXT)}`, undefined, signal).then(() => true, () => false);
-        if (!said)
-          continue;
-        delete waiting[key];
-        addBlocker(night.bot, { kind: "ask", text: `${place.title} asks: ${question.text}`, detail: "No one answered overnight", session: place.id }, file);
-      }
+    const limitsSeen = { ...goal.limitsSeen ?? {} };
+    for (const each of work) {
+      if (working.has(each.data.id))
+        continue;
+      const failed = await failedTurn(each.target, each.data.id, signal);
+      if (!failed || limitsSeen[each.data.id] === failed.idle || !isLimit(failed.error))
+        continue;
+      limitsSeen[each.data.id] = failed.idle;
+      pauseGoal(goal.bot, { why: limitName(each.data.model), until: resetsIn(failed.error, now) ?? now + UNKNOWN_RESET, session: each.data.id }, file);
     }
-    for (const ask of workAsks().filter((each) => each.bot === night.bot && now - each.at >= wait)) {
-      const answered = await answerWork(ask.id, { answer: "deny", overnight: true }, targets).catch(() => null);
-      if (answered && "answered" in answered)
-        addBlocker(night.bot, { kind: "outside", text: `Make the project ${ask.project}`, detail: "It wasn't in the plan, so it waits for you" }, file);
+    const kept = readKept2(file).find((each) => each.id === goal.id);
+    for (const paused of kept?.paused ?? []) {
+      if (!paused.until || now < paused.until)
+        continue;
+      const key = paused.session ?? "bot";
+      const carried = paused.session ? await placeOfSession(paused.session, targets()).catch(() => null).then((place) => place ? asked(place.target, "POST", `api/session/${encodeURIComponent(paused.session)}/prompt`, { id: messageID(), text: `[Limit reset] ${paused.why} has reset. Carry on where you stopped.`, delivery: "queue" }).then(() => true, () => false) : false) : await tellBot2(goal, `[Limit reset] ${paused.why} has reset. Carry on with the goal.`, targets);
+      if (!carried)
+        continue;
+      changeKept2((all) => {
+        const live = all.find((each) => each.id === goal.id);
+        if (!live)
+          return;
+        live.paused = live.paused.filter((each) => (each.session ?? "bot") !== key);
+        live.waited += Math.max(0, now - (live.pauseSince?.[key] ?? now));
+        if (live.pauseSince)
+          delete live.pauseSince[key];
+        for (const step of live.steps)
+          if (step.state === "paused" && (!paused.session || step.sessions?.includes(paused.session) || !step.sessions?.length)) {
+            step.state = "doing";
+            delete step.resumes;
+          }
+      }, file);
+      noteWorkChanged(goal.bot);
+    }
+    const asksSeen = {};
+    const open = new Set;
+    for (const each of work) {
+      const { permissions, questions } = await asksIn(each.target, each.data.id, signal).catch(() => ({ permissions: [], questions: [] }));
+      for (const ask of [...permissions.map((one) => ({ id: one.id, what: permissionWords(one).replace(/\.$/, "") })), ...questions.map((one) => ({ id: one.id, what: `Asks: ${one.text}` }))]) {
+        const key = `${each.data.id}:${ask.id}`;
+        open.add(key);
+        asksSeen[key] = kept?.asksSeen?.[key] ?? now;
+        if (now - asksSeen[key] >= ASK_SETTLES)
+          addWaiting(goal.bot, { kind: "ask", text: `${each.data.title || "New Session"}: ${ask.what}`, session: each.data.id }, file, `ask:${key}`);
+      }
     }
     changeKept2((all) => {
-      const kept = all.find((each) => each.id === night.id);
-      if (kept)
-        kept.waiting = waiting;
+      const live = all.find((each) => each.id === goal.id);
+      if (!live)
+        return;
+      live.asksSeen = asksSeen;
+      live.limitsSeen = limitsSeen;
+      live.waiting = live.waiting.filter((item) => item.kind !== "ask" || open.has(item.id.replace(/^ask:/, "")));
+      if (freshPeriods(live, now))
+        noteWorkChanged(live.bot);
     }, file);
   }
-  for (const night of readKept2(file).filter((each) => botHere(each.bot) && (each.state === "running" || each.state === "done" || each.state === "stopped"))) {
-    const told = new Set(night.told ?? []);
-    const fresh = night.state === "running" || night.state === "done" ? night.blockers.filter((each) => !told.has(each.id)) : [];
-    let reportTold = night.reportTold === true;
-    for (const blocker of fresh) {
-      if (tell({ title: night.name, subtitle: "Needs you in the morning", body: blocker.text, category: "blocked", thread: night.session, data: { session: blocker.session ?? night.session, ...night.wake && blocker.kind === "you" ? { wake: "1" } : { quiet: "1" } } }))
-        told.add(blocker.id);
+  for (const goal of readKept2(file).filter((each) => botHere(each.bot) && each.state !== "proposed" && each.state !== "declined")) {
+    const told = new Set(goal.told ?? []);
+    let reportTold = goal.reportTold === true;
+    let digest;
+    let phasesDone;
+    if (goal.state === "running") {
+      for (const item of goal.waiting.filter((each) => !told.has(each.id) && each.kind !== "ask")) {
+        if (tell({ title: goal.name, subtitle: "Needs you", body: item.text, category: "blocked", thread: goal.session, data: { session: item.session ?? goal.session, ...goal.wake && item.kind === "you" ? { wake: "1" } : { quiet: "1" } } }))
+          told.add(item.id);
+      }
+      const last = goal.lastDigest?.at ?? goal.started ?? now;
+      const every = goal.digest === "day" ? DAY : goal.digest === "week" ? 7 * DAY : 0;
+      const phases = [...new Set(goal.steps.map((step) => step.phase).filter((each) => Boolean(each)))];
+      const done = phases.filter((phase) => goal.steps.filter((step) => step.phase === phase).every((step) => step.state === "done" || step.state === "skipped"));
+      const milestone = goal.digest === "milestones" && done.some((phase) => !(goal.phasesDone ?? []).includes(phase));
+      if (every && now - last >= every || milestone) {
+        const words = `${milestone ? `${done.filter((phase) => !(goal.phasesDone ?? []).includes(phase)).join(", ")} done. ` : ""}${digestWords(goal, last, now)}`;
+        if (tell({ title: goal.goal.length > 60 ? `${goal.goal.slice(0, 59)}…` : goal.goal, subtitle: goal.name, body: words, category: "report", thread: goal.session, data: { session: goal.session, quiet: "1" } })) {
+          digest = { at: now, text: words };
+          phasesDone = done;
+        }
+      }
     }
-    if (night.state !== "running" && !reportTold && night.report) {
-      reportTold = tell({ title: `${night.name}'s night`, subtitle: night.blockers.length ? `${night.blockers.length} ${night.blockers.length === 1 ? "thing needs" : "things need"} you` : night.state === "done" ? "Done" : "Stopped", body: night.report, category: "report", thread: night.session, data: { session: night.session, quiet: "1" } });
+    if (goal.state !== "running" && !reportTold && goal.report) {
+      reportTold = tell({ title: goal.state === "done" ? `${goal.name} finished its goal` : `${goal.name}'s goal ended`, subtitle: goal.waiting.length ? `${goal.waiting.length} ${goal.waiting.length === 1 ? "thing needs" : "things need"} you` : undefined, body: goal.report, category: "report", thread: goal.session, data: { session: goal.session } });
     }
-    if (told.size !== (night.told ?? []).length || reportTold !== (night.reportTold === true)) {
+    if (told.size !== (goal.told ?? []).length || reportTold !== (goal.reportTold === true) || digest) {
       changeKept2((all) => {
-        const kept = all.find((each) => each.id === night.id);
+        const kept = all.find((each) => each.id === goal.id);
         if (!kept)
           return;
         kept.told = [...told];
         kept.reportTold = reportTold;
+        if (digest)
+          kept.lastDigest = digest;
+        if (phasesDone)
+          kept.phasesDone = phasesDone;
       }, file);
+      if (digest)
+        noteWorkChanged(goal.bot);
     }
   }
 }
-async function watchNights(tell, targets, { signal, every = 30000 } = {}) {
+async function watchGoals(tell, targets, { signal, every = 30000, here } = {}) {
   let soon = false;
   const look = () => {
     soon = true;
   };
-  nightFollowers.add(look);
+  goalFollowers.add(look);
   try {
     while (!signal?.aborted) {
       soon = false;
       try {
-        await lookAtNights(tell, targets, { signal });
+        await lookAtGoals(tell, targets, { signal, here });
       } catch {}
       for (let waited = 0;waited < every && !soon && !signal?.aborted; waited += 1000)
         await pause(1000, signal);
     }
   } finally {
-    nightFollowers.delete(look);
+    goalFollowers.delete(look);
     keepAwake(false);
   }
 }
@@ -6324,7 +6637,7 @@ function skillFolders() {
 }
 var SKILL_TRASH = path35.join(K, "trash", "skills");
 var SKILL_TRASH_DAYS = 30;
-var DAY = 86400000;
+var DAY2 = 86400000;
 var isDirectory = (file) => {
   try {
     return fs32.statSync(file).isDirectory();
@@ -6339,7 +6652,7 @@ function skillTrashEntry(entry) {
 function clearSkillTrash(now = Date.now()) {
   for (const id of listOf(SKILL_TRASH)) {
     const entry = skillTrashEntry(id);
-    if (entry && entry.deleted * 1000 <= now - SKILL_TRASH_DAYS * DAY)
+    if (entry && entry.deleted * 1000 <= now - SKILL_TRASH_DAYS * DAY2)
       try {
         fs32.rmSync(path35.join(SKILL_TRASH, id), { recursive: true, force: true });
       } catch {}
@@ -6347,7 +6660,7 @@ function clearSkillTrash(now = Date.now()) {
 }
 function keepSkillTrashClear() {
   clearSkillTrash();
-  const timer = setInterval(() => clearSkillTrash(), DAY);
+  const timer = setInterval(() => clearSkillTrash(), DAY2);
   timer.unref?.();
   return timer;
 }
@@ -7227,7 +7540,7 @@ var FEATURES = [
   "queue",
   "work",
   "work.projects",
-  "work.nights"
+  "work.goals"
 ];
 
 // Packages/Box/src/link/documents/work.ts
@@ -8307,8 +8620,17 @@ var WORK = object({
   "projects?": list(PROJECT)
 });
 var WORK_CHANGED = object({ changed: map(number) });
-var NIGHT_STEP = object({ text: string, state: words("todo", "doing", "done", "blocked", "skipped"), "note?": string });
-var NIGHT_CHECK = object({
+var GOAL_STEP = object({
+  id: string,
+  text: string,
+  state: words("todo", "doing", "done", "waiting", "paused", "skipped"),
+  "progress?": number,
+  "note?": string,
+  "phase?": string,
+  "sessions?": list(string),
+  "resumes?": number
+});
+var GOAL_CHECK = object({
   id: string,
   text: string,
   "detail?": string,
@@ -8316,7 +8638,7 @@ var NIGHT_CHECK = object({
   by: words("bot", "box"),
   "action?": object({ kind: words("open", "projectsFolder"), label: string, "url?": string })
 });
-var NIGHT_BLOCKER = object({
+var GOAL_WAITING = object({
   id: string,
   kind: words("you", "judgment", "outside", "ask"),
   text: string,
@@ -8325,28 +8647,34 @@ var NIGHT_BLOCKER = object({
   "session?": string,
   at: number
 });
-var NIGHT = object({
+var GOAL_SPEND = object({ what: string, cap: number, currency: string, per: words("day", "week", "month", "goal"), spent: number, "until?": number });
+var GOAL_PLAN = object({
   id: string,
   bot: string,
   name: string,
   session: string,
   goal: string,
   state: words("proposed", "running", "done", "stopped", "declined"),
-  steps: list(NIGHT_STEP),
-  checks: list(NIGHT_CHECK),
-  spend: list(object({ what: string, cap: number, currency: string })),
+  steps: list(GOAL_STEP),
+  checks: list(GOAL_CHECK),
+  spend: list(GOAL_SPEND),
   public: list(object({ id: string, text: string, on: bool })),
   projects: list(string),
   wake: bool,
+  digest: words("day", "week", "milestones", "none"),
+  "ends?": number,
   proposed: number,
   "started?": number,
   "ended?": number,
-  blockers: list(NIGHT_BLOCKER),
+  waiting: list(GOAL_WAITING),
+  paused: list(object({ why: string, "until?": number, "session?": string })),
+  waited: number,
   watching: list(string),
+  "lastDigest?": object({ at: number, text: string }),
   "report?": string,
-  canStart: bool
+  alone: bool
 });
-var NIGHTS = object({ nights: list(NIGHT) });
+var GOAL_PLANS = object({ goals: list(GOAL_PLAN) });
 var REFUSED = object({ message: string });
 var WORK_ROUTES = [
   { route: "GET kuvo/work", answers: { 200: WORK, 400: REFUSED, 404: REFUSED, 503: REFUSED } },
@@ -8357,9 +8685,10 @@ var WORK_ROUTES = [
   { route: "POST kuvo/work/asks/:id", answers: { 200: WORK_ASK_ANSWERED, 400: REFUSED, 404: REFUSED } },
   { route: "GET kuvo/work/settings", answers: { 200: WORK_SETTINGS } },
   { route: "PATCH kuvo/work/settings", answers: { 200: WORK_SETTINGS, 400: REFUSED } },
-  { route: "GET kuvo/work/nights", answers: { 200: NIGHTS } },
-  { route: "GET kuvo/work/nights/events", answers: { 200: NIGHTS } },
-  { route: "POST kuvo/work/nights/:id", answers: { 200: object({ night: NIGHT }), 400: REFUSED, 404: REFUSED, 409: object({ message: string, "needs?": string }) } },
+  { route: "GET kuvo/work/goals", answers: { 200: GOAL_PLANS } },
+  { route: "GET kuvo/work/goals/events", answers: { 200: GOAL_PLANS } },
+  { route: "POST kuvo/work/goals/ask", answers: { 200: object({ text: string }), 400: REFUSED, 404: REFUSED } },
+  { route: "POST kuvo/work/goals/:id", answers: { 200: object({ goal: GOAL_PLAN }), 400: REFUSED, 404: REFUSED } },
   { route: "POST kuvo/projects/new", answers: { 201: object({ project: PROJECT, text: string }), 400: REFUSED, 403: object({ message: string, needs: string }), 409: REFUSED, 502: REFUSED } }
 ];
 
@@ -13156,7 +13485,7 @@ function pickModel(given, effort, models) {
 // Packages/Box/src/link/letters/start.ts
 var OUTSIDE = { session: "unknown", place: null, name: "another agent" };
 var ASKS_FIRST = [{ action: "shell", resource: "*", effect: "ask" }];
-var nightNote = "This runs overnight while the user sleeps, so no one will answer what you ask for a while, and what you ask is said no to. Prepare rather than act on the world: don't publish, deploy, send or pay anything, and do only what your task names. What you can't do without the user, report rather than wait for.";
+var goalNote = "This is part of a goal the user may not be watching: what you ask can wait a while, so carry on with what doesn't depend on it. Prepare rather than act on the world: don't publish, deploy, send or pay anything unless your task says it's approved, and report what you couldn't do.";
 var sessionNote = (bot) => `You were started by ${bot}, a bot coordinating this work. When you're done, review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left. ${bot} reads that report.`;
 var WAKES = ["finished", "asks"];
 function wakesFrom(given, byBot, waits) {
@@ -13264,6 +13593,7 @@ async function startSession(given, by, place) {
   const ownBot = by?.place ? botOfConversation(by.session) : null;
   const bot = ownBot ?? (by?.place ? worksFor(by.place.data) : null);
   const depth = ownBot ? 1 : depthOf(by?.place?.data) + 1;
+  const goal = bot ? runningGoal(bot.bot) : null;
   let engine = null;
   try {
     engine = place.readEngine();
@@ -13295,6 +13625,11 @@ async function startSession(given, by, place) {
       const today = work.filter((each) => (each.data.time?.created ?? 0) >= midnight);
       const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
       const past = pastLimit(limits, { depth, working: work.filter((each) => working.has(each.data.id)).length, started: today.length, tokens });
+      if (past && goal && (past.includes(" a day ") || past.includes("tokens a day"))) {
+        const midnight = new Date(new Date().setHours(24, 0, 0, 0)).getTime();
+        pauseGoal(bot.bot, { why: "your daily limit", until: midnight });
+        return no(429, `${past.replace(/ Ask the user to raise it \(Edit Bot › Work\), or go on tomorrow\.$/, "")} Your goal waits for it to reset at midnight, and you're woken then: carry on meanwhile with what doesn't start a session.`);
+      }
       if (past)
         return no(429, past);
     }
@@ -13331,8 +13666,7 @@ async function startSession(given, by, place) {
   const project = projectOf2(folder);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
   const made = rulesFor(wantsAsk && !asksFirst(parent?.permissions) ? { ...parent, permissions: askFirstRules() } : parent, project?.folders ?? []);
-  const night = bot ? runningNight(bot.bot) : null;
-  const rules = bot ? withAlwaysAsk(made ?? [], { publishing: Boolean(night && !night.public.some((step) => step.on)) }) : made;
+  const rules = bot ? withAlwaysAsk(made ?? [], { publishing: Boolean(goal && !goal.public.some((step) => step.on)) }) : made;
   const agent = given.mode === "plan" || given.mode === "build" ? given.mode : parent?.agent ?? null;
   let session;
   try {
@@ -13358,13 +13692,15 @@ async function startSession(given, by, place) {
     if (bot)
       noteWorkChanged(bot.bot);
   }
+  if (bot && goal && given.step !== undefined && given.step !== null)
+    linkSession(bot.bot, given.step, session);
   const waits = given.wait === true;
   const id = messageID();
   const text = by ? composeLetter(by.name, by.session, task, waits) + (bot ? `
 
-${sessionNote(bot.name)}${night ? `
+${sessionNote(bot.name)}${goal ? `
 
-${nightNote}` : ""}` : "") : task;
+${goalNote}` : ""}` : "") : task;
   try {
     await asked(target, "POST", `api/session/${address}/prompt`, { id, text, delivery: "steer" });
   } catch (error) {
@@ -13545,7 +13881,7 @@ async function makeProjectTool(caller, args, { signal, wait, every } = {}) {
   const asker = { session: caller.session, name: bot?.name ?? caller.name, ...bot ? { bot: bot.bot } : {} };
   const action = clone ? "cloneProject" : "makeProject";
   const given = { name, ...args.git === false ? { git: false } : {}, ...clone ? { clone } : {} };
-  const planned = Boolean(bot && runningNight(bot.bot)?.projects.some((each) => each.toLowerCase() === name.toLowerCase()));
+  const planned = Boolean(bot && runningGoal(bot.bot)?.projects.some((each) => each.toLowerCase() === name.toLowerCase()));
   if (bot && (planned || botAllows(bot.bot, action)) && projectsFolder()) {
     try {
       const done = await doWork(action, given, asker);
@@ -13575,38 +13911,40 @@ ${lines.join(`
 `)}
 ${folder.trim()}`);
 }
-var nightBot = (caller) => botOfConversation(caller.session);
-var ONLY_BOTS = "Only a bot works through a night: ask the user to give the goal to one of their bots.";
+var goalBot = (caller) => botOfConversation(caller.session);
+var ONLY_BOTS = "Only a bot takes a goal with a plan: ask the user to give it to one of their bots.";
 var answered2 = (outcome) => ("said" in outcome) ? said(outcome.said) : refused(outcome.refused);
-function proposeNightTool(caller, args) {
-  const bot = nightBot(caller);
+function proposeGoalTool(caller, args) {
+  const bot = goalBot(caller);
   if (!bot)
     return refused(ONLY_BOTS);
-  const outcome = proposeNight({ ...bot, session: caller.session }, args);
+  const outcome = proposeGoal({ ...bot, session: caller.session }, args);
   if ("refused" in outcome)
     return refused(outcome.refused);
-  const { night } = outcome;
-  const yours = night.checks.filter((check) => check.state !== "ok").map((check) => check.text);
-  const cant = night.checks.some((check) => check.id === "unattended" && check.state === "failed");
-  if (cant)
-    return said(`The card is up, but ${HERE} can't run a night yet, so the night can't start here. Tell the user in a line, and offer to do it with them while they're here instead.`);
-  return said(`The card is up on ${HERE}: the user starts the night from it, or says not tonight. ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Night started]. If they fix something, propose it again with the checks as they are now.`);
+  const { goal } = outcome;
+  const yours = goal.checks.filter((check) => check.state === "needs").map((check) => check.text);
+  const alone = goal.alone ? "" : ` ${HERE[0].toUpperCase()}${HERE.slice(1)} can't work on it alone yet, so once it starts, what your sessions ask waits for the user rather than for you.`;
+  return said(`The card is up on ${HERE}: the user starts the goal from it, or says not now. ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Goal started]. If they change something, propose it again as it is now.${alone}`);
 }
-function nightProgressTool(caller, args) {
-  const bot = nightBot(caller);
-  return bot ? answered2(nightProgress(bot.bot, args)) : refused(ONLY_BOTS);
+function goalProgressTool(caller, args) {
+  const bot = goalBot(caller);
+  return bot ? answered2(goalProgress(bot.bot, args)) : refused(ONLY_BOTS);
 }
 function mayPublishTool(caller, args) {
-  const bot = nightBot(caller);
+  const bot = goalBot(caller);
   return bot ? answered2(mayPublish(bot.bot, args)) : refused(ONLY_BOTS);
 }
-function finishNightTool(caller, args) {
-  const bot = nightBot(caller);
-  return bot ? answered2(finishNight(bot.bot, args)) : refused(ONLY_BOTS);
+function maySpendTool(caller, args) {
+  const bot = goalBot(caller);
+  return bot ? answered2(maySpend(bot.bot, args)) : refused(ONLY_BOTS);
+}
+async function finishGoalTool(caller, args, targets) {
+  const bot = goalBot(caller);
+  return bot ? answered2(await finishGoal(bot.bot, args, () => targets)) : refused(ONLY_BOTS);
 }
 
 // Packages/Box/src/link/letters/tools.ts
-var AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_night", "night_progress", "may_publish", "finish_night"];
+var AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_publish", "may_spend", "finish_goal"];
 var isAgentTool = (name) => AGENT_TOOLS.includes(name);
 var said2 = (text) => ({ text, isError: false });
 var refused2 = (text) => ({ text, isError: true });
@@ -13831,20 +14169,23 @@ async function agentTool(name, args, session, place) {
         return refused2("Only a conversation on this computer makes projects here.");
       return makeProjectTool({ ...root, name: nameOf2(root.session, all) }, args, { signal: place.signal, ...place.step ? { every: place.step } : {} });
     }
-    case "propose_night":
-    case "night_progress":
+    case "propose_goal":
+    case "goal_progress":
     case "may_publish":
-    case "finish_night": {
+    case "may_spend":
+    case "finish_goal": {
       if (!root)
-        return refused2("Only a bot on this computer works through a night here.");
+        return refused2("Only a bot on this computer takes a goal here.");
       const caller = { ...root, name: nameOf2(root.session, all) };
-      if (name === "propose_night")
-        return proposeNightTool(caller, args);
-      if (name === "night_progress")
-        return nightProgressTool(caller, args);
+      if (name === "propose_goal")
+        return proposeGoalTool(caller, args);
+      if (name === "goal_progress")
+        return goalProgressTool(caller, args);
       if (name === "may_publish")
         return mayPublishTool(caller, args);
-      return finishNightTool(caller, args);
+      if (name === "may_spend")
+        return maySpendTool(caller, args);
+      return finishGoalTool(caller, args, targets);
     }
     case "list_sessions":
     case "stop_session":
@@ -15390,7 +15731,7 @@ async function* movePlacesRoute(context) {
 // Packages/Box/src/link/areas/work.ts
 var WORK_ROUTE = /^kuvo\/(?:work(?:\/events)?|bots\/([^/]+)\/stop-all)$/;
 var WORK_ASKS_ROUTE = /^kuvo\/work\/(?:settings|asks(?:\/([^/]+))?)$/;
-var NIGHTS_ROUTE = /^kuvo\/work\/nights(?:\/([^/]+))?$/;
+var GOALS_ROUTE = /^kuvo\/work\/goals(?:\/([^/]+))?$/;
 async function botWork(bot, context) {
   const { readEngine, bridge, signal } = context;
   const targets = targetsOf({ readEngine, bridge });
@@ -15503,21 +15844,30 @@ async function* newProjectRoute(context) {
   }
   return yield* json(201, { project: outcome.made.project, text: madeWords(outcome.made, HERE) });
 }
-async function* nightsRoute(context, match) {
+async function* goalsRoute(context, match) {
   const { request, readEngine, bridge, signal, json } = context;
   const method = request.method.toUpperCase();
   if (!match[1] || match[1] === "events") {
     if (method !== "GET")
       return yield* json(405, {});
     if (!match[1])
-      return yield* json(200, { nights: nights() });
+      return yield* json(200, { goals: goalPlans() });
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-    return yield* followed(() => ({ nights: nights() }), nightFollowers, signal ?? undefined, { folders: [WORK_FOLDER], recursive: false });
+    return yield* followed(() => ({ goals: goalPlans() }), goalFollowers, signal ?? undefined, { folders: [WORK_FOLDER], recursive: false });
   }
   if (method !== "POST")
     return yield* json(405, {});
   const given = parsed(request.body);
-  const outcome = await answerNight(decodeURIComponent(match[1]), isObject(given) ? given : {}, () => targetsOf({ readEngine, bridge }));
+  const targets = () => targetsOf({ readEngine, bridge });
+  if (match[1] === "ask") {
+    if (!isObject(given) || typeof given.session !== "string" || !botOfConversation(given.session))
+      return yield* json(400, { message: "Send {session, goal}: a bot's conversation, and the goal in your words." });
+    const outcome = await askGoal(given.session, typeof given.goal === "string" ? given.goal : "", targets);
+    if ("refused" in outcome)
+      return yield* json(outcome.refused.status, { message: outcome.refused.message });
+    return yield* json(200, outcome);
+  }
+  const outcome = await answerGoal(decodeURIComponent(match[1]), isObject(given) ? given : {}, targets);
   if ("refused" in outcome) {
     const { status, ...refusal } = outcome.refused;
     return yield* json(status, refusal);
@@ -15778,7 +16128,7 @@ var ROUTES = [
   { when: (route) => /^kuvo\/worktrees(\/(remove|record|where))?$/.test(route), answer: worktreesRoute },
   { when: (route) => route.match(WORK_ROUTE), answer: workRoute },
   { when: (route) => route.match(WORK_ASKS_ROUTE), answer: workAsksRoute },
-  { when: (route) => route.match(NIGHTS_ROUTE), answer: nightsRoute },
+  { when: (route) => route.match(GOALS_ROUTE), answer: goalsRoute },
   { when: (route) => route === "kuvo/bots/keys/refresh", answer: botKeysRefreshRoute },
   { when: (route) => /^kuvo\/bots\/[^/]+\/keys(\/[^/]+)?$/.test(route), answer: botKeysRoute },
   { when: (route) => route.match(/^kuvo\/sessions\/([^/]+)\/agents$/), answer: carryRoute },
@@ -16147,7 +16497,7 @@ async function run2() {
   watchMoves(() => current);
   watchAsks(tell, { answered });
   watchWorkAsks(tell, { answered });
-  watchNights(tell, peerTargets);
+  watchGoals(tell, peerTargets, { here: () => hold.inUse });
   let lastWelcomed = Date.now();
   refreshOwn(readEngineFile).catch(() => {});
   setTimeout(() => {
@@ -16359,7 +16709,7 @@ async function serve() {
     } catch {}
   watchBox({ tell: macTell, hold: macLink.hold, bots: true, notices: IS_MAC });
   if (IS_MAC)
-    watchNights(macTell, peerTargets);
+    watchGoals(macTell, peerTargets, { here: () => macLink.hold?.inUse ?? false });
   const leave = async () => {
     for (let tries = 0;tries < 30 && (macLink.host?.unsent?.() ?? 0) > 0; tries++)
       await sleep(50);
@@ -16680,7 +17030,7 @@ export {
   listFolders,
   listWakes,
   listedAsk,
-  lookAtNights,
+  lookAtGoals,
   macAnswers,
   macDocsChanged,
   macFront,
@@ -16728,6 +17078,8 @@ export {
   peerMail,
   peerOf,
   peersOf,
+  periodEnd,
+  periodOf,
   personalitiesDocument,
   phoneSeenLately,
   pieces,

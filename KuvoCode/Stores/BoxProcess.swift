@@ -84,7 +84,7 @@ final class BoxProcess {
     /// Starts it with the engine's Bun, once: it goes on through the engine's restarts.
     func start(engine: URL, environment: [String: String]) async {
         var env = environment
-        // GitHub's stand-in, a box kept from your other computers, and one that may run a night
+        // GitHub's stand-in, a box kept from your other computers, and one that may work on goals alone
         // without the sandbox are for the tests' box only (`TestBox`), never the app's.
         env["KUVO_TEST_GITHUB"] = nil
         env["KUVO_TEST_NO_PEERS"] = nil

@@ -1,5 +1,5 @@
 // What always comes to you (PROTOCOL.md, "Work › What always comes to you"), whatever the mode, an
-// Always or a night's switches: payments, permanent deletes, permission changes, new accounts,
+// Always or a goal's switches: payments, permanent deletes, permission changes, new accounts,
 // messages to people, credentials, and git's settings. A bot never answers these for its sessions
 // (`alwaysAsks`, checked before the policy, so it stays when the policy shrinks with the sandbox).
 // Commands and edits ask for them in every session of a bot's work and its own conversation, even

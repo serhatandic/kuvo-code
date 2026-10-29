@@ -22,7 +22,7 @@ import { noteWorkChanged } from "../work/changes";
 import { botLimits, pastLimit } from "../work/limits";
 import { pickModel, usableModels } from "../work/models";
 import { withAlwaysAsk } from "../work/always";
-import { runningNight } from "../work/night";
+import { linkSession, pauseGoal, runningGoal } from "../work/goals";
 import { botOfConversation, depthOf, ofBot, workingNow, workSessions, worksFor } from "../work/tree";
 import type { WorksFor } from "../../shared/routes/work";
 import type { Target } from "../../shared/records";
@@ -46,6 +46,8 @@ export interface StartGiven {
   mode?: unknown;
   approval?: unknown;
   wake?: unknown;
+  /** The goal's step it works on (its number or id), for that step's track. */
+  step?: unknown;
   computer?: unknown;
   wait?: unknown;
 }
@@ -96,8 +98,8 @@ export interface StartPlace {
 
 /** What a session a bot started is told with its task: its half of the playbook (PROTOCOL.md,
  * "Work"), in the task's text, so it works with any agent. */
-/** What a session a bot starts during its night is told: the user is asleep. */
-export const nightNote = "This runs overnight while the user sleeps, so no one will answer what you ask for a while, and what you ask is said no to. Prepare rather than act on the world: don't publish, deploy, send or pay anything, and do only what your task names. What you can't do without the user, report rather than wait for.";
+/** What a session a bot starts for its goal is told: no one may be there to answer. */
+export const goalNote = "This is part of a goal the user may not be watching: what you ask can wait a while, so carry on with what doesn't depend on it. Prepare rather than act on the world: don't publish, deploy, send or pay anything unless your task says it's approved, and report what you couldn't do.";
 export const sessionNote = (bot: string) => `You were started by ${bot}, a bot coordinating this work. When you're done, review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left. ${bot} reads that report.`;
 
 // What a start's wake names: what its starter hears of it.
@@ -211,6 +213,8 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const ownBot = by?.place ? botOfConversation(by.session) : null;
   const bot: WorksFor | null = ownBot ?? (by?.place ? worksFor(by.place.data) : null);
   const depth = ownBot ? 1 : depthOf(by?.place?.data) + 1;
+  // The goal its bot is at, if any.
+  const goal = bot ? runningGoal(bot.bot) : null;
   // Where it runs: the engine, the coding agents' bridge for one of theirs, or the conversation's.
   let engine: Target | null = null;
   try { engine = place.readEngine(); } catch {}
@@ -239,6 +243,12 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
       const today = work.filter(each => (each.data.time?.created ?? 0) >= midnight);
       const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
       const past = pastLimit(limits, { depth, working: work.filter(each => working.has(each.data.id)).length, started: today.length, tokens });
+      // A day's limit, during a goal: the goal waits for midnight, when the bot is woken to carry on.
+      if (past && goal && (past.includes(" a day ") || past.includes("tokens a day"))) {
+        const midnight = new Date(new Date().setHours(24, 0, 0, 0)).getTime();
+        pauseGoal(bot.bot, { why: "your daily limit", until: midnight });
+        return no(429, `${past.replace(/ Ask the user to raise it \(Edit Bot › Work\), or go on tomorrow\.$/, "")} Your goal waits for it to reset at midnight, and you're woken then: carry on meanwhile with what doesn't start a session.`);
+      }
       if (past) return no(429, past);
     }
   }
@@ -275,9 +285,8 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
   const made = rulesFor(wantsAsk && !asksFirst(parent?.permissions) ? { ...parent, permissions: askFirstRules() as EngineSession["permissions"] } : parent, project?.folders ?? []);
   // A bot's work asks for what always comes to you, whatever its approval (last, so they win).
-  // Overnight, publishing too, unless you switched on a public step for tonight.
-  const night = bot ? runningNight(bot.bot) : null;
-  const rules = bot ? withAlwaysAsk(made ?? [], { publishing: Boolean(night && !night.public.some(step => step.on)) }) : made;
+  // For a goal, publishing too, unless you switched on a public step.
+  const rules = bot ? withAlwaysAsk(made ?? [], { publishing: Boolean(goal && !goal.public.some(step => step.on)) }) : made;
   // Its mode: the one asked for, else the conversation's (one that plans starts sessions that plan).
   const agent = given.mode === "plan" || given.mode === "build" ? given.mode : parent?.agent ?? null;
   let session: string;
@@ -301,9 +310,10 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo } }).catch(() => {});
     if (bot) noteWorkChanged(bot.bot);
   }
+  if (bot && goal && given.step !== undefined && given.step !== null) linkSession(bot.bot, given.step, session);
   const waits = given.wait === true;
   const id = messageID();
-  const text = by ? composeLetter(by.name, by.session, task, waits) + (bot ? `\n\n${sessionNote(bot.name)}${night ? `\n\n${nightNote}` : ""}` : "") : task;
+  const text = by ? composeLetter(by.name, by.session, task, waits) + (bot ? `\n\n${sessionNote(bot.name)}${goal ? `\n\n${goalNote}` : ""}` : "") : task;
   try {
     await asked(target, "POST", `api/session/${address}/prompt`, { id, text, delivery: "steer" });
   } catch (error) {

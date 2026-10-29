@@ -20,10 +20,10 @@ export interface NoticeData {
   /** "0": its notification mustn't answer it from buttons. */
   answerable?: "0";
   ask?: string;
-  /** "1": shown quietly (a night's blocker, its morning report): in the list, never lighting the
+  /** "1": shown quietly (what a goal needs of you, its digest): in the list, never lighting the
    * screen or making a sound. */
   quiet?: "1";
-  /** "1": a night's blocker you asked to be woken for (shown, with its sound, not quietly). */
+  /** "1": what a goal needs of you, where you asked to be woken (shown, with its sound, not quietly). */
   wake?: "1";
 }
 

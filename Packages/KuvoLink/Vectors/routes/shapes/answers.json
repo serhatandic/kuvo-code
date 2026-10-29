@@ -2350,7 +2350,7 @@
             "literal": "work.projects"
            },
            {
-            "literal": "work.nights"
+            "literal": "work.goals"
            },
            {
             "literal": "accounts.ended"
@@ -2601,7 +2601,7 @@
             "literal": "work.projects"
            },
            {
-            "literal": "work.nights"
+            "literal": "work.goals"
            }
           ]
          }
@@ -5726,11 +5726,11 @@
    }
   },
   {
-   "route": "GET kuvo/work/nights",
+   "route": "GET kuvo/work/goals",
    "answers": {
     "200": {
      "object": {
-      "nights": {
+      "goals": {
        "list": {
         "object": {
          "id": "string",
@@ -5760,6 +5760,7 @@
          "steps": {
           "list": {
            "object": {
+            "id": "string",
             "text": "string",
             "state": {
              "oneOf": [
@@ -5773,14 +5774,23 @@
                "literal": "done"
               },
               {
-               "literal": "blocked"
+               "literal": "waiting"
+              },
+              {
+               "literal": "paused"
               },
               {
                "literal": "skipped"
               }
              ]
             },
-            "note?": "string"
+            "progress?": "number",
+            "note?": "string",
+            "phase?": "string",
+            "sessions?": {
+             "list": "string"
+            },
+            "resumes?": "number"
            }
           }
          },
@@ -5837,7 +5847,25 @@
            "object": {
             "what": "string",
             "cap": "number",
-            "currency": "string"
+            "currency": "string",
+            "per": {
+             "oneOf": [
+              {
+               "literal": "day"
+              },
+              {
+               "literal": "week"
+              },
+              {
+               "literal": "month"
+              },
+              {
+               "literal": "goal"
+              }
+             ]
+            },
+            "spent": "number",
+            "until?": "number"
            }
           }
          },
@@ -5854,10 +5882,27 @@
           "list": "string"
          },
          "wake": "bool",
+         "digest": {
+          "oneOf": [
+           {
+            "literal": "day"
+           },
+           {
+            "literal": "week"
+           },
+           {
+            "literal": "milestones"
+           },
+           {
+            "literal": "none"
+           }
+          ]
+         },
+         "ends?": "number",
          "proposed": "number",
          "started?": "number",
          "ended?": "number",
-         "blockers": {
+         "waiting": {
           "list": {
            "object": {
             "id": "string",
@@ -5885,11 +5930,27 @@
            }
           }
          },
+         "paused": {
+          "list": {
+           "object": {
+            "why": "string",
+            "until?": "number",
+            "session?": "string"
+           }
+          }
+         },
+         "waited": "number",
          "watching": {
           "list": "string"
          },
+         "lastDigest?": {
+          "object": {
+           "at": "number",
+           "text": "string"
+          }
+         },
          "report?": "string",
-         "canStart": "bool"
+         "alone": "bool"
         }
        }
       }
@@ -5898,11 +5959,11 @@
    }
   },
   {
-   "route": "GET kuvo/work/nights/events",
+   "route": "GET kuvo/work/goals/events",
    "answers": {
     "200": {
      "object": {
-      "nights": {
+      "goals": {
        "list": {
         "object": {
          "id": "string",
@@ -5932,6 +5993,7 @@
          "steps": {
           "list": {
            "object": {
+            "id": "string",
             "text": "string",
             "state": {
              "oneOf": [
@@ -5945,14 +6007,23 @@
                "literal": "done"
               },
               {
-               "literal": "blocked"
+               "literal": "waiting"
+              },
+              {
+               "literal": "paused"
               },
               {
                "literal": "skipped"
               }
              ]
             },
-            "note?": "string"
+            "progress?": "number",
+            "note?": "string",
+            "phase?": "string",
+            "sessions?": {
+             "list": "string"
+            },
+            "resumes?": "number"
            }
           }
          },
@@ -6009,7 +6080,25 @@
            "object": {
             "what": "string",
             "cap": "number",
-            "currency": "string"
+            "currency": "string",
+            "per": {
+             "oneOf": [
+              {
+               "literal": "day"
+              },
+              {
+               "literal": "week"
+              },
+              {
+               "literal": "month"
+              },
+              {
+               "literal": "goal"
+              }
+             ]
+            },
+            "spent": "number",
+            "until?": "number"
            }
           }
          },
@@ -6026,10 +6115,27 @@
           "list": "string"
          },
          "wake": "bool",
+         "digest": {
+          "oneOf": [
+           {
+            "literal": "day"
+           },
+           {
+            "literal": "week"
+           },
+           {
+            "literal": "milestones"
+           },
+           {
+            "literal": "none"
+           }
+          ]
+         },
+         "ends?": "number",
          "proposed": "number",
          "started?": "number",
          "ended?": "number",
-         "blockers": {
+         "waiting": {
           "list": {
            "object": {
             "id": "string",
@@ -6057,11 +6163,27 @@
            }
           }
          },
+         "paused": {
+          "list": {
+           "object": {
+            "why": "string",
+            "until?": "number",
+            "session?": "string"
+           }
+          }
+         },
+         "waited": "number",
          "watching": {
           "list": "string"
          },
+         "lastDigest?": {
+          "object": {
+           "at": "number",
+           "text": "string"
+          }
+         },
          "report?": "string",
-         "canStart": "bool"
+         "alone": "bool"
         }
        }
       }
@@ -6070,11 +6192,31 @@
    }
   },
   {
-   "route": "POST kuvo/work/nights/:id",
+   "route": "POST kuvo/work/goals/ask",
    "answers": {
     "200": {
      "object": {
-      "night": {
+      "text": "string"
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/work/goals/:id",
+   "answers": {
+    "200": {
+     "object": {
+      "goal": {
        "object": {
         "id": "string",
         "bot": "string",
@@ -6103,6 +6245,7 @@
         "steps": {
          "list": {
           "object": {
+           "id": "string",
            "text": "string",
            "state": {
             "oneOf": [
@@ -6116,14 +6259,23 @@
               "literal": "done"
              },
              {
-              "literal": "blocked"
+              "literal": "waiting"
+             },
+             {
+              "literal": "paused"
              },
              {
               "literal": "skipped"
              }
             ]
            },
-           "note?": "string"
+           "progress?": "number",
+           "note?": "string",
+           "phase?": "string",
+           "sessions?": {
+            "list": "string"
+           },
+           "resumes?": "number"
           }
          }
         },
@@ -6180,7 +6332,25 @@
           "object": {
            "what": "string",
            "cap": "number",
-           "currency": "string"
+           "currency": "string",
+           "per": {
+            "oneOf": [
+             {
+              "literal": "day"
+             },
+             {
+              "literal": "week"
+             },
+             {
+              "literal": "month"
+             },
+             {
+              "literal": "goal"
+             }
+            ]
+           },
+           "spent": "number",
+           "until?": "number"
           }
          }
         },
@@ -6197,10 +6367,27 @@
          "list": "string"
         },
         "wake": "bool",
+        "digest": {
+         "oneOf": [
+          {
+           "literal": "day"
+          },
+          {
+           "literal": "week"
+          },
+          {
+           "literal": "milestones"
+          },
+          {
+           "literal": "none"
+          }
+         ]
+        },
+        "ends?": "number",
         "proposed": "number",
         "started?": "number",
         "ended?": "number",
-        "blockers": {
+        "waiting": {
          "list": {
           "object": {
            "id": "string",
@@ -6228,11 +6415,27 @@
           }
          }
         },
+        "paused": {
+         "list": {
+          "object": {
+           "why": "string",
+           "until?": "number",
+           "session?": "string"
+          }
+         }
+        },
+        "waited": "number",
         "watching": {
          "list": "string"
         },
+        "lastDigest?": {
+         "object": {
+          "at": "number",
+          "text": "string"
+         }
+        },
         "report?": "string",
-        "canStart": "bool"
+        "alone": "bool"
        }
       }
      }
@@ -6245,12 +6448,6 @@
     "404": {
      "object": {
       "message": "string"
-     }
-    },
-    "409": {
-     "object": {
-      "message": "string",
-      "needs?": "string"
      }
     }
    }

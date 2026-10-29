@@ -11,7 +11,7 @@ import { noteWorkChanged } from "./changes";
 import { callOf, keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, rulesOf } from "./answers";
 import { allowRefusal } from "./policy";
 import { ALWAYS, alwaysAsks } from "./always";
-import { finishNight, mayPublish, nightProgress, proposeNight, runningNight } from "./night";
+import { finishGoal, goalProgress, mayPublish, maySpend, proposeGoal, runningGoal } from "./goals";
 import fs from "node:fs";
 import path from "node:path";
 import { readProjects } from "../areas/projects";
@@ -145,7 +145,7 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
     const folder = data.location?.directory ?? data.directory ?? "";
     const rules = rulesOf((caller.place.data.permissions ?? []) as KitRule[]);
     const seen = await callOf(target, permission, signal);
-    // What always comes to the user, whatever the mode, the plan or the night's switches.
+    // What always comes to the user, whatever the mode, the plan or the goal's switches.
     const always = alwaysAsks(permission.action, permission.resources, seen);
     if (always) return refused(`That's ${ALWAYS[always]}, which always comes to the user: you can't allow it. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
     const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen);
@@ -186,8 +186,8 @@ export async function makeProjectTool(caller: Caller, args: Record<string, unkno
   const asker = { session: caller.session, name: bot?.name ?? caller.name, ...(bot ? { bot: bot.bot } : {}) };
   const action = clone ? "cloneProject" : "makeProject";
   const given = { name, ...(args.git === false ? { git: false } : {}), ...(clone ? { clone } : {}) };
-  // Named in the night you started, or allowed Always.
-  const planned = Boolean(bot && runningNight(bot.bot)?.projects.some(each => each.toLowerCase() === name.toLowerCase()));
+  // Named in the goal you started, or allowed Always.
+  const planned = Boolean(bot && runningGoal(bot.bot)?.projects.some(each => each.toLowerCase() === name.toLowerCase()));
   if (bot && (planned || botAllows(bot.bot, action)) && projectsFolder()) {
     try {
       const done = await doWork(action, given, asker);
@@ -216,38 +216,44 @@ export function listProjectsTool(): ToolAnswer {
   return said(`Projects on ${HERE}:\n${lines.join("\n")}\n${folder.trim()}`);
 }
 
-// The bot a conversation is, for the night's tools: only a bot works through a night.
-const nightBot = (caller: Caller) => botOfConversation(caller.session);
-const ONLY_BOTS = "Only a bot works through a night: ask the user to give the goal to one of their bots.";
+// The bot a conversation is, for the goal's tools: only a bot works through a goal of this kind (a
+// session's /goal is the conversation's own, `agents/goals.ts`).
+const goalBot = (caller: Caller) => botOfConversation(caller.session);
+const ONLY_BOTS = "Only a bot takes a goal with a plan: ask the user to give it to one of their bots.";
 const answered = (outcome: { said: string } | { refused: string }): ToolAnswer => ("said" in outcome ? said(outcome.said) : refused(outcome.refused));
 
-/** propose_night: the night's plan and checks, put to the user on the bedtime card. */
-export function proposeNightTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
-  const bot = nightBot(caller);
+/** propose_goal: the goal's plan and checks, put to the user on the goal card. */
+export function proposeGoalTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
+  const bot = goalBot(caller);
   if (!bot) return refused(ONLY_BOTS);
-  const outcome = proposeNight({ ...bot, session: caller.session }, args);
+  const outcome = proposeGoal({ ...bot, session: caller.session }, args);
   if ("refused" in outcome) return refused(outcome.refused);
-  const { night } = outcome;
-  const yours = night.checks.filter(check => check.state !== "ok").map(check => check.text);
-  const cant = night.checks.some(check => check.id === "unattended" && check.state === "failed");
-  if (cant) return said(`The card is up, but ${HERE} can't run a night yet, so the night can't start here. Tell the user in a line, and offer to do it with them while they're here instead.`);
-  return said(`The card is up on ${HERE}: the user starts the night from it, or says not tonight. ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Night started]. If they fix something, propose it again with the checks as they are now.`);
+  const { goal } = outcome;
+  const yours = goal.checks.filter(check => check.state === "needs").map(check => check.text);
+  const alone = goal.alone ? "" : ` ${HERE[0].toUpperCase()}${HERE.slice(1)} can't work on it alone yet, so once it starts, what your sessions ask waits for the user rather than for you.`;
+  return said(`The card is up on ${HERE}: the user starts the goal from it, or says not now. ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Goal started]. If they change something, propose it again as it is now.${alone}`);
 }
 
-/** night_progress: the night's steps, a blocker, and what's still watched. */
-export function nightProgressTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
-  const bot = nightBot(caller);
-  return bot ? answered(nightProgress(bot.bot, args)) : refused(ONLY_BOTS);
+/** goal_progress: the goal's steps, what waits for the user, what's spent and what's still watched. */
+export function goalProgressTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
+  const bot = goalBot(caller);
+  return bot ? answered(goalProgress(bot.bot, args)) : refused(ONLY_BOTS);
 }
 
-/** may_publish: whether one of the night's public steps is switched on. */
+/** may_publish: whether one of the goal's public steps is switched on. */
 export function mayPublishTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
-  const bot = nightBot(caller);
+  const bot = goalBot(caller);
   return bot ? answered(mayPublish(bot.bot, args)) : refused(ONLY_BOTS);
 }
 
-/** finish_night: the night done, with the morning report. */
-export function finishNightTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
-  const bot = nightBot(caller);
-  return bot ? answered(finishNight(bot.bot, args)) : refused(ONLY_BOTS);
+/** may_spend: whether a purchase fits the plan's cap for it, in its period. */
+export function maySpendTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
+  const bot = goalBot(caller);
+  return bot ? answered(maySpend(bot.bot, args)) : refused(ONLY_BOTS);
+}
+
+/** finish_goal: the goal done, with the report. */
+export async function finishGoalTool(caller: Caller, args: Record<string, unknown>, targets: Target[]): Promise<ToolAnswer> {
+  const bot = goalBot(caller);
+  return bot ? answered(await finishGoal(bot.bot, args, () => targets)) : refused(ONLY_BOTS);
 }

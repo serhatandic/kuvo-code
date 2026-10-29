@@ -92,13 +92,25 @@ export const WORK = object({
  * work again when its time moves. */
 export const WORK_CHANGED = object({ changed: map(number) });
 
-/** A step of a night's plan, and where it stands (with a word on why, when there's one). */
-export const NIGHT_STEP = object({ text: string, state: words("todo", "doing", "done", "blocked", "skipped"), "note?": string });
+/** A step of a goal's plan, a track of its own: where it stands, how far along where the bot can
+ * measure it (0 to 1; left out where it can't, never guessed), a word on it, the phase it's in, the
+ * sessions working on it, and, while it waits for a limit to reset, until when (ms). */
+export const GOAL_STEP = object({
+  id: string,
+  text: string,
+  state: words("todo", "doing", "done", "waiting", "paused", "skipped"),
+  "progress?": number,
+  "note?": string,
+  "phase?": string,
+  "sessions?": list(string),
+  "resumes?": number,
+});
 
-/** What a night needs, checked before you start it: by the bot (its tools, keys, services) or by
- * the box (working unattended here, on power, where new projects go). `needs` is yours to do, with
- * what you'd press (a page to open, or the projects folder to pick); `failed` can't be done here. */
-export const NIGHT_CHECK = object({
+/** What a goal needs, checked before you start it: by the bot (its tools, keys, services) or by
+ * the box (whether it may work on its own here, on power, where new projects go). `needs` is yours to
+ * do, with what you'd press (a page to open, or the projects folder to pick); `failed` can't be done
+ * here (the goal can still run with you there). */
+export const GOAL_CHECK = object({
   id: string,
   text: string,
   "detail?": string,
@@ -107,10 +119,10 @@ export const NIGHT_CHECK = object({
   "action?": object({ kind: words("open", "projectsFolder"), label: string, "url?": string }),
 });
 
-/** Something the night couldn't do without you, kept for the morning: only you can fix it, a
- * judgment call before anything public, something outside the plan, or an ask no one answered (it
- * was said no to, and worked around). A page to open for it, and the session it's in, if any. */
-export const NIGHT_BLOCKER = object({
+/** What waits for you: what only you can fix, a judgment call before anything public, something
+ * outside the plan, or an ask (a permission or a question one of its sessions has, waiting for you).
+ * A page to open for it, and the session it's in. */
+export const GOAL_WAITING = object({
   id: string,
   kind: words("you", "judgment", "outside", "ask"),
   text: string,
@@ -120,35 +132,47 @@ export const NIGHT_BLOCKER = object({
   at: number,
 });
 
-/** A bot's night (PROTOCOL.md, "Work › A night"): the goal in your words, the plan's steps, what
- * it checked, what it may spend (each with a cap: what the plan names, never more), the public
- * steps with your switch for each (off until you turn it on), the projects it may make, whether a
- * blocker wakes you, where it stands, what's blocked, what's still watched, and the morning report.
- * Proposed by the bot; only you start it, decline it or stop it. Times in ms since 1970. */
-export const NIGHT = object({
+/** What it may spend, each with a cap for a period (a day, a week, a month, or the whole goal), what
+ * it spent in the period now, and, once the cap's reached, until when what spends waits (ms). */
+export const GOAL_SPEND = object({ what: string, cap: number, currency: string, per: words("day", "week", "month", "goal"), spent: number, "until?": number });
+
+/** A bot's goal (PROTOCOL.md, "Work › Goals"): the goal in your words and its plan, kept on the box
+ * beside the conversation's own goal (`kuvo/agents/api/kuvo/goals`), which keeps the bot at it. The
+ * steps (one track each), what it checked, what it may spend, its public steps with your switch for
+ * each (off until you turn it on), the projects it may make, whether what needs you wakes you, how
+ * often you hear how it goes (`digest`), when it ends if you set an end, where it stands, what waits
+ * for you, what's paused at a limit and until when, how long it has waited at limits (ms), what's
+ * still watched, the last digest and the final report. Proposed by the bot; only you start it,
+ * decline it or stop it. `alone`: whether this box may work on it on its own (else it runs with you
+ * there). Times in ms since 1970. */
+export const GOAL_PLAN = object({
   id: string,
   bot: string,
   name: string,
   session: string,
   goal: string,
   state: words("proposed", "running", "done", "stopped", "declined"),
-  steps: list(NIGHT_STEP),
-  checks: list(NIGHT_CHECK),
-  spend: list(object({ what: string, cap: number, currency: string })),
+  steps: list(GOAL_STEP),
+  checks: list(GOAL_CHECK),
+  spend: list(GOAL_SPEND),
   public: list(object({ id: string, text: string, on: bool })),
   projects: list(string),
   wake: bool,
+  digest: words("day", "week", "milestones", "none"),
+  "ends?": number,
   proposed: number,
   "started?": number,
   "ended?": number,
-  blockers: list(NIGHT_BLOCKER),
+  waiting: list(GOAL_WAITING),
+  paused: list(object({ why: string, "until?": number, "session?": string })),
+  waited: number,
   watching: list(string),
+  "lastDigest?": object({ at: number, text: string }),
   "report?": string,
-  /** Whether a night can run here now (working unattended is on for this box). */
-  canStart: bool,
+  alone: bool,
 });
-/** The nights here: each bot's latest, while it's proposed or running, or ended in the last day. */
-export const NIGHTS = object({ nights: list(NIGHT) });
+/** The goals here: each bot's latest, while it's proposed or running, or ended in the last day. */
+export const GOAL_PLANS = object({ goals: list(GOAL_PLAN) });
 
 const REFUSED = object({ message: string });
 
@@ -158,9 +182,10 @@ export type WorkAnswer = Infer<typeof ANSWER>;
 export type WorkSession = Infer<typeof WORK_SESSION>;
 export type BotWork = Infer<typeof WORK>;
 export type WorkAskShape = Infer<typeof WORK_ASK>;
-export type NightShape = Infer<typeof NIGHT>;
-export type NightBlockerShape = Infer<typeof NIGHT_BLOCKER>;
-export type NightCheckShape = Infer<typeof NIGHT_CHECK>;
+export type GoalPlanShape = Infer<typeof GOAL_PLAN>;
+export type GoalWaitingShape = Infer<typeof GOAL_WAITING>;
+export type GoalCheckShape = Infer<typeof GOAL_CHECK>;
+export type GoalStepShape = Infer<typeof GOAL_STEP>;
 
 export const WORK_ROUTES: RouteShape[] = [
   { route: "GET kuvo/work", answers: { 200: WORK, 400: REFUSED, 404: REFUSED, 503: REFUSED } },
@@ -171,8 +196,9 @@ export const WORK_ROUTES: RouteShape[] = [
   { route: "POST kuvo/work/asks/:id", answers: { 200: WORK_ASK_ANSWERED, 400: REFUSED, 404: REFUSED } },
   { route: "GET kuvo/work/settings", answers: { 200: WORK_SETTINGS } },
   { route: "PATCH kuvo/work/settings", answers: { 200: WORK_SETTINGS, 400: REFUSED } },
-  { route: "GET kuvo/work/nights", answers: { 200: NIGHTS } },
-  { route: "GET kuvo/work/nights/events", answers: { 200: NIGHTS } },
-  { route: "POST kuvo/work/nights/:id", answers: { 200: object({ night: NIGHT }), 400: REFUSED, 404: REFUSED, 409: object({ message: string, "needs?": string }) } },
+  { route: "GET kuvo/work/goals", answers: { 200: GOAL_PLANS } },
+  { route: "GET kuvo/work/goals/events", answers: { 200: GOAL_PLANS } },
+  { route: "POST kuvo/work/goals/ask", answers: { 200: object({ text: string }), 400: REFUSED, 404: REFUSED } },
+  { route: "POST kuvo/work/goals/:id", answers: { 200: object({ goal: GOAL_PLAN }), 400: REFUSED, 404: REFUSED } },
   { route: "POST kuvo/projects/new", answers: { 201: object({ project: PROJECT, text: string }), 400: REFUSED, 403: object({ message: string, needs: string }), 409: REFUSED, 502: REFUSED } },
 ];

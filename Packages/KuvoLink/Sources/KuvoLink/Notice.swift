@@ -28,9 +28,9 @@ public struct Notice: Codable, Equatable, Sendable {
         /// A run finished, or stopped with an error.
         public static let finished = Category(rawValue: "finished")
         public static let failed = Category(rawValue: "failed")
-        /// A bot's news: a wake-up's or a watch's result, or a night's morning report. Quiet.
+        /// A bot's news: a wake-up's or a watch's result, a goal's digest (quiet) or its report.
         public static let report = Category(rawValue: "report")
-        /// A bot's night needs you in the morning. Quiet, unless `data["wake"]` is "1".
+        /// A bot's goal needs you. Quiet (`data["quiet"]`), unless you asked to be woken (`data["wake"]`).
         public static let blocked = Category(rawValue: "blocked")
         /// A group chat's message.
         public static let message = Category(rawValue: "message")

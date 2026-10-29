@@ -203,6 +203,17 @@ const places: GoalPlaces = {
       return false
     }
   },
+  // A conversation's sessions at work (the engine's, marked as started by it), which wake it.
+  inFlight: async (session) => {
+    const engine = places.engine.api
+    const active = await engine.request<{ data?: Record<string, unknown> }>("GET", "/api/session/active").catch(() => undefined)
+    const ids = Object.keys(active?.data ?? {}).filter((id) => id !== session)
+    for (const id of ids.slice(0, 40)) {
+      const found = await engine.request<{ data?: any }>("GET", "/api/session/" + encodeURIComponent(id)).catch(() => undefined)
+      if (found?.data?.metadata?.kuvo?.startedBy === session) return true
+    }
+    return false
+  },
 }
 const goals = new Goals(join(home, "goals.json"), places)
 // Its other keywords, for the same conversations: side questions, handoffs and reviews.

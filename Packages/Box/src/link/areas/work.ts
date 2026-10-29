@@ -5,7 +5,8 @@
 // turn with what it was still to hear of them. What a bot asks
 // you before it does it (`kuvo/work/asks`, its events, and your answer, `POST kuvo/work/asks/<id>`),
 // where new projects go (`kuvo/work/settings`), a project made (`POST kuvo/projects/new`), and a
-// bot's night (`kuvo/work/nights`, its events, and your answer, `POST kuvo/work/nights/<id>`).
+// bot's goal (`kuvo/work/goals`, its events, a goal asked for, `POST kuvo/work/goals/ask`, and your
+// answer to one, `POST kuvo/work/goals/<id>`).
 
 import { isObject, parsed } from "../../shared/json";
 import { followed } from "../follow";
@@ -18,16 +19,16 @@ import { botLimits } from "../work/limits";
 import { answerWork, askFollowers, workAsks } from "../work/asks";
 import { madeWords, makeProject } from "../work/projects";
 import { setProjectsFolder, workSettings } from "../work/settings";
-import { answerNight, nightFollowers, nights } from "../work/night";
+import { answerGoal, askGoal, goalFollowers, goalPlans } from "../work/goals";
 import { readProjects } from "./projects";
 import { HERE } from "../home";
-import { describeWork, ofBot, workingNow, workSessions } from "../work/tree";
+import { botOfConversation, describeWork, ofBot, workingNow, workSessions } from "../work/tree";
 import type { BotWork, WorkAnswer } from "../../shared/routes/work";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
 export const WORK_ROUTE = /^kuvo\/(?:work(?:\/events)?|bots\/([^/]+)\/stop-all)$/;
 export const WORK_ASKS_ROUTE = /^kuvo\/work\/(?:settings|asks(?:\/([^/]+))?)$/;
-export const NIGHTS_ROUTE = /^kuvo\/work\/nights(?:\/([^/]+))?$/;
+export const GOALS_ROUTE = /^kuvo\/work\/goals(?:\/([^/]+))?$/;
 
 // A bot's work as clients show it.
 async function botWork(bot: string, context: RouteContext): Promise<BotWork> {
@@ -133,20 +134,27 @@ export async function* newProjectRoute(context: RouteContext): AsyncGenerator<An
   return yield* json(201, { project: outcome.made.project, text: madeWords(outcome.made, HERE) });
 }
 
-// The nights here (each bot's latest), their events, and your answer to one: start (with your
-// switches), decline or stop.
-export async function* nightsRoute(context: RouteContext, match: RegExpMatchArray): AsyncGenerator<AnswerPiece> {
+// The goals here (each bot's latest), their events, a goal asked for in a bot's chat (/goal), and
+// your answer to one: start (with your switches and limits), decline or stop.
+export async function* goalsRoute(context: RouteContext, match: RegExpMatchArray): AsyncGenerator<AnswerPiece> {
   const { request, readEngine, bridge, signal, json } = context;
   const method = request.method.toUpperCase();
   if (!match[1] || match[1] === "events") {
     if (method !== "GET") return yield* json(405, {});
-    if (!match[1]) return yield* json(200, { nights: nights() });
+    if (!match[1]) return yield* json(200, { goals: goalPlans() });
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-    return yield* followed(() => ({ nights: nights() }), nightFollowers, signal ?? undefined, { folders: [WORK_FOLDER], recursive: false });
+    return yield* followed(() => ({ goals: goalPlans() }), goalFollowers, signal ?? undefined, { folders: [WORK_FOLDER], recursive: false });
   }
   if (method !== "POST") return yield* json(405, {});
   const given = parsed(request.body);
-  const outcome = await answerNight(decodeURIComponent(match[1]), isObject(given) ? given : {}, () => targetsOf({ readEngine, bridge }));
+  const targets = () => targetsOf({ readEngine, bridge });
+  if (match[1] === "ask") {
+    if (!isObject(given) || typeof given.session !== "string" || !botOfConversation(given.session)) return yield* json(400, { message: "Send {session, goal}: a bot's conversation, and the goal in your words." });
+    const outcome = await askGoal(given.session, typeof given.goal === "string" ? given.goal : "", targets);
+    if ("refused" in outcome) return yield* json(outcome.refused.status, { message: outcome.refused.message });
+    return yield* json(200, outcome);
+  }
+  const outcome = await answerGoal(decodeURIComponent(match[1]), isObject(given) ? given : {}, targets);
   if ("refused" in outcome) {
     const { status, ...refusal } = outcome.refused;
     return yield* json(status, refusal);
