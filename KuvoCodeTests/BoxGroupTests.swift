@@ -202,6 +202,22 @@ import Testing
         #expect(app.chats.messages(in: "grp_box0000001").map(\.text) == ["Morning.", "Done."])
     }
 
+    /// A message of a kind a newer Kuvo Code says is kept as it said it, so this copy, once
+    /// updated, shows it from what it kept (it reads a chat again only once a newer message comes).
+    @Test func aMessageOfANewerKindIsKeptAsItCame() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_pal", "Pal", "box")])
+        let newer: [String: Any] = ["id": "gm_2", "author": "bot_pal", "text": "{\"chart\": 1}", "time": "2026-10-22T08:01:00Z", "kind": "chart"]
+        there.add(Self.group("grp_box0000001", members: ["bot_pal"]), messages: [Self.said, newer])
+        let app = app()
+
+        await app.boxGroups.connected("box")
+        app.boxGroups.flush()
+
+        let kept = try JSONSerialization.jsonObject(with: Data(contentsOf: BoxGroups.folder.appending(path: "grp_box0000001.json"))) as? [[String: Any]]
+        #expect(kept?.compactMap { $0["kind"] as? String } == ["message", "chart"])
+    }
+
     /// This Mac's bridge starting, then stopped: its chats show as last seen, and what you write
     /// waits in the composer; once it's up, it goes.
     @Test func thisMacsChatsWaitForItsBridge() async throws {

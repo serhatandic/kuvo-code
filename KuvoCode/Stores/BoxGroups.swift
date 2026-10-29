@@ -250,7 +250,7 @@ final class BoxGroups {
     private func setLog(_ id: String, _ messages: [GroupMessage]?) {
         logs[id] = messages
         // Set outright: a message event changes them, so comparing all of them first only costs.
-        live(id).messages = (messages ?? []).filter { $0.kind != .unknown }
+        live(id).messages = (messages ?? []).filter(\.kind.isKnown)
     }
 
     /// What the bot talking in a chat is doing, as its computer last said (see `GroupActivity`).

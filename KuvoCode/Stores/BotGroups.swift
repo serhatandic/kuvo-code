@@ -99,7 +99,7 @@ struct GroupMessage: Codable, Identifiable, Hashable {
     /// On a bot's message: the part of the work it's reporting back on, from its own conversation.
     var report: String?
 
-    enum Kind: String, Codable {
+    enum Kind: Codable, Hashable {
         /// Said in the chat.
         case message
         /// The lead's sum-up at the end of a discussion.
@@ -108,11 +108,32 @@ struct GroupMessage: Codable, Identifiable, Hashable {
         case note
         /// A meeting you scheduled, come due: its topic.
         case meeting
-        /// One a newer Kuvo Code says, left out of the chat rather than shown as something else.
-        case unknown
+        /// One a newer Kuvo Code says, left out of the chat rather than shown as something else,
+        /// and kept as it said it, for when this copy is updated.
+        case unknown(String)
+
+        var rawValue: String {
+            switch self {
+            case .message: "message"
+            case .wrapUp: "wrapUp"
+            case .note: "note"
+            case .meeting: "meeting"
+            case .unknown(let kind): kind
+            }
+        }
+
+        var isKnown: Bool {
+            if case .unknown = self { false } else { true }
+        }
 
         init(from decoder: Decoder) throws {
-            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+            let kind = try decoder.singleValueContainer().decode(String.self)
+            self = [Self.message, .wrapUp, .note, .meeting].first { $0.rawValue == kind } ?? .unknown(kind)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
         }
     }
 }
