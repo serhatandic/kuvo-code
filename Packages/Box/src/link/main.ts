@@ -56,6 +56,7 @@ import { macNoticeHold, macTell } from "./mac/notices";
 import { runMacPeers } from "./mac/peers";
 import { runMacLink } from "./mac/relay";
 import { watchVaultAsks } from "./vault/asks";
+import { watchSandboxAsks } from "./fence/outside";
 import { holdVault } from "./vault/holder";
 import { primeGenerations } from "./vault/store";
 import { setVaultTell } from "./vault/use";
@@ -304,6 +305,7 @@ async function run(): Promise<void> {
   holdVault(engineHandler(readEngineFile, { name: os.hostname() }));
   setVaultTell(tell);
   watchVaultAsks(tell, answered);
+  watchSandboxAsks(tell, answered);
   // What its bots ask you before they do it (making a project): told the same way.
   watchWorkAsks(tell, { answered });
   // Your other computers: this box's agents told to them while the relay connection is up (and
@@ -545,6 +547,7 @@ async function serve(): Promise<void> {
   if (IS_MAC) {
     setVaultTell(macTell);
     watchVaultAsks(macTell, id => macLink.hold?.resolve(id));
+    watchSandboxAsks(macTell, id => macLink.hold?.resolve(id));
   }
   // Its bots' folders' settings, as its keys and integrations are now (after an update, say), as a
   // machine's bridge does as it starts; where its keys can't be reached yet, they stay as they were.

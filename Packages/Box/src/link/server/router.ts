@@ -61,7 +61,7 @@ export interface Route<Match = true> {
 const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/info", answer: infoRoute },
   { when: route => route === "kuvo/vault" || route.startsWith("kuvo/vault/"), answer: vaultRoute },
-  { when: route => route === "kuvo/sandbox" || route === "kuvo/sandbox/check", answer: sandboxRoute },
+  { when: route => route === "kuvo/sandbox" || route.startsWith("kuvo/sandbox/"), answer: sandboxRoute },
   { when: route => route === "kuvo/file", answer: ({ request, json }: RouteContext) => fileAt(request.path, json) },
   { when: route => route === "kuvo/update", answer: updateRoute },
   { when: (route, request) => /^kuvo\/integrations(\/|\?|$)/.test(request.path), answer: integrationsRoute },

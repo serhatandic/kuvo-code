@@ -1,7 +1,8 @@
 // The sandbox's policy in macOS's own terms: a Seatbelt profile for `sandbox-exec`, which the
 // launcher (`bin/kuvo-fence`) runs each command in, with the conversation's folder, its git
 // repository, the commands' temporary folder and where its wake-ups are kept as the profile's
-// parameters (WORK, GIT, TMP, WAKES).
+// parameters (WORK, GIT, TMP, WAKES), what Also Allowed gives its project (ALLOW0…), and the tag
+// its refusals are logged with (TAG: `kuvo-sandbox <session>`).
 //
 // Later rules win, so each part carves out of the ones before it. Two profiles: one for a folder
 // outside Kuvo Code's (a project), where Kuvo Code's folders are hidden even inside it; and one
@@ -11,6 +12,7 @@
 // `watch`: each refusal is allowed and logged instead (with its tag), for what would have been
 // stopped (`log show --predicate 'sender == "Sandbox"'`).
 
+import { MOST_FOLDERS } from "./allowed";
 import type { FencePolicy } from "./policy";
 
 export interface SeatbeltOptions {
@@ -39,7 +41,7 @@ const GUARDED = String.raw`(.*/)?(\.git$|\.git/(${GIT_GUARDED})|\.opencode(/|$)|
 
 export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): string {
   const mode = options.mode ?? "enforce";
-  const tag = quote(options.tag ?? "kuvo-sandbox");
+  const tag = options.tag ? quote(options.tag) : `(param "TAG")`;
   const out = ["(version 1)", "(allow default)"];
   // With no filters, the operation everywhere (`whole`); otherwise nothing to refuse.
   const deny = (operations: string, ...filters: string[]) => denyIn(false, operations, ...filters);
@@ -60,6 +62,9 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   out.push(";; writes: its folder, its repository, temporary folders, devices and tools' caches");
   deny("file-write*", subpath("/"));
   allow("file-write*", ...policy.writable.map(subpath), param("WORK"), param("GIT"));
+  // What you let this project's commands write (Also Allowed), before what follows takes back
+  // Kuvo Code's folders, git's hooks and the agents' settings in it.
+  allow("file-write*", ...Array.from({ length: MOST_FOLDERS }, (_, at) => param(`ALLOW${at}`)));
   deny("file-write*", ...policy.readOnly.map(subpath));
 
   // What's in them is neither read (nor listed) nor written; a path through them is still looked up,

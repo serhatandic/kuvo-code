@@ -1,6 +1,7 @@
 // This box's home: its folder and the files every part of it reads, and what kind of box it is
 // (a machine's, in `~/.kuvo-code`; or this Mac's, which its app starts in a folder of its own).
 
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -10,6 +11,26 @@ import path from "node:path";
  * test's own HOME counts under Bun too, which otherwise keeps the one it started with. */
 export function homeFolder(): string {
   return process.env.HOME || os.homedir();
+}
+
+let account: string | undefined;
+/** Your account's own home folder, as the system has it, whatever HOME says (Bun's `os.userInfo()`
+ * follows HOME): `id -P` on macOS, `getent passwd` on Linux, the password file without it. */
+export function accountHome(): string {
+  if (account) return account;
+  const uid = os.userInfo().uid;
+  const field = (line: string | undefined, at: number) => line?.trim().split(":")[at] || "";
+  let found = "";
+  if (process.platform === "darwin") {
+    found = field(spawnSync("/usr/bin/id", ["-P"], { encoding: "utf8", timeout: 5000 }).stdout, 8);
+  } else {
+    found = field(spawnSync("getent", ["passwd", String(uid)], { encoding: "utf8", timeout: 5000 }).stdout, 5);
+    if (!found) {
+      try { found = field(fs.readFileSync("/etc/passwd", "utf8").split("\n").find(line => line.split(":")[2] === String(uid)), 5); } catch {}
+    }
+  }
+  account = path.isAbsolute(found) ? found : os.userInfo().homedir;
+  return account;
 }
 
 export const K = process.env.KUVO_HOME || path.join(homeFolder(), ".kuvo-code");

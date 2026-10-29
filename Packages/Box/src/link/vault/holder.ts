@@ -23,6 +23,10 @@ let holding = false;
 /** Whether this process holds the vault. */
 export const holdsVault = () => holding;
 
+/** Whether a route is one only the holding process answers: the vault's, and the sandbox's asks
+ * and its agents' tool (fence/outside.ts), whose asks wait in it. */
+export const heldHere = (route: string) => /^kuvo\/(vault|sandbox\/(asks|tools))(\/|\?|$)/.test(route);
+
 /** A request as it goes over the socket, and its answer back. */
 interface Sent {
   method: string;
@@ -97,8 +101,9 @@ export function holdVault(handle: LinkHandler): net.Server {
         fromMac: true,
         ...(proved ? { vaultClient: true } : {}),
       };
-      // Only the vault's own routes answer here.
-      if (!/^kuvo\/vault(\/|\?|$)/.test(request.path)) return void socket.end(JSON.stringify({ status: 404, type: "application/json", body: Buffer.from("{}").toString("base64") }) + "\n");
+      // Only the routes of what this process alone keeps answer here: the vault's, and the sandbox's
+      // asks and its agents' tool, which wait in it.
+      if (!heldHere(request.path)) return void socket.end(JSON.stringify({ status: 404, type: "application/json", body: Buffer.from("{}").toString("base64") }) + "\n");
       let status = 502;
       let type = "";
       const chunks: Buffer[] = [];

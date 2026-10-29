@@ -15,7 +15,8 @@ export function landlockPolicy(policy: FencePolicy): string {
 }
 
 /**
- * The script: `kuvo-fence.js <policy.json> <WORK> <GIT> <TMP> <WAKES> <shell> [args…]`. Fails closed: when
+ * The script: `kuvo-fence.js <policy.json> <WORK> <GIT> <TMP> <WAKES> <ALLOWED> <shell> [args…]`, ALLOWED
+ * the file of folders Also Allowed gives its project, one a line (fence/allowed.ts). Fails closed: when
  * the kernel can't, the command doesn't run (the box knows before, and says so).
  */
 export const LANDLOCK_RUNNER = String.raw`// Kuvo Code writes this each time its box starts: changes here don't last.
@@ -24,7 +25,7 @@ import { dlopen, FFIType, ptr, read } from "bun:ffi";
 import fs from "node:fs";
 import path from "node:path";
 
-const [policyFile, work, git, tmp, wakes, shell, ...args] = process.argv.slice(2);
+const [policyFile, work, git, tmp, wakes, allowedFile, shell, ...args] = process.argv.slice(2);
 const fail = (why) => { process.stderr.write("This command can't run in the sandbox here: " + why + "\n"); process.exit(126); };
 let policy;
 try { policy = JSON.parse(fs.readFileSync(policyFile, "utf8")); } catch { fail("its settings can't be read."); }
@@ -84,7 +85,10 @@ function grantExcept(top, access, out = hidden) {
 }
 grantExcept("/", READS);
 for (const where of policy.readable) grant(where, READS);
-for (const where of [...policy.writable, work, git]) if (where) grantExcept(where, all, kept);
+// What you let its project's commands write (Also Allowed).
+let allowed = [];
+try { allowed = fs.readFileSync(allowedFile, "utf8").split("\n").filter((line) => line.startsWith("/")); } catch {}
+for (const where of [...policy.writable, work, git, ...allowed]) if (where) grantExcept(where, all, kept);
 if (tmp) { fs.mkdirSync(tmp, { recursive: true }); grant(tmp, all); }
 // Its conversation's wake-ups and watches (kuvo-wake): read, and only its inbox written, which the box
 // takes in, out of its reach.

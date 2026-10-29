@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { listOf, textOf, writePrivate } from "../files";
 import { BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SANDBOX_NOTE, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
+import { tellLauncher } from "./allowed";
 import { agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
 import { LANDLOCK_RUNNER, landlockPolicy } from "./landlock";
 import { fencePolicy, realish } from "./policy";
@@ -263,6 +264,7 @@ export function setUpFence(): FenceState {
     if (platform === "linux") writeExecutable(places.runner, LANDLOCK_RUNNER);
     lastProfiles = "";
     writeProfiles();
+    tellLauncher();
     const result = probe();
     checked = { able: true, ...result, ...(result.passed ? {} : { reason: "checkFailed" as const }) };
     failures = result.passed ? 0 : failures + 1;

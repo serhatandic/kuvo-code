@@ -7,6 +7,8 @@
 // `workdir`) the agent picks. The engine reads its plugins folder as it runs, so a plugin written
 // now is used from the next command on, with no restart.
 
+import { MOST_FOLDERS } from "./allowed";
+
 /** Where the box keeps the sandbox's own files (profiles, the plugin's note, commands' temporary
  * folder), what it hides, and where commands' own folders inside Kuvo Code's are. */
 export interface FencePlaces {
@@ -42,7 +44,12 @@ export function launcherScript(places: FencePlaces): string {
   const run = places.platform === "darwin"
     ? [
         `escaped() { printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\\\&/g'; }`,
-        `exec /usr/bin/sandbox-exec -D WORK="$work" -D GIT="$git" -D TMP="$tmp" -D WAKES="$own" -D SSH="$ssh" -D WORK_RE="$(escaped "$work")" -D GIT_RE="$(escaped "$git")" -f "$F/$profile.sb" "$shell" "$@"`,
+        // Its refusals, in macOS's log, name its conversation and the command, by a sum of it (a
+        // sandbox_ask's card shows what stopped that command: fence/outside.ts).
+        `for c_last; do :; done`,
+        `c_sum=$( (printf '%s' "\${c_last-}" | shasum -a 256) 2>/dev/null | cut -c 1-16)`,
+        `case \${OPENCODE_SESSION_ID-} in ses_*[!A-Za-z0-9_]*|ses_|'') tag="kuvo-sandbox" ;; *) tag="kuvo-sandbox $OPENCODE_SESSION_ID $c_sum" ;; esac`,
+        `exec /usr/bin/sandbox-exec -D TAG="$tag" -D WORK="$work" -D GIT="$git" -D TMP="$tmp" -D WAKES="$own" -D SSH="$ssh" -D WORK_RE="$(escaped "$work")" -D GIT_RE="$(escaped "$git")" ${Array.from({ length: MOST_FOLDERS }, (_, at) => `-D ALLOW${at}="$a${at}"`).join(" ")} -f "$F/$profile.sb" "$shell" "$@"`,
       ]
     : [
         // Kuvo Code's own commands (kuvo-wake's watches) run it with no engine: the box names the
@@ -50,7 +57,7 @@ export function launcherScript(places: FencePlaces): string {
         // agent writes: Bun's settings (`bunfig.toml`, its preloads) and a `.env` from nowhere.
         `[ -n "$runtime" ] || runtime=$(cat "$F/runtime" 2>/dev/null)`,
         `[ -x "$runtime" ] || { echo "This command can't run in the sandbox here: the engine's runtime wasn't given." >&2; exit 126; }`,
-        `BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 exec "$runtime" --config=/dev/null --no-env-file ${sh(places.runner)} "$F/policy.json" "$work" "$git" "$tmp" "$own" "$shell" "$@"`,
+        `BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 exec "$runtime" --config=/dev/null --no-env-file ${sh(places.runner)} "$F/policy.json" "$work" "$git" "$tmp" "$own" "$allowed" "$shell" "$@"`,
       ];
   return [
     "#!/bin/sh",
@@ -77,6 +84,11 @@ export function launcherScript(places: FencePlaces): string {
     `sum=$( (printf '%s' "$work" | sha256sum || printf '%s' "$work" | shasum -a 256) 2>/dev/null | cut -c 1-32)`,
     `case $sum in ????????????????????????????????) ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
     `tmp=$F/tmp/$sum`,
+    // What Also Allowed gives this project's commands to write (fence/allowed.ts): the box's file
+    // for it, by the same sum, one folder a line; each that isn't given stays where nothing is.
+    `allowed=$F/allowed/$sum`,
+    ...Array.from({ length: MOST_FOLDERS }, (_, at) => `a${at}=$F/none`),
+    `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
     // Its conversation's wake-ups and watches (kuvo-wake): its bot's folder, or its own in the
     // box's wakes folder, which this makes with the folder it works in (never the command's: a
@@ -220,7 +232,7 @@ export function agentsNote(platform: "darwin" | "linux"): string {
     "",
     "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
     "",
-    "When the sandbox refuses something a task needs (\"Operation not permitted\" or \"Permission denied\" outside these folders), don't work around it: tell the user what was refused and why you need it.",
+    "When the sandbox refuses something a task needs (\"Operation not permitted\" or \"Permission denied\" outside these folders), don't work around it: ask the user with sandbox_ask, giving the command as you ran it and why the task needs it. They can let it run outside the sandbox once, always for this project, or say no; allowed, it runs for you and you get its output.",
     "",
   ].join("\n");
 }
