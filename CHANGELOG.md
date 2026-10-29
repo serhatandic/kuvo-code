@@ -153,6 +153,10 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A message you send just before quitting Kuvo Code (while the session's tools still start, say) is back in the composer when you open it again, instead of lost.
 - A chat moved into a project on a machine works in the project's other folders there, and a coding agent's subagent you have open keeps following its work after your Mac wakes.
 - A machine's session waiting on you keeps its mark while the machine reconnects after your Mac wakes, rather than notifying you a second time.
+- Typing "/review with " no longer crashes Kuvo Code when the conversation's own model is the only one you have.
+- Escape stops the agent in the conversation you're looking at, even while Find is still open in one you've left.
+- A conversation whose agent gave the browser an impossible element or tab number opens again instead of crashing.
+- Find in a conversation highlights the place you're on in a message sent with a keyword, finds a name shown with its face, and stays quick in a long pasted log.
 
 ## 0.7.2
 
