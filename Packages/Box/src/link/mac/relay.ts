@@ -17,7 +17,7 @@ import { appHost, forgetHostProof, proveHost } from "../host-interface";
 import { announce } from "../peers/agents";
 import { peerMail, receiveMail } from "../peers/mail";
 import { authorizePhone, confirmPhone } from "../phones";
-import { connectOnce } from "../relay/connection";
+import { connectOnce, nextTry } from "../relay/connection";
 import { LinkHost } from "../relay/host";
 import { AGENTS } from "../server/forward";
 import { engineHandler } from "../server/router";
@@ -160,12 +160,11 @@ export async function runMacLink(): Promise<void> {
         attempt = 0;
         continue;
       }
-      // Well only once a connection's held a while: one dropped right after its welcome (another
-      // copy on the same address, say) backs off as one that never came up does.
-      attempt = welcomed && Date.now() - started >= 60_000 ? 0 : attempt + 1;
+      const next = nextTry(attempt, welcomed, Date.now() - started);
+      attempt = next.attempt;
       if (!welcomed) setLinkStatus("failed", `Can't reach the relay at ${new URL(link.relay).host}.`);
       else setLinkStatus("connecting");
-      await macLinkWait(Math.min(60_000, 1000 * 2 ** Math.min(attempt, 6)));
+      await macLinkWait(next.wait);
     } catch (error) {
       macLink.host = null;
       setLinkStatus("failed", String((error as Error | undefined)?.message ?? error));

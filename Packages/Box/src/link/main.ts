@@ -60,7 +60,7 @@ import { watchSeats } from "./peers/seats";
 import { changePersonalities, mergePersonalities, readPersonalities } from "./personalities/library";
 import { takePersonalities } from "./personalities/take";
 import { authorizePhone, confirmPhone, foldPhones, newPairingToken, PAIRING_MINUTES, pairingLink } from "./phones";
-import { connectOnce } from "./relay/connection";
+import { connectOnce, nextTry } from "./relay/connection";
 import { LinkHost } from "./relay/host";
 import { engineHandler } from "./server/router";
 import { serveBox } from "./server/serve";
@@ -149,7 +149,7 @@ export { macNoticeHold, macTell } from "./mac/notices";
 export { LETTER_WAIT, runMacPeers, stopMacPeers } from "./mac/peers";
 export { setMacPeers } from "./mac/routes";
 export { engineHandler } from "./server/router";
-export { connectOnce, fromRelay } from "./relay/connection";
+export { connectOnce, fromRelay, nextTry } from "./relay/connection";
 export { MAC_BOX_ROUTES, macAnswers, macFront, runMacLink } from "./mac/relay";
 export { keepKeeper } from "./keeper";
 export { serveBox } from "./server/serve";
@@ -334,9 +334,11 @@ async function run(): Promise<void> {
       send: () => {},
     });
     current = host;
+    const started = Date.now();
     const welcomed = await connectOnce(link!.relay!, Buffer.from(link!.secret!, "base64url"), host, machineWelcomed);
-    attempt = welcomed ? 0 : attempt + 1;
-    await sleep(Math.min(60_000, 1000 * 2 ** Math.min(attempt, 6)));
+    const next = nextTry(attempt, welcomed, Date.now() - started);
+    attempt = next.attempt;
+    await sleep(next.wait);
   }
 }
 

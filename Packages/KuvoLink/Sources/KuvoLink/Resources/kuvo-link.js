@@ -8230,6 +8230,10 @@ function fromRelay(host, message, self) {
   if (message.kind === "unreachable" || message.kind === "gone")
     host.forget(message.address);
 }
+function nextTry(attempt, welcomed, heldFor) {
+  const next = welcomed && heldFor >= 60000 ? 0 : attempt + 1;
+  return { attempt: next, wait: Math.min(60000, 1000 * 2 ** Math.min(next, 6)) };
+}
 function connectOnce(relay, secret, host, onWelcome = () => {}) {
   return new Promise((resolve) => {
     const self = addressOf(secret);
@@ -10628,12 +10632,13 @@ async function runMacLink() {
         attempt = 0;
         continue;
       }
-      attempt = welcomed && Date.now() - started >= 60000 ? 0 : attempt + 1;
+      const next = nextTry(attempt, welcomed, Date.now() - started);
+      attempt = next.attempt;
       if (!welcomed)
         setLinkStatus("failed", `Can't reach the relay at ${new URL(link.relay).host}.`);
       else
         setLinkStatus("connecting");
-      await macLinkWait(Math.min(60000, 1000 * 2 ** Math.min(attempt, 6)));
+      await macLinkWait(next.wait);
     } catch (error) {
       macLink.host = null;
       setLinkStatus("failed", String(error?.message ?? error));
@@ -10874,9 +10879,11 @@ async function run() {
       send: () => {}
     });
     current = host;
+    const started = Date.now();
     const welcomed = await connectOnce(link.relay, Buffer.from(link.secret, "base64url"), host, machineWelcomed);
-    attempt = welcomed ? 0 : attempt + 1;
-    await sleep(Math.min(60000, 1000 * 2 ** Math.min(attempt, 6)));
+    const next = nextTry(attempt, welcomed, Date.now() - started);
+    attempt = next.attempt;
+    await sleep(next.wait);
   }
 }
 async function box(command) {
@@ -11351,6 +11358,7 @@ export {
   newPairing,
   newSigningSeed,
   newerVersion,
+  nextTry,
   nextWake,
   noLongerNeeded,
   noteDocsChanged,
