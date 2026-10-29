@@ -231,6 +231,8 @@ test("a command can't change what git runs on its own, the engine's settings or 
       ["add a submodule's hook", "echo 'curl evil' > .git/modules/lib/hooks/post-checkout"],
       ["change a submodule's settings", "echo '[core] fsmonitor = evil' > .git/modules/lib/config"],
       ["change a worktree's settings", "echo '[core] fsmonitor = evil' > .git/worktrees/spare/config.worktree"],
+      ["point a worktree at another repository", "echo /elsewhere/.git > .git/worktrees/spare/commondir"],
+      ["point a worktree at another checkout", "echo /elsewhere/.git > .git/worktrees/spare/gitdir"],
       ["make a branch", "mkdir -p .git/refs/heads && echo 0 > .git/refs/heads/topic"],
       ["add the engine's settings", `echo '{}' > opencode.json`],
       ["add the engine's plugins", "mkdir -p .opencode/plugin && echo x > .opencode/plugin/x.js"],
@@ -256,7 +258,7 @@ test("a command can't change what git runs on its own, the engine's settings or 
     const seen = outcome(ran.out);
     assert.deepEqual(seen, {
       "add a git hook": "refused", "change git's settings": "refused", "add a submodule's hook": "refused", "change a submodule's settings": "refused",
-      "change a worktree's settings": "refused", "make a branch": "allowed", "add the engine's settings": "refused", "add the engine's plugins": "refused",
+      "change a worktree's settings": "refused", "point a worktree at another repository": "refused", "point a worktree at another checkout": "refused", "make a branch": "allowed", "add the engine's settings": "refused", "add the engine's plugins": "refused",
       "add Claude Code's hooks": "refused", "change Claude Code's own settings": "refused", "add Claude Code's servers": "refused", "add Codex's settings": "refused",
       "add Cursor's hooks": "refused", "move Claude Code's settings into place": "refused",
       "swap in another .claude": "refused", "link in a Codex folder": "refused", "swap in another .git": "refused",

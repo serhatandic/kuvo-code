@@ -4,7 +4,10 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:tes
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { CodexAgent } from "../../src/agents/agents/codex"
+import { spawnSync } from "node:child_process"
+import { createHash } from "node:crypto"
+import { mkdirSync, realpathSync } from "node:fs"
+import { CodexAgent, fenceProfiles } from "../../src/agents/agents/codex"
 import { Auto } from "../../src/agents/auto"
 import type { Roster } from "../../src/agents/roster"
 import { Sessions } from "../../src/agents/sessions"
@@ -559,6 +562,70 @@ describe("Codex in the session's modes", () => {
     expect(turnStart()).toMatchObject({ approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly" }, collaborationMode: { mode: "plan" } })
     expect(answers()).toEqual([{ decision: "decline" }])
     expect(tools(id)[0].state.status).toBe("error")
+  })
+})
+
+describe("Codex in the box's sandbox", () => {
+  const reply: [string, any][] = [["item/completed", { item: { type: "agentMessage", id: "m1", text: "Done." } }]]
+  // The box's sandbox, on, with a folder of secrets commands can't read and one more they can write.
+  let fence: { secret: string; other: string }
+  beforeEach(() => {
+    const folder = join(root, "fence")
+    fence = { secret: join(realpathSync(root), "secret"), other: join(realpathSync(root), "other") }
+    mkdirSync(folder)
+    writeFileSync(join(folder, "on"), "")
+    writeFileSync(join(folder, "policy.json"), JSON.stringify({ hidden: [fence.secret], readable: [], writable: [fence.other], readOnly: [] }))
+    process.env.KUVO_FENCE = folder
+  })
+  afterEach(() => {
+    delete process.env.KUVO_FENCE
+  })
+
+  test("Codex starts with the sandbox's rules as its own, and Approve All runs every command in it, never asking to leave it", async () => {
+    await run(reply)
+    expect(argv()).toContain('default_permissions="kuvo"')
+    expect(argv().find((arg) => arg.startsWith("permissions.kuvo.filesystem="))).toContain(`${JSON.stringify(fence.secret)}="deny"`)
+    expect(turnStart()).toMatchObject({ permissions: "kuvo", approvalPolicy: { granular: { sandbox_approval: false } }, runtimeWorkspaceRoots: [root] })
+    expect(turnStart().sandboxPolicy).toBeUndefined()
+  })
+
+  test("a folder you let this project's commands write in (Also Allowed) is one Codex's commands write in too", async () => {
+    const extra = join(realpathSync(root), "assets")
+    mkdirSync(extra)
+    mkdirSync(join(root, "fence", "allowed"))
+    writeFileSync(join(root, "fence", "allowed", createHash("sha256").update(realpathSync(root)).digest("hex").slice(0, 32)), extra + "\n")
+    await run(reply)
+    expect(turnStart().runtimeWorkspaceRoots).toEqual([root, extra])
+  })
+
+  test("Plan only reads, in the sandbox", async () => {
+    await run(reply, { agent: "plan" })
+    expect(turnStart()).toMatchObject({ permissions: "kuvo_read", approvalPolicy: { granular: { sandbox_approval: false } }, collaborationMode: { mode: "plan" } })
+  })
+
+  test("Ask First asks before commands, as Codex does", async () => {
+    await run(reply, { permissions: askFirst })
+    expect(turnStart()).toMatchObject({ permissions: "kuvo", approvalPolicy: "untrusted" })
+  })
+
+  // Codex's own sandbox, given the rules as Kuvo Code gives them: what a command there can and can't do.
+  test.skipIf(!Bun.which("codex"))("in the real Codex's sandbox, a command can't read your secrets or write outside the project, its git hooks or the agents' settings", () => {
+    const project = join(realpathSync(root), "project")
+    mkdirSync(join(project, ".claude"), { recursive: true })
+    mkdirSync(fence.secret)
+    mkdirSync(fence.other)
+    mkdirSync(join(root, "elsewhere"))
+    writeFileSync(join(fence.secret, "key"), "s")
+    spawnSync("git", ["init", "-q", project])
+    const tries = { secret: `cat ${fence.secret}/key`, project: "echo x > made.txt", other: `echo x > ${fence.other}/o`, elsewhere: `echo x > ${root}/elsewhere/e`, settings: "echo x > .claude/settings.json", hooks: "echo x > .git/hooks/pre-commit" }
+    const done = (profile: string) => {
+      const line = Object.entries(tries).map(([name, each]) => `${each} 2>/dev/null && echo ${name}`).join("; ")
+      const rules = JSON.parse(readFileSync(join(root, "fence", "policy.json"), "utf8"))
+      const result = spawnSync("codex", ["sandbox", ...fenceProfiles(rules), "-c", `default_permissions="${profile}"`, "--", "sh", "-c", line], { cwd: project, encoding: "utf8" })
+      return result.stdout.trim().split("\n").filter(Boolean)
+    }
+    expect(done("kuvo")).toEqual(["project", "other"])
+    expect(done("kuvo_read")).toEqual(["other"])
   })
 })
 

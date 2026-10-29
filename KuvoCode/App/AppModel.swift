@@ -686,6 +686,9 @@ final class AppModel {
         environment["KUVO_BOTS"] = Bots.root.path
         environment["KUVO_WAKES"] = WakeUps.root.path
         environment["KUVO_BIN"] = bin
+        // The box's sandbox, which the coding agents run their commands in while it's on, as a
+        // machine's is in `~/.kuvo-code/run/fence`.
+        environment["KUVO_FENCE"] = BoxProcess.run.appending(path: "fence").path
         // This Mac's group chats, in its own folder, as a machine's are in `~/.kuvo-code`: their
         // bots are its bots, what they let go of goes to the box's trash (and on to the Finder's,
         // `kuvo.group.trashed`), and a bot remembers them under the key it always has.

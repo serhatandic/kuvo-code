@@ -11,6 +11,7 @@ import type { Limit } from "../auto"
 import { accountName, ContextWindows, failure, model } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
 import { emit } from "../events"
+import { allowedFolders, fenceKey, fenceRules, worktreeGitFolders, type FenceRules } from "../fence"
 import { kuvoTools, toolServerName } from "../kuvotools"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import { elicitationField } from "../forms"
@@ -31,6 +32,41 @@ const outputLimit = 30_000
  * even where your Codex settings turn them on: they click around your Mac with no card to allow it.
  * (Written without quotes: `-c` takes a key's dots as its path. Harmless where they aren't.)
  */
+// What a command in the sandbox can't change in a project (as the engine's can't): git's hooks and
+// settings, a worktree's pointers to its repository, the engine's settings, and the coding agents'
+// folders whole (Codex's rules are by path, so a folder moved into place would get past a rule for
+// a file in it). Only at the top of each folder it works in: Codex's rules can't reach deeper.
+const KEPT_IN_PROJECT = [".git/hooks", ".git/config", "config.worktree", "commondir", "gitdir", ".opencode", "opencode.json", "opencode.jsonc",
+  ".mcp.json", ".claude", ".codex", ".cursor", ".gemini", ".grok"]
+
+const toml = (text: string) => JSON.stringify(text)
+
+/**
+ * The box's sandbox as Codex's own permission profiles, for its app-server (`-c`): `kuvo`, where the
+ * folders it works in are written (but `KEPT_IN_PROJECT`), and `kuvo_read` for Plan, where they're
+ * only read. Both read everything but Kuvo Code's folders and your secrets, write the temporary
+ * folders and tools' caches (not what runs later in them), where Kuvo Code keeps wake-ups, and reach
+ * the network.
+ */
+export function fenceProfiles(rules: FenceRules): string[] {
+  const filesystem = (projects: "write" | "read") => {
+    const access = new Map<string, string>([["/", "read"]])
+    for (const folder of rules.writable) access.set(folder, "write")
+    for (const folder of [process.env.KUVO_WAKES, process.env.KUVO_BOTS]) if (folder) access.set(folder, "write")
+    for (const place of rules.readOnly) access.set(place, "read")
+    for (const place of rules.hidden) access.set(place, "deny")
+    for (const place of rules.readable) access.set(place, "read")
+    const inProjects = projects === "read" ? [[".", "read"]] : [[".", "write"], ...KEPT_IN_PROJECT.map((place) => [place, "read"])]
+    const entries = [...[...access].map(([place, how]) => `${toml(place)}=${toml(how)}`), `":workspace_roots"={${inProjects.map(([place, how]) => `${toml(place)}=${toml(how)}`).join(",")}}`]
+    return `{${entries.join(",")}}`
+  }
+  return [
+    "-c", `permissions.kuvo.filesystem=${filesystem("write")}`, "-c", "permissions.kuvo.network.enabled=true",
+    "-c", `permissions.kuvo_read.filesystem=${filesystem("read")}`, "-c", "permissions.kuvo_read.network.enabled=true",
+    "-c", `default_permissions="kuvo"`,
+  ]
+}
+
 const noComputerUse = ["unified-computer-use@openai-bundled", "computer-use@openai-bundled"]
 
 export class CodexAgent implements Agent {
@@ -99,6 +135,9 @@ export class CodexAgent implements Agent {
 
   /** The app-server still running the old Codex. */
   private outdated?: RPC
+  /** The box's sandbox as the app-server running now started with it (`fenceKey`), and whether it's on. */
+  private serverFence?: string
+  fenced = false
 
   /**
    * The new Codex lists the models and runs the sessions once its app-server starts again: now,
@@ -151,6 +190,8 @@ export class CodexAgent implements Agent {
       if (!this.server || this.threads.size || this.logins.size || this.oneOffs.size || Date.now() - this.lastUse < 15 * 60_000) return
       this.shutdown()
     }, 60_000)
+    // The box's sandbox changed (on, off, its rules): Codex starts again with it once it's quiet.
+    if (this.server && !this.server.isClosed && this.serverFence !== fenceKey()) this.outdated ??= this.server
     this.restartIfQuiet(starting)
     if (this.server && !this.server.isClosed) return this.server
     this.starting ??= this.start().finally(() => (this.starting = undefined))
@@ -163,7 +204,11 @@ export class CodexAgent implements Agent {
     // An added account's own CODEX_HOME, with your Codex settings in it: only its sign-in is its
     // own. (On a machine, nothing of the machine's own Codex.)
     if (this.instance.home && !onMachine) shadowHome(this.instance.home)
-    const rpc = new RPC([executable, "app-server", ...noComputerUse.flatMap((plugin) => ["-c", `plugins.${plugin}.enabled=false`])], { cwd: this.context.temporary, env: this.instance.home ? { CODEX_HOME: this.instance.home } : undefined })
+    // Its commands in the box's sandbox while it's on, as Codex's own (fenceProfiles).
+    const fence = fenceRules()
+    const rpc = new RPC([executable, "app-server", ...noComputerUse.flatMap((plugin) => ["-c", `plugins.${plugin}.enabled=false`]), ...(fence ? fenceProfiles(fence) : [])], { cwd: this.context.temporary, env: this.instance.home ? { CODEX_HOME: this.instance.home } : undefined })
+    this.serverFence = JSON.stringify(fence ?? null)
+    this.fenced = Boolean(fence)
     rpc.onNotification = (method, params) => this.notification(method, params)
     rpc.onRequest = (method, params, id) => this.request(method, params, id)
     rpc.onExit = () => {
@@ -399,7 +444,7 @@ export class CodexAgent implements Agent {
   async generate(prompt: string, model?: ModelRef): Promise<string> {
     const rpc = await this.rpc()
     // (Its own default model, when none is given; thinking little either way.)
-    const started: any = await rpc.request("thread/start", { ephemeral: true, cwd: this.context.temporary, ...(model && model.id !== "default" ? { model: model.id } : {}), approvalPolicy: "never", sandbox: "read-only" }, 60_000)
+    const started: any = await rpc.request("thread/start", { ephemeral: true, cwd: this.context.temporary, ...(model && model.id !== "default" ? { model: model.id } : {}), approvalPolicy: "never", ...(this.fenced ? { permissions: "kuvo_read" } : { sandbox: "read-only" }) }, 60_000)
     const threadId: string = started.thread.id
     let text = ""
     let turnId: string | undefined
@@ -632,6 +677,19 @@ class CodexThread implements Thread {
   }
 
   private policy(hooks: TurnHooks, plan: boolean) {
+    // In the box's sandbox (fenceProfiles), with what a commit in a worktree writes in its
+    // repository's folder, and the folders you let this project's commands write in (Also Allowed). Codex never runs a command outside it on its own: it isn't let ask to (a
+    // command that needs it is `sandbox_ask`'s, which only you answer), and what its own rules would
+    // ask about (rm -f) it turns down itself. Ask First asks before its commands as Codex does, and
+    // a command you allow it runs outside its sandbox, as Codex runs every command it asked about.
+    if (this.agent.fenced) {
+      const directory = this.session.location.directory
+      const roots = { runtimeWorkspaceRoots: [directory, ...worktreeGitFolders(directory), ...allowedFolders(directory)] }
+      const inside = { granular: { sandbox_approval: false, rules: true, mcp_elicitations: true, request_permissions: false } }
+      if (plan) return { approvalPolicy: inside, permissions: "kuvo_read", ...roots }
+      if (hooks.approvesAll()) return { approvalPolicy: inside, permissions: "kuvo", ...roots }
+      return { approvalPolicy: "untrusted", permissions: "kuvo", ...roots }
+    }
     if (plan) return { approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly", networkAccess: true } }
     // Approve All: what Codex's own rules ask about (rm -f) is asked too, and your rules let it
     // through without a card; with "never", Codex refuses it itself.

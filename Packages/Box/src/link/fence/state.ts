@@ -174,8 +174,10 @@ function runtime(): string | null {
 
 function writeProfiles(): void {
   const policy = fencePolicy(platform === "darwin" ? kuvoPorts() : []);
+  // (policy.json on both: Linux's sandbox reads it, and the coding agents' bridge gives each agent
+  // the same rules in its own terms.)
   const files: [string, string][] = platform === "darwin"
-    ? [["project.sb", seatbeltProfile(policy, { inside: false })], ["inside.sb", seatbeltProfile(policy, { inside: true })]]
+    ? [["project.sb", seatbeltProfile(policy, { inside: false })], ["inside.sb", seatbeltProfile(policy, { inside: true })], ["policy.json", landlockPolicy(policy)]]
     : [["policy.json", landlockPolicy(policy)], ["runtime", runtime() ?? ""]];
   const text = files.map(([name, body]) => name + body).join("");
   if (text === lastProfiles) return;
