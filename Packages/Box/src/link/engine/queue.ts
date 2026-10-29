@@ -269,8 +269,9 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
 const SCANNED_FILE = path.join(RUN, "queues-scanned.json");
 
 /** Once for each engine started anew (its process changed): each of its latest sessions with
- * messages waiting and nothing running held and paused, as Stop holds them. A stream that only
- * dropped and came back carries on. */
+ * messages waiting and nothing running held and paused, as Stop holds them. The same engine (the
+ * box started again, or its stream dropped and came back): their queues go on, as after a run
+ * that ended while it couldn't hear. */
 export async function scanQueues(target: Target & { pid?: number }): Promise<void> {
   const known = locked(QUEUES_LOCK, () => {
     let scanned: Record<string, unknown> = {};
@@ -280,13 +281,13 @@ export async function scanQueues(target: Target & { pid?: number }): Promise<voi
     try { writePrivate(SCANNED_FILE, JSON.stringify(scanned)); } catch {}
     return false;
   });
-  if (known) return;
   const page = await asked(target, "GET", "api/session?parentID=null&limit=100&order=desc") as { data?: { id?: string; time?: { updated?: number } }[] } | null;
   const week = Date.now() - 7 * 86_400_000;
   for (const session of page?.data ?? []) {
     if (typeof session.id !== "string" || (session.time?.updated ?? 0) < week) continue;
     try {
-      if ((await inboxOf(target, session.id)).length && !(await isRunning(target, session.id))) await holdQueue(target, session.id);
+      if (known) await drain(target, session.id);
+      else if ((await inboxOf(target, session.id)).length && !(await isRunning(target, session.id))) await holdQueue(target, session.id);
     } catch {}
   }
 }

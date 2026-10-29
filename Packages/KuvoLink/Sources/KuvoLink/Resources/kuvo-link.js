@@ -6720,15 +6720,15 @@ async function scanQueues(target) {
     } catch {}
     return false;
   });
-  if (known)
-    return;
   const page = await asked(target, "GET", "api/session?parentID=null&limit=100&order=desc");
   const week = Date.now() - 7 * 86400000;
   for (const session of page?.data ?? []) {
     if (typeof session.id !== "string" || (session.time?.updated ?? 0) < week)
       continue;
     try {
-      if ((await inboxOf(target, session.id)).length && !await isRunning(target, session.id))
+      if (known)
+        await drain(target, session.id);
+      else if ((await inboxOf(target, session.id)).length && !await isRunning(target, session.id))
         await holdQueue(target, session.id);
     } catch {}
   }

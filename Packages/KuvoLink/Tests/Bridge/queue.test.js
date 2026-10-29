@@ -213,6 +213,18 @@ test("a queue left with nothing running when the engine started again waits for 
   assert.equal(link.queueOf("ses_1").paused, true);
 });
 
+test("a run that ended while the box was starting again, beside the same engine: what waits goes on, unless it's paused", async () => {
+  await link.scanQueues({ ...target, pid: 30 });
+  inboxes.ses_1 = [{ id: "msg_q1", delivery: "queue" }];
+  inboxes.ses_2 = [{ id: "msg_q2", delivery: "queue" }];
+  inboxes.ses_3 = [{ id: "msg_q3", delivery: "queue" }];
+  running.add("ses_3");
+  await ask("POST", "kuvo/sessions/ses_2/queue/hold");
+  await link.scanQueues({ ...target, pid: 30 });
+  assert.deepEqual(asked, ["ses_1 msg_q1 steer"], "the one waiting goes; the paused one and the one at work don't");
+  assert.deepEqual(link.queueOf("ses_1"), { paused: false, held: [] });
+});
+
 test("every client follows the queues: a line now, one each time they change", async () => {
   inboxes.ses_1 = [{ id: "msg_q1", delivery: "queue" }];
   const stop = new AbortController();
