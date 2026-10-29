@@ -20,7 +20,7 @@ import Testing
     }
 
     /// Pixel's goal on the machine, at `state`; the machine may work on it alone where `alone`.
-    private func lab(_ state: String = "proposed", alone: Bool = true) async throws -> MachineTestBox {
+    private func lab(_ state: String = "proposed", alone: Bool = true, waiting: [[String: Any]] = []) async throws -> MachineTestBox {
         let machine = try await MachineTestBox(name: "lab", environment: alone ? ["KUVO_TEST_SANDBOX_ON": "1"] : [:])
         let folder = machine.folder.appending(path: "bots/bot_pixel00001")
         try FileManager.default.createDirectory(at: folder.appending(path: "workspace"), withIntermediateDirectories: true)
@@ -33,7 +33,7 @@ import Testing
             "steps": [["id": "s1", "text": "Build the site", "state": state == "running" ? "doing" : "todo", "progress": 0.5], ["id": "s2", "text": "Deploy", "state": "todo", "phase": "Launch"]],
             "checks": [["id": "c1", "text": "Add a Cloudflare API token", "state": "needs", "by": "bot", "action": ["kind": "open", "label": "Add", "url": "https://dash.cloudflare.com"]]],
             "spend": [["what": "ads", "cap": 20, "currency": "USD", "per": "day", "spent": 0]], "public": [["id": "p1", "text": "Publish the site", "on": false]],
-            "projects": [String](), "wake": false, "digest": "day", "proposed": now, "waiting": [Any](), "paused": [Any](), "waited": 0, "watching": [String](),
+            "projects": [String](), "wake": false, "digest": "day", "proposed": now, "waiting": waiting, "paused": [Any](), "waited": 0, "watching": [String](),
         ].merging(state == "running" ? ["started": now] : [:]) { _, given in given }
         try FileManager.default.createDirectory(at: machine.folder.appending(path: "run/work"), withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: ["goals": [goal]]).write(to: machine.folder.appending(path: "run/work/goals.json"))
@@ -95,5 +95,67 @@ import Testing
         let stopped = try #require(try await app.goalPlans.answer(plan, on: box, .stop))
         #expect(stopped.state == .stopped)
         #expect(try kept(machine)["state"] as? String == "stopped")
+    }
+
+    @Test func whatWaitsForYouPutAwayAndLimitsChangedReachTheGoalsBox() async throws {
+        let now = Date.now.timeIntervalSince1970 * 1000
+        let machine = try await lab("running", waiting: [["id": "w1", "kind": "you", "text": "Stripe’s identity check", "site": "stripe.com", "url": "https://dashboard.stripe.com", "at": now]])
+        defer { machine.stop() }
+        await app.goalPlans.read("lab")
+        let (box, plan) = try #require(app.goalPlans.plan(for: "ses_pixel"))
+        #expect(plan.waiting.map(\.text) == ["Stripe’s identity check"])
+
+        let cleared = try #require(try await app.goalPlans.answer(plan, on: box, .clear(waiting: "w1")))
+        #expect(cleared.waiting.isEmpty, "its row goes from under the lanes")
+        #expect((try kept(machine)["waiting"] as? [Any])?.isEmpty == true, "and from its box, for every client")
+
+        let changed = try #require(try await app.goalPlans.answer(cleared, on: box, .change(digest: .week, spend: [.init(cap: 40, per: .month)])))
+        #expect(changed.digest == .week)
+        #expect(changed.spend.first.map { [$0.cap, $0.per.rawValue] as [AnyHashable] } == [40.0, "month"])
+        #expect(try kept(machine)["digest"] as? String == "week")
+        #expect(app.goalPlans.plan(for: "ses_pixel")?.plan.digest == .week, "the bar shows what its box keeps now")
+    }
+
+    /// Why a box can't work on a goal alone, on its card: the words and where its button goes, as
+    /// the box names the reason.
+    @Test func theSandboxRowSaysWhyAndItsButtonGoesWhereYouCanFixIt() throws {
+        let row = { (reading: GoalSandbox.Reading?, onThisMac: Bool, agent: String?) in
+            GoalSandbox.row(reading, computer: onThisMac ? "This Mac" : "lokum", onThisMac: onThisMac, bot: "Pixel", agent: agent)
+        }
+        let status = { (reason: String, route: String?) in GoalSandbox.Reading.status(.init(on: false, reason: reason, route: route)) }
+
+        #expect(row(status("off", "PATCH kuvo/sandbox"), true, nil) == nil, "only off (it comes on by itself): the card says nothing of it")
+        #expect(row(.status(.init(on: true)), true, nil) == nil)
+        let unknown = try #require(row(status("somethingNew", "POST kuvo/sandbox/check"), false, nil), "a reason from a newer box still says it can't, and checks again")
+        #expect(unknown.title == "lokum can’t work on its own yet")
+        #expect(unknown.buttons == [.init(label: "Try Again", action: .route(method: "POST", path: "kuvo/sandbox/check"))])
+
+        let kernel = try #require(row(.status(.init(on: false, able: false, reason: "kernel", needs: "Linux 5.13")), false, nil))
+        #expect(kernel.text.contains("Linux 5.13 or later"))
+        #expect(kernel.buttons.map(\.label) == ["How to Check…"])
+        #expect(row(status("macos", nil), true, nil)?.buttons == [.init(label: "Software Update…", action: .open(GoalSandbox.softwareUpdate))])
+
+        let failedOnce = try #require(row(.status(.init(on: false, reason: "checkFailed", route: "POST kuvo/sandbox/check", check: "readsOwn", failures: 1)), true, nil))
+        #expect(failedOnce.text.contains("found that a command could read Kuvo Code’s own files"))
+        #expect(failedOnce.buttons == [.init(label: "Try Again", action: .route(method: "POST", path: "kuvo/sandbox/check"))])
+        let failedTwice = try #require(row(.status(.init(on: false, reason: "checkFailed", route: "POST kuvo/sandbox/check", check: "tempFiles", failures: 2)), true, nil))
+        #expect(failedTwice.text.contains("failed again: a command couldn’t write its temporary files"))
+        #expect(failedTwice.buttons.map(\.label) == ["Try Again", "Report a Problem…"], "Report a Problem joins once it fails again")
+
+        #expect(row(status("plugin", "POST kuvo/sandbox/check"), true, nil)?.buttons == [.init(label: "Fix It", action: .route(method: "POST", path: "kuvo/sandbox/check"))])
+        for reason in ["engineDown", "waiting"] {
+            #expect(row(status(reason, "POST kuvo/engine/restart"), true, nil)?.buttons == [.init(label: "Restart Engine", action: .route(method: "POST", path: "kuvo/engine/restart"))])
+        }
+        #expect(row(status("checking", "POST kuvo/sandbox/check"), false, nil)?.checking == true)
+
+        // A box from before the sandbox: the machine is updated from Machines; this Mac, as an app.
+        #expect(row(.old, false, nil)?.buttons == [.init(label: "Update lokum…", action: .updateMachine)])
+        #expect(row(.old, true, nil)?.buttons == [.init(label: "Check for Updates…", action: .checkForUpdates)])
+
+        // A bot on a coding agent: the sandbox doesn't cover its commands, whatever the box says.
+        let agents = try #require(row(.status(.init(on: true, agents: false)), true, "Claude Code"))
+        #expect(agents.title == "Pixel can’t work on its own yet")
+        #expect(agents.text.contains("runs on Claude Code"))
+        #expect(agents.buttons == [.init(label: "Use the Engine…", action: .editBot)])
     }
 }
