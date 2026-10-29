@@ -333,6 +333,21 @@ import Testing
         #expect(app.chats.messages(in: "grp_box0000001").map(\.text) == ["Morning."])
     }
 
+    /// One machine at two addresses, the name kept with a chat talking when last seen, not
+    /// connected now: nothing shows talking there, so its settings aren't held back for it.
+    @Test func aMachineAtTwoAddressesKeptAwayShowsNothingTalking() throws {
+        defer { Self.clean(); mac.stop() }
+        let app = app()
+        let group = Self.group("grp_box0000001", members: ["bot_pal"])
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+                                                                                 "state": ["discussing": false, "paused": false]]), machine: "box-old")
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+                                                                                 "state": ["speaking": "bot_pal", "discussing": true, "paused": false]]), machine: "box")
+        app.boxGroups.fold("box-old", into: "box")
+        #expect(!app.boxGroups.isTalking(on: "box"))
+        #expect(app.chats.speaking["grp_box0000001"] == nil)
+    }
+
     /// This Mac's bridge starting, then stopped: its chats show as last seen, and what you write
     /// waits in the composer; once it's up, it goes.
     @Test func thisMacsChatsWaitForItsBridge() async throws {

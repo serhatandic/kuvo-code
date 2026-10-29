@@ -407,6 +407,9 @@ final class BoxGroups {
         chats.removeAll { $0.machine == address && there.contains($0.group.id) }
         for index in chats.indices where chats[index].machine == address { chats[index].machine = machine }
         running.remove(address)
+        // Not connected under the name kept: as last seen, nothing talking (a copy kept from before
+        // could say so), until it's read again.
+        if !running.contains(machine) { disconnected(machine) }
         save()
     }
 
