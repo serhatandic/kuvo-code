@@ -917,7 +917,11 @@ final class SessionModel {
         if delivery == .steer { isQueuePaused = false }
         outgoing[id] = Outgoing(state: .sending, isOurs: true, startsRun: delivery == .steer && !isBusy)
         // To wait for Resume (put back after a Stop): the box holds it once it's there.
-        if holds { outgoing[id]?.heldAt = (outgoing.values.compactMap(\.heldAt).min() ?? 0) - 1 }
+        if holds {
+            // (Read before the write: `outgoing` can't be read while it's being written.)
+            let first = outgoing.values.compactMap(\.heldAt).min() ?? 0
+            outgoing[id]?.heldAt = first - 1
+        }
         editTranscript { $0.addLocal(id: id, text: text, delivery: delivery, files: files) }
         let previous = sending
         sending = Task {
@@ -1905,6 +1909,9 @@ final class SessionModel {
         guard canReach else { return }
         isQueuePaused = false
         Task {
+            // A message held as it went (put back after a Stop) held by the box first: its hold
+            // after the Resume would pause the queue again.
+            if outgoing.values.contains(where: { $0.heldAt != nil }) { await sending?.value }
             guard await !queueRoute("queue/resume") else { return }
             isQueuePaused = true
             failure = "The queue couldn't be resumed: its computer didn't answer. Try again in a moment."
