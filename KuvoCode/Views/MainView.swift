@@ -1399,12 +1399,10 @@ struct WelcomeView: View {
         places[pane] = Weak(view: view)
     }
 
-    /// Whether the keyboard is in `pane`'s card: what has it shows inside it.
+    /// Whether the keyboard is in `pane`'s card.
     func isIn(_ pane: WindowTabs.Pane) -> Bool {
-        guard let place = places[pane]?.view, let window = place.window,
-              let view = window.firstResponder as? NSView, view.window === window else { return false }
-        let shown = view.convert(view.visibleRect, to: nil)
-        return !shown.isEmpty && place.convert(place.bounds, to: nil).insetBy(dx: -1, dy: -1).contains(shown)
+        guard let place = places[pane]?.view, let view = place.window?.firstResponder as? NSView else { return false }
+        return view.isInCard(place)
     }
 
     /// Whether nothing in the window has the keyboard.

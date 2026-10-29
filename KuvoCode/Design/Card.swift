@@ -346,12 +346,9 @@ private struct CardClicks: NSViewRepresentable {
             keyboard = nil
         }
 
-        /// Whether the keyboard is in this card: what has it shows inside the card (a view as big as
-        /// the window, as SwiftUI's own can be, is in none of them).
+        /// Whether the keyboard is in this card.
         private func holds(_ view: NSView) -> Bool {
-            guard isOn, let window, view.window === window else { return false }
-            let shown = view.convert(view.visibleRect, to: nil)
-            return !shown.isEmpty && convert(bounds, to: nil).insetBy(dx: -1, dy: -1).contains(shown)
+            isOn && view.isInCard(self)
         }
 
         /// Close, minimize and zoom, which sit over the sidebar while the tab bar is hidden.
@@ -361,6 +358,20 @@ private struct CardClicks: NSViewRepresentable {
                 return button.frame.contains(superview.convert(point, from: nil))
             }
         }
+    }
+}
+
+extension NSView {
+    /// Whether this view is in `card`'s: what shows of it is inside the card, or, while none of it
+    /// shows (a panel still sliding in from past the window's edge), all of it is. A view as big as
+    /// the window, as SwiftUI's own can be, is in none of them.
+    func isInCard(_ card: NSView) -> Bool {
+        guard let window, card.window === window else { return false }
+        let frame = card.convert(card.bounds, to: nil).insetBy(dx: -1, dy: -1)
+        let shown = convert(visibleRect, to: nil)
+        if !shown.isEmpty { return frame.contains(shown) }
+        let whole = convert(bounds, to: nil)
+        return !whole.isEmpty && frame.contains(whole)
     }
 }
 
