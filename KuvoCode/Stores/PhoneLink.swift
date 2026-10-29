@@ -566,6 +566,10 @@ final class PhoneLink {
                 """), input: settings)
             struct Answer: Decodable { var address: String?; var key: String?; var peers: Bool?; var sign: String?; var docs: [Documents.Envelope]? }
             let answer = try? JSONDecoder().decode(Answer.self, from: Data(output.utf8))
+            // Removed or uninstalled meanwhile (or merged into another): not named to your phones
+            // and other computers again.
+            if engine.isRetired { return }
+            if let machines = bots?.app?.machines, machines.engine(machine.id) !== engine { return }
             let before = machineHosts[machine.id]
             if let address = answer?.address, let key = answer?.key {
                 machineHosts[machine.id] = MachineHost(name: machine.name, address: address, key: key, anotherMac: engine.isAnotherMacsEngine, peers: answer?.peers,
@@ -960,7 +964,7 @@ final class PhoneLink {
     static let features = [
         "accounts.credentials", "accounts.found", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply", "engine.restart",
         "file", "folders", "git", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog",
-        "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
+        "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.parts", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
         "personalities.events", "skills.trash", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
         "agent-tools", "sessions.start", "letters-read", "queue",
         // The Mac's own.

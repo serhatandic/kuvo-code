@@ -288,8 +288,9 @@ nonisolated enum Git {
         }
         let limit = relativePath(of: directory, in: root)
         // Its own prefixes, whatever the git settings (diff.noprefix, diff.mnemonicPrefix): the
-        // paths are read after them.
-        var arguments = ["-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"]
+        // paths are read after them. The file's own lines: an unchanged blank line written as " "
+        // (diff.suppressBlankEmpty), none through a converter (textconv); each line is counted.
+        var arguments = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"]
         switch scope {
         // The session's edits come from the engine, not git; read like Uncommitted here.
         case .uncommitted, .branch, .session: arguments.append(base)

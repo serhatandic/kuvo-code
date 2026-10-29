@@ -42,15 +42,23 @@ public enum ShellEnvironment {
         // Keeps interactive shells from asking about things like oh-my-zsh updates.
         var environment = ProcessInfo.processInfo.environment
         environment["DISABLE_AUTO_UPDATE"] = "true"
-        guard let result = try? await ChildProcess.run(shell, [flags, "/usr/bin/env -0"], environment: environment,
+        // What the profile says as it starts (a greeting) comes before the marker, not in the first setting.
+        guard let result = try? await ChildProcess.run(shell, [flags, "printf '%s\\0' \(marker); /usr/bin/env -0"], environment: environment,
                                                        errors: .discard, limit: timeout),
               result.succeeded else { return nil }
         return parse(result.output)
     }
 
+    static let marker = "__KUVO_ENVIRONMENT__"
+
+    /// `env -0`'s settings, after the marker when there is one.
     static func parse(_ data: Data) -> [String: String] {
         var result: [String: String] = [:]
-        for entry in data.split(separator: 0) {
+        var entries = data.split(separator: 0)
+        if let at = entries.firstIndex(where: { $0.suffix(marker.utf8.count).elementsEqual(marker.utf8) }) {
+            entries = Array(entries[(at + 1)...])
+        }
+        for entry in entries {
             guard let line = String(data: entry, encoding: .utf8), let equals = line.firstIndex(of: "=") else { continue }
             result[String(line[..<equals])] = String(line[line.index(after: equals)...])
         }

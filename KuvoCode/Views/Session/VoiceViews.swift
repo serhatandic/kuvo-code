@@ -27,7 +27,8 @@ struct VoiceComposerRow: View {
         HStack(spacing: 10) {
             switch voice.phase {
             case .preparing(let progress):
-                // Downloading the speech model, when it says how far; asking for the microphone, not.
+                // Downloading Apple's speech model for your language, when it says how far;
+                // asking for the microphone, or loading Whisper, not.
                 if let progress {
                     Text("Getting voice ready…")
                         .foregroundStyle(.secondary)
@@ -66,7 +67,6 @@ struct VoiceComposerRow: View {
                 VoiceTrace(levels: voice.recentLevels)
                     .frame(height: 22)
                     .frame(maxWidth: .infinity)
-                SpeechModelNote(voice: voice)
             }
             Button(action: cancel) {
                 HStack(spacing: 5) {
@@ -79,7 +79,7 @@ struct VoiceComposerRow: View {
             // Escape anywhere in the window (the composer's field handles it first).
             .keyboardShortcut(.cancelAction)
             .help("Stop listening, without keeping what you said (Escape)")
-            if voice.phase == .listening || voice.phase == .finishing {
+            if voice.phase == .listening || voice.phase == .finishing || voice.keepsWords {
                 Button(action: done) {
                     HStack(spacing: 5) {
                         Text("Done")
@@ -96,6 +96,7 @@ struct VoiceComposerRow: View {
         .controlSize(.regular)
         .frame(minHeight: 32)
     }
+
 }
 
 /// The voice field ("Voice Field"): the whole window steps back while you speak. How long it's
@@ -122,10 +123,16 @@ struct VoiceField: View {
             Spacer(minLength: 24)
             Group {
                 if case .failed(let failure) = voice.phase {
-                    Text(failure.message)
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
+                    VStack(spacing: 16) {
+                        // What was written before it stopped, for Done to take.
+                        if voice.keepsWords {
+                            VoiceWords(transcript: voice.transcript, font: .system(size: 30, weight: .medium), alignment: .center)
+                        }
+                        Text(failure.message)
+                            .font(voice.keepsWords ? .body : .title3)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
                 } else {
                     VoiceWords(transcript: voice.transcript, font: .system(size: 30, weight: .medium), placeholder: "Say what you’d like to ask", alignment: .center)
                 }
@@ -135,11 +142,7 @@ struct VoiceField: View {
             Spacer(minLength: 24)
             VoiceWave(level: voice.level)
                 .frame(height: 56)
-                .padding(.bottom, 16)
-            // Whisper on its way, or listening the first time; the same room either way.
-            SpeechModelNote(voice: voice)
-                .frame(height: 16)
-                .padding(.bottom, 12)
+                .padding(.bottom, 44)
             HStack(spacing: 14) {
                 Button(action: cancel) {
                     HStack(spacing: 6) {
@@ -151,7 +154,7 @@ struct VoiceField: View {
                 .buttonBorderShape(.capsule)
                 .keyboardShortcut(.cancelAction)
                 .help("Stop listening, without keeping what you said (Escape)")
-                if case .failed(let failure) = voice.phase {
+                if case .failed(let failure) = voice.phase, failure.opensSettings || voice.transcript.isEmpty {
                     if failure.opensSettings {
                         Button("Open Settings", action: openSettings)
                             .buttonStyle(.borderedProminent)
@@ -167,7 +170,8 @@ struct VoiceField: View {
                     .buttonStyle(.borderedProminent)
                     .buttonBorderShape(.capsule)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(voice.phase != .listening)
+                    // Stopped by a failure, it still takes what was written.
+                    .disabled(voice.phase != .listening && !voice.keepsWords)
                     .help("Put what you said in the message (Return)")
                 }
             }

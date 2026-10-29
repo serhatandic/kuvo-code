@@ -191,13 +191,13 @@ test("read_conversation reads another's conversation as the export words it, or 
 test("start_session starts one where its conversation works, on its model and approval, marked as started by it", async () => {
   const said = await tool("start_session", { task: "Review the docs.", title: "Review docs" }, "ses_helper");
   assert.equal(said.isError, false, said.text);
-  assert.equal(said.text, "Started \"Review docs\" in api, beside this conversation (address ses_new1). It's on it now. Write to it with send_message; it can write back to you the same way.");
+  assert.equal(said.text, "Started \"Review docs\" in api (address ses_new1). It's on it now. Write to it with send_message; it can write back to you the same way.");
   assert.equal(made.length, 1);
   assert.deepEqual(made[0].location, { directory: project });
   assert.equal(made[0].title, "Review docs");
   assert.deepEqual(made[0].model, { providerID: "openai", id: "gpt-5" });
   assert.ok(made[0].permissions.some(rule => rule.action === "shell" && rule.effect === "ask"), "it asks first, as its conversation does");
-  assert.deepEqual(marked.get("ses_new1"), { kuvo: { startedBy: "ses_lead", beside: true } });
+  assert.deepEqual(marked.get("ses_new1"), { kuvo: { startedBy: "ses_lead" } });
   assert.equal(prompts[0].to, "ses_new1");
   assert.equal(prompts[0].text, "[Message from Lead · ses_lead] (To answer, use send_message to ses_lead.)\n\nReview the docs.");
 });
@@ -216,7 +216,7 @@ test("a session started from a conversation in Plan mode plans too; one from a c
 
 test("a bot starts its sessions in the chats, and six in ten minutes at most", async () => {
   const first = await tool("start_session", { task: "Look into the flaky test." }, "ses_scout");
-  assert.match(first.text, /^Started a new session, beside this conversation \(address ses_new1\)/);
+  assert.match(first.text, /^Started a new session \(address ses_new1\)/);
   assert.equal(made[0].location.directory, path.join(home, "chats"));
   for (let count = 1; count < 6; count++) assert.equal((await tool("start_session", { task: `Task ${count}` }, "ses_scout")).isError, false);
   const refused = await tool("start_session", { task: "One more." }, "ses_scout");
@@ -235,13 +235,13 @@ test("a group chat's seat neither writes to agents nor starts sessions", async (
 test("a client starts a session with a task, as the user's own first message", async () => {
   const started = await route("POST", "kuvo/sessions", { task: "Fix the login bug.", folder: other, title: "Login bug" });
   assert.equal(started.status, 200);
-  assert.deepEqual(started.body, { session: "ses_new1", title: "Login bug", folder: other, project: "web", beside: true });
+  assert.deepEqual(started.body, { session: "ses_new1", title: "Login bug", folder: other, project: "web" });
   assert.equal(prompts[0].text, "Fix the login bug.");
   assert.equal(marked.has("ses_new1"), false, "started by no conversation");
 
-  const byAgent = await route("POST", "kuvo/sessions", { task: "Check the deploy.", startedBy: "ses_helper", beside: false });
+  const byAgent = await route("POST", "kuvo/sessions", { task: "Check the deploy.", startedBy: "ses_helper" });
   assert.equal(byAgent.status, 200);
-  assert.deepEqual(marked.get(byAgent.body.session), { kuvo: { startedBy: "ses_lead", beside: false } });
+  assert.deepEqual(marked.get(byAgent.body.session), { kuvo: { startedBy: "ses_lead" } });
 
   assert.deepEqual(await route("POST", "kuvo/sessions", { folder: other }), { status: 400, body: { message: "Say what it's to do (task)." } });
   assert.deepEqual(await route("POST", "kuvo/sessions", { task: "Hi.", folder: path.join(home, "nowhere") }),

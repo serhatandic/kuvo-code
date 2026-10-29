@@ -393,14 +393,15 @@ its own, which a `SIGTERM` stops waiting.
   - An agent here gets the message straight from the box; one on another computer by a letter
     ("Peers"). Without a conversation to answer, or off the relay, a letter isn't waited for.
     `read_conversation` reads one here, or asks a peer with `letters-read` for it by letter.
-- **`POST kuvo/sessions`** `{task, title?, folder?, startedBy?, beside? = true, wait? = false}` →
-  `{session, title, folder, project, beside, answer?}` (`project` null for a chat; `answer` with
+- **`POST kuvo/sessions`** `{task, title?, folder?, startedBy?, wait? = false}` →
+  `{session, title, folder, project, answer?}` (`project` null for a chat; `answer` with
   `wait`, its first answer in ten minutes, else null). `start_session` is this route, from the
   calling conversation.
   - From a conversation (`startedBy`, its root found as above): in its folder unless `folder` names
     another (a bot's own folder is its chats), on its model and in its mode (Plan stays Plan), on the engine or coding agents' bridge
     it runs on, with its approval made again with this box's Settings › Permissions (Ask First isn't
-    got around), its metadata `kuvo: {startedBy, beside}`, and the task as a message from it.
+    got around), its metadata `kuvo: {startedBy}` (it opens nothing by itself: clients list it under that
+    conversation), and the task as a message from it.
   - From a client (no `startedBy`): in `folder`, approved as Approve All with Settings ›
     Permissions, the task as the user's own first message.
   - Either way its project's other folders are allowed to it and named in its instructions, one in
@@ -1265,6 +1266,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   (a shared bot's, from File › Import Bot…) makes it wait the same way, with that job as
   `firstMessage`; otherwise it's null and the bot writes first. A machine's box ignores
   `machine`; a Mac's answers 400 for one (a bot for a machine is made on that machine's box).
+  `request` (8 to 64 of `A-Za-z0-9_-`, the client's own id for this New Bot, kept as it sends it
+  again) makes a repeat safe: once a bot's being made for it, the same `request` gets the same
+  answer for an hour (a client whose connection dropped before the answer came tries again with
+  it); one that wasn't made is tried again. Since a bot is made whole once it's started, whatever
+  becomes of the request, a client that sends none can make it twice.
   Errors are `{"message"}`: 400 for a missing name or an unknown template, personality or
   project; 409 while its box has no kit yet (below); 422 for a model that can't run there (its
   account isn't signed in there); 503 when it couldn't be made.
@@ -1495,10 +1501,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 A conversation's goal ("/goal all tests in test/auth pass"): its agent works toward it on its own,
 turn after turn, until a check after each turn finds it met. Each box runs its own, in its agents
 bridge beside the engine, for the engine's sessions and the coding agents' alike, with no client
-there (a machine's with the Mac closed too). The check reads the conversation and the names of the
-files in its folder (what exists, so a plan isn't taken for proof), and runs nothing; a turn that
-ends waiting on you (a permission or a question of its open, or one the check finds asking you) isn't
-judged or nudged, and the turn after your answer is: on
+there (a machine's with the Mac closed too). The check reads the conversation and runs nothing: on
 the engine, the session's model afresh, apart from the agent (OpenCode's free models answer only in
 the session's own context, so there it's asked there); with the coding agents, their one-off
 answer, another agent you're signed in to answering for one that has none (Antigravity, Cursor,
@@ -1584,7 +1587,8 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   off to isn't carried over, and it starts unpinned and not archived; if the mark can't be written,
   it's answered without it). Show a conversation marked `kuvo.branchedFrom` or `kuvo.handoffFrom`,
   or `kuvo.startedBy` (one an agent started with its start_session tool, on a Mac or a machine;
-  `kuvo.beside` says where it first opens, and neither is carried over to a branch either),
+  it opens nowhere by itself, and the mark isn't carried over to a branch either; older ones also
+  carry `kuvo.beside`, which nothing reads),
   under that one when it's in the same list, newest first, and rank it in a list of the latest by
   its newest branch; a subagent's session (one with a `parentID`) is never shown so: it shows in
   the conversation it works for. A box from before branches answers `404` "Not available for this
@@ -1608,7 +1612,14 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   - `{"kind": "folder", "path"}` and `{"kind": "project"}`: the files themselves, of a folder in
     the project (a path inside it, never `..` or absolute: `400`) or all of it, numbered line by
     line: those git keeps or would (all but hidden ones and `node_modules` out of a repository),
-    but for links, lock files, `.env` files, big files and ones that aren't text.
+    but for links, lock files, `.env` files, big files and ones that aren't text;
+  - `{"kind": "described", "words"}` (bridge 0.9.101, when `choices` says `describes`): the files
+    `words` describe ("the auth module and its tests", "the files I changed today"), which the
+    conversation's model picks from the project's files, told what git says was worked on lately
+    and today's date; then read as a folder's are. A client sends only `words` (500 characters at
+    most); the box finds the files, keeps them for half an hour for the same conversation and
+    words (so a review asked for after `measure` reads the same ones), and a review's `scope` has
+    them as `paths` once found. Words that fit no file are `422` with what to do.
 
   One too big to read at once is read in parts, one after another (at most 30; more is left out,
   and its summary says how many files), each by a fresh model.
@@ -1624,16 +1635,38 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
     locations: [{file, line?, endLine?}]}`: what's wrong in a line, why and how to fix it (`""`
     when the title says it all), and every place it's in, none when it's about the change as a
     whole (a missing test). `fix` is what to send the agent, as your message, to fix them all.
+    `parts` (`reviews.parts`, bridge 0.9.102) are what it reads, each part by a reviewer of its
+    own: `[{n, of, files, state: "waiting" | "reading" | "done" | "failed" | "stopped", found,
+    session?, now?}]`, `files` the part's first 200, `found` what it found. On the engine each
+    part reads in a session of its own, `session`: under the conversation (`parentID`), marked
+    `kuvo.reviewPart: {review, part, of}` and kept out of lists like the box's other runs, its
+    agent `plan` with rules that let it read the project and nothing more. Its folder is the box's
+    own (`reviewers` beside its reviews, a git repository with one empty commit), reading the
+    project from outside it, so no "Always allow" saved for the project reaches it (a box that
+    can't make that folder so, without git, fails the part, saying why, rather than read it
+    elsewhere); `kuvo.messages` says it takes none. A client opens it as it
+    opens a subagent's, to watch it read and to look at it after; it goes when the review is put
+    away or another takes its place. `now` is what it's doing as it reads ("Reading src/a.ts",
+    "Looking for “token”", "Thinking", "Writing what it found"), told as it changes (not kept),
+    gone once it's done. Stop stops the part reading (`stopped`); those after it stay `waiting`.
+    A review's only part stopped from its own session ends the review as its Stop does. Parts'
+    sessions no kept review records (made as the box stopped) are deleted once the box's engine
+    is there again, and one left reading is stopped.
+    With the coding agents a part has no `session`. A box from before `parts` leaves it out.
   - `POST …/kuvo/reviews/<session>/measure` with `{"scope"?}` → `{data: {files, parts, leftOut,
-    commits?}}`: how much a review of it would read, to show before asking for a big one
-    (`commits` for a branch or a range of them); `422` with what's wrong when it can't be read
-    (not a repository, no such commit or folder).
+    commits?, found?}}`: how much a review of it would read, to show before asking for a big one
+    (`commits` for a branch or a range of them, `found` the first 10 files found for described
+    words that it reads); `422` with what's wrong when it can't be read (not a repository, no such
+    commit or folder, words that fit no file, or only files it can't read), `503` when the model
+    couldn't be asked. Described words still being found are waited for, not asked again, by a
+    review or another `measure` meanwhile.
   - `GET …/kuvo/reviews/<session>/choices` → `{data: {repository, branch?: {name, base, commits},
-    commits: [{id, short, title, time}], folders: [{path, files}]}}`: what "What to review"
+    commits: [{id, short, title, time}], folders: [{path, files}], describes?: true}}`: what "What to review"
     offers in the conversation's folder: the branch it's on with its base and how many commits
     of its own (left out on the base itself), its 30 latest commits (`time` in ms), and its
     folders by path, with how many files each has at any depth (500 at most, shallowest first).
-    Out of a repository, `repository` is `false` and only the folders come.
+    Out of a repository, `repository` is `false` and only the folders come. `describes` says it
+    reads what you describe (`described`; a box from before leaves it out).
   - `POST …/kuvo/reviews/<session>/stop` → `{data: review}`: one under way ends where it is,
     `done`, keeping what it found so far (its summary says how far it got); `409` once it's over.
   - `POST …/kuvo/reviews/<session>/fix` with `{"findings"?: [id]}` → `{data: {text}}`: what to send
@@ -1692,6 +1725,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
 | `reviews` | `kuvo/agents/api/kuvo/reviews…`: reviews with fresh eyes |
 | `reviews.scopes` | a review's `scope`, `measure`, `choices` and `stop` (bridge 0.9.97); without it a box reads the changes not committed yet whatever the scope |
+| `reviews.parts` | a review's `parts`, each on the engine read in a `session` a client can open (bridge 0.9.102) |
 | `groups` | `kuvo/groups`, `…/events`, one chat's events, and writing, stopping, keep going, viewed, undo and start |
 | `groups.make` | `POST kuvo/groups` |
 | `groups.edit` | `PATCH kuvo/groups/<id>` |

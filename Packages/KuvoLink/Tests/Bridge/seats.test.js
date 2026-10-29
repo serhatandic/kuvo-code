@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
@@ -259,4 +260,83 @@ test("a bridge that turns down hearing it was given up (an older one, or group c
   }
   assert.deepEqual(asked, ["/gaveup"]);
   assert.equal(fs.existsSync(path.join(sending, "sm_huge0002.json")), false);
+});
+
+test("what the bridge sends as it goes (its group chats' mail, followed) keeps coming past the time the bridge has to answer", async () => {
+  fresh();
+  let following;
+  const server = http.createServer((request, response) => {
+    response.writeHead(200, { "content-type": "application/x-ndjson" });
+    response.write('{"n":1}\n');
+    following = response;
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  fs.writeFileSync(path.join(run, "bridge.json"), JSON.stringify({ port: server.address().port, password: "bridge-pw" }));
+  const deadline = new AbortController();
+  const answerIn = link.bridgeClock.answerIn;
+  link.bridgeClock.answerIn = () => deadline.signal;
+  try {
+    const answer = await link.bridgeAsk("GET", "/mail");
+    const reader = answer.body.getReader();
+    const decoder = new TextDecoder();
+    let text = decoder.decode((await reader.read()).value, { stream: true });
+    // The time it had to answer is up, and it sends more.
+    deadline.abort(new DOMException("The operation timed out.", "TimeoutError"));
+    following.end('{"n":2}\n');
+    for (let part = await reader.read(); !part.done; part = await reader.read()) text += decoder.decode(part.value, { stream: true });
+    assert.equal(text, '{"n":1}\n{"n":2}\n');
+  } finally {
+    link.bridgeClock.answerIn = answerIn;
+    server.close();
+  }
+});
+
+test("a bridge that answered and then says nothing for a minute is followed anew: what it sends then still goes, and it's told again who your computers are", async () => {
+  fresh();
+  const waiting = [];
+  const poke = () => { for (const resolve of waiting.splice(0)) resolve(); };
+  const until = async check => { while (!check()) await new Promise(resolve => waiting.push(resolve)); };
+  const follows = [], told = [], sent = [];
+  const server = http.createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      if (request.method === "GET" && request.url === "/api/kuvo/peers/mail") {
+        response.writeHead(200, { "content-type": "application/x-ndjson" });
+        response.flushHeaders();
+        follows.push(response);
+        // The first time it answers and then says nothing; the second, it sends.
+        if (follows.length === 2) response.write(JSON.stringify({ id: "sm_stop0001", to: second.pub, mail: { kind: "stop", id: "trn_1" }, durable: false }) + "\n");
+      } else {
+        if (request.method === "PUT") told.push(request.url);
+        response.writeHead(200, { "content-type": "application/json" }).end("{}");
+      }
+      poke();
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  fs.writeFileSync(path.join(run, "bridge.json"), JSON.stringify({ port: server.address().port, password: "bridge-pw" }));
+  const timers = [];
+  const after = link.bridgeClock.after;
+  link.bridgeClock.after = (ms, work) => {
+    const timer = { ms, work, live: true };
+    timers.push(timer);
+    poke();
+    return () => { timer.live = false; };
+  };
+  const stop = new AbortController();
+  try {
+    link.watchSeats(() => ({ send: bytes => { sent.push(bytes); poke(); } }), stop.signal);
+    await until(() => follows.length === 1 && told.length === 1);
+    const quiet = timers.findLast(timer => timer.live);
+    assert.ok(quiet, "it keeps an eye on how long the bridge has said nothing");
+    assert.equal(quiet.ms, 60_000);
+    // A minute without a word.
+    quiet.work();
+    await until(() => follows.length === 2 && sent.length === 1 && told.length === 2);
+  } finally {
+    stop.abort();
+    link.bridgeClock.after = after;
+    server.closeAllConnections();
+    server.close();
+  }
 });

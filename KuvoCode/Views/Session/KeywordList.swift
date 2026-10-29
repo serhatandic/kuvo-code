@@ -243,8 +243,8 @@ struct ReviewerList: View {
     }
 }
 
-/// "/review "'s lists, as "/loop "'s "How often": what it reads, a commit or a folder for it, and
-/// what it looks for. "1 of 2" and "2 of 2" say there are two to answer.
+/// "/review "'s lists, as "/loop "'s "How often": what it reads, a commit or a folder for it (or
+/// your own words), and what it looks for.
 struct ReviewChoiceList: View {
     let list: ReviewList
     let selected: Int
@@ -252,21 +252,12 @@ struct ReviewChoiceList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            HStack {
-                Text(list.title)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .accessibilityAddTraits(.isHeader)
-                Spacer(minLength: 8)
-                if let step = list.step {
-                    Text(step)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                        .accessibilityLabel("Step \(step)")
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 2)
+            Text(list.title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 2)
+                .accessibilityAddTraits(.isHeader)
             ForEach(Array(list.rows.enumerated()), id: \.element.id) { index, row in
                 Button { choose(row) } label: { label(row) }
                     .buttonStyle(ListRowButtonStyle(isSelected: index == selected))
@@ -416,18 +407,15 @@ struct CustomLoopRow: View {
     }
 }
 
-/// Under the message field while a keyword is typed: what will happen, in a line.
-struct KeywordHint: View {
+/// Under the message field while a keyword is typed: why what's typed can't be done as it is (a
+/// /loop whose "how often" can't be read), in a line.
+struct KeywordProblem: View {
     let text: String
-    /// What's typed can't be done as it is (a /loop whose "how often" can't be read).
-    var isProblem = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
-            if isProblem {
-                Image(systemName: "exclamationmark.circle")
-                    .accessibilityHidden(true)
-            }
+            Image(systemName: "exclamationmark.circle")
+                .accessibilityHidden(true)
             Text(text)
                 .fixedSize(horizontal: false, vertical: true)
         }

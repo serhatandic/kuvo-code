@@ -43,6 +43,37 @@ import Testing
         #expect(workspace.session(child) == nil && workspace.session(grandchild) == nil)
     }
 
+    /// A review's part's tab, opened again as Kuvo Code opens after its review was put away,
+    /// says the part is gone, not that a subagent is missing.
+    @Test func aReviewsPartOpenedIsKnownAfterRelaunch() {
+        defer { engine.stop() }
+        workspace.rememberReviewPart("ses_part_kept", of: parent)
+        let relaunched = Workspace()
+        #expect(relaunched.isReviewPart("ses_part_kept"))
+        #expect(relaunched.parent(of: "ses_part_kept") == parent)
+        #expect(!relaunched.isReviewPart(child))
+    }
+
+    /// A review's part reads in a session under the conversation: its review shows it, so the
+    /// conversation's row never says a subagent is at work for it, and it isn't working for it.
+    @Test func aReviewsPartAtWorkIsntASubagent() async throws {
+        defer { engine.stop() }
+        let part = "ses_part"
+        engine.on("GET", "/api/session/\(part)", json: ["data": StubEngine.session(part, title: "Review · part 1 of 2", directory: "/tmp/kuvo-tests-subagents",
+                                                                                    extra: ["parentID": parent, "metadata": ["kuvo": ["reviewPart": ["review": "rev_1", "part": 1, "of": 2]]]])])
+        engine.list([StubEngine.session(parent, title: "Lead", directory: "/tmp/kuvo-tests-subagents")], running: [part, child])
+        await workspace.refresh()
+        try await until { workspace.helpersAtWork(in: parent) == 1 }
+        // Only its real subagent counts, once both are read.
+        try await until { workspace.parent(of: part) == parent }
+        #expect(workspace.helpersAtWork(in: parent) == 1)
+        engine.list([StubEngine.session(parent, title: "Lead", directory: "/tmp/kuvo-tests-subagents")], running: [part])
+        await workspace.refresh()
+        try await until { workspace.parent(of: part) == parent }
+        #expect(workspace.helpersAtWork(in: parent) == 0)
+        #expect(!workspace.isWorking(parent))
+    }
+
     /// Two of a session's subagents ask you something at once: one session waits for you, on the
     /// Dock too.
     @Test func itsSubagentsAsksAreItsOwn() async throws {

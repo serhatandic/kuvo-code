@@ -8,12 +8,28 @@ import Testing
 /// down, and its box is told each; a read elsewhere is taken when it's later; seats and the
 /// engine's runs for coding agents are kept out of sight.
 struct SessionRulesTests {
-    private func session(_ id: String, idle: Double? = nil, viewed: Double? = nil, created: Double = 1, updated: Double = 2, metadata: String = "null") throws -> Session {
+    private func session(_ id: String, title: String? = nil, idle: Double? = nil, viewed: Double? = nil, created: Double = 1, updated: Double = 2, metadata: String = "null") throws -> Session {
         var time = #""created": \#(created), "updated": \#(updated)"#
         if let idle { time += #", "idle": \#(idle)"# }
         if let viewed { time += #", "viewed": \#(viewed)"# }
-        let json = #"{"id": "\#(id)", "projectID": "p", "title": "\#(id)", "cost": 0, "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}}, "time": {\#(time)}, "location": {"directory": "/p"}, "metadata": \#(metadata)}"#
+        let json = #"{"id": "\#(id)", "projectID": "p", "title": "\#(title ?? id)", "cost": 0, "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}}, "time": {\#(time)}, "location": {"directory": "/p"}, "metadata": \#(metadata)}"#
         return try JSONDecoder().decode(Session.self, from: Data(json.utf8))
+    }
+
+    /// Sub-sessions that come back round (one listed under itself, or under its own sub-session,
+    /// as a box can say of a coding agent's run): the row and reading it still finish, once each.
+    @Test func subSessionsInALoopAreReadOnce() throws {
+        var sessions = [try session("ses_timer", idle: 5, viewed: 5)]
+        var subs: [String: [Session]] = [
+            "ses_timer": [try session("ses_find", idle: 3)],
+            "ses_find": [try session("ses_timer", idle: 4), try session("ses_find", idle: 4)],
+        ]
+        #expect(!ReadState.hasNew(under: "ses_timer", in: subs) { _ in 5 })
+        subs["ses_find"]?.append(try session("ses_new", idle: 9))
+        #expect(ReadState.hasNew(under: "ses_timer", in: subs) { _ in 5 })
+        let read = ReadState.read("ses_timer", sessions: &sessions, subSessions: &subs) { _ in nil }
+        #expect(read.map(\.id).filter { $0 == "ses_new" }.count == 1)
+        #expect(!ReadState.hasNew(under: "ses_timer", in: subs) { _ in 5 })
     }
 
     @Test func readingASessionReadsWhatItShowsAllTheWayDown() throws {
@@ -54,6 +70,7 @@ struct SessionRulesTests {
     @Test func seatsAndTheEnginesRunsAreKeptOutOfSight() throws {
         #expect(HiddenSessions.isHidden(try session("ses_seat", metadata: #"{"kuvo": {"seat": "grp_1"}}"#)))
         #expect(HiddenSessions.isHidden(try session("ses_run", metadata: #"{"kuvo": {"engineFor": "ses_x"}}"#)))
+        #expect(HiddenSessions.isHidden(try session("ses_part", metadata: #"{"kuvo": {"reviewPart": {"review": "rev_1", "part": 1, "of": 2}}}"#)))
         #expect(!HiddenSessions.isHidden(try session("ses_bot", metadata: #"{"kuvo": {"bot": "bot_1"}}"#)))
         #expect(!HiddenSessions.isHidden(try session("ses_plain")))
     }
@@ -106,6 +123,25 @@ struct SessionRulesTests {
         let folded = Branches.tree([tests, demo, docs, deeper])
         #expect(Set(Branches.all(under: "ses_demo", in: folded.under).map(\.id)) == ["ses_tests", "ses_docs", "ses_deeper"])
         #expect(Branches.all(under: "ses_tests", in: folded.under).isEmpty)
+    }
+
+    /// While the step that started a session waits for its first answer, its row already opens
+    /// it: the one started since the step began, by the title it gave, or else the first of them.
+    @Test func aStepWaitingOnItsSessionOpensIt() throws {
+        func step(_ title: String?) throws -> Message.ToolCall {
+            let input: JSONValue = title.map { .object(["task": .string("Review"), "title": .string($0), "wait": .bool(true)]) } ?? .object(["task": .string("Review"), "wait": .bool(true)])
+            let time = try JSONDecoder().decode(Message.ToolCall.Time.self, from: Data(#"{"created": 10000, "ran": 10100}"#.utf8))
+            return Message.ToolCall(id: "call", name: "kuvo-browser_start_session", state: .running(input: input, metadata: nil), time: time)
+        }
+        let started = #"{"kuvo": {"startedBy": "ses_lead"}}"#
+        let earlier = try session("ses_earlier", title: "Review docs", created: 4_000, metadata: started)
+        let other = try session("ses_other", title: "Write tests", created: 10_400, metadata: started)
+        let docs = try session("ses_docs", title: "Review docs", created: 10_600, metadata: started)
+        let branch = try session("ses_branch", title: "Review docs", created: 10_500, metadata: #"{"kuvo": {"branchedFrom": "ses_lead"}}"#)
+        let all = [earlier, other, docs, branch]
+        #expect(Branches.started(byWaiting: try step("Review docs"), among: all) == "ses_docs")
+        #expect(Branches.started(byWaiting: try step(nil), among: all) == "ses_other", "untitled: the first started since")
+        #expect(Branches.started(byWaiting: try step("Review docs"), among: [earlier, branch]) == nil, "not there yet")
     }
 
     /// In a list of the latest, a conversation counts as new as its newest branch: one at work

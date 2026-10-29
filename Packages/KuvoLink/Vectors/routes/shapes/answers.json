@@ -2198,6 +2198,9 @@
             "literal": "reviews"
            },
            {
+            "literal": "reviews.parts"
+           },
+           {
             "literal": "reviews.scopes"
            },
            {
@@ -2432,6 +2435,9 @@
            },
            {
             "literal": "reviews"
+           },
+           {
+            "literal": "reviews.parts"
            },
            {
             "literal": "reviews.scopes"
@@ -4439,7 +4445,6 @@
         "null"
        ]
       },
-      "beside": "bool",
       "answer?": {
        "oneOf": [
         "string",

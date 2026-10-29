@@ -42,7 +42,7 @@ export async function* botRoute(context: RouteContext, oneBot: RegExpMatchArray)
   }
   const { status, value } = request.method.toUpperCase() === "PATCH"
     ? await changeBot(id, parsed(request.body) as BotChange | null | undefined, readEngine, bridge, info.name, signal)
-    : await deleteBot(id, readEngine, bridge, signal);
+    : await deleteBot(id, readEngine, bridge);
   return yield* json(status, value);
 }
 

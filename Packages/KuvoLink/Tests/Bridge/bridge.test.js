@@ -379,7 +379,9 @@ test("a Mac's files for a machine take the phone's path: kept on the machine's b
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => { server.closeAllConnections(); server.close(); });
   const target = () => ({ pid: process.pid, port: server.address().port, password: "s3cret", version: "2.0.32" });
-  const handle = link.engineHandler(target, {}, target);
+  // The agents' bridge, as a process the box takes for it on a Mac and on Linux alike.
+  const agents = await runningAs("kuvo-agents", t);
+  const handle = link.engineHandler(target, {}, () => ({ ...target(), pid: agents }));
   const pdf = Buffer.from("%PDF-1.4\nThe secret word is MARMALADE.\n%%EOF\n");
   const files = [{ uri: `data:application/pdf;base64,${pdf.toString("base64")}`, name: "note.pdf" }];
   // As `box route` hands it on: from Kuvo Code on another computer, never a phone. What the Mac
@@ -410,9 +412,9 @@ test("a Mac's files for a machine take the phone's path: kept on the machine's b
   // A session the coding agents run gets them through the agents' bridge, the same way.
   delete prompted["/api/session/ses_mac1/prompt"];
   await ask("kuvo/agents/api/session/ses_mac1/prompt", { id: "msg_2", text: "Read it", files });
-  const agents = prompted["/api/session/ses_mac1/prompt"];
-  assert.equal(agents.files, undefined);
-  assert.ok(agents.text.startsWith("Read it\n\n<attached-files>\nOpen these attached files with your tools if you need them:\n"), agents.text);
+  const throughAgents = prompted["/api/session/ses_mac1/prompt"];
+  assert.equal(throughAgents.files, undefined);
+  assert.ok(throughAgents.text.startsWith("Read it\n\n<attached-files>\nOpen these attached files with your tools if you need them:\n"), throughAgents.text);
 
   // A model that can't be found out: the engine's gets the PDF, as most read them; the coding
   // agents open it from where it's kept.
@@ -1110,6 +1112,38 @@ test("a Mac's phones document, by mail, counts from the Macs that set the machin
   assert.equal(later.removed.some(entry => entry.key === k(others)), false);
   fs.rmSync(path.join(home, "run", "link.json"));
 });
+test("while the box updates (its engine stopped on purpose, its files being swapped), Start and Restart say so and start nothing; while it only checks or downloads, they work", async t => {
+  const bin = path.join(home, "bin");
+  fs.mkdirSync(bin, { recursive: true });
+  fs.mkdirSync(path.join(home, "run", ".updating"), { recursive: true });
+  const said = path.join(home, "run", "box-said");
+  fs.writeFileSync(path.join(bin, "kuvo-start"), `#!/bin/sh\necho "\${1:-box}" >>"${said}"\nexit 0\n`);
+  fs.writeFileSync(path.join(bin, "kuvo-launch"), "#!/bin/sh\n");
+  fs.writeFileSync(path.join(home, "run", "launch.env"), "PATH=/usr/bin\n");
+  // An update run as a process of its own (`box update-now`, from a Mac).
+  fs.writeFileSync(path.join(home, "run", ".updating", "pid"), String(await runningAs("kuvo-link", t)));
+  fs.writeFileSync(path.join(home, "run", "stopped"), "");
+  try {
+    const handle = link.engineHandler(() => { throw new Error("none"); });
+    for (const step of ["installing", "starting"]) {
+      fs.writeFileSync(path.join(home, "run", "update.json"), JSON.stringify({ running: step }));
+      for (const command of ["start", "restart"]) {
+        const answered = await answer(handle, "POST", `kuvo/engine/${command}`);
+        assert.equal(answered.status, 409, `${command} while ${step}`);
+        assert.match(answered.json.message, /updating/);
+      }
+    }
+    await link.toolRun();
+    assert.equal(fs.existsSync(said), false, "nothing started");
+    // Before it stops anything, its engine runs as ever.
+    fs.writeFileSync(path.join(home, "run", "update.json"), JSON.stringify({ running: "downloading" }));
+    assert.equal((await answer(handle, "POST", "kuvo/engine/restart")).status, 202);
+    await link.toolRun();
+    assert.deepEqual(fs.readFileSync(said, "utf8").trim().split("\n"), ["restart"]);
+  } finally {
+    for (const name of ["bin/kuvo-start", "bin/kuvo-launch", "run/launch.env", "run/box-said", "run/stopped", "run/.updating", "run/update.json"]) fs.rmSync(path.join(home, name), { recursive: true, force: true });
+  }
+});
 test("Start goes through the box's tool, for an engine an older Mac stopped, the bridge staying up; there's no Stop; kuvo/info says whether it runs and whether it's stopped, and names its chats folder", async () => {
   const bin = path.join(home, "bin");
   fs.mkdirSync(bin, { recursive: true });
@@ -1163,7 +1197,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "accounts.credentials": ["GET", "kuvo/accounts/credentials"], "accounts.ended": ["GET", "kuvo/accounts/ended"], "accounts.found": ["GET", "kuvo/accounts/found"], agents: ["GET", "kuvo/agents/api/session"], artifacts: ["GET", "kuvo/artifacts?bot=bot_none"], asks: ["GET", "kuvo/asks"], attention: ["GET", "kuvo/attention"],
     bots: ["GET", "kuvo/bots"], "bots.events": ["GET", "kuvo/bots/events"], "bots.job": ["GET", "kuvo/bots"], "bots.edit": ["DELETE", "kuvo/bots/bot_none"], "bots.keys": ["GET", "kuvo/bots/bot_none/keys"],
     "bots.make": ["GET", "kuvo/bots/templates"], config: ["GET", "kuvo/config"], "config.apply": ["GET", "kuvo/config/apply"], "engine.restart": ["GET", "kuvo/engine/restart"],
-    "engine.start": ["GET", "kuvo/engine/start"], file: ["GET", "kuvo/file"], git: ["POST", "kuvo/git/changes"], goals: ["GET", "kuvo/agents/api/kuvo/goals"], btw: ["GET", "kuvo/agents/api/kuvo/btw"], handoff: ["POST", "kuvo/agents/api/kuvo/handoff/ses_none"], branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"], reviews: ["GET", "kuvo/agents/api/kuvo/reviews"], groups: ["GET", "kuvo/groups"],
+    "engine.start": ["GET", "kuvo/engine/start"], file: ["GET", "kuvo/file"], git: ["POST", "kuvo/git/changes"], goals: ["GET", "kuvo/agents/api/kuvo/goals"], btw: ["GET", "kuvo/agents/api/kuvo/btw"], "btw.threads": ["GET", "kuvo/agents/api/kuvo/btw"], handoff: ["POST", "kuvo/agents/api/kuvo/handoff/ses_none"], branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"], reviews: ["GET", "kuvo/agents/api/kuvo/reviews"], "reviews.scopes": ["GET", "kuvo/agents/api/kuvo/reviews"], "reviews.parts": ["GET", "kuvo/agents/api/kuvo/reviews"], groups: ["GET", "kuvo/groups"],
     "groups.delete": ["DELETE", "kuvo/groups/grp_none"], "groups.edit": ["PATCH", "kuvo/groups/grp_none"], "groups.joinable": ["GET", "kuvo/groups/joinable"], "groups.make": ["POST", "kuvo/groups"],
     // Its turns for chats on other computers, which kuvo/groups/joinable shows from theirs.
     "groups.seats": ["GET", "kuvo/groups/joinable"],

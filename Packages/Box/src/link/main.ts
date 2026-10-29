@@ -136,7 +136,7 @@ export { peerOf, readPeerAgents, takeAgents } from "./peers/directory";
 export { composeLetter } from "./letters/letter";
 export { composeAgents } from "./peers/directory";
 export { nameAgents, namedAgents, namesIn } from "./peers/naming";
-export { carrySeat, seatPayloads, seatPeers, takeSeat, tellSeatPeers, watchSeats } from "./peers/seats";
+export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeSeat, tellSeatPeers, watchSeats } from "./peers/seats";
 export { announce, ownAgents, refreshOwn, writeAgents } from "./peers/agents";
 export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
 export { takeLetter } from "./letters/take";

@@ -120,6 +120,19 @@ test("not a group chat seat's or a coding agent's turn, nor their subagents', no
   assert.deepEqual((await box.search("picked the second")).found, ["ses_here"]);
 });
 
+test("a review's part, read in a session of its own under the conversation, is never found: its review shows it", async t => {
+  const box = await engine(t, { list: [
+    session("ses_reviewed", "Login", 41),
+    session("ses_part", "Review · part 1 of 2", 45, { parentID: "ses_reviewed", metadata: { kuvo: { reviewPart: { review: "rev_1", part: 1, of: 2 } } } }),
+  ] }, {
+    ses_reviewed: conversation("here", "Fix the login", "Done."),
+    ses_part: conversation("part", "You review code with fresh eyes: the login", "The token is written to the log."),
+  });
+  assert.deepEqual((await box.search("token is written")).found, []);
+  assert.deepEqual((await box.search("fresh eyes")).found, []);
+  assert.deepEqual((await box.search("fix the login")).found, ["ses_reviewed"]);
+});
+
 test("a subagent's words find the conversation it works for, as that conversation, once, with the subagent that said them", async t => {
   const box = await engine(t, { list: [
     session("ses_timer", "Timer cycle", 50),

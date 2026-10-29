@@ -17,6 +17,7 @@ import { basename, join, sep } from "node:path"
 import { fromPatch, unified } from "../diff"
 import { isBinary, isText, kindOf, typeOf, type Kind } from "./kinds"
 import { CopyPolicy, freeSpace, privateReasons, type NoCopy } from "./policy"
+import { inScratch } from "./turnfiles"
 
 /** The biggest file a copy is kept of (as `kuvo/file` sends at most). */
 export const copyLimit = 25 * 1024 * 1024
@@ -155,7 +156,14 @@ export class ArtifactStore {
 
   constructor(
     private readonly root: string,
-    private readonly options: { bots?: string; budget?: number; now?: () => Date; disk?: () => { free: number; total: number } } = {},
+    private readonly options: {
+      bots?: string
+      budget?: number
+      now?: () => Date
+      disk?: () => { free: number; total: number }
+      /** Files shown before the record heard it (a kept reply's, read again), and when: marked as it loads. */
+      shown?: { path: string; at: number }[]
+    } = {},
   ) {
     mkdirSync(join(root, "log"), { recursive: true })
     mkdirSync(join(root, "copies"), { recursive: true })
@@ -803,6 +811,30 @@ export class ArtifactStore {
     let versions = 0
     for (const artifact of this.artifacts.values()) versions += artifact.versions.length + 1
     if (lines > 1000 && lines > versions * 2) this.compact(months)
+    // Shown before the record heard it: marked, as it was then, with no version of its own.
+    const marked = new Set<Artifact>()
+    for (const { path, at } of this.options.shown ?? []) {
+      const artifact = this.at(path)
+      const when = stamp(new Date(at))
+      if (!artifact || (artifact.shown && artifact.shown >= when)) continue
+      artifact.shown = when
+      marked.add(artifact)
+    }
+    // A command's scratch in a project's tmp folder, recorded before it was left out (a render to
+    // check its work): not what it made, unless you kept it or it was shown.
+    const dropped = new Set<string>()
+    let any = false
+    for (const artifact of [...this.artifacts.values()]) {
+      const project = artifact.where.project
+      if (!project || artifact.where.bots.length || artifact.pinned || artifact.shown || !inScratch(artifact.path, project)) continue
+      if (!artifact.versions.every((version) => version.via.length && version.via.every((via) => via === "shell"))) continue
+      this.artifacts.delete(artifact.id)
+      any = true
+      for (const version of artifact.versions) if (version.hash?.startsWith("sha256:")) dropped.add(version.hash)
+    }
+    // Written down: a dropped one's lines go with the log written again.
+    if (any) this.compact(months)
+    else for (const artifact of marked) this.write(artifact)
     for (const artifact of this.artifacts.values()) {
       artifact.versions.sort((a, b) => a.n - b.n)
       // Recorded before its kind told its type (bytes that aren't text, said to be text).
@@ -814,6 +846,8 @@ export class ArtifactStore {
         else this.use(version.hash, version.size, 1)
       }
     }
+    // Their copies, when nothing else has the same bytes.
+    for (const hash of dropped) if (!this.copies.has(hash)) rmSync(this.copyPath(hash), { force: true })
   }
 }
 

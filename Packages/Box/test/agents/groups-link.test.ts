@@ -267,6 +267,22 @@ describe("the box's link and this bridge", () => {
     expect((await peerRoutes(undefined, "GET", ["mail"], async () => ({}))).status).toBe(404)
   })
 
+  test("what goes says it's still there while nothing goes, so the link can tell a bridge that's alive from one that's stuck", async () => {
+    const waiting: (() => void)[] = []
+    const clock = { setTimeout: (work: () => void) => waiting.push(work), clearTimeout: () => {} }
+    const post = new PeerPost(undefined, clock)
+    const reader = post.follow().body!.getReader()
+    // A quiet while: an empty line, which the link skips (any link, older ones too).
+    expect(waiting.length).toBe(1)
+    waiting.shift()!()
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe("\n")
+    // And again, for as long as it's followed.
+    expect(waiting.length).toBe(1)
+    await reader.cancel()
+    waiting.shift()!()
+    expect(waiting.length).toBe(0)
+  })
+
   test("what a bot remembers of a chat, not yet taken by the link: only the newest is kept, across a restart too", () => {
     const file = join(root, "peer-outbox.json")
     const post = new PeerPost(file)

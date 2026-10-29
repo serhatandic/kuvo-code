@@ -101,10 +101,9 @@ private let readers = [flash, claude, sonnet, copilotSonnet]
     #expect(ReviewCommand(#" folder "My Docs" the links"#, readers: readers).focus == "the links")
     #expect(ReviewCommand.phrase(.folder("My Docs")) == #"folder "My Docs""#)
     #expect(ReviewCommand.phrase(.commits(from: "abc1234^", to: nil)) == "since abc1234")
-    // Today's words still mean what they did.
-    #expect(ReviewCommand(" the pause handling", readers: readers).scope == nil)
-    #expect(ReviewCommand(" the pause handling", readers: readers).focusAsked == "the pause handling")
+    // Words after "for" are what to look at; with something named to read, words of your own too.
     #expect(ReviewCommand(" for the tests", readers: readers).focusAsked == "the tests")
+    #expect(ReviewCommand(" for the tests", readers: readers).scopeAsked == nil)
 }
 
 // The composer's lists follow what's typed: What to review first, then Look for; a commit or a
@@ -132,6 +131,44 @@ private let readers = [flash, claude, sonnet, copilotSonnet]
     #expect(ReviewCommand(" this branch with ", readers: readers).head == " this branch ")
     #expect(ReviewCommand(" an eye on the tests", readers: readers).asking == nil)
     #expect(ReviewCommand.longer(than: " this branch with Claude", readers: readers) == [sonnet, copilotSonnet])
+}
+
+// Something else… in What to review: what to review in your own words, after "about", in quotes
+// once its row is picked; it's the box that finds the files, so only the words go to it, and a
+// review comes back with the files it found.
+@Test func whatToReviewCanBeSaidInYourOwnWords() throws {
+    // Words of your own, nothing named before them: what to review, sent as written, the box
+    // finding its files; none of them drawn with the keyword.
+    let command = ReviewCommand(" the new changes to the sign-in", readers: readers)
+    #expect(command.scope == nil)
+    #expect(command.described == "the new changes to the sign-in")
+    #expect(command.scopeAsked == .described("the new changes to the sign-in"))
+    #expect(command.focusAsked == nil)
+    #expect(command.readerLength == 0)
+    #expect(command.asking == nil)
+    // After what to look for, or who reads it, they're what to look at, as they always were.
+    let named = ReviewCommand(" for security with Claude Sonnet 4.5 the tokens", readers: readers)
+    #expect(named.scopeAsked == nil)
+    #expect(named.focusAsked == "security: the tokens")
+    #expect(ReviewCommand(" with Claude the tokens", readers: readers).described == nil)
+    // Nothing written reviews the changes not committed yet, as ever; with something named to
+    // read, your words are what to look at.
+    #expect(ReviewCommand(" ", readers: readers).scopeAsked == nil)
+    #expect(ReviewCommand(" this branch the tokens", readers: readers).described == nil)
+    #expect(ReviewCommand(" this branch the tokens", readers: readers).focusAsked == "the tokens")
+    #expect(ReviewCommand.phrase(.described("the sign-in")) == "the sign-in")
+
+    let said = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ReviewScope.described("files I touched today", paths: ["a.ts"]))) as? [String: String]
+    #expect(said == ["kind": "described", "words": "files I touched today"])
+    let kept = #"{"id":"rev_1","session":"ses_1","state":"done","scope":{"kind":"described","words":"the auth module","paths":["src/auth/login.ts"]},"findings":[],"started":1}"#
+    let review = try JSONDecoder().decode(Review.self, from: Data(kept.utf8))
+    #expect(review.scope == .described("the auth module", paths: ["src/auth/login.ts"]))
+    #expect(review.scope?.title == "“the auth module”")
+}
+
+// A folder's path can be in curly quotes, as the field types them.
+@Test func aFoldersPathCanBeInCurlyQuotes() {
+    #expect(ReviewCommand(#" folder “My Docs” the links"#, readers: readers).scope == .folder("My Docs"))
 }
 
 // From review: a pick after typed words goes after a space; the short words the lists are found by

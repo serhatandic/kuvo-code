@@ -153,7 +153,7 @@ final class AgentMail {
         switch name {
         case "send_message": Analytics.shared.track("agent_message_sent", ["waits": waits])
         case "read_conversation": Analytics.shared.track("agent_conversation_read", ["query": (arguments["query"] as? String)?.isEmpty == false])
-        case "start_session": Analytics.shared.track("agent_started_session", ["waits": waits, "beside": (arguments["beside"] as? NSNumber)?.boolValue ?? true])
+        case "start_session": Analytics.shared.track("agent_started_session", ["waits": waits])
         default: break
         }
     }

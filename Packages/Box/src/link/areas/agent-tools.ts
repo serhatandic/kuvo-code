@@ -30,7 +30,7 @@ export async function* startRoute(context: RouteContext): AsyncGenerator<AnswerP
   const { request, readEngine, bridge, signal, json } = context;
   if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
   const given = parsed(request.body);
-  if (!isObject(given)) return yield* json(400, { message: "Send {task}, and title, folder, startedBy, beside, wait." });
+  if (!isObject(given)) return yield* json(400, { message: "Send {task}, and title, folder, startedBy, wait." });
   let by = null;
   if (given.startedBy !== undefined && given.startedBy !== null) {
     const root = typeof given.startedBy === "string" && ADDRESS.test(given.startedBy) ? await rootOf(given.startedBy, targetsOf({ readEngine, bridge })) : null;

@@ -19,7 +19,7 @@ import type { BridgeRecord, EngineRecord, Target } from "../../shared/records";
 import type { LastUpdate, UpdateStatus, UpdateStep } from "../../shared/routes/box";
 import { quote } from "../../shared/text";
 import { sleep } from "../../shared/wait";
-import { ASKS_FILE } from "../areas/asks";
+import { readAsks } from "../areas/asks";
 import { asked, fetched, readBridgeFile, readEngineFile } from "../engine/client";
 import type { UncheckedAnswer } from "../engine/client";
 import { listOf, textOf, writePrivate } from "../files";
@@ -172,8 +172,7 @@ async function boxBusy(readEngine: () => EngineRecord = readEngineFile, readBrid
     const active = (await asked(target, "GET", "api/session/active").catch(() => null) as UncheckedAnswer)?.data;
     if (Array.isArray(active) ? active.length : isObject(active) && Object.keys(active).length) return true;
   }
-  try { if ((JSON.parse(fs.readFileSync(ASKS_FILE, "utf8")) ?? []).length) return true; } catch {}
-  return false;
+  return readAsks().length > 0;
 }
 
 

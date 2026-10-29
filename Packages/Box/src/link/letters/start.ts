@@ -29,7 +29,6 @@ export interface StartGiven {
   task?: unknown;
   title?: unknown;
   folder?: unknown;
-  beside?: unknown;
   wait?: unknown;
 }
 
@@ -45,16 +44,15 @@ export interface Starter {
 /** An agent's call from no conversation this box has: counted together, its task from "another
  * agent" that can't be answered, and asking first, as nothing says it may do more. */
 export const OUTSIDE: Starter = { session: "unknown", place: null, name: "another agent" };
-const ASKS_FIRST: KitRule[] = [{ action: "shell", resource: "*", effect: "ask" }];
+const ASKS_FIRST: NonNullable<EngineSession["permissions"]> = [{ action: "shell", resource: "*", effect: "ask" }];
 
-/** A session started: its address, title, folder and project (null for a chat), whether it shows
- * beside the conversation that started it, and with `wait`, its first answer (null for none yet). */
+/** A session started: its address, title, folder and project (null for a chat), and with `wait`,
+ * its first answer (null for none yet). */
 export interface Started {
   session: string;
   title: string | null;
   folder: string;
   project: string | null;
-  beside: boolean;
   answer?: string | null;
 }
 
@@ -155,7 +153,6 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   }
   const project = projectOf(folder);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
-  const beside = given.beside !== false;
   const rules = rulesFor(parent, project?.folders ?? []);
   let session: string;
   try {
@@ -171,7 +168,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/kuvo.project-folders`, { value: projectsNote(folder, project.folders) }).catch(() => {});
   }
   await tellWorktree(target, session).catch(() => {});
-  if (by?.place) await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo: { startedBy: by.session, beside } } }).catch(() => {});
+  if (by?.place) await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo: { startedBy: by.session } } }).catch(() => {});
   const waits = given.wait === true;
   const id = messageID();
   try {
@@ -179,7 +176,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   } catch (error) {
     return no(502, `Started a session (${session}), but the task didn't reach it: ${String((error as Error | null)?.message ?? error)}`, session);
   }
-  const started: Started = { session, title, folder, project: project?.name ?? null, beside };
+  const started: Started = { session, title, folder, project: project?.name ?? null };
   if (!waits) return { started };
   // A new session: anything it says is its answer.
   return { started: { ...started, answer: await answerTo(target, session, id, { wait: place.step, signal: place.signal }) } };
@@ -188,9 +185,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
 /** How a start went, in the words the tool gives its agent. */
 export function startedWords(outcome: { started: Started } | { refused: StartRefusal }, waits: boolean): { text: string; isError: boolean } {
   if ("refused" in outcome) return { text: outcome.refused.message, isError: true };
-  const { session, title, project, beside, answer } = outcome.started;
+  const { session, title, project, answer } = outcome.started;
   const name = title ? `"${title}"` : "a new session";
   const where = project ? ` in ${project}` : "";
-  if (!waits) return { text: `Started ${name}${where}${beside ? ", beside this conversation" : ", in a tab"} (address ${session}). It's on it now. Write to it with send_message; it can write back to you the same way.`, isError: false };
+  if (!waits) return { text: `Started ${name}${where} (address ${session}). It's on it now. Write to it with send_message; it can write back to you the same way.`, isError: false };
   return { text: `Started ${name}${where} (address ${session}). ` + (answer ? `It answered:\n\n${answer}` : "It hasn't answered yet; it may still write back with send_message."), isError: false };
 }

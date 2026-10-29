@@ -108,7 +108,8 @@ struct KeywordBars: View {
                 .transition(.fold)
         } else if let review = model.shownReview {
             ReviewBar(review: review, isHidden: hidden(.review, $model.hidesReview), sendTargets: sendTargets,
-                      readerName: review.model.flatMap { model.reviewCatalogNow?.model($0)?.name }) { findings, target in
+                      readerName: review.model.flatMap { model.reviewCatalogNow?.model($0)?.name },
+                      olderBox: RemoteFolder.machine(of: model.session.location.directory)) { findings, target in
                 fix(findings, target)
             } putAway: {
                 model.putAwayReview()
@@ -118,6 +119,11 @@ struct KeywordBars: View {
                 model.dismissReview()
             } open: { place in
                 if let url = Self.file(place.file, in: model.session.location.directory) { app.utilities.show(url) }
+            } openPart: { part in
+                guard let session = part.session else { return }
+                // In the conversation's place, as a subagent's: its header goes back.
+                workspace.rememberReviewPart(session, of: model.id)
+                app.tabs.openInPlace(session)
             }
             .modifier(CardRow())
             .transition(.fold)
@@ -147,7 +153,7 @@ struct KeywordBars: View {
 }
 
 /// A side thread ("/btw") in the card over the composer: its questions and answers in place, the
-/// earlier ones quieter, the newest with Add to Chat and Copy, and a field to ask a follow-up,
+/// earlier ones quieter, the newest with Copy and Reply as a reply has them, and a field to ask a follow-up,
 /// answered with the thread so far. ⋯ goes to this conversation's other threads, starts a new one
 /// or takes this one away; ✕ puts it away (it stays with the conversation's side questions in the
 /// sidebar).
@@ -168,6 +174,10 @@ struct SideThreadBar: View {
     var leave: () -> Void = {}
     @State private var followUp = ""
     @FocusState private var followUpFocused: Bool
+    @State private var follows = FollowsEnd()
+
+    /// KUVO_DEMO_SIDE_THREAD_HOVER: the answer's Copy shown as with the pointer over it.
+    private static let copyHovered = ProcessInfo.processInfo.environment["KUVO_DEMO_SIDE_THREAD_HOVER"] != nil
 
     private var latest: SideQuestion { thread.latest }
     private var isAnswering: Bool { latest.state == .answering }
@@ -182,7 +192,7 @@ struct SideThreadBar: View {
                 VStack(alignment: .leading, spacing: 10) {
                     turns
                     field
-                    Label("Asks only, changes nothing", systemImage: "eye")
+                    Text("Asks only, changes nothing")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.tertiary)
                 }
@@ -201,7 +211,9 @@ struct SideThreadBar: View {
         }
     }
 
-    /// Each question and its answer, the newest at the bottom and in view.
+    /// Each question and its answer, the newest at the bottom: it opens at the end, and an answer
+    /// that comes is scrolled to (from its question: answers come whole, and a long one reads from
+    /// its start), as the conversation follows what comes, unless you scrolled up to read.
     private var turns: some View {
         ScrollViewReader { reader in
             ScrollView {
@@ -212,13 +224,33 @@ struct SideThreadBar: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // Room inside the scroll view, which clips, for Copy's fill reaching past the
+                // answer's edge, as under a message; the turns stay where they were.
+                .padding(.leading, 6)
             }
             .frame(maxHeight: 260)
             .fixedSize(horizontal: false, vertical: true)
-            // The newest from its question: a long answer reads from its start.
-            .onAppear { reader.scrollTo(latest.id, anchor: .top) }
-            .onChange(of: latest.id) { withAnimation(.ui) { reader.scrollTo(latest.id, anchor: .top) } }
-            .onChange(of: latest.state) { withAnimation(.ui) { reader.scrollTo(latest.id, anchor: .top) } }
+            .padding(.leading, -6)
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            // Where you stopped scrolling: only then, as its height settles in more than one pass.
+            .onScrollPhaseChange { _, phase, context in
+                guard phase == .idle else { return }
+                follows.scrolled(visibleBottom: context.geometry.visibleRect.maxY, contentHeight: context.geometry.contentSize.height)
+            }
+            .onAppear { follows = FollowsEnd() }
+            .onChange(of: thread.questions.count) {
+                follows.asked()
+                toLatest(reader)
+            }
+            .onChange(of: latest) { if follows.isFollowing { toLatest(reader) } }
+        }
+    }
+
+    /// The newest question and its answer, from the top, once it's laid out.
+    private func toLatest(_ reader: ScrollViewProxy) {
+        let id = latest.id
+        Task { @MainActor in
+            withAnimation(.ui) { reader.scrollTo(id, anchor: .top) }
         }
     }
 
@@ -239,14 +271,14 @@ struct SideThreadBar: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 if isLatest, let answer = question.answer {
-                    HStack(spacing: 14) {
-                        Button("Add to Chat") { addToChat(answer) }
-                            .help("Quote this answer over the composer, to answer under")
-                        Button("Copy") { Clipboard.copy(answer) }
+                    // A reply's own Copy and Reply, the same buttons and the same tick once copied.
+                    HStack(spacing: 0) {
+                        CopyButton(text: answer, help: "Copy the Answer")
+                            .environment(\.showsHover, Self.copyHovered)
+                        MessageActionButton(symbol: "arrowshape.turn.up.left", help: "Reply: quotes this answer in the composer") { addToChat(answer) }
                     }
-                    .buttonStyle(TextButtonStyle(outset: true))
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    // The copy glyph under the answer's first letter.
+                    .padding(.leading, -6)
                 }
             case .failed:
                 Label(question.error ?? "It couldn’t be answered.", systemImage: "exclamationmark.circle")
@@ -297,12 +329,16 @@ struct SideThreadBar: View {
     }
 
     @ViewBuilder private var mark: some View {
+        // Only what the title doesn't say: that it's being answered, or couldn't be.
         if isAnswering {
             Spinner(size: 14)
-        } else {
-            Image(systemName: latest.state == .failed ? "exclamationmark.circle" : Keyword.btw.symbol)
+        } else if latest.state == .failed {
+            Image(systemName: "exclamationmark.circle")
                 .font(.system(size: 13))
-                .foregroundStyle(latest.state == .failed ? AnyShapeStyle(.orange) : AnyShapeStyle(.tint))
+                .foregroundStyle(.orange)
+        } else {
+            // Its column kept, so the title stays where it is when one comes.
+            Color.clear.frame(height: 1)
         }
     }
 
@@ -357,7 +393,8 @@ struct ReviewSendTarget: Identifiable, Equatable {
     var isBot: Bool
 }
 
-/// How a review's findings show: a list, each opening in place (the default), or one at a time.
+/// How a review's findings show: a list, each opening in place (the default), or one at a time
+/// (Settings › Appearance).
 enum ReviewLayout: String {
     case list, single
 
@@ -376,19 +413,31 @@ struct ReviewBar: View {
     let sendTargets: [ReviewSendTarget]
     /// Who read it, for the line under what it found.
     var readerName: String?
+    /// The machine the conversation is on, when its box is from before parts: it says to update it.
+    var olderBox: String?
     /// `findings`: their ids, nil for all of them.
     let fix: (_ findings: [String]?, _ target: ReviewFixTarget) -> Void
     let putAway: () -> Void
     let stop: () -> Void
     let cancel: () -> Void
     let open: (Review.Place) -> Void
-    @AppStorage(ReviewLayout.key) private var layout = ReviewLayout.list.rawValue
+    /// Opens a part's session, in the conversation's place.
+    var openPart: (Review.Part) -> Void = { _ in }
+    @AppStorage(ReviewLayout.key) private var layout = ReviewLayout.list
     @State private var confirmsCancel = false
     /// What the part read last found, while there were findings before it.
     @State private var newest: Set<String> = []
+    /// A finding's row, closed.
+    @State private var rowHeight: CGFloat?
 
-    /// What it found shows while it's still reading, too.
-    private var showsFindings: Bool { review.state != .reviewing || !review.findings.isEmpty }
+    /// What it found shows while it's still reading, too, and its parts as they read.
+    private var showsFindings: Bool { review.state != .reviewing || !review.findings.isEmpty || !(review.parts ?? []).isEmpty }
+
+    /// Its parts, to show: any that opens, or more than one.
+    private var shownParts: [Review.Part]? {
+        guard let parts = review.parts, parts.count > 1 || parts.contains(where: \.opens) else { return nil }
+        return parts
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -417,8 +466,16 @@ struct ReviewBar: View {
                 ProgressLine("Reviewing", fraction: Double(progress.read) / Double(max(progress.of, 1)), layout: .bar)
                     .padding(.leading, 42)
                     .padding(.trailing, 16)
-                    .padding(.bottom, showsFindings && !isHidden ? 4 : 10)
+                    .padding(.bottom, showsFindings && !isHidden ? 4 : olderBox != nil && review.hasNoParts ? 4 : 10)
                     .transition(.opacity)
+            }
+            // A machine whose box can't show its parts: that it could, updated.
+            if let olderBox, review.hasNoParts {
+                Text("Update Kuvo Code on \(olderBox) to see inside each part.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
+                    .padding(.leading, 42)
+                    .padding(.bottom, 10)
             }
             if !isHidden, showsFindings {
                 details
@@ -448,9 +505,9 @@ struct ReviewBar: View {
     /// While it reads in parts, Stop (and Fix… for what it found so far); once done, Fix….
     private var accessory: AnyView? {
         let fixes = !review.findings.isEmpty && review.state != .failed
-        guard review.state == .reviewing, review.progress != nil else { return fixes ? AnyView(fixMenu(nil, label: "Fix…")) : nil }
+        guard review.state == .reviewing, review.progress != nil else { return fixes ? AnyView(fixMenu(nil, label: "Fix All…")) : nil }
         return AnyView(HStack(spacing: 2) {
-            if fixes { fixMenu(nil, label: "Fix…") }
+            if fixes { fixMenu(nil, label: "Fix All…") }
             Button("Stop", action: stop)
                 .buttonStyle(TextButtonStyle())
                 .font(.system(size: 13))
@@ -503,6 +560,8 @@ struct ReviewBar: View {
     private var footnote: String? { ReviewList.footnote(review, readerName: readerName) }
 
     /// Fix… for `findings` (nil: all of them); `outset` lines its words up with the text above.
+    /// For them all (`findings` nil) a chip, an action of its own on the bar's line; for one, a
+    /// word on its row.
     private func fixMenu(_ findings: [String]?, label: String, outset: Bool = false) -> some View {
         Menu {
             Button("Fix in a New Session", systemImage: "plus.square") { fix(findings, .newSession) }
@@ -522,8 +581,7 @@ struct ReviewBar: View {
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)
-        .buttonStyle(TextButtonStyle(outset: outset))
-        .font(.system(size: 13))
+        .modifier(FixLook(isChip: findings == nil, outset: outset))
         .fixedSize()
         .help(findings == nil ? "Fix what it found: in a new session, here, or elsewhere" : "Fix this one: in a new session, here, or elsewhere")
     }
@@ -532,10 +590,13 @@ struct ReviewBar: View {
         switch review.state {
         case .reviewing:
             VStack(alignment: .leading, spacing: 6) {
-                Text("Found so far:")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(.secondary)
-                findingList
+                if let parts = shownParts { ReviewPartList(parts: parts, open: openPart) }
+                if !review.findings.isEmpty {
+                    Text("Found so far:")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
+                    findingList
+                }
             }
         case .failed:
             Text(review.error ?? "It couldn’t be done. Try again.")
@@ -544,20 +605,17 @@ struct ReviewBar: View {
                 .textSelection(.enabled)
         case .done:
             VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    if let summary = review.summary {
-                        Text(summary)
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        Spacer(minLength: 0)
-                    }
-                    if review.findings.count > 1 { layoutSwitch }
+                if let summary = review.summary {
+                    Text(summary)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                // What each reviewer did, still there to open.
+                if let parts = shownParts { ReviewPartList(parts: parts, open: openPart) }
                 if !review.findings.isEmpty {
-                    if layout == ReviewLayout.single.rawValue {
+                    if layout == .single {
                         SingleFinding(findings: review.findings, fixMenu: { fixMenu([$0.id], label: "Fix This…", outset: true) }, open: open)
                     } else {
                         findingList
@@ -579,27 +637,128 @@ struct ReviewBar: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(review.findings) { finding in
                     FindingRow(finding: finding, isNew: newest.contains(finding.id), fixMenu: { fixMenu([finding.id], label: "Fix…") }, fix: { fix([finding.id], $0) }, open: open)
+                        // A closed row's height (an open one's is more).
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowHeight = min(rowHeight ?? $0, $0) }
                 }
             }
         }
-        // About five, then it scrolls.
-        .frame(maxHeight: 176)
+        // Five whole rows, then it scrolls: the list never ends halfway through one.
+        .frame(maxHeight: (rowHeight ?? 34) * 5)
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, -8)
     }
+}
 
-    /// The list, or one at a time: kept for the next review too.
-    private var layoutSwitch: some View {
-        HStack(spacing: 0) {
-            ForEach([ReviewLayout.list, .single], id: \.rawValue) { each in
-                Button(each == .list ? "As a List" : "One at a Time", systemImage: each == .list ? "list.bullet" : "rectangle.portrait") {
-                    withAnimation(.ui) { layout = each.rawValue }
+/// A review's parts, in its card: each with what it's doing as it reads, then what it found; one
+/// that reads in a session of its own opens it, in the conversation's place, as a subagent's
+/// does. Four rows show, then it scrolls.
+private struct ReviewPartList: View {
+    let parts: [Review.Part]
+    let open: (Review.Part) -> Void
+
+    private static let rowHeight: CGFloat = 28
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(parts) { part in
+                    ReviewPartRow(part: part, open: { open(part) })
                 }
-                .buttonStyle(IconButtonStyle(width: 22, height: 20))
-                .foregroundStyle(layout == each.rawValue ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
-                .help(each == .list ? "Show them as a list" : "Show them one at a time")
-                .accessibilityAddTraits(layout == each.rawValue ? .isSelected : [])
             }
+        }
+        .frame(maxHeight: Self.rowHeight * 4)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, -8)
+    }
+}
+
+private struct ReviewPartRow: View {
+    let part: Review.Part
+    let open: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 8) {
+                mark
+                    .frame(width: 14)
+                Text(part.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(part.state == .waiting ? .secondary : .primary)
+                    .fixedSize()
+                Group {
+                    if part.state == .reading {
+                        ShimmerText(text: part.line)
+                    } else {
+                        Text(part.line)
+                            .foregroundStyle(part.state == .waiting ? .tertiary : .secondary)
+                    }
+                }
+                .font(.system(size: 12.5))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if part.opens {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background(hovering && part.opens ? AnyShapeStyle(Pressable.hoverFill) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 7))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .clickablePointer()
+        // One that doesn't open reads as the others do, not dimmed.
+        .allowsHitTesting(part.opens)
+        .accessibilityRemoveTraits(part.opens ? [] : .isButton)
+        .help(part.opens ? "Open what this reviewer read, thought and found" : "")
+        .accessibilityLabel("\(part.title), \(part.line)")
+        .accessibilityHint(part.opens ? "Opens what it read, thought and found" : "")
+    }
+
+    @ViewBuilder private var mark: some View {
+        switch part.state {
+        case .reading: Spinner(size: 11)
+        case .done:
+            Image(systemName: "checkmark")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.green)
+        case .failed:
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 11))
+                .foregroundStyle(.orange)
+        case .stopped:
+            Image(systemName: "stop.circle")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        case .waiting:
+            Circle()
+                .strokeBorder(style: StrokeStyle(lineWidth: 1.2, dash: [2, 2]))
+                .foregroundStyle(.tertiary)
+                .frame(width: 10, height: 10)
+        }
+    }
+}
+
+/// Fix…'s look: for them all, a chip on the bar's line; for one, a word on its row.
+private struct FixLook: ViewModifier {
+    let isChip: Bool
+    let outset: Bool
+
+    func body(content: Content) -> some View {
+        if isChip {
+            content
+                .buttonStyle(ChipButtonStyle())
+                .font(.system(size: 12, weight: .medium))
+        } else {
+            content
+                .buttonStyle(TextButtonStyle(outset: outset))
+                .font(.system(size: 13))
         }
     }
 }
@@ -695,7 +854,7 @@ private struct FindingRow: View {
         .onHover { hovering = $0 }
         .clickablePointer()
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(finding.severity.name): \(finding.title)\(isNew ? ", new" : "")")
+        .accessibilityLabel("\(finding.severity.name): \(finding.title)\(isNew ? ", new" : "")\(placesSaid)")
         .accessibilityValue(isOpen ? finding.explanation : "")
         .accessibilityHint(isOpen ? "Hides why" : "Shows why and where")
         .accessibilityAddTraits(.isButton)
@@ -710,15 +869,22 @@ private struct FindingRow: View {
         }
     }
 
-    /// Its first place, and how many more; none for one about the change as a whole.
+    /// Where it is, for VoiceOver: every place by its path.
+    private var placesSaid: String {
+        finding.locations.isEmpty ? "" : ", in " + ListFormatter.localizedString(byJoining: finding.locations.map(\.text))
+    }
+
+    /// Its first place, by its file's name and lines (the paths under the pointer), and how many
+    /// more; none for one about the change as a whole.
     @ViewBuilder private var firstPlace: some View {
         if let first = finding.locations.first {
-            Text(first.text + (finding.locations.count > 1 ? " +\(finding.locations.count - 1)" : ""))
+            Text(first.shortText + (finding.locations.count > 1 ? " +\(finding.locations.count - 1) more" : ""))
                 .font(.system(size: 11.5, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .truncationMode(.head)
+                .truncationMode(.middle)
                 .frame(maxWidth: 220, alignment: .trailing)
+                .help(finding.locations.map(\.text).joined(separator: "\n"))
         } else {
             Text("the change as a whole")
                 .font(.system(size: 11.5))

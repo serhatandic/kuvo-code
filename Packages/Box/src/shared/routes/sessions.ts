@@ -11,7 +11,7 @@ export type Carried = Infer<typeof CARRIED>;
 
 /** A session started: its address, title, folder and project (null for a chat), whether it shows
  * beside the conversation that started it, and with `wait`, its first answer (null for none yet). */
-export const STARTED = object({ session: string, title: nullable(string), folder: string, project: nullable(string), beside: bool, "answer?": nullable(string) });
+export const STARTED = object({ session: string, title: nullable(string), folder: string, project: nullable(string), "answer?": nullable(string) });
 
 export type StartedSession = Infer<typeof STARTED>;
 
