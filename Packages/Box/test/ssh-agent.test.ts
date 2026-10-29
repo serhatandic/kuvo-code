@@ -1,0 +1,123 @@
+// Kuvo Code's SSH agent, as OpenSSH's own tools use it: `ssh-add -l` lists the keys a conversation
+// may use, and `ssh-keygen -Y sign` signs through it (as `ssh` and git over SSH do), with a key in
+// each of the formats `ssh-keygen` writes. Its keys come from the vault in the box; here, from the
+// files `ssh-keygen` made, with the vault's say on each signature stood in for.
+import { afterAll, expect, test } from "bun:test";
+import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { type AgentKey, privateKeyOf, serveAgent } from "../src/link/vault/ssh-agent";
+
+// A short path: a socket's is at most 104 bytes on macOS.
+const root = fs.mkdtempSync(path.join(os.tmpdir().length > 40 ? "/tmp" : os.tmpdir(), "kv-ssh-"));
+afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+
+const envOf = (env: Record<string, string>) => ({ PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: root, ...env });
+const ssh = (tool: string, args: string[], env: Record<string, string> = {}) =>
+  spawnSync(tool, args, { env: envOf(env), encoding: "utf8" });
+// Run while the agent answers, in this same process: never blocking it.
+function sshNow(tool: string, args: string[], env: Record<string, string> = {}, input?: string): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise(resolve => {
+    const child = spawn(tool, args, { env: envOf(env) });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.on("close", status => resolve({ status, stdout, stderr }));
+    child.stdin.end(input ?? "");
+  });
+}
+
+// A key as `ssh-keygen` makes it: its private key's text, and its public key's file.
+function made(name: string, ...args: string[]): { text: string; pub: string } {
+  const file = path.join(root, name);
+  const run = ssh("ssh-keygen", ["-q", "-N", "", "-C", name, "-f", file, ...args]);
+  expect(run.status, run.stderr).toBe(0);
+  const pub = path.join(root, `${name}-only.pub`);
+  fs.renameSync(`${file}.pub`, pub);
+  const text = fs.readFileSync(file, "utf8");
+  fs.rmSync(file);
+  return { text, pub };
+}
+
+const keys = {
+  ed25519: made("ed25519", "-t", "ed25519"),
+  rsa: made("rsa", "-t", "rsa", "-b", "2048"),
+  ecdsa256: made("ecdsa256", "-t", "ecdsa", "-b", "256"),
+  ecdsa384: made("ecdsa384", "-t", "ecdsa", "-b", "384"),
+  ecdsa521: made("ecdsa521", "-t", "ecdsa", "-b", "521"),
+  rsaPEM: made("rsa-pem", "-t", "rsa", "-b", "2048", "-m", "PEM"),
+};
+
+function agentFor(names: (keyof typeof keys)[], allowed: (key: AgentKey) => boolean = () => true) {
+  const socket = path.join(root, `agent-${Math.random().toString(36).slice(2, 8)}.sock`);
+  const offered: AgentKey[] = names.map(name => ({ id: name, name, ...privateKeyOf(keys[name].text) }));
+  const asked: string[] = [];
+  const server = serveAgent(socket, {
+    keys: async () => offered,
+    allow: async key => { asked.push(key.name); return allowed(key); },
+  });
+  return { socket, asked, ready: new Promise(resolve => server.once("listening", resolve)), close: () => new Promise(resolve => server.close(resolve)) };
+}
+
+// Signs a file through the agent, by the public key alone, and checks the signature as anyone would.
+async function signs(socket: string, name: keyof typeof keys): Promise<boolean> {
+  const file = path.join(root, `signed-${name}`);
+  fs.writeFileSync(file, "a commit\n");
+  const signed = await sshNow("ssh-keygen", ["-Y", "sign", "-n", "git", "-f", keys[name].pub, file], { SSH_AUTH_SOCK: socket });
+  if (signed.status !== 0) return false;
+  const signers = path.join(root, `allowed-${name}`);
+  fs.writeFileSync(signers, `kuvo@test ${fs.readFileSync(keys[name].pub, "utf8").split(" ").slice(0, 2).join(" ")}\n`);
+  const checked = await sshNow("ssh-keygen", ["-Y", "verify", "-f", signers, "-I", "kuvo@test", "-n", "git", "-s", `${file}.sig`], {}, "a commit\n");
+  fs.rmSync(`${file}.sig`, { force: true });
+  return checked.status === 0;
+}
+
+test("ssh-add lists the conversation's keys, by the same fingerprints ssh-keygen gives them", async () => {
+  const agent = agentFor(["ed25519", "rsa", "ecdsa256"]);
+  await agent.ready;
+  try {
+    const listed = await sshNow("ssh-add", ["-l"], { SSH_AUTH_SOCK: agent.socket });
+    expect(listed.status, listed.stderr).toBe(0);
+    for (const name of ["ed25519", "rsa", "ecdsa256"] as const) {
+      const fingerprint = ssh("ssh-keygen", ["-l", "-f", keys[name].pub]).stdout.split(" ")[1];
+      expect(listed.stdout).toContain(fingerprint);
+    }
+    expect(agent.asked).toEqual([]);
+  } finally {
+    await agent.close();
+  }
+});
+
+test("each kind of key ssh-keygen makes signs through it, and the signature checks out", async () => {
+  const names = Object.keys(keys) as (keyof typeof keys)[];
+  const agent = agentFor(names);
+  await agent.ready;
+  try {
+    const signed: Record<string, boolean> = {};
+    for (const name of names) signed[name] = await signs(agent.socket, name);
+    expect(signed).toEqual(Object.fromEntries(names.map(name => [name, true])));
+  } finally {
+    await agent.close();
+  }
+});
+
+test("a key the vault doesn't let it use now signs nothing, and one it doesn't offer isn't there", async () => {
+  const agent = agentFor(["ed25519"], () => false);
+  await agent.ready;
+  try {
+    expect(await signs(agent.socket, "ed25519")).toBe(false);
+    expect(agent.asked).toEqual(["ed25519"]);
+    expect(await signs(agent.socket, "rsa")).toBe(false);
+    expect((await sshNow("ssh-add", ["-D"], { SSH_AUTH_SOCK: agent.socket })).status).not.toBe(0);
+  } finally {
+    await agent.close();
+  }
+});
+
+test("a key with a passphrase, or that isn't a key, says what to do", () => {
+  const file = path.join(root, "locked");
+  ssh("ssh-keygen", ["-q", "-N", "a passphrase", "-t", "ed25519", "-f", file]);
+  expect(() => privateKeyOf(fs.readFileSync(file, "utf8"))).toThrow(/passphrase/);
+  expect(() => privateKeyOf("not a key")).toThrow(/isn't a private key/);
+});
