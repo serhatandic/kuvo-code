@@ -132,6 +132,18 @@ export function launcherScript(places: FencePlaces): string {
   ].filter(line => line !== "").join("\n") + "\n";
 }
 
+/** `run/fence/shell/<zsh|bash>`: the shell Claude Code runs its commands with while the sandbox is on
+ * (`CLAUDE_CODE_SHELL`), the launcher with the real one. Named as the shell it stands for: Claude
+ * Code takes a shell only by its name. Its process names the conversation's folder and repository. */
+export function agentShellScript(places: FencePlaces, shell: string): string {
+  return [
+    "#!/bin/sh",
+    "# Kuvo Code writes this each time its box starts: changes here don't last.",
+    `KUVO_FENCE_SHELL=${sh(shell)} exec ${sh(places.launcher)} "$@"`,
+    "",
+  ].join("\n");
+}
+
 /** The engine's plugin (`kuvo-sandbox.js` in its plugins folder). `version` names this box's
  * sandbox files, so the box knows its engine has these and not an older plugin's. */
 export function pluginScript(places: FencePlaces, version: string): string {

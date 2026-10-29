@@ -5,8 +5,8 @@
 
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { existsSync, readFileSync, realpathSync } from "node:fs"
-import { join } from "node:path"
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs"
+import { basename, dirname, join, resolve } from "node:path"
 import { machineHome } from "./machine"
 
 /** What commands may do: everything read but `hidden`; written only in the session's folder and
@@ -50,9 +50,8 @@ const real = (place: string) => {
 export function allowedFolders(directory: string): string[] {
   const where = folder()
   if (!where) return []
-  const sum = createHash("sha256").update(real(directory)).digest("hex").slice(0, 32)
   try {
-    return readFileSync(join(where, "allowed", sum), "utf8").split("\n").filter((line) => line.startsWith("/") && real(line) === line).slice(0, 8)
+    return readFileSync(join(where, "allowed", sum(real(directory))), "utf8").split("\n").filter((line) => line.startsWith("/") && real(line) === line).slice(0, 8)
   } catch {
     return []
   }
@@ -72,4 +71,74 @@ export function worktreeGitFolders(directory: string): string[] {
   const [common, own] = read.stdout.trim().split("\n")
   if (!common || !own || common === own) return []
   return [join(common, "objects"), join(common, "refs"), join(common, "logs"), own]
+}
+
+/** The launcher's sum for a folder (its real path), as `sha256sum | cut -c 1-32` makes it. */
+const sum = (place: string) => createHash("sha256").update(place).digest("hex").slice(0, 32)
+
+/** Whether `git` is a repository's own folder, not a link. */
+function isRepository(git: string): boolean {
+  try {
+    if (lstatSync(git).isSymbolicLink() || !statSync(join(git, "HEAD")).isFile()) return false
+    return statSync(join(git, "objects")).isDirectory() && statSync(join(git, "refs")).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A folder's git repository, which its commands may write too, as the engine's plugin finds it
+ * (`pluginScript` in link/fence/files.ts; keep the two the same): its `.git`, or for a worktree the
+ * repository's own folder, from the folder upwards. Only a real one, a worktree the repository names
+ * back; "" for none (its commands write only the folder).
+ */
+export function repositoryOf(folder: string): string {
+  const realOr = (place: string) => {
+    try {
+      return realpathSync(place)
+    } catch {
+      return ""
+    }
+  }
+  for (let at = folder; at && at !== dirname(at); at = dirname(at)) {
+    const git = join(at, ".git")
+    let link
+    try {
+      link = lstatSync(git)
+    } catch {
+      continue
+    }
+    if (link.isSymbolicLink()) return ""
+    if (link.isDirectory()) return isRepository(git) ? realOr(git) : ""
+    try {
+      const named = readFileSync(git, "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim()
+      if (!named) return ""
+      const own = realOr(resolve(at, named))
+      if (!own || basename(dirname(own)) !== "worktrees") return ""
+      if (realOr(readFileSync(join(own, "gitdir"), "utf8").trim()) !== realOr(git)) return ""
+      const common = realOr(resolve(own, readFileSync(join(own, "commondir"), "utf8").trim()))
+      return common && common === dirname(dirname(own)) && isRepository(common) ? common : ""
+    } catch {
+      return ""
+    }
+  }
+  return ""
+}
+
+/**
+ * For an agent whose commands run through a shell it's given (Claude Code): the box's shell that
+ * runs them in the sandbox (the user's own, zsh or bash, by name), what the launcher's told (the
+ * conversation's folder and its repository), and the commands' temporary folder, which they write.
+ * Undefined while the sandbox is off here.
+ */
+export function fenceShell(directory: string): { shell: string; work: string; git: string; temporary: string } | undefined {
+  const where = folder()
+  if (!where || !fenceRules()) return undefined
+  const mine = basename(process.env.SHELL ?? "")
+  const shell = [mine, "zsh", "bash"].filter((name) => name === "zsh" || name === "bash").map((name) => join(where, "shell", name)).find((place) => existsSync(place))
+  if (!shell) return undefined
+  const work = real(directory)
+  const temporary = join(where, "tmp", sum(work))
+  mkdirSync(temporary, { recursive: true, mode: 0o700 })
+  return { shell, work, git: repositoryOf(work), temporary }
 }

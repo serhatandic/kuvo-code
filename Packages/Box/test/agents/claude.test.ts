@@ -1,10 +1,13 @@
 // Claude Code's thread against a fake SDK: messages you send partway, taken late or never.
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { createHash } from "node:crypto"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
+import { repositoryOf } from "../../src/agents/fence"
 import { Auto } from "../../src/agents/auto"
 import { Queue } from "../../src/agents/queue"
 import type { Roster } from "../../src/agents/roster"
@@ -563,6 +566,58 @@ const toolCalls = (id: string) => steps(id).flatMap((message) => message.content
 
 /** Ask First, as the composer's menu sets it. */
 const askFirst: PermissionRule[] = ["edit", "write", "patch", "shell", "webfetch", "external_directory"].map((action) => ({ action, resource: "*", effect: "ask" }))
+
+describe("Claude Code in the box's sandbox", () => {
+  // The box's sandbox folder, as the box sets it up (link/fence/state.ts): its rules, its shells.
+  let fence: string
+  const turnOn = () => {
+    writeFileSync(join(fence, "policy.json"), JSON.stringify({ hidden: [], readable: [], writable: [], readOnly: [] }))
+    writeFileSync(join(fence, "on"), "")
+  }
+  beforeEach(() => {
+    fence = join(root, "fence")
+    mkdirSync(join(fence, "shell"), { recursive: true })
+    for (const name of ["zsh", "bash"]) writeFileSync(join(fence, "shell", name), "#!/bin/sh\n", { mode: 0o700 })
+    process.env.KUVO_FENCE = fence
+  })
+  afterEach(() => {
+    delete process.env.KUVO_FENCE
+  })
+
+  test("while it's on, Claude Code runs its commands with the box's shell, told the conversation's folder and repository, and notes where they end up where they can write", async () => {
+    turnOn()
+    spawnSync("git", ["init", "-q", root])
+    await begin()
+    const env = fake.options.env
+    const work = realpathSync(root)
+    expect(env.CLAUDE_CODE_SHELL).toMatch(new RegExp(`^${fence}/shell/(zsh|bash)$`))
+    expect(env.KUVO_FENCE_WORK).toBe(work)
+    expect(env.KUVO_FENCE_GIT).toBe(join(work, ".git"))
+    expect(env.CLAUDE_CODE_TMPDIR).toBe(join(fence, "tmp", createHash("sha256").update(work).digest("hex").slice(0, 32)))
+  })
+
+  test("off, Claude Code runs its commands as it always does; turned on, its next turn starts it again in the sandbox", async () => {
+    const { id, first } = await begin()
+    expect(fake.options.env.CLAUDE_CODE_SHELL).toBeUndefined()
+    fake.streams([first], [{ type: "text", text: "Done." }])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    turnOn()
+    sessions.prompt(id, { id: "msg_claude_turn_9001", text: "again", files: [], delivery: "steer" })
+    await until(() => fake.options.env.CLAUDE_CODE_SHELL !== undefined)
+  })
+
+  test("a worktree's commits go to its repository's own folder, which its commands write; a .git that names a folder not naming it back gives none", () => {
+    const repository = join(root, "repo")
+    spawnSync("git", ["init", "-q", repository])
+    spawnSync("git", ["-C", repository, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "first"])
+    spawnSync("git", ["-C", repository, "worktree", "add", "-q", join(root, "tree")])
+    expect(repositoryOf(realpathSync(join(root, "tree")))).toBe(realpathSync(join(repository, ".git")))
+    mkdirSync(join(root, "posing"))
+    writeFileSync(join(root, "posing", ".git"), `gitdir: ${join(repository, ".git", "worktrees", "tree")}\n`)
+    expect(repositoryOf(realpathSync(join(root, "posing")))).toBe("")
+  })
+})
 
 describe("Claude Code's permissions", () => {
   test("Ask First: a command it would run is your card on its step; Allow Once lets it run", async () => {

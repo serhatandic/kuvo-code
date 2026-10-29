@@ -10,6 +10,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
@@ -269,6 +270,49 @@ test("a command can't change what git runs on its own, the engine's settings or 
     assert.equal(fs.readFileSync(path.join(project, ".claude", "hooks", "check.sh"), "utf8"), "exit 0\n");
     assert.equal(fs.existsSync(path.join(project, ".codex")), false);
     assert.equal(fs.existsSync(path.join(project, ".git", "hooks", "pre-commit")), false);
+  } finally {
+    await running.stop();
+  }
+});
+
+test("Claude Code's commands, run with the box's shell for it as Claude Code runs them, are in the sandbox, and a worktree commits", async () => {
+  const box = boxAt("claude");
+  const repository = path.join(root, "claude-repo");
+  const project = path.join(root, "claude-tree");
+  assert.equal(spawnSync("git", ["init", "-q", repository]).status, 0);
+  assert.equal(spawnSync("git", ["-C", repository, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "first"]).status, 0);
+  assert.equal(spawnSync("git", ["-C", repository, "worktree", "add", "-q", project]).status, 0);
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    // What the coding agents' bridge gives Claude Code (agents/fence.ts): the shell, by its name, the
+    // conversation's folder and repository, and the commands' temporary folder for its own notes.
+    const fence = path.join(box.home, "run", "fence");
+    const shell = ["zsh", "bash"].map(name => path.join(fence, "shell", name)).find(place => fs.existsSync(place));
+    assert.ok(shell, "the box wrote a shell for Claude Code");
+    const temporary = path.join(fence, "tmp", crypto.createHash("sha256").update(project).digest("hex").slice(0, 32));
+    fs.mkdirSync(path.join(temporary, "claude-1"), { recursive: true, mode: 0o700 });
+    const env = { PATH: process.env.PATH, HOME: root, KUVO_FENCE_WORK: project, KUVO_FENCE_GIT: path.join(repository, ".git"), OPENCODE_SESSION_ID: "ses_claudeTest" };
+    // Each command as Claude Code sends it: its snapshot (which may not be there), the command, then
+    // where it ended up, noted in its temporary folder.
+    const cwd = path.join(temporary, "claude-1", "claude-7-cwd");
+    const claudeRuns = command => spawnSync(shell, ["-c", `source ${JSON.stringify(path.join(box.home, "agents", "snapshot.sh"))} 2>/dev/null || true && eval '${command.replace(/'/g, "'\\''")}' < /dev/null && pwd -P >| ${JSON.stringify(cwd)}`], { cwd: project, env, encoding: "utf8" });
+    const ran = claudeRuns(tries([
+      ["write in its project", "echo ok > made.txt"],
+      ["commit in its worktree", "git add made.txt && git -c user.name=t -c user.email=t@t commit -qm made"],
+      ["read the box's files", `cat ${JSON.stringify(path.join(box.home, "run", "engine.json"))}`],
+      ["write outside its project", `echo x > ${JSON.stringify(path.join(root, "planted"))}`],
+      ["add a git hook", `echo x > ${JSON.stringify(path.join(repository, ".git", "hooks", "pre-commit"))}`],
+    ]));
+    assert.deepEqual(outcome(ran.stdout), {
+      "write in its project": "allowed", "commit in its worktree": "allowed", "read the box's files": "refused",
+      "write outside its project": "refused", "add a git hook": linux ? "allowed" : "refused",
+    }, ran.stdout + ran.stderr);
+    assert.equal(spawnSync("git", ["-C", repository, "log", "--all", "--format=%s"], { encoding: "utf8" }).stdout.includes("made"), true);
+    // Claude Code learns where a cd took the command.
+    assert.equal(claudeRuns("cd ..").status, 0);
+    assert.equal(fs.readFileSync(cwd, "utf8").trim(), root);
+    assert.equal(fs.existsSync(path.join(root, "planted")), false);
   } finally {
     await running.stop();
   }

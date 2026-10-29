@@ -21,6 +21,7 @@ import { newID } from "../ids"
 import { kuvoTools } from "../kuvotools"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
 import { onMachine, ownFoldersScript } from "../machine"
+import { fenceKey, fenceShell } from "../fence"
 import { addShell, endShell } from "../shells"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import type { Turn } from "../turn"
@@ -475,7 +476,7 @@ class ClaudeThread implements Thread {
   private commands = new Map<string, string>()
   /** The last of its tasks to end: what began a turn it starts on its own. */
   private lastEnded?: { type: string; description: string; command?: string; status: string; summary?: string }
-  private opened?: { model: string; effort?: string; plan: boolean; append: string; program: number; tools?: string; skills?: string }
+  private opened?: { model: string; effort?: string; plan: boolean; append: string; program: number; tools?: string; skills?: string; fence: string }
 
   constructor(
     private readonly agent: ClaudeAgent,
@@ -559,7 +560,9 @@ class ClaudeThread implements Thread {
     const tools = kuvoTools(this.session.id)
     // Settings › Skills' skills, as a plugin of its own (but those it reads itself).
     const skills = skillsFolder(await skillsFor(this.session.location.directory, this.agent.ownSkillFolders(this.session.location.directory), turnedOff(hooks)))
-    if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills)) this.close()
+    // So does it when the box's sandbox was turned on or off, or its rules changed.
+    const fence = fenceKey()
+    if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence)) this.close()
     if (!this.query) {
       this.open(sdk, modelID, effort, input.plan, append, hooks, skills)
       // Kuvo Code's own tools, as the engine's models have them: told over its pipe, not on its
@@ -573,7 +576,7 @@ class ClaudeThread implements Thread {
       if (this.opened?.model !== modelID) await this.query.setModel(modelID === "default" ? undefined : modelID).catch(() => {})
       if (this.opened?.effort !== effort) await this.query.applyFlagSettings({ effortLevel: effort ?? null }).catch(() => {})
       if (this.opened?.plan !== input.plan) await this.query.setPermissionMode(input.plan ? "plan" : "default").catch(() => {})
-      this.opened = { model: modelID, effort, plan: input.plan, append, program: this.agent.program, tools: tools?.key, skills }
+      this.opened = { model: modelID, effort, plan: input.plan, append, program: this.agent.program, tools: tools?.key, skills, fence }
     }
     if (hooks.signal.aborted) return { outcome: "interrupted" }
     return new Promise<RunResult>((resolve) => {
@@ -778,7 +781,7 @@ class ClaudeThread implements Thread {
     if (!resume) delete this.state.claudeCost
     this.input = new Queue()
     const tools = kuvoTools(this.session.id)
-    this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills }
+    this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() }
     this.query = sdk.query({
       prompt: this.input,
       options: {
@@ -797,11 +800,22 @@ class ClaudeThread implements Thread {
         ...(skills ? { plugins: [{ type: "local" as const, path: skills, skipMcpDiscovery: true }] } : {}),
         ...(resume ? { resume: id } : { sessionId: id }),
         // Its commands know their conversation, as the engine's do (kuvo-wake schedules for it).
-        env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id },
+        env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id, ...this.fenced() },
         stderr: () => {},
       },
     })
     void this.read(this.query)
+  }
+
+  /**
+   * While the box's sandbox is on here, Claude Code runs each command in it: its shell is the box's
+   * (fenceShell), which it runs every command with, and its own temporary files, where it notes a
+   * command's folder after a cd, are where commands write.
+   */
+  private fenced(): Record<string, string> {
+    const fence = fenceShell(this.session.location.directory)
+    if (!fence) return {}
+    return { CLAUDE_CODE_SHELL: fence.shell, CLAUDE_CODE_TMPDIR: fence.temporary, KUVO_FENCE_WORK: fence.work, KUVO_FENCE_GIT: fence.git }
   }
 
   private async read(query: any) {
