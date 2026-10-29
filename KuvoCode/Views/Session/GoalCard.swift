@@ -29,6 +29,11 @@ struct GoalCard: View {
     @State private var sandboxBusy = false
     @State private var failure: String?
     @State private var sent: GoalPlanAnswer.Action?
+    /// How tall what's between its header and its buttons can be before it scrolls.
+    @Environment(\.cardRoom) private var room
+    @State private var middleHeight: CGFloat = 0
+    /// Bumped to read the sandbox again (after its fix ran).
+    @State private var sandboxRound = 0
 
     private var isAnswering: Bool { app.goalPlans.answering.contains(plan.id) }
     private var onThisMac: Bool { box == BoxClient.mac }
@@ -40,6 +45,52 @@ struct GoalCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
+            // As tall as it is, up to the room there is; then it scrolls, the header and the
+            // buttons staying in sight.
+            ScrollView {
+                middle
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { middleHeight = $0 }
+            }
+            .frame(height: min(max(middleHeight, 1), room))
+            .scrollBounceBehavior(.basedOnSize)
+            HStack(spacing: 8) {
+                Button("Not Now", role: .cancel) { send(.decline) }
+                    .keyboardShortcut(takesKeys ? .cancelAction : nil)
+                    .help("Put the plan away: \(plan.name) doesn’t start it")
+                Spacer()
+                if isAnswering, sent == .start {
+                    Spinner()
+                        .accessibilityLabel("Starting the goal")
+                }
+                Button(plan.alone ? "Start Goal" : "Start With Me Here") { send(.start) }
+                    .buttonStyle(.glassProminent)
+                    .keyboardShortcut(takesKeys ? .defaultAction : nil)
+                    .help(plan.alone ? "\(plan.name) works through the plan on \(computer.lowercasedThisMac), with the window closed too"
+                                     : "\(plan.name) works through the plan while you’re here")
+            }
+            .buttonStyle(.glass)
+            .controlSize(.large)
+            .disabled(isAnswering)
+        }
+        .padding(16)
+        .onAppear(perform: takeIn)
+        .onChange(of: plan.id) { takeIn() }
+        .task(id: "\(plan.id)|\(box)|\(plan.alone)|\(sandboxRound)") {
+            guard !plan.alone else { return }
+            // Read again while it's being checked, less often each time.
+            var wait = 2.0
+            while !Task.isCancelled {
+                sandbox = await app.goalPlans.sandbox(on: box)
+                guard case .status(let status) = sandbox, status.reason == "checking" else { return }
+                try? await Task.sleep(for: .seconds(wait))
+                wait = min(wait * 2, 60)
+            }
+        }
+    }
+
+    /// The checks and the limits, between the header and the buttons.
+    private var middle: some View {
+        VStack(alignment: .leading, spacing: 12) {
             if !plan.alone, let row = sandboxRow {
                 sandboxView(row)
             }
@@ -78,31 +129,6 @@ struct GoalCard: View {
                     .symbolRenderingMode(.multicolor)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 8) {
-                Button("Not Now", role: .cancel) { send(.decline) }
-                    .keyboardShortcut(takesKeys ? .cancelAction : nil)
-                    .help("Put the plan away: \(plan.name) doesn’t start it")
-                Spacer()
-                if isAnswering, sent == .start {
-                    Spinner()
-                        .accessibilityLabel("Starting the goal")
-                }
-                Button(plan.alone ? "Start Goal" : "Start With Me Here") { send(.start) }
-                    .buttonStyle(.glassProminent)
-                    .keyboardShortcut(takesKeys ? .defaultAction : nil)
-                    .help(plan.alone ? "\(plan.name) works through the plan on \(computer.lowercasedThisMac), with the window closed too"
-                                     : "\(plan.name) works through the plan while you’re here")
-            }
-            .buttonStyle(.glass)
-            .controlSize(.large)
-            .disabled(isAnswering)
-        }
-        .padding(16)
-        .onAppear(perform: takeIn)
-        .onChange(of: plan.id) { takeIn() }
-        .task(id: plan.alone ? "\(plan.id)|\(box)" : nil) {
-            guard !plan.alone else { return }
-            sandbox = await app.goalPlans.sandbox(on: box)
         }
     }
 
@@ -203,8 +229,10 @@ struct GoalCard: View {
                 defer { sandboxBusy = false }
                 if case .route(let method, let path) = action {
                     do { try await app.goalPlans.sandboxRoute(method, path, on: box) } catch { failure = error.localizedDescription }
+                    // Fixed, the plan may run alone now: its box says.
+                    await app.goalPlans.read(box)
                 }
-                sandbox = await app.goalPlans.sandbox(on: box)
+                sandboxRound += 1
             }
         }
     }
@@ -321,13 +349,13 @@ struct GoalCard: View {
             }
         }
 
-        var date: Date? {
+        /// When it ends: the end of the day picked.
+        func date(now: Date = .now, calendar: Calendar = .current) -> Date? {
             switch self {
             case .none: return nil
             case .at(let ms): return Date(timeIntervalSince1970: ms / 1000)
             case .days(let days):
-                let calendar = Calendar.current
-                let day = calendar.date(byAdding: .day, value: days, to: calendar.startOfDay(for: .now)) ?? .now
+                let day = calendar.date(byAdding: .day, value: days, to: calendar.startOfDay(for: now)) ?? now
                 return calendar.date(bySettingHour: 23, minute: 59, second: 0, of: day)
             }
         }
@@ -360,8 +388,7 @@ struct GoalCard: View {
         sent = action
         failure = nil
         let answer: GoalPlanAnswer = action == .start
-            ? .start(public: switches, wake: wake, digest: digest, ends: deadline.date,
-                     spend: plan.spend.indices.map { GoalPlanAnswer.SpendChange(cap: capBinding($0).wrappedValue, per: periodBinding($0).wrappedValue) })
+            ? Self.start(plan, switches: switches, wake: wake, digest: digest, deadline: deadline, caps: caps, periods: periods)
             : .decline
         Task {
             do {
@@ -370,6 +397,20 @@ struct GoalCard: View {
                 failure = error.localizedDescription
             }
         }
+    }
+}
+
+extension GoalCard {
+    /// What Start Goal sends: each public step's switch, Wake me, how often you hear, the end
+    /// you picked, and each spend line's cap and period as you set them.
+    static func start(_ plan: GoalPlan, switches: [String: Bool], wake: Bool, digest: GoalPlan.Cadence, deadline: Deadline,
+                      caps: [Double], periods: [GoalPlan.Spend.Period], now: Date = .now, calendar: Calendar = .current) -> GoalPlanAnswer {
+        .start(public: Dictionary(uniqueKeysWithValues: plan.public.map { ($0.id, switches[$0.id] ?? $0.on) }), wake: wake, digest: digest,
+               ends: deadline.date(now: now, calendar: calendar),
+               spend: plan.spend.indices.map { index in
+                   GoalPlanAnswer.SpendChange(cap: caps.indices.contains(index) ? caps[index] : plan.spend[index].cap,
+                                              per: periods.indices.contains(index) ? periods[index] : plan.spend[index].per)
+               })
     }
 }
 
