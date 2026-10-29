@@ -40,6 +40,8 @@ enum GoalSandbox {
         case status(Status)
         /// A box from before the sandbox could be checked (no `sandbox.check`, or 404).
         case old
+        /// A box with goals whose sandbox can't be checked yet: it can't say why.
+        case unchecked
         /// It couldn't be read now.
         case unreadable
     }
@@ -114,6 +116,8 @@ enum GoalSandbox {
             return Row(title: cant, text: "Kuvo Code on \(computer) is too old for the sandbox. \(withYou)", buttons: [Button(label: "Update \(computer)…", action: .updateMachine)])
         case .unreadable:
             return Row(title: cant, text: "Its sandbox can’t be read now. \(withYou)", buttons: [Button(label: "Try Again", action: .readAgain)])
+        case .unchecked:
+            return Row(title: cant, text: "\(bot) works while you’re here.", buttons: [])
         case .status(let read):
             status = read
         }
@@ -179,10 +183,12 @@ extension GoalPlans {
         #if DEBUG
         if let demoSandbox { return demoSandbox }
         #endif
-        guard let client = boxClient(box) else { return .unreadable }
+        guard let client = client(box) else { return .unreadable }
         struct Info: Decodable { var features: [String]? }
         guard let info = try? await client.value(Info.self, "GET", "kuvo/info") else { return .unreadable }
-        guard info.features?.contains("sandbox.check") == true else { return .old }
+        let features = info.features ?? []
+        // One with goals but no check yet can't say why; one with neither is from before both.
+        guard features.contains("sandbox.check") else { return features.contains("work.goals") ? .unchecked : .old }
         do {
             return .status(try await client.value(GoalSandbox.Status.self, "GET", "kuvo/sandbox"))
         } catch let refusal as BoxRefusal where refusal.status == 404 {
@@ -194,7 +200,7 @@ extension GoalPlans {
 
     /// A route of `box`'s sandbox (check again, fix, restart the engine).
     func sandboxRoute(_ method: String, _ path: String, on box: String) async throws {
-        guard let client = boxClient(box) else { throw BoxRefusal(status: 503, message: "Its computer can’t be reached now.") }
+        guard let client = client(box) else { throw BoxRefusal(status: 503, message: "Its computer can’t be reached now.") }
         let (status, data) = try await client.send(method, path, body: method == "GET" ? nil : Data("{}".utf8))
         guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
     }

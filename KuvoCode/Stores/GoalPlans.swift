@@ -31,12 +31,10 @@ final class GoalPlans {
     /// Each box's follow now, so one that ended (a reconnect) leaves the next one's goals alone.
     @ObservationIgnored private var following: [String: UUID] = [:]
 
-    private func client(_ box: String) -> BoxClient? {
+    /// `box`'s client: a test's own, or the app's.
+    func client(_ box: String) -> BoxClient? {
         boxes?(box) ?? app?.box(box)
     }
-
-    /// `box`'s client, for what's read of it beside its goals (its sandbox).
-    func boxClient(_ box: String) -> BoxClient? { client(box) }
 
     /// The goal of the bot whose conversation is `session`, with its box: its latest, while it's
     /// proposed or running, or ended within the day.
@@ -146,9 +144,14 @@ final class GoalPlans {
             let answered = try await client.value(Answered.self, "POST", "kuvo/work/goals/\(plan.id)", body: answer)
             take((plans[box] ?? []).map { $0.id == plan.id ? answered.goal : $0 }, from: box)
             return answered.goal
-        } catch let refusal as BoxRefusal where refusal.status == 404 || refusal.status == 400 {
+        } catch let refusal as BoxRefusal where refusal.status == 404 {
+            // Answered meanwhile on another client, or gone.
             await read(box)
             return nil
+        } catch let refusal as BoxRefusal where refusal.status == 400 {
+            // Not as it was (a plan from more than a day ago): the box says why, on the card.
+            await read(box)
+            throw refusal
         }
     }
 
