@@ -629,10 +629,11 @@ test("an SSH key you keep for a project signs through its conversations' own age
       assert.equal(signed.status, 0, signed.stderr);
       fs.rmSync(path.join(root, "commit.sig"));
     }
-    // Another project's conversation, and a bot's: their agents offer nothing.
+    // Another project's conversation, a bot's, and one noted with another folder than its own (the
+    // engine's word wins): their agents offer nothing.
     const elsewhere = path.join(root, "projects", "blog");
     fs.mkdirSync(elsewhere, { recursive: true });
-    for (const [note, folder] of everyoneOnly ? [] : [[folderNote(elsewhere), elsewhere], ["ses_scout", path.join(home, "bots", "bot_scout", "workspace")]]) {
+    for (const [note, folder] of everyoneOnly ? [] : [[folderNote(elsewhere), elsewhere], ["ses_scout", path.join(home, "bots", "bot_scout", "workspace")], ["ses_ship", project]]) {
       const socket = await sshAgentFor(note, folder);
       assert.ok(socket, `an agent for ${note}`);
       assert.equal((await sshTool("ssh-add", ["-l"], socket)).status, 1, "no keys");

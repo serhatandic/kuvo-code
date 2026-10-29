@@ -10207,13 +10207,15 @@ function launcherScript(places) {
     `if [ -d ${sh(places.sshAgents)} ]; then`,
     `  case \${OPENCODE_SESSION_ID-} in ses_*[!A-Za-z0-9_]*|ses_|'') note=dir-$sum ;; ses_*) note=$OPENCODE_SESSION_ID ;; *) note=dir-$sum ;; esac`,
     `  N=${sh(places.sshFor)}`,
-    `  [ "$(cat "$N/$note" 2>/dev/null)" = "$work" ] || (umask 077; mkdir -p "$N" && printf '%s' "$work" >"$N/.$note.$$" && mv -f "$N/.$note.$$" "$N/$note")`,
+    `  tries=1`,
+    `  [ "$(cat "$N/$note" 2>/dev/null)" = "$work" ] || { (umask 077; mkdir -p "$N" && printf '%s' "$work" >"$N/.$note.$$" && mv -f "$N/.$note.$$" "$N/$note") && tries=40; }`,
     `  p=$( (printf '%s' "$note" | sha256sum || printf '%s' "$note" | shasum -a 256) 2>/dev/null | cut -c 1-16)`,
+    `  case $p in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) tries=0 ;; esac`,
     `  i=0`,
-    `  while [ $i -lt 40 ]; do`,
+    `  while [ $i -lt $tries ]; do`,
     `    for s in ${sh(places.sshAgents)}/"$p"*.sock; do [ -S "$s" ] && ssh=$s; done`,
     `    [ -n "$ssh" ] && break`,
-    `    i=$((i + 1)); sleep 0.05`,
+    `    i=$((i + 1)); [ $i -lt $tries ] && sleep 0.05`,
     `  done`,
     `  [ -n "$ssh" ] && export SSH_AUTH_SOCK="$ssh"`,
     `fi`,
@@ -16918,11 +16920,33 @@ var isSshKey = (item) => item.kind === "key" && item.fields.includes("private_ke
 var sumOf = (text) => crypto26.createHash("sha256").update(text).digest("hex").slice(0, 32);
 var REFUSED_FOR = 30000;
 var NOTE_KEPT = 30 * 24 * 60 * 60000;
+var IDLE = 60 * 60000;
+function safeFolder() {
+  if (process.platform !== "darwin")
+    return true;
+  const parent = path72.dirname(SSH_AGENTS);
+  try {
+    const seen = fs72.lstatSync(parent);
+    return seen.isDirectory() && seen.uid === process.getuid?.() && (seen.mode & 63) === 0;
+  } catch {
+    return true;
+  }
+}
 var EVERYONE_ONLY = process.platform !== "darwin";
 var NOTE2 = /^(ses_[A-Za-z0-9_]{1,80}|dir-[0-9a-f]{32})$/;
+var real = (where) => {
+  try {
+    return fs72.realpathSync(where);
+  } catch {
+    return path72.resolve(where);
+  }
+};
 function callerFor(note, folder) {
   if (note.startsWith("ses_"))
-    return async () => ({ ...await callerOf(note, readEngineFile, readBridgeFile), folder });
+    return async () => {
+      const who = await callerOf(note, readEngineFile, readBridgeFile);
+      return who.folder && real(who.folder) === real(folder) ? who : null;
+    };
   return async () => {
     const bot = listBots().find((each) => each.folder && (folder === each.folder || folder.startsWith(each.folder + path72.sep)));
     return { folder, ...bot ? { bot: bot.id, botName: bot.name, ...bot.session ? { session: bot.session, root: bot.session } : {} } : {} };
@@ -16932,13 +16956,14 @@ function sourceFor(caller) {
   const read = new Map;
   const asking = new Map;
   const refused = new Map;
+  const asked = async () => EVERYONE_ONLY ? {} : await caller();
   return {
     keys: async () => {
-      if (!agentsUseVault() || isLocked())
+      const who = agentsUseVault() && !isLocked() ? await caller() : null;
+      if (!who || pausedFor(who.bot, who.root ?? who.session)) {
+        read.clear();
         return [];
-      const who = await caller();
-      if (pausedFor(who.bot, who.root ?? who.session))
-        return [];
+      }
       const keys = [];
       const grants = EVERYONE_ONLY ? readGrants().filter((grant) => grant.who.everyone) : readGrants();
       for (const item of readItems()) {
@@ -16961,23 +16986,32 @@ function sourceFor(caller) {
     allow: (key, signal) => {
       if (Date.now() < (refused.get(key.id) ?? 0))
         return Promise.resolve(false);
-      let answer = asking.get(key.id);
-      if (!answer) {
-        answer = (async () => {
+      let open = asking.get(key.id);
+      if (!open) {
+        const stop = new AbortController;
+        const answer = (async () => {
           const item = itemByID(key.id);
-          if (!item || !agentsUseVault())
+          const who = await asked();
+          if (!item || !who || !agentsUseVault())
             return false;
-          const who = await caller();
-          const allowed = await mayUse(item, who, { program: "ssh", signal });
+          const allowed = await mayUse(item, who, { program: "ssh", signal: stop.signal });
           if (allowed.ok)
             noteUse(item, who, { program: "ssh" }, allowed.how);
-          else
+          else if (!stop.signal.aborted)
             refused.set(key.id, Date.now() + REFUSED_FOR);
           return allowed.ok;
         })().catch(() => false).finally(() => asking.delete(key.id));
-        asking.set(key.id, answer);
+        open = { answer, waiting: 0, stop };
+        asking.set(key.id, open);
       }
-      return answer;
+      const it = open;
+      it.waiting++;
+      const gone = () => {
+        if (--it.waiting === 0)
+          it.stop.abort();
+      };
+      signal.addEventListener("abort", gone, { once: true });
+      return it.answer.finally(() => signal.removeEventListener("abort", gone));
     }
   };
 }
@@ -16991,13 +17025,27 @@ function keepSshAgents() {
     agents.delete(note);
   };
   const look = () => {
-    if (!agentsUseVault()) {
+    try {
+      lookNow();
+    } catch (error) {
+      console.error(`Kuvo Code's SSH agents couldn't be kept (${SSH_AGENTS}): ${error instanceof Error ? error.message : error}`);
+    }
+  };
+  const lookNow = () => {
+    if (!agentsUseVault() || !safeFolder()) {
       for (const note of [...agents.keys()])
         close(note);
-      fs72.rmSync(SSH_AGENTS, { recursive: true, force: true });
+      if (safeFolder())
+        fs72.rmSync(SSH_AGENTS, { recursive: true, force: true });
       return;
     }
     fs72.mkdirSync(SSH_AGENTS, { recursive: true, mode: 448 });
+    for (const [note, agent] of agents) {
+      if (Date.now() - agent.used < IDLE)
+        continue;
+      close(note);
+      fs72.rmSync(path72.join(SSH_FOR, note), { force: true });
+    }
     let notes = [];
     try {
       notes = fs72.readdirSync(SSH_FOR).filter((name) => NOTE2.test(name));
@@ -17019,20 +17067,27 @@ function keepSshAgents() {
         if (old.startsWith(prefix))
           fs72.rmSync(path72.join(SSH_AGENTS, old), { force: true });
       const socket = path72.join(SSH_AGENTS, `${prefix}${crypto26.randomBytes(9).toString("base64url")}.sock`);
-      agents.set(note, { folder, server: serveAgent(socket, sourceFor(callerFor(note, folder))) });
+      const agent = { folder, server: serveAgent(socket, sourceFor(callerFor(note, folder))), used: Date.now() };
+      agent.server.on("connection", () => {
+        agent.used = Date.now();
+      });
+      agents.set(note, agent);
     }
     for (const note of [...agents.keys()])
       if (!notes.includes(note))
         close(note);
   };
-  fs72.mkdirSync(SSH_FOR, { recursive: true, mode: 448 });
-  fs72.rmSync(SSH_AGENTS, { recursive: true, force: true });
-  for (const note of fs72.readdirSync(SSH_FOR)) {
-    try {
-      if (Date.now() - fs72.statSync(path72.join(SSH_FOR, note)).mtimeMs > NOTE_KEPT)
-        fs72.rmSync(path72.join(SSH_FOR, note), { force: true });
-    } catch {}
-  }
+  try {
+    fs72.mkdirSync(SSH_FOR, { recursive: true, mode: 448 });
+    if (safeFolder())
+      fs72.rmSync(SSH_AGENTS, { recursive: true, force: true });
+    for (const note of fs72.readdirSync(SSH_FOR)) {
+      try {
+        if (Date.now() - fs72.statSync(path72.join(SSH_FOR, note)).mtimeMs > NOTE_KEPT)
+          fs72.rmSync(path72.join(SSH_FOR, note), { force: true });
+      } catch {}
+    }
+  } catch {}
   look();
   let watcher = null;
   try {
@@ -17047,7 +17102,8 @@ function keepSshAgents() {
     for (const note of [...agents.keys()])
       close(note);
     try {
-      fs72.rmSync(SSH_AGENTS, { recursive: true, force: true });
+      if (safeFolder())
+        fs72.rmSync(SSH_AGENTS, { recursive: true, force: true });
     } catch {}
   };
   process.once("exit", stop);

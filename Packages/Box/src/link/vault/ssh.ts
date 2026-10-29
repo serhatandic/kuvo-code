@@ -32,28 +32,55 @@ export const isSshKey = (item: VaultItem) => item.kind === "key" && item.fields.
 const sumOf = (text: string) => crypto.createHash("sha256").update(text).digest("hex").slice(0, 32);
 const REFUSED_FOR = 30_000;
 const NOTE_KEPT = 30 * 24 * 60 * 60_000;
+const IDLE = 60 * 60_000;
+
+/** Whether the agents' folder is in a folder that's this user's alone: on a Mac, `/tmp/kuvo-ssh-<uid>`,
+ * which anyone could have made first (a folder, not a link, owned by you, `0700`), or none yet. */
+function safeFolder(): boolean {
+  if (process.platform !== "darwin") return true;
+  const parent = path.dirname(SSH_AGENTS);
+  try {
+    const seen = fs.lstatSync(parent);
+    return seen.isDirectory() && seen.uid === process.getuid?.() && (seen.mode & 0o077) === 0;
+  } catch {
+    return true;
+  }
+}
 // Where any conversation's commands can reach any conversation's agent (see above).
 const EVERYONE_ONLY = process.platform !== "darwin";
 const NOTE = /^(ses_[A-Za-z0-9_]{1,80}|dir-[0-9a-f]{32})$/;
 
-function callerFor(note: string, folder: string): () => Promise<Caller> {
-  if (note.startsWith("ses_")) return async () => ({ ...(await callerOf(note, readEngineFile, readBridgeFile)), folder });
+const real = (where: string) => { try { return fs.realpathSync(where); } catch { return path.resolve(where); } };
+
+// Who the conversation a note names is: the engine's word for a session (its folder, which the note
+// must name too), or for a command of yours, the bot whose folder it's in. Null: no one's keys.
+function callerFor(note: string, folder: string): () => Promise<Caller | null> {
+  if (note.startsWith("ses_")) return async () => {
+    const who = await callerOf(note, readEngineFile, readBridgeFile);
+    return who.folder && real(who.folder) === real(folder) ? who : null;
+  };
   return async () => {
     const bot = listBots().find(each => each.folder && (folder === each.folder || folder.startsWith(each.folder + path.sep)));
     return { folder, ...(bot ? { bot: bot.id, botName: bot.name, ...(bot.session ? { session: bot.session, root: bot.session } : {}) } : {}) };
   };
 }
 
-function sourceFor(caller: () => Promise<Caller>) {
-  // Each key read once while it's the same item (values from the Keychain, or the store).
+function sourceFor(caller: () => Promise<Caller | null>) {
+  // Each key read once while it's the same item (values from the Keychain, or the store), and
+  // forgotten while the vault is locked or the conversation paused.
   const read = new Map<string, { changed: number; key: AgentKey | null }>();
-  const asking = new Map<string, Promise<boolean>>();
+  const asking = new Map<string, { answer: Promise<boolean>; waiting: number; stop: AbortController }>();
   const refused = new Map<string, number>();
+  // Where any conversation's commands could reach this agent, it's asked as no one: only what you
+  // keep for everyone, never a bot's or a project's.
+  const asked = async (): Promise<Caller | null> => (EVERYONE_ONLY ? {} : await caller());
   return {
     keys: async (): Promise<AgentKey[]> => {
-      if (!agentsUseVault() || isLocked()) return [];
-      const who = await caller();
-      if (pausedFor(who.bot, who.root ?? who.session)) return [];
+      const who = agentsUseVault() && !isLocked() ? await caller() : null;
+      if (!who || pausedFor(who.bot, who.root ?? who.session)) {
+        read.clear();
+        return [];
+      }
       const keys: AgentKey[] = [];
       const grants = EVERYONE_ONLY ? readGrants().filter(grant => grant.who.everyone) : readGrants();
       for (const item of readItems()) {
@@ -71,24 +98,31 @@ function sourceFor(caller: () => Promise<Caller>) {
       }
       return keys;
     },
-    // One ask at a time per key, whichever of the conversation's commands signs: the others wait
-    // for its answer. After a no, it's no for a little while, without asking again.
+    // One ask at a time per key, whichever of the conversation's commands signs: the others wait for
+    // its answer, and it's taken back only when every one of them has gone. After your no, it's no
+    // for a little while, without asking again.
     allow: (key: AgentKey, signal: AbortSignal): Promise<boolean> => {
       if (Date.now() < (refused.get(key.id) ?? 0)) return Promise.resolve(false);
-      let answer = asking.get(key.id);
-      if (!answer) {
-        answer = (async () => {
+      let open = asking.get(key.id);
+      if (!open) {
+        const stop = new AbortController();
+        const answer = (async () => {
           const item = itemByID(key.id);
-          if (!item || !agentsUseVault()) return false;
-          const who = await caller();
-          const allowed = await mayUse(item, who, { program: "ssh", signal });
+          const who = await asked();
+          if (!item || !who || !agentsUseVault()) return false;
+          const allowed = await mayUse(item, who, { program: "ssh", signal: stop.signal });
           if (allowed.ok) noteUse(item, who, { program: "ssh" }, allowed.how);
-          else refused.set(key.id, Date.now() + REFUSED_FOR);
+          else if (!stop.signal.aborted) refused.set(key.id, Date.now() + REFUSED_FOR);
           return allowed.ok;
         })().catch(() => false).finally(() => asking.delete(key.id));
-        asking.set(key.id, answer);
+        open = { answer, waiting: 0, stop };
+        asking.set(key.id, open);
       }
-      return answer;
+      const it = open;
+      it.waiting++;
+      const gone = () => { if (--it.waiting === 0) it.stop.abort(); };
+      signal.addEventListener("abort", gone, { once: true });
+      return it.answer.finally(() => signal.removeEventListener("abort", gone));
     },
   };
 }
@@ -99,7 +133,7 @@ function sourceFor(caller: () => Promise<Caller>) {
  * Returns what stops them.
  */
 export function keepSshAgents(): () => void {
-  const agents = new Map<string, { folder: string; server: net.Server }>();
+  const agents = new Map<string, { folder: string; server: net.Server; used: number }>();
   const close = (note: string) => {
     const agent = agents.get(note);
     if (!agent) return;
@@ -107,12 +141,26 @@ export function keepSshAgents(): () => void {
     agents.delete(note);
   };
   const look = () => {
-    if (!agentsUseVault()) {
+    try {
+      lookNow();
+    } catch (error) {
+      console.error(`Kuvo Code's SSH agents couldn't be kept (${SSH_AGENTS}): ${error instanceof Error ? error.message : error}`);
+    }
+  };
+  const lookNow = () => {
+    if (!agentsUseVault() || !safeFolder()) {
       for (const note of [...agents.keys()]) close(note);
-      fs.rmSync(SSH_AGENTS, { recursive: true, force: true });
+      if (safeFolder()) fs.rmSync(SSH_AGENTS, { recursive: true, force: true });
       return;
     }
     fs.mkdirSync(SSH_AGENTS, { recursive: true, mode: 0o700 });
+    // An agent no command used for a while goes, with its note: the conversation's next command
+    // notes it again.
+    for (const [note, agent] of agents) {
+      if (Date.now() - agent.used < IDLE) continue;
+      close(note);
+      fs.rmSync(path.join(SSH_FOR, note), { force: true });
+    }
     let notes: string[] = [];
     try { notes = fs.readdirSync(SSH_FOR).filter(name => NOTE.test(name)); } catch {}
     for (const note of notes) {
@@ -125,18 +173,22 @@ export function keepSshAgents(): () => void {
       const prefix = sumOf(note).slice(0, 16);
       for (const old of fs.readdirSync(SSH_AGENTS)) if (old.startsWith(prefix)) fs.rmSync(path.join(SSH_AGENTS, old), { force: true });
       const socket = path.join(SSH_AGENTS, `${prefix}${crypto.randomBytes(9).toString("base64url")}.sock`);
-      agents.set(note, { folder, server: serveAgent(socket, sourceFor(callerFor(note, folder))) });
+      const agent = { folder, server: serveAgent(socket, sourceFor(callerFor(note, folder))), used: Date.now() };
+      agent.server.on("connection", () => { agent.used = Date.now(); });
+      agents.set(note, agent);
     }
     for (const note of [...agents.keys()]) if (!notes.includes(note)) close(note);
   };
-  fs.mkdirSync(SSH_FOR, { recursive: true, mode: 0o700 });
-  // Sockets an earlier process left (killed before it could clear them): this one holds the vault now.
-  fs.rmSync(SSH_AGENTS, { recursive: true, force: true });
-  // Notes of conversations long gone (a note is written once, so one still going is noted again by
-  // its next command).
-  for (const note of fs.readdirSync(SSH_FOR)) {
-    try { if (Date.now() - fs.statSync(path.join(SSH_FOR, note)).mtimeMs > NOTE_KEPT) fs.rmSync(path.join(SSH_FOR, note), { force: true }); } catch {}
-  }
+  try {
+    fs.mkdirSync(SSH_FOR, { recursive: true, mode: 0o700 });
+    // Sockets an earlier process left (killed before it could clear them): this one holds the vault now.
+    if (safeFolder()) fs.rmSync(SSH_AGENTS, { recursive: true, force: true });
+    // Notes of conversations long gone (a note is written once, so one still going is noted again by
+    // its next command).
+    for (const note of fs.readdirSync(SSH_FOR)) {
+      try { if (Date.now() - fs.statSync(path.join(SSH_FOR, note)).mtimeMs > NOTE_KEPT) fs.rmSync(path.join(SSH_FOR, note), { force: true }); } catch {}
+    }
+  } catch {}
   look();
   let watcher: fs.FSWatcher | null = null;
   try { watcher = fs.watch(SSH_FOR, () => look()); watcher.unref?.(); } catch {}
@@ -147,7 +199,7 @@ export function keepSshAgents(): () => void {
     watcher?.close();
     clearInterval(every);
     for (const note of [...agents.keys()]) close(note);
-    try { fs.rmSync(SSH_AGENTS, { recursive: true, force: true }); } catch {}
+    try { if (safeFolder()) fs.rmSync(SSH_AGENTS, { recursive: true, force: true }); } catch {}
   };
   // The box exits on SIGTERM without closing its servers: its agents go with it all the same.
   process.once("exit", stop);
