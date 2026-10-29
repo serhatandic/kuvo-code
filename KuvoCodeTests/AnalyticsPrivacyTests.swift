@@ -8,7 +8,7 @@ import Testing
 /// deployment, a local model, your own name for one) is "custom".
 @MainActor
 @Suite(.serialized) struct AnalyticsPrivacyTests {
-    let catalog = Catalog(isMac: true)
+    let catalog = Catalog()
     let config: EngineConfig
 
     init() async throws {

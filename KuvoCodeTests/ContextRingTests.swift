@@ -12,7 +12,7 @@ import Testing
 @Suite(.serialized) struct ContextRingTests {
     let engine = StubEngine(port: 47999)
     let workspace = Workspace()
-    let catalog = Catalog(isMac: true)
+    let catalog = Catalog()
     let id = "ses_ring"
 
     init() {

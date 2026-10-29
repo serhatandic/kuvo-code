@@ -12,10 +12,10 @@ import { readKit } from "../bots/kit";
 import { listBots } from "../bots/list";
 import { asked } from "../engine/client";
 import { messageID } from "../engine/sessions";
-import { macMoving } from "../host-interface";
 import { keepOwn, ownAgents, ownAsLast } from "../peers/agents";
 import { composeAgents, isPutAway, peerOf, readPeerAgents } from "../peers/directory";
 import { movedOf, peersOf } from "../peers/known";
+import { frozen } from "../moves/records";
 import { readLink } from "../state";
 import { excerpt, folded, READ_BY_MAIL, READ_LIMIT, readConversation } from "./conversation";
 import { letterAnswer, leaveLetter, offRelay } from "./leave";
@@ -167,7 +167,7 @@ async function sendMessage(args: Record<string, unknown>, caller: string | null,
   const target = found.agent;
   if (target.session === caller) return refused("That's you.");
   // Moving to another computer: once it's over, to it where it lives then.
-  if (IS_MAC && (await macMoving(target.session).catch(() => false))) return refused(`${target.name} is moving to another computer. Try again in a minute.`);
+  if (frozen().has(target.session)) return refused(`${target.name} is moving to another computer. Try again in a minute.`);
   // A few at a time: two agents shouldn't keep writing to each other unattended. Taken back if it
   // doesn't go, so one tried again isn't counted twice.
   const key = caller ?? "outside";

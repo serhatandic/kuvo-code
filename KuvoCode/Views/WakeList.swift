@@ -390,11 +390,11 @@ struct WakeBar: View {
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .help(wake.note)
-                Button("Now", systemImage: "arrow.up") { attempt { try await app.wakeUps.wakeNow(wake, of: owner) } }
+                Button("Now") { attempt { try await app.wakeUps.wakeNow(wake, of: owner) } }
                     .buttonStyle(TextButtonStyle())
                     .font(.system(size: 13))
                     .help(wake.every == nil ? "Wake it up now" : "Wake it up now; it still comes back at its time")
-                Button("Cancel", systemImage: "xmark.circle") { cancel(item, saying: "Wake-up canceled") { try await app.wakeUps.cancel(wake, of: owner) } }
+                Button("Cancel") { cancel(item, saying: "Wake-up canceled") { try await app.wakeUps.cancel(wake, of: owner) } }
                     .buttonStyle(TextButtonStyle())
                     .font(.system(size: 13))
                     .help("Cancel this wake-up")
@@ -408,7 +408,7 @@ struct WakeBar: View {
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .help(watch.check + "\n\n" + watch.note)
-                Button("Stop", systemImage: "xmark.circle") { cancel(item, saying: "Watch stopped") { try await app.wakeUps.cancel(watch, of: owner) } }
+                Button("Stop") { cancel(item, saying: "Watch stopped") { try await app.wakeUps.cancel(watch, of: owner) } }
                     .buttonStyle(TextButtonStyle())
                     .font(.system(size: 13))
                     .help("Stop this watch")

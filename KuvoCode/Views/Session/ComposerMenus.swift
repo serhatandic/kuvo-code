@@ -43,9 +43,9 @@ enum ToolApproval: String, CaseIterable {
     /// they're folded in: Approve All runs what Settings asks first about, without asking; Ask
     /// First still lets through what Settings allows (a command like "npm test *", a bot's
     /// memory), asking about the rest; and both keep what Settings doesn't allow, which nothing
-    /// overrides.
+    /// overrides (one a newer engine set that this app doesn't know counts as that too, sent as it is).
     func rules(settings: [PermissionRule]) -> [PermissionRule] {
-        let denied = settings.filter { $0.effect == .deny }
+        let denied = settings.filter { $0.effect.holdsBack }
         switch self {
         case .approveAll:
             return settings.filter { $0.effect == .ask }.map { PermissionRule(action: $0.action, resource: $0.resource, effect: .allow) } + denied
@@ -56,7 +56,7 @@ enum ToolApproval: String, CaseIterable {
             let everywhere = settings.last { $0.action == "external_directory" && $0.resource == "*" }?.effect == .allow
             let mode = everywhere ? rules : rules.filter { $0.action != "external_directory" }
             // What Settings says of particular things (an Ask under a broader Allow too), in its order.
-            return mode + settings.filter { $0.effect != .deny && $0.resource != "*" && $0.action != "external_directory" } + denied
+            return mode + settings.filter { !$0.effect.holdsBack && $0.resource != "*" && $0.action != "external_directory" } + denied
         }
     }
 
@@ -103,8 +103,8 @@ struct ModeChip: View {
 
     var body: some View {
         NativeMenuButton(name: "mode", menu: makeMenu) {
+            // The mode in words; the hand says it asks first, which the words don't.
             HStack(spacing: 6) {
-                Image(systemName: Self.symbol(agent))
                 Text(agent.capitalized)
                 if approval == .askFirst {
                     Image(systemName: "hand.raised.fill")
@@ -167,14 +167,11 @@ struct WorkplaceChip: View {
 
     var body: some View {
         NativeMenuButton(name: "workplace", menu: makeMenu) {
-            HStack(spacing: 6) {
-                Image(systemName: worktree ? "arrow.triangle.branch" : "folder")
-                Text(worktree ? (attempts > 1 ? "Worktree ×\(attempts)" : "Worktree") : "Local")
-            }
-            .font(.callout)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .hoverHighlight(in: Capsule(), mutesInk: true)
+            Text(worktree ? (attempts > 1 ? "Worktree ×\(attempts)" : "Worktree") : "Local")
+                .font(.callout)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .hoverHighlight(in: Capsule(), mutesInk: true)
         }
         .help("Where the session works: in the project's folder, or in a worktree of its own")
     }

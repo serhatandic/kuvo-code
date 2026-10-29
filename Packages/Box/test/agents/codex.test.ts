@@ -160,6 +160,36 @@ const askFirst: PermissionRule[] = ["edit", "write", "patch", "shell", "webfetch
 /** A command Codex runs, as it tells one (in your login shell). */
 const command = (id: string, line: string, more: Record<string, unknown> = {}) => ({ type: "commandExecution", id, command: `/bin/zsh -lc '${line}'`, cwd: root, status: "inProgress", ...more })
 
+describe("Codex that won't start", () => {
+  test("a Codex that turns down being started (an older or newer one) isn't left running, however often it's tried", async () => {
+    const script = join(root, "refuses.js")
+    writeFileSync(script, `require("node:fs").appendFileSync(${JSON.stringify(join(root, "pids.txt"))}, process.pid + "\\n")
+process.stdin.on("data", (chunk) => {
+  for (const line of String(chunk).split("\\n").filter(Boolean)) {
+    const message = JSON.parse(line)
+    if (message.method === "initialize") process.stdout.write(JSON.stringify({ id: message.id, error: { code: -32601, message: "Unknown method" } }) + "\\n")
+  }
+})
+`)
+    const launcher = join(root, "codex")
+    writeFileSync(launcher, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`)
+    chmodSync(launcher, 0o755)
+    codex = new TestCodex(launcher, root)
+    for (let attempt = 0; attempt < 2; attempt++) await expect(codex.rpc()).rejects.toThrow()
+    const pids = readFileSync(join(root, "pids.txt"), "utf8").trim().split("\n").map(Number)
+    expect(pids).toHaveLength(2)
+    const running = (pid: number) => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    await until(() => !pids.some(running))
+  })
+})
+
 describe("Codex, nothing dropped", () => {
   test("an image it made, one it looked at, a function's pictures, and an item kind the bridge doesn't know", async () => {
     const id = await run([
@@ -244,6 +274,57 @@ describe("Codex's reply and its steps", () => {
     })
     expect(changed.state.metadata.files[1].patch).toContain("+expect(sum(1, 2)).toBe(3)")
     expect(after.content).toEqual([{ type: "text", text: "Fixed: the tests pass." }])
+  })
+})
+
+describe("Codex's file citations", () => {
+  test("a file it cites as what it made shows as a file in the conversation, one it cites in its words as its path, and no directive shows raw, however its words come", async () => {
+    const pdf = join(root, "output/pdf/moon.pdf")
+    const id = await run([
+      ["item/agentMessage/delta", { itemId: "m1", delta: "Created the field note: one page.\n\n:co" }],
+      ["item/agentMessage/delta", { itemId: "m1", delta: `dex-file-citation{path="${pdf}" purp` }],
+      ["item/agentMessage/delta", { itemId: "m1", delta: 'ose="output"}' }],
+      ["item/completed", { item: { type: "agentMessage", id: "m1", text: `Created the field note: one page.\n\n:codex-file-citation{path="${pdf}" purpose="output"}` } }],
+      ["item/started", { item: command("c1", "ls") }],
+      ["item/completed", { item: command("c1", "ls", { status: "completed", exitCode: 0, aggregatedOutput: "" }) }],
+      ["item/completed", { item: { type: "agentMessage", id: "m2", text: 'The review of :codex-file-citation{path="/w/review.pdf" purpose="source"} is due Friday. Time: 10:30.:codex-followup{text="More?"}\nA :codex-file-citation{path="unclosed is kept as words.\nThe rest stays.' } }],
+    ])
+    const content = steps(id).flatMap((step) => step.content)
+    const words = content.filter((part: any) => part.type === "text").map((part: any) => part.text)
+    expect(words.join("").replace(':codex-file-citation{path="unclosed', "")).not.toContain(":codex-")
+    expect(words).toEqual(["Created the field note: one page.\n\n", "The review of `/w/review.pdf` is due Friday. Time: 10:30.\nA :codex-file-citation{path=\"unclosed is kept as words.\nThe rest stays."])
+    const shown = tools(id).find((tool: any) => tool.name === "kuvo-browser_show_file")
+    expect(shown?.state).toMatchObject({ status: "completed", input: { path: pdf } })
+  })
+
+  test("a reply kept from before its citations were read shows as one does now once the bridge starts again: the file it made shown, and no directive", () => {
+    const pdf = join(root, "output/pdf/moon.pdf")
+    const store = new Store(join(root, "sessions"))
+    // Only to make it: Codex itself isn't asked anything.
+    const first = new Sessions(store, { find: (id: string | undefined) => (id === "codex-cli" ? { providerID: "codex-cli" } : undefined) } as unknown as Roster, new Auto(root))
+    const id = first.create({ title: "Codex", model: { providerID: "codex-cli", id: "gpt-test" }, location: { directory: root } }).id
+    const words = `Created the field note: one page.\n\n:codex-file-citation{path="${pdf}" purpose="output"}\n\nIt follows :codex-file-citation{path="/w/notes.md" purpose="source"}.`
+    const kept: Message = { type: "assistant", id: "msg_kept", time: { created: 1, completed: 2 }, agent: "build", model: { providerID: "codex-cli", id: "gpt-test" }, content: [{ type: "text", text: words }] }
+    // Another agent's words quoting one (Auto went on with Claude): words, as they were.
+    const quoted: Message = { type: "assistant", id: "msg_quoted", time: { created: 3, completed: 4 }, agent: "build", model: { providerID: "claude-code", id: "sonnet" }, content: [{ type: "text", text: words }] }
+    store.get(id)!.messages.push(kept, quoted)
+    store.save(id, true)
+    first.closeAll()
+
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: () => undefined } as unknown as Roster, new Auto(root))
+    const reply = sessions.messages(id).find((message) => message.id === "msg_kept") as any
+    expect(reply.content.map((part: any) => (part.type === "text" ? part.text : `[${part.name} ${part.state.status} ${part.state.input.path}]`))).toEqual([
+      "Created the field note: one page.\n\n",
+      `[kuvo-browser_show_file completed ${pdf}]`,
+      "\n\nIt follows `/w/notes.md`.",
+    ])
+    expect((sessions.messages(id).find((message) => message.id === "msg_quoted") as any).content).toEqual([{ type: "text", text: words }])
+    expect(sessions.cited).toEqual([{ path: pdf, at: 2 }])
+    // Kept as it reads now: read once, not again at the next start.
+    expect(readFileSync(join(root, "sessions", id, "messages.json"), "utf8").split(":codex-").length).toBe(3)
+    sessions.closeAll()
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: () => undefined } as unknown as Roster, new Auto(root))
+    expect(sessions.cited).toEqual([])
   })
 })
 
@@ -764,5 +845,15 @@ describe("Stopping Codex", () => {
     expect(sent().filter((message) => message.method === "turn/interrupt").map((message) => message.params)).toEqual([{ threadId: "t1", turnId: "u1" }])
     expect(sessions.messages(id).at(-1)).toMatchObject({ type: "idle", outcome: "interrupted" })
     expect(tools(id)[0].state).toMatchObject({ status: "error", error: { type: "aborted" }, content: [{ type: "text", text: "Stopped." }] })
+  })
+
+  test("its account removed while it works (Settings › Accounts): the turn ends as stopped, without Stop", async () => {
+    const id = start([["item/started", { item: command("c1", "npm run dev") }], untilStopped])
+    await until(() => tools(id).length > 0)
+    // As removing an account does: its conversations close, and its Codex stops.
+    sessions.forgetProvider(codex!.providerID)
+    codex!.shutdown()
+    await until(() => ended(id))
+    expect(sessions.messages(id).at(-1)).toMatchObject({ type: "idle", outcome: "interrupted" })
   })
 })

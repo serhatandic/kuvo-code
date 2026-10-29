@@ -47,6 +47,60 @@ import Testing
         #expect(model.failure != nil)
     }
 
+    /// A message on its way (its tools starting, a slow engine) when the app quits is back in the
+    /// composer at the next launch; once the engine has it, nothing of it is kept.
+    @Test func aMessageOnItsWayAsTheAppQuitsIsInTheComposerNextTime() async throws {
+        defer {
+            done()
+            Drafts.shared.saveNow()
+        }
+        let held = Gate()
+        StubWeb.handle(Self.engine + "/api/session/\(id)/prompt") { _, _ in
+            held.wait()
+            return StubWeb.json([:])
+        }
+        let model = try #require(workspace.model(for: id))
+        model.draftText = "Fix the build"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        #expect(model.draftText.isEmpty)
+        // The app quitting now: the next launch reads what's kept.
+        #expect(Drafts(defaults: .standard)[id].text == "Fix the build")
+        // (That read kept it as a draft, as a launch does: this app's own drafts again.)
+        Drafts.shared.saveNow()
+        held.open()
+        await model.messagesSent()
+        #expect(Drafts(defaults: .standard)[id].isEmpty, "once it's gone, it isn't put back")
+    }
+
+    /// A new session's first message, on its way as the app quits, is back once at the next launch:
+    /// in the new-session composer it was written in, not also in the session's own.
+    @Test func aNewSessionsFirstMessageOnItsWayAsTheAppQuitsComesBackOnce() async throws {
+        let draft = SidebarView.draftTag("/tmp/kuvo-tests-composer")
+        defer {
+            done()
+            Drafts.shared.remove(draft)
+            Drafts.shared.saveNow()
+        }
+        let held = Gate()
+        StubWeb.handle(Self.engine + "/api/session/\(id)/prompt") { _, _ in
+            held.wait()
+            return StubWeb.json([:])
+        }
+        let model = try #require(workspace.model(for: id))
+        // As the new-session composer sends it: kept there until the session has it.
+        Drafts.shared[draft].text = "Start the API"
+        let (sending, sent) = Drafts.shared.takeOut(draft)
+        model.submit(sent.text, files: sent.files, for: nil, queue: false, commands: [], keptElsewhere: true)
+        // The app quitting now.
+        let next = Drafts(defaults: .standard)
+        #expect(next[draft].text == "Start the API")
+        #expect(next[id].isEmpty, "not twice")
+        Drafts.shared.saveNow()
+        held.open()
+        await model.messagesSent()
+        Drafts.shared.sent(sending)
+    }
+
     /// What a widget sent that didn't go comes back as its words alone, not the note naming the
     /// widget, and leaves your review comments for your own message.
     @Test func aWidgetsAnswerThatDidntGoComesBackAsItsWords() async throws {
@@ -76,7 +130,7 @@ import Testing
         try StubWeb.answer(Self.engine + "/api/model/default", json: ["location": location, "data": NSNull()])
         try StubWeb.answer(Self.engine + "/api/agent", json: ["location": location, "data": []])
         try StubWeb.answer(Self.engine + "/api/command", json: ["location": location, "data": []])
-        let catalog = Catalog(isMac: true)
+        let catalog = Catalog()
         catalog.api = workspace.api
         await catalog.refresh()
         let luna = ModelRef(id: "luna", providerID: "openai")

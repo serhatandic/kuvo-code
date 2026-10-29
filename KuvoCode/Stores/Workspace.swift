@@ -20,11 +20,9 @@ final class Workspace {
             for model in models.values where !RemoteFolder.isRemote(model.session.location.directory) && !OutsideAgents.isAgentSession(model.session) { model.reconnect(api) }
         }
     }
-    /// The main window's tabs, where a fork, a move to the coding agents and an agent's new session
-    /// open (the app sets it; none in a test of the workspace alone).
+    /// The main window's tabs, where a fork and a move to the coding agents open (the app sets it;
+    /// none in a test of the workspace alone).
     @ObservationIgnored weak var tabs: WindowTabs?
-    /// Sessions agents started that have been shown (see `noteBeside`).
-    @ObservationIgnored private var askedBeside: Set<String> = []
 
     /// The agents bridge: sessions with Claude Code, Codex, Cursor, Grok and Antigravity go to it,
     /// whatever their folder (on this Mac).
@@ -319,12 +317,13 @@ final class Workspace {
         if Moves.isFrozen(id) { throw Moves.Failure.moving }
         guard let api = api(forFolder: directory) else { return }
         try await api.moveSession(id, to: directory)
-        let extra = settings[directory]?.folders ?? []
+        // As its engine knows them: a machine's folders are plain paths there.
+        let extra = (settings[directory]?.folders ?? []).map(api.enginePath)
         try? await api.setPermissions(session: id, rules: ProjectFolders.permissions(session.permissions ?? [], folders: extra))
         if extra.isEmpty {
             try? await api.removeInstruction(session: id, key: ProjectFolders.instructionKey)
         } else {
-            try? await api.setInstruction(session: id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: directory, folders: extra))
+            try? await api.setInstruction(session: id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: api.enginePath(directory), folders: extra))
         }
         // Its open conversation stays as it is, now in its new place.
         await reload(id)
@@ -809,7 +808,8 @@ final class Workspace {
         guard let api = isAgents ? bridge?.api : api(forFolder: directory) else { throw CancellationError() }
         let directory = addFolder(directory)
         let folder = worktree ? try await makeWorktree(of: directory) : directory
-        let extra = settings[directory]?.folders ?? []
+        // As its engine knows them: a machine's folders are plain paths there.
+        let extra = (settings[directory]?.folders ?? []).map(api.enginePath)
         let rules = ProjectFolders.permissions(approval.rules(settings: EngineConfig.rules(on: RemoteFolder.machine(of: directory))), folders: extra)
         let session: Session
         do {
@@ -820,7 +820,7 @@ final class Workspace {
             throw error
         }
         if !extra.isEmpty {
-            try? await api.setInstruction(session: session.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: folder, folders: extra))
+            try? await api.setInstruction(session: session.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: api.enginePath(folder), folders: extra))
         }
         if let tree = worktrees[folder] {
             toldWorktree.insert(session.id)
@@ -1223,7 +1223,9 @@ final class Workspace {
         for folder in unsentProjects.filter({ Self.box(of: $0) == box }).sorted() {
             let body = Self.boxBody(settings[folder] ?? ProjectSettings(), removed: !folders.contains(folder))
             guard let (status, _) = try? await client.send("PUT", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(folder)), body: body) else { continue }
-            if (200..<300).contains(status) || status == 400 { unsentProjects.remove(folder) }
+            // Changed again while it went: still to send, as it is now (its own turn does).
+            let now = Self.boxBody(settings[folder] ?? ProjectSettings(), removed: !folders.contains(folder))
+            if (200..<300).contains(status) || status == 400, now == body { unsentProjects.remove(folder) }
         }
     }
 
@@ -1442,9 +1444,10 @@ final class Workspace {
                                                    permissions: current.permissions, messages: messages, waiting: carried)
         moving = false
         for item in waiting { try? await engine.cancelInbox(session: id, item: item.id) }
-        let extra = extraFolders(session.location.directory)
+        // As its bridge knows them: a machine's folders are plain paths there.
+        let extra = extraFolders(session.location.directory).map(bridge.enginePath)
         if !extra.isEmpty {
-            try? await bridge.setInstruction(session: moved.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: session.location.directory, folders: extra))
+            try? await bridge.setInstruction(session: moved.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: bridge.enginePath(session.location.directory), folders: extra))
         }
         if let tree = worktrees[session.location.directory] {
             try? await bridge.setInstruction(session: moved.id, key: Self.worktreeInstructionKey, text: Self.instructions(for: tree))
@@ -1569,7 +1572,8 @@ final class Workspace {
                 Task { try? await api.markViewed(id, idle: idle) }
             }
             for (id, model) in models where isMacs(model.session) {
-                guard let session = listed.first(where: { $0.id == id }) else {
+                // A subagent's isn't one of the conversations listed: among all of the bridge's.
+                guard let session = (model.isSubagent ? everything : listed).first(where: { $0.id == id }) else {
                     models[id] = nil
                     continue
                 }
@@ -2001,8 +2005,12 @@ final class Workspace {
                 asking[request] = session
                 continue
             }
-            // On a machine not connected now: read again when it is.
-            guard sessionMachines[session].map(connectedMachines.contains) ?? true else { continue }
+            // On a machine not connected now: as it was, read again when it is (and not told
+            // again then as news).
+            guard sessionMachines[session].map(connectedMachines.contains) ?? true else {
+                asking[request] = session
+                continue
+            }
             // A closed session's: still asked (or not known), it stays; its notification goes otherwise.
             if sharedForms[request] == nil, let api = api(forSession: session) {
                 guard let asked = await Self.stillAsked(in: session, api: api), !asked.contains(request) else {
@@ -2574,6 +2582,7 @@ final class Workspace {
         guard let session = try? await api(forSession: id)?.session(id) else { return }
         // Only root sessions get a row; subagent sessions show inside their parent, and under it.
         if let parent = session.parentID {
+            if isHidden(session) { hiddenRuns.insert(session.id) }
             parents[session.id] = parent
             if !isHidden(session) { keepSubSession(session, of: parent) }
             // A subagent's subagent: whose that one is, up to the session with a row.
@@ -2632,7 +2641,23 @@ final class Workspace {
         // The latest ones are enough: tabs come and go.
         if openedSubSessions.count > 200 { openedSubSessions = Dictionary(uniqueKeysWithValues: openedSubSessions.shuffled().prefix(150).map { ($0.key, $0.value) }) }
         UserDefaults.standard.set(openedSubSessions, forKey: "openedSubSessions")
+        if reviewParts.contains(where: { openedSubSessions[$0] == nil }) { reviewParts = reviewParts.filter { openedSubSessions[$0] != nil } }
+        UserDefaults.standard.set(Array(reviewParts), forKey: "openedReviewParts")
     }
+
+    /// A review's part, opened from its card: it opens as a sub-session of `parent` (the
+    /// conversation reviewed), whose list leaves it out as it does the box's other runs.
+    func rememberReviewPart(_ id: String, of parent: String) {
+        parents[id] = parent
+        reviewParts.insert(id)
+        rememberOpened(id)
+        UserDefaults.standard.set(Array(reviewParts), forKey: "openedReviewParts")
+    }
+
+    /// A review's part, opened: once its review is put away, it's gone, not a subagent missing
+    /// (kept, as its tab is, as Kuvo Code opens again).
+    func isReviewPart(_ id: String) -> Bool { reviewParts.contains(id) }
+    @ObservationIgnored private var reviewParts = Set(UserDefaults.standard.stringArray(forKey: "openedReviewParts") ?? [])
 
     /// Learns whose sub-session `id` is, when it has no row and that isn't known yet.
     func findParent(of id: String) async {
@@ -2677,7 +2702,7 @@ final class Workspace {
     /// Subagents a session handed work to that are at it now (through subagents of subagents),
     /// such as those it sent off in the background, which go on after its own turn ends.
     func helpersAtWork(in id: String) -> Int {
-        running.count { $0 != id && root(of: $0) == id }
+        running.count { $0 != id && !hiddenRuns.contains($0) && !reviewParts.contains($0) && root(of: $0) == id }
     }
 
     /// The sessions a bot runs (`kuvo.by`) that are at it now: working, or waiting on you. What
@@ -2689,6 +2714,10 @@ final class Workspace {
         #endif
         return sessions.filter { WorksFor($0)?.bot == bot && !Self.isArchived($0) && (isWorking($0.id) || needsAttention($0.id)) }
     }
+
+    /// Sessions under another that are kept out of sight (a review's parts, which their review
+    /// shows): never counted as its subagents at work.
+    private var hiddenRuns: Set<String> = []
 
     /// The session works, itself, through subagents still at it, or with a command it left
     /// running in the background: what its row, tab and bot show.
@@ -2836,23 +2865,12 @@ final class Workspace {
         }
     }
 
-    /// A session an agent started (its start_session tool) shows beside the conversation that
-    /// started it or in a tab of its own, as its metadata says (`kuvo.startedBy`, `kuvo.beside`):
-    /// once, the first time it's seen, while it's new, wherever it runs.
-    private func noteBeside(_ session: Session) {
-        guard let kuvo = session.metadata?["kuvo"], let starter = kuvo["startedBy"]?.string,
-              Date.now.timeIntervalSince1970 * 1000 - session.time.created < 120_000,
-              askedBeside.insert(session.id).inserted else { return }
-        tabs?.agentStarted(session.id, by: starter, beside: kuvo["beside"]?.bool != false)
-    }
-
     private func upsert(_ session: Session) {
         guard !isHidden(session) else {
             sessions.removeAll { $0.id == session.id }
             return
         }
         nameBranch(of: session)
-        defer { noteBeside(session) }
         var session = session
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
             let wasArchived = Self.isArchived(sessions[index])

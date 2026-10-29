@@ -13,6 +13,8 @@ final class Dictation {
     private(set) var owner: String?
     /// How it shows while it listens: as Settings said when it started.
     private(set) var style = VoiceStyle.composer
+    /// The composer whose mic shows the tip about more accurate voice input, once, after the first dictation.
+    var tipFor: String?
     @ObservationIgnored private var deliver: ((String) -> Void)?
     /// The composer in view, which the shortcut starts voice input for.
     @ObservationIgnored private var focused: (owner: String, words: Words, deliver: (String) -> Void)?
@@ -27,7 +29,10 @@ final class Dictation {
         voice.ended = { [weak self, weak voice] words in
             guard let self, let voice, self.voice === voice else { return }
             let words = words.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !words.isEmpty { self.deliver?(words) }
+            if !words.isEmpty {
+                self.deliver?(words)
+                if VoiceTip.takeTurn() { self.tipFor = owner }
+            }
             self.close()
         }
         style = VoiceStyle.current

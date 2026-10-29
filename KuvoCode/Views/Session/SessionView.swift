@@ -121,6 +121,9 @@ struct FailureBar: View {
 extension EnvironmentValues {
     /// The conversation's machine is out of reach: what needs its engine (undo, try again) waits.
     @Entry var isOffline = false
+    /// The conversation shown takes no messages (a review's part, watched, not steered): nothing
+    /// offers to send one, Try Again included.
+    @Entry var takesNoMessages = false
 }
 
 /// What's over the conversation's end: questions and permission requests as solid cards, then
@@ -358,7 +361,8 @@ private struct BottomStack: View {
                         Spacer()
                         HideBarsTab { model.tuck.hide() }
                     }
-                    .padding(.trailing, 18)
+                    // Its end over the bars' ✕ itself (narrower than its button).
+                    .padding(.trailing, BarEnd.trailing + 8)
                     .padding(.bottom, -8)
                     .transition(.opacity)
                 }
@@ -682,7 +686,7 @@ struct DraftSessionView: View {
             .readableColumn()
 
             if isCreating, isRepository, worktree {
-                Label(attempts > 1 ? "Setting up \(attempts) worktrees…" : "Setting up a worktree…", systemImage: "arrow.triangle.branch")
+                Text(attempts > 1 ? "Setting up \(attempts) worktrees…" : "Setting up a worktree…")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.top, 12)

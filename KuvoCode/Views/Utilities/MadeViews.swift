@@ -241,25 +241,27 @@ struct MadePopover: View {
 
     private var heading: String { place.title }
 
-    /// A coding session's code changes are in the panel.
+    /// A coding session's changes to tracked files are in the panel. Its words wrap rather
+    /// than cut off, beside a button that keeps its size.
     private var changesNote: some View {
         VStack(spacing: 0) {
             Divider()
             HStack(spacing: 8) {
-                Text("Its code changes are in the side panel.")
+                Text("Changes to tracked files are in the side panel.")
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
                 Button("Show Changes") {
                     close()
                     app.utilities.revealChanges()
                 }
                 .buttonStyle(TextButtonStyle(outset: true))
+                .fixedSize()
             }
             .font(.system(size: 12))
             .padding(.horizontal, 16)
-            .frame(height: 36)
+            .padding(.vertical, 9)
+            .frame(minHeight: 36)
             .accessibilityElement(children: .contain)
         }
     }
@@ -343,7 +345,7 @@ struct MadePopover: View {
         let detail = switch place {
         case .bot(let bot): "What \(bot.name) writes, makes and keeps in its memory shows up here, with every version."
         case .group: things.only == nil ? "What the bots in this chat write and make shows up here, each with its face." : "This bot hasn’t made anything in this chat yet."
-        case .session: "Pictures, documents and other files this session makes, besides code, show up here."
+        case .session: "Pictures, documents and other files this session makes show up here. Changes to tracked files are in the side panel."
         }
         return MadeNotice(symbol: "tray", title: "Nothing Made Yet", detail: detail)
     }
@@ -659,8 +661,9 @@ struct MadeRow: View {
                             .font(.system(size: 13, weight: .medium))
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        if let pin = header.pinned, timeOnly || pin.by == "bot" {
-                            MarkBadge(text: ArtifactWords.mark(pin))
+                        // Kept, wherever it's listed: a star for yours, Final for its bot's.
+                        if let pin = header.pinned {
+                            if pin.by == "bot" { MarkBadge(text: ArtifactWords.mark(pin)) } else { KeptStar() }
                         }
                     }
                     Text(subtitle)
@@ -1442,7 +1445,7 @@ private struct QuickLookPreview: NSViewRepresentable {
     }
 }
 
-/// What's kept at the top, as a small tinted capsule: "Final" (its bot's mark) or "Kept" (yours).
+/// What its bot marked final, as a small tinted capsule beside its name.
 private struct MarkBadge: View {
     let text: String
 
@@ -1453,5 +1456,16 @@ private struct MarkBadge: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
             .background(.tint.opacity(0.14), in: .capsule)
+    }
+}
+
+/// What you keep, as the star Keep fills, beside its name.
+private struct KeptStar: View {
+    var body: some View {
+        Image(systemName: ArtifactWords.kept.symbol)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.tint)
+            .help("Kept")
+            .accessibilityLabel("Kept")
     }
 }

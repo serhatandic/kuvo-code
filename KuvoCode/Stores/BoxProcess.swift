@@ -48,6 +48,39 @@ final class BoxProcess {
         return Bridge.scriptURL
     }
 
+    /// `content` (what the engine starts with in `OPENCODE_CONFIG_CONTENT`) with what some providers
+    /// need from the engine on top, as this Mac's box last learned it from its engine, or Kuvo Code
+    /// knows them before it has (`kuvo-link.js engine-config`, as a machine's start adds it); as it
+    /// is when that can't be run, or doesn't answer within `timeout` seconds (the engine's start never
+    /// waits on it longer).
+    static func engineConfig(engine: URL, content: String?, environment: [String: String], timeout: TimeInterval = 10) async -> String? {
+        guard let script else { return content }
+        var env = environment
+        env["BUN_BE_BUN"] = "1"
+        env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
+        env["KUVO_HOME"] = home.path
+        env["OPENCODE_CONFIG_CONTENT"] = content
+        let given = env
+        return await Task.detached {
+            let process = Process()
+            process.executableURL = engine
+            process.arguments = ["run", script.path, "engine-config"]
+            process.environment = given
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            process.standardInput = FileHandle.nullDevice
+            do { try process.run() } catch { return content }
+            let late = DispatchWorkItem { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: late)
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            late.cancel()
+            guard process.terminationStatus == 0, let text = String(data: data, encoding: .utf8), text.hasPrefix("{"), text.hasSuffix("}") else { return content }
+            return text
+        }.value
+    }
+
     /// Starts it with the engine's Bun, once: it goes on through the engine's restarts.
     func start(engine: URL, environment: [String: String]) async {
         var env = environment

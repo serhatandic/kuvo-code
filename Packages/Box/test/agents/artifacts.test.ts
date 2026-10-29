@@ -313,6 +313,83 @@ describe("files a command made", () => {
     expect(value.artifacts.map((artifact: any) => [artifact.name, artifact.latest.via])).toEqual([["chart.csv", ["shell"]]])
   })
 
+  test("what a command made is kept, but not the scratch it left in a tmp folder (a render to check its work)", async () => {
+    recorder = record(store, { bots }).recorder
+    spawnSync("git", ["init", "-q", project])
+    session("ses_code", project)
+    await hear([{ type: "session.execution.started", data: { sessionID: "ses_code" } }])
+    mkdirSync(join(project, "output", "pdf"), { recursive: true })
+    writeFileSync(join(project, "output", "pdf", "moon.pdf"), "%PDF-1.4\n")
+    mkdirSync(join(project, "tmp", "pdfs"), { recursive: true })
+    writeFileSync(join(project, "tmp", "pdfs", "moon.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00]))
+    mkdirSync(join(project, "Temp"))
+    writeFileSync(join(project, "Temp", "check.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00]))
+    await hear([{ type: "session.execution.succeeded", data: { sessionID: "ses_code" } }])
+    expect((await route("GET", "kuvo/artifacts?session=ses_code")).value.artifacts.map((artifact: any) => artifact.name)).toEqual(["moon.pdf"])
+  })
+
+  test("scratch a command left in a tmp folder, recorded before it was left out, is gone from the record when the box starts again, unless you kept it", async () => {
+    spawnSync("git", ["init", "-q", project])
+    const files = { render: join(project, "tmp", "pdfs", "moon.png"), kept: join(project, "tmp", "kept.png"), shown: join(project, "tmp", "shown.png"), written: join(project, "tmp", "notes.md"), pdf: join(project, "output", "moon.pdf") }
+    mkdirSync(join(project, "tmp", "pdfs"), { recursive: true })
+    mkdirSync(join(project, "output"))
+    writeFileSync(files.render, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x01]))
+    writeFileSync(files.kept, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x02]))
+    writeFileSync(files.shown, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x03]))
+    writeFileSync(files.written, "# Notes\n")
+    writeFileSync(files.pdf, "%PDF-1.4\n")
+    // As an older box recorded a turn's end: every file a command made, scratch too.
+    const made = (via: string) => ({ by: { kind: "agent" as const, session: "ses_code", agent: "codex" }, turn: { session: "ses_code" }, via, where: { project, session: "ses_code" } })
+    await store.changeAll([files.render, files.kept, files.shown, files.pdf], made("shell"))
+    await store.change(files.written, made("write"))
+    await store.shown(files.shown, made("show_file"))
+    await store.pin(ArtifactStore.idOf(files.kept), { by: "you" })
+    const render = store.at(files.render)!.versions[0].hash!
+    const copy = join(root, "artifacts", "copies", render.slice(7, 9), render.slice(7))
+    expect(readFileSync(copy).length).toBe(5)
+
+    for (let start = 0; start < 2; start++) {
+      // And gone for good: not back as the box starts again after.
+      store = new ArtifactStore(join(root, "artifacts"), { bots, disk: () => disk })
+      const names = (await route("GET", "kuvo/artifacts?session=ses_code")).value.artifacts.map((artifact: any) => artifact.name).sort()
+      expect(names).toEqual(["kept.png", "moon.pdf", "notes.md", "shown.png"])
+      expect(() => readFileSync(copy)).toThrow()
+    }
+    // A command making it again later is recorded afresh, not with the versions taken off.
+    await store.changeAll([files.render], made("show_file"))
+    store = new ArtifactStore(join(root, "artifacts"), { bots, disk: () => disk })
+    expect(store.at(files.render)?.versions.map((version) => version.n)).toEqual([1])
+  })
+
+  test("a file a kept reply cited as what it made, read as the box starts again, is shown then, with its versions as they were, and stays shown; a cited one in a tmp folder isn't taken off", async () => {
+    spawnSync("git", ["init", "-q", project])
+    mkdirSync(join(project, "output"))
+    mkdirSync(join(project, "tmp"))
+    const pdf = join(project, "output", "moon.pdf")
+    const report = join(project, "tmp", "report.pdf")
+    writeFileSync(pdf, "%PDF-1.4\n")
+    writeFileSync(report, "%PDF-1.4 first\n")
+    const made = { by: { kind: "agent" as const, session: "ses_code", agent: "codex" }, turn: { session: "ses_code" }, via: "shell", where: { project, session: "ses_code" } }
+    await store.changeAll([pdf, report], made)
+    writeFileSync(report, "%PDF-1.4 second\n")
+    await store.changeAll([report], { ...made, turn: { session: "ses_code", message: "m2" } })
+    // Changed by you since: not a version of the agent's.
+    writeFileSync(pdf, "%PDF-1.4 yours\n")
+    const versions = (path: string) => store.at(path)!.versions.map((version) => [version.n, version.hash])
+    const before = { pdf: versions(pdf), report: versions(report) }
+    expect(before.report.length).toBe(2)
+
+    const cited = Date.parse("2026-10-20T10:00:00Z")
+    store = new ArtifactStore(join(root, "artifacts"), { bots, disk: () => disk, shown: [{ path: pdf, at: cited }, { path: report, at: cited }] })
+    for (const reopened of [false, true]) {
+      if (reopened) store = new ArtifactStore(join(root, "artifacts"), { bots, disk: () => disk })
+      const listed = (await route("GET", "kuvo/artifacts?session=ses_code")).value.artifacts
+      expect(listed.map((artifact: any) => [artifact.name, artifact.shown]).sort()).toEqual([["moon.pdf", cited / 1000], ["report.pdf", cited / 1000]])
+      expect({ pdf: versions(pdf), report: versions(report) }).toEqual(before)
+      expect((await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(report)}/versions/1`)).value).toBe("%PDF-1.4 first\n")
+    }
+  })
+
   test("a project's are found as the turn ends: outside git by a walk, in git as git status lists them (not what it ignores)", async () => {
     recorder = record(store, { bots }).recorder
     session("ses_code", project)
@@ -954,6 +1031,32 @@ describe("the routes", () => {
     writeFileSync(file, "a\n")
     await hear(turn("ses_code", "m1", tool("ses_code", "c1", "write", { filePath: file })))
     expect((await line()).artifacts.map((artifact: any) => artifact.name)).toEqual(["a.md"])
+    controller.abort()
+  })
+
+  test("what you keep in a conversation's followed list goes to the top, marked yours, as you keep it, and back in its place as you stop", async () => {
+    session("ses_code", project)
+    // A minute apart, so which is newer is never a tie.
+    let minute = 0
+    const now = () => new Date(Date.UTC(2026, 9, 26, 9, minute))
+    store = new ArtifactStore(join(root, "artifacts"), { bots, disk: () => disk, now })
+    recorder = new Recorder(store, { bots, now })
+    for (const [n, name] of ["older.png", "newer.pdf"].entries()) {
+      minute = n
+      const file = join(project, name)
+      writeFileSync(file, name)
+      await hear(turn("ses_code", `m${n}`, tool("ses_code", `c${n}`, "write", { filePath: file })))
+    }
+    const controller = new AbortController()
+    const response = await artifactRoutes(store, "GET", ["events"], new URLSearchParams("session=ses_code"), async () => ({}), controller.signal)
+    const reader = response.body!.getReader()
+    const line = async () => JSON.parse(new TextDecoder().decode((await reader.read()).value)).artifacts.map((artifact: any) => [artifact.name, artifact.pinned?.by ?? null])
+    expect(await line()).toEqual([["newer.pdf", null], ["older.png", null]])
+    const older = ArtifactStore.idOf(join(project, "older.png"))
+    await route("POST", `kuvo/artifacts/${older}/pin`, { pinned: true })
+    expect(await line()).toEqual([["older.png", "you"], ["newer.pdf", null]])
+    await route("POST", `kuvo/artifacts/${older}/pin`, { pinned: false })
+    expect(await line()).toEqual([["newer.pdf", null], ["older.png", null]])
     controller.abort()
   })
 })

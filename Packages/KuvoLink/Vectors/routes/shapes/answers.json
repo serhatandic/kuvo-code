@@ -2248,6 +2248,9 @@
             "literal": "mcp.catalog"
            },
            {
+            "literal": "moves"
+           },
+           {
             "literal": "named"
            },
            {
@@ -2276,6 +2279,9 @@
            },
            {
             "literal": "reviews"
+           },
+           {
+            "literal": "reviews.parts"
            },
            {
             "literal": "reviews.scopes"
@@ -2490,6 +2496,9 @@
             "literal": "mcp.catalog"
            },
            {
+            "literal": "moves"
+           },
+           {
             "literal": "named"
            },
            {
@@ -2518,6 +2527,9 @@
            },
            {
             "literal": "reviews"
+           },
+           {
+            "literal": "reviews.parts"
            },
            {
             "literal": "reviews.scopes"
@@ -3202,6 +3214,164 @@
    "answers": {
     "200": {
      "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/moves",
+   "answers": {
+    "200": {
+     "object": {
+      "moves": {
+       "list": {
+        "object": {
+         "id": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "bot"
+           },
+           {
+            "literal": "chat"
+           },
+           {
+            "literal": "group"
+           }
+          ]
+         },
+         "thing": "string",
+         "name": "string",
+         "from": "string",
+         "to": "string",
+         "role": {
+          "oneOf": [
+           {
+            "literal": "from"
+           },
+           {
+            "literal": "to"
+           }
+          ]
+         },
+         "stage": {
+          "oneOf": [
+           {
+            "literal": "holding"
+           },
+           {
+            "literal": "copying"
+           },
+           {
+            "literal": "switching"
+           },
+           {
+            "literal": "finishing"
+           }
+          ]
+         },
+         "sessions": {
+          "list": "string"
+         },
+         "sent?": "number",
+         "size?": "number"
+        }
+       }
+      },
+      "away": {
+       "list": "string"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/moves/places",
+   "answers": {
+    "200": {
+     "object": {
+      "places": {
+       "list": {
+        "object": {
+         "key": "string",
+         "name": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "mac"
+           },
+           {
+            "literal": "machine"
+           }
+          ]
+         },
+         "ok": "bool",
+         "why?": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/moves",
+   "answers": {
+    "200": {
+     "object": {
+      "move": {
+       "object": {
+        "id": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "bot"
+          },
+          {
+           "literal": "chat"
+          },
+          {
+           "literal": "group"
+          }
+         ]
+        },
+        "thing": "string",
+        "name": "string",
+        "from": "string",
+        "to": "string",
+        "role": {
+         "oneOf": [
+          {
+           "literal": "from"
+          },
+          {
+           "literal": "to"
+          }
+         ]
+        },
+        "stage": {
+         "oneOf": [
+          {
+           "literal": "holding"
+          },
+          {
+           "literal": "copying"
+          },
+          {
+           "literal": "switching"
+          },
+          {
+           "literal": "finishing"
+          }
+         ]
+        },
+        "sessions": {
+         "list": "string"
+        },
+        "sent?": "number",
+        "size?": "number"
+       }
+      }
+     }
     }
    }
   },
@@ -4545,7 +4715,6 @@
         "null"
        ]
       },
-      "beside": "bool",
       "answer?": {
        "oneOf": [
         "string",

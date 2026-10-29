@@ -23,7 +23,7 @@ final class AppModel {
     /// The login shell's environment (PATH and the like), for the engine and terminals.
     private(set) var shellEnvironment = ProcessInfo.processInfo.environment
 
-    let catalog = Catalog(isMac: true)
+    let catalog = Catalog()
     /// The right panel's tools; one window, so one set.
     let utilities = Utilities()
     /// Terminals that are tabs of the window, in place of a conversation; they end with it.
@@ -289,6 +289,8 @@ final class AppModel {
         botAsks.onChange = { [weak self] sessions in self?.workspace.askingForWork = sessions }
         boxGroups.app = self
         moves.app = self
+        // What this Mac's box says is moving, as it changes.
+        Task { [moves] in await moves.follow() }
         workspace.onMovedToAgents = { [weak self] from, to in await self?.movedToAgents(from: from, to: to) ?? false }
         workspace.onBotToAgents = { [weak self] id, model in try await self?.bots.moveToAgents(session: id, model: model) }
         workspace.runsOnAgents(bots.agentSessionIDs)
@@ -305,7 +307,6 @@ final class AppModel {
         phoneLink.readyMachines = { [weak self] in self?.machines.engines.values.filter(\.isReady) ?? [] }
         // With machines, this Mac meets them at the relay, phone or not.
         phoneLink.hasMachines = { [weak self] in !(self?.machines.list.isEmpty ?? true) }
-        phoneLink.movedSessions = { [weak self] in self?.moves.livePlaces ?? [:] }
         Machines.linkKey = { [weak self] in self?.phoneLink.macKey }
         phoneLink.bots = bots
         phoneLink.browserAsks = browserAsks
@@ -447,9 +448,11 @@ final class AppModel {
             // them as they change after.
             await Self.atMost(.seconds(10)) { [weak self] in await self?.prepareSettings() }
             guard launch == self.launch else { return }
-            // What some providers need until opencode handles it (see ProviderCompatibility).
-            let compatibility = ProviderCompatibility.config
-            if !compatibility.isEmpty { shell["OPENCODE_CONFIG_CONTENT"] = Self.merged(compatibility, into: shell["OPENCODE_CONFIG_CONTENT"]) }
+            // What some providers need until opencode handles it, on top, as this Mac's box learned
+            // it from its engine (as a machine's start adds it).
+            shell["OPENCODE_CONFIG_CONTENT"] = await BoxProcess.engineConfig(engine: binary, content: shell["OPENCODE_CONFIG_CONTENT"], environment: shell)
+            // COMPAT(0.7 provider-compatibility): what the app learned before its box did, gone. Goes 3 months after 0.8.0.
+            UserDefaults.standard.removeObject(forKey: "copilotClaudeModels")
             #if DEBUG
             // KUVO_PERF_PROVIDER: the stand-in model a group chat's discussion is measured on (PerfGroups).
             if let perf = PerfGroups.providerConfig { shell["OPENCODE_CONFIG_CONTENT"] = Self.merged(perf, into: shell["OPENCODE_CONFIG_CONTENT"]) }
@@ -496,8 +499,8 @@ final class AppModel {
             Analytics.shared.catalog = catalog
             workspace.api = api
             wireStores()
-            // A move cut short (the app quit) is finished or taken back.
-            Task { await moves.recover() }
+            // What this Mac's box and your machines say is moving, from now on.
+            Task { await moves.reloadAll() }
             usage.api = api
             engineStarted = .now
             engine = .ready
@@ -655,8 +658,6 @@ final class AppModel {
             Task {
                 // This Mac's group chats first: they're what shows from the cache meanwhile.
                 await self?.boxGroups.connected(nil)
-                // A move of a group chat to or from this Mac cut short, now its bridge is there.
-                await self?.moves.recover()
                 await self?.catalog.refreshAgents()
                 await self?.workspace.refreshAgents()
             }

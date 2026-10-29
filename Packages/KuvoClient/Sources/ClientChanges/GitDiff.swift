@@ -139,21 +139,26 @@ public enum DiffParser {
                 else if line.hasPrefix("Binary files ") { file.isBinary = true }
                 continue
             }
-            guard let first = line.first else { continue }
+            // Its marks are the line's first scalars, not its first characters: a line whose words
+            // start with a mark that joins what's before it (an accent, a vowel sign) makes one
+            // character with them.
+            let scalars = line.unicodeScalars
+            guard let first = scalars.first else { continue }
             var parsed: DiffLine
             if sides > 1 {
                 // "++", " +", "- " …: a mark for each side, the file as it is after them.
-                let marks = line.prefix(sides)
-                guard marks.count == sides, marks.allSatisfy({ "+- ".contains($0) }) else { continue }
-                let text = String(line.dropFirst(sides))
+                let marks = scalars.prefix(sides)
+                guard marks.count == sides, marks.allSatisfy({ "+- ".unicodeScalars.contains($0) }) else { continue }
+                let text = String(String.UnicodeScalarView(scalars.dropFirst(sides)))
                 if marks.contains("-") { parsed = DiffLine(kind: .removed, oldNumber: oldLine, text: text); oldLine += 1 }
                 else if marks.contains("+") { parsed = DiffLine(kind: .added, newNumber: newLine, text: text); newLine += 1 }
                 else { parsed = DiffLine(kind: .context, oldNumber: oldLine, newNumber: newLine, text: text); oldLine += 1; newLine += 1 }
             } else {
+                let text = String(String.UnicodeScalarView(scalars.dropFirst()))
                 switch first {
-                case "+": parsed = DiffLine(kind: .added, newNumber: newLine, text: String(line.dropFirst())); newLine += 1
-                case "-": parsed = DiffLine(kind: .removed, oldNumber: oldLine, text: String(line.dropFirst())); oldLine += 1
-                case " ": parsed = DiffLine(kind: .context, oldNumber: oldLine, newNumber: newLine, text: String(line.dropFirst())); oldLine += 1; newLine += 1
+                case "+": parsed = DiffLine(kind: .added, newNumber: newLine, text: text); newLine += 1
+                case "-": parsed = DiffLine(kind: .removed, oldNumber: oldLine, text: text); oldLine += 1
+                case " ": parsed = DiffLine(kind: .context, oldNumber: oldLine, newNumber: newLine, text: text); oldLine += 1; newLine += 1
                 default: continue  // "\ No newline at end of file"
                 }
             }
@@ -248,7 +253,7 @@ public enum DiffParser {
         let parts = line.split(separator: " ")
         func start(_ part: Substring?) -> Int {
             guard let part else { return 1 }
-            return max(part.dropFirst().split(separator: ",").first.flatMap { Int($0) } ?? 1, 1)
+            return lineStart(part.dropFirst().split(separator: ",").first.flatMap { Int($0) })
         }
         return (start(parts.first { $0.hasPrefix("-") }), start(parts.first { $0.hasPrefix("+") }))
     }
@@ -258,10 +263,15 @@ public enum DiffParser {
         let parts = line.split(separator: " ")
         func start(_ part: Substring?) -> Int {
             guard let part else { return 1 }
-            let number = part.dropFirst().split(separator: ",").first.flatMap { Int($0) } ?? 1
-            return max(number, 1)
+            return lineStart(part.dropFirst().split(separator: ",").first.flatMap { Int($0) })
         }
         return (start(parts.dropFirst().first), start(parts.dropFirst(2).first))
+    }
+
+    /// A hunk's first line as its header says, kept where a file's lines can be (each line after
+    /// it counts on from there).
+    private static func lineStart(_ number: Int?) -> Int {
+        min(max(number ?? 1, 1), Int(Int32.max))
     }
 }
 

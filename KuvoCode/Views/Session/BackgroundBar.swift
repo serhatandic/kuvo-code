@@ -94,8 +94,9 @@ struct WorkBar<Item: Identifiable, Row: View>: View {
 
 /// The line of a bar in the card over the composer (`WorkBar`, the goal's, the keywords'): its
 /// mark, what it says, how far along it is, and while what's under it is hidden, what that is;
-/// clicking it shows or hides what's under it. A button of its own goes before the end column:
-/// the chevron, then ✕ to put the bar away, in the same place on every line of the card.
+/// clicking it shows or hides what's under it. Its end is the same on every line of the card
+/// (`BarEnd`): ✕ last, and before it one column for the chevron, or for its own button when
+/// there's nothing under it to show.
 struct BarLine: View {
     let mark: AnyView
     let title: String
@@ -116,11 +117,7 @@ struct BarLine: View {
     var body: some View {
         HStack(spacing: 0) {
             toggle
-            if let accessory {
-                accessory
-                    .padding(.trailing, 4)
-            }
-            BarEnd(isHidden: $isHidden, opens: opens, showHelp: showHelp, hideHelp: hideHelp, close: close, closeLabel: "Close \(title)", closeHelp: closeHelp)
+            BarEnd(isHidden: $isHidden, opens: opens, accessory: accessory, showHelp: showHelp, hideHelp: hideHelp, close: close, closeLabel: "Close \(title)", closeHelp: closeHelp)
         }
     }
 
@@ -195,11 +192,14 @@ struct BarLine: View {
     }
 }
 
-/// The end of a bar's line, one column down the whole card: the chevron that shows or hides
-/// what's under it (the line itself does too), then ✕ that puts the bar away, or their room.
+/// The end of a bar's line, the same on every line of the card: ✕ that puts the bar away (or its
+/// room), and before it one column, centered on the same place whatever is in it: the chevron
+/// that shows or hides what's under it (the line itself does too), or, with nothing under it, the
+/// bar's own button ("Stop"). Its own button goes before the chevron when there's both.
 struct BarEnd: View {
     @Binding var isHidden: Bool
     var opens = true
+    var accessory: AnyView?
     var showHelp = ""
     var hideHelp = ""
     var close: (() -> Void)?
@@ -207,23 +207,36 @@ struct BarEnd: View {
     var closeLabel = "Close"
     var closeHelp = "Close"
 
+    /// The column before ✕: as wide as a short word's button, which is centered in it as the
+    /// chevron is (a longer one grows it to the left).
+    static let column: CGFloat = 40
+    /// Between the controls at the end.
+    static let gap: CGFloat = 2
+    /// From ✕ to the card's edge (the Hide tab over the card ends there too).
+    static let trailing: CGFloat = 8
+
     var body: some View {
-        HStack(spacing: 2) {
-            Button {
-                withAnimation(.ui) { isHidden.toggle() }
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 11, weight: .semibold))
-                    .rotationEffect(.degrees(isHidden ? 180 : 0))
+        HStack(spacing: Self.gap) {
+            if opens {
+                if let accessory { accessory }
+                Button {
+                    withAnimation(.ui) { isHidden.toggle() }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .rotationEffect(.degrees(isHidden ? 180 : 0))
+                }
+                .buttonStyle(IconButtonStyle(width: 24, height: 24))
+                .foregroundStyle(.secondary)
+                .help(isHidden ? showHelp : hideHelp)
+                // The line says the same, and shows and hides it.
+                .accessibilityHidden(true)
+                .focusable(false)
+                .frame(width: Self.column)
+            } else if let accessory {
+                accessory
+                    .frame(minWidth: Self.column)
             }
-            .buttonStyle(IconButtonStyle(width: 24, height: 24))
-            .foregroundStyle(.secondary)
-            .help(isHidden ? showHelp : hideHelp)
-            // The line says the same, and shows and hides it.
-            .accessibilityHidden(true)
-            .focusable(false)
-            .opacity(opens ? 1 : 0)
-            .disabled(!opens)
             if let close {
                 Button(closeLabel, systemImage: "xmark", action: close)
                     .font(.system(size: 10, weight: .semibold))
@@ -237,7 +250,7 @@ struct BarEnd: View {
                     .accessibilityHidden(true)
             }
         }
-        .padding(.trailing, 8)
+        .padding(.trailing, Self.trailing)
     }
 }
 
@@ -262,7 +275,7 @@ private struct BackgroundJobRow: View {
                     .foregroundStyle(.secondary)
                     .help("How long it has been running")
             }
-            Button("Output", systemImage: "text.alignleft") { showsOutput.toggle() }
+            Button("Output") { showsOutput.toggle() }
                 .buttonStyle(TextButtonStyle())
                 .font(.system(size: 13))
                 .help("What it has printed so far")
@@ -270,7 +283,7 @@ private struct BackgroundJobRow: View {
                     ShellOutputView(job: job, api: api, directory: directory)
                         .popoverContent()
                 }
-            Button("Stop", systemImage: "stop.circle") { stop() }
+            Button("Stop") { stop() }
                 .buttonStyle(TextButtonStyle())
                 .font(.system(size: 13))
                 .help("Stop it: the agent hears that it ended, with what it printed")

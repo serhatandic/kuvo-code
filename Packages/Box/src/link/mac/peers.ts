@@ -10,6 +10,7 @@ import { attentionGiven } from "../notices/hold";
 import { announce, refreshOwn } from "../peers/agents";
 import { mailFor, peersOf } from "../peers/known";
 import { watchSeats } from "../peers/seats";
+import { watchMoves } from "../moves/move";
 import { macLink, readLink } from "../state";
 import type { LetterReply, MacWaiter } from "../letters/outbox";
 import type { Attention } from "../notices/hold";
@@ -41,6 +42,7 @@ export function macAttendPeers(body: Body<"elsewhere">, given: Pick<Attention, "
 export function runMacPeers(): void {
   const stop = new AbortController();
   watchSeats(() => macLink.host, stop.signal);
+  watchMoves(() => macLink.host, stop.signal);
   refreshOwn(readEngineFile).catch(() => {});
   const rounds = [
     setInterval(() => {

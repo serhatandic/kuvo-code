@@ -7,10 +7,11 @@ import OpenCodeKit
 
 /// Sessions a client keeps out of sight.
 public enum HiddenSessions {
-    /// A group chat's seat (its chat shows what matters), or a run the engine keeps for a coding
-    /// agents' session (that session shows what it does).
+    /// A group chat's seat (its chat shows what matters), a run the engine keeps for a coding
+    /// agents' session (that session shows what it does), or a review's part, read in a session of
+    /// its own (its review shows it, and opens it).
     public static func isHidden(_ session: Session) -> Bool {
-        session.metadata?["kuvo"]?["seat"] != nil || session.metadata?["kuvo"]?["engineFor"] != nil
+        session.metadata?["kuvo"]?["seat"] != nil || session.metadata?["kuvo"]?["engineFor"] != nil || session.metadata?["kuvo"]?["reviewPart"] != nil
     }
 }
 
@@ -35,6 +36,18 @@ public enum Branches {
     public static func started(byStep result: String) -> String? {
         guard let range = result.range(of: #"\(address (ses_[A-Za-z0-9]+)\)"#, options: .regularExpression) else { return nil }
         return String(result[range].dropFirst("(address ".count).dropLast())
+    }
+
+    /// The session a start_session step started while the step still waits for its first answer
+    /// (its result, with the address, comes only then): one an agent started once the step began,
+    /// with the title the step gave it if it gave one, the first of them. So its row opens it at once.
+    public static func started(byWaiting step: Message.ToolCall, among sessions: [Session]) -> String? {
+        guard case .running(let input, _) = step.state, let began = step.time?.created ?? step.time?.ran else { return nil }
+        let title = input["title"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return sessions
+            .filter { origin(of: $0)?.kind == .started && $0.time.created >= began - 1_000 }
+            .filter { title?.isEmpty != false || $0.title == title }
+            .min { $0.time.created < $1.time.created }?.id
     }
 
     /// The sidebar's hint for a conversation that came from `title`'s.
@@ -109,8 +122,16 @@ public enum ReadState {
 
     /// One of `id`'s sub-sessions, or theirs, is new. `subSessions`: each session's, by the one
     /// that started them; `rootViewed`: when a sub-session's top session was last read.
+    /// Each once, though a box lists them in a loop.
     public static func hasNew(under id: String, in subSessions: [String: [Session]], rootViewed: (Session) -> Milliseconds?) -> Bool {
-        (subSessions[id] ?? []).contains { isNew($0, rootViewed: rootViewed($0)) || hasNew(under: $0.id, in: subSessions, rootViewed: rootViewed) }
+        var seen: Set<String> = [id]
+        var next = subSessions[id] ?? []
+        while let sub = next.popLast() {
+            guard seen.insert(sub.id).inserted else { continue }
+            if isNew(sub, rootViewed: rootViewed(sub)) { return true }
+            next += subSessions[sub.id] ?? []
+        }
+        return false
     }
 
     /// Reads `id`: itself (one of `sessions`, or a sub-session, under `parent(id)`), and its
@@ -127,13 +148,15 @@ public enum ReadState {
             subSessions[above]?[index].time.viewed = idle
             if !read.contains(where: { $0.id == id }) { read.append((id, idle)) }
         }
+        // Each once, though a box lists them in a loop.
+        var seen: Set<String> = [id]
         func readUnder(_ id: String) {
             for (index, child) in (subSessions[id] ?? []).enumerated() {
                 if child.isUnread, let idle = child.time.idle {
                     subSessions[id]?[index].time.viewed = idle
-                    read.append((child.id, idle))
+                    if !read.contains(where: { $0.id == child.id }) { read.append((child.id, idle)) }
                 }
-                readUnder(child.id)
+                if seen.insert(child.id).inserted { readUnder(child.id) }
             }
         }
         readUnder(id)

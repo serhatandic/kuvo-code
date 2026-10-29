@@ -290,6 +290,11 @@ class CursorThread implements Thread {
       name: `Kuvo Code: ${this.session.title ?? "session"}`,
       mode,
       apiKey,
+      // (On a machine, the commands Cursor runs get the bridge's own folders (XDG_… in Kuvo
+      // Code's), not the machine's, unlike every other agent's: its SDK runs them in this process
+      // with its environment, and takes none for a local agent. Giving the whole bridge the
+      // machine's folders would give them to every agent's own process too, so `gh` and git's own
+      // settings stay out of reach of Cursor's commands there.)
       local: {
         cwd,
         ...(skills ? { dirs: [skills] } : {}),

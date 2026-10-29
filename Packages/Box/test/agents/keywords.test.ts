@@ -52,6 +52,13 @@ function places(bridge = false): GoalPlaces {
   }
 }
 
+/** As `places`, the engine's events heard through its real link (a session under another is
+ * heard through its parent's feed, as on a box). */
+function linkedPlaces(): GoalPlaces {
+  // As the box's own (agents/main.ts) hears it.
+  return { ...places(), engine: { api: link, listen: (session, told) => link.listen(session, { event: (event) => told.event(event.type, event.data), reconnected: told.reconnected }) } }
+}
+
 /** What the conversation was told (a note or a message), which a side question never is. */
 const told = (session = "ses_work") => engine.synthetic.filter((note) => note.session === session).length + engine.prompts(session).length
 
@@ -63,6 +70,12 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "kuvo-keywords-"))
   following = []
   engine = new StandIn(beat)
+  // Its events reach those following them.
+  engine.onEmit = (type, data) => {
+    // A session under another is heard through its parent's feed too, as the engine's link does.
+    const parent = engine.made.find((each) => each.id === data?.sessionID)?.parentID
+    for (const each of following.filter((each) => each.session === data?.sessionID || (parent && each.session === parent))) each.event(type, data)
+  }
   engine.session("ses_work", [
     { id: "msg_0001", type: "user", text: "Make the timer pause on blur.", time: { created: 1 } },
     { id: "msg_0002", type: "assistant", content: [{ type: "text", text: "Done: it pauses when the window loses focus." }], time: { created: 2 } },
@@ -448,7 +461,8 @@ describe("a review with fresh eyes", () => {
     expect(review.findings.map((each) => each.title)).toEqual(["Secret in a.ts", "Slow loop in c.ts"])
     for (const event of events.slice(seen)) {
       const told = (event.data as any)?.review?.progress
-      if (event.type === "kuvo.review.updated" && told) progress.push(`${told.read}/${told.of}`)
+      // (Told again as each part's state changes: each step once.)
+      if (event.type === "kuvo.review.updated" && told && progress.at(-1) !== `${told.read}/${told.of}`) progress.push(`${told.read}/${told.of}`)
     }
     expect(progress).toEqual(["0/3", "1/3", "2/3"])
     expect(review.progress).toBeUndefined()
@@ -501,15 +515,15 @@ describe("a review with fresh eyes", () => {
     expect(reviews.get("ses_work")).toBeUndefined()
   })
 
-  test("on a free model, in a session of the engine's own that's gone after", async () => {
+  test("on a free model, read in its part's session as on any other (no one-off answer, which free models don't give)", async () => {
     engine.freeModel = true
     const reviews = new Reviews(join(root, "reviews.json"), places(), changes("+x\n"))
     reviews.onEnded = beat
     engine.answers = [`{"summary": "Fine.", "findings": []}`]
     await reviews.start("ses_work")
     await until(() => reviews.get("ses_work")?.state === "done")
-    expect(engine.made[0]?.metadata).toEqual({ kuvo: { engineFor: "ses_work" } })
-    expect(engine.conversations.has(engine.made[0].id)).toBe(false)
+    expect(reviews.get("ses_work")!.summary).toBe("Fine.")
+    expect(engine.made.map((each) => Object.keys(each.metadata.kuvo))).toEqual([["reviewPart", "messages"]])
   })
 
   test("reads a folder's changes from its git: tracked files' diffs and new files whole", async () => {
@@ -684,12 +698,362 @@ describe("a review with fresh eyes", () => {
     held.stopAll()
   })
 
+  test("each part is read in a session of its own under the conversation, which can be watched as it reads and looked at after", async () => {
+    const parts: Parts = { parts: ["=== src/a.ts ===\n1  a()\n", "=== src/b.ts ===\n1  b()\n=== src/c.ts ===\n1  c()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+    reviews.onEnded = beat
+    engine.directory = "/tmp/project"
+    engine.holdingChecks = true
+    engine.answers = [
+      `{"summary": "One.", "findings": [{"title": "a() throws", "explanation": "", "severity": "bug", "locations": [{"file": "src/a.ts", "line": 1}]}]}`,
+      `{"summary": "Fine.", "findings": []}`,
+    ]
+    // The engine's feed open, as a box's is long before a review: the conversation is followed.
+    const following = link.listen("ses_work", { event: () => {}, reconnected: () => {} })
+    await until(() => engine.listening)
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    // The plan: each part, with the files it reads, waiting until its turn.
+    await until(() => !!reviews.get("ses_work")?.parts?.[0]?.session)
+    const first = reviews.get("ses_work")!.parts!
+    expect(first.map((part) => ({ n: part.n, of: part.of, files: part.files, state: part.state }))).toEqual([
+      { n: 1, of: 2, files: ["src/a.ts"], state: "reading" },
+      { n: 2, of: 2, files: ["src/b.ts", "src/c.ts"], state: "waiting" },
+    ])
+    // Its session: the conversation's, hidden from lists, read-only, and told the part.
+    const made = engine.made.find((each) => each.id === first[0].session)!
+    expect(made.parentID).toBe("ses_work")
+    expect(made.metadata.kuvo.reviewPart).toEqual({ review: reviews.get("ses_work")!.id, part: 1, of: 2 })
+    expect(made.agent).toBe("plan")
+    expect(made.permissions[0]).toEqual({ action: "*", resource: "*", effect: "deny" })
+    // Read-only whatever was saved for the project: its session is in a project of its own (the
+    // box's, a git repository with one empty commit), which no "Always allow" was ever saved for,
+    // and from there it may only read, the project's folder too.
+    expect(made.location.directory).toBe(join(root, "reviewers"))
+    expect((await run("git", ["-C", join(root, "reviewers"), "log", "--format=%s"])).stdout.trim()).toBe("Kuvo Code's reviewers read projects from here")
+    expect(made.permissions.filter((rule: any) => rule.effect === "allow").map((rule: any) => `${rule.action} ${rule.resource}`)).toEqual([
+      "read *", "grep *", "glob *", "list *", "external_directory /tmp/project", "external_directory /tmp/project/*",
+    ])
+    await until(() => engine.prompts(first[0].session!).length === 1)
+    expect(engine.prompts(first[0].session!)[0].text).toContain("=== src/a.ts ===")
+    expect(engine.prompts(first[0].session!)[0].text).toContain("The project is in /tmp/project")
+
+    // What it's doing now, as it goes: the file it reads, by its path in the project.
+    engine.emit("session.tool.input.started", { sessionID: first[0].session, id: "t1", name: "read" })
+    engine.emit("session.tool.called", { sessionID: first[0].session, id: "t1", input: { filePath: "/tmp/project/src/a.ts" } })
+    await until(() => reviews.get("ses_work")?.parts?.[0]?.now === "Reading src/a.ts")
+    engine.emit("session.reasoning.started", { sessionID: first[0].session })
+    await until(() => reviews.get("ses_work")?.parts?.[0]?.now === "Thinking")
+
+    // Done, the next one reads; what each found is counted, and its line is gone.
+    engine.answerChecks()
+    await until(() => !!reviews.get("ses_work")?.parts?.[1]?.session && engine.checks.length === 2)
+    engine.answerChecks()
+    await until(() => reviews.get("ses_work")?.state === "done")
+    const review = reviews.get("ses_work")!
+    expect(review.findings.map((each) => each.title)).toEqual(["a() throws"])
+    expect(review.parts!.map((part) => ({ state: part.state, found: part.found, now: part.now }))).toEqual([
+      { state: "done", found: 1, now: undefined },
+      { state: "done", found: 0, now: undefined },
+    ])
+    // Kept while the review is, gone with it.
+    const sessions = review.parts!.map((part) => part.session!)
+    expect(sessions.every((id) => engine.conversations.has(id))).toBe(true)
+    reviews.dismiss("ses_work")
+    await until(() => sessions.every((id) => engine.deleted.includes(id)))
+    engine.holdingChecks = false
+    following()
+    reviews.stopAll()
+  })
+
+  test("a part whose end went by while the engine's feed was away is read once it's back, from how its turn ended", async () => {
+    const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+    reviews.onEnded = beat
+    const following = link.listen("ses_work", { event: () => {}, reconnected: () => {} })
+    await until(() => engine.listening)
+    engine.silentParts = true
+    engine.answers = [`{"summary": "One.", "findings": [{"title": "a() throws", "explanation": "", "severity": "bug", "locations": []}]}`]
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    await until(() => engine.checks.length === 1 && engine.conversations.get(reviews.get("ses_work")!.parts![0].session!)?.some((each) => each.type === "idle") === true)
+    // The link comes back (as when the engine started again): the part's end is read from its session.
+    link.configure(engine.url + "/", "x")
+    await until(() => reviews.get("ses_work")?.state === "done")
+    expect(reviews.get("ses_work")!.parts![0].state).toBe("done")
+    expect(reviews.get("ses_work")!.findings.map((each) => each.title)).toEqual(["a() throws"])
+    engine.silentParts = false
+    following()
+    reviews.stopAll()
+  })
+
+  test("stopped while a part reads, its session is stopped too; the parts after it are never read", async () => {
+    const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n", "=== b.ts ===\n1  b()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+    reviews.onEnded = beat
+    engine.holdingChecks = true
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    await until(() => engine.checks.length === 1)
+    const reading = reviews.get("ses_work")!.parts![0].session!
+    reviews.stop("ses_work")
+    await until(() => engine.interrupted.includes(reading))
+    expect(reviews.get("ses_work")!.parts!.map((part) => part.state)).toEqual(["stopped", "waiting"])
+    engine.holdingChecks = false
+    engine.answerChecks()
+    reviews.stopAll()
+  })
+
+  test("stopped while a part's prompt is on its way, its turn is stopped once it begins", async () => {
+    const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+    reviews.onEnded = beat
+    engine.holdingPrompts = true
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    await until(() => !!reviews.get("ses_work")?.parts?.[0]?.session && engine.prompts(reviews.get("ses_work")!.parts![0].session!).length === 1)
+    const reading = reviews.get("ses_work")!.parts![0].session!
+    // Stopped before the engine began its turn: that interrupt finds nothing to stop…
+    reviews.stop("ses_work")
+    await until(() => engine.interrupted.includes(reading))
+    // …so it's stopped again once the turn has begun.
+    engine.beginPrompts()
+    await until(() => engine.interrupted.filter((each) => each === reading).length === 2)
+    reviews.stopAll()
+  })
+
+  test("stopped while a part's prompt is on its way and its turn begins only after it's answered, its turn is still stopped", async () => {
+    const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+    reviews.onEnded = beat
+    engine.holdingPrompts = true
+    engine.turnsBeginLate = true
+    engine.holdingChecks = true
+    engine.interruptEndsParts = true
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    await until(() => !!reviews.get("ses_work")?.parts?.[0]?.session && engine.prompts(reviews.get("ses_work")!.parts![0].session!).length === 1)
+    const reading = reviews.get("ses_work")!.parts![0].session!
+    reviews.stop("ses_work")
+    // Its prompt answered, its turn not yet begun: the interrupts so far find nothing to stop.
+    engine.beginPrompts()
+    await until(() => engine.interrupted.filter((each) => each === reading).length === 2)
+    engine.beginTurns()
+    await until(() => engine.conversations.get(reading)!.at(-1)?.type === "idle")
+    expect(engine.conversations.get(reading)!.at(-1)!.outcome).toBe("interrupted")
+    engine.answerChecks()
+    reviews.stopAll()
+  })
+
+  test("a review starting as the box starts again keeps its part's session, while one no review records is deleted", async () => {
+    const orphan = (await link.request("POST", "/api/session", { title: "Review · part", parentID: "ses_work", location: { directory: join(root, "reviewers") }, metadata: { kuvo: { reviewPart: { review: "rev_gone", part: 1, of: 1 } } } })).data.id
+    const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+    reviews.onEnded = beat
+    // Its part's session made, its answer back only once the box has listed the sessions.
+    engine.answersMadeOnListing = true
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    await until(() => engine.made.length === 2)
+    reviews.resume()
+    await until(() => reviews.get("ses_work")?.state !== "reviewing")
+    expect(reviews.get("ses_work")!.state).toBe("done")
+    const read = reviews.get("ses_work")!.parts![0].session!
+    expect(engine.deleted).not.toContain(read)
+    // Nothing being made any more: the next start deletes the one no review records.
+    reviews.resume()
+    await until(() => engine.deleted.includes(orphan))
+    expect(engine.deleted).toEqual([orphan])
+    reviews.stopAll()
+  })
+
+  test("reviews whose first parts start together both read them, from one project of their own", async () => {
+    engine.session("ses_other")
+    const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+    reviews.onEnded = beat
+    await Promise.all([reviews.start("ses_work", undefined, undefined, { kind: "project" }), reviews.start("ses_other", undefined, undefined, { kind: "project" })])
+    await until(() => reviews.get("ses_work")?.state !== "reviewing" && reviews.get("ses_other")?.state !== "reviewing")
+    expect([reviews.get("ses_work")!.state, reviews.get("ses_other")!.state]).toEqual(["done", "done"])
+    expect(engine.made.map((each) => each.location.directory)).toEqual([join(root, "reviewers"), join(root, "reviewers")])
+    expect((await run("git", ["-C", join(root, "reviewers"), "log", "--format=%s"])).stdout.trim()).toBe("Kuvo Code's reviewers read projects from here")
+    reviews.stopAll()
+  })
+
+  test("the only part stopped from its own session leaves the review stopped, not failed", async () => {
+    const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+    reviews.onEnded = beat
+    engine.holdingChecks = true
+    engine.interruptEndsParts = true
+    const following = link.listen("ses_work", { event: () => {}, reconnected: () => {} })
+    await until(() => engine.listening)
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    await until(() => engine.checks.length === 1)
+    // Its Stop, in its own view.
+    await link.request("POST", `/api/session/${reviews.get("ses_work")!.parts![0].session}/interrupt`)
+    await until(() => reviews.get("ses_work")?.state !== "reviewing")
+    const review = reviews.get("ses_work")!
+    expect({ state: review.state, summary: review.summary, error: review.error }).toEqual({ state: "done", summary: "Stopped before it read anything.", error: undefined })
+    expect(review.parts!.map((part) => part.state)).toEqual(["stopped"])
+    engine.answerChecks()
+    following()
+    reviews.stopAll()
+  })
+
+  test("parts read from a project of their own though your git signs commits, and a folder left without its commit is set up again", async () => {
+    // Your own git: every commit signed (by a program that can't sign here), and a hook that fails.
+    const config = join(root, "gitconfig")
+    mkdirSync(join(root, "hooks"))
+    writeFileSync(join(root, "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
+    writeFileSync(config, `[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = /usr/bin/false\n[core]\n\thooksPath = ${join(root, "hooks")}\n`)
+    const before = process.env.GIT_CONFIG_GLOBAL
+    process.env.GIT_CONFIG_GLOBAL = config
+    try {
+      // Left from before: a repository without its commit.
+      mkdirSync(join(root, "reviewers"))
+      await run("git", ["-C", join(root, "reviewers"), "init", "-q"])
+      const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
+      const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+      reviews.onEnded = beat
+      await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+      await until(() => reviews.get("ses_work")?.state !== "reviewing")
+      expect(reviews.get("ses_work")!.state).toBe("done")
+      expect(engine.made[0].location.directory).toBe(join(root, "reviewers"))
+      expect((await run("git", ["-C", join(root, "reviewers"), "log", "--format=%s"])).stdout.trim()).toBe("Kuvo Code's reviewers read projects from here")
+      reviews.stopAll()
+    } finally {
+      process.env.GIT_CONFIG_GLOBAL = before
+    }
+  })
+
+  test("a part isn't read when its project of its own can't be set up, and the review says why", async () => {
+    // Where the folder would be, a file.
+    writeFileSync(join(root, "reviewers"), "")
+    const parts: Parts = { parts: ["=== a.ts ===\n1  a()\n"], leftOut: 0 }
+    const reviews = new Reviews(join(root, "reviews.json"), linkedPlaces(), async () => parts)
+    reviews.onEnded = beat
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    await until(() => reviews.get("ses_work")?.state !== "reviewing")
+    expect(reviews.get("ses_work")!.state).toBe("failed")
+    expect(reviews.get("ses_work")!.error).toContain("couldn't set up the folder its reviewers read from")
+    expect(engine.made).toEqual([])
+    expect(engine.checks).toEqual([])
+    reviews.stopAll()
+  })
+
+  test("once the engine's there after the box starts again, a part left reading is stopped and parts' sessions no review records are deleted", async () => {
+    const folder = join(root, "reviewers")
+    const part = (n: number) => ({ title: "Review · part", parentID: "ses_work", location: { directory: folder }, metadata: { kuvo: { reviewPart: { review: "rev_1", part: n, of: 2 } } } })
+    const recorded = (await link.request("POST", "/api/session", part(1))).data.id
+    const orphan = (await link.request("POST", "/api/session", part(2))).data.id
+    const elsewhere = (await link.request("POST", "/api/session", { ...part(2), location: { directory: "/tmp/project" } })).data.id
+    const plain = (await link.request("POST", "/api/session", { title: "Yours", location: { directory: folder } })).data.id
+    writeFileSync(join(root, "reviews.json"), JSON.stringify([{ id: "rev_1", session: "ses_work", state: "reviewing", findings: [], started: 1, parts: [
+      { n: 1, of: 2, files: ["a.ts"], fileCount: 1, state: "reading", found: 0, session: recorded },
+      { n: 2, of: 2, files: ["b.ts"], fileCount: 1, state: "waiting", found: 0 },
+    ] }]))
+    // The box starts before it knows where the engine is.
+    const late = new EngineLink()
+    const reviews = new Reviews(join(root, "reviews.json"), { ...places(), engine: { api: late, listen } }, async () => ({ parts: [], leftOut: 0 }))
+    const starting = late.whenReady().then(() => reviews.resume())
+    expect(engine.interrupted).toEqual([])
+    late.configure(engine.url, "x")
+    await starting
+    await until(() => engine.interrupted.includes(recorded) && engine.deleted.includes(orphan))
+    expect(engine.deleted).toEqual([orphan])
+    expect([recorded, elsewhere, plain].every((id) => engine.conversations.has(id))).toBe(true)
+    late.configure(undefined, undefined)
+    reviews.stopAll()
+  })
+
   test("out of a repository, What to review offers only the folders", async () => {
     const folder = join(root, "loose")
     mkdirSync(join(folder, "lib", "deep"), { recursive: true })
     writeFileSync(join(folder, "lib", "a.ts"), "a\n")
     writeFileSync(join(folder, "lib", "deep", "b.ts"), "b\n")
-    expect(await reviewChoices(folder)).toEqual({ repository: false, commits: [], folders: [{ path: "lib", files: 2 }, { path: "lib/deep", files: 1 }] })
+    expect(await reviewChoices(folder)).toEqual({ repository: false, commits: [], folders: [{ path: "lib", files: 2 }, { path: "lib/deep", files: 1 }], describes: true })
+  })
+
+  test("what you describe in words is read as the files the model finds for it, measured first, the same ones reviewed", async () => {
+    const folder = join(root, "described")
+    const git = (...args: string[]) => run("git", ["-C", folder, "-c", "user.email=t@example.com", "-c", "user.name=T", ...args])
+    await run("git", ["init", "-q", "-b", "main", folder])
+    mkdirSync(join(folder, "src", "auth"), { recursive: true })
+    mkdirSync(join(folder, "test"))
+    writeFileSync(join(folder, "src", "auth", "login.ts"), "check(password)\n")
+    writeFileSync(join(folder, "src", "auth", "session.ts"), "keep(token)\n")
+    writeFileSync(join(folder, "test", "login.test.ts"), "expect(login())\n")
+    writeFileSync(join(folder, "src", "billing.ts"), "charge()\n")
+    writeFileSync(join(folder, ".env"), "KEY=secret\n")
+    await git("add", "-A")
+    await git("commit", "-qm", "first")
+    writeFileSync(join(folder, "src", "billing.ts"), "charge(twice)\n")
+    engine.directory = folder
+    const reviews = new Reviews(join(root, "reviews.json"), places())
+    reviews.onEnded = beat
+    const measure = (scope: any) => reviewRoutes(reviews, "POST", ["ses_work", "measure"], async () => ({ scope }))
+
+    // The model picks from the project's files, told what changed lately; a folder is each file
+    // in it, and one it made up, one out of the project or a secret is never read.
+    engine.answers = [`{"paths": ["src/auth/", "test/login.test.ts", "src/made-up.ts", "../outside.ts", ".env"]}`]
+    const size = (await (await measure({ kind: "described", words: "the auth module and its tests" })).json() as any).data
+    expect(size).toEqual({ files: 3, parts: 1, leftOut: 0, found: ["src/auth/login.ts", "src/auth/session.ts", "test/login.test.ts"] })
+    const asked = engine.checks.at(-1)!.prompt
+    expect(asked).toContain("<words>\nthe auth module and its tests\n</words>")
+    expect(asked).toContain("src/billing.ts")
+    expect(asked).toContain("Not committed yet:\nsrc/billing.ts")
+
+    // Asked for soon after, it reads those same files, without asking again, and keeps them.
+    const checks = engine.checks.length
+    engine.answers = [`{"summary": "Fine.", "findings": []}`]
+    await reviewRoutes(reviews, "POST", ["ses_work"], async () => ({ scope: { kind: "described", words: "the auth module and its tests", paths: ["src/billing.ts"] } }))
+    await until(() => reviews.get("ses_work")?.state === "done")
+    const review = reviews.get("ses_work")!
+    expect(review.scope).toEqual({ kind: "described", words: "the auth module and its tests", paths: ["src/auth/login.ts", "src/auth/session.ts", "test/login.test.ts"] })
+    expect(engine.checks.length).toBe(checks + 1)
+    const read = engine.checks.at(-1)!.prompt
+    expect(read).toContain("=== src/auth/session.ts ===")
+    expect(read).not.toContain("charge")
+    expect(read).not.toContain("KEY=secret")
+
+    // Words that fit nothing are said so; none at all aren't a scope.
+    engine.answers = [`{"paths": []}`]
+    const none = await measure({ kind: "described", words: "the payment gateway" })
+    expect(none.status).toBe(422)
+    expect(((await none.json()) as any).message).toBe("No files in this project fit that. Say it another way, or pick a folder.")
+    expect((await measure({ kind: "described", words: "  " })).status).toBe(400)
+
+    // Files that fit but can't be read (a picture) are said so before a review is asked for, and
+    // only the ones it reads are named.
+    writeFileSync(join(folder, "logo.png"), "\0\x01binary")
+    writeFileSync(join(folder, "package-lock.json"), "{}\n")
+    await git("add", "-A")
+    await git("commit", "-qm", "more")
+    engine.answers = [`{"paths": ["logo.png", "package-lock.json"]}`]
+    const unreadable = await measure({ kind: "described", words: "the logo" })
+    expect(unreadable.status).toBe(422)
+    expect(((await unreadable.json()) as any).message).toBe("None of the files that fit can be reviewed: they aren't text, or they're too big.")
+    engine.answers = [`{"paths": ["src/billing.ts", "package-lock.json"]}`]
+    expect(((await (await measure({ kind: "described", words: "billing" })).json()) as any).data).toEqual({ files: 1, parts: 1, leftOut: 0, found: ["src/billing.ts"] })
+    reviews.stopAll()
+  })
+
+  test("a review asked for while its words' files are still being found waits for them, and reads the same ones", async () => {
+    const folder = join(root, "pending")
+    await run("git", ["init", "-q", "-b", "main", folder])
+    writeFileSync(join(folder, "a.ts"), "a()\n")
+    writeFileSync(join(folder, "b.ts"), "b()\n")
+    engine.directory = folder
+    const reviews = new Reviews(join(root, "reviews.json"), places())
+    reviews.onEnded = beat
+    engine.holdingChecks = true
+    const measuring = reviewRoutes(reviews, "POST", ["ses_work", "measure"], async () => ({ scope: { kind: "described", words: "the a file" } }))
+    await until(() => engine.checks.length === 1)
+    await reviewRoutes(reviews, "POST", ["ses_work"], async () => ({ scope: { kind: "described", words: "the a file" } }))
+    engine.answers = [`{"paths": ["a.ts"]}`, `{"summary": "Fine.", "findings": []}`]
+    engine.holdingChecks = false
+    engine.answerChecks()
+    expect(((await (await measuring).json()) as any).data.found).toEqual(["a.ts"])
+    await until(() => reviews.get("ses_work")?.state === "done")
+    // One question for the files, one for the review.
+    expect(engine.checks.length).toBe(2)
+    expect(reviews.get("ses_work")!.scope).toEqual({ kind: "described", words: "the a file", paths: ["a.ts"] })
+    reviews.stopAll()
   })
 
   test("a big project is read in parts, and a folder that isn't a repository still has its files read", async () => {

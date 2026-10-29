@@ -568,12 +568,18 @@ struct SidebarView: View {
         newChat(on: machine)
     }
 
-    /// A new chat on `machine`, in Kuvo Code's chats folder there (`Moves`): found over SSH the
-    /// first time.
+    /// A new chat on `machine`, in Kuvo Code's chats folder there, as its box names it (`kuvo/info`).
     private func newChat(on machine: String) {
         Task {
-            guard let home = try? await app.moves.transport.home(on: machine) else { return }
-            newSession(RemoteFolder.folder(home.chats, on: machine))
+            struct Info: Decodable { var chats: String? }
+            do {
+                guard let chats = try await app.box(machine).value(Info.self, "GET", "kuvo/info").chats else {
+                    throw BoxRefusal(status: 404, message: "\(app.machines.engine(machine)?.machine.name ?? machine) needs a newer Kuvo Code to start chats there. It updates by itself overnight.")
+                }
+                newSession(RemoteFolder.folder(chats, on: machine))
+            } catch {
+                Modal.show(error)
+            }
         }
     }
 

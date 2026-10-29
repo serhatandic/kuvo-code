@@ -46,6 +46,8 @@ export interface ToldAgents {
   id?: string;
   list: ListedAgent[];
   features?: string[];
+  /** Conversations it moved away lately, by the key of the box each lives on now, and when. */
+  moved?: { session: string; key: string; at: number }[];
 }
 
 /** `run/agents.json`: everyone, for list_agents here (kuvo-browser.js reads it), and this box's

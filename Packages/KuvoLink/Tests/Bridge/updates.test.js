@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { runningAs } from "./running-as.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-updates-"));
 process.env.KUVO_HOME = home;
@@ -210,6 +211,16 @@ test("a box updates to a newer release: its engine and files swapped, started ag
 
   // The same release again: nothing to do.
   assert.equal((await update()).result, "current");
+});
+
+test("an agent's browser waiting on you (a sign-in) holds the update: nothing is stopped or swapped", async t => {
+  await machine();
+  release();
+  write(path.join(home, "run", "browser.pid"), String(await runningAs("kuvo-browser", t)));
+  write(path.join(home, "run", "browser-asks.json"), JSON.stringify({ asks: [{ id: "ask_1", kind: "signIn", host: "github.com", session: "ses_1", username: true, password: true }] }));
+  assert.deepEqual(await update(), { result: "busy", message: "Something is running there now." });
+  assert.equal(fs.readFileSync(path.join(home, "bin", "box-version"), "utf8"), "0.9.0");
+  assert.equal(read(engineFile).version, "1.0.0", "its engine still runs");
 });
 
 test("a new version that doesn't come up is taken back: the files, the box's version and the engine it had", async () => {

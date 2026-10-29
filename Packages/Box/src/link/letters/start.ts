@@ -1,7 +1,7 @@
 // A new session started with a task (PROTOCOL.md, "Agents' tools": `POST kuvo/sessions`, and the
 // start_session tool on every box)
 // From a conversation: an agent of its own, in that one's folder (or the one given), on its model,
-// with its approval, so Ask First isn't got around; it gets the task as a message from the
+// in its mode (Plan stays Plan), with its approval, so Ask First isn't got around; it gets the task as a message from the
 // conversation, so it knows who to report to, and its metadata says who started it, for every client
 // to show it beside them. From a client (no `startedBy`): the task as the user's own first message.
 
@@ -45,7 +45,6 @@ export interface StartGiven {
   approval?: unknown;
   wake?: unknown;
   computer?: unknown;
-  beside?: unknown;
   wait?: unknown;
 }
 
@@ -61,18 +60,16 @@ export interface Starter {
 /** An agent's call from no conversation this box has: counted together, its task from "another
  * agent" that can't be answered, and asking first, as nothing says it may do more. */
 export const OUTSIDE: Starter = { session: "unknown", place: null, name: "another agent" };
-const ASKS_FIRST: KitRule[] = [{ action: "shell", resource: "*", effect: "ask" }];
+const ASKS_FIRST: NonNullable<EngineSession["permissions"]> = [{ action: "shell", resource: "*", effect: "ask" }];
 
-/** A session started: its address, title, folder and project (null for a chat), whether it shows
- * beside the conversation that started it, and with `wait`, its first answer (null for none yet).
- * For its starter's words: what it picked (model, effort, mode), whether its approval was brought
- * down to the starter's, and what the starter hears of it. */
+/** A session started: its address, title, folder and project (null for a chat), and with `wait`,
+ * its first answer (null for none yet). For its starter's words: what it picked (model, effort,
+ * mode), whether its approval was brought down to the starter's, and what the starter hears of it. */
 export interface Started {
   session: string;
   title: string | null;
   folder: string;
   project: string | null;
-  beside: boolean;
   answer?: string | null;
   picked?: string;
   askedFirst?: boolean;
@@ -269,9 +266,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const askedFirst = given.approval === "approveAll" && asksFirst(parent?.permissions);
   const project = projectOf(folder);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
-  const beside = given.beside !== false;
-  const rules = rulesFor(wantsAsk && !asksFirst(parent?.permissions) ? { ...parent, permissions: askFirstRules() } : parent, project?.folders ?? []);
-  const agent = given.mode === "plan" || given.mode === "build" ? given.mode : null;
+  const rules = rulesFor(wantsAsk && !asksFirst(parent?.permissions) ? { ...parent, permissions: askFirstRules() as EngineSession["permissions"] } : parent, project?.folders ?? []);
+  // Its mode: the one asked for, else the conversation's (one that plans starts sessions that plan).
+  const agent = given.mode === "plan" || given.mode === "build" ? given.mode : parent?.agent ?? null;
   let session: string;
   try {
     const made = await call(target, "POST", "/api/session", { location: { directory: folder }, ...(title ? { title } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}), ...(rules ? { permissions: rules } : {}) }, place.signal);
@@ -289,7 +286,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   await tellWorktree(target, session).catch(() => {});
   const wakes = wakesFrom(given.wake, Boolean(ownBot), given.wait === true);
   if (by?.place) {
-    const kuvo = { startedBy: by.session, beside, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) };
+    const kuvo = { startedBy: by.session, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) };
     await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo } }).catch(() => {});
     if (bot) noteWorkChanged(bot.bot);
   }
@@ -301,7 +298,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   } catch (error) {
     return no(502, `Started a session (${session}), but the task didn't reach it: ${String((error as Error | null)?.message ?? error)}`, session);
   }
-  const started: Started = { session, title, folder, project: project?.name ?? null, beside, ...(picked.length ? { picked: picked.join(" · ") } : {}), ...(askedFirst ? { askedFirst } : {}), ...(wakes.length ? { wakes } : {}) };
+  const started: Started = { session, title, folder, project: project?.name ?? null, ...(picked.length ? { picked: picked.join(" · ") } : {}), ...(askedFirst ? { askedFirst } : {}), ...(wakes.length ? { wakes } : {}) };
   if (!waits) return { started };
   // A new session: anything it says is its answer.
   return { started: { ...started, answer: await answerTo(target, session, id, { wait: place.step, signal: place.signal }) } };
@@ -310,12 +307,12 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
 /** How a start went, in the words the tool gives its agent. */
 export function startedWords(outcome: { started: Started } | { refused: StartRefusal }, waits: boolean): { text: string; isError: boolean } {
   if ("refused" in outcome) return { text: outcome.refused.message, isError: true };
-  const { session, title, project, beside, answer, picked, askedFirst, wakes = [] } = outcome.started;
+  const { session, title, project, answer, picked, askedFirst, wakes = [] } = outcome.started;
   const name = title ? `"${title}"` : "a new session";
   const where = project ? ` in ${project}` : "";
   const what = picked ? `: ${picked}.` : ".";
   const asks = askedFirst ? " It asks first, as you do." : "";
   const hears = wakes.length ? ` You'll be woken when it ${wakes.length === 2 ? "finishes or asks for something" : wakes[0] === "finished" ? "finishes" : "asks for something"}, so don't check on it.` : "";
-  if (!waits) return { text: `Started ${name}${where}${beside ? ", beside this conversation" : ", in a tab"} (address ${session})${what}${asks} It's on it now.${hears || " Write to it with send_message; it can write back to you the same way."}`, isError: false };
+  if (!waits) return { text: `Started ${name}${where} (address ${session})${what}${asks} It's on it now.${hears || " Write to it with send_message; it can write back to you the same way."}`, isError: false };
   return { text: `Started ${name}${where} (address ${session})${what}${asks} ` + (answer ? `It answered:\n\n${answer}` : "It hasn't answered yet; it may still write back with send_message."), isError: false };
 }

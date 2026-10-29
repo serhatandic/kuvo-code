@@ -31,6 +31,7 @@ import { providerModelsRoute } from "../areas/providers";
 import { answerProjects } from "../areas/projects";
 import { settingsRoute } from "../areas/settings";
 import { skillsRoute } from "../areas/skills";
+import { moveEventsRoute, movePlacesRoute, movesRoute } from "../areas/moves";
 import { sessionWakesRoute, wakeEventsRoute, wakesRoute } from "../areas/wakes";
 import { worktreeEventsRoute, worktreesRoute } from "../areas/worktrees";
 import { newProjectRoute, WORK_ASKS_ROUTE, WORK_ROUTE, workAsksRoute, workRoute } from "../areas/work";
@@ -111,6 +112,9 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/bots/retell", answer: retellRoute },
   { when: route => route === "kuvo/bots/events", answer: botEventsRoute },
   { when: route => route === "kuvo/bots", answer: botsRoute },
+  { when: route => route === "kuvo/moves", answer: movesRoute },
+  { when: route => route === "kuvo/moves/events", answer: moveEventsRoute },
+  { when: route => route === "kuvo/moves/places", answer: movePlacesRoute },
   { when: route => route === "kuvo/wakes", answer: wakesRoute },
   { when: route => route === "kuvo/wakes/events", answer: wakeEventsRoute },
   { when: route => route.match(/^kuvo\/wakes\/([^/]+)(?:\/(cancel|now|pause|watch))?$/), answer: sessionWakesRoute },

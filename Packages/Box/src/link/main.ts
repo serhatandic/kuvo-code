@@ -43,7 +43,9 @@ import { docsChanged, macDocsChanged } from "./documents/exchange";
 import { newSigningSeed, ownSign, SIGN } from "./documents/format";
 import { docsWork, ownDocs, pruneDocs } from "./documents/work";
 import { peerTargets, readBridgeFile, readEngineFile } from "./engine/client";
+import { engineConfigContent } from "./engine/compatibility";
 import { watchBox } from "./engine/watch";
+import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
 import { IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, VERSION_FILE, homeFolder } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
@@ -88,6 +90,8 @@ export { IS_MAC, LINK_FILE } from "./home";
 export { BRIDGE_VERSION } from "./version";
 export { FEATURES } from "../shared/features";
 export { messageID } from "./engine/sessions";
+export { forgetMovesInMemory, keepMoving, sendMovesWith, takeMoveMail, watchMoves } from "./moves/move";
+export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
 export { queueOf, queueWatcher, readQueues, scanQueues } from "./engine/queue";
 export { workWatcher } from "./work/wakes";
 export { macLink, readLink, updateLink, writeLink } from "./state";
@@ -138,7 +142,7 @@ export { peerOf, readPeerAgents, takeAgents } from "./peers/directory";
 export { composeLetter } from "./letters/letter";
 export { composeAgents } from "./peers/directory";
 export { nameAgents, namedAgents, namesIn } from "./peers/naming";
-export { carrySeat, seatPayloads, seatPeers, takeSeat, tellSeatPeers, watchSeats } from "./peers/seats";
+export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeSeat, tellSeatPeers, watchSeats } from "./peers/seats";
 export { announce, ownAgents, refreshOwn, writeAgents } from "./peers/agents";
 export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
 export { takeLetter } from "./letters/take";
@@ -285,6 +289,8 @@ async function run(): Promise<void> {
   watchBox({ tell, hold });
   // What its group chats send your other computers, carried on the relay connection that's up.
   watchSeats(() => current);
+  // Moves to and from your other computers, carried on the same connection.
+  watchMoves(() => current);
   watchAsks(tell, { answered });
   // What its bots ask you before they do it (making a project): told the same way.
   watchWorkAsks(tell, { answered });
@@ -690,6 +696,9 @@ if (main) {
   else if (mode === "box") await box(argument);
   else if (mode === "serve") await serve();
   else if (mode === "leave") leave(argument);
+  // A machine's start scripts' (`kuvo-launch`): what its engine starts with, its OPENCODE_CONFIG_CONTENT
+  // with what some providers need on top, as this box last learned it (PROTOCOL.md, "Settings per box").
+  else if (mode === "engine-config") process.stdout.write(engineConfigContent(process.env.OPENCODE_CONFIG_CONTENT));
   else if (mode === "update") {
     // `update [--now]`, and for a test's folder only, `--url <boxes.json> --key <public key>`. Once
     // it's updated, the running bridge goes, for the keeper to start the new one.
@@ -711,7 +720,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | update [--now] | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | update [--now] | selftest");
     process.exit(2);
   }
 }

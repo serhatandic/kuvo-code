@@ -202,9 +202,6 @@ final class PhoneLink {
     /// own, without the phone link, makes no connection.
     var relayWanted: Bool { Self.isEnabled || hasMachines() }
 
-    /// Where each conversation being moved lives now (nil: this Mac), by machine. Set by the app
-    /// (`Moves.livePlaces`).
-    @ObservationIgnored var movedSessions: () -> [String: String?] = { [:] }
 
     /// This Mac's link, held by its box (KuvoLink's PROTOCOL.md, "This Mac's box: the relay"): told
     /// whether it's wanted, and followed (how it stands, and the phones it keeps), from now on.
@@ -566,6 +563,10 @@ final class PhoneLink {
                 """), input: settings)
             struct Answer: Decodable { var address: String?; var key: String?; var peers: Bool?; var sign: String?; var docs: [Documents.Envelope]? }
             let answer = try? JSONDecoder().decode(Answer.self, from: Data(output.utf8))
+            // Removed or uninstalled meanwhile (or merged into another): not named to your phones
+            // and other computers again.
+            if engine.isRetired { return }
+            if let machines = bots?.app?.machines, machines.engine(machine.id) !== engine { return }
             let before = machineHosts[machine.id]
             if let address = answer?.address, let key = answer?.key {
                 machineHosts[machine.id] = MachineHost(name: machine.name, address: address, key: key, anotherMac: engine.isAnotherMacsEngine, peers: answer?.peers,
@@ -608,21 +609,6 @@ final class PhoneLink {
         setupFailed[id] = nil
     }
 
-    /// A conversation being moved, and the key of the computer it lives on now (PROTOCOL.md,
-    /// "Peers"): the one it left may still list it.
-    struct Moved: Encodable {
-        var session: String
-        var key: String
-    }
-
-    private var moved: [Moved] {
-        movedSessions().compactMap { session, place in
-            // On this Mac, or a machine whose link talks to other computers (others' aren't peers).
-            let live: String? = if let place { machineHosts[place]?.peers == true ? machineHosts[place]?.key : nil } else { key.publicBytes.base64URL }
-            return live.map { Moved(session: session, key: $0) }
-        }.sorted { $0.session < $1.session }
-    }
-
     /// Your machines as this Mac's box names them in its peers document (PROTOCOL.md, "Peers"): those
     /// whose bridge signs its own documents and whose engine is this Mac's (another Mac's machines
     /// are that Mac's to tell), with the conversations being moved. The box signs it, meets your
@@ -640,6 +626,8 @@ final class PhoneLink {
     private func peersBody(removed: [String] = []) -> Data? {
         guard relayWanted, hasIdentity else { return nil }
         struct Peer: Encodable { var key: String; var sign: String; var address: String; var name: String; var id: String }
+        // COMPAT(beta.1 mac-moves): `moved`, none: the boxes that move conversations say where they went. Goes when 0.8.0 ships.
+        struct Moved: Encodable { var session: String; var key: String }
         struct Body: Encodable { var peers: [Peer]; var moved: [Moved]; var removed: [String] }
         // Only whole records (one that isn't would be left out by the box anyway).
         let base64URL = /[A-Za-z0-9_-]+/
@@ -648,7 +636,7 @@ final class PhoneLink {
                   host.key.count == 43, sign.count == 43, host.address.count == 22 else { return nil }
             return Peer(key: host.key, sign: sign, address: host.address, name: host.name, id: id)
         }
-        return try? JSONEncoder().encode(Body(peers: peers, moved: moved, removed: removed))
+        return try? JSONEncoder().encode(Body(peers: peers, moved: [], removed: removed))
     }
 
     /// This Mac's public key, as your machines know it (none while the Keychain won't give it out).
@@ -922,7 +910,7 @@ final class PhoneLink {
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
     nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/plugins", "kuvo/folders", "kuvo/programs", "kuvo/providers", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities",
-                                                  "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended", "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/artifacts", "kuvo/search", "kuvo/git", "kuvo/agent-tools", "kuvo/work"]
+                                                  "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended", "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/artifacts", "kuvo/search", "kuvo/git", "kuvo/agent-tools", "kuvo/moves", "kuvo/work"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
@@ -959,8 +947,8 @@ final class PhoneLink {
     /// `engine.start` and `update`), and the Mac's own. `usage` is added while the usage panel is.
     static let features = [
         "accounts.credentials", "accounts.found", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply", "engine.restart",
-        "file", "folders", "git", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog",
-        "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
+        "file", "folders", "git", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves",
+        "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.parts", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
         "personalities.events", "skills.trash", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
         "agent-tools", "sessions.start", "letters-read", "queue", "work", "work.projects",
         // The Mac's own.

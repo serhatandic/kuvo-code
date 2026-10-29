@@ -57,6 +57,9 @@ export function botHere(id: unknown): BotHere | null {
 // reaches it or changes here until it's there, as on the Mac.
 export const isMoving = (folder: string): boolean => (textOf(path.join(folder, "paused")) ?? "").trim() === "moving";
 export const MOVING = "It’s moving to another computer. Try again once it’s there.";
+// How long a step of making or deleting a bot waits on the engine, once it's under way: it goes on
+// without the phone's request, which may end first.
+export const BOT_STEP = 30_000;
 
 /** A model as `isModel` checks it: its id and its account's are text; its variant, and anything
  * else that came with it, aren't checked (`botModel` keeps a variant only when it's text). */

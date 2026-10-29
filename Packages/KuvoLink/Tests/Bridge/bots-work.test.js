@@ -160,7 +160,7 @@ test("a bot starts a session in a project, on the model, effort and mode it pick
   assert.equal(said.isError, false, said.text);
   const session = startedAddress(said);
   assert.ok(session, said.text);
-  assert.match(said.text, /^Started "Onboarding" in Tidepool, beside this conversation \(address ses_new1\): Claude Sonnet 5\.5 · high · Plan\. It's on it now\. You'll be woken when it finishes or asks for something, so don't check on it\.$/);
+  assert.match(said.text, /^Started "Onboarding" in Tidepool \(address ses_new1\): Claude Sonnet 5\.5 · high · Plan\. It's on it now\. You'll be woken when it finishes or asks for something, so don't check on it\.$/);
   assert.deepEqual(made[0].location, { directory: tidepool });
   assert.deepEqual(made[0].model, { providerID: "anthropic", id: "claude-sonnet-5-5", variant: "high" });
   assert.equal(made[0].agent, "plan");

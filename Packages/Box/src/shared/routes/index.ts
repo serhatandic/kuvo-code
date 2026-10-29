@@ -12,6 +12,7 @@ import { GROUP_ROUTES } from "./groups";
 import { INTEGRATION_ROUTES } from "./integrations";
 import { MAC_ROUTES } from "./mac";
 import { MISC_ROUTES } from "./misc";
+import { MOVE_ROUTES } from "./moves";
 import { PERSONALITY_ROUTES } from "./personalities";
 import { PROJECT_ROUTES } from "./projects";
 import { SESSION_ROUTES } from "./sessions";
@@ -37,6 +38,7 @@ export const ROUTES: RouteShape[] = [
   ...BOX_ROUTES,
   ...CHANGES_ROUTES,
   ...MAC_ROUTES,
+  ...MOVE_ROUTES,
   ...GROUP_ROUTES,
   ...INTEGRATION_ROUTES,
   ...MISC_ROUTES,

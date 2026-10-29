@@ -155,9 +155,3 @@ export async function linkHost(call: string, body?: unknown): Promise<HostAnswer
     return null;
   }
 }
-
-// Whether one of this Mac's conversations is moving to or from another computer now: its app runs
-// the move (`link/moving`). Not when the app can't say (it isn't answering).
-export async function macMoving(session: string): Promise<boolean> {
-  return (await linkHost("link/moving", { session }))?.moving === true;
-}

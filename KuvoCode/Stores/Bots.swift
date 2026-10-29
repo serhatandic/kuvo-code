@@ -362,6 +362,20 @@ final class Bots {
         return client
     }
 
+    /// One New Bot, as its sheet keeps it: its own id, sent each time Create is clicked, so its box
+    /// makes one bot however often it's sent (an answer lost on the way back, and Create clicked
+    /// again). Another sheet is another New Bot.
+    struct NewBotRequest {
+        let id = "req_" + UUID().uuidString
+
+        @MainActor
+        func make(with bots: Bots, name: String, look: BotLook, personality: String? = nil, model: ModelRef?, machine: String?, project: String?,
+                  template: String? = nil, shared: (line: String, details: String)? = nil) async throws -> Made {
+            try await bots.make(name: name, look: look, personality: personality, model: model, machine: machine, project: project,
+                                template: template, shared: shared, request: id)
+        }
+    }
+
     /// A bot made, and what to type in its conversation for you (a template's or a shared bot's job;
     /// nil when it writes first).
     struct Made {
@@ -371,18 +385,20 @@ final class Bots {
 
     /// Makes a bot where it's to live, as New Bot does: its box makes its folder, its conversation
     /// and what it's told. From a template (`template`) or a shared bot's job (`shared`) it waits,
-    /// with that job for your composer; otherwise it writes first.
+    /// with that job for your composer; otherwise it writes first. `request`: New Bot's own id,
+    /// the same each time it's tried, so its box makes one bot however often it's sent.
     func make(name: String, look: BotLook, personality: String? = nil, model: ModelRef?, machine: String?, project: String?,
-              template: String? = nil, shared: (line: String, details: String)? = nil) async throws -> Made {
+              template: String? = nil, shared: (line: String, details: String)? = nil, request: String? = nil) async throws -> Made {
         let client = try box(machine)
         if machine == nil { writeMacKit() }
         struct Body: Encodable {
             var name: String, look: BotLook, personality: String?, model: ModelRef?, project: String?, template: String?
             var job: [String: String]?
+            var request: String?
         }
         let body = Body(name: Self.oneLine(name), look: look, personality: personality, model: model,
                         project: project.map { RemoteFolder.parse($0)?.path ?? $0 }, template: template,
-                        job: shared.map { ["line": $0.line, "details": $0.details] })
+                        job: shared.map { ["line": $0.line, "details": $0.details] }, request: request)
         struct Answer: Decodable { var bot: ListedBot; var firstMessage: String? }
         let answer = try await client.value(Answer.self, "POST", "kuvo/bots", body: body)
         take(one: answer.bot, from: client.box)
@@ -566,32 +582,6 @@ final class Bots {
         // Told at once, as before, rather than at their next run.
         guard let client = client(BoxClient.mac) else { return }
         Task { _ = try? await client.send("POST", "kuvo/bots/retell") }
-    }
-
-    // MARK: Moving
-
-    /// A bot that moved to another computer (`Moves`): it lives on `machine` (nil: this Mac) from
-    /// now on, in `folder`, with its conversation carried there (`session`, the same ID). Its box
-    /// there makes it its own (`kuvo/bots/<id>/arrived`): what its folder says of where it is and
-    /// the clock it goes by, its rules there (its folder, that computer's Settings › Permissions),
-    /// and what it's told there. One that can't be asked now does so at the bot's next run there.
-    func moved(_ id: String, to machine: String?, folder: String, session: Session) async {
-        guard let index = known.firstIndex(where: { $0.id == id }) else { return }
-        known[index].machine = machine
-        known[index].folder = folder
-        save()
-        show()
-        app?.workspace.add(session)
-        let box = machine ?? BoxClient.mac
-        guard let client = client(box) else { return }
-        struct Answer: Decodable { var bot: ListedBot }
-        let path = "kuvo/bots/" + (id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id) + "/arrived"
-        do {
-            let answer = try await client.value(Answer.self, "POST", path)
-            take(one: answer.bot, from: box)
-        } catch {
-            log.error("A moved bot wasn't made its box's yet: \(error.localizedDescription, privacy: .public)")
-        }
     }
 
     // MARK: Words

@@ -11,6 +11,7 @@ import type { Agent, PermissionAsk, RunInput, RunResult, Thread, TurnHooks } fro
 import { failure } from "./agent"
 import type { Limit } from "./auto"
 import { newID } from "./ids"
+import { holdsBack } from "./rules"
 import type { Turn } from "./turn"
 import type { Decision, FormField, Model, ModelRef, Session, StructuredError, TokenUsage, ToolOutput, PermissionRule } from "./wire"
 
@@ -172,9 +173,10 @@ export class EngineLink {
     const rules: PermissionRule[] = []
     for (const policy of policies as { action?: string; resource?: string; effect?: string }[]) {
       if (policy?.action !== "tool.use" || typeof policy.resource !== "string") continue
-      if (policy.effect !== "deny" && policy.effect !== "allow") continue
+      if (typeof policy.effect !== "string") continue
       const at = policy.resource.indexOf(":")
-      rules.push({ action: at < 0 ? policy.resource : policy.resource.slice(0, at), resource: at < 0 ? "*" : policy.resource.slice(at + 1) || "*", effect: policy.effect })
+      // (One of a kind a newer engine has that this bridge doesn't know: nothing allows it either.)
+      rules.push({ action: at < 0 ? policy.resource : policy.resource.slice(0, at), resource: at < 0 ? "*" : policy.resource.slice(at + 1) || "*", effect: holdsBack(policy.effect) ? "deny" : policy.effect })
     }
     return rules
   }

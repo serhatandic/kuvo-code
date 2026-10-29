@@ -14,6 +14,7 @@ import { currentDigest } from "../documents/work";
 import { readBridgeFile } from "../engine/client";
 import { locked, textOf, writePrivate } from "../files";
 import { IS_MAC, K } from "../home";
+import { awaySessions, movedAway } from "../moves/records";
 import { macLink, readLink } from "../state";
 import { AGENTS_FILE, composeAgents, fitsAgent, isPutAway, keptAgent, MAC_AGENTS_FILE, PEER_AGENTS_FILE, PEER_LOCK, readPeerAgents } from "./directory";
 import { mailFor, movedOf, peersOf } from "./known";
@@ -51,7 +52,9 @@ export function forgetMacsAgents(mac: string, link: LinkState | null): void {
 // own: one without a title is "New session", and a chat's project is "Chats". Null when its engine
 // can't say (then what it last said stands).
 export async function ownAgents(readEngine: () => Target, machine?: string, kit: BotKit | null = readKit(), readBridge: () => BridgeRecord = readBridgeFile): Promise<ListedAgent[] | null> {
-  const bots = listBots(machine).map(bot => ({ session: bot.session, name: bot.name, kind: "bot" as const, id: bot.id, ...(bot.job ? { about: bot.job } : {}), ...(bot.look ? { look: bot.look } : {}) }));
+  // Not what doesn't live here (a copy a move brought, not switched to yet; an original going).
+  const away = new Set(awaySessions());
+  const bots = listBots(machine).filter(bot => !away.has(bot.session)).map(bot => ({ session: bot.session, name: bot.name, kind: "bot" as const, id: bot.id, ...(bot.job ? { about: bot.job } : {}), ...(bot.look ? { look: bot.look } : {}) }));
   const botSessions = new Set(bots.map(bot => bot.session));
   const sessionsOf = async (target: Target): Promise<EngineSession[]> => {
     const response = await fetch(`http://127.0.0.1:${target.port}/api/session?parentID=null&limit=100&order=desc`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` }, signal: AbortSignal.timeout(10_000) });
@@ -69,7 +72,7 @@ export async function ownAgents(readEngine: () => Target, machine?: string, kit:
   const named = (directory: string | undefined): string | undefined => projects.find(project => project.directory === directory)?.name
     ?? (directory === path.join(K, "chats") ? "Chats" : directory ? path.basename(directory) : undefined);
   const recent = sessions
-    .filter(session => !session.parentID && !botSessions.has(session.id) && !session.metadata?.kuvo?.seat && !isPutAway(session))
+    .filter(session => !session.parentID && !botSessions.has(session.id) && !away.has(session.id) && !session.metadata?.kuvo?.seat && !isPutAway(session))
     .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
     .slice(0, 40)
     .map(session => ({ session: session.id, name: session.title || "New session", kind: "session" as const, ...(named(session.location?.directory ?? session.directory) ? { project: named(session.location?.directory ?? session.directory) } : {}) }));
@@ -132,7 +135,9 @@ export async function announce(host: Pick<LinkHost, "send">, readEngine: () => T
   if (!link?.key) return;
   await refreshOwn(readEngine, link);
   if (!ownList) return;
-  const json = JSON.stringify(ownList);
+  // With the conversations it moved away lately, and where each lives now.
+  const moved = movedAway(now).map(({ session, key, at }) => ({ session, key, at }));
+  const json = JSON.stringify([ownList, moved]);
   let have: DigestEntry[] | false | null = null;
   for (const peer of peersOf(link)) {
     const last = toldPeers.get(peer.key);
@@ -144,7 +149,7 @@ export async function announce(host: Pick<LinkHost, "send">, readEngine: () => T
     let bytes: Buffer | null = null, sent: ListedAgent[] = [];
     for (const count of [ownList.length, Math.floor(ownList.length / 2), Math.floor(ownList.length / 4)]) {
       sent = ownList.slice(0, count);
-      bytes = mailFor(peer, { agents: { at: now, list: sent, features: ownFeatures() }, ...docs, at: now, ...(ask ? { ask: "agents" } : {}) }, link);
+      bytes = mailFor(peer, { agents: { at: now, list: sent, features: ownFeatures(), moved }, ...docs, at: now, ...(ask ? { ask: "agents" } : {}) }, link);
       if (bytes) break;
     }
     if (!bytes) continue;

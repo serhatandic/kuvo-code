@@ -92,8 +92,8 @@ import Testing
             session("ses_deeper", "Try it with an enum", created: 30, extra: ["metadata": ["kuvo": ["branchedFrom": "ses_tried"]]]),
             session("ses_find", "Find where the timer state lives", created: 40, extra: ["parentID": "ses_timer"]),
             session("ses_lost", "From one archived since", created: 50, extra: ["metadata": ["kuvo": ["branchedFrom": "ses_gone"]]]),
-            // One its agent started (start_session), for any kind of agent.
-            session("ses_review", "Review the timer tests", created: 25, extra: ["metadata": ["kuvo": ["startedBy": "ses_timer", "beside": true], "kuvoAgent": "codex"]]),
+            // One its agent started (start_session), whatever kind of agent.
+            session("ses_review", "Review the timer tests", created: 25, extra: ["metadata": ["kuvo": ["startedBy": "ses_timer", "beside": true]]]),
         ])
         await workspace.refresh()
 
