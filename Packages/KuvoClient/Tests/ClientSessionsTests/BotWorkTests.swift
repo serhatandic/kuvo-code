@@ -1,0 +1,50 @@
+import ClientSessions
+import Foundation
+import OpenCodeKit
+import Testing
+
+/// What both apps show of a bot's work: the bot a session works for, the ask a bot answered on the
+/// step that asked it ("Allowed by Pixel"), its work as the box tells it, and its line in the
+/// sidebar.
+struct BotWorkTests {
+    private func session(metadata: String) throws -> Session {
+        let json = #"{"id": "ses_1", "projectID": "p", "title": "Haptics", "cost": 0, "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}}, "time": {"created": 1, "updated": 2}, "location": {"directory": "/p"}, "metadata": \#(metadata)}"#
+        return try JSONDecoder().decode(Session.self, from: Data(json.utf8))
+    }
+
+    @Test func aSessionUnderABotIsMarkedWithItsBotAndShowsItsAnswersOnTheirSteps() throws {
+        let session = try session(metadata: #"{"kuvo": {"startedBy": "ses_pixel", "by": {"bot": "bot_pixel", "name": "Pixel"}, "depth": 1, "answers": [{"ask": "per_1", "call": "call_1", "what": "Wants to run a command: npx expo install expo-haptics", "decision": "allow", "reason": "The plan names it.", "by": {"bot": "bot_pixel", "name": "Pixel"}, "at": 1761700000000}, {"ask": "per_2", "what": "?", "decision": "something-newer", "reason": "", "by": {"name": "x"}, "at": 1}]}}"#)
+        #expect(WorksFor(session) == WorksFor(try self.session(metadata: #"{"kuvo": {"by": {"bot": "bot_pixel", "name": "Pixel"}}}"#)))
+        #expect(WorksFor(session)?.name == "Pixel")
+        let answer = try #require(WorkAnswer.forCall("call_1", in: session))
+        #expect(answer.verdict == "Allowed by Pixel")
+        #expect(answer.reason == "The plan names it.")
+        #expect(WorkAnswer.on(session).count == 1, "one a newer box words differently is left out, not the lot")
+        #expect(WorkAnswer.forCall("call_9", in: session) == nil)
+    }
+
+    @Test func aSessionOfYourOwnWorksForNoBot() throws {
+        #expect(WorksFor(try session(metadata: #"{"kuvo": {"startedBy": "ses_lead"}}"#)) == nil)
+        #expect(WorksFor(try session(metadata: "null")) == nil)
+        #expect(WorkAnswer.on(try session(metadata: "null")).isEmpty)
+    }
+
+    @Test func aBotsWorkReadsAsItsBoxTellsIt() throws {
+        let json = #"{"bot": "bot_pixel", "sessions": [{"session": "ses_1", "title": "Sign-in", "folder": "/p", "project": "Tidepool", "startedBy": "ses_pixel", "depth": 1, "model": {"id": "claude-sonnet-5-5", "providerID": "anthropic", "variant": "high"}, "state": "asking", "asks": "Wants to run a command: npm test", "started": 1, "tokens": 1200}, {"session": "ses_2", "title": "Plan", "folder": "/p", "startedBy": "ses_pixel", "depth": 1, "state": "finished", "started": 1, "tokens": 0, "lastReply": "Done."}], "answered": [], "today": {"started": 2, "working": 1, "tokens": 1200}, "limits": null}"#
+        let report = try JSONDecoder().decode(BotWorkReport.self, from: Data(json.utf8))
+        #expect(report.atWork.map(\.title) == ["Sign-in"], "one asking is still at it; one finished isn't")
+        #expect(report.limits == nil)
+        #expect(report.sessions[0].model?.variant == "high")
+    }
+
+    @Test func aBotsLineSaysWhereItsSessionsWork() {
+        #expect(WorkWords.atWork(count: 3, projects: ["Tidepool", "Tidepool"]) == "At work in Tidepool: 3 sessions")
+        #expect(WorkWords.atWork(count: 1, projects: ["Tidepool"]) == "At work in Tidepool: 1 session")
+        #expect(WorkWords.atWork(count: 2, projects: ["Tidepool", "kuvo-web"]) == "At work in 2 projects: 2 sessions")
+        #expect(WorkWords.atWork(count: 2, projects: []) == "At work: 2 sessions")
+        #expect(WorkWords.asking("Wants to run a command: npx expo install expo-haptics") == "Asks to run npx expo install expo-haptics")
+        #expect(WorkWords.asking("Wants to work outside the project.") == "Asks to work outside the project.")
+        #expect(WorkWords.tokens(412_300) == "412k")
+        #expect(WorkWords.tokens(1_250_000) == "1.2M")
+    }
+}

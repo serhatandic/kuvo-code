@@ -2651,6 +2651,16 @@ final class Workspace {
         running.count { $0 != id && root(of: $0) == id }
     }
 
+    /// The sessions a bot runs (`kuvo.by`) that are at it now: working, or waiting on you. What
+    /// its row says it's doing ("At work in Tidepool: 3 sessions").
+    func work(of bot: String) -> [Session] {
+        #if DEBUG
+        // KUVO_DEMO_BOT_WORK: every session marked as a bot's counts as at work, for a look.
+        if ProcessInfo.processInfo.environment["KUVO_DEMO_BOT_WORK"] != nil { return sessions.filter { WorksFor($0)?.bot == bot && !Self.isArchived($0) } }
+        #endif
+        return sessions.filter { WorksFor($0)?.bot == bot && !Self.isArchived($0) && (isWorking($0.id) || needsAttention($0.id)) }
+    }
+
     /// The session works, itself, through subagents still at it, or with a command it left
     /// running in the background: what its row, tab and bot show.
     func isWorking(_ id: String) -> Bool {

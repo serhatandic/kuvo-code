@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 
@@ -301,6 +302,9 @@ struct BotEditor: View {
                                 }
                             }
                         }
+                    }
+                    section("Work", note: "Limits on the sessions \(bot.name) runs for you. It sizes its work to the job, with none until you set one; past one, it asks you.") {
+                        BotWorkLimits(bot: bot)
                     }
                     section("Wake-Ups", note: "The bot schedules these itself: wake-ups to carry on later, and watches, which check something without its model and wake it when that changes. Add a wake-up of your own, and at its time what it says to do arrives in its conversation.") {
                         WakeList(owner: bot.wakeOwner, name: bot.name)
@@ -1069,5 +1073,77 @@ struct ScheduleRow: View {
             .fixedSize()
         }
         .padding(.vertical, 6)
+    }
+}
+
+/// The limits you set on the sessions a bot runs (Edit Bot › Work), kept on its box: none until you
+/// set one, as it sizes its work to the job. Each changes as you pick it.
+struct BotWorkLimits: View {
+    let bot: Bot
+    @Environment(AppModel.self) private var app
+    @State private var failure: String?
+    @State private var isSaving = false
+
+    private var limits: WorkLimits { app.botWork.reports[bot.id]?.limits ?? WorkLimits() }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            WellGroup {
+                row("Sessions at once", symbol: "square.stack", value: limits.atOnce, choices: [1, 2, 3, 5, 8], words: { "\($0)" }) { $0.atOnce = $1 }
+                WellDivider()
+                row("New sessions a day", symbol: "calendar", value: limits.perDay, choices: [3, 5, 10, 20, 50], words: { "\($0)" }) { $0.perDay = $1 }
+                WellDivider()
+                row("Sessions they start", symbol: "arrow.turn.down.right", value: limits.depth, choices: [1, 2, 3],
+                    words: { $0 == 1 ? "None" : $0 == 2 ? "One level" : "Two levels" }) { $0.depth = $1 }
+                WellDivider()
+                row("Tokens a day", symbol: "gauge.with.dots.needle.33percent", value: limits.tokensPerDay, choices: [250_000, 1_000_000, 5_000_000, 20_000_000], words: { WorkWords.tokens($0) }) { $0.tokensPerDay = $1 }
+            }
+            .disabled(isSaving)
+            if let failure {
+                Text(failure)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .task { await app.botWork.read(bot) }
+    }
+
+    private func row(_ title: String, symbol: String, value: Int?, choices: [Int], words: @escaping (Int) -> String, set: @escaping (inout WorkLimits, Int?) -> Void) -> some View {
+        NativeMenuButton(opensBelow: true) {
+            let menu = NSMenu()
+            menu.addItem(ActionItem("No Limit", checked: value == nil) { change { set(&$0, nil) } })
+            menu.addItem(.separator())
+            for choice in choices {
+                menu.addItem(ActionItem(words(choice), checked: value == choice) { change { set(&$0, choice) } })
+            }
+            return menu
+        } label: {
+            WellRow {
+                Image(systemName: symbol)
+            } content: {
+                HStack(spacing: 8) {
+                    Text(title)
+                    Spacer(minLength: 8)
+                    Text(value.map(words) ?? "No limit")
+                        .foregroundStyle(.secondary)
+                    MenuChevron()
+                }
+            }
+            .contentShape(.rect)
+        }
+        .accessibilityLabel(title)
+        .accessibilityValue(value.map(words) ?? "No limit")
+    }
+
+    private func change(_ edit: (inout WorkLimits) -> Void) {
+        var changed = limits
+        edit(&changed)
+        isSaving = true
+        failure = nil
+        Task {
+            do { try await app.botWork.setLimits(changed, for: bot) } catch { failure = error.localizedDescription }
+            isSaving = false
+        }
     }
 }

@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientSessions
 import ClientText
 import OpenCodeKit
 import SwiftUI
@@ -37,6 +38,8 @@ struct SessionView: View {
                     .environment(\.isConversationShown, isShown && isInSight)
                     .zIndex(isShown ? 1 : 0)
                     .environment(\.isOffline, Self.offlineMachine(of: each, in: app) != nil)
+                    // What its bot answered for it, on the steps that asked.
+                    .environment(\.workAnswers, WorkAnswer.byCall(each.session))
             }
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
@@ -191,6 +194,8 @@ private struct BottomStack: View {
                 return BarStripItem(bar: bar, symbol: answering ? nil : Keyword.btw.symbol, words: answering ? "Answering…" : (model.shownSideThread?.questions.count ?? 1) > 1 ? "Side thread" : "Side question")
             case .subagents:
                 return BarStripItem(bar: bar, symbol: nil, words: subagentsAtWork.count == 1 ? "A subagent" : "\(subagentsAtWork.count) subagents")
+            case .work:
+                return BarStripItem(bar: bar, symbol: nil, words: BotWorkBar.title(workReport?.atWork.count ?? 0))
             case .background:
                 return BarStripItem(bar: bar, symbol: nil, words: "\(backgroundJobs.count) running")
             case .wakes:
@@ -218,6 +223,7 @@ private struct BottomStack: View {
         if model.review != nil { bars.append(.review) }
         if let id = model.shownSideQuestion, model.sideQuestions.contains(where: { $0.id == id }) { bars.append(.sideQuestion) }
         if !subagentsAtWork.isEmpty { bars.append(.subagents) }
+        if !(workReport?.atWork.isEmpty ?? true) { bars.append(.work) }
         if !backgroundJobs.isEmpty { bars.append(.background) }
         if wakeOwner != nil { bars.append(.wakes) }
         return bars
@@ -256,10 +262,24 @@ private struct BottomStack: View {
         case .review: $model.hidesReview
         case .sideQuestion: $model.hidesSideQuestion
         case .subagents: $model.hidesSubagents
+        case .work: $model.hidesWork
         case .background: $model.hidesBackgroundJobs
         case .wakes: $model.hidesWakes
         case .handoff: .constant(true)
         }
+    }
+
+    /// The bot this conversation is, whose sessions show in a bar over its composer.
+    private var workBot: Bot? { app.bots.bot(forSession: model.id) }
+
+    /// Its sessions as its box last told them.
+    private var workReport: BotWorkReport? { workBot.flatMap { app.botWork.reports[$0.id] } }
+
+    /// What its work is read again on: a session of it started, at work, asking, done.
+    private var workChanges: String? {
+        guard let bot = workBot else { return nil }
+        return bot.id + workspace.sessions.filter { WorksFor($0)?.bot == bot.id }
+            .map { "\($0.id)·\($0.time.updated)·\(workspace.isWorking($0.id))·\(workspace.needsAttention($0.id))" }.joined(separator: ",")
     }
 
     /// Commands its agent left running, which the conversation doesn't show as they run: once
@@ -370,6 +390,11 @@ private struct BottomStack: View {
                                 .modifier(CardRow())
                                 .transition(.fold)
                         }
+                        if let bot = workBot, let report = workReport, !report.atWork.isEmpty {
+                            BotWorkBar(bot: bot, report: report, isHidden: hidden(.work, $model.hidesWork))
+                                .modifier(CardRow())
+                                .transition(.fold)
+                        }
                         if !backgroundJobs.isEmpty {
                             BackgroundBar(jobs: backgroundJobs, api: workspace.api(forSession: model.id), directory: model.session.location.directory, isHidden: hidden(.background, $model.hidesBackgroundJobs)) { job in
                                 Task { await workspace.stopShellJob(job, in: model.id) }
@@ -443,6 +468,12 @@ private struct BottomStack: View {
             .animation(.ui, value: folds)
             .animation(.ui, value: isAsking)
             .animation(.ui, value: tucked)
+            // A bot's work read from its box as it changes (a session of it started, at work,
+            // asking, done), wherever the bot lives.
+            .task(id: workChanges) {
+                guard let bot = workBot else { return }
+                await app.botWork.read(bot)
+            }
             #if DEBUG
             // KUVO_DEMO_TUCKED: the bars tucked into their line once the sample ones are in (`new`:
             // the side question marked).

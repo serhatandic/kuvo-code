@@ -43,6 +43,8 @@ final class AppModel {
     let bots = Bots()
     /// Bots' and sessions' wake-ups and watches.
     let wakeUps = WakeUps()
+    /// The sessions bots run, as their boxes tell it.
+    let botWork = BotWork()
     /// Voice input, for whichever composer listens.
     let dictation = Dictation()
     // COMPAT(0.7 mac-group-chats): `GroupMigration.run` before the box's group chats start. Goes 3 months after 0.8.0.
@@ -280,6 +282,7 @@ final class AppModel {
         workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
         bots.app = self
         wakeUps.app = self
+        botWork.app = self
         boxGroups.app = self
         moves.app = self
         workspace.onMovedToAgents = { [weak self] from, to in await self?.movedToAgents(from: from, to: to) ?? false }

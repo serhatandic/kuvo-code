@@ -1,0 +1,87 @@
+import ClientSessions
+import Foundation
+import OpenCodeKit
+import Testing
+@testable import KuvoCode
+
+/// A bot running sessions, as this Mac shows it (PROTOCOL.md, "Work"): its conversation's At work
+/// bar reads its work from its box (the sessions it runs and where each stands, the asks it
+/// answered), and Edit Bot › Work keeps the limits you set on that box. The machine's box is the
+/// real one (`kuvo-link.js serve`), reached over HTTP where a Mac reaches it over SSH; its engine is
+/// a stand-in.
+@MainActor
+@Suite(.serialized) struct BotWorkTests {
+    let engine = StubEngine(port: 47_987)
+    let app = AppModel()
+
+    init() {
+        TestEnvironment.prepare()
+        try? FileManager.default.removeItem(at: Bots.file)
+        app.bots.app = app
+        app.botWork.app = app
+    }
+
+    private func done(_ machine: MachineTestBox) {
+        machine.stop()
+        StubWeb.stopListening(port: 47_987)
+        engine.stop()
+        try? FileManager.default.removeItem(at: Bots.file)
+    }
+
+    /// Pixel, a bot on the machine, and a session it started there, at work in Tidepool, with an
+    /// ask it answered.
+    private func lab() async throws -> MachineTestBox {
+        let machine = try await MachineTestBox(name: "lab")
+        let folder = machine.folder.appending(path: "bots/bot_pixel00001")
+        try FileManager.default.createDirectory(at: folder.appending(path: "wakes"), withIntermediateDirectories: true)
+        try Data(#"{"kuvo": 1, "id": "bot_pixel00001", "name": "Pixel", "job": "Builds apps", "look": {"color": "sky", "shape": "round", "face": "calm"}, "created": "2026-10-01T09:00:00Z", "updated": "2026-10-01T09:00:00Z"}"#.utf8)
+            .write(to: folder.appending(path: "bot.json"))
+        try Data("ses_pixel".utf8).write(to: folder.appending(path: "session"))
+        try Data("# Pixel's memory\n".utf8).write(to: folder.appending(path: "MEMORY.md"))
+        try JSONEncoder().encode(app.bots.kit(for: "lab")).write(to: machine.folder.appending(path: "bots/kit.json"))
+        let answer: [String: Any] = ["ask": "per_1", "call": "call_1", "what": "Wants to run a command: npm test", "decision": "allow", "reason": "The plan runs the tests.",
+                                     "by": ["bot": "bot_pixel00001", "name": "Pixel"], "at": Date.now.timeIntervalSince1970 * 1000]
+        let signIn = StubEngine.session("ses_signin", title: "Sign-in", directory: "/home/me/tidepool", created: Date.now.timeIntervalSince1970 * 1000, extra: [
+            "model": ["id": "claude-sonnet-5-5", "providerID": "anthropic"],
+            "metadata": ["kuvo": ["startedBy": "ses_pixel", "by": ["bot": "bot_pixel00001", "name": "Pixel"], "depth": 1, "answers": [answer]]],
+        ])
+        engine.list([StubEngine.session("ses_pixel", title: "Pixel", directory: folder.appending(path: "workspace").path), signIn], running: ["ses_signin"])
+        engine.on("GET", "/api/session/ses_signin/permission", json: ["data": []])
+        engine.on("GET", "/api/session/ses_signin/form", json: ["data": []])
+        engine.on("PATCH", "/api/session/*", json: ["data": [:]])
+        try await StubWeb.listen(port: 47_987)
+        try FileManager.default.createDirectory(at: machine.folder.appending(path: "run"), withIntermediateDirectories: true)
+        try Data(#"{"port": 47987, "password": "test"}"#.utf8).write(to: machine.folder.appending(path: "run/engine.json"))
+        app.bots.boxes = { box in box == "lab" ? machine.client : BoxClient(box: box, transport: LocalBox { _ in AsyncThrowingStream { $0.finish() } }) }
+        app.bots.reachable = { $0 == "lab" }
+        app.botWork.boxes = { box in box == "lab" ? machine.client : BoxClient(box: box, transport: LocalBox { _ in AsyncThrowingStream { $0.finish() } }) }
+        await app.bots.refresh("lab")
+        return machine
+    }
+
+    @Test func aBotsConversationShowsTheSessionsItRunsAndTheAsksItAnswered() async throws {
+        let machine = try await lab()
+        defer { done(machine) }
+        let pixel = try #require(app.bots.bot("bot_pixel00001"))
+        await app.botWork.read(pixel)
+        let report = try #require(app.botWork.reports[pixel.id])
+        #expect(report.atWork.map(\.title) == ["Sign-in"])
+        #expect(BotWorkBar.title(report.atWork.count) == "At work: 1 session")
+        #expect(BotWorkBar.progress(report) == "answered 1 ask")
+        let answer = try #require(report.answered.first)
+        #expect(answer.verdict == "Allowed by Pixel" && answer.reason == "The plan runs the tests." && answer.session == "ses_signin")
+    }
+
+    @Test func limitsSetInEditBotAreKeptOnItsBoxAndCanBeTakenAway() async throws {
+        let machine = try await lab()
+        defer { done(machine) }
+        let pixel = try #require(app.bots.bot("bot_pixel00001"))
+        try await app.botWork.setLimits(WorkLimits(atOnce: 2, tokensPerDay: 1_000_000), for: pixel)
+        #expect(app.botWork.reports[pixel.id]?.limits == WorkLimits(atOnce: 2, tokensPerDay: 1_000_000))
+        let kept = try JSONSerialization.jsonObject(with: Data(contentsOf: machine.folder.appending(path: "bots/bot_pixel00001/bot.json"))) as? [String: Any]
+        #expect((kept?["work"] as? [String: Any])?["limits"] as? [String: Int] == ["atOnce": 2, "tokensPerDay": 1_000_000])
+        #expect(kept?["name"] as? String == "Pixel", "the rest of its description kept")
+        try await app.botWork.setLimits(nil, for: pixel)
+        #expect(app.botWork.reports[pixel.id]?.limits == nil)
+    }
+}

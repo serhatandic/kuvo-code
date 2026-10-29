@@ -931,9 +931,19 @@ struct SidebarView: View {
                     if renaming == target { renaming = nil }
                 }
             } else {
-                Text(session.title ?? "New Session")
-                    .fontWeight(session.isUnread ? .semibold : .regular)
-                    .foregroundStyle(Workspace.isArchived(session) ? .secondary : .primary)
+                HStack(spacing: 6) {
+                    // A bot's work: its face, still, before the title.
+                    if let by = WorksFor(session), let bot = bots.bot(by.bot) {
+                        BotAvatar(look: bot.look, size: 15, animates: false)
+                            .help("Started by \(bot.name)")
+                            .accessibilityLabel("\(bot.name)’s work")
+                    }
+                    Text(session.title ?? "New Session")
+                        .fontWeight(session.isUnread ? .semibold : .regular)
+                        .foregroundStyle(Workspace.isArchived(session) ? .secondary : .primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
         } accessory: {
             if Workspace.isArchived(session) {
@@ -1534,6 +1544,9 @@ private struct BotRow: View {
             ShimmerText(text: "Working…")
         } else if case let helpers = workspace.helpersAtWork(in: bot.sessionID), helpers > 0 {
             ShimmerText(text: helpers == 1 ? "Working on a task…" : "Working on \(helpers) tasks…")
+        } else if case let work = workspace.work(of: bot.id), !work.isEmpty {
+            // Its sessions at it: where, and how many (one waiting on you shows on its own row).
+            ShimmerText(text: WorkWords.atWork(count: work.count, projects: work.map { workspace.projectName($0.location.directory) }))
         } else if let place = bots.waitingFor(bot) {
             // What you changed while its machine was away, on its way once it's back.
             BotState(systemImage: "clock.arrow.circlepath", isSet: false) { Text("Changes waiting for \(place)") }

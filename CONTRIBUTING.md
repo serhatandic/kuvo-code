@@ -358,6 +358,7 @@ when you're there to answer.
 | `KUVO_DEMO_UNDO` | Undo's lines in the card, held so they don't go: the goal put away and a message removed (with `KUVO_DEMO_BARS` and `KUVO_DEMO_WAITING`) |
 | `KUVO_DEMO_BOT_MODEL` | With `KUVO_DEMO_BOT`: the model a new bot gets, `<provider>/<model>` (a coding agent's, like `claude-code/haiku`, makes it run with the agents) |
 | `KUVO_DEMO_EDIT_BOT` | With `KUVO_DEMO_BOT`: that bot's editor, open (`bottom`: scrolled to its wake-ups and memory) |
+| `KUVO_DEMO_BOT_WORK` | A bot's name: its work, a sample (three sessions at work, one asking, two done, two asks answered), in the bar over its composer, and every session marked as its work counts as at work in the sidebar (`KUVO_DEMO_BOT_WORK_ALL`: its All list open too) |
 | `KUVO_DEMO_EDIT_BOT_SAVE` | With `KUVO_DEMO_EDIT_BOT`: its job in a few words changed to this, and saved, ten seconds on (with `KUVO_DEMO_BOX_FAILED`, to see what Save says while this Mac's box is down) |
 | `KUVO_DEMO_MOVE_BOT` | With `KUVO_DEMO_BOT`: once that bot is done (and its prompt with it), it moves to this machine, or to this Mac when empty, as Move to Computer does |
 | `KUVO_DEMO_MOVE_GROUP` | With `KUVO_DEMO_GROUP`: that group chat moves to this machine, or to this Mac when empty, as Move to Computer does, before its message goes |
