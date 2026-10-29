@@ -36,6 +36,15 @@ struct TranscriptView: View {
         return nil
     }
 
+    /// The answers its bot gave, by the step that asked: kept on the session it is, or (a
+    /// subagent's) the one it works for.
+    private var workAnswers: [String: WorkAnswer] {
+        let root = workspace.root(of: model.id)
+        let own = WorkAnswer.byCall(model.session)
+        guard root != model.id, let above = workspace.session(root) else { return own }
+        return own.merging(WorkAnswer.byCall(above)) { mine, _ in mine }
+    }
+
     var body: some View {
         let rows = rows
         // More of a reply, in a row of its own, carries on from the row before rather than coming in.
@@ -70,8 +79,9 @@ struct TranscriptView: View {
         // What a widget writes back goes to this conversation's agent, as yours: as words, never
         // a command or keyword the page could run as you, and without your review comments.
         .environment(\.answerAgent) { text in model.send(text, for: nil, withComments: false) }
-        // What the bot that runs it answered for it, on the steps that asked (a subagent's too).
-        .environment(\.workAnswers, WorkAnswer.byCall(model.session))
+        // What the bot that runs it answered for it, on the steps that asked; a subagent's are kept
+        // on the session it works for.
+        .environment(\.workAnswers, workAnswers)
         .overlay {
             if model.isLoaded && rows.isEmpty {
                 EmptyConversationView(directory: model.session.location.directory) { text in
