@@ -23,7 +23,7 @@ const write = (file, text) => {
 const tool = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-browser.js", import.meta.url));
 const script = path.join(home, "bin", "kuvo-link.js");
 write(script, fs.readFileSync(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url)));
-const env = { ...process.env, KUVO_HOME: home, HOME: home };
+const env = { ...process.env, KUVO_HOME: home, HOME: home, KUVO_VAULT_AGENTS: "1" };
 for (const name of ["KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "KUVO_KEYS", "KUVO_KEYS_ON_HOST", "KUVO_BOX"]) delete env[name];
 
 const TOKEN = "glpat-very-secret-token-0001";

@@ -2533,18 +2533,20 @@ async function mcp() {
     switch (message.method) {
       case "initialize": {
         const supported = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
-        return reply({
+        // What the vault's tools are for, only where this machine's box lets agents use it.
+        return vaultTools().then((more) => reply({
           protocolVersion: supported.includes(params.protocolVersion) ? params.protocolVersion : "2025-06-18",
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: "kuvo-browser", title: "Kuvo Code browser", version: CONFIG.version },
-          instructions: CONFIG.instructions,
-        });
+          instructions: CONFIG.instructions + (more.length ? CONFIG.vaultInstructions ?? "" : ""),
+        }));
       }
       case "ping":
         return reply({});
       case "tools/list":
         // With the vault's, in this machine's box's own words (none from a box without one).
-        return vaultTools().then((more) => reply({ tools: [...CONFIG.tools, ...more] }));
+        // (browser_fill only with them: none while the vault isn't open to agents here.)
+        return vaultTools().then((more) => reply({ tools: [...CONFIG.tools.filter((tool) => more.length || tool.name !== "browser_fill"), ...more] }));
       case "tools/call": {
         // The session it's for: the engine says so with each call; an agent of the agents bridge
         // starts this for one session, named in KUVO_SESSION.

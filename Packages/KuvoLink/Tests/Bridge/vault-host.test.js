@@ -19,7 +19,7 @@ const PASSWORD = "host-password-not-a-key";
 const host = await standInHost(PASSWORD);
 // With the vault's two secrets, as the app starts its box (AppModel.boxEnvironment).
 host.vaultSecret = crypto.randomBytes(32).toString("hex");
-const env = { ...process.env, HOME: root, KUVO_HOME: home, KUVO_HOST_URL: host.url, KUVO_HOST_PASSWORD: PASSWORD, KUVO_HOST_VAULT_SECRET: host.vaultSecret, KUVO_VAULT_FILE_KEY: crypto.randomBytes(32).toString("base64url") };
+const env = { ...process.env, HOME: root, KUVO_HOME: home, KUVO_HOST_URL: host.url, KUVO_HOST_PASSWORD: PASSWORD, KUVO_HOST_VAULT_SECRET: host.vaultSecret, KUVO_VAULT_FILE_KEY: crypto.randomBytes(32).toString("base64url"), KUVO_VAULT_AGENTS: "1" };
 for (const name of ["KUVO_KEYS", "KUVO_KEYS_ON_HOST", "KUVO_BOX"]) delete env[name];
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 

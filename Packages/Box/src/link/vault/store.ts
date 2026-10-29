@@ -14,6 +14,7 @@ import { GRANT_HOWS, ITEM_KINDS, type VaultGrant, type VaultItem, type VaultStat
 import { locked, textOf, writePrivate } from "../files";
 import { BOX, KEYS_ON_HOST, MAC_VAULT_FILE_KEY, RUN } from "../home";
 import { appHost, askHost, KeysUnavailable, NOT_ANSWERING } from "../host-interface";
+import { agentsUseVault } from "./gate";
 
 export const VAULT_FOLDER = path.join(BOX, "vault");
 const ITEMS = path.join(VAULT_FOLDER, "items.json");
@@ -573,6 +574,7 @@ export function vaultState(): VaultState {
     pausedBots: { ...(paused.bots ?? {}) },
     store: onHost() ? "keychain" : "encrypted",
     keptDays: KEPT_DAYS,
+    agents: agentsUseVault(),
     ...(tampered.size ? { tampered: true } : {}),
     generations: generations(),
   };

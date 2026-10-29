@@ -37,6 +37,9 @@ extension AppModel {
         // Where it answers is in the box's folder, never its environment.
         environment["KUVO_HOST_URL"] = nil
         environment["KUVO_HOST_PASSWORD"] = nil
+        // Agents use the vault only where their commands are fenced (the box decides), never because
+        // your shell says so.
+        environment["KUVO_VAULT_AGENTS"] = nil
         // The vault's secrets, for it alone (HostInterface.vaultSecret, VaultValues.fileKey).
         environment["KUVO_HOST_VAULT_SECRET"] = host.vaultSecret
         environment["KUVO_VAULT_FILE_KEY"] = VaultValues.fileKey()

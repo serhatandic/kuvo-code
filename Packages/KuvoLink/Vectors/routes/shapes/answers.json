@@ -5284,6 +5284,7 @@
          ]
         },
         "keptDays": "number",
+        "agents?": "bool",
         "tampered?": "bool",
         "generations?": {
          "map": "number"
@@ -5643,6 +5644,7 @@
        ]
       },
       "keptDays": "number",
+      "agents?": "bool",
       "tampered?": "bool",
       "generations?": {
        "map": "number"
@@ -5683,6 +5685,7 @@
        ]
       },
       "keptDays": "number",
+      "agents?": "bool",
       "tampered?": "bool",
       "generations?": {
        "map": "number"

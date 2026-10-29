@@ -18,7 +18,8 @@ import { script } from "./bot-keys-scenarios.js";
 // (A short folder: the vault's socket lives in it, and a socket's path can't be long.)
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "kv-"));
 const home = path.join(root, ".kuvo-code");
-const env = { ...process.env, HOME: root, KUVO_HOME: home };
+// (Agents may use it: on a box whose commands are fenced. One that isn't is the last test.)
+const env = { ...process.env, HOME: root, KUVO_HOME: home, KUVO_VAULT_AGENTS: "1" };
 for (const name of ["KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "KUVO_KEYS", "KUVO_KEYS_ON_HOST", "KUVO_BOX"]) delete env[name];
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 
@@ -73,8 +74,8 @@ before(async () => {
 after(() => { engine?.closeAllConnections(); engine?.close(); });
 
 // The box's long-running process, which holds the vault.
-async function start() {
-  const child = spawn(process.execPath, [script, "serve"], { env: { ...env, OPENCODE_PASSWORD: "box-pw" }, stdio: ["pipe", "pipe", "pipe"] });
+async function start(more = {}) {
+  const child = spawn(process.execPath, [script, "serve"], { env: { ...env, OPENCODE_PASSWORD: "box-pw", ...more }, stdio: ["pipe", "pipe", "pipe"] });
   let out = "", err = "";
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
@@ -558,6 +559,7 @@ test("after the box starts again the vault is locked, until a client's key unloc
   assert.equal((await fromMac("POST", "kuvo/vault/unlock", { key }, key)).status, 200);
   const listed = await fromMac("GET", "kuvo/vault", undefined, key);
   assert.equal(listed.value.state.locked, false);
+  assert.equal(listed.value.state.agents, true);
   assert.equal(listed.value.items.length, 9);
   assert.equal((await fillAs({ session: "ses_ship", origin: "https://github.com", purpose: "sign-in" })).value.values.password, SECRET);
   await box.stop();
@@ -567,4 +569,25 @@ test("without the box's own process, a request says so plainly", async () => {
   const answer = await fromMac("GET", "kuvo/vault", undefined, key);
   assert.equal(answer.status, 503);
   assert.match(answer.value.message, /isn't open/);
+});
+
+test("on a box whose agents' commands aren't fenced, the vault is yours alone: agents get no tools, and a sign-in asks you", async () => {
+  box = await start({ KUVO_VAULT_AGENTS: "" });
+  try {
+    assert.deepEqual((await box.local("GET", "kuvo/vault/tools")).value.tools, [], "no vault tools listed");
+    const listed = await tool("ses_ship", "vault_items", {});
+    assert.equal(listed.value.isError, true);
+    assert.match(listed.value.text, /isn't open to agents/);
+    assert.doesNotMatch(listed.value.text, /GitHub|NAS/, "no item named");
+    // Nothing's the conversation's, so its browser asks you, as without a vault.
+    const fill = await fillAs({ session: "ses_ship", origin: "https://github.com", purpose: "sign-in" });
+    assert.equal(fill.status, 404);
+    assert.equal(fill.value.values, undefined);
+    assert.equal((await fromMac("POST", "kuvo/vault/unlock", { key }, key)).status, 200);
+    const state = await fromMac("GET", "kuvo/vault", undefined, key);
+    assert.equal(state.value.state.agents, false, "your Vault page can say so");
+    assert.equal(state.value.items.length, 9, "your items are all still there");
+  } finally {
+    await box.stop();
+  }
 });

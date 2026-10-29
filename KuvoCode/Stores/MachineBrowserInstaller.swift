@@ -433,7 +433,8 @@ extension MachineBrowserInstaller {
                 "printUnmask": BrowserAgent.printUnmaskScript,
             ],
             "tools": BrowserTools.definitions,
-            "instructions": BrowserTools.instructions(machine: true),
+            "instructions": BrowserTools.instructions(machine: true, vault: false),
+            "vaultInstructions": BrowserTools.vaultInstructions,
             "version": AppInfo.version,
         ]
         let json = (try? JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])).map { String(decoding: $0, as: UTF8.self) } ?? "{}"

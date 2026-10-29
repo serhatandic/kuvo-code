@@ -16,6 +16,7 @@ import type { AnswerPiece, RouteContext } from "../server/context";
 import { note, readActivity } from "../vault/activity";
 import { answer as answerAsk, listAsks, onAsksChanged } from "../vault/asks";
 import { fill } from "../vault/fill";
+import { AGENTS_LATER, agentsUseVault } from "../vault/gate";
 import { askHolder, holdsVault } from "../vault/holder";
 import {
   addItem, changeItem, currentUnlockKey, generationsTold, givenWho, notePrimeTrouble, isLocked, isMade, itemByID, LOCKED, makeVault, onHost, primeGenerations, readGrants, readItems,
@@ -126,8 +127,9 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
   // The agents' door, and a browser's fills: under the caller's grants, from anyone here.
   if (route === "kuvo/vault/tools") {
     // What a tool server lists (`tools/list`), in this box's own words.
-    if (method === "GET") return yield* json(200, { tools: VAULT_TOOLS });
+    if (method === "GET") return yield* json(200, { tools: agentsUseVault() ? VAULT_TOOLS : [] });
     if (method !== "POST") return yield* json(405, {});
+    if (!agentsUseVault()) return yield* json(200, { text: AGENTS_LATER, isError: true });
     // Only a call the conversation it names is making now, with these arguments (vault/who.ts).
     const args = isObject(given.arguments) ? given.arguments : {};
     if (typeof given.name !== "string" || !await isCalling(stringOf(given.session), [given.name], args, readEngine, readBridge)) {
@@ -141,6 +143,8 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
     // Its values are for the browser's own process alone: on this Mac, the app's panel browser.
     // (On a machine, the browser and anything you run there share your account: PROTOCOL.md.)
     if (onHost() && !request.fromApp) return yield* json(403, { message: CLIENTS_ONLY });
+    // (Nothing's this conversation's: a sign-in asks you, as without a vault.)
+    if (!agentsUseVault()) return yield* json(404, { message: AGENTS_LATER });
     if (isLocked()) return yield* json(423, { message: LOCKED });
     // And one fill for each such call: what races the browser for it gets nothing more.
     const call = await callingNow(stringOf(given.session), ["browser_sign_in", "browser_fill"], null, readEngine, readBridge);

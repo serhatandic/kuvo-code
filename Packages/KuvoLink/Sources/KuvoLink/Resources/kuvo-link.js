@@ -8986,6 +8986,7 @@ var VAULT_STATE = object({
   pausedBots: map(string),
   store: words("keychain", "encrypted"),
   keptDays: number,
+  "agents?": bool,
   "tampered?": bool,
   "generations?": map(number)
 });
@@ -9031,6 +9032,10 @@ var VAULT_KEY = object({ key: string });
 var VAULT_TOOL_LIST = object({ tools: list(any) });
 var VAULT_TOOL = object({ text: string, isError: bool });
 var VAULT_FILL = object({ item: object({ id: string, name: string }), "username?": string, values: map(string) });
+
+// Packages/Box/src/link/vault/gate.ts
+var agentsUseVault = () => process.env.KUVO_VAULT_AGENTS === "1";
+var AGENTS_LATER = "The user's vault isn't open to agents on this computer yet. To sign in, use browser_sign_in, and the user signs in.";
 
 // Packages/Box/src/link/vault/store.ts
 var VAULT_FOLDER = path41.join(BOX, "vault");
@@ -9511,6 +9516,7 @@ function vaultState() {
     pausedBots: { ...paused.bots ?? {} },
     store: onHost() ? "keychain" : "encrypted",
     keptDays: KEPT_DAYS,
+    agents: agentsUseVault(),
     ...tampered.size ? { tampered: true } : {},
     generations: generations()
   };
@@ -14397,9 +14403,11 @@ async function* answerVault(context) {
   const parts = route.split("/");
   if (route === "kuvo/vault/tools") {
     if (method === "GET")
-      return yield* json(200, { tools: VAULT_TOOLS });
+      return yield* json(200, { tools: agentsUseVault() ? VAULT_TOOLS : [] });
     if (method !== "POST")
       return yield* json(405, {});
+    if (!agentsUseVault())
+      return yield* json(200, { text: AGENTS_LATER, isError: true });
     const args = isObject(given.arguments) ? given.arguments : {};
     if (typeof given.name !== "string" || !await isCalling(stringOf(given.session), [given.name], args, readEngine, readBridge)) {
       return yield* json(200, { text: NOT_CALLING, isError: true });
@@ -14412,6 +14420,8 @@ async function* answerVault(context) {
       return yield* json(405, {});
     if (onHost() && !request.fromApp)
       return yield* json(403, { message: CLIENTS_ONLY });
+    if (!agentsUseVault())
+      return yield* json(404, { message: AGENTS_LATER });
     if (isLocked())
       return yield* json(423, { message: LOCKED });
     const call = await callingNow(stringOf(given.session), ["browser_sign_in", "browser_fill"], null, readEngine, readBridge);

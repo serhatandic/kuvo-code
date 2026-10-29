@@ -2357,7 +2357,8 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
   one without making it.
 - `GET kuvo/vault` → `{state, items, grants}`. `state` is `{made, locked, paused, pausedBots:
   {<bot, or a conversation that isn't a bot's>: why}, store: "keychain" | "encrypted", keptDays,
-  tampered?, generations: {items, grants, paused}}`; an item is `{id, kind: "login" |
+  agents, tampered?, generations: {items, grants, paused}}` (`agents`: whether agents may use it
+  on this box, below); an item is `{id, kind: "login" |
   "key" | "file" | "note", name, sites, username?, fields, fileName?, readable?, signInOnly?,
   created, changed, used?}` (`sites`: hosts, a site's own and those under it; `fields`: the names of the values it
   holds, a sign-in's `password`, a file's `file` (base64), a note's `text`, a key's own); a grant
@@ -2394,6 +2395,13 @@ bridge) has a tool call of that name running in it (`api/session/<id>/message`, 
 only the conversation's own call uses its grants. (On a machine its browser, and anything that runs
 as you there, can still reach a value a fill puts in a page: until agents' commands are fenced off,
 that's what a machine can't keep from them.)
+
+Agents use the vault only on a box whose agents' commands are fenced (not yet on any box; the
+tests open it with `KUVO_VAULT_AGENTS=1`, which a Mac's app never passes its box). Until then
+`GET kuvo/vault/tools` lists no tools, a call says the vault isn't open to agents, and a fill is
+`404` (nothing is the conversation's, so a sign-in asks you, as without a vault); the browser tools
+leave out `browser_fill` and the vault's sentence in their instructions. Your clients see and change
+everything as before, and the state says `agents: false`.
 
 - `POST kuvo/vault/tools {name, arguments, session}` → `{text, isError}`: `vault_items`, the items
   this conversation may use (by its bot, its project or everyone), never another's name, and a

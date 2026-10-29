@@ -118,6 +118,12 @@ struct VaultSettings: View {
                     .foregroundStyle(.secondary)
             }
         }
+        if state.agents == false {
+            Section {
+                Label("Agents can’t use the vault on \(computer) yet. They ask you to sign in instead.", systemImage: "lock")
+                    .foregroundStyle(.secondary)
+            }
+        }
         if state.tampered == true {
             Section {
                 Label("Its files were changed outside Kuvo Code, so it uses none of them, and every agent’s use is paused. Add its items again.", systemImage: "exclamationmark.octagon.fill")
