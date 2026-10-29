@@ -33,8 +33,8 @@ export interface AgentKey {
 /** Where a conversation's agent gets its keys: those it may use, and whether it may sign with one now. */
 export interface AgentSource {
   keys(): Promise<AgentKey[]>;
-  /** Whether this key may sign now (asking the user, when its grant says to). */
-  allow(key: AgentKey): Promise<boolean>;
+  /** Whether this key may sign now (asking the user, when its grant says to, until `signal` ends). */
+  allow(key: AgentKey, signal: AbortSignal): Promise<boolean>;
 }
 
 class Reader {
@@ -177,7 +177,7 @@ const message = (type: number, ...parts: Buffer[]) => {
   return Buffer.concat([u32(body.length), body]);
 };
 
-async function answer(request: Buffer, source: AgentSource): Promise<Buffer> {
+async function answer(request: Buffer, source: AgentSource, signal: AbortSignal): Promise<Buffer> {
   const type = request[0];
   const body = new Reader(request.subarray(1));
   try {
@@ -190,7 +190,7 @@ async function answer(request: Buffer, source: AgentSource): Promise<Buffer> {
       const data = body.bytes();
       const flags = body.done ? 0 : body.u32();
       const key = (await source.keys()).find(each => each.blob.equals(blob));
-      if (!key || !(await source.allow(key))) return message(FAILURE);
+      if (!key || !(await source.allow(key, signal))) return message(FAILURE);
       return message(SIGN_RESPONSE, str(signWith(key, data, flags)));
     }
   } catch {}
@@ -198,31 +198,59 @@ async function answer(request: Buffer, source: AgentSource): Promise<Buffer> {
   return message(FAILURE);
 }
 
+// A socket's path is at most this long, in bytes (with its ending zero, 104 on macOS, 108 on Linux).
+const LONGEST_PATH = process.platform === "darwin" ? 103 : 107;
+// Requests a connection may have waiting: one at a time is how SSH asks.
+const WAITING = 4;
+
 /**
- * The agent on `socket` (`0600`, in a folder only its conversation can reach), for one conversation's keys. Each connection's requests are
- * answered in turn; a malformed or oversized one ends it.
+ * The agent on `socket` (`0600`, in a folder only its conversation can reach), for one conversation's
+ * keys. Each connection's requests are answered in turn, and a connection with more waiting, or a
+ * malformed or oversized request, is ended. Closing it ends its connections too, and with them any
+ * ask still waiting for the user. A socket it can't open is `error` on the server, never thrown.
  */
 export function serveAgent(socket: string, source: AgentSource): net.Server {
-  try { fs.rmSync(socket, { force: true }); } catch {}
+  const open = new Set<net.Socket>();
   const server = net.createServer(connection => {
+    open.add(connection);
+    const gone = new AbortController();
     let held = Buffer.alloc(0);
+    let waiting = 0;
     let working = Promise.resolve();
     connection.on("error", () => {});
+    connection.on("close", () => { open.delete(connection); gone.abort(); });
     connection.on("data", chunk => {
       held = Buffer.concat([held, chunk]);
       while (held.length >= 4) {
         const length = held.readUInt32BE(0);
-        if (length === 0 || length > LONGEST) return void connection.destroy();
+        if (length === 0 || length > LONGEST || waiting >= WAITING) return void connection.destroy();
         if (held.length < 4 + length) break;
         const request = held.subarray(4, 4 + length);
         held = held.subarray(4 + length);
-        working = working.then(async () => {
-          const reply = await answer(request, source);
-          if (!connection.destroyed) connection.write(reply);
-        });
+        waiting++;
+        working = working
+          .then(async () => {
+            const reply = await answer(request, source, gone.signal);
+            if (!connection.destroyed) connection.write(reply);
+          })
+          .catch(() => { connection.destroy(); })
+          .finally(() => { waiting--; });
       }
     });
   });
+  server.maxConnections = 16;
+  server.on("error", () => {});
+  const close = server.close.bind(server);
+  server.close = (done?: (error?: Error) => void) => {
+    for (const connection of open) connection.destroy();
+    return close(done);
+  };
+  if (Buffer.byteLength(socket) > LONGEST_PATH) {
+    queueMicrotask(() => server.emit("error", new Error(`An SSH agent's socket can't be this long: ${socket}`)));
+    return server;
+  }
+  try { fs.rmSync(socket, { force: true }); } catch {}
   server.listen(socket, () => { try { fs.chmodSync(socket, 0o600); } catch {} });
+  server.unref();
   return server;
 }

@@ -11,6 +11,12 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 export const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+/** Where a box (its folder `KUVO_HOME`) keeps its conversations' SSH agents (vault/ssh.ts): on a Mac,
+ * where a socket's path is short, outside it, so a test clears it itself (a box it stops with SIGTERM
+ * can't). */
+export const sshAgentsOf = home => process.platform === "darwin"
+  ? path.join("/private/tmp", `kuvo-ssh-${process.getuid()}`, `agents-${crypto.createHash("sha256").update(home).digest("hex").slice(0, 8)}`)
+  : path.join(home, "run", "ssh-agents");
 export const own = "KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT";
 
 const catalog = (version = "1.0.0") => ({ integrations: [

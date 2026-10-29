@@ -5,6 +5,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { type AgentKey, privateKeyOf, serveAgent } from "../src/link/vault/ssh-agent";
@@ -27,6 +28,8 @@ function sshNow(tool: string, args: string[], env: Record<string, string> = {}, 
     child.stdin.end(input ?? "");
   });
 }
+
+const u32 = (value: number) => { const out = Buffer.alloc(4); out.writeUInt32BE(value); return out; };
 
 // A key as `ssh-keygen` makes it: its private key's text, and its public key's file.
 function made(name: string, ...args: string[]): { text: string; pub: string } {
@@ -120,4 +123,40 @@ test("a key with a passphrase, or that isn't a key, says what to do", () => {
   ssh("ssh-keygen", ["-q", "-N", "a passphrase", "-t", "ed25519", "-f", file]);
   expect(() => privateKeyOf(fs.readFileSync(file, "utf8"))).toThrow(/passphrase/);
   expect(() => privateKeyOf("not a key")).toThrow(/isn't a private key/);
+});
+
+test("a command that sends a flood of sign requests is cut off, rather than asking the user for each", async () => {
+  const agent = agentFor(["ed25519"]);
+  await agent.ready;
+  try {
+    const { blob } = privateKeyOf(keys.ed25519.text);
+    const one = (() => {
+      const parts = [Buffer.from([13]), u32(blob.length), blob, u32(4), Buffer.from("data"), u32(0)];
+      const body = Buffer.concat(parts);
+      return Buffer.concat([u32(body.length), body]);
+    })();
+    const replies = await new Promise<number>(resolve => {
+      const connection = net.connect(agent.socket, () => connection.write(Buffer.concat(Array(500).fill(one))));
+      let got = 0;
+      connection.on("data", chunk => { got += chunk.length; });
+      connection.on("error", () => {});
+      // (Ended by the agent: Bun's client hears the end before it gives up what it still had to write.)
+      connection.on("end", () => { resolve(got); connection.destroy(); });
+      connection.on("close", () => resolve(got));
+    });
+    expect(agent.asked.length).toBeLessThanOrEqual(4);
+    expect(replies).toBeLessThan(500 * 8);
+    // And the agent still answers the next command.
+    expect(await signs(agent.socket, "ed25519")).toBe(true);
+  } finally {
+    await agent.close();
+  }
+});
+
+test("a socket the agent can't open is an error on it, never a crash of the box", async () => {
+  const server = serveAgent(path.join(root, "x".repeat(200) + ".sock"), { keys: async () => [], allow: async () => false });
+  const error = await new Promise<Error>(resolve => server.once("error", resolve));
+  expect(error.message).toMatch(/can't be this long/);
+  const missing = serveAgent(path.join(root, "no-such-folder", "a.sock"), { keys: async () => [], allow: async () => false });
+  expect((await new Promise<Error & { code?: string }>(resolve => missing.once("error", resolve))).code).toBe("ENOENT");
 });

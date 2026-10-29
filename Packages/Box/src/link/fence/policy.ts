@@ -59,8 +59,20 @@ const MAC_SECRETS = ["Library/Application Support/Google/Chrome", "Library/Appli
   "Library/Safari", "Library/Cookies", "Library/Application Support/1Password", "Library/Group Containers/2BUA8C4S2C.com.1password",
   "Library/Application Support/Bitwarden"];
 // Not the Keychain's folder: gh and git's helper read their sign-ins from it in their own process
-// (its items keep their own access lists, Kuvo Code's too).
+// (its items keep their own access lists, Kuvo Code's too). But the system's own keychain in it
+// (`Library/Keychains/<UUID>`), which only its daemons read: `keychainDaemons`.
 const LINUX_SECRETS = [".config/google-chrome", ".config/chromium", ".config/BraveSoftware", ".mozilla", ".local/share/keyrings"];
+
+/** The system's own keychain folders in your Keychain's (`Library/Keychains/<UUID>`), which only
+ * its daemons read, never gh or git themselves. */
+function keychainDaemons(home: string): string[] {
+  const folder = path.join(home, "Library", "Keychains");
+  try {
+    return fs.readdirSync(folder).filter(name => /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i.test(name)).map(name => path.join(folder, name));
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Your private SSH keys: every file in `~/.ssh` but its settings, known hosts and public keys,
@@ -117,7 +129,7 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
         `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
       ],
       writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES])],
-      secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...sshKeys(home).map(realish), ...ghHosts(home).map(realish)],
+      secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...sshKeys(home).map(realish), ...ghHosts(home).map(realish)],
     };
   }
   return {

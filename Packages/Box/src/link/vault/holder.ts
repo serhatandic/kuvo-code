@@ -13,6 +13,7 @@ import net from "node:net";
 import path from "node:path";
 import { isSocketKey, RUN, socketKey } from "../home";
 import type { AnyPiece, LinkHandler, LinkRequest } from "../server/context";
+import { keepSshAgents } from "./ssh";
 import { LOCKED, provesUnlock, unlockProof } from "./store";
 
 export const VAULT_SOCKET = path.join(RUN, "vault.sock");
@@ -133,6 +134,9 @@ export function holdVault(handle: LinkHandler): net.Server {
   // Without its socket, `box route` (the Mac over SSH, the browser here) can't reach the vault: said where it's seen.
   server.on("error", error => console.error(`The vault's socket (${VAULT_SOCKET}) couldn't listen: ${error.message}`));
   server.unref();
+  // Each conversation's SSH agent, from the vault's SSH keys, while its commands are in the sandbox.
+  const stopAgents = keepSshAgents();
+  server.on("close", stopAgents);
   return server;
 }
 

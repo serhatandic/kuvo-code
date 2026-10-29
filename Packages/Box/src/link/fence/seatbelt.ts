@@ -81,6 +81,9 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   deny("network-outbound", ...policy.ports.map(port => `(remote tcp ${quote(`localhost:${port}`)})`));
   deny("network-outbound", ...policy.kuvo.map(folder => `(remote unix-socket ${subpath(folder)})`),
     ...policy.kuvoPatterns.map(pattern => `(remote unix-socket ${regex(pattern)})`));
+  // But its own SSH agent, Kuvo Code's (vault/ssh.ts), in `/tmp/kuvo-ssh-<uid>` with the app's
+  // connections to your machines, which the launcher names (none: nothing).
+  allow("network-outbound", `(remote unix-socket (literal (param "SSH")))`);
 
   // Signals stay allowed: xcodebuild stops the xctest it started through the Simulator, which runs
   // outside the sandbox (refused, it waits forever); a signal reads nothing. Launchd jobs, opening

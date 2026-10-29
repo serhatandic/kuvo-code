@@ -14,7 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { listOf, textOf, writePrivate } from "../files";
-import { BOTS, BOX, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SESSION_WAKES, SOCKET_KEY_FILE } from "../home";
+import { BOTS, BOX, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
 import { launcherScript, pluginScript, type FencePlaces } from "./files";
 import { LANDLOCK_RUNNER, landlockPolicy } from "./landlock";
 import { fencePolicy, realish } from "./policy";
@@ -74,6 +74,8 @@ const places: FencePlaces = {
   bots: BOTS,
   wakes: SESSION_WAKES,
   key: SOCKET_KEY_FILE,
+  sshFor: SSH_FOR,
+  sshAgents: SSH_AGENTS,
   platform,
 };
 const VERSION = crypto.createHash("sha256")

@@ -2566,7 +2566,11 @@ secrets (cloud, package and git tokens, browsers' and password managers' data, p
 every file in `~/.ssh` but its config, known hosts and public keys; gh's `hosts.yml` when it holds
 the token). A bot's or a chat's command gets its own folder back, and not its neighbours'. Its
 environment has none of the engine's `OPENCODE_…` (but `OPENCODE_SESSION_ID`), no `KUVO_…` password,
-secret, token or key, and no `SSH_AUTH_SOCK`.
+secret, token or key, and no `SSH_AUTH_SOCK` but its own SSH agent's (below).
+On macOS your Keychain stays readable, as gh and git's Keychain helper read their sign-ins from it in
+their own process (each item keeps its own access list, Kuvo Code's too, though one that trusts
+`security` reads without asking, and the file itself can be copied), but not the system's own
+keychain in its folder (`Library/Keychains/<UUID>`), which only its daemons read.
 On macOS it also can't reach Kuvo Code's own servers on `127.0.0.1` (the engine's, the bridge's,
 the box's, the host interface) or sockets in its folders, start launchd jobs, open apps
 (LaunchServices) or send Apple Events; on Linux the servers' passwords are in files it can't read,
@@ -2600,6 +2604,24 @@ runs in the sandbox, in its conversation's folder (none when that's gone), wheth
 Check Now (`kuvo-wake try`), what it prints going to a file; set up and checked (`run/fence/ready`)
 but not on, or its launcher missing, checks wait. Where the box can't set it up, checks run as
 commands do.
+
+**SSH keys.** Your own keys and agent stay hidden; a command signs with the SSH keys you keep in the
+vault for its conversation (a `key` item with a `private_key`, OpenSSH's own format or PEM, without
+a passphrase; for its bot, its project or everyone, as the vault's grants say, asking you when one
+says to) through Kuvo Code's own SSH agent, which `ssh`, git over SSH and `ssh-add` use as
+`SSH_AUTH_SOCK`. While agents may use the vault, the launcher notes each conversation before its
+command runs (`run/ssh-for/<session>`, or `dir-<sum>` with its folder for one of yours with none),
+and the process that holds the vault opens that conversation's agent: a socket of its own, named
+from the note's sum and random bytes, in `/tmp/kuvo-ssh-<uid>/agents-<sum>` on a Mac (a socket's
+path is short there) and `run/ssh-agents` on a machine, which the launcher hands the command.
+Each lists only the keys its conversation may use, signs inside that process (a key never reaches
+the command), answers one request at a time per connection, asks you once for a key whichever of
+the conversation's commands signs, and after you say no, says no for a little while without asking.
+Pause, a locked vault or a key removed: none offered. They go when the box does (cleared as it starts,
+too). On macOS a command reaches its own agent and no other's, nor the app's own SSH connections
+beside them; on Linux, which can't refuse a socket and shows every folder's names, any
+conversation's commands could reach another's agent, so there an agent offers only the keys you
+keep for everyone, until it can tell which conversation a connection comes from.
 
 **How.** The box writes, as it starts and when you turn it on: `bin/kuvo-fence` (the shell the
 engine runs a command with) and, on Linux, `bin/kuvo-fence.js`; the rules in `run/fence/`

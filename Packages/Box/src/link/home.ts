@@ -26,6 +26,14 @@ export const VERSION_FILE = path.join(RUN, "link.version");
 // gives first: Kuvo Code's processes read it here, a command in the sandbox can't (it can connect
 // to a socket it can't read the folder of). The same in kuvo-browser.js.
 export const SOCKET_KEY_FILE = path.join(RUN, "socket.key");
+/** Where the sandbox's launcher notes each conversation for its SSH agent (vault/ssh.ts), and where
+ * the agents are, both out of commands' sight (not in `run/fence`, which they read): a socket's path
+ * is at most 104 bytes on macOS, so a Mac's are in Kuvo Code's short folder in `/tmp` (one per box),
+ * which the sandbox refuses but each command's own; a machine's in its own folder. */
+export const SSH_FOR = path.join(RUN, "ssh-for");
+export const SSH_AGENTS = process.platform === "darwin"
+  ? path.join("/private/tmp", `kuvo-ssh-${os.userInfo().uid}`, `agents-${crypto.createHash("sha256").update(K).digest("hex").slice(0, 8)}`)
+  : path.join(RUN, "ssh-agents");
 
 const KEY_SHAPE = /^[0-9a-f]{64}$/;
 const madeKey = () => crypto.randomBytes(32).toString("hex") + "\n";

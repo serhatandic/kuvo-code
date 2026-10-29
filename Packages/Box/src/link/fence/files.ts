@@ -27,6 +27,10 @@ export interface FencePlaces {
   /** `run/socket.key`, the box's sockets' key, which the plugin makes anew as an engine first sends
    * commands through the sandbox. */
   key: string;
+  /** Where the launcher notes each conversation for its SSH agent, and where the agents are
+   * (vault/ssh.ts): there only while agents may use the vault. */
+  sshFor: string;
+  sshAgents: string;
   platform: "darwin" | "linux";
 }
 
@@ -38,7 +42,7 @@ export function launcherScript(places: FencePlaces): string {
   const run = places.platform === "darwin"
     ? [
         `escaped() { printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\\\&/g'; }`,
-        `exec /usr/bin/sandbox-exec -D WORK="$work" -D GIT="$git" -D TMP="$tmp" -D WAKES="$own" -D WORK_RE="$(escaped "$work")" -D GIT_RE="$(escaped "$git")" -f "$F/$profile.sb" "$shell" "$@"`,
+        `exec /usr/bin/sandbox-exec -D WORK="$work" -D GIT="$git" -D TMP="$tmp" -D WAKES="$own" -D SSH="$ssh" -D WORK_RE="$(escaped "$work")" -D GIT_RE="$(escaped "$git")" -f "$F/$profile.sb" "$shell" "$@"`,
       ]
     : [
         // Kuvo Code's own commands (kuvo-wake's watches) run it with no engine: the box names the
@@ -90,6 +94,23 @@ export function launcherScript(places: FencePlaces): string {
     `    fi`,
     `    (umask 077; mkdir -p "$w_own/wakes" "$w_own/watches" "$w_own/inbox") 2>/dev/null && touch "$w_own" && w_own=$(cd "$w_own" && pwd -P) && own=$w_own && export KUVO_WAKE_FOLDER="$own" ;;`,
     `esac`,
+    // Kuvo Code's SSH agent for the conversation (the vault's SSH keys), while agents may use it:
+    // noted where commands can't write, then handed the command once the box has opened it. Its
+    // name starts with its note's sum; the rest, no command can list or guess.
+    `ssh=`,
+    `if [ -d ${sh(places.sshAgents)} ]; then`,
+    `  case \${OPENCODE_SESSION_ID-} in ses_*[!A-Za-z0-9_]*|ses_|'') note=dir-$sum ;; ses_*) note=$OPENCODE_SESSION_ID ;; *) note=dir-$sum ;; esac`,
+    `  N=${sh(places.sshFor)}`,
+    `  [ "$(cat "$N/$note" 2>/dev/null)" = "$work" ] || (umask 077; mkdir -p "$N" && printf '%s' "$work" >"$N/.$note.$$" && mv -f "$N/.$note.$$" "$N/$note")`,
+    `  p=$( (printf '%s' "$note" | sha256sum || printf '%s' "$note" | shasum -a 256) 2>/dev/null | cut -c 1-16)`,
+    `  i=0`,
+    `  while [ $i -lt 40 ]; do`,
+    `    for s in ${sh(places.sshAgents)}/"$p"*.sock; do [ -S "$s" ] && ssh=$s; done`,
+    `    [ -n "$ssh" ] && break`,
+    `    i=$((i + 1)); sleep 0.05`,
+    `  done`,
+    `  [ -n "$ssh" ] && export SSH_AUTH_SOCK="$ssh"`,
+    `fi`,
     ...run,
     "",
   ].filter(line => line !== "").join("\n") + "\n";

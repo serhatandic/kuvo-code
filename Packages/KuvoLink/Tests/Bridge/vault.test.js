@@ -13,7 +13,7 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { script } from "./bot-keys-scenarios.js";
+import { script, sshAgentsOf } from "./bot-keys-scenarios.js";
 
 // (A short folder: the vault's socket lives in it, and a socket's path can't be long.)
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "kv-"));
@@ -565,6 +565,108 @@ test("after the box starts again the vault is locked, until a client's key unloc
   assert.equal(listed.value.items.length, 9);
   assert.equal((await fillAs({ session: "ses_ship", origin: "https://github.com", purpose: "sign-in" })).value.values.password, SECRET);
   await box.stop();
+});
+
+// The agent each conversation's commands get in the sandbox (vault/ssh.ts): the launcher notes the
+// conversation, and hands its commands the agent's socket. Here, the notes as the launcher writes them.
+const sshAgents = sshAgentsOf(home);
+after(() => fs.rmSync(sshAgents, { recursive: true, force: true }));
+async function sshAgentFor(note, folder) {
+  const notes = path.join(home, "run", "ssh-for");
+  fs.mkdirSync(notes, { recursive: true });
+  fs.writeFileSync(path.join(notes, `.${note}`), folder);
+  fs.renameSync(path.join(notes, `.${note}`), path.join(notes, note));
+  const prefix = crypto.createHash("sha256").update(note).digest("hex").slice(0, 16);
+  for (let tries = 0; tries < 100; tries++) {
+    const found = fs.existsSync(sshAgents) && fs.readdirSync(sshAgents).find(name => name.startsWith(prefix) && name.endsWith(".sock"));
+    if (found) return path.join(sshAgents, found);
+    await new Promise(done => setTimeout(done, 20));
+  }
+  return null;
+}
+const folderNote = folder => `dir-${crypto.createHash("sha256").update(folder).digest("hex").slice(0, 32)}`;
+// (Never blocking this process, whose stand-in engine the agent asks who a conversation is.)
+const sshTool = (tool, args, socket) => new Promise(resolve => {
+  const child = spawn(tool, args, { env: { PATH: process.env.PATH, HOME: root, ...(socket ? { SSH_AUTH_SOCK: socket } : {}) }, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "", stderr = "";
+  child.stdout.on("data", chunk => { stdout += chunk; });
+  child.stderr.on("data", chunk => { stderr += chunk; });
+  child.on("close", status => resolve({ status, stdout, stderr }));
+});
+
+test("an SSH key you keep for a project signs through its conversations' own agent, as git over SSH uses it, and another project's agent doesn't offer it (on Linux, only a key you keep for everyone)", async () => {
+  box = await start();
+  let left = [];
+  try {
+    assert.equal((await fromMac("POST", "kuvo/vault/unlock", { key }, key)).status, 200);
+    const file = path.join(root, "deploy");
+    assert.equal((await sshTool("ssh-keygen", ["-q", "-N", "", "-t", "ed25519", "-C", "deploy", "-f", file])).status, 0);
+    const added = await fromMac("POST", "kuvo/vault/items", { name: "Deploy key", kind: "key", values: { private_key: fs.readFileSync(file, "utf8") } }, key);
+    assert.equal(added.status, 200, JSON.stringify(added.value));
+    assert.equal(JSON.stringify(added.value).includes("PRIVATE KEY"), false, "the key itself never comes back");
+    // Only in the vault now: ssh-keygen would sign with the file beside the public key.
+    fs.rmSync(file);
+    await fromMac("POST", "kuvo/vault/grants", { item: added.value.item.id, who: { project }, how: "own" }, key);
+    const fingerprint = (await sshTool("ssh-keygen", ["-l", "-f", `${file}.pub`])).stdout.split(" ")[1];
+    // On Linux any conversation's commands could reach another's agent (vault/ssh.ts): only what
+    // you keep for everyone is offered there.
+    const everyoneOnly = process.platform !== "darwin";
+    if (everyoneOnly) {
+      assert.equal((await sshTool("ssh-add", ["-l"], await sshAgentFor("ses_shop", project))).status, 1, "a project's key, on Linux");
+      await fromMac("POST", "kuvo/vault/grants", { item: added.value.item.id, who: { everyone: true }, how: "own" }, key);
+    }
+
+    // A conversation in the project, and a command of yours in it with none.
+    for (const [note, folder] of [["ses_shop", project], [folderNote(path.join(project, "web")), path.join(project, "web")]]) {
+      const socket = await sshAgentFor(note, folder);
+      assert.ok(socket, `an agent for ${note}`);
+      assert.equal((fs.statSync(socket).mode & 0o077), 0, "only you can reach it");
+      const listed = await sshTool("ssh-add", ["-l"], socket);
+      assert.equal(listed.status, 0, listed.stderr);
+      assert.match(listed.stdout, new RegExp(fingerprint.replace(/[+/]/g, "\\$&")));
+      fs.writeFileSync(path.join(root, "commit"), "a commit\n");
+      const signed = await sshTool("ssh-keygen", ["-Y", "sign", "-n", "git", "-f", `${file}.pub`, path.join(root, "commit")], socket);
+      assert.equal(signed.status, 0, signed.stderr);
+      fs.rmSync(path.join(root, "commit.sig"));
+    }
+    // Another project's conversation, and a bot's: their agents offer nothing.
+    const elsewhere = path.join(root, "projects", "blog");
+    fs.mkdirSync(elsewhere, { recursive: true });
+    for (const [note, folder] of everyoneOnly ? [] : [[folderNote(elsewhere), elsewhere], ["ses_scout", path.join(home, "bots", "bot_scout", "workspace")]]) {
+      const socket = await sshAgentFor(note, folder);
+      assert.ok(socket, `an agent for ${note}`);
+      assert.equal((await sshTool("ssh-add", ["-l"], socket)).status, 1, "no keys");
+      assert.notEqual((await sshTool("ssh-keygen", ["-Y", "sign", "-n", "git", "-f", `${file}.pub`, `${file}.pub`], socket)).status, 0);
+    }
+    // A note by folder that names another folder than its sum's opens nothing.
+    assert.equal(await sshAgentFor(folderNote(elsewhere).replace(/.$/, c => (c === "0" ? "1" : "0")), project), null);
+    // Paused, the conversation's agent offers nothing either.
+    await fromMac("POST", "kuvo/vault/pause", { paused: true, bot: "ses_shop" }, key);
+    assert.equal((await sshTool("ssh-add", ["-l"], await sshAgentFor("ses_shop", project))).status, 1, "paused");
+    await fromMac("POST", "kuvo/vault/pause", { paused: false, bot: "ses_shop" }, key);
+    // A key you remove is gone from every agent at once.
+    const socket = await sshAgentFor("ses_shop", project);
+    assert.equal((await sshTool("ssh-add", ["-l"], socket)).status, 0);
+    assert.equal((await fromMac("DELETE", `kuvo/vault/items/${added.value.item.id}`, undefined, key)).status, 200);
+    assert.equal((await sshTool("ssh-add", ["-l"], socket)).status, 1, "removed");
+    left = fs.readdirSync(sshAgents);
+  } finally {
+    await box.stop();
+  }
+  // A box killed before it could close them leaves its sockets; the next one to hold the vault
+  // clears them, and opens its own.
+  box = await start();
+  try {
+    let now = [];
+    for (let tries = 0; tries < 100 && now.length < left.length; tries++) {
+      await new Promise(done => setTimeout(done, 20));
+      now = fs.existsSync(sshAgents) ? fs.readdirSync(sshAgents) : [];
+    }
+    assert.equal(now.length, left.length, "an agent for each conversation again");
+    assert.deepEqual(now.filter(name => left.includes(name)), [], "none of the old ones");
+  } finally {
+    await box.stop();
+  }
 });
 
 test("the variable that opens the vault to agents opens it only in a test's own folder, never in a real box's, where a line in your shell's profile could set it", async () => {

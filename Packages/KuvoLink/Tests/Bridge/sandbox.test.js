@@ -16,7 +16,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { script } from "./bot-keys-scenarios.js";
+import { script, sshAgentsOf } from "./bot-keys-scenarios.js";
 
 // In the folder tests keep in your home (not the temporary folders, which commands may write), so
 // what a command mustn't write is somewhere it otherwise couldn't.
@@ -462,8 +462,10 @@ test("on macOS, a command can't start what runs outside it, nor read another cop
   fs.mkdirSync(project);
   const outside = path.join(root, "job-escaped");
   // gh and git's Keychain helper read your sign-ins from the Keychain's files in their own process
-  // (your own, as the sandbox hides what's in your home folder: listed here, nothing read).
+  // (your own: its first bytes, the file's signature, and nothing in it; `security` says "not found"
+  // either way). The system's own keychain in its folder, which only its daemons read, stays hidden.
   const keychains = path.join(os.userInfo().homedir, "Library", "Keychains");
+  const daemons = fs.readdirSync(keychains).find(name => /^[0-9A-F]{8}-[0-9A-F-]{27}$/i.test(name));
   // An app that would run outside the sandbox, were it opened: it leaves a mark where the command can't.
   const app = path.join(root, "Escape.app");
   const opened = path.join(root, "app-escaped");
@@ -483,15 +485,66 @@ test("on macOS, a command can't start what runs outside it, nor read another cop
     const ran = await engineRuns(box, project, tries([
       ["read another copy's files", `cat ${JSON.stringify(path.join(copy, "secret"))}`],
       ["start a launchd job", `launchctl submit -l ${label} -- /bin/sh -c 'echo x > ${outside}'`],
-      ["open an app", `open -g -j -a ${JSON.stringify(app)} && sleep 2 && test -f ${JSON.stringify(opened)}`],
-      ["read your Keychain", `ls ${JSON.stringify(keychains)}`],
+      // (`open` says whether the system took the app to start: no waiting for it to.)
+      ["open an app", `open -g -j -a ${JSON.stringify(app)}`],
+      // Refused by the sandbox (the system's list of apps out of reach), not for want of the app.
+      ["miss the app", `open -g -j -a ${JSON.stringify(app)} 2>&1 | grep -q "Unable to find application"`],
+      ["read your Keychain", `test "$(head -c 4 ${JSON.stringify(path.join(keychains, "login.keychain-db"))})" = kych`],
+      ...(daemons ? [["read the system's own keychain", `ls ${JSON.stringify(path.join(keychains, daemons))}`]] : []),
     ]));
-    assert.deepEqual(outcome(ran.out), { "read another copy's files": "refused", "start a launchd job": "refused", "open an app": "refused", "read your Keychain": "allowed" }, ran.out);
-    assert.equal(fs.existsSync(opened), false, "the app ran outside the sandbox");
+    assert.deepEqual(outcome(ran.out), { "read another copy's files": "refused", "start a launchd job": "refused", "open an app": "refused", "miss the app": "refused", "read your Keychain": "allowed", ...(daemons ? { "read the system's own keychain": "refused" } : {}) }, ran.out);
   } finally {
+    // Were it ever opened, the system would remember the app: forgotten again.
+    if (fs.existsSync(opened)) spawnSync("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister", ["-u", app]);
     spawnSync("launchctl", ["remove", label]);
     fs.rmSync(copy, { recursive: true, force: true });
     await running.stop();
+  }
+});
+
+test("a command reaches its own conversation's SSH agent from the sandbox (the vault's SSH keys), and on macOS no other's, nor the app's connections to your machines", async () => {
+  // (On macOS, this Mac's box: its agents are in a folder the sandbox hides.)
+  const box = boxAt("ssh", !linux);
+  box.env.KUVO_VAULT_AGENTS = "1";
+  const project = path.join(root, "ssh-project");
+  const other = path.join(root, "ssh-other");
+  fs.mkdirSync(project);
+  fs.mkdirSync(other);
+  const agents = sshAgentsOf(box.home);
+  // On macOS, one of the app's SSH connections to your machines, beside the agents (a stand-in).
+  const connection = linux ? null : path.join(path.dirname(agents), `sandbox-test-${process.pid}.sock`);
+  const listening = connection && net.createServer(socket => socket.end());
+  if (listening) {
+    fs.mkdirSync(path.dirname(connection), { recursive: true, mode: 0o700 });
+    await new Promise(resolve => listening.listen(connection, resolve));
+  }
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    const theirs = (await engineRuns(box, other, `printf '%s\\n' "$SSH_AUTH_SOCK"`)).out.trim();
+    assert.ok(theirs.startsWith(agents + "/") && theirs.endsWith(".sock"), theirs);
+    // `ssh-add -l`: 1 is an agent with no keys (none in this vault), 2 one it can't reach.
+    const ran = await engineRuns(box, project, [
+      `ssh-add -l >/dev/null 2>&1; echo "its own: $?"`,
+      `SSH_AUTH_SOCK=${JSON.stringify(theirs)} ssh-add -l >/dev/null 2>&1; echo "another's: $?"`,
+      ...(connection ? [
+        `perl -MIO::Socket::UNIX -e 'exit(IO::Socket::UNIX->new(Peer => shift) ? 0 : 1)' "$SSH_AUTH_SOCK"; echo "connect to its own: $?"`,
+        `perl -MIO::Socket::UNIX -e 'exit(IO::Socket::UNIX->new(Peer => shift) ? 0 : 1)' ${JSON.stringify(connection)}; echo "a connection to a machine: $?"`,
+      ] : []),
+    ].join("\n"));
+    const said = Object.fromEntries(ran.out.trim().split("\n").filter(line => /^[a-z' ]+: \d+$/.test(line)).map(line => line.split(": ")));
+    assert.equal(said["its own"], "1", ran.out);
+    // macOS refuses every socket but its own. Linux can't refuse a socket and shows every folder's
+    // names, so there an agent offers only keys you keep for everyone (vault.test.js).
+    if (!linux) {
+      assert.equal(said["another's"], "2", ran.out);
+      assert.equal(said["connect to its own"], "0", ran.out);
+      assert.equal(said["a connection to a machine"], "1", ran.out);
+    }
+  } finally {
+    await running.stop();
+    if (listening) await new Promise(resolve => listening.close(resolve));
+    fs.rmSync(agents, { recursive: true, force: true });
   }
 });
 

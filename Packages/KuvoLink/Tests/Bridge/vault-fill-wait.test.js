@@ -15,10 +15,11 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { sshAgentsOf } from "./bot-keys-scenarios.js";
 
 // (Short: the vault's and the browser's sockets are in it.)
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kvf-")));
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+after(() => { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(sshAgentsOf(home), { recursive: true, force: true }); });
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
