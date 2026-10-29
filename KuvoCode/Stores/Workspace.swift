@@ -178,11 +178,13 @@ final class Workspace {
     @ObservationIgnored private(set) var sharedForms: [String: String] = [:]
     /// Sessions whose agent asks you for something in its browser (a sign-in, a code, a step).
     var askingInBrowser: Set<String> = []
+    /// Conversations asking you before they do something (a bot making a project).
+    var askingForWork: Set<String> = []
 
     /// Sessions that finished while you were elsewhere, or wait for your answer: the
     /// number on the Dock icon. A subagent's ask is its session's.
     var waitingCount: Int {
-        let askers = Set(asking.values.map(root(of:))).union(askingInBrowser.map(root(of:))).subtracting(seats)
+        let askers = Set(asking.values.map(root(of:))).union(askingInBrowser.map(root(of:))).union(askingForWork).subtracting(seats)
         return Set(sessions.filter { $0.isUnread && !Self.isArchived($0) }.map(\.id)).union(askers).count
     }
 
@@ -667,7 +669,7 @@ final class Workspace {
     /// Waiting on you: a permission, a question or a sign-in, in a conversation you have open or
     /// not (a bot's work in a session of its own, say).
     func needsAttention(_ id: String) -> Bool {
-        if askingInBrowser.contains(id) || asking.values.contains(where: { $0 == id || root(of: $0) == id }) { return true }
+        if askingInBrowser.contains(id) || askingForWork.contains(id) || asking.values.contains(where: { $0 == id || root(of: $0) == id }) { return true }
         guard let model = models[id] else { return false }
         return !model.permissions.isEmpty || !model.forms.isEmpty
     }
@@ -1125,7 +1127,31 @@ final class Workspace {
         var run: String?
         var terminal: String?
         var removed: Bool?
+        /// The bot that made it, for one a bot made.
+        var madeBy: MadeBy?
     }
+
+    /// The bot that made a project (`make_project`): its id and name.
+    struct MadeBy: Codable, Equatable {
+        var bot: String
+        var name: String
+    }
+
+    /// The bot that made each project a bot made, by its folder as it's named here.
+    var madeBy: [String: MadeBy] {
+        #if DEBUG
+        return boxMadeBy.merging(demoMadeBy) { _, demo in demo }
+        #else
+        return boxMadeBy
+        #endif
+    }
+    private var boxMadeBy: [String: MadeBy] = [:]
+
+    #if DEBUG
+    /// Projects marked as a bot's, for a look at them (KUVO_DEMO_MADE_BY).
+    private var demoMadeBy: [String: MadeBy] = [:]
+    func noteMadeBy(_ folder: String, _ maker: MadeBy) { demoMadeBy[folder] = maker }
+    #endif
 
     private struct BoxProjects: Decodable { var projects: [BoxProject] }
 
@@ -1206,6 +1232,9 @@ final class Workspace {
     /// `listed` as `box`'s, here, in place of what was known of them; what's changed here and not
     /// sent yet stays as it is here.
     private func take(_ listed: [BoxProject], from box: String) {
+        var makers = boxMadeBy.filter { Self.box(of: $0.key) != box }
+        for project in listed where project.removed != true { if let maker = project.madeBy { makers[Self.here(project.directory, on: box)] = maker } }
+        if makers != boxMadeBy { boxMadeBy = makers }
         let unsent = unsentProjects.filter { Self.box(of: $0) == box }
         let theirs = listed.filter { $0.removed != true }.map { Self.here($0.directory, on: box) }.filter { !unsent.contains($0) }
         // New ones first, as one added here is; the rest where they were.
@@ -2674,6 +2703,16 @@ final class Workspace {
     /// such as those it sent off in the background, which go on after its own turn ends.
     func helpersAtWork(in id: String) -> Int {
         running.count { $0 != id && !hiddenRuns.contains($0) && !reviewParts.contains($0) && root(of: $0) == id }
+    }
+
+    /// The sessions a bot runs (`kuvo.by`) that are at it now: working, or waiting on you. What
+    /// its row says it's doing ("At work in Tidepool: 3 sessions").
+    func work(of bot: String) -> [Session] {
+        #if DEBUG
+        // KUVO_DEMO_BOT_WORK: every session marked as a bot's counts as at work, for a look.
+        if ProcessInfo.processInfo.environment["KUVO_DEMO_BOT_WORK"] != nil { return sessions.filter { WorksFor($0)?.bot == bot && !Self.isArchived($0) } }
+        #endif
+        return sessions.filter { WorksFor($0)?.bot == bot && !Self.isArchived($0) && (isWorking($0.id) || needsAttention($0.id)) }
     }
 
     /// Sessions under another that are kept out of sight (a review's parts, which their review

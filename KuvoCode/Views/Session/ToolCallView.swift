@@ -36,6 +36,7 @@ struct ToolCallView: View {
     }
 
     @Environment(\.answerAgent) private var answerAgent
+    @Environment(\.workAnswers) private var workAnswers
 
     @ViewBuilder private var step: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -80,6 +81,13 @@ struct ToolCallView: View {
                 if let file {
                     Button("Copy Path") { Clipboard.copy(file.path) }
                 }
+            }
+
+            // Asked, and answered by the bot that runs this session: who, and why.
+            if let answer = workAnswers[call.id] {
+                WorkAnswerLine(answer: answer)
+                    .padding(.leading, Self.iconWidth + Self.iconGap)
+                    .padding(.top, 3)
             }
 
             if isExpanded, hasDetails {
@@ -584,5 +592,38 @@ struct SubagentSteps: View {
 extension Message.ToolState {
     var isFailure: Bool {
         if case .failed = self { true } else { false }
+    }
+}
+
+extension EnvironmentValues {
+    /// What a bot answered for the conversation's asks, by the tool call that asked (`kuvo.answers`).
+    @Entry var workAnswers: [String: WorkAnswer] = [:]
+}
+
+/// Under a step that asked: answered by the bot that runs the session, not by you ("Allowed by
+/// Pixel: the plan names the haptics package"), with its face.
+struct WorkAnswerLine: View {
+    let answer: WorkAnswer
+    @Environment(Bots.self) private var bots
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Group {
+                if let bot = bots.bot(answer.by.bot) {
+                    BotAvatar(look: bot.look, size: 14, animates: false)
+                } else {
+                    Image(systemName: answer.decision == .deny ? "xmark.circle" : "checkmark.circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
+            Text("\(Text(answer.verdict).fontWeight(.medium))\(Text(answer.reason.isEmpty ? "" : ": " + answer.reason).foregroundStyle(.secondary))")
+                .font(.system(size: 12))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .help("\(answer.verdict) at \(answer.date.formatted(date: .omitted, time: .shortened)), not by you: \(answer.reason)")
+        .accessibilityElement(children: .combine)
     }
 }

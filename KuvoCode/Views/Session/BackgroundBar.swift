@@ -32,6 +32,8 @@ struct BackgroundBar: View {
 struct WorkBar<Item: Identifiable, Row: View>: View {
     let items: [Item]
     let title: String
+    /// How far along it is, after the title.
+    var progress: String?
     /// What the only one is, beside the title while the rows are hidden.
     var detail: Text?
     /// The mark before the title, for what waits rather than works (a wake-up); else a spinner.
@@ -86,7 +88,7 @@ struct WorkBar<Item: Identifiable, Row: View>: View {
             AnyView(Image(systemName: symbol)
                 .font(.system(size: 13))
                 .foregroundStyle(.tint))
-        } ?? AnyView(Spinner(size: 14)), title: title, detail: detail, accessory: accessory, showHelp: showHelp, hideHelp: hideHelp, isHidden: $isHidden)
+        } ?? AnyView(Spinner(size: 14)), title: title, progress: progress, detail: detail, accessory: accessory, showHelp: showHelp, hideHelp: hideHelp, isHidden: $isHidden, opens: !items.isEmpty)
     }
 }
 

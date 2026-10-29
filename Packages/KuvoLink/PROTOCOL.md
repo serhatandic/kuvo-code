@@ -484,12 +484,13 @@ its own, which a `SIGTERM` stops waiting.
   - An agent here gets the message straight from the box; one on another computer by a letter
     ("Peers"). Without a conversation to answer, or off the relay, a letter isn't waited for.
     `read_conversation` reads one here, or asks a peer with `letters-read` for it by letter.
-- **`POST kuvo/sessions`** `{task, title?, folder?, startedBy?, wait? = false}` →
+- **`POST kuvo/sessions`** `{task, title?, folder? | project? | chat?, worktree?, model?, effort?,
+  mode?, approval?, wake?, startedBy?, wait? = false}` →
   `{session, title, folder, project, answer?}` (`project` null for a chat; `answer` with
   `wait`, its first answer in ten minutes, else null). `start_session` is this route, from the
   calling conversation.
   - From a conversation (`startedBy`, its root found as above): in its folder unless `folder` names
-    another (a bot's own folder is its chats), on its model and in its mode (Plan stays Plan), on the engine or coding agents' bridge
+    another (a bot's own folder is its chats), on its model and in its mode (Plan stays Plan) unless `model`, `effort` or `mode` names another, on the engine or coding agents' bridge
     it runs on, with its approval made again with this box's Settings › Permissions (Ask First isn't
     got around), its metadata `kuvo: {startedBy}` (it opens nothing by itself: clients list it under that
     conversation), and the task as a message from it.
@@ -500,10 +501,18 @@ its own, which a `SIGTERM` stops waiting.
   - 400 `{message}` (no task, not a folder here), 403 (a group chat's seat), 404 (`startedBy`
     isn't a conversation here), 429 (too many lately), 502 `{message, session?}` (not made, or
     made but its task didn't reach it), 503 (no engine).
+  - Where and how, each optional (bridge 0.9.106, "Work"): `project` (a project's name or folder
+    here) or `chat: true` instead of `folder`; `worktree: true`, a worktree of its project on a
+    branch of its own; `model` (`"provider/model"` or `{providerID, id}`, one there's an account for
+    here, on the engine or the coding agents' bridge as it runs) and `effort` (one of its variants);
+    `mode` `build` or `plan`; `approval` `ask` or `approveAll`, never above the starter's (a starter
+    that asks first starts one that does too); `wake` (`finished`, `asks`, `both`, `none`), what the
+    starter hears of it. `computer` other than this one: 400, for now.
   - Unknown fields are ignored, so a newer client can send more to an older box.
 - **Limits**: one table on the box (`letters/limits.ts`): a conversation sends 20 messages in ten
   minutes and starts 6 sessions in ten minutes at most, and letters from one peer count as one
-  sender. What each did lately is kept in `run/tool-limits.json`, so calls answered by separate
+  sender. A bot's work is its own to size: only the limits you set for it hold ("Work"), and a net
+  of 40 sessions in ten minutes, counted for the bot and every session under it, stops a runaway. What each did lately is kept in `run/tool-limits.json`, so calls answered by separate
   processes count together. A tool's call from no conversation this box has counts as one sender,
   `outside` (its session asks first, and its task can't be answered); a session started by a
   client (`kuvo/sessions` without `startedBy`) isn't counted.
@@ -545,6 +554,110 @@ the same for every client and with none connected, and keeps them in `run/queues
   request before it asks the box to stop, and for its hold before it asks the box to resume.
 - A box without `queue` in its features (its update didn't get through): each client carries that
   box's queues itself, as clients did before.
+
+### Work
+
+A bot runs sessions as you would (bridge 0.9.106): it starts them in your projects on the model,
+effort, mode and approval it picks, hears when they finish or ask, answers what they ask within
+what it may do itself, and stops them. Every box does this alike, with no client connected; every
+client shows it from the same routes.
+
+- **Marked as its work**: a session a bot starts, and every one under it, has metadata
+  `kuvo: {startedBy, by: {bot, name}, depth, wake?}`: the bot it works for, how deep it is
+  (1 for one the bot started), and what its starter hears of it (a bot: both, or only its asks
+  when it waited for the answer). What a starter hears is gathered a few seconds and sent as one
+  message (an ask to be read at its next step), kept in `run/work/wakes.json` until it's sent. Clients mark rows by `kuvo.by`.
+  Its task ends with the session's half of the playbook: review your work with reviewer subagents,
+  fix what they find, and end with a short report.
+- **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
+  `list_sessions` (each with where it stands: working, asking and what, with the ask's id,
+  finished, failed, stopped; its model, tokens and last reply's first lines), `stop_session`
+  (`{session, archive?}`; only one of its own), `answer_ask` (`{session, ask, decision: allow|deny,
+  reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
+  an account for here, `provider/model`, with their efforts).
+- **Answering asks, until the sandbox** (`work/policy.ts`): reading a command can't be made
+  airtight, so until sessions run in the sandbox a bot answers only two kinds of ask, judged by
+  the tool call itself (its whole input, found by the ask's `source`: never only what the ask
+  lists, which leaves out a command's `cd` and the folder it runs in), and only where it could go
+  ahead itself, part by part (the engine's rules for its own conversation allow each: the engine's
+  defaults, Settings › Permissions, then the conversation's own):
+  - Making or changing a source or text file inside the session's folder (its project's other
+    folders too), by a tool that edits (never another tool asked as an edit), never a folder:
+    only by its extension from a known list (code, styles, Markdown, data), its path
+    written plainly (letters, digits, `.`, `_`, `-`, `/`), no part hidden (starting with `.`), no
+    `..`, nothing reached through a link, never a name a later command runs or reads as settings
+    (`package.json`, `tsconfig.json`, `opencode.json`, `*.config.*`, `build.rs`, `Package.swift`…,
+    compared without case, as macOS does), never your keys and sign-ins.
+  - A few commands that read: `ls`, `cat`, `head`, `tail`, `wc`, and `git status`, `diff` and `log`
+    (only where the folder is its repository's own top level), each with a few options, run in the
+    session's folder (a `workdir` elsewhere goes to the user); the line printable ASCII, every part
+    one of those, paths written plainly as above. No redirects, patterns of files, settings before
+    it, `cd`, `pushd` or `popd`, nor anything a shell expands or runs besides.
+  - Everything else goes to the user: reading through the engine, building, testing, installing,
+    changing files from the shell, git that changes anything, fetching, integrations' tools. It may
+    always deny, with its reason passed on.
+  - What it can't close, until the sandbox:
+    - An edit it allowed, then a run the user allows later, runs what was edited: source reaches
+      `cargo build` and `swift build`, macros, and test runs. Each ask is judged alone, so the user
+      allowing a build or a test run allows the project's code as it is then.
+    - A file can change between the check and the run, and a hard link looks like any file.
+    - git follows the diff, textconv and LFS settings the user already has.
+  Each answer is kept on the session, `kuvo.answers: [{ask, call?, what, decision, reason, by:
+  {bot?, name}, at}]` (the latest 40), where clients show it on the ask's tool call ("Allowed by
+  Pixel") and in the bot's work.
+- **Limits you set** (Edit Bot › Work; `PATCH kuvo/bots/<id>` `{work: {limits}}`, null for none;
+  `limits` in `kuvo/bots`): `atOnce` (its sessions working at once), `perDay` (started since
+  midnight, archived ones too), `depth`, `tokensPerDay` (of the sessions started today). None until you set one; past one, `start_session` refuses
+  with words saying which.
+- **`GET kuvo/work?bot=<id>`** → `{bot, sessions: [{session, title, folder, project?, startedBy,
+  depth, model?, mode?, state, asks?, started, tokens, cost?, lastReply?}], answered: [answer with
+  its session], today: {started, working, tokens, cost?}, limits}`: its sessions the latest first,
+  archived ones left out. 400 without `bot`, 404 for no such bot here, 503 with no engine.
+- **`GET kuvo/work/events`** (ndjson): `{"changed": {<bot>: <ms>}}` now and at each change to a
+  bot's work (a session started, stopped, finished or asking, an ask answered, its limits); a
+  client reads that bot's work again when its time moves. Kept in `run/work/changes.json`.
+- **`POST kuvo/bots/<id>/stop-all`** → `{stopped}`: every session of its work that's working,
+  stopped (held and paused, as the queue's Stop), and the bot's own turn too, with what it was
+  still to hear of them dropped. 404 for no such bot here, 503 with no engine.
+- **A box starting again** (its link): what its followed sessions did while it was down (finished,
+  failed, asked) is told to their starters once, by what `run/work/told.json` says was told, and an
+  answer to an ask given after its tool stopped waiting goes to its conversation if it hadn't.
+
+**Projects** (bridge 0.9.107, feature `work.projects`): a bot makes new projects on its box, in a
+folder you pick once per box, after asking you.
+- **Where they go**: `GET|PATCH kuvo/work/settings` → `{projectsFolder: string|null, suggested?}`,
+  kept in `box/work.json`. None until you pick one; `suggested` is `~/Developer` or `~/Projects`
+  when there's one. PATCH `{projectsFolder}` takes a full path (`~` is fine) to a folder that's
+  there, or null; 400 otherwise. The box makes projects only there, and never deletes one.
+- **Tools**: `make_project` (`{name, git?, clone?}`: a folder named after it, lowercase with
+  dashes, a new git repository there unless `git: false`, or a repository cloned from an https or
+  ssh address), `list_projects` (each project here: its folder, whether it's git, who made it).
+  A folder that's there with files in it, a project there already, or an address git can't clone
+  is refused without asking.
+- **Asking you first**: `make_project` asks unless you said Always to that bot for that kind,
+  and a projects folder is picked. The ask is kept in `run/work/asks.json` until you answer; the
+  tool waits up to ten minutes, then says it stays asked, and the conversation gets
+  `[The user answered] …` as a message when you do.
+  - An ask goes with its bot (deleted), or after a week unanswered.
+  - `GET kuvo/work/asks` and `GET kuvo/work/asks/events` (ndjson, a line now and at each change)
+    → `{asks: [{id, action: makeProject|cloneProject, session, name, bot?, project, clone?,
+    folderName, folder: string|null, suggested?, at}]}`: `session` and `name` are the
+    conversation asking (a bot's own), `folderName` the folder it gets, `folder` where it would go
+    (null with no projects folder yet). A bot's are in its `kuvo/work` too, as `asks`, with the
+    projects it made, as `projects`.
+  - `POST kuvo/work/asks/<id>` `{answer: allow|always|deny, folder?}` → `{answer, text, isError}`:
+    what's asked is done there and then, `text` in the words its asker reads (`isError` when it
+    couldn't be: the ask is answered all the same). `folder` picks the projects folder while none
+    is picked (needed to allow then: 400 "Pick the folder…"), and is ignored once one is. Always keeps
+    `work.allowed: [makeProject|cloneProject]` in its bot.json (`allowed` in `kuvo/bots`; `PATCH
+    kuvo/bots/<id>` `{work: {allowed}}` takes it back, and `{work: {limits}}` alone leaves it). 404
+    for one answered already, from another client say.
+  - A machine's bridge tells your phones of each, as category `ask` with `answerable: "0"`, `data:
+    {session, ask}`: it opens the conversation. A Mac tells them itself.
+- **Made**: `box/projects.json` keeps it first, with `madeBy: {bot, name, at}` for a bot's. `POST
+  kuvo/projects/new` `{name, git?, clone?}` → 201 `{project, text}` makes one from a client
+  the same way (no `madeBy`): 403 `{needs: "projectsFolder"}` with none picked, 409 for one there,
+  400 for a name or address that won't do, 502 when git fails.
 
 ### Updates
 
@@ -1828,6 +1941,8 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
+| `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |
+| `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
 | `search` | `kuvo/search` |
 | `personalities` | `kuvo/personalities…` |
 | `personalities.events` | `kuvo/personalities/events` |

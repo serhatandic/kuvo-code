@@ -64,6 +64,8 @@ final class SessionModel {
     var hidesBackgroundJobs = false
     /// The bar of its wake-ups and watches shows only its line.
     var hidesWakes = false
+    /// The bar of the sessions its bot runs shows only its line.
+    var hidesWork = false
     /// The goal's bar shows only its line.
     var hidesGoal = false
     /// The bars over the composer tucked into one line (`BarStrip`), as you left them here.

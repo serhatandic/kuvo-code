@@ -23,6 +23,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sleep } from "../shared/wait";
 import { watchAsks } from "./areas/asks";
+import { watchWorkAsks } from "./work/asks";
 import { refreshBotsKeys } from "./areas/bot-keys";
 import { setBoxKey } from "./areas/box-keys";
 import { addMacDefaults, changeSettings, ownsSettings, readSettings } from "./areas/config";
@@ -96,6 +97,7 @@ export { messageID } from "./engine/sessions";
 export { forgetMovesInMemory, keepMoving, sendMovesWith, takeMoveMail, watchMoves } from "./moves/move";
 export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
 export { queueOf, queueWatcher, readQueues, scanQueues } from "./engine/queue";
+export { workWatcher } from "./work/wakes";
 export { macLink, readLink, updateLink, writeLink } from "./state";
 export { searchPlugins } from "./areas/plugins";
 export { listFolders, makeFolder } from "./areas/folders";
@@ -298,6 +300,8 @@ async function run(): Promise<void> {
   holdVault(engineHandler(readEngineFile, { name: os.hostname() }));
   setVaultTell(tell);
   watchVaultAsks(tell, answered);
+  // What its bots ask you before they do it (making a project): told the same way.
+  watchWorkAsks(tell, { answered });
   // Your other computers: this box's agents told to them while the relay connection is up (and
   // listed here, relay or not), and its agents' letters sent; without the relay a while, those
   // not sent yet go to the Mac.

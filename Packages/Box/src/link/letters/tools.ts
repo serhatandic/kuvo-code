@@ -1,7 +1,8 @@
 // Agents writing to each other (PROTOCOL.md, "Agents' tools")
 // Any conversation on any of your computers can ask who else there is (list_agents), write to one of
 // them (send_message), read one's conversation (read_conversation) and start a session
-// (start_session). Every box answers them alike (`POST kuvo/agent-tools`): this Mac's app and a
+// (start_session), and run the sessions it started as you would (list_sessions, stop_session,
+// answer_ask, list_models, make_project, list_projects: `work/tools.ts`, PROTOCOL.md "Work"). Every box answers them alike (`POST kuvo/agent-tools`): this Mac's app and a
 // machine's kuvo-browser.js only pass the call on. A message reaches its conversation as input that
 // says who sent it, and the agent there takes it up; with `wait`, the sender gets its answer back.
 // One on another computer goes there by mail (PROTOCOL.md, "Peers"). You name one with "&".
@@ -22,6 +23,7 @@ import { composeLetter, placeOfSession } from "./letter";
 import { allowed, takeBack } from "./limits";
 import { OUTSIDE, seatRefusal, startedWords, startSession } from "./start";
 import { answerTo } from "./take";
+import { answerAskTool, listModelsTool, listProjectsTool, listSessionsTool, makeProjectTool, stopSessionTool } from "../work/tools";
 import type { ListedAgent, Target } from "../../shared/records";
 import type { SessionPlace } from "./letter";
 
@@ -41,7 +43,7 @@ export interface ToolPlace {
 }
 
 /** The tools, by name. */
-export const AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session"] as const;
+export const AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models", "make_project", "list_projects"] as const;
 export type AgentToolName = (typeof AGENT_TOOLS)[number];
 export const isAgentTool = (name: unknown): name is AgentToolName => AGENT_TOOLS.includes(name as AgentToolName);
 
@@ -266,7 +268,28 @@ export async function agentTool(name: AgentToolName, args: Record<string, unknow
       // From a conversation this box doesn't have: an agent all the same, counted and approved as
       // one (`outside`).
       const by = root ? { ...root, name: nameOf(root.session, all) } : OUTSIDE;
-      return startedWords(await startSession(args, by, { readEngine: place.readEngine, step: place.step, signal: place.signal }), args.wait === true);
+      return startedWords(await startSession(args, by, { readEngine: place.readEngine, bridge: place.bridge, step: place.step, signal: place.signal }), args.wait === true);
+    }
+    case "list_models": {
+      let engine: Target | null = null;
+      try { engine = place.readEngine(); } catch {}
+      return listModelsTool(engine, place.bridge(), place.signal);
+    }
+    case "list_projects":
+      return listProjectsTool();
+    case "make_project": {
+      if (!root) return refused("Only a conversation on this computer makes projects here.");
+      return makeProjectTool({ ...root, name: nameOf(root.session, all) }, args, { signal: place.signal, ...(place.step ? { every: place.step } : {}) });
+    }
+    case "list_sessions":
+    case "stop_session":
+    case "answer_ask": {
+      // Only a conversation here has sessions of its own.
+      if (!root) return refused("Only a conversation on this computer has sessions of its own.");
+      const caller = { ...root, name: nameOf(root.session, all) };
+      if (name === "list_sessions") return listSessionsTool(caller, targets, place.signal);
+      if (name === "stop_session") return stopSessionTool(caller, args, targets, place.signal);
+      return answerAskTool(caller, args, targets, place.signal);
     }
   }
 }

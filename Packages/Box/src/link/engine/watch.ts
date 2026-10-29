@@ -7,8 +7,9 @@ import { noteSignIn } from "../areas/accounts";
 import { nameWorktreeBranch, tellWorktree } from "../areas/worktrees";
 import { freshenBot, freshenBots } from "../bots/tell";
 import { ANSWERED, GROUP_NEWS, NEWS, groupNotice, noticeFor, settleHeld } from "../notices/news";
-import { engineGet, readBridgeFile, readEngineFile } from "./client";
+import { engineGet, peerTargets, readBridgeFile, readEngineFile } from "./client";
 import { learnCompatibility } from "./compatibility";
+import { workWatcher } from "../work/wakes";
 import { queueWatcher, scanQueues } from "./queue";
 import type { Target } from "../../shared/records";
 import type { SignInEvent } from "../areas/accounts";
@@ -82,6 +83,7 @@ export interface WatchOptions {
   learns?: boolean;
   learned?: () => void;
   queues?: boolean;
+  work?: boolean;
 }
 
 // The events in a `text/event-stream` body, parsed.
@@ -214,8 +216,8 @@ function backgroundTools(engine: Target, session: string): Promise<Response> {
 // `learned`: told each time it's read its engine's models for what they need (a test waits on it).
 export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn, learned }: WatchBoxOptions = {}): void {
   const answered = (id: string | undefined) => hold?.resolve(id);
-  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true });
-  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true });
+  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: true });
+  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: true });
 }
 
 // Follows `source`'s events (the engine's, or the coding agents' bridge's: `read` gives its port
@@ -231,8 +233,9 @@ export function watchBox({ tell = () => true, hold = null, bots = false, notices
 // `learns`: what its providers' models need from it learned for its next start (`learnCompatibility`),
 // the engine's: as it's found, then every ten minutes at most while it's at work (a sign-in to
 // GitHub Copilot brings new models); `learned` told each time.
-// `queues`: its sessions' queues carried on (engine/queue.ts).
-export async function watchEvents(read: () => Target, tell: (notice: Notice) => void, signal?: AbortSignal, answered: (id: string | undefined) => void = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {}, queues = false }: WatchOptions = {}): Promise<void> {
+// `queues`: its sessions' queues carried on (engine/queue.ts). `work`: whoever started a session
+// told as it finishes or asks (work/wakes.ts).
+export async function watchEvents(read: () => Target, tell: (notice: Notice) => void, signal?: AbortSignal, answered: (id: string | undefined) => void = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {}, queues = false, work = false }: WatchOptions = {}): Promise<void> {
   let attempt = 0;
   let lastLearned = 0;
   const learn = (source: Target) => {
@@ -249,6 +252,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       const source = read();
       const steer = steers ? steering(session => backgroundTools(source, session).catch(() => {}), { after: steerAfter, signal: connection.signal }) : null;
       const queue = queues ? queueWatcher(source) : null;
+      const followWork = work ? workWatcher(source, peerTargets) : null;
       const response = await fetch(`http://127.0.0.1:${source.port}/api/event`, {
         headers: { authorization: `Basic ${Buffer.from(`opencode:${source.password}`).toString("base64")}`, accept: "text/event-stream" },
         signal,
@@ -272,6 +276,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         learn(source);
         steer?.(event);
         queue?.(event as QueueEvent);
+        followWork?.(event);
         if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (!bots) {
           if (event.type === "session.created") tellWorktree(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});

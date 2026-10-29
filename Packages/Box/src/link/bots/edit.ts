@@ -12,22 +12,42 @@ import { BOTS, HERE, IS_MAC, K, RUN } from "../home";
 import { hostTrash } from "../host-interface";
 import { botVariable, deleteKey, keyNames } from "../keys";
 import { botPersonalities } from "../personalities/library";
-import { BOT_STEP, botHere, botLook, botModel, isModel, isMoving, MOVING, noteBotsChanged, sameModel } from "./here";
+import { BOT_STEP, botHere, botLook, botModel, changeDescription, isModel, isMoving, MOVING, noteBotsChanged, sameModel } from "./here";
 import { givenJob, jobOf, writeJob } from "./jobs";
 import { NO_KIT, readKit, runsWithAgents } from "./kit";
 import { listBots } from "./list";
 import { fitsLook, signInRefusal } from "./make";
 import { tellBot, toldNow } from "./tell";
+import { noteWorkChanged } from "../work/changes";
+import { limitsFrom } from "../work/limits";
+import { WORK_ACTIONS } from "../work/asks";
 import type { Target } from "../../shared/records";
 import type { BotLook } from "../../shared/routes/bots";
 import type { ChangedBot } from "../../shared/routes/bots";
+import type { BotDescription } from "./here";
 import type { JSONAnswer, OtherStatus } from "../server/context";
 import type { Job } from "./jobs";
 import type { GivenBot } from "./make";
 
+// The bot as `changed` has it, with what it may do without asking as it's kept now, unless the
+// change names that itself (`names`): an "Always" answered meanwhile isn't undone.
+function keepAllowed(changed: BotDescription, now: BotDescription | null, names: boolean): BotDescription {
+  if (names) return changed;
+  const next = { ...changed };
+  const kept = isObject(now?.work) ? now.work.allowed : undefined;
+  const work = isObject(next.work) ? { ...next.work } : {};
+  if (kept === undefined) delete work.allowed;
+  else work.allowed = kept;
+  if (Object.keys(work).length) next.work = work;
+  else delete next.work;
+  return next;
+}
+
 /** A change to a bot, as Edit Bot sends it (`PATCH kuvo/bots/<id>`): its name, look, personality,
- * job or model, each checked here (`personality` null for none). */
-export type BotChange = Pick<GivenBot, "name" | "look" | "personality" | "job" | "model">;
+ * job or model, and its work's settings (`work: {limits, allowed}`: the limits you set, null for
+ * none, and what it may do without asking, each only when named),
+ * each checked here (`personality` null for none). */
+export type BotChange = Pick<GivenBot, "name" | "look" | "personality" | "job" | "model"> & { work?: unknown };
 
 /** What `changeBot` answers: the bot as it is after the change, or why not. */
 export type ChangedAnswer = JSONAnswer<ChangedBot | { message: string }>;
@@ -102,6 +122,40 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
     }
     changed.model = model;
   }
+  // Its work's settings (the limits you set, what it may do without asking): only those named
+  // changed, nothing else of it touched. `work: null`, or limits left out by a client from before
+  // `allowed`, takes the limits away.
+  let limitsChanged = false;
+  const namesAllowed = isObject(given.work) && "allowed" in given.work;
+  if ("work" in given) {
+    if (given.work !== null && !isObject(given.work)) return no(400, "That isn’t a bot’s work settings.");
+    const asked = isObject(given.work) ? given.work : {};
+    const work = isObject(described.work) ? { ...described.work } : {};
+    if ("limits" in asked || !("allowed" in asked)) {
+      const limits = limitsFrom(asked.limits);
+      if (limits) work.limits = limits;
+      else delete work.limits;
+    }
+    if ("allowed" in asked) {
+      const allowed = Array.isArray(asked.allowed) ? WORK_ACTIONS.filter(each => (asked.allowed as unknown[]).includes(each)) : [];
+      if (allowed.length) work.allowed = allowed;
+      else delete work.allowed;
+    }
+    limitsChanged = JSON.stringify(work) !== JSON.stringify(isObject(described.work) ? described.work : {});
+    if (Object.keys(work).length) changed.work = work;
+    else delete changed.work;
+  }
+  // Only its work's settings changed: its description kept, nothing to tell it.
+  if (limitsChanged && !Object.keys(given).some(key => key !== "work")) {
+    try {
+      changeDescription(here.folder, now => keepAllowed(changed, now, namesAllowed));
+    } catch (error) {
+      return no(503, `The bot couldn’t be changed: ${(error as Error | null)?.message ?? error}`);
+    }
+    noteBotsChanged();
+    noteWorkChanged(id);
+    return { status: 200, value: { bot: listBots(machine).find(each => each.id === id) ?? null } satisfies ChangedBot };
+  }
   let target: Target | null | undefined;
   try {
     target = here.agents ? readBridge() : readEngine();
@@ -113,7 +167,7 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
   const retold = renamed || changed.personality !== described.personality || newJob;
   const switched = !sameModel(changed.model, described.model);
   const looks = (["color", "shape", "face"] as const).some(part => (changed.look as BotLook | undefined)?.[part] !== (described.look as BotLook | undefined)?.[part]);
-  if (retold || switched || looks) {
+  if (retold || switched || looks || limitsChanged) {
     // (Its job isn't an edit of its description's: the bot keeps it, and Edit Bot can too.)
     if (renamed || switched || looks || changed.personality !== described.personality) changed.updated = stamp();
     try {
@@ -121,10 +175,7 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
         writeJob(here, job!);
         changed.job = job!.line;
       }
-      const file = path.join(here.folder, "bot.json");
-      fs.writeFileSync(`${file}.new`, JSON.stringify(changed, null, 2));
-      fs.renameSync(`${file}.new`, file);
-      here.described = changed;
+      here.described = changeDescription(here.folder, now => keepAllowed(changed, now, namesAllowed));
     } catch (error) {
       return no(503, `The bot couldn’t be changed: ${(error as Error | null)?.message ?? error}`);
     }
@@ -135,6 +186,7 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
     if (switched && changed.model) await call(target, "POST", `/api/session/${session}/model`, { model: changed.model }, AbortSignal.timeout(BOT_STEP)).catch(() => {});
     if (retold) await tellBot(target, here, here.session, toldNow(kit, here, changed), AbortSignal.timeout(BOT_STEP));
     noteBotsChanged();
+    if (limitsChanged) noteWorkChanged(id);
   }
   return { status: 200, value: { bot: listBots(machine).find(each => each.id === id) ?? null } satisfies ChangedBot };
 }

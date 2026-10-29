@@ -43,6 +43,10 @@ final class AppModel {
     let bots = Bots()
     /// Bots' and sessions' wake-ups and watches.
     let wakeUps = WakeUps()
+    /// The sessions bots run, as their boxes tell it.
+    let botWork = BotWork()
+    /// What bots ask you before they do it (making a project), on every box.
+    let botAsks = BotAsks()
     /// Voice input, for whichever composer listens.
     let dictation = Dictation()
     // COMPAT(0.7 mac-group-chats): `GroupMigration.run` before the box's group chats start. Goes 3 months after 0.8.0.
@@ -280,6 +284,9 @@ final class AppModel {
         workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
         bots.app = self
         wakeUps.app = self
+        botWork.app = self
+        botAsks.app = self
+        botAsks.onChange = { [weak self] sessions in self?.workspace.askingForWork = sessions }
         boxGroups.app = self
         moves.app = self
         // What this Mac's box says is moving, as it changes.
@@ -537,6 +544,7 @@ final class AppModel {
                         async let wakes: Void = wakeUps.follow()
                         async let personalities: Void = Personalities.shared.follow()
                         async let bots: Void = bots.follow()
+                        async let asks: Void = botAsks.follow(BoxClient.mac)
                         // COMPAT(0.7 mac-personalities): what an earlier Kuvo Code changed in its own copy, taken in. Goes 3 months after 0.8.0.
                         // What a 0.8.0 beta changed of your personalities where it kept them.
                         await Personalities.shared.takeFromOld()
@@ -546,6 +554,7 @@ final class AppModel {
                         await wakes
                         await personalities
                         await bots
+                        await asks
                     }
                 }
             }

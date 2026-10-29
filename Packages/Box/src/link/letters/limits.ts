@@ -1,7 +1,9 @@
 // How much agents may do unattended (PROTOCOL.md, "Agents' tools")
 // Two agents shouldn't keep writing to each other for ever, nor one fill the window with sessions,
 // while nobody's watching. The limits are this one table, and every route and letter goes through
-// `allowed`: a `most` of Infinity switches one off. What each caller did lately is kept in
+// `allowed`: a `most` of Infinity switches one off. A bot's work is its own to size (the limits you
+// set for it are in `work/limits.ts`): for it, only a net against a runaway (`botSessions`, counted
+// by bot, its sessions' starts included). What each caller did lately is kept in
 // `run/tool-limits.json`, so a tool's call answered by a process of its own (`box route`) counts too.
 
 import fs from "node:fs";
@@ -9,11 +11,12 @@ import path from "node:path";
 import { locked, writePrivate } from "../files";
 import { RUN } from "../home";
 
-/** What's counted: messages sent (by a conversation, or letters from another computer) and
- * sessions started; at most `most` in `within` ms. */
+/** What's counted: messages sent (by a conversation, or letters from another computer), sessions
+ * started, and a bot's sessions started; at most `most` in `within` ms. */
 export const LIMITS = {
   messages: { most: 20, within: 600_000 },
   sessions: { most: 6, within: 600_000 },
+  botSessions: { most: 40, within: 600_000 },
 } satisfies Record<string, { most: number; within: number }>;
 
 export type LimitKind = keyof typeof LIMITS;
