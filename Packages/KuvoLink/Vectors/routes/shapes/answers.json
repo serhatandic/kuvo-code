@@ -4696,7 +4696,28 @@
         "object": {
          "session": "string",
          "next?": "number",
-         "watching": "bool"
+         "watching": "bool",
+         "wakes?": {
+          "list": {
+           "object": {
+            "id": "string",
+            "due": "number",
+            "note": "string",
+            "every?": "string"
+           }
+          }
+         },
+         "watches?": {
+          "list": {
+           "object": {
+            "letters": "string",
+            "every": "string",
+            "check": "string",
+            "note": "string"
+           }
+          }
+         },
+         "paused?": "bool"
         }
        }
       }
