@@ -176,6 +176,32 @@ import Testing
         #expect(app.wakeUps.wakes[session.id]?.isEmpty != false)
     }
 
+    /// A machine's sessions with wake-ups, looked at each minute while it's connected: one call
+    /// there for all of them, not one more for each session.
+    @Test func aMachinesWakeUpsAreReadInOneCall() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        let session = try #require(sessions(on: id).first)
+        let answer = WakesThere()
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            if script.contains(" box route") { return answer.routed }
+            return script.contains("timezone") ? "" : nil
+        }
+        await app.wakeUps.share(with: engine)
+        let due = Wakes.name(due: .now.addingTimeInterval(7200), every: nil)
+        answer.set(["sessions": [["session": session.id, "next": 1, "watching": false,
+                                  "wakes": [["id": due, "due": 1, "note": "Check the deploy"]], "watches": [], "paused": false]]])
+        let before = ssh.scripts(to: id).count
+
+        await app.wakeUps.share(with: engine)
+
+        #expect(app.wakeUps.wakes[session.id]?.map(\.note) == ["Check the deploy"])
+        #expect(ssh.scripts(to: id).dropFirst(before).filter { $0.contains(" box route") }.count == 1)
+    }
+
     /// Removed while its engine starts over (its Settings › Engine), before it connects again: it
     /// doesn't connect again, and nothing more goes there.
     @Test func removedWhileItsEngineStartsOverItDoesntConnectAgain() async throws {

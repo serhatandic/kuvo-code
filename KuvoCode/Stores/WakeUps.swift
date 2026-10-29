@@ -459,16 +459,24 @@ final class WakeUps {
 
     /// The wake-ups of a machine's sessions that keep some: the sidebar's signs, and the phone's
     /// Now and Cancel, have them without their conversations being opened. One that keeps none
-    /// now (all sent or canceled there) has none here either.
+    /// now (all sent or canceled there) has none here either. A box lists them all in one answer;
+    /// an older one only names the sessions, each read on its own.
     private func readSessions(on machine: String) async {
-        struct Listing: Decodable { struct Entry: Decodable { var session: String }; var sessions: [Entry] }
+        struct Listing: Decodable {
+            struct Entry: Decodable { var session: String; var wakes: [Listed.Wake]?; var watches: [Listed.Watch]?; var paused: Bool? }
+            var sessions: [Entry]
+        }
         guard let app, let listing = try? await app.box(machine).value(Listing.self, "GET", "kuvo/wakes") else { return }
         var keys: Set<String> = []
         for entry in listing.sessions {
             if let session = app.workspace.session(entry.session), RemoteFolder.machine(of: session.location.directory) == machine {
                 let owner = Self.owner(of: session)
                 keys.insert(owner.key)
-                await read(owner)
+                if let wakes = entry.wakes {
+                    take(Listed(wakes: wakes, watches: entry.watches, paused: entry.paused), for: owner.key)
+                } else {
+                    await read(owner)
+                }
             }
         }
         for key in readOn[machine, default: []].subtracting(keys) {

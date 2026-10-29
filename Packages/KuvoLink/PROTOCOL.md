@@ -1336,9 +1336,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   alike, with the Mac closed too: ask the box a conversation lives on (one that keeps none answers
   an empty list). A wake-up reaches the conversation as a
   message starting with `[Wake-up] `. `GET kuvo/wakes` lists every session with a wake-up or a
-  watch at once, for the marks beside them in a list: `{"sessions": [{session, next, watching}]}`
-  (`next`, the soonest, in seconds since 1970, left out when it has none). Bots' come with
-  `kuvo/bots`. Each box lists its own.
+  watch at once, for the marks beside them in a list: `{"sessions": [{session, next, watching,
+  wakes, watches, paused}]}` (`next`, the soonest, in seconds since 1970, left out when it has
+  none; `wakes`, `watches` and `paused` as `GET kuvo/wakes/<session>` says them, so a client reads
+  them all in one call, and left out by an older box). Bots' come with `kuvo/bots`. Each box
+  lists its own.
 - `POST kuvo/wakes/<session>/watch` with `{"every", "check", "note"}` makes a watch, as its agent
   makes one with `kuvo-wake watch`: `every` 5m or more, 2h or 1d, `check` a shell command run on
   that computer, `note` what to do when its output changes. It answers the list as it is then;

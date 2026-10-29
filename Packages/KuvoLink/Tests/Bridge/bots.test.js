@@ -179,7 +179,9 @@ test("kuvo/wakes reads a bot's or a session's wake-ups, watches and pause", asyn
   assert.deepEqual((await ask(handle, "GET", "kuvo/wakes/ses_other")).json, { wakes: [], watches: [], paused: false });
   assert.deepEqual((await ask(handle, "GET", "kuvo/wakes/..%2F..%2Fetc")).json, { wakes: [], watches: [], paused: false });
 
-  // All at once, for the marks beside them: each session's soonest and whether it watches; bots' come with kuvo/bots.
+  // All at once, for the marks beside them: each session's soonest and whether it watches, and
+  // its wake-ups, watches and pause as its own route says them (one read for a client); bots'
+  // come with kuvo/bots.
   const watching = path.join(home, "wakes", "ses_watch");
   write(path.join(watching, "session"), "ses_watch");
   write(path.join(watching, "watches", "Ww2", "check"), "test -f done");
@@ -187,8 +189,8 @@ test("kuvo/wakes reads a bot's or a session's wake-ups, watches and pause", asyn
   const all = await ask(handle, "GET", "kuvo/wakes");
   assert.equal(all.status, 200);
   assert.deepEqual(all.json.sessions.sort((a, b) => a.session.localeCompare(b.session)), [
-    { session: "ses_plain", next: 1792000900, watching: false },
-    { session: "ses_watch", watching: true },
+    { session: "ses_plain", next: 1792000900, watching: false, ...own.json },
+    { session: "ses_watch", watching: true, wakes: [], watches: [{ letters: "Ww2", every: "", check: "test -f done", note: "" }], paused: false },
   ]);
   assert.equal((await ask(handle, "POST", "kuvo/wakes")).status, 405);
 });

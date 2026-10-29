@@ -2774,10 +2774,10 @@ function listWakes() {
     const session = (textOf(path16.join(folder, "session")) ?? "").trim();
     if (!session)
       continue;
-    const { wakes, watches } = readWakes(folder);
+    const { wakes, watches, paused } = readWakes(folder);
     if (!wakes.length && !watches.length)
       continue;
-    sessions.push({ session, ...wakes.length ? { next: wakes[0].due } : {}, watching: watches.length > 0 });
+    sessions.push({ session, ...wakes.length ? { next: wakes[0].due } : {}, watching: watches.length > 0, wakes: wakes.map(listedWake), watches, paused });
   }
   return sessions;
 }
