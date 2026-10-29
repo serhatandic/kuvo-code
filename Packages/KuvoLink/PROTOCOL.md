@@ -2637,6 +2637,11 @@ does it give the engine the plugin, and it takes it away (with what the engine n
 it's `on` again only once the engine has loaded it again) when you turn the sandbox off or a check
 fails, so commands run as before rather than not at all. It puts it back if it goes, and keeps
 Kuvo Code's own ports in the macOS rules as they change.
+Agents are told: each box starts its engine with `run/fence/agents.md` among its instructions
+(`engine-config`, beside what it's given), which the engine reads again as it changes. While the
+plugin is given it says what commands can't do, and how builds and tools that would fail run (on a
+Mac: `swift … --disable-sandbox`, xcodebuild's package flags, `pgrep` rather than `ps`); otherwise
+it's empty.
 
 - `GET kuvo/sandbox` → `{on, why?, wanted, able, agents}`. `on`: every command the engine runs here
   goes through the sandbox, checked (the engine loaded this box's plugin). `why`, when it isn't, in

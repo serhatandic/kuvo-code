@@ -14,8 +14,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { listOf, textOf, writePrivate } from "../files";
-import { BOTS, BOX, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
-import { launcherScript, pluginScript, type FencePlaces } from "./files";
+import { BOTS, BOX, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SANDBOX_NOTE, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
+import { agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
 import { LANDLOCK_RUNNER, landlockPolicy } from "./landlock";
 import { fencePolicy, realish } from "./policy";
 import { seatbeltProfile } from "./seatbelt";
@@ -233,9 +233,17 @@ function probe(): { passed: boolean; why?: string; check?: FenceCheck } {
   }
 }
 
-/** The engine's plugin taken away, and kuvo-wake told: commands run as before. What the engine
- * noted of the plugin goes too, so it's on again only once the engine has loaded it again. */
+// What the engine tells its agents of the sandbox: kept there, empty while it's off, as the engine
+// watches the file it was named.
+function tellAgents(on: boolean): void {
+  const note = on ? agentsNote(platform) : "";
+  if (textOf(SANDBOX_NOTE) !== note) writePrivate(SANDBOX_NOTE, note);
+}
+
+/** The engine's plugin taken away, and kuvo-wake and agents told: commands run as before. What the
+ * engine noted of the plugin goes too, so it's on again only once the engine has loaded it again. */
 function withdraw(): void {
+  try { tellAgents(false); } catch {}
   fs.rmSync(PLUGIN, { force: true });
   fs.rmSync(ON, { force: true });
   fs.rmSync(READY, { force: true });
@@ -280,6 +288,7 @@ export function setUpFence(): FenceState {
       writePrivate(PLUGIN, plugin);
     }
     if (!fs.existsSync(ON)) writePrivate(ON, "");
+    tellAgents(true);
   } catch (error) {
     withdraw();
     checked = { able: true, passed: false, why: `It couldn't be set up: ${(error as Error).message}`, reason: "checkFailed", check: "setup" };

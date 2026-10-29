@@ -196,3 +196,31 @@ export default {
 }
 `;
 }
+
+/** What the engine tells its agents while their commands run in the sandbox here (`run/fence/agents.md`,
+ * among the instructions each box starts its engine with): what they can't do, and how builds and
+ * tools that would fail in it run. */
+export function agentsNote(platform: "darwin" | "linux"): string {
+  const mac = platform === "darwin";
+  return [
+    "# Commands run in a sandbox here",
+    "",
+    "Each command you run with the shell tool runs in Kuvo Code's sandbox. It writes only in this conversation's folder, its git repository, its temporary folder (`$TMPDIR`) and tools' caches, and it can't read Kuvo Code's own folders or the user's secrets (private SSH keys, cloud and package tokens)." +
+      (mac ? " Nor can it change git's hooks or config, or the settings of opencode and the coding agents in a project (`.opencode`, `opencode.json`, `.claude`, `.mcp.json`, `.codex`, `.cursor`, `.grok`, `.gemini`)." : ""),
+    ...(mac
+      ? [
+          "",
+          "On this Mac:",
+          "- `swift build`, `swift test` and `swift run` need `--disable-sandbox`: SwiftPM's own sandbox can't start inside this one.",
+          "- `xcodebuild` on a project with Swift packages needs `-IDEPackageSupportDisableManifestSandbox=YES -IDEPackageSupportDisablePluginExecutionSandbox=YES`. It can't open a Swift package that has no Xcode project: use `swift build --disable-sandbox` or `swift test --disable-sandbox` there.",
+          "- `ps` and `top` are refused: use `pgrep -fl` or `lsof`.",
+          "- Commands can't open apps (`open`) or start launchd jobs.",
+        ]
+      : []),
+    "",
+    "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
+    "",
+    "When the sandbox refuses something a task needs (\"Operation not permitted\" or \"Permission denied\" outside these folders), don't work around it: tell the user what was refused and why you need it.",
+    "",
+  ].join("\n");
+}

@@ -34,6 +34,9 @@ export const SSH_FOR = path.join(RUN, "ssh-for");
 export const SSH_AGENTS = process.platform === "darwin"
   ? path.join("/private/tmp", `kuvo-ssh-${os.userInfo().uid}`, `agents-${crypto.createHash("sha256").update(K).digest("hex").slice(0, 8)}`)
   : path.join(RUN, "ssh-agents");
+/** What the engine tells its agents of the sandbox, as it's on here or not (fence/state.ts writes it),
+ * named in the settings each box starts its engine with (engine/compatibility.ts). */
+export const SANDBOX_NOTE = path.join(RUN, "fence", "agents.md");
 
 const KEY_SHAPE = /^[0-9a-f]{64}$/;
 const madeKey = () => crypto.randomBytes(32).toString("hex") + "\n";

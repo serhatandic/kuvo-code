@@ -257,6 +257,36 @@ test("a command can't change what git runs on its own, the engine's settings or 
   }
 });
 
+test("agents are told how commands run in the sandbox while it's on, and nothing once it's off", async () => {
+  const box = boxAt("told");
+  const project = path.join(root, "told-project");
+  fs.mkdirSync(project);
+  // The note the engine starts with among its instructions (`engine-config`, as this Mac's app and a
+  // machine's start scripts run it), keeping the instructions it was given.
+  const config = JSON.parse(spawnSync(process.execPath, [script, "engine-config"], { env: { ...box.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ instructions: ["~/rules.md"] }) }, encoding: "utf8" }).stdout);
+  assert.equal(config.instructions[0], "~/rules.md");
+  const note = config.instructions.find(each => each !== "~/rules.md");
+  assert.ok(note && path.isAbsolute(note), JSON.stringify(config.instructions));
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: true })).value.able, true);
+    const told = fs.readFileSync(note, "utf8");
+    assert.match(told, /runs in Kuvo Code's sandbox/);
+    if (linux) assert.doesNotMatch(told, /--disable-sandbox|pgrep/);
+    else {
+      assert.match(told, /swift test --disable-sandbox/);
+      assert.match(told, /use `pgrep -fl` or `lsof`/);
+      // What it tells them holds: ps is refused, pgrep works.
+      const ran = await engineRuns(box, project, tries([["ps", "ps -ax"], ["pgrep", "pgrep -fl sh"]]));
+      assert.deepEqual(outcome(ran.out), { ps: "refused", pgrep: "allowed" }, ran.out);
+    }
+    assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: false })).value.on, false);
+    assert.equal(fs.readFileSync(note, "utf8"), "");
+  } finally {
+    await running.stop();
+  }
+});
+
 test("a bot's command writes in its own folder, and another bot's is hidden from it", async () => {
   const box = boxAt("bots");
   for (const bot of ["bot_ship", "bot_scout"]) fs.mkdirSync(path.join(box.bots, bot, "workspace"), { recursive: true });
