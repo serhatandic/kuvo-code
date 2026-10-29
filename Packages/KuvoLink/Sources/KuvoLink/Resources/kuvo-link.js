@@ -9001,7 +9001,7 @@ var say = {
   busy: (name) => `${name} kept getting messages while it moved, so it stayed where it is. Try again in a moment.`,
   botsElsewhere: (chat) => `${chat}’s bots live on different computers, so it can’t go there.`,
   inBoxGroup: (name, chat) => `${name} is in “${chat}”, which lives on ${HERE} with its bots. Move the chat to a Mac first, or take ${name} out of it.`,
-  tooBig: (name) => `${name} is too big to move over the internet (more than 1 GB).`,
+  tooBig: (name) => `${name} is more than 1 GB, too big to move to another computer, so it stays where it is.`,
   noGroups: (place) => `Group chats on ${place} aren’t running right now. Try again once they are.`,
   noEngine: (place) => `The engine on ${place} isn’t running. Try again once it is.`,
   needsUpdate: (place) => `${place} needs a newer Kuvo Code before things can move to or from it.`,
@@ -14400,7 +14400,16 @@ async function* settingsRoute(context) {
 
 // Packages/Box/src/link/areas/moves.ts
 var KINDS = ["bot", "chat", "group"];
-var movesNow = () => ({ moves: liveMoves().map(shownMove), away: awaySessions() });
+var movesNow = () => {
+  const peers = peersOf(readLink());
+  return {
+    moves: liveMoves().map((record) => {
+      const place = plainName(peers.find((peer) => peer.key === record.peer)?.name ?? "");
+      return { ...shownMove(record), ...place ? { place } : {} };
+    }),
+    away: awaySessions()
+  };
+};
 async function* movesRoute(context) {
   const { request, signal, json } = context;
   const method = request.method.toUpperCase();

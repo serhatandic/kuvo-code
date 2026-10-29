@@ -393,10 +393,11 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   of your computers. A client that goes doesn't stop it.
 - `GET kuvo/moves` → `200 {moves: [Move], away: [session]}`, and `GET kuvo/moves/events`, the same
   as a line now and each time it changes. `Move = {id, kind, thing, name, from, to, role, stage,
-  sessions, sent?, size?}`: `from` and `to` are boxes' keys; `role`, whether this box is where it
-  was (`from`) or where it's going (`to`); `stage`: `holding`, `copying`, `switching`,
-  `finishing`; `sessions`, its conversations, root first; `sent` and `size`, bytes, while its copy
-  is on its way. `away`: conversations this box's engine lists that don't live here (a copy not
+  sessions, place?, sent?, size?}`: `from` and `to` are boxes' keys; `role`, whether this box is
+  where it was (`from`) or where it's going (`to`); `stage`: `holding`, `copying`, `switching`,
+  `finishing`; `sessions`, its conversations, root first; `place`, the other computer's name, as
+  your computers call it (when this box knows it); `sent` and `size`, bytes, while its copy is on
+  its way, for a client to show how far it is. `away`: conversations this box's engine lists that don't live here (a copy not
   switched to yet, an original still going): clients leave them out.
 - While it moves, nothing reaches it: a prompt to one of its conversations through the link answers
   `409 {message}`, a letter `retry`, its wake-ups and watches are held (`paused` says `moving`), and
