@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import OpenCodeKit
+import SwiftTerm
 import Testing
 @testable import KuvoCode
 
@@ -400,5 +402,25 @@ import Testing
         #expect(next.selection == .session("ses_notified"))
         #expect(next.pairs.isEmpty, "a session opened in a tab of its own isn't also beside another")
         #expect(!next.showsPanel, "what a version that kept less didn't keep is as it starts")
+    }
+
+    /// Text selected in a terminal tab of the window, Add to Message from its right-click menu: a
+    /// new session in the terminal's folder, with the text in its message.
+    @Test func addToMessageInATerminalTabStartsASessionWithTheSelection() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "KuvoCodeTests-terminal-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        tabs.openTerminalTab(command: nil, in: folder)
+        let terminalTab = try #require(tabs.selection)
+        defer { tabs.close(terminalTab); done(); try? FileManager.default.removeItem(atPath: folder) }
+        let terminal = try #require(app.mainTerminals.entry(terminalTab.text)?.session)
+        terminal.view.feed(text: "make: *** [build] Error 1")
+        terminal.view.selectAll(nil)
+        let menu = try #require(terminal.view.menu)
+        terminal.menuNeedsUpdate(menu)
+        menu.performActionForItem(at: menu.indexOfItem(withTitle: "Add to Message"))
+        let draft = try #require(tabs.selection)
+        #expect(draft != terminalTab, "a session to write it in")
+        #expect(Drafts.shared[draft.text].text.contains("make: *** [build] Error 1"))
+        Drafts.shared[draft.text] = Drafts.Draft()
     }
 }

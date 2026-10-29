@@ -643,7 +643,10 @@ final class WindowTabs {
         // A project's folder, not a bot's own or the chats' (their agents work there).
         let directory = directory ?? Self.project(activeDirectory) ?? NSHomeDirectory()
         Analytics.shared.track("terminal_tab_opened", ["kind": command == nil ? "shell" : "project"])
-        open(TabKey(terminals.open(in: directory, command: command, environment: app.shellEnvironment)))
+        let key = terminals.open(in: directory, command: command, environment: app.shellEnvironment)
+        // Add to Message in its right-click menu: a new session in its folder, with what's selected.
+        terminals.entry(key)?.session.addToMessage = { [weak self] in self?.addToMessage($0) }
+        open(TabKey(key))
     }
 
     // MARK: Adding to a message
