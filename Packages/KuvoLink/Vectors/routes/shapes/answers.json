@@ -5795,7 +5795,9 @@
             "sessions?": {
              "list": "string"
             },
-            "resumes?": "number"
+            "resumes?": "number",
+            "began?": "number",
+            "ended?": "number"
            }
           }
          },
@@ -6035,7 +6037,9 @@
             "sessions?": {
              "list": "string"
             },
-            "resumes?": "number"
+            "resumes?": "number",
+            "began?": "number",
+            "ended?": "number"
            }
           }
          },
@@ -6294,7 +6298,9 @@
            "sessions?": {
             "list": "string"
            },
-           "resumes?": "number"
+           "resumes?": "number",
+           "began?": "number",
+           "ended?": "number"
           }
          }
         },

@@ -510,7 +510,7 @@ export function linkSession(bot: string, step: unknown, session: string, file = 
     const at = !goal ? -1 : typeof step === "number" ? step - 1 : goal.steps.findIndex(each => each.id === step);
     if (!goal || !goal.steps[at]) return false;
     const each = goal.steps[at];
-    goal.steps[at] = { ...each, state: each.state === "todo" ? "doing" : each.state, sessions: [...new Set([...(each.sessions ?? []), session])] };
+    goal.steps[at] = { ...each, state: each.state === "todo" ? "doing" : each.state, began: each.began ?? Date.now(), sessions: [...new Set([...(each.sessions ?? []), session])] };
     return true;
   }, file);
   if (linked) noteWorkChanged(bot);
@@ -551,6 +551,11 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
       if (typeof mark.progress === "number") next.progress = mark.progress;
       if (mark.progress === null) delete next.progress;
       if (next.state === "done") next.progress = 1;
+      // When it began and ended, for a time axis: begun as it's first under way, ended as it's
+      // done or set aside (and begun again if it's taken up again).
+      if (next.state !== "todo" && next.began === undefined) next.began = Date.now();
+      if (next.state === "done" || next.state === "skipped") next.ended = next.ended ?? Date.now();
+      else delete next.ended;
       if (text(mark.note, 300)) next.note = text(mark.note, 300)!;
       else if (mark.note === null || mark.note === "") delete next.note;
       if (next.state !== "paused") delete next.resumes;

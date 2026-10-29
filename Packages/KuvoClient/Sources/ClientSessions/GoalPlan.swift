@@ -27,8 +27,11 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         public let sessions: [String]
         /// While it's paused at a limit: when it carries on (ms since 1970).
         public let resumes: Double?
+        /// When it began and ended (ms since 1970), for a time axis.
+        public let began: Double?
+        public let ended: Double?
 
-        public init(id: String, text: String, state: State, progress: Double? = nil, note: String? = nil, phase: String? = nil, site: String? = nil, after: [String] = [], sessions: [String] = [], resumes: Double? = nil) {
+        public init(id: String, text: String, state: State, progress: Double? = nil, note: String? = nil, phase: String? = nil, site: String? = nil, after: [String] = [], sessions: [String] = [], resumes: Double? = nil, began: Double? = nil, ended: Double? = nil) {
             self.id = id
             self.text = text
             self.state = state
@@ -39,6 +42,8 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
             self.after = after
             self.sessions = sessions
             self.resumes = resumes
+            self.began = began
+            self.ended = ended
         }
 
         public init(from decoder: Decoder) throws {
@@ -54,9 +59,11 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
             after = (try? container.decodeIfPresent([String].self, forKey: .after)) ?? []
             sessions = (try? container.decodeIfPresent([String].self, forKey: .sessions)) ?? []
             resumes = try container.decodeIfPresent(Double.self, forKey: .resumes)
+            began = try container.decodeIfPresent(Double.self, forKey: .began)
+            ended = try container.decodeIfPresent(Double.self, forKey: .ended)
         }
 
-        private enum CodingKeys: String, CodingKey { case id, text, state, progress, note, phase, site, after, sessions, resumes }
+        private enum CodingKeys: String, CodingKey { case id, text, state, progress, note, phase, site, after, sessions, resumes, began, ended }
 
         public var resumesDate: Date? { resumes.map { Date(timeIntervalSince1970: $0 / 1000) } }
     }

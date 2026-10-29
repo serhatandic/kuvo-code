@@ -4901,7 +4901,7 @@ function linkSession(bot, step, session, file = GOALS_FILE) {
     if (!goal || !goal.steps[at])
       return false;
     const each = goal.steps[at];
-    goal.steps[at] = { ...each, state: each.state === "todo" ? "doing" : each.state, sessions: [...new Set([...each.sessions ?? [], session])] };
+    goal.steps[at] = { ...each, state: each.state === "todo" ? "doing" : each.state, began: each.began ?? Date.now(), sessions: [...new Set([...each.sessions ?? [], session])] };
     return true;
   }, file);
   if (linked)
@@ -4949,6 +4949,12 @@ function goalProgress(bot, given, file = GOALS_FILE) {
         delete next.progress;
       if (next.state === "done")
         next.progress = 1;
+      if (next.state !== "todo" && next.began === undefined)
+        next.began = Date.now();
+      if (next.state === "done" || next.state === "skipped")
+        next.ended = next.ended ?? Date.now();
+      else
+        delete next.ended;
       if (text(mark.note, 300))
         next.note = text(mark.note, 300);
       else if (mark.note === null || mark.note === "")
@@ -8853,7 +8859,9 @@ var GOAL_STEP = object({
   "site?": string,
   "after?": list(string),
   "sessions?": list(string),
-  "resumes?": number
+  "resumes?": number,
+  "began?": number,
+  "ended?": number
 });
 var GOAL_CHECK = object({
   id: string,

@@ -386,6 +386,8 @@ test("the goal as it goes: tracks with real progress only, steps added as the pl
   let goal = (await goals())[0];
   assert.deepEqual(goal.steps.map(each => [each.state, each.progress ?? null]), [["done", 1], ["doing", 0.5], ["todo", null], ["todo", null], ["todo", null], ["todo", null]]);
   assert.equal(goal.steps[5].text, "Write the launch post");
+  assert.ok(goal.steps[0].began <= goal.steps[0].ended && goal.steps[1].began && goal.steps[1].ended === undefined, "when each began and ended, for the time axis");
+  assert.equal(goal.steps[2].began, undefined, "not begun yet");
   assert.deepEqual(goal.watching, [], "nothing's kept of a call that's wrong somewhere");
 
   await tool("goal_progress", { waiting: { kind: "you", text: "Finish Stripe's identity check", url: "https://dashboard.stripe.com" }, watching: ["DNS for driftwood.coffee"] });
