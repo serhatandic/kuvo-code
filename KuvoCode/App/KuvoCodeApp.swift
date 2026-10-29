@@ -106,8 +106,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Notifier.shared.start()
         FieldScrolling.start()
-        // Agents' sign-in on their own, allowed before it kept its account: that account now.
-        Task.detached { Passwords.keepAgentAccounts() }
         // A notification clicked: its conversation, in the window.
         Notifier.shared.open = { [model] session in model.open(.session(session)) }
         Notifier.shared.answer = { [model] session, request, answer in model.workspace.answer(request, in: session, with: answer) }

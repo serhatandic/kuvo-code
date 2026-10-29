@@ -60,6 +60,8 @@ struct SessionView: View {
         // machine is read once the machine is back.
         .task(id: model.id) { if !model.isLoaded, !model.waitsForEngine { await model.load() } }
         .task(id: model.session.location.directory) { await catalog.loadCommands(in: model.session.location.directory) }
+        // What its agent asks of its computer's vault, followed while it's open (VaultAskCards).
+        .task(id: Workspace.box(of: model.session.location.directory)) { await Vaults.shared.follow(Workspace.box(of: model.session.location.directory)) }
         // Its wake-ups and watches, read again as each run ends (its agent may have set one,
         // or one went); a bot's are its row's to read.
         .task(id: "\(model.id) \(model.isRunning)") {
@@ -317,6 +319,8 @@ private struct BottomStack: View {
                     BrowserAskCard(ask: ask)
                         .modifier(ComposerSurface())
                 }
+                // What its agent asks of its computer's vault.
+                VaultAskCards(session: model.session.id, box: Workspace.box(of: model.session.location.directory))
                 // What went wrong, over the composer rather than in an alert you must click away.
                 if let failure = model.failure, offlineMachine == nil {
                     FailureBar(text: failure) { model.failure = nil }

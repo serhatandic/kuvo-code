@@ -68,6 +68,8 @@ extension AppModel {
         BrowserTools.job = { [weak self] arguments, caller in
             await self?.bots.setJob(arguments, caller: caller) ?? ("Kuvo Code isn't ready yet.", true)
         }
+        // The vault's tools and fills, through this Mac's box.
+        wireVault()
         // The browser sends agents from the sites of integrations you added to their tools.
         BrowserTools.integrationSites = { [weak self] in self.map { Integrations.sites(Integrations.added(in: $0.engineConfig)) } ?? [] }
         // An agent showing you a file or folder: in the panel, beside its conversation.
@@ -458,6 +460,9 @@ extension AppModel {
             { await self.syncSignIns(with: engine) },
             { await self.syncSignInFiles(with: engine) },
             { await self.wakeUps.share(with: engine) },
+            // Its vault, read as it connects: an older copy of its files put back while it was
+            // away is caught now, not only when its page is opened.
+            { await Vaults.shared.refresh(machine) },
             { await Utilities.shareTabTidying(on: machine) },
         ]) else { return }
         connection.every(600, "sign-ins", [
@@ -523,6 +528,7 @@ extension AppModel {
         workspace.machines = Set(machines.list.map(\.id))
         workspace.forget(id, forGood: true)
         boxGroups.forget(machine: id)
+        Vaults.shared.forget(id)
         // Its pages in Settings.
         settingsTabs.closeTabs(notOn: Set(machines.list.map(\.id)), machines: machines)
         // Your others hear of it: one uninstalled stops being their peer (one only removed stays,

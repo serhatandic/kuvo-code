@@ -45,6 +45,9 @@ final class TestBox {
         environment["KUVO_WAKES"] = WakeUps.root.path
         environment["KUVO_WAKE_COMMAND"] = WakeUps.command.path
         environment["KUVO_KEYS_ON_HOST"] = "1"
+        // As the app gives them (AppModel.boxEnvironment): the vault's secrets.
+        environment["KUVO_HOST_VAULT_SECRET"] = host.vaultSecret
+        environment["KUVO_VAULT_FILE_KEY"] = VaultValues.fileKey()
         // Never the opencode sign-ins of whoever runs the tests (`kuvo/accounts/found`): none.
         environment["KUVO_DEMO_OPENCODE_AUTH"] = BoxProcess.home.appending(path: "opencode-auth.json").path
         // Where its host interface answers, in its folder (`run/host.json`), as the app tells it.

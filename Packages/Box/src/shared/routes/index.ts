@@ -19,6 +19,7 @@ import { SESSION_ROUTES } from "./sessions";
 import { SETTINGS_ROUTES } from "./settings";
 import { SKILL_ROUTES } from "./skills";
 import { WAKE_ROUTES } from "./wakes";
+import { VAULT_ROUTES } from "./vault";
 import { WORKTREE_ROUTES } from "./worktrees";
 
 /** What a route that refuses says, as JSON: why, in words to show (`message`), and for a file that
@@ -47,5 +48,6 @@ export const ROUTES: RouteShape[] = [
   ...SETTINGS_ROUTES,
   ...SKILL_ROUTES,
   ...WAKE_ROUTES,
+  ...VAULT_ROUTES,
   ...WORKTREE_ROUTES,
 ];

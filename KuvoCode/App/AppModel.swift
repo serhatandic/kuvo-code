@@ -334,6 +334,17 @@ final class AppModel {
         return true
     }
 
+    /// A local opencode build to run instead of the pinned download (KUVO_OPENCODE_BINARY), in a
+    /// debug build only: in the app you use, anything that can set its environment
+    /// (`launchctl setenv`) could have it run a program of its own as its engine and box.
+    static var engineOverride: String? {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["KUVO_OPENCODE_BINARY"]
+        #else
+        nil
+        #endif
+    }
+
     /// The engine this Mac runs (KUVO_OPENCODE_BINARY's, or the one installed), once it has started.
     private(set) var engineBinary: URL?
     /// When the engine running now came up, for a phone to tell it from the one before a restart.
@@ -376,10 +387,9 @@ final class AppModel {
         let began = SuspendingClock.now
         var downloaded = false
         do {
-            // Set KUVO_OPENCODE_BINARY to run a local opencode build instead of the pinned download.
             async let environment = ShellEnvironment.load()
             let binary: URL
-            if let override = ProcessInfo.processInfo.environment["KUVO_OPENCODE_BINARY"] {
+            if let override = Self.engineOverride {
                 binary = URL(filePath: override)
             } else if let installed = await Task.detached(operation: { [installer] in installer.installed() }).value {
                 // Checking its signature reads all of it, a second or so: off the main thread.
@@ -396,6 +406,12 @@ final class AppModel {
                 guard launch == self.launch else { return }
             }
 
+            // Neither the engine nor the box starts from an app changed since it was signed (the
+            // box's script is in it): the engine itself was checked as it was found or downloaded.
+            if Self.engineOverride == nil, await !Task.detached(operation: { BoxIntegrity.appIsSealed() }).value {
+                engine = .failed("Kuvo Code on this Mac was changed since it was installed, so its engine didn’t start. Install Kuvo Code again.")
+                return
+            }
             engineBinary = binary
             engine = .starting
             stage = "launch"
@@ -433,7 +449,7 @@ final class AppModel {
             shell["KUVO_INTEGRATIONS"] = integrations.path
             // This Mac's box, before the engine: it keeps the engine's settings (and the other
             // areas that have moved onto it), and goes on through the engine's restarts.
-            await box.start(engine: binary, environment: await boxEnvironment(shell))
+            await box.start(engine: binary, environment: await boxEnvironment(shell), checked: Self.engineOverride == nil)
             guard launch == self.launch else { return }
             // The settings as they are now (they can change while the engine is down, and the box
             // adds its defaults as it starts), brought up to date before the engine reads them;
@@ -508,7 +524,7 @@ final class AppModel {
             let boxEnvironment = await boxEnvironment(shell)
             guard launch == self.launch else { return }
             Task {
-                await box.start(engine: binary, environment: boxEnvironment)
+                await box.start(engine: binary, environment: boxEnvironment, checked: Self.engineOverride == nil)
                 // Your personalities, as it keeps them, before they're followed.
                 await Personalities.shared.refresh()
                 // Its worktrees, projects and wake-ups, as this Mac's box keeps them, from now on

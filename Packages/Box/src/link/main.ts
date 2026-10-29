@@ -46,7 +46,7 @@ import { engineConfigContent } from "./engine/compatibility";
 import { watchBox } from "./engine/watch";
 import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
-import { IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, VERSION_FILE, homeFolder } from "./home";
+import { IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, takeVaultSecrets, VERSION_FILE, homeFolder } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
 import { noteRelay } from "./letters/leave";
 import { deliverLeftAnswers, sendOutbox } from "./letters/outbox";
@@ -54,6 +54,10 @@ import { macLinkCheck } from "./mac/link";
 import { macNoticeHold, macTell } from "./mac/notices";
 import { runMacPeers } from "./mac/peers";
 import { runMacLink } from "./mac/relay";
+import { watchVaultAsks } from "./vault/asks";
+import { holdVault } from "./vault/holder";
+import { primeGenerations } from "./vault/store";
+import { setVaultTell } from "./vault/use";
 import { HELD_FILE, NoticeHold } from "./notices/hold";
 import { noticeJSON, pushTo } from "./notices/notice";
 import { announce, forgetMacsAgents, refreshOwn } from "./peers/agents";
@@ -290,6 +294,10 @@ async function run(): Promise<void> {
   // Moves to and from your other computers, carried on the same connection.
   watchMoves(() => current);
   watchAsks(tell, { answered });
+  // The vault, held here: its key in this process's memory, its asks told to your phones.
+  holdVault(engineHandler(readEngineFile, { name: os.hostname() }));
+  setVaultTell(tell);
+  watchVaultAsks(tell, answered);
   // Your other computers: this box's agents told to them while the relay connection is up (and
   // listed here, relay or not), and its agents' letters sent; without the relay a while, those
   // not sent yet go to the Mac.
@@ -398,12 +406,20 @@ async function box(command: string): Promise<void> {
       // A client's request, answered as the bridge answers a phone's: one that answers once,
       // never a stream that follows.
       answerOnce();
-      let given: { method?: unknown; path?: unknown; body?: unknown; headers?: unknown } | null = {};
+      let given: { method?: unknown; path?: unknown; body?: unknown; bodyText?: unknown; headers?: unknown } | null = {};
       try { given = JSON.parse(await input()); } catch {}
       const handle = engineHandler(readEngineFile, { name: os.hostname() });
       // With the folder it's asked about (`x-opencode-directory`), as a phone's request has it.
       const folder = (given?.headers as Record<string, unknown> | undefined)?.["x-opencode-directory"];
-      const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json", ...(typeof folder === "string" ? { "x-opencode-directory": folder } : {}) }, body: Buffer.from(given?.body === undefined ? "" : JSON.stringify(given.body)), fromMac: true };
+      // And the Mac's proof for a request to this machine's vault (or its unlock key, to unlock it),
+      // which makes it a client there (areas/vault.ts); with the body as it was sent, which the proof covers.
+      const vaultHeaders: Record<string, string> = {};
+      for (const name of ["x-kuvo-vault-key", "x-kuvo-vault-proof"]) {
+        const value = (given?.headers as Record<string, unknown> | undefined)?.[name];
+        if (typeof value === "string") vaultHeaders[name] = value;
+      }
+      const sentBody = typeof given?.bodyText === "string" ? given.bodyText : given?.body === undefined ? "" : JSON.stringify(given.body);
+      const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json", ...(typeof folder === "string" ? { "x-opencode-directory": folder } : {}), ...vaultHeaders }, body: Buffer.from(sentBody), fromMac: true };
       let status = 502;
       let type = "";
       const chunks: Buffer[] = [];
@@ -459,10 +475,37 @@ async function box(command: string): Promise<void> {
   }
 }
 
+/** The first line on stdin, as JSON (what the app sends `serve` there, before anything else). */
+function firstLine(): Promise<Record<string, unknown>> {
+  return new Promise(resolve => {
+    let given = "";
+    const take = (chunk: Buffer | string) => {
+      given += chunk.toString();
+      const end = given.indexOf("\n");
+      if (end < 0) return;
+      process.stdin.off("data", take);
+      process.stdin.off("end", done);
+      process.stdin.pause();
+      try { resolve(JSON.parse(given.slice(0, end))); } catch { resolve({}); }
+    };
+    const done = () => resolve({});
+    process.stdin.on("data", take);
+    process.stdin.once("end", done);
+  });
+}
+
 async function serve(): Promise<void> {
-  const password = process.env.OPENCODE_PASSWORD;
+  // Its password, and this Mac's vault's secrets, from the app on stdin (never its environment,
+  // which any of your processes can read); a test's box, in OPENCODE_PASSWORD.
+  let password = process.env.OPENCODE_PASSWORD;
+  delete process.env.OPENCODE_PASSWORD;
   if (!password) {
-    console.error("serve answers only with a password: set OPENCODE_PASSWORD.");
+    const given = await firstLine();
+    if (typeof given.password === "string") password = given.password;
+    takeVaultSecrets(given);
+  }
+  if (!password) {
+    console.error("serve answers only with a password: on its stdin, {\"password\"}, or in OPENCODE_PASSWORD.");
     process.exit(2);
   }
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
@@ -476,6 +519,20 @@ async function serve(): Promise<void> {
     server.listen(0, "127.0.0.1", resolve);
   });
   console.log(JSON.stringify({ url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }));
+  // The vault, held here (on a machine, `run` holds it; a test's box serves alone), its asks told
+  // to your phones through this Mac's link.
+  holdVault(engineHandler(readEngineFile, { name: os.hostname() }, readBridgeFile));
+  // This Mac's vault's newest generations, from its app, before agents use it (vault/store.ts).
+  if (IS_MAC) void (async () => {
+    for (let tries = 0; tries < 120; tries++) {
+      try { return await primeGenerations(); } catch {}
+      await sleep(1000);
+    }
+  })();
+  if (IS_MAC) {
+    setVaultTell(macTell);
+    watchVaultAsks(macTell, id => macLink.hold?.resolve(id));
+  }
   // Its bots' folders' settings, as its keys and integrations are now (after an update, say), as a
   // machine's bridge does as it starts; where its keys can't be reached yet, they stay as they were.
   refreshBotsKeys().catch(() => {});

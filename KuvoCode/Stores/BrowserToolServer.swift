@@ -114,7 +114,8 @@ final class BrowserToolServer {
         case "ping":
             return reply([:])
         case "tools/list":
-            return reply(["tools": BrowserTools.definitions])
+            // With the vault's, in this Mac's box's own words.
+            return reply(["tools": BrowserTools.definitions + (await BrowserTools.vaultDefinitions())])
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
@@ -129,10 +130,11 @@ final class BrowserToolServer {
             if name == BrowserTools.showWidget { return reply(BrowserTools.showWidgetCall(arguments)) }
             let key = Self.key(id, client: client)
             let call: Task<CallResult, Never>
-            if BrowserTools.mailTools.contains(name) || BrowserTools.wakeTools.contains(name) || name == BrowserTools.setJob {
+            if BrowserTools.mailTools.contains(name) || BrowserTools.wakeTools.contains(name) || name == BrowserTools.setJob || BrowserTools.isVault(name) {
                 // Stopped as the others are: one waiting for an answer stops waiting.
                 call = Task {
-                    let result = name == BrowserTools.setJob ? await BrowserTools.job(arguments, caller)
+                    let result = BrowserTools.isVault(name) ? await BrowserTools.vault(name, arguments, caller)
+                        : name == BrowserTools.setJob ? await BrowserTools.job(arguments, caller)
                         : BrowserTools.wakeTools.contains(name) ? await BrowserTools.wake(name, arguments, caller) : await BrowserTools.mail(name, arguments, caller)
                     return CallResult(value: ["content": [["type": "text", "text": result.text]], "isError": result.isError])
                 }
@@ -189,9 +191,15 @@ enum BrowserTools {
         tool("browser_tabs", "List the browser's tabs (numbered like [1], with the one in use marked), switch to one to work in it, or close one.",
              ["action": ["type": "string", "enum": ["list", "switch", "close"], "description": "Defaults to list."],
               "tab": ["type": "integer", "description": "The tab's number from the list, to switch to or close."]]),
-        tool("browser_sign_in", "Sign in on the page with the user's own username and password: they type them in Kuvo Code (or pick a saved one), and they go straight into the fields you name. You never see them. Use this for every sign-in, and never ask for a password in the chat. Whenever a page you open asks to sign in, call it right away, even if the user didn't mention signing in: its card is how you ask them, and they can say Not Now there. Don't ask in the chat whether to sign in. Name the fields the page has now (on a sign-in that asks for the username and the password on pages of their own, call it on each; the user answers once). Then submit the form yourself.",
+        tool("browser_sign_in", "Sign in on the page with the user's own username and password: from their vault when this conversation may use one of its sign-ins on this site (it fills on its own), or else they type them in Kuvo Code (or pick one), and they go straight into the fields you name. You never see them. Use this for every sign-in, and never ask for a password in the chat. Whenever a page you open asks to sign in, call it right away, even if the user didn't mention signing in: its card is how you ask them, and they can say Not Now there. Don't ask in the chat whether to sign in. Name the fields the page has now (on a sign-in that asks for the username and the password on pages of their own, call it on each; the user answers once). Then submit the form yourself.",
              ["username": ["type": "integer", "description": "The number of the username or email field, if the page has one."],
-              "password": ["type": "integer", "description": "The number of the password field, if the page has one."]]),
+              "password": ["type": "integer", "description": "The number of the password field, if the page has one."],
+              "item": ["type": "string", "description": "A sign-in from vault_items to use, by name, when more than one could do. It's filled only on its own site."]]),
+        tool("browser_fill", "Fill one field on the page from the user's vault: a sign-in's username or password, or a field of a key or a note, by the item's name from vault_items. It's filled only on the item's own sites, and you never see it.",
+             ["index": ["type": "integer", "description": "The field's number."],
+              "item": ["type": "string", "description": "The vault item, by name."],
+              "field": ["type": "string", "description": "Which of its fields, when it has more than one (vault_items lists them)."],
+              "why": ["type": "string", "description": "Why you need it, in one sentence the user reads."]], required: ["index", "item"]),
         tool("browser_ask_code", "Ask the user for a one-time code (from a text message, an email or an authenticator app), which goes straight into the field with this number. You never see it. Then submit it if the page doesn't on its own.",
              ["index": ["type": "integer"], "prompt": ["type": "string", "description": "What to tell the user, like \"Enter the 6-digit code texted to your phone\"."]], required: ["index"]),
         tool("browser_ask_user", "Ask the user to do something on the page themselves: a CAPTCHA, approving the sign-in on their phone, or anything else you can't do. Waits until they say it's done (up to 15 minutes), then reads the page again. Not for a question or a choice: ask those with your question tool, or in your reply.",
@@ -295,6 +303,14 @@ enum BrowserTools {
     }
 
     static var mail: (_ name: String, _ arguments: [String: Any], _ caller: String?) async -> (text: String, isError: Bool) = { _, _, _ in ("Not available.", true) }
+    /// The vault's tools (`vault_items`, `vault_ask`, `vault_run`): this Mac's box lists them and
+    /// carries them out (KuvoLink's PROTOCOL.md, "Vault").
+    nonisolated static func isVault(_ name: String) -> Bool { name.hasPrefix("vault_") }
+    static var vaultDefinitions: () async -> [[String: Any]] = { [] }
+    static var vault: (_ name: String, _ arguments: [String: Any], _ caller: String?) async -> (text: String, isError: Bool) = { _, _, _ in ("Not available.", true) }
+    /// What the vault fills on a page for a conversation (`kuvo/vault/fill`): its status and answer,
+    /// or nil when this Mac's box can't be reached.
+    static var vaultFill: (_ body: [String: Any]) async -> (status: Int, value: [String: Any])? = { _ in nil }
     /// The tool a bot keeps its job with, in its box's record (`PATCH kuvo/bots/<id>` with `job`).
     nonisolated static let setJob = "set_job"
     /// Carries out its calls from this Mac's conversations.
@@ -394,7 +410,7 @@ enum BrowserTools {
         let place = machine
             ? "Use these tools to browse in the browser on this machine, which the user can watch in Kuvo Code's panel. localhost is this machine, so you can open servers you run here."
             : "Use these tools to browse in the browser panel the user sees."
-        return docs + "\n\n" + place + " Start with browser_navigate, read pages with browser_snapshot, and act on elements by their number. To sign in, use browser_sign_in; for a one-time code, browser_ask_code; for anything only the user can do (a CAPTCHA, approving on their phone), browser_ask_user. These ask the user in a card in Kuvo Code, where they can also say no. So whenever a page you open asks to sign in, call browser_sign_in right away, even if the user didn't mention signing in, rather than asking in the chat whether to; and never ask for a password or a code in the chat. For a \"Continue with Google\" (or Apple) sign-in, click it and sign in on the page it opens the same way; if that page won't let you, use browser_ask_user."
+        return docs + "\n\n" + place + " Start with browser_navigate, read pages with browser_snapshot, and act on elements by their number. To sign in, use browser_sign_in; for a one-time code, browser_ask_code; for anything only the user can do (a CAPTCHA, approving on their phone), browser_ask_user. These ask the user in a card in Kuvo Code, where they can also say no. So whenever a page you open asks to sign in, call browser_sign_in right away, even if the user didn't mention signing in, rather than asking in the chat whether to; and never ask for a password or a code in the chat. For a \"Continue with Google\" (or Apple) sign-in, click it and sign in on the page it opens the same way; if that page won't let you, use browser_ask_user. The user's vault keeps sign-ins, keys, files and notes you may use without ever seeing them: vault_items lists yours, vault_ask asks for one you need, browser_fill fills a field from one, and vault_run hands values to a command (never print them)."
     }
 
     private static func tool(_ name: String, _ description: String, _ properties: [String: Any] = [:], required: [String] = []) -> [String: Any] {
@@ -494,7 +510,10 @@ enum BrowserTools {
         case "browser_tabs":
             return text(await agent.tabs(string("action") ?? "list", tab: int("tab")))
         case "browser_sign_in":
-            return text(await agent.signIn(username: int("username"), password: int("password"), for: caller))
+            return text(await agent.signIn(username: int("username"), password: int("password"), item: string("item"), for: caller))
+        case "browser_fill":
+            guard let index = int("index"), let item = string("item"), !item.isEmpty else { return text("Name the field by its number and the vault item to fill it from.", error: true) }
+            return text(await agent.fill(index, item: item, field: string("field"), why: string("why"), for: caller))
         case "browser_ask_code":
             guard let index = int("index") else { return text("Missing index.", error: true) }
             return text(await agent.askCode(index, prompt: string("prompt"), for: caller))

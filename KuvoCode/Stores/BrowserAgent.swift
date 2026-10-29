@@ -356,10 +356,11 @@ final class BrowserAgent {
 
     // MARK: Asking you
 
-    /// Signs in with your username and password, which you type (or pick from your saved
-    /// passwords) in Kuvo Code: they go straight into the fields named, and the agent never sees
-    /// them. A password only goes into a password field.
-    func signIn(username: Int?, password: Int?, for caller: String? = nil) async -> String {
+    /// Signs in with your username and password: from the vault when the conversation may use one
+    /// of its sign-ins on this site (or the one it names), else which you type (or pick from your
+    /// saved passwords) in Kuvo Code. They go straight into the fields named, and the agent never
+    /// sees them. A password only goes into a password field.
+    func signIn(username: Int?, password: Int?, item: String? = nil, for caller: String? = nil) async -> String {
         let browser = browser()
         guard let host = Self.site(of: browser.url) else { return "Open the sign-in page first." }
         guard username != nil || password != nil else { return "Name the username field, the password field, or both, by number." }
@@ -369,6 +370,7 @@ final class BrowserAgent {
             return "The page is still on its way to \(host). Wait for it, take a browser_snapshot, and call browser_sign_in again."
         }
         if let problem = await checkFields(username: username, password: password, in: browser) { return problem }
+        if let said = await signInFromVault(username: username, password: password, item: item, host: host, in: browser, for: caller) { return said }
         switch await ask(.signIn(username: username != nil, password: password != nil), host: host, in: browser, for: caller) {
         case .signIn(let user, let secret):
             let username = user?.isEmpty == false ? username : nil
@@ -396,6 +398,67 @@ final class BrowserAgent {
         default:
             return "The user didn't sign in. Ask them in the chat how to go on."
         }
+    }
+
+    /// A sign-in from the vault, filled on its own site (the box checks where the page really is):
+    /// what to tell the agent, or nil to ask you as before (nothing in the vault is this
+    /// conversation's here, or it's locked).
+    private func signInFromVault(username: Int?, password: Int?, item: String?, host: String, in browser: BrowserSession, for caller: String?) async -> String? {
+        guard let address = browser.url?.absoluteString else { return nil }
+        var body: [String: Any] = ["origin": address, "purpose": "sign-in"]
+        if let caller { body["session"] = caller }
+        if let item, !item.isEmpty { body["item"] = item }
+        guard let filled = await BrowserTools.vaultFill(body) else { return nil }
+        let said = filled.value["message"] as? String
+        guard filled.status == 200 else {
+            // Refused (a site that isn't the item's, Pause, you said no), or the item it named isn't one: said. Else you're asked.
+            return filled.status == 403 || (item != nil && filled.status != 423) ? said ?? "The vault didn't fill that." : nil
+        }
+        let name = (filled.value["item"] as? [String: Any])?["name"] as? String ?? "the vault"
+        let user = filled.value["username"] as? String
+        let secret = (filled.value["values"] as? [String: String])?["password"]
+        if let problem = stillOn(host, in: browser) { return problem }
+        var done: [String] = []
+        if let username, let user {
+            let outcome = await run(Self.fillScript, ["index": username, "value": user, "wanted": "text", "site": host], in: browser)
+            guard outcome == "ok" else { return outcome }
+            done.append("the username")
+        }
+        if let password, let secret {
+            let outcome = await run(Self.fillScript, ["index": password, "value": secret, "wanted": "password", "site": host], in: browser)
+            guard outcome == "ok" else { return outcome }
+            done.append("the password")
+        }
+        guard !done.isEmpty else { return "“\(name)” has nothing for those fields." }
+        try? await Task.sleep(for: .milliseconds(300))
+        return "Filled \(done.joined(separator: " and ")) for \(host) from the vault's “\(name)” (you can't see them). Submit the form to sign in.\n\n" + (await snapshot())
+    }
+
+    /// One field filled from a vault item, on the item's own sites only: a sign-in's username or
+    /// password, a key's or a note's field. The agent never sees it.
+    func fill(_ index: Int, item: String, field: String?, why: String?, for caller: String? = nil) async -> String {
+        let browser = browser()
+        guard let host = Self.site(of: browser.url), let address = browser.url?.absoluteString else { return "Open the page first." }
+        guard await Self.documentSite(in: browser) == host else {
+            return "The page is still on its way to \(host). Wait for it, take a browser_snapshot, and call browser_fill again."
+        }
+        let kind = await run(Self.fieldKindScript, ["index": index], in: browser)
+        guard kind == "text" || kind == "password" else { return kind == "missing" ? "There's no element [\(index)] on the page now. Take a fresh browser_snapshot." : "[\(index)] isn't a field to fill." }
+        var body: [String: Any] = ["origin": address, "purpose": "field", "item": item]
+        if let caller { body["session"] = caller }
+        if let field, !field.isEmpty { body["field"] = field }
+        if let why, !why.isEmpty { body["why"] = why }
+        guard let filled = await BrowserTools.vaultFill(body) else { return "This Mac's vault can't be reached now. Try again in a moment." }
+        guard filled.status == 200, let values = filled.value["values"] as? [String: String], let (name, value) = values.first else {
+            return filled.value["message"] as? String ?? "The vault didn't fill that (\(filled.status))."
+        }
+        let itemName = (filled.value["item"] as? [String: Any])?["name"] as? String ?? item
+        if let problem = stillOn(host, in: browser) { return problem }
+        // A password only into a password field; anything else into either.
+        let outcome = await run(Self.fillScript, ["index": index, "value": value, "wanted": name == "password" ? "password" : "code", "site": host], in: browser)
+        guard outcome == "ok" else { return outcome }
+        try? await Task.sleep(for: .milliseconds(300))
+        return "Filled [\(index)] with “\(itemName)”'s \(name) (you can't see it).\n\n" + (await snapshot())
     }
 
     /// A one-time code (from a text, an email or an authenticator) that you type in Kuvo Code,

@@ -1211,6 +1211,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "agent-tools": ["POST", "kuvo/agent-tools"], "sessions.start": ["POST", "kuvo/sessions"],
     // What its agents' mail says it takes (a letter that reads a conversation), on the agents' tools.
     "letters-read": ["POST", "kuvo/agent-tools"], queue: ["GET", "kuvo/sessions/ses_none/queue"],
+    vault: ["GET", "kuvo/vault/tools"],
   };
   const named = (await answer(handle, "GET", "kuvo/info")).json.features;
   assert.deepEqual([...named].sort(), Object.keys(routes).sort(), "every name has a route here, and every route here its name");
