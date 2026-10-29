@@ -15,10 +15,14 @@ const SHORTEST_PART = 8;
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** A whole value's forms. */
+/** A whole value's forms: as it is, base64 (with a newline after it too, as `echo | base64` has
+ * it), hex either case, URL- and JSON-escaped. (A hiding, not a fence: a command can still send a
+ * value elsewhere.) */
 function encodings(value: string): string[] {
   const bytes = Buffer.from(value, "utf8");
-  return [value, bytes.toString("base64"), bytes.toString("base64").replace(/=+$/, ""), bytes.toString("base64url"), bytes.toString("hex"), encodeURIComponent(value), JSON.stringify(value).slice(1, -1)];
+  const line = Buffer.from(value + "\n", "utf8");
+  const hex = bytes.toString("hex");
+  return [value, bytes.toString("base64"), bytes.toString("base64").replace(/=+$/, ""), bytes.toString("base64url"), line.toString("base64"), line.toString("base64").replace(/=+$/, ""), hex, hex.toUpperCase(), encodeURIComponent(value), JSON.stringify(value).slice(1, -1)];
 }
 
 /** The strings anywhere in a JSON value. */
@@ -34,6 +38,9 @@ function formsOf(value: string): string[] {
   const forms = new Set(encodings(value).filter(form => form.length >= SHORTEST));
   const parts: string[] = [];
   if (/[\r\n]/.test(value)) parts.push(...value.split(/\r?\n/).map(line => line.trim()));
+  // Hex as `xxd -p` wraps it, 60 to a line.
+  const hex = Buffer.from(value, "utf8").toString("hex");
+  if (hex.length > 60) parts.push(...hex.match(/.{1,60}/g)!);
   try { parts.push(...stringsIn(JSON.parse(value))); } catch {}
   for (const part of parts) {
     if (part.length < SHORTEST_PART) continue;

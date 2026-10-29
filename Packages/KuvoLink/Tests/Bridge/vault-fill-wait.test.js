@@ -50,7 +50,7 @@ const engine = http.createServer((request, response) => {
   const [, id, messages] = request.url.match(/^\/api\/session\/([^/?]+)(\/message)?(\?.*)?$/) ?? [];
   const session = sessions[decodeURIComponent(id ?? "")];
   response.writeHead(session ? 200 : 404, { "content-type": "application/json" });
-  const content = [...running.values()].filter(each => each.session === session?.id).map(each => ({ type: "tool", name: each.name, state: { status: "running", input: each.args } }));
+  const content = [...running.entries()].filter(([, each]) => each.session === session?.id).map(([id, each]) => ({ type: "tool", id: `call_${id}`, name: each.name, state: { status: "running", input: each.args } }));
   response.end(JSON.stringify(!session ? { message: "No such session." } : messages ? { data: [{ content }] } : { data: session }));
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));

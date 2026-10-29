@@ -63,32 +63,39 @@ const fileKey = (): Buffer | null => {
   return storeKey ? crypto.createHmac("sha256", storeKey).update("kuvo-vault-files").digest() : null;
 };
 
-const signatureOf = (key: Buffer, file: string, data: unknown) =>
-  crypto.createHmac("sha256", key).update(`${path.basename(file)}\0${JSON.stringify(data)}`).digest("base64url");
+const signatureOf = (key: Buffer, file: string, generation: number, data: unknown) =>
+  crypto.createHmac("sha256", key).update(`${path.basename(file)}\0${generation}\0${JSON.stringify(data)}`).digest("base64url");
 
-// Files found changed since this process started (said in the state until they're written again).
+// Files found changed since this process started (said in the state until they're written again),
+// and each one's newest generation seen: an older copy put back (with grants you took away since)
+// is changed too. (Across a restart, a machine's is checked from its first read on.)
 const tampered = new Set<string>();
+const newest = new Map<string, number>();
 
 /** A signed file's data: `fallback` when there's none, or it can't be checked now (locked), or it
  * wasn't signed with this vault's key. */
 function readSigned<T>(file: string, fallback: T): T {
-  const kept = readJSON<{ data?: T; sig?: unknown } | null>(file, null);
+  const kept = readJSON<{ gen?: unknown; data?: T; sig?: unknown } | null>(file, null);
   if (!kept) return fallback;
   const key = fileKey();
   if (!key) return fallback;
+  const generation = typeof kept.gen === "number" ? kept.gen : -1;
   const given = Buffer.from(typeof kept.sig === "string" ? kept.sig : "");
-  const expected = Buffer.from(signatureOf(key, file, kept.data));
-  if (kept.data === undefined || given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
+  const expected = Buffer.from(signatureOf(key, file, generation, kept.data));
+  if (kept.data === undefined || given.length !== expected.length || !crypto.timingSafeEqual(given, expected) || generation < (newest.get(file) ?? 0)) {
     tampered.add(file);
     return fallback;
   }
+  newest.set(file, generation);
   return kept.data;
 }
 
 function keepSigned(file: string, data: unknown) {
   const key = fileKey();
   if (!key) throw onHost() ? new VaultRefusal(503, "Kuvo Code on this Mac didn't give its vault its key. Quit Kuvo Code and open it again.") : new VaultRefusal(423, LOCKED);
-  keepJSON(file, { v: 2, data, sig: signatureOf(key, file, data) });
+  const generation = Math.max(newest.get(file) ?? 0, readJSON<{ gen?: unknown } | null>(file, null)?.gen as number || 0) + 1;
+  keepJSON(file, { v: 2, gen: generation, data, sig: signatureOf(key, file, generation, data) });
+  newest.set(file, generation);
   tampered.delete(file);
 }
 
@@ -341,6 +348,8 @@ export const changeItem = (id: string, given: GivenItem) => oneAtATime(() => cha
 export const removeItem = (id: string) => oneAtATime(() => removeOne(id));
 
 async function addOne(given: GivenItem): Promise<VaultItem> {
+  // Its Pause file with the first item, so one deleted later reads as paused.
+  if (!fs.existsSync(PAUSED)) vaultWork(() => keepSigned(PAUSED, {}));
   if (!ITEM_KINDS.includes(given.kind as never)) throw new VaultRefusal(400, `An item is one of: ${ITEM_KINDS.join(", ")}.`);
   const kind = given.kind as VaultItem["kind"];
   const name = cleanName(given.name);
@@ -464,7 +473,8 @@ interface Paused {
 // While its file can't be read (a machine's vault locked, or this Mac's app gave no key), or was
 // changed: every agent's use is paused, rather than one you paused going on.
 const readPaused = (): Paused => {
-  if (!fs.existsSync(PAUSED)) return {};
+  // Gone once there was one (Pause can't be undone by deleting its file): paused.
+  if (!fs.existsSync(PAUSED)) return newest.has(PAUSED) || fs.existsSync(ITEMS) ? (tampered.add(PAUSED), { all: true }) : {};
   return readSigned<Paused>(PAUSED, { all: true });
 };
 

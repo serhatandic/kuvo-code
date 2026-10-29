@@ -26,6 +26,8 @@ after(() => fs.rmSync(root, { recursive: true, force: true }));
 const SECRET = "mac-secret-sauce-42";
 let engine;
 let box;
+// Each sign-in the engine runs, its own call (the box fills once for each).
+let calls = 0;
 
 before(async () => {
   fs.mkdirSync(path.join(home, "run"), { recursive: true });
@@ -36,7 +38,7 @@ before(async () => {
     // Its browser_sign_in, running as the fill comes (the box answers a fill only for one: vault/who.ts).
     if (request.url.startsWith("/api/session/ses_ship/message")) {
       response.writeHead(200, { "content-type": "application/json" });
-      return response.end(JSON.stringify({ data: [{ type: "assistant", content: [{ type: "tool", name: "kuvo-browser_browser_sign_in", state: { status: "running", input: {} } }] }] }));
+      return response.end(JSON.stringify({ data: [{ type: "assistant", content: [{ type: "tool", id: `call_${++calls}`, name: "kuvo-browser_browser_sign_in", state: { status: "running", input: {} } }] }] }));
     }
     const found = request.url.startsWith("/api/session/ses_ship");
     response.writeHead(found ? 200 : 404, { "content-type": "application/json" });

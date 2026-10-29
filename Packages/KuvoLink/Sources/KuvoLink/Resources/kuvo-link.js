@@ -6856,8 +6856,9 @@ var fileKey = () => {
     return MAC_VAULT_FILE_KEY;
   return storeKey ? crypto15.createHmac("sha256", storeKey).update("kuvo-vault-files").digest() : null;
 };
-var signatureOf = (key, file, data) => crypto15.createHmac("sha256", key).update(`${path34.basename(file)}\x00${JSON.stringify(data)}`).digest("base64url");
+var signatureOf = (key, file, generation, data) => crypto15.createHmac("sha256", key).update(`${path34.basename(file)}\x00${generation}\x00${JSON.stringify(data)}`).digest("base64url");
 var tampered = new Set;
+var newest = new Map;
 function readSigned(file, fallback) {
   const kept = readJSON(file, null);
   if (!kept)
@@ -6865,19 +6866,23 @@ function readSigned(file, fallback) {
   const key = fileKey();
   if (!key)
     return fallback;
+  const generation = typeof kept.gen === "number" ? kept.gen : -1;
   const given = Buffer.from(typeof kept.sig === "string" ? kept.sig : "");
-  const expected = Buffer.from(signatureOf(key, file, kept.data));
-  if (kept.data === undefined || given.length !== expected.length || !crypto15.timingSafeEqual(given, expected)) {
+  const expected = Buffer.from(signatureOf(key, file, generation, kept.data));
+  if (kept.data === undefined || given.length !== expected.length || !crypto15.timingSafeEqual(given, expected) || generation < (newest.get(file) ?? 0)) {
     tampered.add(file);
     return fallback;
   }
+  newest.set(file, generation);
   return kept.data;
 }
 function keepSigned(file, data) {
   const key = fileKey();
   if (!key)
     throw onHost() ? new VaultRefusal(503, "Kuvo Code on this Mac didn't give its vault its key. Quit Kuvo Code and open it again.") : new VaultRefusal(423, LOCKED);
-  keepJSON(file, { v: 2, data, sig: signatureOf(key, file, data) });
+  const generation = Math.max(newest.get(file) ?? 0, readJSON(file, null)?.gen || 0) + 1;
+  keepJSON(file, { v: 2, gen: generation, data, sig: signatureOf(key, file, generation, data) });
+  newest.set(file, generation);
   tampered.delete(file);
 }
 var keepJSON = (file, value) => {
@@ -7084,6 +7089,8 @@ var addItem = (given) => oneAtATime2(() => addOne(given));
 var changeItem = (id, given) => oneAtATime2(() => changeOne(id, given));
 var removeItem = (id) => oneAtATime2(() => removeOne(id));
 async function addOne(given) {
+  if (!fs34.existsSync(PAUSED))
+    vaultWork(() => keepSigned(PAUSED, {}));
   if (!ITEM_KINDS.includes(given.kind))
     throw new VaultRefusal(400, `An item is one of: ${ITEM_KINDS.join(", ")}.`);
   const kind = given.kind;
@@ -7209,7 +7216,7 @@ function setGrant(itemID, who, how) {
 }
 var readPaused = () => {
   if (!fs34.existsSync(PAUSED))
-    return {};
+    return newest.has(PAUSED) || fs34.existsSync(ITEMS) ? (tampered.add(PAUSED), { all: true }) : {};
   return readSigned(PAUSED, { all: true });
 };
 function setPaused(paused, who, why = "Paused by you.") {
@@ -11082,8 +11089,11 @@ async function callerOf(session, readEngine, readBridge) {
 }
 var ordered = (value) => Array.isArray(value) ? value.map(ordered) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, ordered(value[key])])) : value;
 async function isCalling(session, tools, args, readEngine, readBridge) {
+  return await callingNow(session, tools, args, readEngine, readBridge) !== null;
+}
+async function callingNow(session, tools, args, readEngine, readBridge) {
   if (!session || !/^[A-Za-z0-9_-]{1,100}$/.test(session))
-    return false;
+    return null;
   const targets = [];
   try {
     targets.push(readEngine());
@@ -11098,17 +11108,17 @@ async function isCalling(session, tools, args, readEngine, readBridge) {
   for (const target of targets) {
     try {
       const page = await engineGet(target, `api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`);
-      for (const message of page?.data ?? []) {
-        for (const block of message.content ?? []) {
+      for (const [at, message] of (page?.data ?? []).entries()) {
+        for (const [place, block] of (message.content ?? []).entries()) {
           if (block.type !== "tool" || !named(block.name) || !["running", "pending"].includes(block.state?.status ?? ""))
             continue;
           if (wanted === null || JSON.stringify(ordered(block.state?.input ?? {})) === wanted)
-            return true;
+            return `${session}\x00${block.callID ?? block.id ?? `${at}.${place}`}`;
         }
       }
     } catch {}
   }
-  return false;
+  return null;
 }
 function grantFor(item, caller, grants = readGrants()) {
   let how = null;
@@ -11478,7 +11488,10 @@ var SHORTEST_PART = 8;
 var escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function encodings(value) {
   const bytes = Buffer.from(value, "utf8");
-  return [value, bytes.toString("base64"), bytes.toString("base64").replace(/=+$/, ""), bytes.toString("base64url"), bytes.toString("hex"), encodeURIComponent(value), JSON.stringify(value).slice(1, -1)];
+  const line = Buffer.from(value + `
+`, "utf8");
+  const hex = bytes.toString("hex");
+  return [value, bytes.toString("base64"), bytes.toString("base64").replace(/=+$/, ""), bytes.toString("base64url"), line.toString("base64"), line.toString("base64").replace(/=+$/, ""), hex, hex.toUpperCase(), encodeURIComponent(value), JSON.stringify(value).slice(1, -1)];
 }
 function stringsIn(value, found = []) {
   if (typeof value === "string")
@@ -11496,6 +11509,9 @@ function formsOf(value) {
   const parts = [];
   if (/[\r\n]/.test(value))
     parts.push(...value.split(/\r?\n/).map((line) => line.trim()));
+  const hex = Buffer.from(value, "utf8").toString("hex");
+  if (hex.length > 60)
+    parts.push(...hex.match(/.{1,60}/g));
   try {
     parts.push(...stringsIn(JSON.parse(value)));
   } catch {}
@@ -11808,6 +11824,7 @@ var NOT_OPEN = "This computer's vault isn't open: Kuvo Code's link here isn't ru
 var CLIENTS_ONLY = "Only Kuvo Code on your Mac or iPhone can do this.";
 var NOT_CALLING = "Only a conversation's own tool call can use the vault, and this one isn't running in it.";
 var stringOf = (value) => typeof value === "string" ? value : undefined;
+var filledFor = new Set;
 var ED_SPKI2 = Buffer.from("302a300506032b6570032100", "hex");
 function clientOf({ request, phone }) {
   if (phone?.key) {
@@ -11897,8 +11914,12 @@ async function* answerVault(context) {
       return yield* json(403, { message: CLIENTS_ONLY });
     if (isLocked())
       return yield* json(423, { message: LOCKED });
-    if (!await isCalling(stringOf(given.session), ["browser_sign_in", "browser_fill"], null, readEngine, readBridge))
+    const call = await callingNow(stringOf(given.session), ["browser_sign_in", "browser_fill"], null, readEngine, readBridge);
+    if (!call || filledFor.has(call))
       return yield* json(403, { message: NOT_CALLING });
+    filledFor.add(call);
+    if (filledFor.size > 1000)
+      filledFor.delete(filledFor.values().next().value);
     const caller = await callerOf(given.session, readEngine, readBridge);
     const outcome = await fill(given, caller, signal);
     return yield* json(outcome.status, outcome.value);

@@ -2078,17 +2078,24 @@ another box.
 
 **Where it's kept.** In `box/vault/` under the box's folder: `items.json` (each item without its
 values), `grants.json`, `paused.json` and `activity.jsonl` (kept a year). The first three are
-`{"v": 2, "data", "sig"}`, signed (HMAC-SHA256 of `<file name>\0<data as JSON>`) with a key no agent
-can read: a machine's from its store key (so they can't be checked while it's locked), this Mac's
-given by its app from the Keychain to the box alone, in `KUVO_VAULT_FILE_KEY` as it starts. One that
-isn't signed with it, or was changed, counts for nothing (`paused.json` then pauses everyone), and
-the state says `tampered`. Values:
+`{"v": 2, "gen", "data", "sig"}`, signed (HMAC-SHA256 of `<file name>\0<gen>\0<data as JSON>`) with
+a key no agent can read: a machine's from its store key (so they can't be checked while it's
+locked), this Mac's given by its app from the Keychain to the box alone, on its stdin as it starts
+(below). `gen` goes up with each write. One that isn't signed with it, was changed, or is older than
+one the box has read since it started counts for nothing; `paused.json`, made with the first item,
+then pauses everyone, and so does its being gone. The state says `tampered`. Values:
 
 - this Mac's are in the Keychain, through its app ("Host interface": `vault/get {"id"}` →
   `{"values"}` or `404`, `vault/set {"id", "values"}`, `vault/delete {"id"}`), never in the box's
-  folder. Those calls also carry `x-kuvo-vault-secret`, which the app gives the box alone, in
-  `KUVO_HOST_VAULT_SECRET` as it starts (the password in `run/host.json` is in a file an agent's
-  command can read): `403` without it;
+  folder. The app gives the box a secret of the vault's (with its own password and the file key)
+  on `serve`'s stdin as it starts, `{"password", "hostVaultSecret", "vaultFileKey"}`, never in its
+  environment, which any of the user's processes can read (`ps -E`): the password in
+  `run/host.json` is in a file an agent's command can read, and rewrite. Before a vault call the
+  box asks `hello` with `"vault": true`, and goes on only if the answer's `vaultProof` is that
+  secret's HMAC-SHA256 of `kuvo-host-vault\0<nonce>\0<where it reached it>`; each call carries
+  `x-kuvo-vault-at` (ms) and `x-kuvo-vault-auth`, the secret's HMAC of
+  `kuvo-host-vault-call\0<call>\0<sha256 of its body, hex>\0<at>`, taken within a minute and once
+  (`403` otherwise);
 - a machine's are in `box/vault/values/<id>`, AES-256-GCM with the store key, which is only ever
   in the memory of the process that holds the vault. `key.json` keeps the store key wrapped by the
   unlock key, and an HMAC that checks one. Only clients keep the unlock key. After the box starts
@@ -2099,10 +2106,12 @@ Mac) holds the vault. A `box route` passes `kuvo/vault…` to it over `run/vault
 by the user, which the route checks first), one request a connection: `{"hello": <nonce>}`, answered
 `{"nonce", "proof"?}` (`proof`, while the holder has the unlock key: HMAC-SHA256 with it of
 `kuvo-vault-holder\0<the route's nonce>`, base64url); then a line of `{"method", "path", "headers",
-"body"}` (base64) there, `{"status", "type", "body"}` back. A request with the unlock key sends it
-only to a holder that can't prove it has it (a locked one, which it unlocks); to one that proves it,
-`x-kuvo-vault-auth` instead (HMAC-SHA256 with the key of `kuvo-vault-client\0<the holder's nonce>`),
-and to one whose proof is wrong, nothing (`403`). It says `503 {"message"}` when nothing holds it. A
+"body"}` (base64) there, `{"status", "type", "body"}` back. A request with the unlock key sends, to
+a holder that proves it has it, `x-kuvo-vault-auth` instead: HMAC-SHA256 with the key of
+`kuvo-vault-client\0<the holder's nonce>\0<METHOD>\0<path>\0<sha256 of the base64 body, base64url>`,
+for that request alone. To one whose proof is wrong, nothing (`403`); to one that gives none (a
+locked one), the key itself only for `kuvo/vault/unlock`, which a client sends when you ask
+(**Unlock** on a machine's Vault page), and `423` for anything else. It says `503 {"message"}` when nothing holds it. A
 machine's link keeps running while it has a vault.
 
 **Who may do what.** Clients are your phones (through the relay, by their keys), this Mac's own app
@@ -2155,8 +2164,10 @@ carries the unlock key in `x-kuvo-vault-key`, which also unlocks a locked vault.
 Each is answered only while that conversation is making the call: its engine (or the coding agents'
 bridge) has a tool call of that name running in it (`api/session/<id>/message`, a `tool` block,
 `running` or `pending`; for `tools`, with the same arguments; for `fill`, `browser_sign_in` or
-`browser_fill`). Any program on the computer could name a session; only the conversation's own call
-uses its grants.
+`browser_fill`, and one fill for each such call). Any program on the computer could name a session;
+only the conversation's own call uses its grants. (On a machine its browser, and anything that runs
+as you there, can still reach a value a fill puts in a page: until agents' commands are fenced off,
+that's what a machine can't keep from them.)
 
 - `POST kuvo/vault/tools {name, arguments, session}` → `{text, isError}`: `vault_items`, the items
   this conversation may use (by its bot, its project or everyone), never another's name, and a

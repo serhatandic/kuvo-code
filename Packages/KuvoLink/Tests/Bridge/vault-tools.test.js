@@ -31,6 +31,7 @@ const TOKEN = "glpat-very-secret-token-0001";
 // The engine: a bot's conversation, in its folder, and the tool call it's making now (the box
 // answers a vault call only as one its conversation makes: vault/who.ts).
 let calling = [];
+let calls = 0;
 const engine = http.createServer((request, response) => {
   if (/^\/api\/session\/ses_ship\/message/.test(request.url)) {
     response.writeHead(200, { "content-type": "application/json" });
@@ -85,7 +86,7 @@ function ask(method, params) {
   });
 }
 const call = (name, args) => {
-  calling = [{ type: "tool", name: `kuvo-browser_${name}`, state: { status: "running", input: args ?? {} } }];
+  calling = [{ type: "tool", id: `call_${++calls}`, name: `kuvo-browser_${name}`, state: { status: "running", input: args ?? {} } }];
   return ask("tools/call", { name, arguments: args, _meta: { "ai.opencode/sessionID": "ses_ship" } });
 };
 

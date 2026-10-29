@@ -22,12 +22,14 @@ import {
   removeItem, setGrant, setPaused, unlockWith, valuesOf, VaultRefusal, vaultState,
 } from "../vault/store";
 import { callTool, VAULT_TOOLS } from "../vault/tools";
-import { callerOf, isCalling } from "../vault/who";
+import { callerOf, callingNow, isCalling } from "../vault/who";
 
 const NOT_OPEN = "This computer's vault isn't open: Kuvo Code's link here isn't running. Try again in a moment.";
 const CLIENTS_ONLY = "Only Kuvo Code on your Mac or iPhone can do this.";
 const NOT_CALLING = "Only a conversation's own tool call can use the vault, and this one isn't running in it.";
 const stringOf = (value: unknown) => (typeof value === "string" ? value : undefined);
+// The tool calls a fill was answered for, each once.
+const filledFor = new Set<string>();
 const ED_SPKI = Buffer.from("302a300506032b6570032100", "hex");
 
 /** Who's asking, as a client: a phone (by its name), this Mac's app, the Mac over SSH with the
@@ -117,7 +119,11 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
     // (On a machine, the browser and anything you run there share your account: PROTOCOL.md.)
     if (onHost() && !request.fromApp) return yield* json(403, { message: CLIENTS_ONLY });
     if (isLocked()) return yield* json(423, { message: LOCKED });
-    if (!await isCalling(stringOf(given.session), ["browser_sign_in", "browser_fill"], null, readEngine, readBridge)) return yield* json(403, { message: NOT_CALLING });
+    // And one fill for each such call: what races the browser for it gets nothing more.
+    const call = await callingNow(stringOf(given.session), ["browser_sign_in", "browser_fill"], null, readEngine, readBridge);
+    if (!call || filledFor.has(call)) return yield* json(403, { message: NOT_CALLING });
+    filledFor.add(call);
+    if (filledFor.size > 1000) filledFor.delete(filledFor.values().next().value!);
     const caller = await callerOf(given.session, readEngine, readBridge);
     const outcome = await fill(given, caller, signal);
     return yield* json(outcome.status, outcome.value);

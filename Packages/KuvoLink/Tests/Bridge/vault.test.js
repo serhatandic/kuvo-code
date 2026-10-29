@@ -46,7 +46,8 @@ let engine;
 // The tool calls each session's engine says are running now: a vault call is answered only as one
 // of them (vault/who.ts, isCalling). `tool` and `fillAs` say so before they call, as the engine would.
 const calling = {};
-const running = (session, name, input) => { calling[session] = [{ type: "tool", name: `kuvo-browser_${name}`, state: { status: "running", input } }]; };
+let calls = 0;
+const running = (session, name, input) => { calling[session] = [{ type: "tool", id: `call_${++calls}`, name: `kuvo-browser_${name}`, state: { status: "running", input } }]; };
 
 before(async () => {
   fs.mkdirSync(path.join(home, "run"), { recursive: true });
@@ -337,6 +338,44 @@ test("the vault's files changed outside Kuvo Code count for nothing: a grant wri
     fs.writeFileSync(itemsFile, keptItems);
   }
   assert.equal((await fillAs({ session: "ses_ship", origin: "https://github.com", purpose: "sign-in" })).status, 200, "as it was again");
+});
+
+test("one fill for each call: what races the browser for it gets nothing more", async () => {
+  running("ses_ship", "browser_sign_in", {});
+  const first = await box.local("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://github.com", purpose: "sign-in" });
+  assert.equal(first.status, 200);
+  const again = await box.local("POST", "kuvo/vault/fill", { session: "ses_ship", origin: "https://github.com", purpose: "sign-in" });
+  assert.equal(again.status, 403);
+  assert.ok(!JSON.stringify(again.value).includes(SECRET));
+});
+
+test("Pause isn't undone by deleting its file, nor a grant taken away given back by an older copy", async () => {
+  const paused = path.join(home, "box", "vault", "paused.json");
+  const grants = path.join(home, "box", "vault", "grants.json");
+  const keptPaused = fs.readFileSync(paused, "utf8");
+  fs.rmSync(paused);
+  assert.match((await tool("ses_ship", "vault_run", { command: "true", variables: { T: "GitHub token" }, why: "x" })).value.text, /changed outside Kuvo Code/);
+  fs.writeFileSync(paused, keptPaused);
+  // Ship may use the token on its own; that's taken away; the copy from before is put back.
+  const before = fs.readFileSync(grants, "utf8");
+  await fromMac("POST", "kuvo/vault/grants", { item: items["GitHub token"].id, who: { bot: "bot_ship" }, how: null }, key);
+  const now = fs.readFileSync(grants, "utf8");
+  fs.writeFileSync(grants, before);
+  try {
+    const listed = await tool("ses_ship", "vault_items", {});
+    assert.ok(!listed.value.text.includes("GitHub token"), listed.value.text);
+  } finally {
+    fs.writeFileSync(grants, now);
+  }
+  await fromMac("POST", "kuvo/vault/grants", { item: items["GitHub token"].id, who: { bot: "bot_ship" }, how: "own" }, key);
+  assert.match((await tool("ses_ship", "vault_items", {})).value.text, /GitHub token/);
+});
+
+test("a value printed through echo and base64, or as hex, still shows as its item", async () => {
+  const ran = await tool("ses_ship", "vault_run", { command: 'echo "$T" | base64; printf %s "$T" | od -An -tx1 | tr -d " \\n" | tr a-f A-F; echo', variables: { T: "GitHub token" }, why: "x" });
+  assert.ok(!ran.value.text.includes(Buffer.from(TOKEN + "\n").toString("base64").replace(/=+$/, "")), ran.value.text);
+  assert.ok(!ran.value.text.includes(Buffer.from(TOKEN).toString("hex").toUpperCase()), ran.value.text);
+  assert.match(ran.value.text, /\[vault: GitHub token\]/);
 });
 
 test("a sign-in only for signing in is never handed to a command or another field, and a value too short to hide isn't kept", async () => {
