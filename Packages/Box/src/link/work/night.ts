@@ -39,6 +39,8 @@ const LOCK = path.join(WORK_FOLDER, ".nights.lock");
 
 /** How long an ask waits overnight before it's no (and worked around, for the morning). */
 export const NIGHT_ASK_WAIT = 15 * 60_000;
+/** How long a night may run: past it, it ends, with a word for the morning. */
+export const NIGHT_LONGEST = 12 * 3_600_000;
 /** How long a night that ended (or a card left unanswered) is still shown. */
 const SHOWN = 24 * 3_600_000;
 
@@ -91,8 +93,8 @@ export function boxChecks(night: Pick<KeptNight, "projects" | "name">): NightChe
     : { id: "unattended", text: `${Here} can't run a night yet`, detail: `${night.name} can do the same plan with you here instead`, state: "failed", by: "box" });
   if (keepsAwake()) {
     const power = onPower();
-    if (power === true) checks.push({ id: "power", text: "Mac on power", detail: "Stays awake till it's done", state: "ok", by: "box" });
-    else if (power === false) checks.push({ id: "power", text: "Plug in your Mac", detail: "It stays awake only on power", state: "needs", by: "box" });
+    if (power === true) checks.push({ id: "power", text: "Mac on power", detail: "With its lid open, it stays awake till it's done", state: "ok", by: "box" });
+    else if (power === false) checks.push({ id: "power", text: "Plug in your Mac", detail: "It stays awake only on power, with its lid open", state: "needs", by: "box" });
   }
   if (night.projects.length && !projectsFolder()) {
     checks.push({ id: "projectsFolder", text: "Pick where new projects go", detail: `for ${night.projects.join(", ")}`, state: "needs", by: "box", action: { kind: "projectsFolder", label: "Pick" } });
@@ -113,11 +115,6 @@ export function nights(file = NIGHTS_FILE): NightShape[] {
     .filter(night => botHere(night.bot) && (night.state === "running" || now - (night.ended ?? night.proposed) < SHOWN))
     .sort((a, b) => b.proposed - a.proposed)
     .map(shown);
-}
-
-/** `bot`'s night now: proposed or running; null for none. */
-export function nightOf(bot: string, file = NIGHTS_FILE): KeptNight | null {
-  return readKept(file).find(night => night.bot === bot && (night.state === "running" || (night.state === "proposed" && Date.now() - night.proposed < SHOWN))) ?? null;
 }
 
 /** `bot`'s night while it runs; null otherwise. */
@@ -217,6 +214,7 @@ export async function answerNight(id: string, given: Record<string, unknown>, ta
       return night;
     }
     if (night.state !== "proposed") return { status: 400 as const, message: night.state === "running" ? "That night is running already." : "That night has ended." };
+    if (action === "start" && Date.now() - night.proposed >= SHOWN) return { status: 400 as const, message: "That plan is from more than a day ago: ask for it again." };
     if (action === "decline") {
       night.state = "declined";
       night.ended = Date.now();
@@ -284,6 +282,13 @@ export function nightProgress(bot: string, given: Record<string, unknown>, file 
   if (!runningNight(bot, file)) return { refused: "No night is running: propose one with propose_night, and the user starts it." };
   const notes: string[] = [];
   const marks = Array.isArray(given.steps) ? given.steps : given.step !== undefined ? [{ step: given.step, state: given.state, note: given.note }] : [];
+  // All of it checked first: nothing's kept of a call that's wrong somewhere.
+  const steps = runningNight(bot, file)!.steps.length;
+  for (const mark of marks) {
+    if (!isObject(mark) || typeof mark.step !== "number" || mark.step < 1 || mark.step > steps) return { refused: `There's no step ${isObject(mark) ? String(mark.step) : ""}: the plan has ${steps}.` };
+    if (!STEP_STATES.includes(mark.state as (typeof STEP_STATES)[number])) return { refused: "A step's state is todo, doing, done, blocked or skipped." };
+  }
+  if (isObject(given.blocker) && (!text(given.blocker.text, 300) || !BLOCKER_KINDS.includes(given.blocker.kind as (typeof BLOCKER_KINDS)[number]))) return { refused: "A blocker needs its kind (you, judgment or outside) and what it is (text)." };
   let wrong: string | null = null;
   changeKept(all => {
     const night = all.find(each => each.bot === bot && each.state === "running");
@@ -352,26 +357,49 @@ export function finishNight(bot: string, given: Record<string, unknown>, file = 
 // ——— The night's watch ———
 
 const ASK_TEXT = "No one could answer this overnight, so it's no for now. Work around it if you can; it waits for the user in the morning report.";
+const QUESTION_TEXT = "No one could answer this overnight. Go on with your best judgment where it's safe, and leave the rest for the morning.";
 
-/** One look at the nights running here: the Mac kept awake while any runs; a Mac on battery, and
- * asks no one answered in time (said no to, and kept as blockers); what's new told to your phones
- * (`tell`: blockers quietly, louder where you asked to be woken, and the morning report). */
-export async function lookAtNights(tell: (notice: Notice) => boolean, targets: () => Target[], { file = NIGHTS_FILE, wait = NIGHT_ASK_WAIT, signal }: { file?: string; wait?: number; signal?: AbortSignal } = {}): Promise<void> {
+/** One look at the nights running here: the Mac kept awake while any runs; a night past its time
+ * ended; a Mac on battery, and asks and questions no one answered in time (said no to, and kept as
+ * blockers); the rules of the bot and its sessions asking for what always comes to you, and for
+ * publishing and deploying, overnight; what's new told to your phones (`tell`: blockers quietly,
+ * louder where you asked to be woken, and the morning report). */
+export async function lookAtNights(tell: (notice: Notice) => boolean, targets: () => Target[], { file = NIGHTS_FILE, wait = NIGHT_ASK_WAIT, longest = NIGHT_LONGEST, signal }: { file?: string; wait?: number; longest?: number; signal?: AbortSignal } = {}): Promise<void> {
+  const now = Date.now();
+  // A night that ran past its time ends: its bot stopped, with a word for the morning.
+  for (const night of readKept(file).filter(each => each.state === "running" && botHere(each.bot) && now - (each.started ?? each.proposed) >= longest)) {
+    const ended = changeKept(all => {
+      const kept = all.find(each => each.id === night.id && each.state === "running");
+      if (!kept) return false;
+      kept.state = "stopped";
+      kept.ended = now;
+      kept.report = `${kept.name} didn't finish in the night's time, so it stopped: ${kept.steps.filter(step => step.state === "done" || step.state === "skipped").length} of ${kept.steps.length} steps done. Ask it where things stand.`;
+      return true;
+    }, file);
+    if (ended) {
+      noteWorkChanged(night.bot);
+      await stopBotWork(night.bot, targets(), signal).catch(() => 0);
+    }
+  }
   const running = readKept(file).filter(night => night.state === "running" && botHere(night.bot));
   keepAwake(running.length > 0);
   if (running.length && onPower() === false) for (const night of running) addBlocker(night.bot, { kind: "you", text: "Your Mac is on battery", detail: "It may sleep before the work is done. Plug it in to carry on." }, file);
-  const now = Date.now();
+  const sessions = running.length ? await workSessions(targets(), signal).catch(() => []) : [];
   for (const night of running) {
     const waiting: Record<string, number> = {};
-    const work = ofBot(night.bot, await workSessions(targets(), signal).catch(() => []));
+    const work = ofBot(night.bot, sessions);
     const own = await placeOfSession(night.session, targets()).catch(() => null);
-    // The bot's own rules ask for what always comes to you, whatever its approval was set to since.
-    if (own && !asksAlways(own.data.permissions)) {
-      await call(own.target, "PATCH", `/api/session/${encodeURIComponent(night.session)}`, { permissions: withAlwaysAsk((own.data.permissions ?? []) as KitRule[]) }, signal).catch(() => {});
+    // The bot's own rules, and its sessions', ask for what always comes to you and for publishing,
+    // whatever their approval was set to since.
+    // (With a public step switched on, publishing goes ahead: you approved it for tonight.)
+    const publishing = !night.public.some(step => step.on);
+    for (const place of [...(own ? [{ target: own.target, id: night.session, rules: own.data.permissions }] : []), ...work.map(each => ({ target: each.target, id: each.data.id, rules: each.data.permissions }))]) {
+      if (asksAlways(place.rules, { publishing })) continue;
+      await call(place.target, "PATCH", `/api/session/${encodeURIComponent(place.id)}`, { permissions: withAlwaysAsk((place.rules ?? []) as KitRule[], { publishing }) }, signal).catch(() => {});
     }
     const places = [...work.map(each => ({ target: each.target, id: each.data.id, title: each.data.title || "New Session" })), ...(own ? [{ target: own.target, id: night.session, title: night.name }] : [])];
     for (const place of places) {
-      const { permissions } = await asksIn(place.target, place.id, signal).catch(() => ({ permissions: [] }));
+      const { permissions, questions } = await asksIn(place.target, place.id, signal).catch(() => ({ permissions: [], questions: [] }));
       for (const permission of permissions) {
         const key = `${place.id}:${permission.id}`;
         const first = night.waiting?.[key] ?? now;
@@ -383,6 +411,17 @@ export async function lookAtNights(tell: (notice: Notice) => boolean, targets: (
         const what = permissionWords(permission);
         await keepAnswer(place.target, place.id, { ask: permission.id, ...(permission.call ? { call: permission.call } : {}), what, decision: "deny", reason: "No one answered overnight", by: { name: "Kuvo Code" }, at: now }).catch(() => {});
         addBlocker(night.bot, { kind: "ask", text: `${place.title}: ${what.replace(/\.$/, "")}`, detail: "No one answered overnight, so it was no", session: place.id }, file);
+      }
+      // A question no one answers: put away, so the session goes on without it.
+      for (const question of questions) {
+        const key = `${place.id}:${question.id}`;
+        const first = night.waiting?.[key] ?? now;
+        waiting[key] = first;
+        if (now - first < wait) continue;
+        const said = await call(place.target, "DELETE", `/api/session/${encodeURIComponent(question.asker)}/form/${encodeURIComponent(question.id)}?message=${encodeURIComponent(QUESTION_TEXT)}`, undefined, signal).then(() => true, () => false);
+        if (!said) continue;
+        delete waiting[key];
+        addBlocker(night.bot, { kind: "ask", text: `${place.title} asks: ${question.text}`, detail: "No one answered overnight", session: place.id }, file);
       }
     }
     // What the bot asks you itself (making a project the plan didn't name).
@@ -396,15 +435,15 @@ export async function lookAtNights(tell: (notice: Notice) => boolean, targets: (
     }, file);
   }
   // What's new, to your phones.
-  for (const night of readKept(file).filter(each => botHere(each.bot) && (each.state === "running" || each.state === "done"))) {
+  for (const night of readKept(file).filter(each => botHere(each.bot) && (each.state === "running" || each.state === "done" || each.state === "stopped"))) {
     const told = new Set(night.told ?? []);
-    const fresh = night.blockers.filter(each => !told.has(each.id));
+    const fresh = night.state === "running" || night.state === "done" ? night.blockers.filter(each => !told.has(each.id)) : [];
     let reportTold = night.reportTold === true;
     for (const blocker of fresh) {
-      if (tell({ title: night.name, subtitle: "Needs you in the morning", body: blocker.text, category: "blocked", thread: night.session, data: { session: blocker.session ?? night.session, ...(night.wake && blocker.kind === "you" ? { wake: "1" as const } : {}) } })) told.add(blocker.id);
+      if (tell({ title: night.name, subtitle: "Needs you in the morning", body: blocker.text, category: "blocked", thread: night.session, data: { session: blocker.session ?? night.session, ...(night.wake && blocker.kind === "you" ? { wake: "1" as const } : { quiet: "1" as const }) } })) told.add(blocker.id);
     }
-    if (night.state === "done" && !reportTold && night.report) {
-      reportTold = tell({ title: `${night.name}'s night`, subtitle: night.blockers.length ? `${night.blockers.length} ${night.blockers.length === 1 ? "thing needs" : "things need"} you` : "Done", body: night.report, category: "report", thread: night.session, data: { session: night.session } });
+    if (night.state !== "running" && !reportTold && night.report) {
+      reportTold = tell({ title: `${night.name}'s night`, subtitle: night.blockers.length ? `${night.blockers.length} ${night.blockers.length === 1 ? "thing needs" : "things need"} you` : night.state === "done" ? "Done" : "Stopped", body: night.report, category: "report", thread: night.session, data: { session: night.session, quiet: "1" } });
     }
     if (told.size !== (night.told ?? []).length || reportTold !== (night.reportTold === true)) {
       changeKept(all => {

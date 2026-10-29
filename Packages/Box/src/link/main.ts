@@ -96,8 +96,8 @@ export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompat
 export { queueOf, queueWatcher, readQueues, scanQueues } from "./engine/queue";
 export { workWatcher } from "./work/wakes";
 export { lookAtNights } from "./work/night";
-export { keptAwake } from "./work/awake";
-export { ALWAYS_ASK_RULES } from "./work/always";
+export { keptAwake, letGo } from "./work/awake";
+export { ALWAYS_ASK_RULES, PUBLISH_ASK_RULES, alwaysAsks, withAlwaysAsk } from "./work/always";
 export { macLink, readLink, updateLink, writeLink } from "./state";
 export { searchPlugins } from "./areas/plugins";
 export { listFolders, makeFolder } from "./areas/folders";

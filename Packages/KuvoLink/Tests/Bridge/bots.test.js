@@ -15,9 +15,9 @@ process.env.KUVO_HOME = home;
 after(() => fs.rmSync(home, { recursive: true, force: true }));
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
-// A bot's rules as its box makes them: what always comes to you asked whatever its approval, after
-// what they allow and ask and before what they hold back (PROTOCOL.md, "What always comes to you").
-const withAlways = rules => [...rules.filter(rule => rule.effect === "allow" || rule.effect === "ask"), ...link.ALWAYS_ASK_RULES, ...rules.filter(rule => rule.effect !== "allow" && rule.effect !== "ask")];
+// A bot's rules as its box makes them: what always comes to you asked whatever its approval (PROTOCOL.md,
+// "What always comes to you"; bots-night.test.js holds what that does).
+const withAlways = rules => link.withAlwaysAsk(rules);
 
 const bots = path.join(home, "bots");
 const write = (file, text) => {

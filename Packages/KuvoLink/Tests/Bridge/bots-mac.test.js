@@ -25,9 +25,9 @@ Object.assign(process.env, {
 });
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
-// A bot's rules as its box makes them: what always comes to you asked whatever its approval, after
-// what they allow and ask and before what they hold back (PROTOCOL.md, "What always comes to you").
-const withAlways = rules => [...rules.filter(rule => rule.effect === "allow" || rule.effect === "ask"), ...link.ALWAYS_ASK_RULES, ...rules.filter(rule => rule.effect !== "allow" && rule.effect !== "ask")];
+// A bot's rules as its box makes them: what always comes to you asked whatever its approval (PROTOCOL.md,
+// "What always comes to you"; bots-night.test.js holds what that does).
+const withAlways = rules => link.withAlwaysAsk(rules);
 const bots = process.env.KUVO_BOTS;
 const home = process.env.KUVO_HOME;
 const settingsFile = path.join(process.env.KUVO_ENGINE_CONFIG, "opencode", "opencode.json");

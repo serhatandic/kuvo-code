@@ -663,20 +663,27 @@ folder you pick once per box, after asking you.
 changes to who may do what, new accounts, messages to people, your passwords, keys and sign-ins,
 and git's settings. No mode, Always, plan or night's switch turns this off.
 - `answer_ask` checks it first, before the policy above, by the tool call's whole input: a
-  command's programs and subcommands (`rm`, `chmod`, `sudo`, `git config`, `git push --force`,
-  `gh pr create`, `stripe … create`, `docker rm`…), a request to a payment's or a message's service
-  (`api.stripe.com`, `hooks.slack.com`…), an edit of `.env`, `.ssh/`, `.gitconfig`, and another tool
-  by its name's words (`gmail_send_email`, `delete_page`, `create_account`). It refuses with the kind
-  in words: "That's a permanent delete, which always comes to the user".
+  command's programs and subcommands, git's past its own options (`rm`, `chmod`, `sudo`, `git -C x
+  config`, `git push --force` or `+ref`, `gh pr create`, `gh api` that writes, `stripe … create`,
+  `docker rm`…), a request to a payment's or a message's service (an address like
+  `https://api.stripe.com`), anything naming where keys are kept (`.ssh`, `.env`, `.netrc`…), a
+  file written in place (`sed -i`, `>>`), an edit of `.env`, `.ssh/`, `.gitconfig`, and another tool
+  by its name's words, in any case (`gmail_send_email`, `sendMail`, `create_pull_request`), unless
+  its first verb only reads (`get_order`) and it reads no secret. It refuses with the kind in words:
+  "That's a permanent delete, which always comes to the user".
 - Every session a bot starts, and the bot's own conversation, carries engine rules that ask for
-  them whatever its approval (`shell` asks for those programs and services, after its own rules so
-  they win over Approve All, and before what you don't allow, which stays not allowed).
+  them whatever its approval: `shell` for those programs, subcommands and services, and `edit` for
+  where keys are kept and git's settings, after its own rules so they win over Approve All, then
+  its own Don't Allows of commands again, so those stay Don't Allow. Nothing else of its rules
+  moves, and its approval reads as it was (Ask First is its own `shell *` rule). Another tool (an
+  integration's) can't be named ahead in the engine's rules: on Approve All, only the bot's answers
+  and words hold it back.
 
 **A night** (bridge 0.9.111, feature `work.nights`, `work/night.ts`): you give a bot a goal at
 bedtime, and it works through it while you sleep.
 - **Only where the box may work unattended**: a night starts only on a box whose sessions' commands
   run in the sandbox (`sandboxOn`, false until it's built in; a test box says yes with
-  `KUVO_TEST_SANDBOX_ON=1`). Everything else about nights works without it. Clients never say
+  `KUVO_TEST_SANDBOX_ON=1`, never the real app's, `run.kuvo.code/box`, whose app takes it out). Everything else about nights works without it. Clients never say
   "sandbox" on the card: the box's check reads "This Mac can't run a night yet".
 - **Tools** (a bot's conversation only): `propose_night` (`{goal, steps: [text], checks?: [{text,
   ok?, detail?, url?, button?}], spend?: [{what, cap, currency?}], public?: [text], projects?:
@@ -688,7 +695,7 @@ bedtime, and it works through it while you sleep.
 - **Only you start it**: `POST kuvo/work/nights/<id>` from a client, `{action: start, public?: {<id>:
   bool}, wake?}`, `{action: decline}` or `{action: stop}` → `{night}`. Never a tool, an agent's
   message or another computer's mail. 409 `{needs: "sandbox"}` where the box can't work unattended;
-  400 for a night in the wrong state; 404 for none. Starting tells the bot `[Night started] …` with
+  400 for a night in the wrong state or a card from more than a day ago; 404 for none. Starting tells the bot `[Night started] …` with
   what's switched on and off, what it may spend and the projects it may make; declining tells it
   `[Not tonight] …`; stopping stops its work as `stop-all` does.
 - **`GET kuvo/work/nights`** and **`GET kuvo/work/nights/events`** (ndjson, now and at each
@@ -706,16 +713,22 @@ bedtime, and it works through it while you sleep.
     session of its work (or the bot) asks that no one answers in 15 minutes, is said no to
     (`reject`, with words telling it to work around it) and kept as a blocker of kind `ask`
     (`outside` for a project), with the answer kept on the session (`by: {name: "Kuvo Code"}`).
+  - A question no one answers in 15 minutes is put away (the engine's form dismissed, with words
+    telling it to go on), and kept as a blocker of kind `ask`.
   - A session the bot starts is told it runs overnight: prepare, don't publish, deploy, send or pay.
+  - While no public step is switched on, publishing and deploying (`git push`, `npm publish`,
+    `vercel`, `wrangler deploy`, `docker push`, `gh release`…) ask too, in the bot's conversation
+    and every session of its work, whatever their approval; with one switched on, they go ahead.
+  - A night that runs 12 hours ends: its work stopped, `state: stopped`, and a short report.
   - The bot is told to make drafts of what's public unless its switch is on, spend only what the
     plan names, and the five kinds of trouble (`bot-words.json`).
   - **Keep-awake**: a Mac's box holds `caffeinate -s -w <its pid>` while any night runs (macOS
     honors it on power only), and lets go once none does. A machine doesn't sleep. A Mac on battery
     mid-night is a blocker.
 - **Your phones**: each new blocker, once, as category `blocked` (`title` the bot, `subtitle`
-  "Needs you in the morning", `data: {session}`, and `wake: "1"` for kind `you` on a night you
-  asked to be woken for); the morning report, once, as `report` (`title` "<bot>'s night"). Both
-  show quietly unless `wake` says otherwise. A Mac's box sends them while its phone link is on;
+  "Needs you in the morning", `data: {session, quiet: "1"}`, or `wake: "1"` in place of `quiet` for
+  kind `you` on a night you asked to be woken for); the morning report, once, as `report`
+  (`title` "<bot>'s night", `quiet: "1"`). A Mac's box sends them while its phone link is on;
   the Mac app shows its own from `kuvo/work/nights`.
 
 ### Updates
@@ -823,7 +836,7 @@ with a mail frame, sealed with the sender's static key for the phone's. Its payl
 | `body` | What the Mac shows: the request, the question, the last words of a reply. |
 | `category` | What it's about, below. |
 | `thread` | What it's grouped under: the session's id, or the group chat's. |
-| `data` | Where it opens: `session` or `group`; `request` for a permission or a form, with `requestSession` when the session asking isn't the one shown (a subagent's), and `answerable: "0"` when its notification mustn't answer it from buttons (it can't show all it covers, or some of its text shows as dots); `ask` for a browser ask; `wake: "1"` for a night's blocker you asked to be woken for. |
+| `data` | Where it opens: `session` or `group`; `request` for a permission or a form, with `requestSession` when the session asking isn't the one shown (a subagent's), and `answerable: "0"` when its notification mustn't answer it from buttons (it can't show all it covers, or some of its text shows as dots); `ask` for a browser ask; `quiet: "1"` for one that shows without lighting the screen or a sound (a night's blocker, its morning report), and `wake: "1"` for a night's blocker you asked to be woken for. |
 
 | Category | When |
 | --- | --- |
@@ -832,8 +845,8 @@ with a mail frame, sealed with the sender's static key for the phone's. Its payl
 | `ask` | An agent browsing asks for a sign-in, a code or a step. `ask` is it. |
 | `finished` | A run finished. |
 | `failed` | A run stopped with an error. |
-| `report` | A bot's run finished: a wake-up's or a watch's news, or a night's morning report. Quiet. |
-| `blocked` | A bot's night needs you in the morning. Quiet, unless `data.wake` is `"1"`. |
+| `report` | A bot's run finished: a wake-up's or a watch's news, or a night's morning report (`quiet`). |
+| `blocked` | A bot's night needs you in the morning (`quiet`, or `wake` where you asked to be woken). |
 | `message` | Something in a group chat. |
 
 A phone should ignore a category it doesn't know, and show the notification plainly.

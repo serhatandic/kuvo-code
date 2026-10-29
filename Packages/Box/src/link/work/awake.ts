@@ -27,6 +27,7 @@ export function keepAwake(on: boolean): void {
     }
     return;
   }
+  gone = held;
   held?.kill();
   held = null;
 }
@@ -34,13 +35,29 @@ export function keepAwake(on: boolean): void {
 /** Whether it's kept awake now. */
 export const keptAwake = () => held !== null;
 
+/** Once what kept it awake has gone (at once when nothing does). */
+export function letGo(): Promise<void> {
+  const child = held ?? gone;
+  if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  // (Waited on, it keeps this process going till then.)
+  child.ref();
+  return new Promise(done => child.once("exit", () => done()));
+}
+let gone: ChildProcess | null = null;
+
+// What `onPower` last found, for half a minute: a card's checks are read at every change.
+let power: { at: number; on: boolean | null } | null = null;
+
 /** Whether this Mac runs on power now (null on a machine, or when it can't tell). */
 export function onPower(): boolean | null {
   if (!keepsAwake()) return null;
+  if (power && Date.now() - power.at < 30_000) return power.on;
+  let on: boolean | null = null;
   try {
     const said = execFileSync("/usr/bin/pmset", ["-g", "batt"], { encoding: "utf8", timeout: 5000 });
-    if (/AC Power/.test(said)) return true;
-    if (/Battery Power/.test(said)) return false;
+    if (/AC Power/.test(said)) on = true;
+    else if (/Battery Power/.test(said)) on = false;
   } catch {}
-  return null;
+  power = { at: Date.now(), on };
+  return on;
 }

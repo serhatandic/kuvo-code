@@ -48,5 +48,6 @@ test("the Mac stays awake while a night runs, and sleeps again once it ends; a m
   write(nightsFile, JSON.stringify({ nights: [{ ...night("done"), ended: Date.now(), report: "Done." }] }));
   await link.lookAtNights(() => true, () => []);
   assert.equal(link.keptAwake(), false);
-  while (holding()) spawnSync("true");
+  await link.letGo();
+  assert.equal(holding(), "", "and the Mac may sleep again");
 });

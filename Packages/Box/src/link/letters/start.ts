@@ -275,7 +275,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
   const made = rulesFor(wantsAsk && !asksFirst(parent?.permissions) ? { ...parent, permissions: askFirstRules() as EngineSession["permissions"] } : parent, project?.folders ?? []);
   // A bot's work asks for what always comes to you, whatever its approval (last, so they win).
-  const rules = bot ? withAlwaysAsk(made ?? []) : made;
+  // Overnight, publishing too, unless you switched on a public step for tonight.
+  const night = bot ? runningNight(bot.bot) : null;
+  const rules = bot ? withAlwaysAsk(made ?? [], { publishing: Boolean(night && !night.public.some(step => step.on)) }) : made;
   // Its mode: the one asked for, else the conversation's (one that plans starts sessions that plan).
   const agent = given.mode === "plan" || given.mode === "build" ? given.mode : parent?.agent ?? null;
   let session: string;
@@ -301,7 +303,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   }
   const waits = given.wait === true;
   const id = messageID();
-  const text = by ? composeLetter(by.name, by.session, task, waits) + (bot ? `\n\n${sessionNote(bot.name)}${runningNight(bot.bot) ? `\n\n${nightNote}` : ""}` : "") : task;
+  const text = by ? composeLetter(by.name, by.session, task, waits) + (bot ? `\n\n${sessionNote(bot.name)}${night ? `\n\n${nightNote}` : ""}` : "") : task;
   try {
     await asked(target, "POST", `api/session/${address}/prompt`, { id, text, delivery: "steer" });
   } catch (error) {

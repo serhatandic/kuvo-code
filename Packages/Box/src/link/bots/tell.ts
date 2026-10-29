@@ -211,7 +211,8 @@ export function permissionsHere(): KitRule[] | null {
 // makes them (ToolApproval.refreshed): Approve All runs what Settings asks first about, Ask First
 // still lets through what Settings allows, and both keep what Settings doesn't allow.
 export function refreshedRules(current: KitRule[], settings: KitRule[]): KitRule[] {
-  const asks = current.some(rule => rule.action === "shell" && rule.effect === "ask");
+  // (Its own approval's rule: what always comes to you asks for some commands whatever it is.)
+  const asks = current.some(rule => rule.action === "shell" && rule.resource === "*" && rule.effect === "ask");
   const denied = settings.filter(holdsBack);
   let made: KitRule[];
   if (asks) {
