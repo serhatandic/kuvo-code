@@ -152,7 +152,7 @@ struct GroupTask: Codable, Hashable, Identifiable {
     /// The bots whose parts come first: it starts once theirs are done, with what they reported.
     var after: [String]?
 
-    enum State: String, Codable {
+    enum State: Codable, Hashable {
         /// In the wrap-up, waiting for you to say go.
         case proposed
         /// Started, but waiting for the parts it comes after.
@@ -163,11 +163,29 @@ struct GroupTask: Codable, Hashable, Identifiable {
         case done
         /// It couldn't be done: the bot's machine away, an error.
         case failed
+        /// One a newer Kuvo Code says: not under way as far as this copy can tell (no spinner, and
+        /// nothing held back for it), and kept as it said it, for when this copy is updated.
+        case other(String)
 
-        /// One a newer Kuvo Code says, as under way (as the phone reads it), rather than the
-        /// computer's chats failing to read.
+        var rawValue: String {
+            switch self {
+            case .proposed: "proposed"
+            case .waiting: "waiting"
+            case .working: "working"
+            case .done: "done"
+            case .failed: "failed"
+            case .other(let state): state
+            }
+        }
+
         init(from decoder: Decoder) throws {
-            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .working
+            let state = try decoder.singleValueContainer().decode(String.self)
+            self = [Self.proposed, .waiting, .working, .done, .failed].first { $0.rawValue == state } ?? .other(state)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
         }
     }
 }

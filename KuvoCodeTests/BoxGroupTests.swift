@@ -283,6 +283,13 @@ import Testing
 
         #expect(app.chats.list.map(\.id) == ["grp_box0000001"])
         #expect(app.chats.messages(in: "grp_box0000001").map(\.text) == ["Morning.", "Here's the plan."])
+        // Not under way: no spinner forever, and Move to Computer isn't held back by it.
+        let states = app.chats.messages(in: "grp_box0000001").flatMap { $0.tasks ?? [] }.map(\.state)
+        #expect(states.count == 1 && !states.contains(.working) && !states.contains(.waiting))
+        // Kept as it came, so a newer Kuvo Code reading the cache sees it.
+        app.boxGroups.flush()
+        let kept = try JSONSerialization.jsonObject(with: Data(contentsOf: BoxGroups.folder.appending(path: "grp_box0000001.json"))) as? [[String: Any]]
+        #expect(kept?.compactMap { ($0["tasks"] as? [[String: Any]])?.first?["state"] as? String } == ["canceled"])
     }
 
     /// One machine added twice, at two addresses, found to be one: its chats are kept once, as
