@@ -133,4 +133,30 @@ import Testing
         panel.inView = .init(session: nil, draft: "terminal:T1")
         #expect(!panel.visibleTabs.contains { $0.kind == .file(a) })
     }
+
+    /// Run again after the draft became its session, or the conversation moved on to another
+    /// (the coding agents): the command starts over in the same terminal, not a second copy of it
+    /// beside the first (a dev server then finding its port taken).
+    @Test func runAgainAfterADraftIsSentOrMovesUsesTheSameTerminal() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "KuvoCodeTests-run-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            panel.closeAll()
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let shell = ["SHELL": "/bin/sh"]
+        let terminals = { self.panel.visibleTabs.filter { $0.kind == .terminal }.count }
+        panel.inView = .init(session: nil, draft: "draft:\(folder.path)")
+        panel.run("true", in: folder.path, environment: shell)
+        panel.adoptDraft("draft:\(folder.path)", as: "ses_a")
+        panel.inView = .init(session: "ses_a")
+        panel.run("true", in: folder.path, environment: shell)
+        #expect(terminals() == 1)
+
+        panel.handOver(from: "ses_a", to: "ses_b")
+        panel.inView = .init(session: "ses_b")
+        panel.run("true", in: folder.path, environment: shell)
+        #expect(terminals() == 1)
+    }
 }
+

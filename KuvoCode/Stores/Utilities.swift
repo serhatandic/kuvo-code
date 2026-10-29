@@ -741,6 +741,7 @@ final class Utilities {
         let panel = panelOf(session)
         for index in tabs.indices where tabs[index].owner == draft { tabs[index].owner = panel }
         if let tab = chosen.removeValue(forKey: chosenKey(draft, place)) { chosen[chosenKey(panel, place)] = tab }
+        moveRuns(from: draft, to: panel)
     }
 
     /// A conversation that carries on in another (moved to the coding agents): its panel's tabs,
@@ -753,9 +754,18 @@ final class Utilities {
             chosen[key] = nil
             chosen[to + key.dropFirst(from.count)] = tab
         }
+        moveRuns(from: from, to: to)
         if let file = kept.removeValue(forKey: from) { kept[to] = file }
         for (id, claim) in agentClaims where claim.session == old { agentClaims[id] = (new, claim.at) }
         if let picked = picks.removeValue(forKey: old) { picks[new] = picked }
+    }
+
+    /// A panel's run terminals go with its tabs, so Run again restarts the same one.
+    private func moveRuns(from: String, to: String) {
+        for (key, id) in runs where key.hasPrefix(from + "|") {
+            runs[key] = nil
+            runs[to + key.dropFirst(from.count)] = id
+        }
     }
 
     /// Closes a conversation's panel: the bot or session was deleted.
