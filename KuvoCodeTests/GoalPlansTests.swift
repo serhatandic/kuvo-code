@@ -124,8 +124,10 @@ import Testing
         }
         let status = { (reason: String, route: String?) in GoalSandbox.Reading.status(.init(on: false, reason: reason, route: route)) }
 
-        #expect(row(status("off", "PATCH kuvo/sandbox"), true, nil) == nil, "only off (it comes on by itself): the card says nothing of it")
         #expect(row(.status(.init(on: true)), true, nil) == nil)
+        let notOn = try #require(row(.status(.init(on: false)), true, nil), "not on, with no reason (switched off for the rollout): it says so, with nothing to press")
+        #expect(notOn.title == "This Mac can’t work on its own yet")
+        #expect(notOn.buttons.isEmpty)
         let unknown = try #require(row(status("somethingNew", "POST kuvo/sandbox/check"), false, nil), "a reason from a newer box still says it can't, and checks again")
         #expect(unknown.title == "lokum can’t work on its own yet")
         #expect(unknown.buttons == [.init(label: "Try Again", action: .route(method: "POST", path: "kuvo/sandbox/check"))])
@@ -136,10 +138,10 @@ import Testing
         #expect(row(status("macos", nil), true, nil)?.buttons == [.init(label: "Software Update…", action: .open(GoalSandbox.softwareUpdate))])
 
         let failedOnce = try #require(row(.status(.init(on: false, reason: "checkFailed", route: "POST kuvo/sandbox/check", check: "readsOwn", failures: 1)), true, nil))
-        #expect(failedOnce.text.contains("found that a command could read Kuvo Code’s own files"))
+        #expect(failedOnce.text == "Its check found that a command could still read Kuvo Code’s files, so commands run outside the sandbox for now. Try Again checks it again.")
         #expect(failedOnce.buttons == [.init(label: "Try Again", action: .route(method: "POST", path: "kuvo/sandbox/check"))])
         let failedTwice = try #require(row(.status(.init(on: false, reason: "checkFailed", route: "POST kuvo/sandbox/check", check: "tempFiles", failures: 2)), true, nil))
-        #expect(failedTwice.text.contains("failed again: a command couldn’t write its temporary files"))
+        #expect(failedTwice.text.hasPrefix("Its check failed again: a command couldn’t write its temporary files"))
         #expect(failedTwice.buttons.map(\.label) == ["Try Again", "Report a Problem…"], "Report a Problem joins once it fails again")
 
         #expect(row(status("plugin", "POST kuvo/sandbox/check"), true, nil)?.buttons == [.init(label: "Fix It", action: .route(method: "POST", path: "kuvo/sandbox/check"))])

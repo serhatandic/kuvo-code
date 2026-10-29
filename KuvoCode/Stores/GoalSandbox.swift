@@ -9,7 +9,6 @@ enum GoalSandbox {
     struct Status: Decodable, Equatable {
         var on: Bool
         var why: String?
-        var wanted: Bool?
         var able: Bool?
         /// The coding agents' own commands are in it too.
         var agents: Bool?
@@ -21,11 +20,10 @@ enum GoalSandbox {
         var check: String?
         var failures: Int?
 
-        init(on: Bool, why: String? = nil, wanted: Bool? = nil, able: Bool? = nil, agents: Bool? = nil, reason: String? = nil, action: String? = nil,
+        init(on: Bool, why: String? = nil, able: Bool? = nil, agents: Bool? = nil, reason: String? = nil, action: String? = nil,
              route: String? = nil, needs: String? = nil, check: String? = nil, failures: Int? = nil) {
             self.on = on
             self.why = why
-            self.wanted = wanted
             self.able = able
             self.agents = agents
             self.reason = reason
@@ -84,8 +82,8 @@ enum GoalSandbox {
         switch check {
         case "folder": "a command couldn’t use its own folder"
         case "tempFiles": "a command couldn’t write its temporary files"
-        case "readsOwn": "a command could read Kuvo Code’s own files"
-        case "writesOwn": "a command could write in Kuvo Code’s own folder"
+        case "readsOwn": "a command could still read Kuvo Code’s files"
+        case "writesOwn": "a command could still write in Kuvo Code’s own folder"
         case "didntRun": "the check didn’t run"
         case "setup": "setting it up failed"
         default: "something wasn’t kept apart"
@@ -94,7 +92,8 @@ enum GoalSandbox {
 
     /// The row for a goal that can't run alone on `computer` ("This Mac", or a machine's name).
     /// `agent`: the coding agent the bot runs on ("Claude Code"), nil for one on the engine. None
-    /// where there's nothing to fix: the sandbox is on, or only off (it comes on by itself).
+    /// where there's nothing to fix: the sandbox is on. It's always on; a box reports it not on with
+    /// no reason only while it's switched off for the rollout, with nothing here to press.
     static func row(_ reading: Reading?, computer: String, onThisMac: Bool, bot: String, agent: String?) -> Row? {
         let cant = "\(computer) can’t work on its own yet"
         let withYou = "Until then, \(bot) works while you’re here."
@@ -122,8 +121,6 @@ enum GoalSandbox {
         let retry = Button(label: "Try Again", action: route.map { .route(method: $0.method, path: $0.path) } ?? .readAgain)
         let restart = Button(label: "Restart Engine", action: .route(method: route?.method ?? "POST", path: route?.path ?? "kuvo/engine/restart"))
         switch status.reason {
-        case "off":
-            return nil
         case "kernel":
             return Row(title: "\(computer) can’t work on its own",
                        text: "\(computer)’s Linux is too old for the sandbox. Ask whoever runs it to update to \(status.needs ?? "Linux 5.13") or later. \(bot) works while you’re here.",
@@ -137,7 +134,8 @@ enum GoalSandbox {
             return Row(title: "Checking the sandbox…", text: "\(bot) works while you’re here until it’s checked.", buttons: [retry] + report(status), checking: true)
         case "checkFailed":
             let again = (status.failures ?? 1) >= 2
-            return Row(title: cant, text: "The sandbox’s check \(again ? "failed again:" : "found that") \(found(status.check)). \(withYou)", buttons: [retry] + report(status))
+            return Row(title: cant, text: "Its check \(again ? "failed again:" : "found that") \(found(status.check)), so commands run outside the sandbox for now. Try Again checks it again.",
+                       buttons: [retry] + report(status))
         case "plugin":
             return Row(title: cant, text: "The sandbox’s part in the engine was changed or removed. Fix It puts it back.",
                        buttons: [Button(label: "Fix It", action: retry.action)])
@@ -147,6 +145,8 @@ enum GoalSandbox {
             return Row(title: cant, text: "The engine hasn’t loaded the sandbox yet. \(withYou)", buttons: [restart])
         case nil where status.on:
             return nil
+        case nil:
+            return Row(title: cant, text: "\(bot) works while you’re here.", buttons: [])
         default:
             // A reason this app doesn't know yet: the box's own words, and checking again.
             return Row(title: cant, text: [status.why, "\(bot) works while you’re here."].compactMap { $0 }.joined(separator: " "), buttons: [retry] + report(status))

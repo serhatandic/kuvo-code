@@ -14,7 +14,7 @@ extension GoalPlans {
         if kind == "cant" {
             let reason = ProcessInfo.processInfo.environment["KUVO_DEMO_SANDBOX"] ?? "checkFailed"
             demoSandbox = reason == "old" ? .old : .status(GoalSandbox.Status(
-                on: false, wanted: false, able: true, agents: false, reason: reason,
+                on: false, able: true, agents: false, reason: reason,
                 route: ["checking", "checkFailed", "engineMissing", "plugin"].contains(reason) ? "POST kuvo/sandbox/check" : ["engineDown", "waiting"].contains(reason) ? "POST kuvo/engine/restart" : nil,
                 needs: reason == "kernel" ? "Linux 5.13" : nil, check: reason == "checkFailed" ? "readsOwn" : nil, failures: reason == "checkFailed" ? 2 : nil))
         }
