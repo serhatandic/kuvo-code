@@ -231,6 +231,44 @@ import Testing
         #expect(BoxGroups.metLine(said) == "All green.")
     }
 
+    /// A chat read again (its computer back, an edit) while its computer says something of it: what
+    /// it said, after the read began, stays. Its talk ended stays ended; gone stays gone.
+    @Test func whatAChatSaysWhileItsReadAgainStays() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_pal", "Pal", "box")])
+        let group = Self.group("grp_box0000001", members: ["bot_pal"])
+        there.add(group, messages: [Self.said])
+        let app = app()
+        await app.boxGroups.connected("box")
+        // Read from while it talked.
+        let talking = StubWeb.json(["data": ["group": group, "status": "active", "state": ["speaking": "bot_pal", "discussing": true, "paused": false], "messages": [Self.said]]])
+        func readHeld(while said: () throws -> Void) async throws {
+            let reading = Gate(), release = Gate()
+            machineBridge.on("GET", "/api/kuvo/groups/grp_box0000001") { _ in
+                reading.open()
+                release.wait()
+                return talking
+            }
+            let read = Task { await app.boxGroups.reload("grp_box0000001") }
+            try await until { reading.isOpen }
+            try said()
+            release.open()
+            await read.value
+        }
+
+        try await readHeld {
+            app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+                                                                                     "state": ["discussing": false, "paused": false]]), machine: "box")
+        }
+        #expect(app.chats.speaking["grp_box0000001"] == nil)
+        #expect(!app.chats.discussing.contains("grp_box0000001"))
+
+        try await readHeld {
+            app.boxGroups.handle(try machineBridge.event("kuvo.group.deleted", ["id": "grp_box0000001"]), machine: "box")
+        }
+        #expect(app.chats.list.isEmpty)
+    }
+
     /// This Mac's bridge starting, then stopped: its chats show as last seen, and what you write
     /// waits in the composer; once it's up, it goes.
     @Test func thisMacsChatsWaitForItsBridge() async throws {
