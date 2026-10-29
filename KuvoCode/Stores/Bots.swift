@@ -45,7 +45,7 @@ struct Bot: Codable, Identifiable, Hashable {
     /// none, and from a box from before bots ran sessions.
     var limits: WorkLimits?
     /// What you allowed it to do without asking ("Always"), as its box keeps it.
-    var allowed: [WorkAction]?
+    var allowed: WorkActions?
 
     /// Where its session runs, the app's way of writing it.
     var directory: String {
@@ -105,7 +105,7 @@ struct ListedBot: Decodable, Equatable {
     /// The limits you set on its work; nil for none.
     var limits: WorkLimits?
     /// What you allowed it to do without asking; nil for nothing.
-    var allowed: [WorkAction]?
+    var allowed: WorkActions?
 }
 
 /// Your bots, wherever each lives, as their computers' boxes keep them: this Mac's followed as they

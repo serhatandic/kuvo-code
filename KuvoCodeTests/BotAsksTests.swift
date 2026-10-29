@@ -82,7 +82,7 @@ import Testing
         let (box, ask) = try #require(app.botAsks.asks(for: "ses_pixel").first)
         try await app.botAsks.answer(ask, on: box, .always, folder: projects.path)
         let pixel = try #require(app.bots.bot("bot_pixel00001"))
-        #expect(pixel.allowed == [.makeProject], "Edit Bot › Work lists it")
+        #expect(pixel.allowed?.actions == [.makeProject], "Edit Bot › Work lists it")
         try await app.botWork.setAllowed([], for: pixel)
         #expect(app.bots.bot("bot_pixel00001")?.allowed == nil, "Ask First: it asks again")
     }

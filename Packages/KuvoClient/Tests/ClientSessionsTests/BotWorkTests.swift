@@ -69,4 +69,9 @@ struct BotWorkTests {
         let older = try JSONDecoder().decode(BotWorkReport.self, from: Data(#"{"bot": "bot_pixel", "sessions": [], "answered": [], "today": {"started": 0, "working": 0, "tokens": 0}, "limits": null}"#.utf8))
         #expect(older.asks.isEmpty && older.projects.isEmpty)
     }
+
+    @Test func whatABotMayDoWithoutAskingReadsEvenWhenANewerBoxNamesMore() throws {
+        let allowed = try JSONDecoder().decode(WorkActions.self, from: Data(#"["makeProject", "buyDomain"]"#.utf8))
+        #expect(allowed.actions == [.makeProject])
+    }
 }

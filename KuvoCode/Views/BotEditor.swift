@@ -1086,7 +1086,7 @@ struct BotWorkLimits: View {
     @State private var isSaving = false
 
     private var limits: WorkLimits { app.bots.bot(bot.id)?.limits ?? WorkLimits() }
-    private var allowed: [WorkAction] { app.bots.bot(bot.id)?.allowed ?? [] }
+    private var allowed: [WorkAction] { app.bots.bot(bot.id)?.allowed?.actions ?? [] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

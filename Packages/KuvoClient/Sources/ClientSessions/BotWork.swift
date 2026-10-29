@@ -177,6 +177,23 @@ public enum WorkAction: String, Codable, Sendable, Hashable, CaseIterable {
     case makeProject, cloneProject
 }
 
+/// What you let a bot do without asking, as its box lists it (`allowed` in `kuvo/bots`): what a
+/// newer box adds that this client doesn't know is left out, so the bot list still reads.
+public struct WorkActions: Codable, Sendable, Hashable {
+    public var actions: [WorkAction]
+
+    public init(_ actions: [WorkAction]) { self.actions = actions }
+
+    public init(from decoder: Decoder) throws {
+        actions = try decoder.singleValueContainer().decode([String].self).compactMap(WorkAction.init(rawValue:))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(actions)
+    }
+}
+
 /// What a bot (or another conversation) asks you before it does it (`kuvo/work/asks`): making a
 /// project, or cloning one into a new project.
 public struct WorkAsk: Decodable, Sendable, Hashable, Identifiable {

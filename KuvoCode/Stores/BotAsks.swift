@@ -76,10 +76,12 @@ final class BotAsks {
             }
             if onThisMac { try? await Task.sleep(for: .seconds(older ? 300 : 2)) }
         }
-        // Gone with its connection: nothing it asked can be answered from here now.
+        // Gone with its connection: nothing it asked can be answered from here now. What it still
+        // asks keeps its notification, and isn't told again when it's back.
         if following[box] == me {
             following[box] = nil
-            take([], from: box)
+            asked[box] = nil
+            changed()
         }
     }
 
@@ -135,7 +137,7 @@ final class BotAsks {
     /// another client (or no longer asked), which is gone here then too.
     @discardableResult
     func answer(_ ask: WorkAsk, on box: String, _ answer: WorkAskAnswer, folder: String? = nil) async throws -> Answered? {
-        guard let client = client(box) else { throw CancellationError() }
+        guard let client = client(box) else { throw BoxRefusal(status: 503, message: "\(app?.machines.engine(box)?.machine.name ?? "Its computer") can’t be reached now. Try again once it’s connected.") }
         guard answering.insert(ask.id).inserted else { return nil }
         defer { answering.remove(ask.id) }
         struct Given: Encodable {
