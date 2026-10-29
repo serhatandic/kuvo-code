@@ -178,7 +178,7 @@ export async function askersOf(target: Target, session: string, signal?: AbortSi
   for (let at = 0; at < found.length && at < 40; at++) {
     if (at > 0 && found.length > 30) break;
     const listed = await call(target, "GET", `/api/session?limit=50&order=desc&parentID=${encodeURIComponent(found[at])}`, undefined, signal).catch(() => null);
-    for (const child of Array.isArray(listed) ? listed : []) if (isObject(child) && typeof child.id === "string" && !found.includes(child.id)) found.push(child.id);
+    for (const child of Array.isArray(listed) ? listed : []) if (isObject(child) && typeof child.id === "string" && child.parentID === found[at] && !found.includes(child.id)) found.push(child.id);
   }
   return found;
 }

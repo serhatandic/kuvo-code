@@ -6813,7 +6813,7 @@ async function askersOf(target, session, signal) {
       break;
     const listed = await call(target, "GET", `/api/session?limit=50&order=desc&parentID=${encodeURIComponent(found[at])}`, undefined, signal).catch(() => null);
     for (const child of Array.isArray(listed) ? listed : [])
-      if (isObject(child) && typeof child.id === "string" && !found.includes(child.id))
+      if (isObject(child) && typeof child.id === "string" && child.parentID === found[at] && !found.includes(child.id))
         found.push(child.id);
   }
   return found;
