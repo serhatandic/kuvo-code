@@ -158,6 +158,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A conversation whose agent gave the browser an impossible element or tab number opens again instead of crashing.
 - Find in a conversation highlights the place you're on in a message sent with a keyword, finds a name shown with its face, and stays quick in a long pasted log.
 - A machine running a newer Kuvo Code still shows its bots and group chats: a bot's look or a chat message this copy doesn't know shows plainly or is left out, instead of the whole list going missing.
+- A machine's group chat that was talking when you disconnected, restarted its engine or connected again no longer stays "thinking" with a Stop button that does nothing; a chat whose talk ended, or that was deleted, while Kuvo Code read it again stays that way.
+- A wake-up canceled or sent on a machine (from your phone, say) leaves the sidebar within a minute, instead of staying until Kuvo Code opens again.
+- Renaming, making or deleting a bot on a machine just as Kuvo Code reads that machine's bots again keeps your change, instead of the old name coming back or a new bot's conversation closing.
 
 ## 0.7.2
 
