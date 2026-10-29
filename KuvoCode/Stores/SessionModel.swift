@@ -396,6 +396,8 @@ final class SessionModel {
     /// The next waiting message started here a moment from now, on a box that doesn't carry the
     /// queue (`drainHere`).
     @ObservationIgnored private var drainTask: Task<Void, Never>?
+    /// Stops asked for so far (`stop`): a Resume that waited meanwhile doesn't go.
+    @ObservationIgnored private var stops = 0
     var failure: String?
 
     /// Its engine: a machine's changes with each connection to it.
@@ -614,6 +616,8 @@ final class SessionModel {
     /// failed on the old connection is past.
     func reconnect(_ api: OpenCodeAPI) {
         self.api = api
+        // Its box may have been updated meanwhile: whether it carries the queue is read again.
+        boxCarriesQueue = nil
         waitsForEngine = false
         failure = nil
     }
@@ -703,7 +707,7 @@ final class SessionModel {
             prepareCode(in: page.data)
             if transcript.isStale { scheduleReload() }
             // Whether its queue waits for Resume, and what's held, as its box says.
-            readQueue(opening: !isLoaded)
+            readQueue(then: isLoaded ? .read : .opened)
             // A subagent's session is the engine's to set up; it only gets shown.
             if !isLoaded, !isSubagent { await syncFolders() }
             isLoaded = true
@@ -753,9 +757,11 @@ final class SessionModel {
         case "session.execution.succeeded", "session.execution.interrupted", "session.execution.failed":
             keepCopy()
             // The box decides a moment after (whether it was a Stop, a failed run pausing it).
-            if boxCarriesQueue == false { carryHere(event.type) } else { readQueue(after: .seconds(2)) }
+            let ended: QueueMoment = event.type == "session.execution.failed" ? .runFailed : .runEnded
+            if boxCarriesQueue == false { carryHere(ended) } else { readQueue(after: .seconds(2), then: ended) }
         case "session.inbox.enqueued", "session.inbox.delivery.changed":
-            if boxCarriesQueue == false { carryHere(event.type) } else { readQueue(after: .milliseconds(300)) }
+            let moment: QueueMoment = event.type == "session.inbox.enqueued" ? .queued : .other
+            if boxCarriesQueue == false { carryHere(moment) } else { readQueue(after: .milliseconds(300), then: moment) }
         case "session.inbox.cancelled", "session.inbox.delivered":
             if let id = try? event.payload(as: EventPayload.InboxChanged.self).inboxID {
                 move(id, to: event.type == "session.inbox.delivered" ? .delivered : .cancelled)
@@ -1504,6 +1510,7 @@ final class SessionModel {
     /// Stops the agent. Waiting messages stay, queued and paused until Resume: its box holds them
     /// and stops the run.
     func stop() {
+        stops += 1
         Task {
             let inFlight = holdOnTheirWay()
             // A held message whose request for the next step is already on its way: there before
@@ -1589,14 +1596,14 @@ final class SessionModel {
         for message in held where outgoing[message]?.heldAt != nil { outgoing[message]?.heldAt = nil }
     }
 
-    /// The queue read again from the box, `after` a moment (what it does on an event comes then).
-    /// `opening`: the session's first read (see `carryHere`).
-    private func readQueue(after delay: Duration = .zero, opening: Bool = false) {
+    /// The queue read again from the box, `after` a moment (what it does on an event comes then);
+    /// on a box that doesn't carry it, what `moment` does here (`carryHere`).
+    private func readQueue(after delay: Duration = .zero, then moment: QueueMoment = .other) {
         queueRead?.cancel()
         queueRead = Task {
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
-            guard await carriesQueue() else { return carryHere(opening ? "opened" : "read") }
+            guard await carriesQueue() else { return carryHere(moment) }
             await queueRoute("queue", method: "GET")
         }
     }
@@ -1621,19 +1628,32 @@ final class SessionModel {
     // later, the next one goes; a failed run pauses it, holding what was for the next step; a queue
     // found waiting as the session opens waits for Resume, and goes on when read again later.
 
-    /// What `happened` (an engine event's type, or `opened`/`read`) does to the queue here.
-    private func carryHere(_ happened: String) {
-        switch happened {
-        case "session.execution.succeeded", "session.execution.interrupted", "read":
-            if !transcript.isRunning, hasQueue { drainHere() }
-        case "session.execution.failed":
+    /// What happened, as the queue a Mac carries reads it.
+    private enum QueueMoment {
+        /// The session read as it opens, or again later.
+        case opened, read
+        /// A run that ended (well, or stopped), or failed.
+        case runEnded, runFailed
+        /// A message queued.
+        case queued
+        case other
+    }
+
+    /// What `moment` does to the queue here.
+    private func carryHere(_ moment: QueueMoment) {
+        switch moment {
+        case .runEnded, .read:
+            if !transcript.isRunning, !transcript.pending.isEmpty { drainHere() }
+        case .runFailed:
             Task { await holdHere() }
-        case "session.inbox.enqueued":
+        case .queued:
             // Queued while nothing runs: the engine waits for a run to end, so it's nudged.
             if !transcript.isRunning, hasQueue { drainHere() }
-        case "opened":
-            if !transcript.isRunning, hasQueue { isQueuePaused = true }
-        default:
+        case .opened:
+            // Left waiting (the app quit mid-run, say): it waits for Resume, what was for the next
+            // step held ahead of it.
+            if !transcript.isRunning, !transcript.pending.filter({ !$0.isLocal }).isEmpty { Task { await holdHere() } }
+        case .other:
             break
         }
     }
@@ -1642,7 +1662,7 @@ final class SessionModel {
     /// before a Stop, after a failed run. (One whose request is on its way: see `requestDone`.)
     private func holdHere() async {
         drainTask?.cancel()
-        let steering = transcript.pending.filter { $0.delivery == .steer && !$0.isLocal && outgoing[$0.id]?.heldAt == nil }
+        let steering = transcript.pending.filter { $0.delivery == .steer && !$0.isLocal && outgoing[$0.id]?.request == nil }
         if hasQueue || !steering.isEmpty { isQueuePaused = true }
         let first = (outgoing.values.compactMap(\.heldAt).min() ?? 0) - steering.count
         for (index, item) in steering.enumerated() {
@@ -1657,7 +1677,8 @@ final class SessionModel {
         drainTask?.cancel()
         drainTask = Task {
             try? await Task.sleep(for: delay)
-            guard !Task.isCancelled, !isQueuePaused, !transcript.isRunning, let next = waiting.first(where: { !$0.isLocal }) else { return }
+            guard !Task.isCancelled, !isQueuePaused, !transcript.isRunning,
+                  let next = waiting.first(where: { !$0.isLocal }) ?? transcript.pending.first(where: { !$0.isLocal }) else { return }
             if next.delivery == .queue {
                 try? await api.setDelivery(session: id, item: next.id, delivery: .steer)
             } else {
@@ -1999,10 +2020,14 @@ final class SessionModel {
     func resumeQueue() {
         guard canReach else { return }
         isQueuePaused = false
+        let stopped = stops
         Task {
             // A message held as it went (put back after a Stop) held by the box first: its hold
-            // after the Resume would pause the queue again.
-            if outgoing.values.contains(where: { $0.heldAt != nil }) { await sending?.value }
+            // after the Resume would pause the queue again. Stopped meanwhile: no Resume.
+            if outgoing.values.contains(where: { $0.heldAt != nil && ($0.state == .sending || $0.request != nil) }) {
+                await sending?.value
+                guard stops == stopped else { return }
+            }
             guard await carriesQueue() else { return drainHere(after: .zero) }
             guard await !queueRoute("queue/resume") else { return }
             isQueuePaused = true

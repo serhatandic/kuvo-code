@@ -270,6 +270,49 @@ import Testing
         #expect(model.failure == nil)
     }
 
+    /// On a box without the queue, a session opened with messages left waiting (the app quit
+    /// mid-run): it waits for Resume, what was for the next step held ahead of the queue; Resume
+    /// gives that first; a run that fails holds what came for its next step and pauses again.
+    @Test func onABoxWithoutTheQueueALeftQueueWaitsAndAFailedRunPausesIt() async throws {
+        let (model, box, kept) = try await open(running: false, inbox: [queued("msg_02", "Then update the docs"), ["id": "msg_03", "sessionID": id, "type": "user", "delivery": "steer", "payload": ["text": "Also run the linter"]]], older: true)
+        defer { box.stop(); engine.stop() }
+        try await until { model.isQueuePaused && !deliveries(of: "msg_03").isEmpty }
+        #expect(deliveries(of: "msg_03") == ["queue"], "held, not left for a step that won't come")
+        #expect(deliveries(of: "msg_02").isEmpty)
+        model.apply(try engine.event("session.inbox.delivery.changed", session: id, ["inboxID": "msg_03", "delivery": "queue"]))
+        #expect(model.waiting.map(\.text) == ["Also run the linter", "Then update the docs"])
+
+        model.resumeQueue()
+        try await until { deliveries(of: "msg_03").count == 2 }
+        #expect(deliveries(of: "msg_03").last == "steer", "what was held goes first")
+        #expect(deliveries(of: "msg_02").isEmpty)
+
+        kept.add("msg_04", "And tag it", "steer")
+        model.apply(try engine.event("session.inbox.enqueued", session: id, ["inboxID": "msg_04", "item": ["type": "user", "delivery": "steer", "payload": ["text": "And tag it"]]]))
+        model.apply(try engine.event("session.execution.failed", session: id, ["error": ["type": "provider", "message": "Overloaded."]]))
+        try await until { !deliveries(of: "msg_04").isEmpty }
+        #expect(deliveries(of: "msg_04") == ["queue"])
+        #expect(model.isQueuePaused)
+        #expect(deliveries(of: "msg_02").isEmpty, "not run into the same error")
+    }
+
+    /// A machine's box updated while the session was open: once the Mac connects again, the box
+    /// carries the queue, and a Stop goes to it.
+    @Test func aBoxUpdatedSinceCarriesTheQueueAfterTheMacReconnects() async throws {
+        let (model, box, _) = try await open(running: true, inbox: [queued("msg_02", "Then update the docs")], older: true)
+        defer { box.stop(); engine.stop() }
+        model.stop()
+        try await until { !engine.requests("POST", "/interrupt").isEmpty }
+        let kept = BoxProcess.run.appending(path: "queues.json")
+        #expect(!FileManager.default.fileExists(atPath: kept.path), "carried here: the box keeps nothing")
+
+        let url = engine.url
+        workspace.boxes = { $0 == BoxClient.mac ? box.client(engine: url) : nil }
+        model.reconnect(engine.api)
+        model.stop()
+        try await until { (try? Data(contentsOf: kept)).flatMap { String(data: $0, encoding: .utf8) }?.contains(#""paused":true"#) == true }
+    }
+
     /// A queued message removed by mistake: Undo puts it back in the queue, as it was, behind
     /// the run, rather than starting it.
     @Test func undoPutsARemovedMessageBackInTheQueue() async throws {
