@@ -431,7 +431,7 @@ final class AppModel {
             shell["KUVO_INTEGRATIONS"] = integrations.path
             // This Mac's box, before the engine: it keeps the engine's settings (and the other
             // areas that have moved onto it), and goes on through the engine's restarts.
-            await box.start(engine: binary, environment: await boxEnvironment(shell))
+            await box.start(engine: binary, environment: await boxEnvironment(shell), checked: ProcessInfo.processInfo.environment["KUVO_OPENCODE_BINARY"] == nil)
             guard launch == self.launch else { return }
             // The settings as they are now (they can change while the engine is down, and the box
             // adds its defaults as it starts), brought up to date before the engine reads them;
@@ -504,7 +504,7 @@ final class AppModel {
             let boxEnvironment = await boxEnvironment(shell)
             guard launch == self.launch else { return }
             Task {
-                await box.start(engine: binary, environment: boxEnvironment)
+                await box.start(engine: binary, environment: boxEnvironment, checked: ProcessInfo.processInfo.environment["KUVO_OPENCODE_BINARY"] == nil)
                 // Your personalities, as it keeps them, before they're followed.
                 await Personalities.shared.refresh()
                 // Its worktrees, projects and wake-ups, as this Mac's box keeps them, from now on

@@ -50,8 +50,18 @@ final class BoxProcess {
         return Bridge.scriptURL
     }
 
-    /// Starts it with the engine's Bun, once: it goes on through the engine's restarts.
-    func start(engine: URL, environment: [String: String]) async {
+    /// Whether what it runs with is checked for opencode's signature before each start (the
+    /// engine's Bun; a test's Node isn't).
+    private var checksRuntime = false
+    /// Whether it runs with the engine's Bun (a test's runs with Node).
+    private var runsEngine = false
+
+    /// Starts it with the engine's Bun, once: it goes on through the engine's restarts. `checked`:
+    /// the engine is checked for opencode's signature before each start (not one you named with
+    /// `KUVO_OPENCODE_BINARY`, a build of your own).
+    func start(engine: URL, environment: [String: String], checked: Bool = true) async {
+        checksRuntime = checked
+        runsEngine = true
         var env = environment
         // GitHub's stand-in, and a box kept from your other computers, are for the tests' box only
         // (`TestBox`), never the app's.
@@ -60,7 +70,9 @@ final class BoxProcess {
         env["BUN_BE_BUN"] = "1"
         // Bun would otherwise keep a copy of the script, compiled, in ~/Library/Caches/bun.
         env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
-        await launch(engine, environment: env) { ["run", $0.path, "serve"] }
+        // Bun's settings only from nowhere: a `bunfig.toml` in its folder (which an agent's command
+        // can write) could load a script of its own first, before the box reads its secrets.
+        await launch(engine, environment: env) { ["run", "--config=/dev/null", $0.path, "serve"] }
     }
 
     #if DEBUG
@@ -80,6 +92,22 @@ final class BoxProcess {
             return
         }
         var env = environment
+        // Nothing from your shell's environment that changes what runs before the box's own code:
+        // libraries loaded into it, Bun's or Node's options (an agent's command can write your
+        // shell's profile). The engine's Bun gets its two from `start` again.
+        for name in env.keys where name.hasPrefix("DYLD_") || name.hasPrefix("BUN_") || name == "NODE_OPTIONS" { env[name] = nil }
+        if runsEngine {
+            env["BUN_BE_BUN"] = "1"
+            env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
+        }
+        if checksRuntime {
+            // And the engine's Bun is opencode's own, checked again each time, as one replaced in
+            // the app's folder would run as the box.
+            guard EngineInstaller.carriesSignature(runtime) else {
+                failure = "Kuvo Code’s engine on this Mac isn’t opencode’s own any more, so its background service didn’t start. Quit Kuvo Code and open it again to download it."
+                return
+            }
+        }
         env["KUVO_HOME"] = Self.home.path
         // A Mac's box: its bots are this Mac's own, made with the kit the app gives it.
         env["KUVO_BOX"] = "mac"

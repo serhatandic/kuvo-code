@@ -191,6 +191,12 @@ public struct EngineInstaller: Sendable {
     }
 
     /// Checks the binary is intact and signed with a Developer ID from opencode's team.
+    /// Whether `binary` still carries opencode's signature (the pinned release's team): checked
+    /// before each start of what runs with it, as a file in the app's folder could be replaced.
+    public static func carriesSignature(_ binary: URL, release: EngineRelease = .pinned) -> Bool {
+        (try? EngineInstaller(root: binary.deletingLastPathComponent(), release: release).verifySignature(of: binary)) != nil
+    }
+
     private func verifySignature(of binary: URL) throws {
         var code: SecStaticCode?
         var status = SecStaticCodeCreateWithPath(binary as CFURL, [], &code)
