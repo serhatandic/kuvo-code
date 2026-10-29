@@ -160,4 +160,53 @@ import Testing
         #expect(agents.text.contains("runs on Claude Code"))
         #expect(agents.buttons == [.init(label: "Use the Engine…", action: .editBot)])
     }
+
+    @Test func startSendsTheCardsSwitchesDeadlineAndChangedLimits() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Europe/Istanbul")!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let plan = GoalPlan(id: "goal_1", bot: "bot_pixel", name: "Pixel", session: "ses_pixel", goal: "Launch Driftwood.", state: .proposed, steps: [],
+                            spend: [.init(what: "ads", cap: 20, currency: "USD", per: .day)],
+                            public: [.init(id: "p1", text: "Publish the site", on: true), .init(id: "p2", text: "Turn on live payments", on: false)],
+                            proposed: now.timeIntervalSince1970 * 1000, alone: true)
+        let answer = GoalCard.start(plan, switches: ["p1": false], wake: true, digest: .week, deadline: .days(1), caps: [30], periods: [.week], now: now, calendar: calendar)
+        #expect(answer.action == .start)
+        #expect(answer.public == ["p1": false, "p2": false], "the switch turned off goes off; one left alone keeps the plan's")
+        #expect(answer.spend == [.init(cap: 30, per: .week)])
+        #expect(answer.wake == true && answer.digest == .week)
+        let tomorrow = calendar.date(bySettingHour: 23, minute: 59, second: 0, of: calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))!)!
+        #expect(answer.ends == tomorrow.timeIntervalSince1970 * 1000, "Tomorrow ends as tomorrow does")
+        #expect(GoalCard.start(plan, switches: [:], wake: false, digest: .none, deadline: .none, caps: [], periods: [], now: now, calendar: calendar).ends == nil)
+    }
+
+    @Test func aCardFromMoreThanADayAgoSaysWhyItCantStart() async throws {
+        let machine = try await lab()
+        defer { machine.stop() }
+        await app.goalPlans.read("lab")
+        let (box, plan) = try #require(app.goalPlans.plan(for: "ses_pixel"))
+        // The card stayed open past a day: its box has it as put to you two days ago.
+        let file = machine.folder.appending(path: "run/work/goals.json")
+        var kept = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var goals = try #require(kept["goals"] as? [[String: Any]])
+        goals[0]["proposed"] = Date.now.timeIntervalSince1970 * 1000 - 2 * 86_400_000
+        kept["goals"] = goals
+        try JSONSerialization.data(withJSONObject: kept).write(to: file)
+        do {
+            try await app.goalPlans.answer(plan, on: box, .start(public: [:], wake: false))
+            Issue.record("a stale plan can't start")
+        } catch let refusal as BoxRefusal {
+            #expect(refusal.status == 400)
+            #expect(!refusal.message.isEmpty && !refusal.message.hasPrefix("It said no"), "the box's own words, for the card")
+        }
+    }
+
+    @Test func aBoxWithGoalsWhoseSandboxCantBeCheckedYetSaysOnlyThatItCant() async throws {
+        let machine = try await lab(alone: false)
+        defer { machine.stop() }
+        let reading = await app.goalPlans.sandbox(on: "lab")
+        #expect(reading == .unchecked, "not from before the sandbox: no update would help")
+        let row = try #require(GoalSandbox.row(reading, computer: "lab", onThisMac: false, bot: "Pixel", agent: nil))
+        #expect(row.title == "lab can’t work on its own yet")
+        #expect(row.buttons.isEmpty)
+    }
 }
