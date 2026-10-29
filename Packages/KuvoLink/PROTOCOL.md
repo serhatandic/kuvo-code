@@ -2104,7 +2104,9 @@ carries the unlock key in `x-kuvo-vault-key`, which also unlocks a locked vault.
   `macSigns`) Ed25519 signature of `kuvo-vault-key\0<the machine's id on its Macs>\0<at>` (link.json's
   `id`), within five minutes. It makes the vault
   if there isn't one yet. `409` on this Mac (its Keychain needs no key), `423` while locked.
-- `POST kuvo/vault/unlock {"key"}` → the state; `403` for a key that isn't this vault's.
+- `POST kuvo/vault/unlock {"key"}` → the state; `403` for a key that isn't this vault's. Before
+  there's a vault, the state (`made: false`) whatever the key, so a client can tell whether to fetch
+  one without making it.
 - `GET kuvo/vault` → `{state, items, grants}`. `state` is `{made, locked, paused, pausedBots:
   {<bot>: why}, store: "keychain" | "encrypted", keptDays}`; an item is `{id, kind: "login" |
   "key" | "file" | "note", name, sites, username?, fields, fileName?, readable?, created, changed,

@@ -216,7 +216,7 @@ struct VaultItemEditor: View {
     @State private var note = ""
     @State private var readable = false
     @State private var file: (name: String, data: Data)?
-    @State private var extra: [(field: String, value: String)] = []
+    @State private var extra: [ExtraField] = []
     /// A key's own fields it had, taken away here.
     @State private var removed: Set<String> = []
     @State private var saving = false
@@ -252,23 +252,22 @@ struct VaultItemEditor: View {
                             SecureField("Value", text: $secret, prompt: Text(item == nil ? "" : "Unchanged")).labelsHidden()
                         }
                         if kind == .key {
-                            ForEach(extra.indices, id: \.self) { index in
-                                let had = item?.fields.contains(extra[index].field) == true
+                            ForEach($extra) { $row in
                                 HStack {
-                                    TextField("Field", text: Binding(get: { extra[index].field }, set: { extra[index].field = $0 }), prompt: Text("field_name"))
+                                    TextField("Field", text: $row.field, prompt: Text("field_name"))
                                         .frame(width: 120)
-                                        .disabled(had)
-                                    SecureField("Value", text: Binding(get: { extra[index].value }, set: { extra[index].value = $0 }), prompt: Text(had ? "Unchanged" : ""))
+                                        .disabled(row.had)
+                                    SecureField("Value", text: $row.value, prompt: Text(row.had ? "Unchanged" : ""))
                                     Button {
-                                        if had { removed.insert(extra[index].field) }
-                                        extra.remove(at: index)
+                                        if row.had { removed.insert(row.field) }
+                                        extra.removeAll { $0.id == row.id }
                                     } label: { Image(systemName: "minus.circle") }
                                         .buttonStyle(IconButtonStyle(width: 24, height: 24))
                                         .help("Remove This Field")
-                                        .accessibilityLabel("Remove \(extra[index].field.isEmpty ? "this field" : extra[index].field)")
+                                        .accessibilityLabel("Remove \(row.field.isEmpty ? "this field" : row.field)")
                                 }
                             }
-                            Button("Add Another Field") { extra.append(("", "")) }.buttonStyle(TextButtonStyle())
+                            Button("Add Another Field") { extra.append(ExtraField(field: "", value: "", had: false)) }.buttonStyle(TextButtonStyle())
                         }
                     case .file:
                         LabeledContent(file?.name ?? item?.fileName ?? "No file chosen") {
@@ -312,7 +311,7 @@ struct VaultItemEditor: View {
             sites = item.sites.joined(separator: ", ")
             username = item.username ?? ""
             readable = item.readable == true
-            if kind == .key { extra = item.fields.filter { $0 != "value" }.map { ($0, "") } }
+            if kind == .key { extra = item.fields.filter { $0 != "value" }.map { ExtraField(field: $0, value: "", had: true) } }
         }
     }
 
@@ -357,8 +356,9 @@ struct VaultItemEditor: View {
         case .login: if !secret.isEmpty { given.values["password"] = secret }
         case .key:
             if !secret.isEmpty { given.values["value"] = secret }
-            for (field, value) in extra where !field.isEmpty && !value.isEmpty { given.values[field.lowercased().replacingOccurrences(of: " ", with: "_")] = value }
+            // Taken away first: one added again by the same name keeps its new value.
             for field in removed { given.values[field] = .some(nil) }
+            for row in extra where !row.field.isEmpty && !row.value.isEmpty { given.values[row.field.lowercased().replacingOccurrences(of: " ", with: "_")] = row.value }
         case .file: if let file { given.values["file"] = file.data.base64EncodedString() }
         case .note: if !note.isEmpty { given.values["text"] = note }
         }
@@ -373,4 +373,13 @@ struct VaultItemEditor: View {
             }
         }
     }
+}
+
+/// A key's own field in its editor: one it had (its name fixed, its value Unchanged until typed),
+/// or one added here.
+private struct ExtraField: Identifiable {
+    let id = UUID()
+    var field: String
+    var value: String
+    let had: Bool
 }

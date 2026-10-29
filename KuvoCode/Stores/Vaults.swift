@@ -49,6 +49,13 @@ final class Vaults {
         return key
     }
 
+    /// Whether a machine has made its vault, which it says without its key: unlocking with none is
+    /// turned away only by a vault that's there.
+    private func hasVault(_ box: String) async -> Bool {
+        guard let client = client(box), let (status, _) = try? await client.send("POST", VaultRoutes.unlock, body: Data("{}".utf8)) else { return false }
+        return status == 403
+    }
+
     /// `method path` on `box`'s vault, its answer's JSON as `T`.
     func ask<T: Decodable>(_ type: T.Type = T.self, _ method: String, _ path: String, body: [String: Any]? = nil, on box: String) async throws -> T {
         guard let client = client(box) else { throw BoxRefusal(status: 503, message: "Kuvo Code isn't ready yet.") }
@@ -95,11 +102,15 @@ final class Vaults {
 
     /// Follows `box` while the caller's task runs (a view's): what its agents ask, read again
     /// every second on this Mac (with its vault every few, which the browser and agents' sign-ins
-    /// read) and every ten on a machine, whose box answers once over SSH. A machine's only once
-    /// this Mac keeps its key: following never makes a vault. A box without a vault stops it.
+    /// read) and every ten on a machine, whose box answers once over SSH. A machine's key is
+    /// fetched once its vault is there: following never makes one. A box from before the vault
+    /// stops it.
     func follow(_ box: String) async {
         var round = 0
         while !Task.isCancelled {
+            if box != BoxClient.mac, VaultKeys.key(for: box) == nil, round % 6 == 0, await hasVault(box) {
+                _ = try? await keyFromMachine(box)
+            }
             if box == BoxClient.mac, round % 5 == 0 {
                 await refresh(box)
             } else if box == BoxClient.mac || VaultKeys.key(for: box) != nil {
@@ -112,7 +123,9 @@ final class Vaults {
                         now.asks = asks
                         shown[box] = now
                     }
-                } catch let refusal as BoxRefusal where [403, 404, 405].contains(refusal.status) {
+                    // Answering again after it didn't: read whole, which says so.
+                    if self[box].failure != nil { await refresh(box) }
+                } catch let refusal as BoxRefusal where [404, 405].contains(refusal.status) {
                     return
                 } catch {}
             }

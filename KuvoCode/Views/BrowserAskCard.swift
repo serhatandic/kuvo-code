@@ -252,12 +252,14 @@ struct BrowserAskCard: View {
             // A password you typed now is yours to allow; one filled in from the vault asks you
             // first, as showing it in Settings does. Saved once the page has it.
             let host = ask.host, id = ask.id, asks = app.browserAsks, answerUsername = username, answerPassword = password
+            let conversation = ask.session.flatMap { app.workspace.model(for: $0) }
             Task {
                 let allowed = wantsAgents ? (typed ? true : await Passwords.authenticate(reason: "let agents sign in to \(host) with its saved password")) : false
                 asks.answer(id, answer)
                 if saving {
+                    // Said over its conversation's composer, where the card was.
                     if await Passwords.save(host: host, account: answerUsername, password: answerPassword, allowAgents: allowed) == nil {
-                        Notifier.shared.notify(session: "", title: "Couldn’t save the password for \(host)", body: "This Mac’s vault didn’t answer. Sign in again to save it.")
+                        conversation?.failure = "The password for \(host) wasn’t saved: this Mac’s vault didn’t answer. Sign in again to save it."
                     }
                 } else if allowed {
                     await Passwords.setAgentSignIn(host, true, account: answerUsername)

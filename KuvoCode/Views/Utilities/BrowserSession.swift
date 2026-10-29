@@ -25,6 +25,8 @@ final class BrowserSession: NSObject {
     @ObservationIgnored var onClose: (() -> Void)?
     /// A sign-in you just sent, which the toolbar offers to save.
     var pendingLogin: PendingLogin?
+    /// The pending login was offered again because saving it didn't work.
+    var pendingLoginFailed = false
     /// The saved logins for the page's site, and whether it has a field to fill them into.
     private(set) var savedLogins: [Passwords.Login] = []
     private(set) var hasLoginField = false
@@ -241,16 +243,20 @@ final class BrowserSession: NSObject {
 
     func offerToSave(_ login: PendingLogin) {
         pendingLogin = login
+        pendingLoginFailed = false
     }
 
     func savePendingLogin() {
         guard let login = pendingLogin else { return }
-        Analytics.shared.track("password_saved")
         pendingLogin = nil
+        pendingLoginFailed = false
         Task {
-            // Not saved (this Mac's vault didn't answer): offered again, to try once more.
-            if await Passwords.save(host: login.host, account: login.account, password: login.password) == nil, pendingLogin == nil {
+            if await Passwords.save(host: login.host, account: login.account, password: login.password) != nil {
+                Analytics.shared.track("password_saved")
+            } else if pendingLogin == nil {
+                // This Mac's vault didn't answer: offered again, saying so, to try once more.
                 pendingLogin = login
+                pendingLoginFailed = true
             }
             refreshLogins()
         }
@@ -715,7 +721,7 @@ private struct SaveLoginBar: View {
                 Image(systemName: "key.fill")
                     .foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(login.isUpdate ? "Update the saved password?" : "Save this password?")
+                    Text(session.pendingLoginFailed ? "Couldn’t save it. Try again?" : login.isUpdate ? "Update the saved password?" : "Save this password?")
                         .font(.system(size: 13, weight: .semibold))
                     Text(login.account.isEmpty ? login.host : "\(login.account) on \(login.host)")
                         .font(.system(size: 12))
