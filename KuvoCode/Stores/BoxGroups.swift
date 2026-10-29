@@ -122,11 +122,15 @@ final class BoxGroups {
     /// Chats being read whole now, and what their computer said of them meanwhile, so the read
     /// (from before) doesn't take it away.
     @ObservationIgnored private var arriving: [String: [GroupMessage]] = [:]
-    /// Reads of a chat's messages under way, by ID: what arrives is kept until the last is through.
-    @ObservationIgnored private var reloading: [String: Int] = [:]
+    /// Reads of a chat's messages under way, by computer and ID: what arrives is kept until the
+    /// last is through.
+    @ObservationIgnored private var reloading: [Read: Int] = [:]
     /// Chats being read whole whose computer said meanwhile how they are now (changed or gone),
-    /// which the read, from before, doesn't take back.
-    @ObservationIgnored private var touchedWhileReading: Set<String> = []
+    /// which the read, from before, doesn't take back. Another computer's word (the one a chat
+    /// leaves as it moves) isn't the one being read's.
+    @ObservationIgnored private var touchedWhileReading: Set<Read> = []
+    /// A chat on one computer.
+    private struct Read: Hashable { var machine: String?; var id: String }
     /// Chats a computer said something of (changed or gone) while its list was being read.
     @ObservationIgnored private var touchedWhileListing: [String: Set<String>] = [:]
     private let log = Logger(subsystem: "run.kuvo.code", category: "box-groups")
@@ -431,7 +435,7 @@ final class BoxGroups {
             case "kuvo.group.updated":
                 let updated = try decoded(event, as: Updated.self)
                 touchedWhileListing[key]?.insert(updated.id)
-                if reloading[updated.id] != nil { touchedWhileReading.insert(updated.id) }
+                if reloading[Read(machine: machine, id: updated.id)] != nil { touchedWhileReading.insert(Read(machine: machine, id: updated.id)) }
                 apply(updated.group, held: updated.status == "held", state: updated.state, on: machine)
                 let now = updated.state.speaking == nil ? [] : updated.state.activity ?? []
                 setActivity(updated.id, now)
@@ -452,7 +456,7 @@ final class BoxGroups {
             case "kuvo.group.deleted":
                 let id = try decoded(event, as: Named.self).id
                 touchedWhileListing[key]?.insert(id)
-                if reloading[id] != nil { touchedWhileReading.insert(id) }
+                if reloading[Read(machine: machine, id: id)] != nil { touchedWhileReading.insert(Read(machine: machine, id: id)) }
                 forget(id, on: machine)
             case "kuvo.group.met":
                 let met = try decoded(event, as: Met.self)
@@ -570,15 +574,17 @@ final class BoxGroups {
 
     func reload(_ id: String, on machine: String?) async {
         guard let api = api(machine) else { return }
-        // (Another read of it under way keeps what arrives for both.)
-        if reloading[id, default: 0] == 0 { arriving[id] = [] }
-        reloading[id, default: 0] += 1
+        // (Another read of it under way, there or on another computer, keeps what arrives for both.)
+        let key = Read(machine: machine, id: id)
+        if !reloading.keys.contains(where: { $0.id == id }) { arriving[id] = [] }
+        reloading[key, default: 0] += 1
         defer {
-            reloading[id, default: 1] -= 1
-            if reloading[id] == 0 { reloading[id] = nil; arriving[id] = nil; touchedWhileReading.remove(id) }
+            reloading[key, default: 1] -= 1
+            if reloading[key] == 0 { reloading[key] = nil; touchedWhileReading.remove(key) }
+            if !reloading.keys.contains(where: { $0.id == id }) { arriving[id] = nil }
         }
         guard let read = try? await api.boxGroup(id) else { return }
-        if touchedWhileReading.contains(id) {
+        if touchedWhileReading.contains(key) {
             // Gone meanwhile: stays gone.
             guard chats.contains(where: { $0.group.id == id && $0.machine == machine }) else { return }
         } else {

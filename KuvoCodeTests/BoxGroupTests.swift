@@ -307,6 +307,32 @@ import Testing
         #expect(!app.boxGroups.isTalking(on: "box"))
     }
 
+    /// A chat read where it's going while the computer it's leaving lets it go (a move): the read
+    /// there isn't taken for that computer's, and the chat shows where it went.
+    @Test func aChatReadWhereItGoesWhileItLeavesShowsThere() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_pal", "Pal", "box")])
+        let group = Self.group("grp_box0000001", members: ["bot_pal"])
+        let app = app()
+        await app.boxGroups.connected("box")
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+                                                                                 "state": ["discussing": false, "paused": false]]), machine: nil)
+        let reading = Gate(), release = Gate()
+        machineBridge.on("GET", "/api/kuvo/groups/grp_box0000001") { _ in
+            reading.open()
+            release.wait()
+            return StubWeb.json(["data": ["group": group, "status": "active", "state": ["discussing": false, "paused": false], "messages": [Self.said]]])
+        }
+        let read = Task { await app.boxGroups.reload("grp_box0000001", on: "box") }
+        try await until { reading.isOpen }
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.deleted", ["id": "grp_box0000001"]), machine: nil)
+        release.open()
+        await read.value
+
+        #expect(app.boxGroups.machine(of: "grp_box0000001") == "box")
+        #expect(app.chats.messages(in: "grp_box0000001").map(\.text) == ["Morning."])
+    }
+
     /// This Mac's bridge starting, then stopped: its chats show as last seen, and what you write
     /// waits in the composer; once it's up, it goes.
     @Test func thisMacsChatsWaitForItsBridge() async throws {
