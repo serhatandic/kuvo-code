@@ -348,6 +348,36 @@ import Testing
         #expect(app.chats.speaking["grp_box0000001"] == nil)
     }
 
+    /// The same, while the name kept is being read: a chat whose messages are here already, said to
+    /// be talking meanwhile, still shows talking once the read is done, rather than cleared as if
+    /// the machine were away (nothing else reads it again).
+    @Test func aMachineAtTwoAddressesBeingReadKeepsWhatItSaidMeanwhile() async throws {
+        defer { Self.clean(); mac.stop() }
+        let app = app()
+        let old = Self.group("grp_box0000001", members: ["bot_pal"]), talking = Self.group("grp_box0000002", members: ["bot_pal"])
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": old, "status": "active",
+                                                                                 "state": ["discussing": false, "paused": false]]), machine: "box-old")
+        there.add(talking, messages: [Self.said])
+        await app.boxGroups.reload("grp_box0000002", on: "box")
+        #expect(app.chats.messages(in: "grp_box0000002").map(\.text) == ["Morning."])
+        let reading = Gate(), release = Gate()
+        machineBridge.on("GET", "/api/kuvo/groups") { request in
+            reading.open()
+            release.wait()
+            return there.answer(request)
+        }
+        let read = Task { await app.boxGroups.connected("box") }
+        try await until { reading.isOpen }
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000002", "group": talking, "status": "active",
+                                                                                 "state": ["speaking": "bot_pal", "discussing": true, "paused": false]]), machine: "box")
+        app.boxGroups.fold("box-old", into: "box")
+        release.open()
+        await read.value
+
+        #expect(app.boxGroups.isTalking(on: "box"))
+        #expect(app.chats.speaking["grp_box0000002"] == "bot_pal")
+    }
+
     /// This Mac's bridge starting, then stopped: its chats show as last seen, and what you write
     /// waits in the composer; once it's up, it goes.
     @Test func thisMacsChatsWaitForItsBridge() async throws {

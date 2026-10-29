@@ -408,14 +408,15 @@ final class BoxGroups {
         for index in chats.indices where chats[index].machine == address { chats[index].machine = machine }
         running.remove(address)
         // Not connected under the name kept: as last seen, nothing talking (a copy kept from before
-        // could say so), until it's read again.
-        if !running.contains(machine) { disconnected(machine) }
+        // could say so), until it's read again. One being read now keeps what it said meanwhile.
+        if !running.contains(machine) { disconnected(machine, keeping: touchedWhileListing[Self.key(machine)] ?? []) }
         save()
     }
 
     /// Its computer went away (or this Mac's bridge stopped): as last seen, nothing talking.
-    func disconnected(_ machine: String?) {
-        for index in chats.indices where chats[index].machine == machine {
+    /// `keeping`: chats it said something of since, left as it said.
+    func disconnected(_ machine: String?, keeping: Set<String> = []) {
+        for index in chats.indices where chats[index].machine == machine && !keeping.contains(chats[index].group.id) {
             chats[index].discussing = false
             chats[index].speaking = nil
             setActivity(chats[index].group.id, [])
