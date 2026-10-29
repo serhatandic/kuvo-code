@@ -218,8 +218,9 @@ A machine's browser is Chrome for Testing, the full browser run in Chrome's own 
 `KuvoCode/Resources/kuvo-browser.js`, runs with the engine's own runtime in three ways:
 
 - **host**, the keeper: it starts Chromium, holds it over a pipe, and serves the DevTools
-  protocol to everyone else on a Unix socket in `~/.kuvo-code/run`, with a few messages of its
-  own (`Kuvo.*`): the page in use, who's browsing where, what agents ask you for, and which
+  protocol to everyone else on a Unix socket in `~/.kuvo-code/run`, to each connection that
+  first gives the box's socket key (`run/socket.key`, which an agent's command in the sandbox
+  can't read; one that doesn't is told to update Kuvo Code and closed), with a few messages of its own (`Kuvo.*`): the page in use, who's browsing where, what agents ask you for, and which
   page each conversation works in. Only one runs at a time. When an update puts a newer build
   in `current`, it stops once nothing uses the browser, keeping the open pages, so the next
   start runs the new one.

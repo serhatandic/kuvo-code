@@ -14,7 +14,7 @@ import { pause } from "../../shared/wait";
 import { engineGet, readEngineFile } from "../engine/client";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
-import { RUN } from "../home";
+import { RUN, socketKey } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import type { ListedAskShape } from "../../shared/routes/asks";
 
@@ -122,6 +122,8 @@ export function askAnswer(ask: BrowserAsk, given: GivenAnswer | null | undefined
 // Gives the browser an answer over its socket; true once it took it.
 export function answerAsk(id: string, answer: AskAnswer, socketPath = BROWSER_SOCKET): Promise<boolean> {
   return new Promise<boolean>(resolve => {
+    let key: string;
+    try { key = socketKey(); } catch { return resolve(false); }
     const socket = net.createConnection(socketPath);
     let buffer = "";
     const done = (ok: boolean) => {
@@ -131,7 +133,8 @@ export function answerAsk(id: string, answer: AskAnswer, socketPath = BROWSER_SO
     };
     const timer = setTimeout(() => done(false), 5000);
     socket.on("error", () => done(false));
-    socket.on("connect", () => socket.write(JSON.stringify({ id: 1, method: "Kuvo.answer", params: { id, answer } }) + "\n"));
+    // The box's socket key first, as the keeper asks of every connection.
+    socket.on("connect", () => socket.write(JSON.stringify({ method: "Kuvo.key", params: { key } }) + "\n" + JSON.stringify({ id: 1, method: "Kuvo.answer", params: { id, answer } }) + "\n"));
     socket.on("data", chunk => {
       buffer += chunk;
       let end;

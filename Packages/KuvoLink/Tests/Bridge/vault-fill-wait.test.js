@@ -228,3 +228,28 @@ test("a page that left its site while the vault asked you gets nothing", { timeo
   assert.match(outcome.content[0].text, /The page left github\.com meanwhile\. Nothing was filled/);
   assert.deepEqual(pages.login.filled, [], "nothing typed into the page");
 });
+
+// A process of yours that isn't Kuvo Code's own, like an agent's command in the sandbox, can reach
+// the vault's socket (Linux's sandbox doesn't hide a socket from connecting) but not the box's
+// socket key in `run`: while a sign-in is calling, it tries to take the fill for itself.
+test("a process without the box's socket key gets nothing from the vault's socket, even while a sign-in calls", { timeout: 60_000 }, async () => {
+  pages.login.url = "https://github.com/login";
+  pages.login.filled = [];
+  const signIn = started(call("ses_ship", "browser_sign_in", { username: 1, password: 2, item: "GitHub" }));
+  const asked = await askedNow(key);
+  const said = await new Promise(resolve => {
+    const socket = net.createConnection(path.join(home, "run", "vault.sock"));
+    let heard = "";
+    socket.setEncoding("utf8");
+    socket.on("connect", () => socket.write(JSON.stringify({ hello: "mine" }) + "\n" + JSON.stringify({ method: "POST", path: "kuvo/vault/fill", headers: {}, body: Buffer.from(JSON.stringify({ session: "ses_ship", item: "GitHub" })).toString("base64") }) + "\n"));
+    socket.on("data", chunk => (heard += chunk));
+    socket.on("error", () => {});
+    socket.on("close", () => resolve(heard));
+  });
+  assert.equal(said, "", "nothing answers it: not even the holder's hello");
+  // The sign-in it raced goes on as before, once you allow it.
+  assert.equal((await fromMac("POST", `kuvo/vault/asks/${asked.id}`, { answer: "once" }, key)).status, 200);
+  const signedIn = await signIn.result;
+  assert.equal(signedIn.isError, false, signedIn.content[0].text);
+  assert.deepEqual(pages.login.filled, [{ index: 1, value: "ship-bot" }, { index: 2, value: SECRET }]);
+});

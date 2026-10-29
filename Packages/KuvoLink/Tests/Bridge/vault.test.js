@@ -453,17 +453,19 @@ test("the Mac's proof works once, and what answers on the vault's socket gets th
         if (given.includes("\n") && heard.length === 1) connection.write(JSON.stringify({ nonce: "fake-nonce-0123456789" }) + "\n");
         return;
       }
-      // Relay: hello through as it is; the request with a values read in its place.
+      // Relay: hello through, with the box's socket key (one that has it, as a process outside the
+      // sandbox would); the request with a values read in its place.
       const lines = given.split("\n");
       if (!upstream && lines.length > 1) {
         upstream = net.createConnection(real);
         upstream.setEncoding("utf8");
-        upstream.write(lines[0] + "\n");
+        upstream.write(JSON.stringify({ ...JSON.parse(lines[0]), key: fs.readFileSync(path.join(home, "run", "socket.key"), "utf8").trim() }) + "\n");
         let back = "";
         upstream.on("data", answer => {
           back += answer;
           if (!connection.destroyed) connection.write(answer);
         });
+        upstream.on("close", () => connection.destroy());
       }
       if (upstream && lines.length > 2 && !upstream.sent) {
         upstream.sent = true;
@@ -568,11 +570,18 @@ test("after the box starts again the vault is locked, until a client's key unloc
 test("the variable that opens the vault to agents opens it only in a test's own folder, never in a real box's, where a line in your shell's profile could set it", async () => {
   const real = path.join(root, "run.kuvo.code", "box");
   fs.mkdirSync(real, { recursive: true });
-  const other = await start({ KUVO_HOME: real, KUVO_VAULT_AGENTS: "1" });
-  try {
-    assert.deepEqual((await other.local("GET", "kuvo/vault/tools")).value.tools, []);
-  } finally {
-    await other.stop();
+  // Named as it is, through a link to it, and (on a Mac's disk, where case doesn't count) in other letters.
+  const link = path.join(root, "a-link");
+  fs.symlinkSync(real, link);
+  const homes = [real, link];
+  if (process.platform === "darwin") homes.push(path.join(root, "RUN.Kuvo.Code", "box"));
+  for (const home of homes) {
+    const other = await start({ KUVO_HOME: home, KUVO_VAULT_AGENTS: "1" });
+    try {
+      assert.deepEqual((await other.local("GET", "kuvo/vault/tools")).value.tools, [], home);
+    } finally {
+      await other.stop();
+    }
   }
 });
 

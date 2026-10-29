@@ -26,6 +26,10 @@ const CONFIG = /*KUVO_CONFIG*/ { scripts: {}, tools: [], instructions: "", versi
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
 const SOCKET = path.join(RUN, "browser.sock");
+// What every connection to the keeper gives first, as to the box's vault: Kuvo Code's processes read
+// it here, a command in the sandbox can't (it can connect to a socket it can't read the folder of).
+// The same as the box's (`socketKey` in its home.ts).
+const SOCKET_KEY_FILE = path.join(RUN, "socket.key");
 const PIDFILE = path.join(RUN, "browser.pid");
 // The pages open when the keeper last stopped (for an update, or with nobody around), to open
 // again when it starts.
@@ -56,14 +60,74 @@ const TAB_IDLE = Number(process.env.KUVO_BROWSER_TAB_IDLE || 3600) * 1000;
 
 // Goes up with every change to the keeper (host mode): a newer one replaces one that's running
 // (its pages close, its sign-ins stay), and an older one never replaces a newer.
-const KEEPER = 36;
+const KEEPER = 37;
 // Passkeys: none yet, as in the panel's browser on the Mac (Passkeys.swift, the same script).
 const NO_PASSKEYS = "(() => {\n  try {\n    const none = () => Promise.reject(new DOMException(\"Passkeys can't be used in this browser.\", \"NotAllowedError\"));\n    const Container = window.CredentialsContainer;\n    if (Container && Container.prototype) {\n      const prototype = Container.prototype, get = prototype.get, create = prototype.create;\n      if (get) prototype.get = function (options) { return options && options.publicKey ? none() : get.call(this, options); };\n      if (create) prototype.create = function (options) { return options && options.publicKey ? none() : create.call(this, options); };\n    }\n    const Credential = window.PublicKeyCredential;\n    if (Credential) {\n      Credential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);\n      if (Credential.isConditionalMediationAvailable) Credential.isConditionalMediationAvailable = () => Promise.resolve(false);\n    }\n  } catch {}\n})();";
 
+// Bun's own, never its settings (`bunfig.toml`, which can preload a script) or a `.env` from the
+// folder it starts in (an agent's command can write them); a test's Node loads neither.
+const OWN_RUNTIME = process.versions.bun ? ["--config=/dev/null", "--no-env-file"] : [];
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/// Calls `handle` with each line `stream` sends.
-function lines(stream, handle, separator = "\n") {
+/// The key for the box's sockets, made once (whole, before anyone can read it).
+function socketKey() {
+  const shape = /^[0-9a-f]{64}$/;
+  try {
+    const key = fs.readFileSync(SOCKET_KEY_FILE, "utf8").trim();
+    if (shape.test(key)) return key;
+  } catch {}
+  fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
+  const made = `${SOCKET_KEY_FILE}.${process.pid}`;
+  fs.writeFileSync(made, crypto.randomBytes(32).toString("hex") + "\n", { mode: 0o600 });
+  // Linked into place: whoever made it first, the others take theirs. (One that isn't a key at all
+  // is replaced, as it is where a folder can't link files.)
+  try {
+    fs.linkSync(made, SOCKET_KEY_FILE);
+  } catch {
+    let there = "";
+    try {
+      there = fs.readFileSync(SOCKET_KEY_FILE, "utf8").trim();
+    } catch {}
+    if (!shape.test(there)) {
+      try {
+        fs.renameSync(made, SOCKET_KEY_FILE);
+      } catch {}
+    }
+  }
+  fs.rmSync(made, { force: true });
+  return fs.readFileSync(SOCKET_KEY_FILE, "utf8").trim();
+}
+
+/// Whether `given` is the key for the box's sockets.
+function sameKey(given) {
+  if (typeof given !== "string") return false;
+  let key;
+  try {
+    key = Buffer.from(socketKey());
+  } catch {
+    return false;
+  }
+  const said = Buffer.from(given);
+  return said.length === key.length && crypto.timingSafeEqual(said, key);
+}
+
+/// A connection to the keeper, the key given first.
+function keeperConnection() {
+  const socket = net.createConnection(SOCKET);
+  socket.once("connect", () => {
+    try {
+      socket.write(JSON.stringify({ method: "Kuvo.key", params: { key: socketKey() } }) + "\n");
+    } catch {
+      socket.destroy();
+    }
+  });
+  return socket;
+}
+
+/// Calls `handle` with each line `stream` sends; `tooLong`, with how much of a line it holds,
+/// says whether it's held too much (and stops it).
+function lines(stream, handle, separator = "\n", tooLong = () => false) {
   let buffer = "";
   stream.setEncoding("utf8");
   stream.on("data", (chunk) => {
@@ -74,6 +138,7 @@ function lines(stream, handle, separator = "\n") {
       buffer = buffer.slice(end + 1);
       if (line) handle(line);
     }
+    if (tooLong(buffer.length)) buffer = "";
   });
 }
 
@@ -95,7 +160,7 @@ function reachable() {
 /// The running keeper's version, from its greeting (1 before keepers said).
 function runningKeeper() {
   return new Promise((resolve) => {
-    const socket = net.createConnection(SOCKET);
+    const socket = keeperConnection();
     let buffer = "";
     const done = (value) => {
       clearTimeout(timer);
@@ -121,7 +186,7 @@ function runningKeeper() {
 /// Asks the running keeper to stop, and waits until it has.
 async function stopKeeper() {
   await new Promise((resolve) => {
-    const socket = net.createConnection(SOCKET);
+    const socket = keeperConnection();
     socket.once("connect", () => socket.end(JSON.stringify({ method: "Kuvo.stop" }) + "\n", resolve));
     socket.once("error", resolve);
   });
@@ -143,7 +208,7 @@ async function ensure() {
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
   fs.rmSync(ERRORFILE, { force: true });
   // In a session of its own, so it outlives whoever started it.
-  const child = spawn(process.execPath, [SCRIPT, "host"], { detached: true, stdio: "ignore", env: { ...process.env, BUN_BE_BUN: "1" }, cwd: BROWSER });
+  const child = spawn(process.execPath, [...OWN_RUNTIME, SCRIPT, "host"], { detached: true, stdio: "ignore", env: { ...process.env, BUN_BE_BUN: "1" }, cwd: BROWSER });
   child.unref();
   const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
@@ -727,11 +792,20 @@ async function host() {
 
   const server = net.createServer((socket) => {
     const client = { socket, sessions: new Set(), closed: false };
-    clients.add(client);
-    clearTimeout(idle);
+    // Kuvo Code's own processes first give the box's socket key; one that doesn't (a command in the
+    // sandbox, or an older Kuvo Code's) hears only that it can't, and is closed. It counts as no one
+    // using the browser meanwhile, and has a few seconds and a short line to give it in.
+    const refuse = () => {
+      if (client.keyed || client.closed) return;
+      client.closed = true;
+      socket.end(JSON.stringify({ method: "Kuvo.error", params: { kind: "failed", message: "This machine's browser needs a newer Kuvo Code. Update Kuvo Code on your Mac to use it." } }) + "\n", () => socket.destroy());
+    };
+    const unkeyed = setTimeout(refuse, 10_000);
     socket.on("error", () => {});
     socket.on("close", () => {
+      clearTimeout(unkeyed);
       client.closed = true;
+      if (!client.keyed) return;
       clients.delete(client);
       for (const sessionId of client.sessions) {
         owners.delete(sessionId);
@@ -758,12 +832,22 @@ async function host() {
       if (client.viewer) broadcast({ method: "Kuvo.viewers", params: { count: viewers() } });
       if (!clients.size) idleSoon();
     });
-    send(client, { method: "Kuvo.hello", params: { targetId: active, status, version: CONFIG.version, keeper: KEEPER, asks: [...asks.values()].map((ask) => ask.params), viewers: viewers(), held: [...held.keys()], holdMacs: Object.fromEntries(holdMacs) } });
     lines(socket, (text) => {
       let message;
       try {
         message = JSON.parse(text);
       } catch {
+        if (!client.keyed) refuse();
+        return;
+      }
+      if (client.closed) return;
+      if (!client.keyed) {
+        if (message.method !== "Kuvo.key" || !sameKey(message.params?.key)) return refuse();
+        client.keyed = true;
+        clearTimeout(unkeyed);
+        clients.add(client);
+        clearTimeout(idle);
+        send(client, { method: "Kuvo.hello", params: { targetId: active, status, version: CONFIG.version, keeper: KEEPER, asks: [...asks.values()].map((ask) => ask.params), viewers: viewers(), held: [...held.keys()], holdMacs: Object.fromEntries(holdMacs) } });
         return;
       }
       switch (message.method) {
@@ -859,7 +943,7 @@ async function host() {
       const forward = { id, method: message.method, params: message.params ?? {} };
       if (message.sessionId) forward.sessionId = message.sessionId;
       toChrome(forward);
-    });
+    }, "\n", (held) => !client.keyed && held > 4096 && (refuse(), true));
   });
   server.on("error", (error) => fail("failed", "The browser couldn't listen for Kuvo Code: " + error.message));
   // Its own view of the pages there, whoever else asks for it, and a session with each, held
@@ -929,7 +1013,7 @@ class Connection {
 
   static open() {
     return new Promise((resolve, reject) => {
-      const socket = net.createConnection(SOCKET);
+      const socket = keeperConnection();
       socket.once("connect", () => resolve(new Connection(socket)));
       socket.once("error", reject);
     });
@@ -963,7 +1047,7 @@ async function connect() {
     process.stdout.write(JSON.stringify({ method: "Kuvo.error", params: problem }) + "\n");
     return;
   }
-  const socket = net.createConnection(SOCKET);
+  const socket = keeperConnection();
   socket.on("connect", () => {
     // Pictures of a page come one at a time, each once the last is acknowledged. Here, a couple
     // ahead of the Mac: the next is made while the last is on its way, so over a slow link the
@@ -1916,7 +2000,7 @@ async function setJob(args, from) {
 /// answer (in `timeout` ms). Its call `cancelled`, it's told to stop (and answers at once).
 function boxRoute(request, { timeout = 30_000, cancelled = () => false } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [path.join(K, "bin", "kuvo-link.js"), "box", "route"], {
+    const child = spawn(process.execPath, [...OWN_RUNTIME, path.join(K, "bin", "kuvo-link.js"), "box", "route"], {
       cwd: K,
       env: { ...process.env, KUVO_HOME: K, BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
       stdio: ["pipe", "pipe", "ignore"],
@@ -1951,7 +2035,7 @@ function boxRoute(request, { timeout = 30_000, cancelled = () => false } = {}) {
 /// the box may (one that asks you waits for you).
 function vaultRoute(request, call, timeout = 60_000) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [path.join(K, "bin", "kuvo-link.js"), "box", "route"], {
+    const child = spawn(process.execPath, [...OWN_RUNTIME, path.join(K, "bin", "kuvo-link.js"), "box", "route"], {
       cwd: K,
       env: { ...process.env, KUVO_HOME: K, BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
       stdio: ["pipe", "pipe", "ignore"],
