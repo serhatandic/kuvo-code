@@ -385,6 +385,24 @@ test("a coding agent run whole in the sandbox keeps its own sign-in and state (o
   }
 });
 
+test("an agent whose program is the engine's runtime (Cursor's SDK) runs as Bun in the sandbox, and no other agent's does", async () => {
+  const box = boxAt("as-bun", !linux);
+  const project = path.join(root, "as-bun-project");
+  fs.mkdirSync(project);
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const seen = (asBun) => spawnSync(path.join(box.home, "run", "fence", "shell", "run"), ["-c", 'echo "bun=${BUN_BE_BUN-none} cache=${BUN_RUNTIME_TRANSPILER_CACHE_PATH-none} named=${KUVO_FENCE_BUN-none}"'], {
+      cwd: project, encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, KUVO_FENCE_SHELL: "/bin/sh", KUVO_FENCE_WORK: project, KUVO_FENCE_OWN: project, KUVO_FENCE_PORT: "1", ...(asBun ? { KUVO_FENCE_BUN: "1" } : {}) },
+    });
+    const ran = seen(true);
+    assert.equal(ran.stdout.trim(), "bun=1 cache=0 named=none", ran.stderr);
+    assert.equal(seen(false).stdout.trim(), "bun=none cache=none named=none");
+  } finally {
+    await running.stop();
+  }
+});
+
 test("agents are told how commands run in the sandbox while it's on, and nothing once it's off", async () => {
   const box = boxAt("told");
   const project = path.join(root, "told-project");

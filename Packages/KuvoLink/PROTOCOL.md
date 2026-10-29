@@ -2700,6 +2700,12 @@ it's empty.
   servers, the settings xAI sends, its models' list, which names where each model's requests go,
   its program, plugins, skills or memories). In a project, `.grok`'s settings, language servers,
   hooks, plugins, agents and workflows are kept as the other agents' are.
+  Cursor, whose SDK runs its tools in the process that runs it (the bridge's, otherwise), runs whole
+  the same way: its SDK in a process of its own for each session (the engine's runtime run as Bun:
+  `KUVO_FENCE_BUN=1`, which commands don't get), which the bridge asks over its stdin and stdout,
+  Cursor's own sandbox off. Your sign-in stays with the bridge, which hands it the key it runs with;
+  of its folders it writes only its conversations, notes, sandbox policies and computer use's
+  (on a Mac; on Linux, whole), and it reads its SDK.
   When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
   you can do (`action`) and the box's route that does it (`route`, where there is one):
 

@@ -173,7 +173,7 @@ export interface AgentPlaces {
 }
 
 /**
- * For an agent run whole in the sandbox (Codex, Grok): the launcher that runs it
+ * For an agent run whole in the sandbox (Codex, Grok, Cursor): the launcher that runs it
  * (`run/fence/shell/run`) and what it's told: its program, the conversation's folder and
  * repository, and its own places. (On a Mac, its homes only read but their state: what runs
  * outside the sandbox when you use it yourself, its settings, plugins and skills, stays as it was.

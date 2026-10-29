@@ -1,10 +1,11 @@
 // Cursor's thread against a fake SDK: what its agent is started with, and what a session shows of
 // its turns (its reply and steps, Stop, each approval mode, what a turn used).
 
-import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import type { TurnHooks } from "../../src/agents/agent"
 import { CursorAgent } from "../../src/agents/agents/cursor"
 import { setToolServer } from "../../src/agents/kuvotools"
@@ -13,6 +14,7 @@ import type { Roster } from "../../src/agents/roster"
 import { Sessions } from "../../src/agents/sessions"
 import { Store } from "../../src/agents/store"
 import { noTokens, type Message, type PermissionRule, type Session } from "../../src/agents/wire"
+import { canFence, realFence } from "./support/fence"
 
 /** Cursor's SDK as far as the bridge uses it: each agent's options as it was made (`made`) or
  *  picked up again (`resumed`, when it `resumes`), and what each run was sent with (`sent`). A run
@@ -328,5 +330,198 @@ describe("Cursor's context", () => {
     const used = { input: 1_000, output: 200, reasoning: 100, cache: { read: 5_000, write: 200 } }
     expect(steps(sessions, id).at(-1).tokens).toEqual(used)
     expect(sessions.get(id).tokens).toEqual(used)
+  })
+})
+
+/**
+ * Cursor's SDK as a package on disk, where the bridge installs it, which loads as the real one does
+ * (in the bridge, or in its worker): each message, its agent tries what `tries.json` beside it
+ * lists, where it runs, and says what it found (`name=yes|no`, or what it read). `crash` stops its
+ * process, saying why; listed as `starting`, it stops as its agent is made.
+ */
+function sdkOnDisk(runtime: string, tries: Record<string, [string, string]>) {
+  const folder = join(runtime, "node_modules", "@cursor", "sdk")
+  mkdirSync(folder, { recursive: true })
+  writeFileSync(join(folder, "package.json"), JSON.stringify({ name: "@cursor/sdk", version: "1.0.35", type: "module", main: "index.js" }))
+  writeFileSync(join(runtime, "tries.json"), JSON.stringify(tries))
+  writeFileSync(
+    join(folder, "index.js"),
+    `import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+const tries = ${JSON.stringify(join(runtime, "tries.json"))}
+export class JsonlLocalAgentStore {
+  constructor(root) { this.root = root }
+}
+async function attempt(how, place, options, message) {
+  if (how === "env") return process.env[place] ?? "none"
+  if (how === "sandbox") return options.local.sandboxOptions.enabled ? "on" : "off"
+  if (how === "key") return options.apiKey
+  if (how === "crash") {
+    console.error("Cursor fell over.")
+    process.exit(1)
+  }
+  try {
+    if (how === "write") {
+      mkdirSync(dirname(place), { recursive: true })
+      writeFileSync(place, "x")
+    } else if (how === "read") readFileSync(place)
+    else if (how === "store") {
+      if (!(options.local.store instanceof JsonlLocalAgentStore)) return "none"
+      writeFileSync(join(options.local.store.root, place), "{}")
+    } else if (how === "attached") readFileSync(/^- (.+)$/m.exec(typeof message === "string" ? message : message.text)[1])
+    else if (how === "tools") {
+      const server = Object.values(options.mcpServers ?? {})[0]
+      if (!server) return "none"
+      const response = await fetch(server.url, { method: "POST", headers: { ...server.headers, "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "show_in_panel", arguments: {} } }) })
+      if (!response.ok) return "no"
+      return (await response.json()).result?.content?.[0]?.text ?? "no"
+    }
+    return "yes"
+  } catch {
+    return "no"
+  }
+}
+let next = 1
+const agent = (agentId, options) => ({
+  agentId,
+  close() {},
+  async send(message, { onDelta }) {
+    const words = []
+    for (const [name, [how, place]] of Object.entries(JSON.parse(readFileSync(tries, "utf8")))) words.push(name + "=" + (await attempt(how, place, options, message)))
+    await onDelta({ update: { type: "text-delta", text: words.join(" ") } })
+    return { wait: async () => ({ status: "finished" }), cancel: async () => {} }
+  },
+})
+const starting = () => {
+  if (!JSON.parse(readFileSync(tries, "utf8")).starting) return
+  console.error("Cursor fell over as it started.")
+  process.exit(1)
+}
+export const Agent = {
+  create: async (options) => (starting(), agent("agent-" + next++, options)),
+  resume: async (id, options) => agent(id, options),
+}
+`,
+  )
+}
+
+describe.skipIf(!canFence)("Cursor in the box's sandbox", () => {
+  /** Kuvo Code's folder (the bridge's in it, with Cursor's SDK), a project, and a folder elsewhere. */
+  let kuvo: string, bridge: string, runtime: string, project: string, elsewhere: string
+  beforeEach(() => {
+    const base = realpathSync(tmpdir())
+    kuvo = mkdtempSync(join(base, "kuvo-"))
+    project = mkdtempSync(join(base, "cursor-project-"))
+    elsewhere = mkdtempSync(join(base, "elsewhere-"))
+    folders.push(kuvo, project, elsewhere)
+    bridge = join(kuvo, "agents")
+    runtime = join(bridge, "runtime", "cursor")
+    mkdirSync(runtime, { recursive: true })
+    writeFileSync(join(kuvo, "secret"), "s")
+    mkdirSync(join(bridge, "codex"), { recursive: true })
+    writeFileSync(join(bridge, "codex", "auth.json"), "{}")
+    process.env.KUVO_FENCE = realFence(kuvo)
+  })
+  afterEach(() => {
+    delete process.env.KUVO_FENCE
+  })
+
+  /** A session on Cursor, its SDK trying `tries`, in the project; Ask First by default. */
+  function session(tries: Record<string, [string, string]>, permissions: PermissionRule[] = askFirst) {
+    sdkOnDisk(runtime, tries)
+    process.env.CURSOR_API_KEY = "key_test"
+    const agent = new TestCursor({ home: bridge, temporary: bridge, deps: { ensure: async () => runtime, load: async (_: string, name: string) => import(Bun.resolveSync(name, runtime)) } as any })
+    const opened = new Sessions(new Store(join(bridge, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(bridge))
+    sessions = opened
+    return { opened, id: opened.create({ model: { providerID: agent.providerID, id: "composer-2" }, location: { directory: project }, permissions }).id }
+  }
+  const words = (opened: Sessions, id: string) => steps(opened, id).flatMap((step) => step.content.filter((content: any) => content.type === "text").map((content: any) => content.text)).join("")
+
+  test("Cursor runs whole in it, in a process of its own: what it runs writes the project and its own conversations and notes, never your sign-in (on a Mac), nor elsewhere, and can't read Kuvo Code's folder", async () => {
+    const { opened, id } = session({
+      project: ["write", join(project, "made.txt")],
+      conversation: ["store", "conversation.jsonl"],
+      notes: ["write", join(bridge, "cursor", "data", "notes.md")],
+      signin: ["write", join(bridge, "cursor", "auth.json")],
+      elsewhere: ["write", join(elsewhere, "e.txt")],
+      kuvo: ["read", join(kuvo, "secret")],
+      others: ["read", join(bridge, "codex", "auth.json")],
+      // Cursor's own sandbox off (one can't run in another on a Mac), and the key it runs with.
+      sandbox: ["sandbox", ""],
+      key: ["key", ""],
+      // (What ran its process as Bun isn't what its commands run with.)
+      bun: ["env", "BUN_BE_BUN"],
+    })
+    await send(opened, id)
+    // (Linux grants its folders whole: there, a machine's, they're Kuvo Code's own.)
+    const mac = process.platform === "darwin" ? "no" : "yes"
+    expect(words(opened, id)).toBe(`project=yes conversation=yes notes=yes signin=${mac} elsewhere=no kuvo=no others=no sandbox=off key=key_test bun=none`)
+  })
+
+  test("a file you attach (one it reads itself, like a PDF) it reads, though Kuvo Code keeps it where the sandbox hides", async () => {
+    const attachment = join(bridge, "attachments", "report.pdf")
+    mkdirSync(dirname(attachment), { recursive: true })
+    writeFileSync(attachment, "%PDF-1.4")
+    const { opened, id } = session({ attached: ["attached", ""] })
+    const before = idles(opened, id).length
+    opened.prompt(id, { id: "msg_cursor_attached00000001", text: "look", files: [{ uri: `file://${attachment}`, name: "report.pdf" }], delivery: "steer" })
+    await until(() => idles(opened, id).length > before)
+    expect(words(opened, id)).toBe("attached=yes")
+  })
+
+  test("Kuvo Code's tools reach it through the bridge, as its own session's", async () => {
+    const app = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: (request) =>
+        request.headers.get("authorization") === "Bearer app-token"
+          ? Response.json({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: request.headers.get("x-kuvo-session") ?? "anyone" }] } })
+          : new Response("Not allowed.", { status: 401 }),
+    })
+    try {
+      setToolServer({ url: `http://127.0.0.1:${app.port}/mcp`, token: "app-token", timeout: 30_000 })
+      const { opened, id } = session({ tools: ["tools", ""] })
+      await send(opened, id)
+      expect(words(opened, id)).toBe(`tools=${id}`)
+    } finally {
+      app.stop(true)
+    }
+  })
+
+  test("a folder you let the project's commands write (Also Allowed) it writes from its next message", async () => {
+    const { opened, id } = session({ elsewhere: ["write", join(elsewhere, "e.txt")] })
+    await send(opened, id)
+    const allowed = join(kuvo, "run", "fence", "allowed", createHash("sha256").update(realpathSync(project)).digest("hex").slice(0, 32))
+    mkdirSync(dirname(allowed), { recursive: true })
+    writeFileSync(allowed, elsewhere + "\n")
+    await send(opened, id, "again")
+    expect(words(opened, id)).toBe("elsewhere=noelsewhere=yes")
+  })
+
+  test("if its process stops, the turn fails with what it said, and the next message starts it again", async () => {
+    const { opened, id } = session({ crash: ["crash", ""] })
+    await send(opened, id)
+    expect(idles(opened, id).at(-1)).toMatchObject({ outcome: "failed", error: { message: expect.stringContaining("Cursor fell over.") } })
+    writeFileSync(join(runtime, "tries.json"), JSON.stringify({ project: ["write", join(project, "made.txt")] }))
+    await send(opened, id, "again")
+    expect(idles(opened, id).at(-1)?.outcome).toBe("succeeded")
+    expect(words(opened, id)).toBe("project=yes")
+  })
+
+  test("if its process stops as its agent is made, the next message starts it again", async () => {
+    const { opened, id } = session({ starting: ["crash", ""] })
+    await send(opened, id)
+    expect(idles(opened, id).at(-1)).toMatchObject({ outcome: "failed", error: { message: expect.stringContaining("Cursor fell over as it started.") } })
+    writeFileSync(join(runtime, "tries.json"), JSON.stringify({ project: ["write", join(project, "made.txt")] }))
+    await send(opened, id, "again")
+    expect(idles(opened, id).at(-1)?.outcome).toBe("succeeded")
+    expect(words(opened, id)).toBe("project=yes")
+  })
+
+  test("with the sandbox off, it runs as before: in the bridge, in Cursor's own sandbox", async () => {
+    delete process.env.KUVO_FENCE
+    const { opened, id } = session({ sandbox: ["sandbox", ""], elsewhere: ["write", join(elsewhere, "e.txt")] })
+    await send(opened, id)
+    expect(words(opened, id)).toBe("sandbox=on elsewhere=yes")
   })
 })
