@@ -1,7 +1,8 @@
 // When the sandbox stops a command a task needs (PROTOCOL.md, "Sandbox", "Asks"): the agent asks
 // with sandbox_ask, you see what it wants to run and why on any client (`kuvo/sandbox/asks`), and
 // answer Allow Once (the box runs that one command outside the sandbox and hands back its output),
-// Always for This (a rule for the project, kept in Also Allowed) or Don't Allow. The engine is a
+// Always for This (that, and the folder it was stopped writing in for the project's commands from
+// then on, kept in Also Allowed) or Don't Allow. The engine is a
 // stand-in, as in sandbox.test.js: it loads the box's real plugin and runs commands through the
 // shell it gives; the sandbox itself is the system's own.
 //
@@ -67,7 +68,8 @@ after(() => { engine?.closeAllConnections(); engine?.close(); });
 
 // The box's long-running process.
 async function start() {
-  const child = spawn(process.execPath, [script, "serve"], { env: { ...env, OPENCODE_PASSWORD: "box-pw" }, stdio: ["pipe", "pipe", "pipe"] });
+  // (Its folders in Kuvo Code's, as a machine's launch points them: npm's cache had none before.)
+  const child = spawn(process.execPath, [script, "serve"], { env: { ...env, OPENCODE_PASSWORD: "box-pw", npm_config_cache: path.join(home, "npm"), KUVO_OWN_npm_config_cache: "" }, stdio: ["pipe", "pipe", "pipe"] });
   let out = "", err = "";
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
@@ -80,12 +82,13 @@ async function start() {
     });
     exited.then(code => reject(new Error(`serve exited ${code}: ${err}`)));
   });
+  const headers = { authorization: `Basic ${Buffer.from("opencode:box-pw").toString("base64")}`, "content-type": "application/json" };
   const ask = async (method, route, body) => {
-    const response = await fetch(`${url}/${route}`, { method, headers: { authorization: `Basic ${Buffer.from("opencode:box-pw").toString("base64")}`, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+    const response = await fetch(`${url}/${route}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
     return { status: response.status, value: await response.json().catch(() => ({})) };
   };
   const stop = async () => { child.stdin.end(); child.kill("SIGTERM"); await exited; };
-  return { ask, stop };
+  return { ask, stop, url, headers };
 }
 
 // The Mac over SSH: `box route`, a process of its own on the machine.
@@ -118,12 +121,35 @@ function sandboxAsk(box, session, args) {
   return box.ask("POST", "kuvo/sandbox/tools", { session, name: "sandbox_ask", arguments: args });
 }
 
-// What's asked now, once something is.
-async function asked(box) {
-  for (let tries = 0; tries < 1000; tries++) {
-    const asks = (await box.ask("GET", "kuvo/sandbox/asks")).value.asks ?? [];
-    if (asks.length) return asks;
-    await new Promise(done => setImmediate(done));
+// What's asked now, once something is: from the asks' stream, which says what's asked each time it
+// changes. (`call`: the call that should ask, which mustn't answer first.)
+async function asked(box, call) {
+  const stop = new AbortController();
+  let done = false;
+  const first = (what) => { if (!done) assert.fail(`answered without asking: ${what}`); };
+  const answered = call.then(result => first(JSON.stringify(result.value ?? result)), error => first(String(error)));
+  try {
+    return await Promise.race([answered, streamed(box, stop.signal)]);
+  } finally {
+    done = true;
+    stop.abort();
+  }
+}
+async function streamed(box, signal) {
+  const response = await fetch(`${box.url}/kuvo/sandbox/asks/events`, { headers: box.headers, signal });
+  let buffered = "";
+  try {
+    for await (const chunk of response.body) {
+      buffered += Buffer.from(chunk).toString("utf8");
+      let at;
+      while ((at = buffered.indexOf("\n")) >= 0) {
+        const { asks } = JSON.parse(buffered.slice(0, at));
+        buffered = buffered.slice(at + 1);
+        if (asks.length) return asks;
+      }
+    }
+  } catch (error) {
+    if (!signal.aborted) throw error;
   }
   assert.fail("nothing was asked");
 }
@@ -172,15 +198,16 @@ test("an agent on a machine has sandbox_ask while the sandbox is on, and its cal
   assert.ok(tool, "listed with the browser's tools");
   assert.deepEqual(tool.inputSchema.required, ["command", "why"]);
 
-  const args = { command: "echo from the machine", why: "To see the tool server pass it on." };
+  // (It runs as you would: with your own folders, never Kuvo Code's, which a machine's box has.)
+  const args = { command: "echo from the machine; printf '%s|%s\\n' \"${npm_config_cache-unset}\" \"${KUVO_HOME-unset}\"", why: "To see the tool server pass it on." };
   calling.ses_shop2 = [{ type: "tool", id: `call_${++calls}`, name: "kuvo-browser_sandbox_ask", state: { status: "running", input: args } }];
   const called = tools.ask("tools/call", { name: "sandbox_ask", arguments: args, _meta: { "ai.opencode/sessionID": "ses_shop2" } });
-  const [open] = await asked(box);
-  assert.equal(open.command, "echo from the machine");
+  const [open] = await asked(box, called);
+  assert.equal(open.command, args.command);
   assert.equal((await fromMac("POST", `kuvo/sandbox/asks/${open.id}`, { answer: "once" })).status, 200);
   const result = await called;
   assert.equal(result.isError, false, result.content[0].text);
-  assert.match(result.content[0].text, /^Ran outside the sandbox · Allowed once\n\nfrom the machine\n/);
+  assert.match(result.content[0].text, /^Ran outside the sandbox · Allowed once\n\nfrom the machine\nunset\|unset\n/);
 });
 
 test("a command the sandbox stopped runs outside it once you allow it once; the next time it asks again, and Don't Allow runs nothing", async () => {
@@ -191,7 +218,7 @@ test("a command the sandbox stopped runs outside it once you allow it once; the 
   assert.equal(fs.existsSync(target), false);
 
   const call = sandboxAsk(box, "ses_shop", { command, why: "To record the release outside the project.", error: inSandbox.out.trim() });
-  const [ask] = await asked(box);
+  const [ask] = await asked(box, call);
   assert.equal(ask.command, command);
   assert.equal(ask.why, "To record the release outside the project.");
   assert.equal(ask.sessionName, "Fix checkout");
@@ -215,54 +242,55 @@ test("a command the sandbox stopped runs outside it once you allow it once; the 
 
   // Once is once: the same command asks again, and you say no.
   const again = sandboxAsk(box, "ses_shop", { command, why: "Once more." });
-  const [second] = await asked(box);
+  const [second] = await asked(box, again);
   assert.equal((await box.ask("POST", `kuvo/sandbox/asks/${second.id}`, { answer: "no" })).status, 200);
   const refused = (await again).value;
   assert.match(refused.text, /The user said no/);
   assert.equal(fs.readFileSync(target, "utf8"), "shipped\n", "nothing ran");
 });
 
-test("Always for a command lets it run outside the sandbox in that project without asking, never in another, until you remove it from Also Allowed", async () => {
+test("a command is never let out of the sandbox for good: Always is only the folder it was stopped writing in, and a script it runs asks again each time", async () => {
+  // A script in the project, which the sandbox writes: what it runs is the agent's to change.
   fs.mkdirSync(path.join(shop, "tools"), { recursive: true });
   const target = path.join(outside, "hooks.txt");
   fs.writeFileSync(path.join(shop, "tools", "install.sh"), `#!/bin/sh\necho installed >> ${JSON.stringify(target)}\n`, { mode: 0o755 });
   const command = "./tools/install.sh --all";
   const call = sandboxAsk(box, "ses_shop2", { command, why: "The README says to install the hooks.", error: "Permission denied" });
-  const [ask] = await asked(box);
-  assert.deepEqual(ask.always, { kind: "outside", prefix: "./tools/install.sh" }, "what Always would allow");
+  const [ask] = await asked(box, call);
+  assert.equal(ask.always, undefined, "a command can only be allowed once");
+  // Answered Always anyway (an older client), it's once.
   assert.equal((await box.ask("POST", `kuvo/sandbox/asks/${ask.id}`, { answer: "always" })).status, 200);
-  assert.match((await call).value.text, /^Ran outside the sandbox · Always for this/);
+  assert.match((await call).value.text, /^Ran outside the sandbox · Allowed once/);
   assert.equal(fs.readFileSync(target, "utf8"), "installed\n");
+  assert.deepEqual((await box.ask("GET", `kuvo/sandbox/allowed?project=${encodeURIComponent(shop)}`)).value.allowed, []);
+  // The agent changes the script: the same command asks again, and nothing runs on a no.
+  fs.writeFileSync(path.join(shop, "tools", "install.sh"), `#!/bin/sh\necho changed >> ${JSON.stringify(target)}\n`, { mode: 0o755 });
+  const again = sandboxAsk(box, "ses_shop", { command: "./tools/install.sh", why: "Again." });
+  const [second] = await asked(box, again);
+  await box.ask("POST", `kuvo/sandbox/asks/${second.id}`, { answer: "no" });
+  assert.match((await again).value.text, /The user said no/);
+  assert.equal(fs.readFileSync(target, "utf8"), "installed\n");
+  // Nor can a client add a command to Also Allowed.
+  assert.equal((await fromMac("POST", "kuvo/sandbox/allowed", { project: shop, kind: "outside", prefix: "./tools/install.sh" })).status, 400);
 
-  // Kept in Also Allowed for the project.
-  const allowed = (await box.ask("GET", `kuvo/sandbox/allowed?project=${encodeURIComponent(shop)}`)).value.allowed;
-  assert.deepEqual(allowed.map(({ kind, prefix, project }) => ({ kind, prefix, project })), [{ kind: "outside", prefix: "./tools/install.sh", project: shop }]);
-  // The next time, in that project, it runs with no card.
-  const quiet = (await sandboxAsk(box, "ses_shop", { command: "./tools/install.sh", why: "Again." })).value;
-  assert.match(quiet.text, /^Ran outside the sandbox · Always for this/);
-  assert.equal(fs.readFileSync(target, "utf8"), "installed\ninstalled\n");
-  // Not a command that only starts like it, chained to another.
-  const chained = sandboxAsk(box, "ses_shop", { command: "./tools/install.sh; rm -rf ~", why: "Chained." });
-  const [chainedAsk] = await asked(box);
-  assert.equal(chainedAsk.always, undefined, "a chained command can't be allowed always");
-  await box.ask("POST", `kuvo/sandbox/asks/${chainedAsk.id}`, { answer: "no" });
-  await chained;
-  // Nor in another project.
-  fs.mkdirSync(path.join(blog, "tools"), { recursive: true });
-  fs.copyFileSync(path.join(shop, "tools", "install.sh"), path.join(blog, "tools", "install.sh"));
-  const elsewhere = sandboxAsk(box, "ses_blog", { command: "./tools/install.sh", why: "Here too." });
-  const [blogAsk] = await asked(box);
-  assert.equal(blogAsk.project, blog);
-  await box.ask("POST", `kuvo/sandbox/asks/${blogAsk.id}`, { answer: "no" });
-  await elsewhere;
-
-  // Removed, it asks again.
-  assert.equal((await fromMac("DELETE", `kuvo/sandbox/allowed/${allowed[0].id}`)).status, 200);
-  const after = sandboxAsk(box, "ses_shop", { command: "./tools/install.sh", why: "After removing." });
-  const [afterAsk] = await asked(box);
-  await box.ask("POST", `kuvo/sandbox/asks/${afterAsk.id}`, { answer: "no" });
-  assert.match((await after).value.text, /The user said no/);
-  assert.equal(fs.readFileSync(target, "utf8"), "installed\ninstalled\n");
+  // On a Mac, where its log says which folder the sandbox stopped a command writing in, Always lets
+  // the project's commands write there from then on, in the sandbox.
+  if (linux) return;
+  const logs = path.join(outside, "logs");
+  fs.mkdirSync(logs);
+  const write = `echo line >> ${JSON.stringify(path.join(logs, "build.log"))}`;
+  assert.notEqual((await engineRuns(shop, write, "ses_shop2")).status, 0, "the sandbox stops it");
+  const wrote = sandboxAsk(box, "ses_shop2", { command: write, why: "To keep the build's log." });
+  const [writeAsk] = await asked(box, wrote);
+  assert.deepEqual(writeAsk.always, { kind: "write", path: path.join(logs, "build.log") });
+  assert.equal((await box.ask("POST", `kuvo/sandbox/asks/${writeAsk.id}`, { answer: "always" })).status, 200);
+  assert.match((await wrote).value.text, /^Ran outside the sandbox · Always for this: from now on your commands can write in /);
+  const rules = (await box.ask("GET", `kuvo/sandbox/allowed?project=${encodeURIComponent(shop)}`)).value.allowed;
+  assert.deepEqual(rules.map(({ kind, path: where }) => ({ kind, path: where })), [{ kind: "write", path: path.join(logs, "build.log") }]);
+  const ran = await engineRuns(shop, write, "ses_shop2");
+  assert.equal(ran.status, 0, ran.out);
+  assert.equal(fs.readFileSync(path.join(logs, "build.log"), "utf8"), "line\nline\n");
+  assert.equal((await fromMac("DELETE", `kuvo/sandbox/allowed/${rules[0].id}`)).status, 200);
 });
 
 test("a folder in Also Allowed is one a project's commands write in the sandbox, and another project's still can't", async () => {
@@ -278,8 +306,30 @@ test("a folder in Also Allowed is one a project's commands write in the sandbox,
   assert.notEqual((await engineRuns(blog, `echo hi > ${JSON.stringify(path.join(shared, "blog.txt"))}`, "ses_blog")).status, 0, "another project's commands can't");
   // A folder of Kuvo Code's own can't be added.
   assert.equal((await fromMac("POST", "kuvo/sandbox/allowed", { project: shop, kind: "write", path: path.join(home, "run") })).status, 400);
-  // Nor what runs later, outside the sandbox: SSH's folder, a shell's startup file.
-  for (const later of [".ssh", ".zshrc", ".bashrc"]) assert.equal((await fromMac("POST", "kuvo/sandbox/allowed", { project: shop, kind: "write", path: path.join(os.userInfo().homedir, later) })).status, 400, later);
+  // Nor what runs later, outside the sandbox: your home folder's settings (SSH's, a shell's startup
+  // file, any hidden folder, Library), its programs, the system's, programs on the PATH, a
+  // repository's own folder.
+  const refused = [".ssh", ".zshrc", ".bashrc", ".nvm/versions", ".vscode/extensions", "Library/LaunchAgents", "bin"].map(later => path.join(os.userInfo().homedir, later));
+  refused.push("/usr/local", "/opt/homebrew/lib/node_modules", path.dirname(process.execPath), path.join(shop, ".git", "hooks"));
+  for (const later of refused) assert.equal((await fromMac("POST", "kuvo/sandbox/allowed", { project: shop, kind: "write", path: later })).status, 400, later);
+  // Inside a folder given, what runs later stays as it is in a project: git's hooks and config, the
+  // agents' and the engine's settings.
+  const repo = path.join(outside, "backend");
+  fs.mkdirSync(path.join(repo, ".git", "hooks"), { recursive: true });
+  assert.equal((await fromMac("POST", "kuvo/sandbox/allowed", { project: shop, kind: "write", path: repo })).status, 200);
+  assert.equal((await engineRuns(shop, `echo ok > ${JSON.stringify(path.join(repo, "notes.txt"))}`, "ses_shop")).status, 0, "it writes in it");
+  if (!linux) {
+    for (const guarded of [".git/hooks/pre-commit", ".git/config", ".claude/settings.json", "opencode.json", ".mcp.json"]) {
+      assert.notEqual((await engineRuns(shop, `mkdir -p ${JSON.stringify(path.dirname(path.join(repo, guarded)))} 2>/dev/null; echo x > ${JSON.stringify(path.join(repo, guarded))}`, "ses_shop")).status, 0, guarded);
+    }
+  }
+  // A folder given that's become a link since (to anywhere: here, your home folder) isn't given.
+  fs.rmSync(repo, { recursive: true });
+  fs.symlinkSync(blog, repo);
+  assert.notEqual((await engineRuns(shop, `echo x > ${JSON.stringify(path.join(repo, "through.txt"))}`, "ses_shop")).status, 0, "not through a link");
+  assert.equal(fs.existsSync(path.join(blog, "through.txt")), false);
+  fs.unlinkSync(repo);
+  for (const rule of (await fromMac("GET", `kuvo/sandbox/allowed?project=${encodeURIComponent(shop)}`)).value.allowed.filter(each => each.path === repo)) await fromMac("DELETE", `kuvo/sandbox/allowed/${rule.id}`);
   // Removed, the next command can't write there again.
   const rule = (await fromMac("GET", `kuvo/sandbox/allowed?project=${encodeURIComponent(shop)}`)).value.allowed.find(each => each.kind === "write");
   assert.equal((await fromMac("DELETE", `kuvo/sandbox/allowed/${rule.id}`)).status, 200);
@@ -289,7 +339,7 @@ test("a folder in Also Allowed is one a project's commands write in the sandbox,
 test("a group chat's seat is asked about once only: nobody's there to answer for it for good", async () => {
   const args = { command: "./tools/lint.sh", why: "To check the post before the standup." };
   const called = sandboxAsk(box, "ses_seat", args);
-  const [open] = await asked(box);
+  const [open] = await asked(box, called);
   assert.equal(open.session, "ses_seat");
   assert.equal(open.always, undefined, "no Always for This");
   assert.equal((await fromMac("POST", `kuvo/sandbox/asks/${open.id}`, { answer: "no" })).status, 200);

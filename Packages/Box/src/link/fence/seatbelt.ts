@@ -1,7 +1,8 @@
 // The sandbox's policy in macOS's own terms: a Seatbelt profile for `sandbox-exec`, which the
 // launcher (`bin/kuvo-fence`) runs each command in, with the conversation's folder, its git
 // repository, the commands' temporary folder and where its wake-ups are kept as the profile's
-// parameters (WORK, GIT, TMP, WAKES), what Also Allowed gives its project (ALLOW0…), and the tag
+// parameters (WORK, GIT, TMP, WAKES), what Also Allowed gives its project (ALLOW0…, escaped for
+// regexes as ALLOW0_RE…), and the tag
 // its refusals are logged with (TAG: `kuvo-sandbox <session>`).
 //
 // Later rules win, so each part carves out of the ones before it. Two profiles: one for a folder
@@ -56,7 +57,8 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   const allow = (operations: string, ...filters: string[]) => {
     if (filters.length) out.push(`(allow ${operations} ${filters.join(" ")})`);
   };
-  // Regexes over a parameter take its escaped copy (`WORK_RE`, `GIT_RE`: the launcher escapes them).
+  // Regexes over a parameter take its escaped copy (`WORK_RE`, `GIT_RE`, `ALLOW0_RE`…: the launcher
+  // escapes them).
   const under = (base: string, rest: string) => `(regex (string-append "^" (param ${quote(base)}) ${quote(rest)}))`;
 
   out.push(";; writes: its folder, its repository, temporary folders, devices and tools' caches");
@@ -82,7 +84,8 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   allow(HIDDEN, `(subpath (string-append (param "WAKES") "/inbox"))`);
 
   out.push(";; what runs outside the sandbox, or changes the engine");
-  deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED));
+  deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED),
+    ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
 
   out.push(";; your secrets");
   deny("file-read*", ...policy.secrets.map(subpath));

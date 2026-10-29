@@ -24,8 +24,9 @@ let holding = false;
 export const holdsVault = () => holding;
 
 /** Whether a route is one only the holding process answers: the vault's, and the sandbox's asks
- * and its agents' tool (fence/outside.ts), whose asks wait in it. */
-export const heldHere = (route: string) => /^kuvo\/(vault|sandbox\/(asks|tools))(\/|\?|$)/.test(route);
+ * and its agents' tool (fence/outside.ts), whose asks wait in it, and Also Allowed, which an ask's
+ * Always adds to there (one process changes it). */
+export const heldHere = (route: string) => /^kuvo\/(vault|sandbox\/(asks|tools|allowed))(\/|\?|$)/.test(route);
 
 /** A request as it goes over the socket, and its answer back. */
 interface Sent {

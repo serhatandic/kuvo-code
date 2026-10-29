@@ -1,7 +1,7 @@
 // Built from Packages/Box/src by scripts/build-box.sh: change those, then run it. Never edit this file.
 
 // Packages/Box/src/link/main.ts
-import { spawn as spawn7 } from "node:child_process";
+import { spawn as spawn8 } from "node:child_process";
 import crypto33 from "node:crypto";
 import fs78 from "node:fs";
 import os13 from "node:os";
@@ -10386,7 +10386,7 @@ var projectSum = (project) => crypto20.createHash("sha256").update(realProject(p
 function readAllowed() {
   try {
     const kept = JSON.parse(fs49.readFileSync(FILE, "utf8"));
-    return Array.isArray(kept?.allowed) ? kept.allowed.filter((rule) => rule && typeof rule.id === "string" && typeof rule.project === "string") : [];
+    return Array.isArray(kept?.allowed) ? kept.allowed.filter((rule) => rule && typeof rule.id === "string" && typeof rule.project === "string" && rule.kind === "write" && typeof rule.path === "string") : [];
   } catch {
     return [];
   }
@@ -10406,8 +10406,7 @@ function keep(rules) {
 function tellLauncher(rules = readAllowed()) {
   const byProject = new Map;
   for (const rule of rules)
-    if (rule.kind === "write" && rule.path)
-      byProject.set(projectSum(rule.project), [...byProject.get(projectSum(rule.project)) ?? [], rule.path]);
+    byProject.set(projectSum(rule.project), [...byProject.get(projectSum(rule.project)) ?? [], rule.path]);
   fs49.mkdirSync(FOR_LAUNCHER, { recursive: true, mode: 448 });
   for (const name of fs49.readdirSync(FOR_LAUNCHER))
     if (!byProject.has(name))
@@ -10418,154 +10417,72 @@ function tellLauncher(rules = readAllowed()) {
 `);
 }
 var inside2 = (child, top) => child === top || child.startsWith(top === "/" ? "/" : top + "/");
-var RUNS_LATER2 = [
-  ".ssh",
-  ".gnupg",
-  ".profile",
-  ".bashrc",
-  ".bash_profile",
-  ".bash_login",
-  ".bash_logout",
-  ".zshrc",
-  ".zshenv",
-  ".zprofile",
-  ".zlogin",
-  ".zlogout",
-  ".config/fish",
-  ".config/nushell",
-  ".inputrc",
-  ".gitconfig",
-  ".config/git",
-  ".claude",
-  ".claude.json",
-  ".codex",
-  ".cursor",
-  ".gemini",
-  ".grok",
-  ".config/opencode",
-  ".local/bin",
-  "bin",
-  ".config/autostart",
-  ".config/systemd",
-  ".config/environment.d",
-  "Library/LaunchAgents",
-  "Library/Application Scripts",
-  ".tmux.conf",
-  ".vimrc",
-  ".config/nvim",
-  ".emacs",
-  ".emacs.d",
-  ".npmrc",
-  ".pip",
-  ".config/pip",
-  ".gemrc",
-  ".curlrc",
-  ".wgetrc",
-  ".pam_environment",
-  ".xprofile",
-  ".xinitrc",
-  ".xsession"
+var SYSTEM = [
+  "/bin",
+  "/sbin",
+  "/usr",
+  "/opt",
+  "/etc",
+  "/var",
+  "/nix",
+  "/snap",
+  "/boot",
+  "/lib",
+  "/lib64",
+  "/root",
+  "/System",
+  "/Library",
+  "/Applications",
+  "/private/etc",
+  "/private/var",
+  "/cores"
 ];
+var HOME_PROGRAMS = ["bin", "Applications"];
+var SETTINGS_FOLDER = /^\.(git|opencode|claude|codex|cursor|gemini|grok)$/;
+var programFolders = () => (process.env.PATH ?? "").split(":").filter((folder) => path49.isAbsolute(folder)).map(realish);
 function checkedPath(given) {
   if (typeof given !== "string" || !path49.isAbsolute(given) || given.includes(`
 `))
     throw new RuleRefusal("Name the folder by its full path.");
   const where = realish(given);
   const policy = fencePolicy();
-  const home = policy.home;
-  if (where === "/" || where === home)
+  const homes = [...new Set([policy.home, realish(accountHome()), ...process.env.HOME ? [realish(process.env.HOME)] : []])].sort((a, b) => b.length - a.length);
+  if (where === "/" || homes.includes(where))
     throw new RuleRefusal("That's too much to give: name a folder inside it.");
   if (policy.kuvo.some((folder) => inside2(where, folder) || inside2(folder, where)) || policy.kuvoPatterns.some((pattern) => new RegExp(pattern).test(where + "/"))) {
     throw new RuleRefusal("Kuvo Code's own folders stay out of the sandbox.");
   }
   if (policy.secrets.some((secret) => inside2(where, secret) || inside2(secret, where)))
     throw new RuleRefusal("That's where your secrets are kept: it stays out of the sandbox.");
-  const homes = [...new Set([home, realish(accountHome())])];
-  if (homes.includes(where))
-    throw new RuleRefusal("That's too much to give: name a folder inside it.");
-  const later = [...homes.flatMap((each) => RUNS_LATER2.map((name) => realish(path49.join(each, name)))), ...policy.readOnly];
-  if (later.some((place) => inside2(where, place) || inside2(place, where)))
-    throw new RuleRefusal("What's there runs later, outside the sandbox: it can only be allowed once.");
+  const later = "What's there runs later, outside the sandbox: it can only be allowed once.";
+  const inHome = homes.find((home) => inside2(where, home));
+  if (inHome) {
+    const first = path49.relative(inHome, where).split("/")[0];
+    if (first.startsWith(".") || first === "Library" || HOME_PROGRAMS.includes(first))
+      throw new RuleRefusal(later);
+  } else if (SYSTEM.some((folder) => inside2(where, folder) || inside2(where, realish(folder)))) {
+    throw new RuleRefusal(later);
+  }
+  if (where.split("/").some((name) => SETTINGS_FOLDER.test(name)))
+    throw new RuleRefusal(later);
+  if ([...programFolders(), ...policy.readOnly].some((place) => inside2(where, place) || inside2(place, where)))
+    throw new RuleRefusal(later);
   return where;
 }
-var RUNNERS = new Set([
-  "sh",
-  "bash",
-  "zsh",
-  "dash",
-  "fish",
-  "env",
-  "sudo",
-  "doas",
-  "xargs",
-  "eval",
-  "exec",
-  "nohup",
-  "time",
-  "command",
-  "nice",
-  "timeout",
-  "watch",
-  "node",
-  "python",
-  "python3",
-  "ruby",
-  "perl",
-  "php",
-  "deno",
-  "bun",
-  "npx",
-  "bunx",
-  "pnpx",
-  "uvx",
-  "osascript",
-  "open"
-]);
-function prefixOf(command) {
-  const text = command.trim();
-  if (!text || /[;&|<>`\n\r\\'"]|\$\(/.test(text))
-    return null;
-  const [first, second] = text.split(/\s+/);
-  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first))
-    return null;
-  const own = second !== undefined && !second.startsWith("-");
-  if (RUNNERS.has(path49.basename(first)))
-    return own ? `${first} ${second}` : null;
-  return own ? `${first} ${second}` : first;
-}
-function matches2(prefix, command) {
-  if (prefixOf(command) === null)
-    return false;
-  const words = command.trim().split(/\s+/);
-  const wanted = prefix.split(" ");
-  return wanted.every((word, at) => words[at] === word);
-}
-var outsideRuleFor = (project, command) => allowedFor(project).find((rule) => rule.kind === "outside" && rule.prefix && matches2(rule.prefix, command)) ?? null;
 function addRule(given) {
   if (typeof given.project !== "string" || !path49.isAbsolute(given.project))
     throw new RuleRefusal("Name the project by its folder's full path.");
+  if (given.kind !== "write")
+    throw new RuleRefusal('Send {project, kind: "write", path}: a folder its commands may write in.');
   const project = realProject(given.project);
   const rules = readAllowed();
-  let rule;
-  if (given.kind === "write") {
-    const where = checkedPath(given.path);
-    const same = rules.find((each) => each.project === project && each.kind === "write" && each.path === where);
-    if (same)
-      return same;
-    if (rules.filter((each) => each.project === project && each.kind === "write").length >= MOST_FOLDERS)
-      throw new RuleRefusal(`A project's commands can be given at most ${MOST_FOLDERS} folders: remove one first.`);
-    rule = { id: newID("al_"), project, kind: "write", path: where, at: Date.now(), ...given.by ? { by: given.by } : {} };
-  } else if (given.kind === "outside") {
-    const prefix = typeof given.prefix === "string" ? prefixOf(given.prefix) : null;
-    if (!prefix || prefix !== given.prefix.trim())
-      throw new RuleRefusal("Name a command by its first words, with nothing chained to it.");
-    const same = rules.find((each) => each.project === project && each.kind === "outside" && each.prefix === prefix);
-    if (same)
-      return same;
-    rule = { id: newID("al_"), project, kind: "outside", prefix, at: Date.now(), ...given.by ? { by: given.by } : {} };
-  } else {
-    throw new RuleRefusal('Send {project, kind: "write", path} or {project, kind: "outside", prefix}.');
-  }
+  const where = checkedPath(given.path);
+  const same = rules.find((each) => each.project === project && each.path === where);
+  if (same)
+    return same;
+  if (rules.filter((each) => each.project === project).length >= MOST_FOLDERS)
+    throw new RuleRefusal(`A project's commands can be given at most ${MOST_FOLDERS} folders: remove one first.`);
+  const rule = { id: newID("al_"), project, kind: "write", path: where, at: Date.now(), ...given.by ? { by: given.by } : {} };
   keep([...rules, rule]);
   return rule;
 }
@@ -10590,11 +10507,10 @@ var sh = (text) => `'${text.replace(/'/g, `'\\''`)}'`;
 function launcherScript(places) {
   const insideCases = [...places.inside.map((folder) => `${sh(folder)}/?*`), sh(places.probe)].join("|");
   const run = places.platform === "darwin" ? [
-    `escaped() { printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\\\&/g'; }`,
     `for c_last; do :; done`,
     `c_sum=$( (printf '%s' "\${c_last-}" | shasum -a 256) 2>/dev/null | cut -c 1-16)`,
     `case \${OPENCODE_SESSION_ID-} in ses_*[!A-Za-z0-9_]*|ses_|'') tag="kuvo-sandbox" ;; *) tag="kuvo-sandbox $OPENCODE_SESSION_ID $c_sum" ;; esac`,
-    `exec /usr/bin/sandbox-exec -D TAG="$tag" -D WORK="$work" -D GIT="$git" -D TMP="$tmp" -D WAKES="$own" -D SSH="$ssh" -D WORK_RE="$(escaped "$work")" -D GIT_RE="$(escaped "$git")" ${Array.from({ length: MOST_FOLDERS }, (_, at) => `-D ALLOW${at}="$a${at}"`).join(" ")} -f "$F/$profile.sb" "$shell" "$@"`
+    `exec /usr/bin/sandbox-exec -D TAG="$tag" -D WORK="$work" -D GIT="$git" -D TMP="$tmp" -D WAKES="$own" -D SSH="$ssh" -D WORK_RE="$(escaped "$work")" -D GIT_RE="$(escaped "$git")" ${Array.from({ length: MOST_FOLDERS }, (_, at) => `-D ALLOW${at}="$a${at}" -D ALLOW${at}_RE="$r${at}"`).join(" ")} -f "$F/$profile.sb" "$shell" "$@"`
   ] : [
     `[ -n "$runtime" ] || runtime=$(cat "$F/runtime" 2>/dev/null)`,
     `[ -x "$runtime" ] || { echo "This command can't run in the sandbox here: the engine's runtime wasn't given." >&2; exit 126; }`,
@@ -10621,8 +10537,9 @@ function launcherScript(places) {
     `case $sum in ????????????????????????????????) ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
     `tmp=$F/tmp/$sum`,
     `allowed=$F/allowed/$sum`,
-    ...Array.from({ length: MOST_FOLDERS }, (_, at) => `a${at}=$F/none`),
-    `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
+    ...places.platform === "darwin" ? [`escaped() { printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\\\&/g'; }`] : [],
+    ...Array.from({ length: MOST_FOLDERS }, (_, at) => `a${at}=$F/none r${at}=-`),
+    `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; ${places.platform === "darwin" ? `eval "r$i=\\$(escaped \\"\\$line\\")"; ` : ""}i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
     `own=$F/none`,
     `case \${OPENCODE_SESSION_ID-} in`,
@@ -10750,7 +10667,7 @@ function agentsNote(platform) {
     "",
     "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
     "",
-    `When the sandbox refuses something a task needs ("Operation not permitted" or "Permission denied" outside these folders), don't work around it: ask the user with sandbox_ask, giving the command as you ran it and why the task needs it. They can let it run outside the sandbox once, always for this project, or say no; allowed, it runs for you and you get its output.`,
+    `When the sandbox refuses something a task needs ("Operation not permitted" or "Permission denied" outside these folders), don't work around it: ask the user with sandbox_ask, giving the command as you ran it and why the task needs it. They can let it run outside the sandbox once (and let your commands write in the folder it was stopped writing in from now on), or say no; allowed, it runs for you and you get its output.`,
     ""
   ].join(`
 `);
@@ -10829,7 +10746,8 @@ grantExcept("/", READS);
 for (const where of policy.readable) grant(where, READS);
 // What you let its project's commands write (Also Allowed).
 let allowed = [];
-try { allowed = fs.readFileSync(allowedFile, "utf8").split("\n").filter((line) => line.startsWith("/")); } catch {}
+// (Each by the real path the box keeps: one that's become a link since, to anywhere, isn't given.)
+try { allowed = fs.readFileSync(allowedFile, "utf8").split("\n").filter((line) => line.startsWith("/") && real(line) === line); } catch {}
 for (const where of [...policy.writable, work, git, ...allowed]) if (where) grantExcept(where, all, kept);
 if (tmp) { fs.mkdirSync(tmp, { recursive: true }); grant(tmp, all); }
 // Its conversation's wake-ups and watches (kuvo-wake): read, and only its inbox written, which the box
@@ -10891,7 +10809,7 @@ function seatbeltProfile(policy, options) {
   allow("file-read-data", param("WAKES"));
   allow(HIDDEN, `(subpath (string-append (param "WAKES") "/inbox"))`);
   out.push(";; what runs outside the sandbox, or changes the engine");
-  deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED));
+  deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED), ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
   out.push(";; your secrets");
   deny("file-read*", ...policy.secrets.map(subpath));
   out.push(";; Kuvo Code's own servers and sockets");
@@ -13790,7 +13708,7 @@ ${answer}` : "It hasn't answered yet; it may still write back with send_message.
 // Packages/Box/src/link/work/policy.ts
 import fs60 from "node:fs";
 import path59 from "node:path";
-function readLine(line) {
+function readLine(line, redirects = false) {
   const parts = [];
   let words = [], writes = [], word = "", has = false, quote = null, start = 0;
   let redirect = null;
@@ -13885,7 +13803,18 @@ function readLine(line) {
         i++;
       start = i + 1;
     } else if (char === ">" || char === "<") {
-      return no("input or output sent elsewhere");
+      if (!redirects)
+        return no("input or output sent elsewhere");
+      if (char === "<" && line[i + 1] === "<")
+        return no("a here-document");
+      if (has && /^[0-9]+$/.test(word)) {
+        word = "";
+        has = false;
+      } else
+        endWord();
+      if (line[i + 1] === char)
+        i++;
+      redirect = char === ">" ? "write" : "read";
     } else {
       word += char;
       has = true;
@@ -14139,7 +14068,7 @@ function checkSpec(spec, words, place) {
 function commandRefusal(line, folders) {
   if (!/^[\x20-\x7E]*$/.test(line))
     return `${CANT} (a character it can't read plainly)`;
-  const read = readLine(line);
+  const read = readLine(line, true);
   if ("unreadable" in read)
     return `${CANT} (${read.unreadable})`;
   if (!read.parts.length || !folders.length)
@@ -14209,9 +14138,28 @@ var OUTWARD = {
   gh: "using your GitHub account",
   glab: "using your GitLab account"
 };
+var SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
+var INLINE = {
+  node: ["-e", "--eval", "-p", "--print"],
+  bun: ["-e", "--eval", "-p", "--print"],
+  deno: ["eval"],
+  python: ["-c"],
+  python3: ["-c"],
+  ruby: ["-e"],
+  perl: ["-e", "-E"],
+  php: ["-r"],
+  osascript: ["-e"],
+  lua: ["-e"]
+};
+var RUNS_SCRIPTS = new Set(["npm", "pnpm", "yarn", "bun"]);
+var LOCAL_URL = /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])([:/]|$)/i;
+var SENDS = /^(-[a-zA-Z]*[TFd]|--upload-file|--form.*|--data.*|--json|--post-(data|file)|--body-(data|file)|-X|--request|--method)$/;
 function outwardRefusal(line) {
-  for (const part of line.split(/[;&|\n(){}`]|\$\(/)) {
-    let words = part.trim().split(/\s+/).map((word) => word.replace(/^["']+|["']+$/g, "")).filter(Boolean);
+  const read = readLine(line, true);
+  if ("unreadable" in read)
+    return `${CANT} (${read.unreadable})`;
+  for (const part of read.parts) {
+    let words = part.words;
     while (words.length && (WRAPPERS.has(path59.basename(words[0])) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]) || /^[-0-9]/.test(words[0])))
       words = words.slice(1);
     const [program, ...rest] = words;
@@ -14220,13 +14168,31 @@ function outwardRefusal(line) {
     const name = path59.basename(program);
     if (OUTWARD[name])
       return OUTWARD[name];
-    if (/(deploy|release|publish)/i.test(name))
+    if (name === "eval")
+      return "running a command it can't read";
+    if (SHELLS.has(name) && (rest.length === 0 || rest.some((word) => /^-[a-zA-Z]*c/.test(word))))
+      return "running a command it can't read";
+    if (INLINE[name] && rest.some((word) => INLINE[name].includes(word)))
+      return "running code it can't read";
+    if ([program, ...rest].some((word) => !word.startsWith("-") && /(deploy|release|publish)/i.test(path59.basename(word)) && (word === program || /\.[a-z]+$/i.test(word))))
       return "releasing or deploying";
-    const sub = rest.filter((word, at) => !word.startsWith("-") && !(name === "git" && ["-C", "-c"].includes(rest[at - 1] ?? "")))[0];
+    const subs = rest.filter((word, at) => !word.startsWith("-") && !(name === "git" && ["-C", "-c"].includes(rest[at - 1] ?? "")));
+    const sub = subs[0];
     if (name === "git" && sub === "push")
       return "pushing";
     if (sub === "publish" || sub === "deploy" || sub === "release" && name !== "git")
       return sub === "publish" ? "publishing" : "releasing or deploying";
+    if (sub === "push" || sub === "upload")
+      return "sending it beyond this computer";
+    if (name === "xcrun" && (sub === "altool" || sub === "notarytool"))
+      return "sending to a store";
+    if (RUNS_SCRIPTS.has(name) && ["run", "run-script"].includes(sub ?? "") && /(deploy|release|publish|push|upload)/i.test(subs[1] ?? ""))
+      return "releasing or deploying";
+    if ((name === "curl" || name === "wget") && rest.some((word) => SENDS.test(word))) {
+      const targets = rest.filter((word) => /^[a-z][a-z0-9+.-]*:\/\//i.test(word) || LOCAL_URL.test(word) || /^[\w-]+(\.[\w-]+)+(:\d+)?(\/|$)/.test(word));
+      if (!targets.length || !targets.every((word) => LOCAL_URL.test(word)))
+        return "sending something beyond this computer";
+    }
   }
   return null;
 }
@@ -15912,7 +15878,7 @@ async function* programsRoute(context) {
 }
 
 // Packages/Box/src/link/fence/outside.ts
-import { spawnSync as spawnSync5 } from "node:child_process";
+import { spawn as spawn7 } from "node:child_process";
 import crypto26 from "node:crypto";
 import fs69 from "node:fs";
 import os8 from "node:os";
@@ -16001,13 +15967,26 @@ function askBook(prefix, no) {
 // Packages/Box/src/link/run-command.ts
 import { spawn as spawn6 } from "node:child_process";
 import fs68 from "node:fs";
-var PRIVATE = ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "KUVO_HOST_VAULT_SECRET", "KUVO_VAULT_FILE_KEY", "BUN_BE_BUN"];
+var PRIVATE = ["BUN_BE_BUN", "BUN_RUNTIME_TRANSPILER_CACHE_PATH"];
 var MOST_KEPT2 = 4 * 1024 * 1024;
-function commandEnv() {
+function commandEnv(from = process.env) {
   const env = {};
-  for (const [name, value] of Object.entries(process.env))
-    if (value !== undefined && !PRIVATE.includes(name))
-      env[name] = value;
+  for (const [name, value] of Object.entries(from)) {
+    if (value === undefined || PRIVATE.includes(name) || name.startsWith("KUVO_") || name.startsWith("OPENCODE_"))
+      continue;
+    env[name] = value;
+  }
+  for (const [name, value] of Object.entries(from)) {
+    if (!name.startsWith("KUVO_OWN_") || value === undefined)
+      continue;
+    const own = name.slice("KUVO_OWN_".length);
+    if (!own)
+      continue;
+    if (value)
+      env[own] = value;
+    else
+      delete env[own];
+  }
   return env;
 }
 var running = new Map;
@@ -16055,13 +16034,22 @@ function runCommand(command, folder, env, timeout, signal, name = String(Math.ra
       stop();
     }, timeout);
     signal?.addEventListener("abort", stop, { once: true });
-    child.on("error", (error) => take(Buffer.from(String(error.message))));
-    child.on("close", (code) => {
+    let done = false;
+    const end = (code) => {
+      if (done)
+        return;
+      done = true;
       clearTimeout(timer);
       signal?.removeEventListener("abort", stop);
       running.delete(name);
       resolve({ output: output.toString("utf8"), code, timedOut });
+    };
+    child.on("error", (error) => {
+      take(Buffer.from(String(error.message)));
+      end(null);
     });
+    child.on("close", end);
+    child.on("exit", (code) => setTimeout(() => end(code), 1000).unref());
   });
 }
 
@@ -16073,7 +16061,7 @@ var answerSandboxAsk = book.answer;
 var SANDBOX_TOOLS = [
   {
     name: "sandbox_ask",
-    description: `Ask the user to run a command outside the sandbox, when the sandbox stopped one the task needs ("Operation not permitted" or "Permission denied" outside the folders you may write, or a refused connection or app). They see the command, why, and what was refused, and allow it once, always for this project, or say no. Allowed, Kuvo Code runs it for you outside the sandbox, in your project's folder, and you get its output. Waits for their answer. Don't use it to get around a rule you were told, and never for a command you haven't tried in the sandbox.`,
+    description: `Ask the user to run a command outside the sandbox, when the sandbox stopped one the task needs ("Operation not permitted" or "Permission denied" outside the folders you may write, or a refused connection or app). They see the command, why, and what was refused, and allow it once or say no; where it was stopped writing in one folder, they can also let your commands write there from now on. Allowed, Kuvo Code runs it for you outside the sandbox, in your project's folder, and you get its output. Waits for their answer. Don't use it to get around a rule you were told, and never for a command you haven't tried in the sandbox.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -16099,14 +16087,27 @@ var KINDS = [
   [/^(appleevent-send|mach-lookup)/, "app"]
 ];
 var commandSum = (command) => crypto26.createHash("sha256").update(command).digest("hex").slice(0, 16);
-function stopsFor(session, command, minutes = 3) {
+async function stopsFor(session, command, minutes = 3) {
   if (process.platform !== "darwin" || !/^ses_[A-Za-z0-9_]{1,80}$/.test(session))
     return [];
   const tagged = `kuvo-sandbox ${session} ${commandSum(command)}`;
-  const read = spawnSync5("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { encoding: "utf8", timeout: 20000, maxBuffer: 16 * 1024 * 1024 });
+  const read = await new Promise((resolve) => {
+    const child = spawn7("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), 20000);
+    child.stdout.setEncoding("utf8").on("data", (chunk) => {
+      if (out.length < 16 * 1024 * 1024)
+        out += chunk;
+    });
+    child.on("error", () => resolve(""));
+    child.on("close", () => {
+      clearTimeout(timer);
+      resolve(out);
+    });
+  });
   const stops = [];
   const seen = new Set;
-  for (const line of (read.stdout ?? "").split(`
+  for (const line of read.split(`
 `)) {
     let message = "";
     try {
@@ -16131,15 +16132,12 @@ function stopsFor(session, command, minutes = 3) {
   }
   return stops.slice(-MOST_STOPS);
 }
-function alwaysFor(command, stops) {
+function alwaysFor(stops) {
   const writes = [...new Set(stops.filter((stop) => stop.kind === "write" && stop.path).map((stop) => stop.path))];
-  if (writes.length === 1 && stops.every((stop) => stop.kind === "write")) {
-    const where = writeRuleWouldBe(writes[0]);
-    if (where)
-      return { kind: "write", path: where };
-  }
-  const prefix = prefixOf(command);
-  return prefix ? { kind: "outside", prefix } : undefined;
+  if (writes.length !== 1 || !stops.every((stop) => stop.kind === "write"))
+    return;
+  const where = writeRuleWouldBe(writes[0]);
+  return where ? { kind: "write", path: where } : undefined;
 }
 function sandboxAskNotice(asked) {
   const who = asked.botName ?? asked.sessionName ?? "An agent";
@@ -16171,34 +16169,27 @@ async function askToRun(caller, args, signal) {
   const project = caller.folder && fs69.existsSync(caller.folder) ? caller.folder : null;
   if (!project)
     return failed("This conversation's folder isn't there, so nothing can run for it.");
-  let how;
-  const rule = outsideRuleFor(project, command);
-  if (rule) {
-    how = "always";
-  } else {
-    const stopped = caller.session ? stopsFor(caller.session, String(args.command)) : [];
-    const always = caller.seat ? undefined : alwaysFor(command, stopped);
-    const answered = await book.ask({
-      ...caller.root ? { session: caller.root, ...caller.sessionName ? { sessionName: caller.sessionName } : {} } : {},
-      ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {},
-      project,
-      command,
-      why,
-      ...stopped.length ? { stopped } : {},
-      ...error ? { error } : {},
-      ...always ? { always } : {},
-      ...IS_MAC ? {} : { machine: os8.hostname() }
-    }, signal);
-    if (answered.answer === "no")
-      return { text: "The user said no: don't run it, nor get around the sandbox another way. Find another way to do the task, or ask them why.", isError: false };
-    how = answered.answer === "always" && always ? "always" : "once";
-    if (how === "always" && always) {
-      try {
-        addRule({ project, ...always, ...answered.client ? { by: answered.client } : {} });
-      } catch {
-        how = "once";
-      }
-    }
+  const stopped = caller.session ? await stopsFor(caller.session, String(args.command)) : [];
+  const always = caller.seat ? undefined : alwaysFor(stopped);
+  const answered = await book.ask({
+    ...caller.root ? { session: caller.root, ...caller.sessionName ? { sessionName: caller.sessionName } : {} } : {},
+    ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {},
+    project,
+    command,
+    why,
+    ...stopped.length ? { stopped } : {},
+    ...error ? { error } : {},
+    ...always ? { always } : {},
+    ...IS_MAC ? {} : { machine: os8.hostname() }
+  }, signal);
+  if (answered.answer === "no")
+    return { text: "The user said no: don't run it, nor get around the sandbox another way. Find another way to do the task, or ask them why.", isError: false };
+  let how = "once";
+  if (answered.answer === "always" && always) {
+    try {
+      addRule({ project, ...always, ...answered.client ? { by: answered.client } : {} });
+      how = "always";
+    } catch {}
   }
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
   const seconds = Math.max(1, Math.min(600, left, Number(args.timeout) || 300));
@@ -16207,7 +16198,7 @@ async function askToRun(caller, args, signal) {
   if (shown.length > MOST_OUTPUT2)
     shown = "…" + shown.slice(-MOST_OUTPUT2).replace(/^[^\n]*\n/, "");
   const ended = timedOut ? `It was stopped after ${seconds} seconds.` : `It ended with ${code}.`;
-  const head = `Ran outside the sandbox · ${how === "always" ? "Always for this" : "Allowed once"}`;
+  const head = how === "always" ? `Ran outside the sandbox · Always for this: from now on your commands can write in ${always.path} in the sandbox, so run them there.` : "Ran outside the sandbox · Allowed once";
   return { text: `${head}
 
 ${shown.trim() ? shown.trimEnd() + `
@@ -16951,7 +16942,7 @@ function keepSshAgents() {
 var VAULT_SOCKET = path72.join(RUN, "vault.sock");
 var holding = false;
 var holdsVault = () => holding;
-var heldHere = (route) => /^kuvo\/(vault|sandbox\/(asks|tools))(\/|\?|$)/.test(route);
+var heldHere = (route) => /^kuvo\/(vault|sandbox\/(asks|tools|allowed))(\/|\?|$)/.test(route);
 var MOST2 = 8 * 1024 * 1024;
 var KEY2 = "x-kuvo-vault-key";
 var AUTH = "x-kuvo-vault-auth";
@@ -17202,6 +17193,14 @@ async function* sandboxRoute(context) {
   const body = parsed(request.body);
   const given = isObject(body) ? body : {};
   const parts = route.split("/");
+  if (!heldHere(route))
+    return yield* json(404, {});
+  if (!holdsVault()) {
+    const answer = await askHolder(request, signal);
+    if (!answer)
+      return yield* json(503, { message: NOT_OPEN });
+    return yield* [{ head: { status: answer.status, headers: { "content-type": answer.type || "application/json" } } }, { body: Buffer.from(answer.body, "base64") }];
+  }
   if (route === "kuvo/sandbox/allowed" || parts[2] === "allowed") {
     try {
       if (route === "kuvo/sandbox/allowed" && method === "GET") {
@@ -17225,14 +17224,6 @@ async function* sandboxRoute(context) {
         return yield* json(400, { message: error.message });
       throw error;
     }
-  }
-  if (!heldHere(route))
-    return yield* json(404, {});
-  if (!holdsVault()) {
-    const answer = await askHolder(request, signal);
-    if (!answer)
-      return yield* json(503, { message: NOT_OPEN });
-    return yield* [{ head: { status: answer.status, headers: { "content-type": answer.type || "application/json" } } }, { body: Buffer.from(answer.body, "base64") }];
   }
   if (route === "kuvo/sandbox/tools") {
     const on = fenceState().on;
@@ -19107,7 +19098,7 @@ async function box(command) {
         return say({ status: 409, message: blocked });
       if (isUpdating())
         return say({ status: 409, message: "It's updating already." });
-      spawn7(process.execPath, [...OWN_RUNTIME, fileURLToPath2(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+      spawn8(process.execPath, [...OWN_RUNTIME, fileURLToPath2(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
       return say({ status: 202, ...updateStatus(), updating: "checking" });
     }
     case "route": {

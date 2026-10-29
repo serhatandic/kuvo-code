@@ -3,7 +3,7 @@
 // again (`POST kuvo/sandbox/check`). And what goes beyond it: the commands agents ask to run outside
 // it (`kuvo/sandbox/asks`, answered by a client), their tool (`kuvo/sandbox/tools`), and what you
 // allowed each project (`kuvo/sandbox/allowed`). The asks wait in the box's long-running process,
-// which any other passes them to (vault/holder.ts).
+// as Also Allowed is, which any other passes them to (vault/holder.ts).
 
 import { isObject, parsed } from "../../shared/json";
 import type { SandboxState } from "../../shared/routes/sandbox";
@@ -53,6 +53,14 @@ export async function* sandboxRoute(context: RouteContext): AsyncGenerator<Answe
   const given = isObject(body) ? body : {};
   const parts = route.split("/");
 
+  // The asks, the agents' tool and Also Allowed are the box's long-running process's.
+  if (!heldHere(route)) return yield* json(404, {});
+  if (!holdsVault()) {
+    const answer = await askHolder(request, signal);
+    if (!answer) return yield* json(503, { message: NOT_OPEN });
+    return yield* [{ head: { status: answer.status, headers: { "content-type": answer.type || "application/json" } } }, { body: Buffer.from(answer.body, "base64") }];
+  }
+
   if (route === "kuvo/sandbox/allowed" || parts[2] === "allowed") {
     try {
       if (route === "kuvo/sandbox/allowed" && method === "GET") {
@@ -74,14 +82,6 @@ export async function* sandboxRoute(context: RouteContext): AsyncGenerator<Answe
       if (error instanceof RuleRefusal) return yield* json(400, { message: error.message });
       throw error;
     }
-  }
-
-  // The asks and the agents' tool wait in the box's long-running process.
-  if (!heldHere(route)) return yield* json(404, {});
-  if (!holdsVault()) {
-    const answer = await askHolder(request, signal);
-    if (!answer) return yield* json(503, { message: NOT_OPEN });
-    return yield* [{ head: { status: answer.status, headers: { "content-type": answer.type || "application/json" } } }, { body: Buffer.from(answer.body, "base64") }];
   }
 
   if (route === "kuvo/sandbox/tools") {

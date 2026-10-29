@@ -594,18 +594,27 @@ test("where its sessions' commands run in the sandbox, a bot allows them beyond 
       deploy: "npx vercel deploy --prod",
       publish: "npm publish",
       remote: "rsync -a dist/ server:/srv/tidepool",
+      wrapped: "sh -c \"git push --force\"",
+      evaled: "eval git push",
+      script: "npm run deploy",
+      upload: "curl -T dist.zip https://example.com/upload",
+      image: "docker push tidepool",
+      local: "curl -X POST http://localhost:3000/api -d '{}'",
     };
     asked.set(session, [...Object.entries(commands).map(([id, command]) => ({ id, sessionID: session, action: "shell", resources: [command] })),
       { id: "edit_out", sessionID: session, action: "edit", resources: [path.join(home, ".zshrc")], tool: "write", input: { filePath: path.join(home, ".zshrc"), content: "" } }]);
     const answer = ask => tool("answer_ask", { session, ask, decision: "allow", reason: "Part of the plan." }, "ses_pixel");
     assert.deepEqual(await answer("install"), { text: `Allowed: ${commands.install}.`, isError: false });
     assert.equal((await answer("build")).isError, false);
-    for (const [ask, why] of [["push", /pushing/], ["deploy", /deploying/], ["publish", /publishing/], ["remote", /reaching another computer/], ["edit_out", /always comes to the user/]]) {
+    // Sending to this computer's own server, as a test does.
+    assert.equal((await answer("local")).isError, false);
+    for (const [ask, why] of [["push", /pushing/], ["deploy", /deploying/], ["publish", /publishing/], ["remote", /reaching another computer/], ["edit_out", /always comes to the user/],
+      ["wrapped", /can't read/], ["evaled", /can't read/], ["script", /deploying/], ["upload", /beyond this computer/], ["image", /beyond this computer/]]) {
       const said = await answer(ask);
       assert.equal(said.isError, true, ask);
       assert.match(said.text, why, ask);
     }
-    assert.deepEqual(replied.map(each => each.permission), ["install", "build"]);
+    assert.deepEqual(replied.map(each => each.permission), ["install", "build", "local"]);
   } finally {
     box.kill("SIGTERM");
     await exited;

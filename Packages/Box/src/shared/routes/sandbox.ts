@@ -23,10 +23,10 @@ export type SandboxState = Infer<typeof SANDBOX>;
 export const SANDBOX_STOP = object({ kind: words("write", "read", "connect", "job", "app", "other"), "path?": string });
 
 /** A rule for a project, kept in Also Allowed: a folder (or file) its commands may write in the
- * sandbox (`write`, with `path`), or a command run outside it without asking (`outside`, with
- * `prefix`: the command's first words; only a simple command matches, never one chained to another). */
+ * sandbox. (Never a command run outside it without asking: whatever a command runs, its scripts,
+ * its project's settings, is what the sandbox writes, so that would let anything out.) */
 export const SANDBOX_RULE = object({
-  id: string, project: string, kind: words("write", "outside"), "path?": string, "prefix?": string,
+  id: string, project: string, kind: words("write"), path: string,
   at: number, "by?": string,
 });
 export const SANDBOX_ALLOWED = object({ allowed: list(SANDBOX_RULE) });
@@ -34,8 +34,9 @@ export const SANDBOX_ALLOWED = object({ allowed: list(SANDBOX_RULE) });
 /**
  * A command an agent wants to run outside the sandbox (its `sandbox_ask`), waiting for your answer:
  * the conversation and its project, its bot, the command, why, what the sandbox stopped (`stopped`,
- * from a Mac's log) or the error the command got (`error`), and what Always would allow (`always`;
- * none for a command that can't be allowed always: then only once or no). `machine`: the
+ * from a Mac's log) or the error the command got (`error`), and what Always would allow (`always`:
+ * the one folder it was stopped writing in, when the box knows it and it may be given; none, and
+ * it's only once or no, for anything else). `machine`: the
  * computer's name, on a machine.
  */
 export const SANDBOX_ASK = object({
@@ -43,7 +44,7 @@ export const SANDBOX_ASK = object({
   "session?": string, "sessionName?": string, "bot?": string, "botName?": string,
   project: string, command: string, why: string,
   "stopped?": list(SANDBOX_STOP), "error?": string,
-  "always?": object({ kind: words("write", "outside"), "path?": string, "prefix?": string }),
+  "always?": object({ kind: words("write"), path: string }),
   "machine?": string,
 });
 export const SANDBOX_ASKS = object({ asks: list(SANDBOX_ASK) });

@@ -2,10 +2,12 @@
 // which both tool servers (this Mac's app, a machine's kuvo-browser.js) pass here as it is. You're
 // asked on any client, with what the sandbox stopped; Allow Once and Always for This have the box
 // run that one command itself, outside the sandbox, in the conversation's folder, and hand its
-// output back. Always also keeps a rule for the project (fence/allowed.ts). The agent never lets a
-// command out of the sandbox itself, and no tool answers an ask: only a client.
+// output back. Always also lets the project's commands write, in the sandbox, the one folder this
+// one was stopped writing in (fence/allowed.ts); a command itself is never let out for good, and
+// is asked about each time. The agent never lets a command out of the sandbox itself, and no tool
+// answers an ask: only a client.
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -17,7 +19,7 @@ import { askBook } from "../notices/asking";
 import type { Notice } from "../notices/notice";
 import { commandEnv, runCommand } from "../run-command";
 import type { Caller } from "../vault/who";
-import { addRule, outsideRuleFor, prefixOf, writeRuleWouldBe } from "./allowed";
+import { addRule, writeRuleWouldBe } from "./allowed";
 
 /** Your answer, and who gave it: "Mac", or a phone's name. */
 export interface SandboxAnswer {
@@ -33,7 +35,7 @@ export const answerSandboxAsk = book.answer;
 export const SANDBOX_TOOLS = [
   {
     name: "sandbox_ask",
-    description: "Ask the user to run a command outside the sandbox, when the sandbox stopped one the task needs (\"Operation not permitted\" or \"Permission denied\" outside the folders you may write, or a refused connection or app). They see the command, why, and what was refused, and allow it once, always for this project, or say no. Allowed, Kuvo Code runs it for you outside the sandbox, in your project's folder, and you get its output. Waits for their answer. Don't use it to get around a rule you were told, and never for a command you haven't tried in the sandbox.",
+    description: "Ask the user to run a command outside the sandbox, when the sandbox stopped one the task needs (\"Operation not permitted\" or \"Permission denied\" outside the folders you may write, or a refused connection or app). They see the command, why, and what was refused, and allow it once or say no; where it was stopped writing in one folder, they can also let your commands write there from now on. Allowed, Kuvo Code runs it for you outside the sandbox, in your project's folder, and you get its output. Waits for their answer. Don't use it to get around a rule you were told, and never for a command you haven't tried in the sandbox.",
     inputSchema: {
       type: "object",
       properties: {
@@ -71,14 +73,22 @@ export const commandSum = (command: string) => crypto.createHash("sha256").updat
 
 /** What the sandbox refused `command` lately in `session`, from macOS's own log (the launcher tags
  * each command's refusals `kuvo-sandbox <session> <sum of the command>`); none where it can't be
- * read, or for a command that didn't run as it's named. */
-export function stopsFor(session: string, command: string, minutes = 3): SandboxStop[] {
+ * read, or for a command that didn't run as it's named. (Read without holding up the box: it can
+ * take seconds.) */
+export async function stopsFor(session: string, command: string, minutes = 3): Promise<SandboxStop[]> {
   if (process.platform !== "darwin" || !/^ses_[A-Za-z0-9_]{1,80}$/.test(session)) return [];
   const tagged = `kuvo-sandbox ${session} ${commandSum(command)}`;
-  const read = spawnSync("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { encoding: "utf8", timeout: 20_000, maxBuffer: 16 * 1024 * 1024 });
+  const read = await new Promise<string>(resolve => {
+    const child = spawn("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => { if (out.length < 16 * 1024 * 1024) out += chunk; });
+    child.on("error", () => resolve(""));
+    child.on("close", () => { clearTimeout(timer); resolve(out); });
+  });
   const stops: SandboxStop[] = [];
   const seen = new Set<string>();
-  for (const line of (read.stdout ?? "").split("\n")) {
+  for (const line of read.split("\n")) {
     let message = "";
     try { message = JSON.parse(line)?.eventMessage ?? ""; } catch { continue; }
     const [first, tag] = String(message).split("\n");
@@ -95,16 +105,13 @@ export function stopsFor(session: string, command: string, minutes = 3): Sandbox
   return stops.slice(-MOST_STOPS);
 }
 
-/** What Always would allow for a command: the one folder (or file) it was stopped writing, when the
- * log says so and it may be given; else its first words, for a simple command; else nothing. */
-function alwaysFor(command: string, stops: SandboxStop[]): SandboxAsk["always"] {
+/** What Always would allow for a command: the one folder (or file) it was stopped writing in, when
+ * the log says so and it may be given; else nothing, and it can only be allowed once. */
+function alwaysFor(stops: SandboxStop[]): SandboxAsk["always"] {
   const writes = [...new Set(stops.filter(stop => stop.kind === "write" && stop.path).map(stop => stop.path!))];
-  if (writes.length === 1 && stops.every(stop => stop.kind === "write")) {
-    const where = writeRuleWouldBe(writes[0]);
-    if (where) return { kind: "write", path: where };
-  }
-  const prefix = prefixOf(command);
-  return prefix ? { kind: "outside", prefix } : undefined;
+  if (writes.length !== 1 || !stops.every(stop => stop.kind === "write")) return undefined;
+  const where = writeRuleWouldBe(writes[0]);
+  return where ? { kind: "write", path: where } : undefined;
 }
 
 /** The notification for an ask, as the Mac words it. */
@@ -138,31 +145,25 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   const project = caller.folder && fs.existsSync(caller.folder) ? caller.folder : null;
   if (!project) return failed("This conversation's folder isn't there, so nothing can run for it.");
 
-  let how: "once" | "always";
-  const rule = outsideRuleFor(project, command);
-  if (rule) {
-    how = "always";
-  } else {
-    // (By the command as it ran, whitespace and all.)
-    const stopped = caller.session ? stopsFor(caller.session, String(args.command)) : [];
-    // (A group chat's seat: once, or not at all.)
-    const always = caller.seat ? undefined : alwaysFor(command, stopped);
-    const answered = await book.ask({
-      ...(caller.root ? { session: caller.root, ...(caller.sessionName ? { sessionName: caller.sessionName } : {}) } : {}),
-      ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}),
-      project,
-      command,
-      why,
-      ...(stopped.length ? { stopped } : {}),
-      ...(error ? { error } : {}),
-      ...(always ? { always } : {}),
-      ...(IS_MAC ? {} : { machine: os.hostname() }),
-    }, signal);
-    if (answered.answer === "no") return { text: "The user said no: don't run it, nor get around the sandbox another way. Find another way to do the task, or ask them why.", isError: false };
-    how = answered.answer === "always" && always ? "always" : "once";
-    if (how === "always" && always) {
-      try { addRule({ project, ...always, ...(answered.client ? { by: answered.client } : {}) }); } catch { how = "once"; }
-    }
+  // (By the command as it ran, whitespace and all.)
+  const stopped = caller.session ? await stopsFor(caller.session, String(args.command)) : [];
+  // (A group chat's seat: once, or not at all.)
+  const always = caller.seat ? undefined : alwaysFor(stopped);
+  const answered = await book.ask({
+    ...(caller.root ? { session: caller.root, ...(caller.sessionName ? { sessionName: caller.sessionName } : {}) } : {}),
+    ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}),
+    project,
+    command,
+    why,
+    ...(stopped.length ? { stopped } : {}),
+    ...(error ? { error } : {}),
+    ...(always ? { always } : {}),
+    ...(IS_MAC ? {} : { machine: os.hostname() }),
+  }, signal);
+  if (answered.answer === "no") return { text: "The user said no: don't run it, nor get around the sandbox another way. Find another way to do the task, or ask them why.", isError: false };
+  let how: "once" | "always" = "once";
+  if (answered.answer === "always" && always) {
+    try { addRule({ project, ...always, ...(answered.client ? { by: answered.client } : {}) }); how = "always"; } catch {}
   }
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
   const seconds = Math.max(1, Math.min(600, left, Number(args.timeout) || 300));
@@ -170,7 +171,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   let shown = output;
   if (shown.length > MOST_OUTPUT) shown = "…" + shown.slice(-MOST_OUTPUT).replace(/^[^\n]*\n/, "");
   const ended = timedOut ? `It was stopped after ${seconds} seconds.` : `It ended with ${code}.`;
-  const head = `Ran outside the sandbox · ${how === "always" ? "Always for this" : "Allowed once"}`;
+  const head = how === "always" ? `Ran outside the sandbox · Always for this: from now on your commands can write in ${always!.path} in the sandbox, so run them there.` : "Ran outside the sandbox · Allowed once";
   return { text: `${head}\n\n${shown.trim() ? shown.trimEnd() + "\n\n" : "It printed nothing.\n\n"}${ended}`, isError: timedOut || code !== 0 };
 }
 

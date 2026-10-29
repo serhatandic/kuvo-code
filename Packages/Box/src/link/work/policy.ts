@@ -21,8 +21,9 @@ interface Line {
 }
 
 /** Why a line can't be read as plain programs (something a shell expands or runs besides), or
- * the line. */
-export function readLine(line: string): Line | { unreadable: string } {
+ * the line. `redirects`: where its output goes or its input comes from is read too (in the sandbox,
+ * which holds what's written), rather than refused. */
+export function readLine(line: string, redirects = false): Line | { unreadable: string } {
   const parts: Line["parts"] = [];
   let words: string[] = [], writes: string[] = [], word = "", has = false, quote: string | null = null, start = 0;
   let redirect: "write" | "read" | null = null;
@@ -99,7 +100,12 @@ export function readLine(line: string): Line | { unreadable: string } {
       start = i + 1;
     } else if (char === ">" || char === "<") {
       // Until the sandbox: where a command reads or writes is only what its words name.
-      return no("input or output sent elsewhere");
+      if (!redirects) return no("input or output sent elsewhere");
+      if (char === "<" && line[i + 1] === "<") return no("a here-document");
+      // (A stream's number, `2>`, is no word of its own.)
+      if (has && /^[0-9]+$/.test(word)) { word = ""; has = false; } else endWord();
+      if (line[i + 1] === char) i++;
+      redirect = char === ">" ? "write" : "read";
     } else {
       word += char;
       has = true;
@@ -264,7 +270,7 @@ function checkSpec(spec: Spec, words: string[], place: Place): string | null {
 export function commandRefusal(line: string, folders: readonly string[]): string | null {
   // What a shell would split on, or take apart, beyond a space: never.
   if (!/^[\x20-\x7E]*$/.test(line)) return `${CANT} (a character it can't read plainly)`;
-  const read = readLine(line);
+  const read = readLine(line, true);
   if ("unreadable" in read) return `${CANT} (${read.unreadable})`;
   if (!read.parts.length || !folders.length) return CANT;
   const place: Place = { cwd: realOf(folders[0]), folders };
@@ -305,22 +311,51 @@ const OUTWARD: Record<string, string> = {
   sftp: "reaching another computer", ftp: "reaching another computer", gh: "using your GitHub account", glab: "using your GitLab account",
 };
 
-/** Why a bot can't allow a command even in the sandbox: it pushes, publishes, deploys or reaches
- * another computer (read as plainly as a line allows: any part, a wrapper's program, a quoted
- * one), or null. */
+// Programs that run code given on their command line (`sh -c`, `node -e`), which can't be read for
+// what it does: with that, the user's to answer.
+const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
+const INLINE: Record<string, string[]> = {
+  node: ["-e", "--eval", "-p", "--print"], bun: ["-e", "--eval", "-p", "--print"], deno: ["eval"], python: ["-c"], python3: ["-c"],
+  ruby: ["-e"], perl: ["-e", "-E"], php: ["-r"], osascript: ["-e"], lua: ["-e"],
+};
+// Package managers whose `run <script>` (or, for some, the script's name alone) runs a script of the
+// project's: read by the script's name.
+const RUNS_SCRIPTS = new Set(["npm", "pnpm", "yarn", "bun"]);
+const LOCAL_URL = /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])([:/]|$)/i;
+// curl's and wget's options that send something, rather than fetch.
+const SENDS = /^(-[a-zA-Z]*[TFd]|--upload-file|--form.*|--data.*|--json|--post-(data|file)|--body-(data|file)|-X|--request|--method)$/;
+
+/** Why a bot can't allow a command even in the sandbox: it pushes, publishes, deploys, uploads or
+ * reaches another computer, or runs code that can't be read (a shell's `-c`, `node -e`), or can't be
+ * read plainly at all; or null. */
 export function outwardRefusal(line: string): string | null {
-  for (const part of line.split(/[;&|\n(){}`]|\$\(/)) {
-    let words = part.trim().split(/\s+/).map(word => word.replace(/^["']+|["']+$/g, "")).filter(Boolean);
+  const read = readLine(line, true);
+  if ("unreadable" in read) return `${CANT} (${read.unreadable})`;
+  for (const part of read.parts) {
+    let words = part.words;
     while (words.length && (WRAPPERS.has(path.basename(words[0])) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]) || /^[-0-9]/.test(words[0]))) words = words.slice(1);
     const [program, ...rest] = words;
     if (!program) continue;
     const name = path.basename(program);
     if (OUTWARD[name]) return OUTWARD[name];
-    if (/(deploy|release|publish)/i.test(name)) return "releasing or deploying";
+    if (name === "eval") return "running a command it can't read";
+    if (SHELLS.has(name) && (rest.length === 0 || rest.some(word => /^-[a-zA-Z]*c/.test(word)))) return "running a command it can't read";
+    if (INLINE[name] && rest.some(word => INLINE[name].includes(word))) return "running code it can't read";
+    // A program or script named for releasing (`./deploy.sh`, `node scripts/release.js`).
+    if ([program, ...rest].some(word => !word.startsWith("-") && /(deploy|release|publish)/i.test(path.basename(word)) && (word === program || /\.[a-z]+$/i.test(word)))) return "releasing or deploying";
     // Its subcommand: the first word that isn't an option (nor an option's value, for git's -C and -c).
-    const sub = rest.filter((word, at) => !word.startsWith("-") && !(name === "git" && ["-C", "-c"].includes(rest[at - 1] ?? "")))[0];
+    const subs = rest.filter((word, at) => !word.startsWith("-") && !(name === "git" && ["-C", "-c"].includes(rest[at - 1] ?? "")));
+    const sub = subs[0];
     if (name === "git" && sub === "push") return "pushing";
     if (sub === "publish" || sub === "deploy" || (sub === "release" && name !== "git")) return sub === "publish" ? "publishing" : "releasing or deploying";
+    if (sub === "push" || sub === "upload") return "sending it beyond this computer";
+    if (name === "xcrun" && (sub === "altool" || sub === "notarytool")) return "sending to a store";
+    if (RUNS_SCRIPTS.has(name) && ["run", "run-script"].includes(sub ?? "") && /(deploy|release|publish|push|upload)/i.test(subs[1] ?? "")) return "releasing or deploying";
+    // (To this computer's own servers, as a test does, it may.)
+    if ((name === "curl" || name === "wget") && rest.some(word => SENDS.test(word))) {
+      const targets = rest.filter(word => /^[a-z][a-z0-9+.-]*:\/\//i.test(word) || LOCAL_URL.test(word) || /^[\w-]+(\.[\w-]+)+(:\d+)?(\/|$)/.test(word));
+      if (!targets.length || !targets.every(word => LOCAL_URL.test(word))) return "sending something beyond this computer";
+    }
   }
   return null;
 }

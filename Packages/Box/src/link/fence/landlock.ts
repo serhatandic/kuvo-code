@@ -87,7 +87,8 @@ grantExcept("/", READS);
 for (const where of policy.readable) grant(where, READS);
 // What you let its project's commands write (Also Allowed).
 let allowed = [];
-try { allowed = fs.readFileSync(allowedFile, "utf8").split("\n").filter((line) => line.startsWith("/")); } catch {}
+// (Each by the real path the box keeps: one that's become a link since, to anywhere, isn't given.)
+try { allowed = fs.readFileSync(allowedFile, "utf8").split("\n").filter((line) => line.startsWith("/") && real(line) === line); } catch {}
 for (const where of [...policy.writable, work, git, ...allowed]) if (where) grantExcept(where, all, kept);
 if (tmp) { fs.mkdirSync(tmp, { recursive: true }); grant(tmp, all); }
 // Its conversation's wake-ups and watches (kuvo-wake): read, and only its inbox written, which the box

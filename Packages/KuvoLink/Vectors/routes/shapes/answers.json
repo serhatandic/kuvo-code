@@ -4933,14 +4933,10 @@
             "oneOf": [
              {
               "literal": "write"
-             },
-             {
-              "literal": "outside"
              }
             ]
            },
-           "path?": "string",
-           "prefix?": "string"
+           "path": "string"
           }
          },
          "machine?": "string"
@@ -4973,14 +4969,10 @@
           "oneOf": [
            {
             "literal": "write"
-           },
-           {
-            "literal": "outside"
            }
           ]
          },
-         "path?": "string",
-         "prefix?": "string",
+         "path": "string",
          "at": "number",
          "by?": "string"
         }
@@ -5004,14 +4996,10 @@
           "oneOf": [
            {
             "literal": "write"
-           },
-           {
-            "literal": "outside"
            }
           ]
          },
-         "path?": "string",
-         "prefix?": "string",
+         "path": "string",
          "at": "number",
          "by?": "string"
         }
@@ -5035,14 +5023,10 @@
           "oneOf": [
            {
             "literal": "write"
-           },
-           {
-            "literal": "outside"
            }
           ]
          },
-         "path?": "string",
-         "prefix?": "string",
+         "path": "string",
          "at": "number",
          "by?": "string"
         }

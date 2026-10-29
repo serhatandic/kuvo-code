@@ -5,15 +5,29 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
-// What the box's own process has that no command it runs should.
-const PRIVATE = ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "KUVO_HOST_VAULT_SECRET", "KUVO_VAULT_FILE_KEY", "BUN_BE_BUN"];
+// What the box's own process has that no command it runs should (besides Kuvo Code's and the
+// engine's own variables).
+const PRIVATE = ["BUN_BE_BUN", "BUN_RUNTIME_TRANSPILER_CACHE_PATH"];
 // What's kept of a command's output: its last few megabytes.
 const MOST_KEPT = 4 * 1024 * 1024;
 
-/** The environment a command gets: the box's, without its own passwords and keys. */
-export function commandEnv(): Record<string, string> {
+/** The environment a command gets: the box's, without its own passwords, keys and variables, and
+ * with your own folders back where a machine's launch pointed them into Kuvo Code's (`KUVO_OWN_…`:
+ * the value before, empty for none), as the engine's commands have them, so `gh`, git and npm find
+ * their sign-ins, settings and caches. */
+export function commandEnv(from: Record<string, string | undefined> = process.env): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const [name, value] of Object.entries(process.env)) if (value !== undefined && !PRIVATE.includes(name)) env[name] = value;
+  for (const [name, value] of Object.entries(from)) {
+    if (value === undefined || PRIVATE.includes(name) || name.startsWith("KUVO_") || name.startsWith("OPENCODE_")) continue;
+    env[name] = value;
+  }
+  for (const [name, value] of Object.entries(from)) {
+    if (!name.startsWith("KUVO_OWN_") || value === undefined) continue;
+    const own = name.slice("KUVO_OWN_".length);
+    if (!own) continue;
+    if (value) env[own] = value;
+    else delete env[own];
+  }
   return env;
 }
 
@@ -49,12 +63,19 @@ export function runCommand(command: string, folder: string, env: Record<string, 
     };
     const timer = setTimeout(() => { timedOut = true; stop(); }, timeout);
     signal?.addEventListener("abort", stop, { once: true });
-    child.on("error", error => take(Buffer.from(String(error.message))));
-    child.on("close", code => {
+    let done = false;
+    const end = (code: number | null) => {
+      if (done) return;
+      done = true;
       clearTimeout(timer);
       signal?.removeEventListener("abort", stop);
       running.delete(name);
       resolve({ output: output.toString("utf8"), code, timedOut });
-    });
+    };
+    child.on("error", error => { take(Buffer.from(String(error.message))); end(null); });
+    child.on("close", end);
+    // Something it started that left its group and kept its output open: done once the shell is,
+    // with what came a moment after.
+    child.on("exit", code => setTimeout(() => end(code), 1000).unref());
   });
 }
