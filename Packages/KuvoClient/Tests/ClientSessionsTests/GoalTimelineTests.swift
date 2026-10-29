@@ -49,4 +49,38 @@ struct GoalTimelineTests {
         #expect(unmeasured.finish == nil, "a step that can't say leaves the finish unknown")
         #expect(unmeasured.lanes[1].likelyEnd == nil)
     }
+
+    @Test func aLongGoalOpensOnTheDaysAroundNowAndAShortOneShowsWhole() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let steps: [GoalPlan.Step] = [.init(id: "s1", text: "Subscriber portal", state: .doing, began: at(0))]
+        // Day 9 of a month: about ten days, from three days before today.
+        let now = start.addingTimeInterval(8.6 * 86400)
+        let month = GoalTimeline(plan(steps, ends: start.addingTimeInterval(30 * 86400)), now: now)
+        let window = try #require(month.window(calendar: calendar))
+        #expect(window.duration == 10 * 86400)
+        #expect(window.start == calendar.date(byAdding: .day, value: -3, to: calendar.startOfDay(for: now)))
+        #expect(window.contains(now))
+        // A week: about five days around today.
+        let weekNow = start.addingTimeInterval(3.6 * 86400)
+        let week = GoalTimeline(plan(steps, ends: start.addingTimeInterval(7 * 86400)), now: weekNow)
+        let days = try #require(week.window(calendar: calendar))
+        #expect(days.duration == 5 * 86400 && days.contains(weekNow))
+        // A few hours, and a couple of days, show whole.
+        #expect(GoalTimeline(plan(steps), now: start.addingTimeInterval(2 * 3600)).window(calendar: calendar) == nil)
+        #expect(GoalTimeline(plan(steps, ends: start.addingTimeInterval(2 * 86400)), now: start.addingTimeInterval(86400)).window(calendar: calendar) == nil)
+    }
+
+    @Test func theCardSaysThePlanInWordsAndNamesEachServiceFromItsSite() {
+        let steps: [GoalPlan.Step] = [.init(id: "s1", text: "Site", state: .todo), .init(id: "s2", text: "DNS", state: .todo), .init(id: "s3", text: "Deploy", state: .todo)]
+        let goal = plan(steps)
+        #expect(GoalPlanWords.summary(goal) == "3 steps")
+        #expect(GoalPlanWords.outline(goal).contains("Site") && GoalPlanWords.outline(goal).contains("Deploy"))
+        let phased = plan([.init(id: "s1", text: "Site", state: .todo, phase: "Build"), .init(id: "s2", text: "Ads", state: .todo, phase: "Grow")])
+        #expect(GoalPlanWords.summary(phased) == "2 steps in 2 phases")
+        #expect(GoalPlanWords.outline(phased).contains("Build") && !GoalPlanWords.outline(phased).contains("Ads"), "a plan with phases is said by its phases")
+        #expect(GoalPlanWords.service("stripe.com") == "Stripe")
+        #expect(GoalPlanWords.service("dash.cloudflare.com") == "Cloudflare")
+        #expect(GoalPlanWords.service("www.namecheap.com") == "Namecheap")
+    }
 }

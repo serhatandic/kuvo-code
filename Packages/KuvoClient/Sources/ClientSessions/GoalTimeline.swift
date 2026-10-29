@@ -115,6 +115,20 @@ public struct GoalTimeline: Sendable {
         return ticks
     }
 
+    /// The days a goal of a week or more opens on, around now, so the steps under way get the
+    /// room: about five for a week, about ten for longer, from a few days before today. Nil for a
+    /// goal that fits whole (a few hours, a couple of days), which shows whole; zoomed out, a long
+    /// one shows whole too.
+    public func window(calendar: Calendar = .current) -> DateInterval? {
+        let span = end.timeIntervalSince(start)
+        guard unit != .hour else { return nil }
+        let long = span > 14 * 86400
+        let today = calendar.startOfDay(for: now)
+        guard let from = calendar.date(byAdding: .day, value: long ? -3 : -2, to: today),
+              let to = calendar.date(byAdding: .day, value: long ? 10 : 5, to: from), to.timeIntervalSince(from) < span else { return nil }
+        return DateInterval(start: from, end: to)
+    }
+
     /// Where `date` falls along the axis, 0 at its start and 1 at its end.
     public func position(of date: Date) -> Double {
         let span = end.timeIntervalSince(start)

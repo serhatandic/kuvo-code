@@ -409,6 +409,28 @@ public enum GoalPlanWords {
     /// "2 of 5".
     public static func progress(_ goal: GoalPlan) -> String { "\(goal.done) of \(goal.steps.count)" }
 
+    /// The plan in a few words, for its card: "6 steps", "12 steps in 3 phases".
+    public static func summary(_ goal: GoalPlan) -> String {
+        let steps = goal.steps.count == 1 ? "1 step" : "\(goal.steps.count) steps"
+        let phases = goal.phases.count
+        return phases > 1 ? "\(steps) in \(phases) phases" : steps
+    }
+
+    /// What the plan does, as a list in words: "Site, Domain, DNS and Deploy"; its phases, for a
+    /// plan with them.
+    public static func outline(_ goal: GoalPlan) -> String {
+        let names = goal.phases.count > 1 ? goal.phases : goal.steps.map(\.text)
+        return names.formatted(.list(type: .and))
+    }
+
+    /// A service's name from its site, for its mark's letter and its buttons: "stripe.com" is
+    /// "Stripe", "dash.cloudflare.com" "Cloudflare".
+    public static func service(_ site: String) -> String {
+        let labels = site.lowercased().split(separator: ".").filter { $0 != "www" }
+        let name = labels.count >= 2 ? labels[labels.count - 2] : labels.first ?? Substring(site)
+        return name.prefix(1).uppercased() + name.dropFirst()
+    }
+
     /// An amount in its currency, as people write it: "$15", "€9.50".
     public static func money(_ amount: Double, _ currency: String) -> String {
         amount.formatted(FloatingPointFormatStyle<Double>.Currency(code: currency).precision(.fractionLength(amount.rounded() == amount ? 0 : 2)))
