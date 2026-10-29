@@ -6068,7 +6068,7 @@ class RPC {
 
 // Packages/Box/src/agents/fence.ts
 import { createHash as createHash3, randomBytes as randomBytes3 } from "crypto";
-import { constants as constants2, copyFileSync, existsSync as existsSync7, lstatSync as lstatSync3, mkdirSync as mkdirSync8, readdirSync as readdirSync9, readFileSync as readFileSync13, realpathSync as realpathSync3, rmSync as rmSync6, statSync as statSync5 } from "fs";
+import { constants as constants2, copyFileSync, existsSync as existsSync7, lstatSync as lstatSync3, mkdirSync as mkdirSync8, readdirSync as readdirSync9, readFileSync as readFileSync13, realpathSync as realpathSync3, rmSync as rmSync6, statSync as statSync5, unlinkSync } from "fs";
 import { basename as basename5, dirname as dirname6, join as join14, resolve as resolve3 } from "path";
 var folder = () => process.env.KUVO_FENCE ?? (machineHome ? join14(machineHome, "run", "fence") : undefined);
 function fenceOn() {
@@ -6171,6 +6171,7 @@ function fenceAgent(program, directory, mine) {
   const where = folder();
   if (!where || !fenceRules())
     return;
+  unlinked(mine.homes, mine.state);
   const command = join14(where, "shell", "run");
   if (!existsSync7(command))
     return;
@@ -6191,8 +6192,34 @@ function fenceAgent(program, directory, mine) {
       KUVO_FENCE_STATE: names(mine.state),
       KUVO_FENCE_KEPT: names(mine.kept),
       KUVO_FENCE_PORT: String(mine.port ?? 0)
+    },
+    ended: () => unlinked(mine.homes, mine.state)
+  };
+}
+function unlinked(homes, state) {
+  const named = new RegExp(`^(${state.map((name) => name.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*")).join("|")})$`);
+  const entries = (folder) => {
+    try {
+      return readdirSync9(folder, { withFileTypes: true });
+    } catch {
+      return [];
     }
   };
+  const inside = (folder) => {
+    for (const entry of entries(folder)) {
+      const path = join14(folder, entry.name);
+      if (entry.isDirectory())
+        inside(path);
+      else if (entry.isSymbolicLink())
+        try {
+          unlinkSync(path);
+        } catch {}
+    }
+  };
+  for (const home of homes)
+    for (const entry of entries(home))
+      if (entry.isDirectory() && named.test(entry.name))
+        inside(join14(home, entry.name));
 }
 function fenceAttachments(directory) {
   const where = folder();
@@ -6477,6 +6504,7 @@ class AcpThread {
     const launch = await this.flavor.command(mode);
     const whole = this.wholeLaunch(launch.argv, launch.env, launch.cleanEnv, skills);
     this.fenced = Boolean(whole);
+    const ended = whole?.ended;
     const flavor = this.flavor;
     const startedAt = Date.now();
     let asksSignIn = false;
@@ -6510,6 +6538,7 @@ class AcpThread {
     rpc.onRequest = (method, params) => this.request(method, params);
     rpc.onExit = () => {
       launch.onExit?.();
+      ended?.();
       if (this.rpc === rpc)
         this.rpc = undefined;
       const young = Date.now() - startedAt < acpTiming.signInGrace;
@@ -6626,7 +6655,7 @@ class AcpThread {
     });
     if (!fence)
       throw new Error(`${this.name} runs in the sandbox here, and it isn't ready: restart Kuvo Code.`);
-    return { argv: [fence.command, ...argv.slice(1)], env: { ...env, ...whole.env, ...fence.env } };
+    return { argv: [fence.command, ...argv.slice(1)], env: { ...env, ...whole.env, ...fence.env }, ended: fence.ended };
   }
   mcpServers(init) {
     const tools = this.fenced ? relayedTools(this.session.id) : kuvoTools(this.session.id);
@@ -10529,6 +10558,7 @@ class CodexAgent {
     rpc.onNotification = (method, params) => this.notification(method, params, rpc);
     rpc.onRequest = (method, params, id) => this.request(method, params, id);
     rpc.onExit = () => {
+      fence?.ended();
       for (const oneOff of this.oneOffs.values())
         if (oneOff.rpc === rpc)
           oneOff.fail(new Error("Codex stopped."));
@@ -21139,4 +21169,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 77db9a45e7b389a08a26cf49248359e46812f92f6d94c43fda64e2c6facc8efa
+// Built from Packages/Box/src/agents 72c405eb12320e09da852210181d877b12a8600a84b7b6cf71c619337f2393c4

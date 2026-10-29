@@ -276,6 +276,7 @@ export class CodexAgent implements Agent {
     rpc.onNotification = (method, params) => this.notification(method, params, rpc)
     rpc.onRequest = (method, params, id) => this.request(method, params, id)
     rpc.onExit = () => {
+      fence?.ended()
       // A title or commit text it was writing won't come.
       for (const oneOff of this.oneOffs.values()) if (oneOff.rpc === rpc) oneOff.fail(new Error("Codex stopped."))
       // Stopped on purpose: the threads were told then (they may be on a newer one by now).

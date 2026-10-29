@@ -4,7 +4,7 @@
 // engine does; Codex runs whole in it.
 
 import { createHash, randomBytes } from "node:crypto"
-import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs"
+import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, type Dirent } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { machineHome } from "./machine"
 
@@ -161,9 +161,11 @@ export interface AgentPlaces {
  * files in; a machine's agents' homes are Kuvo Code's own there.)
  * Undefined while the sandbox is off here.
  */
-export function fenceAgent(program: string, directory: string, mine: AgentPlaces): { command: string; env: Record<string, string> } | undefined {
+export function fenceAgent(program: string, directory: string, mine: AgentPlaces): { command: string; env: Record<string, string>; ended: () => void } | undefined {
   const where = folder()
   if (!where || !fenceRules()) return undefined
+  // What an earlier run left (one that stopped with the box).
+  unlinked(mine.homes, mine.state)
   const command = join(where, "shell", "run")
   if (!existsSync(command)) return undefined
   const work = real(directory)
@@ -182,7 +184,37 @@ export function fenceAgent(program: string, directory: string, mine: AgentPlaces
       KUVO_FENCE_KEPT: names(mine.kept),
       KUVO_FENCE_PORT: String(mine.port ?? 0),
     },
+    // As it stops (call it then).
+    ended: () => unlinked(mine.homes, mine.state),
   }
+}
+
+/**
+ * The links inside an agent's state folders, taken away (by the box, outside the sandbox): the
+ * agents make none there, and a command can't make one either, but can move in a folder with one
+ * inside, which your own agent, outside the sandbox, would write through to elsewhere. (A state
+ * folder that is itself a link, yours, stays.)
+ */
+function unlinked(homes: string[], state: string[]) {
+  const named = new RegExp(`^(${state.map((name) => name.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*")).join("|")})$`)
+  const entries = (folder: string): Dirent[] => {
+    try {
+      return readdirSync(folder, { withFileTypes: true })
+    } catch {
+      return []
+    }
+  }
+  const inside = (folder: string) => {
+    for (const entry of entries(folder)) {
+      const path = join(folder, entry.name)
+      if (entry.isDirectory()) inside(path)
+      else if (entry.isSymbolicLink())
+        try {
+          unlinkSync(path)
+        } catch {}
+    }
+  }
+  for (const home of homes) for (const entry of entries(home)) if (entry.isDirectory() && named.test(entry.name)) inside(join(home, entry.name))
 }
 
 /**

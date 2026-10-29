@@ -2,7 +2,7 @@
 // it asks is answered as the session's rules and modes say; Stop stops it; what it costs is counted.
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -84,6 +84,16 @@ async function attempt(how, place) {
   try {
     if (how === "write") require("node:fs").writeFileSync(place, "x")
     else if (how === "read") require("node:fs").readFileSync(place)
+    else if (how === "link") require("node:fs").symlinkSync("/", place)
+    else if (how === "linked") return require("node:fs").lstatSync(place).isSymbolicLink() ? "yes" : "no"
+    else if (how === "move in") {
+      // A folder made in its project, with a link in it, moved to \`place\` (where there's none yet).
+      const fs = require("node:fs"), path = require("node:path")
+      if (fs.existsSync(place)) throw new Error("There already.")
+      const staged = fs.mkdtempSync(path.join(process.cwd(), "staged-"))
+      fs.symlinkSync("/", path.join(staged, "prompt_history.jsonl"))
+      fs.renameSync(staged, place)
+    }
     else if (how === "tools" || how === "app") {
       const server = how === "tools" ? servers.find((each) => each.type === "http") : { url: place, headers: [] }
       if (!server) return "none"
@@ -674,6 +684,8 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
       statusline: ["write", join(home, "statusline.sh")],
       // What a project always allows, kept with its conversations.
       grants: ["write", join(home, "sessions", "project", "permission.toml")],
+      // A link your own Grok would write through, elsewhere.
+      link: ["link", join(home, "sessions", "project", "prompt_history.jsonl")],
       models: ["write", join(home, "models_cache.json")],
       program: ["write", join(home, "bin", "grok")],
       elsewhere: ["write", join(elsewhere, "e.txt")],
@@ -687,7 +699,7 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
     }), 1, { permissions: askFirst })
     // (Linux grants its home whole: there, a machine's, it's Kuvo Code's own copy of Grok's.)
     const mac = process.platform === "darwin" ? "no" : "yes"
-    expect(words(id)).toBe(`project=yes state=yes signin=yes lock=yes settings=${mac} hooks=${mac} shared=${mac} statusline=${mac} grants=${mac} models=${mac} program=${mac} elsewhere=no kuvo=no sandbox=off memory=0 leader=yes key=xai-test`)
+    expect(words(id)).toBe(`project=yes state=yes signin=yes lock=yes settings=${mac} hooks=${mac} shared=${mac} statusline=${mac} grants=${mac} link=${mac} models=${mac} program=${mac} elsewhere=no kuvo=no sandbox=off memory=0 leader=yes key=xai-test`)
   })
 
   test("Kuvo Code's tools reach it through the bridge, as its own session's; the app's server itself it can't use", async () => {
@@ -721,6 +733,22 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
     send(id, "again")
     await settled(id, 2)
     expect(words(id)).toBe("elsewhere=noelsewhere=yes")
+  })
+
+  test("a link moved into its state inside a folder is taken away before it runs again, so your own Grok never writes through it", async () => {
+    const moved = join(home, "sessions", "another")
+    const agent = trying({ moved: ["move in", moved], there: ["linked", join(moved, "prompt_history.jsonl")] })
+    const id = await run(agent)
+    expect(words(id)).toBe("moved=yes there=yes")
+    // Started again (Also Allowed changed for its project, as the box writes it).
+    const allowed = join(kuvo, "run", "fence", "allowed", createHash("sha256").update(realpathSync(root)).digest("hex").slice(0, 32))
+    mkdirSync(dirname(allowed), { recursive: true })
+    writeFileSync(allowed, elsewhere + "\n")
+    send(id, "again")
+    await settled(id, 2)
+    // (The folder stays, its link gone.)
+    expect(words(id)).toBe("moved=yes there=yesmoved=no there=no")
+    expect(() => lstatSync(join(moved, "prompt_history.jsonl"))).toThrow()
   })
 
   test("with the sandbox off, it runs as before: its own program, its own sandbox as you set it", async () => {

@@ -10541,11 +10541,7 @@ function seatbeltProfile(policy, options) {
   const homes = Array.from({ length: AGENT_FOLDERS }, (_, at) => `OWN${at}`);
   allow("file-read-data", ...homes.map(param), ...Array.from({ length: AGENT_FOLDERS }, (_, at) => param(`READ${at}`)));
   const inHome = (home, rest) => `(regex (string-append "^" (param ${quote2(`${home}_RE`)}) ${rest}))`;
-  allow("file-write*", ...homes.flatMap((home) => [
-    `(require-all ${inHome(home, `"/(" (param "STATE") ")$"`)} (vnode-type REGULAR-FILE))`,
-    `(require-all ${inHome(home, `"/(" (param "STATE") ")$"`)} (vnode-type DIRECTORY))`,
-    inHome(home, `"/(" (param "STATE") ")/"`)
-  ]));
+  allow("file-write*", ...homes.flatMap((home) => ["$", "/"].flatMap((after) => ["REGULAR-FILE", "DIRECTORY"].map((type) => `(require-all ${inHome(home, `"/(" (param "STATE") ")${after}"`)} (vnode-type ${type}))`))));
   allow(HIDDEN, param("TMP"));
   if (options.inside)
     allow(HIDDEN, param("WORK"));

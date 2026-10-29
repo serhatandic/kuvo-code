@@ -89,16 +89,14 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   deny(HIDDEN, ...policy.kuvo.map(subpath), ...policy.kuvoPatterns.map(regex));
   allow("file-read-data", ...policy.kuvoReadable.map(subpath));
   // A coding agent's own homes, run whole in the sandbox: read, and written only where its state is
-  // named at their top (a file, or a folder and all in it; never a link: one put in place there
-  // would lead elsewhere); and the folders it only reads.
+  // named at their top (a file, or a folder and all in it), and there only files and folders: never
+  // a link, which would have your own agent write elsewhere (one in a folder moved in, the bridge
+  // takes away as the agent stops: fence.ts `fenceAgent`); and the folders it only reads.
   const homes = Array.from({ length: AGENT_FOLDERS }, (_, at) => `OWN${at}`);
   allow("file-read-data", ...homes.map(param), ...Array.from({ length: AGENT_FOLDERS }, (_, at) => param(`READ${at}`)));
   const inHome = (home: string, rest: string) => `(regex (string-append "^" (param ${quote(`${home}_RE`)}) ${rest}))`;
-  allow("file-write*", ...homes.flatMap(home => [
-    `(require-all ${inHome(home, `"/(" (param "STATE") ")$"`)} (vnode-type REGULAR-FILE))`,
-    `(require-all ${inHome(home, `"/(" (param "STATE") ")$"`)} (vnode-type DIRECTORY))`,
-    inHome(home, `"/(" (param "STATE") ")/"`),
-  ]));
+  allow("file-write*", ...homes.flatMap(home => ["$", "/"].flatMap(after => ["REGULAR-FILE", "DIRECTORY"].map(type =>
+    `(require-all ${inHome(home, `"/(" (param "STATE") ")${after}"`)} (vnode-type ${type}))`))));
   allow(HIDDEN, param("TMP"));
   if (options.inside) allow(HIDDEN, param("WORK"));
   // Its conversation's wake-ups and watches (kuvo-wake): what's kept there is read, and only its

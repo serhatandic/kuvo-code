@@ -358,7 +358,9 @@ test("a coding agent run whole in the sandbox keeps its own sign-in and state (o
       ["read its settings", `cat ${JSON.stringify(path.join(own, "config.toml"))}`],
       ["change its settings", `echo 'hook = 1' >> ${JSON.stringify(path.join(own, "config.toml"))}`],
       ["add a plugin", `echo x > ${JSON.stringify(path.join(own, "plugins", "p.js"))}`],
-      ["put a link at its top", `ln -s / ${JSON.stringify(path.join(own, "elsewhere"))}`],
+      // (Each by a name that's its state: what keeps them out is that they're links.)
+      ["put a link at its top", `ln -s / ${JSON.stringify(path.join(own, "auth.json.old"))}`],
+      ["put a link in its state", `ln -s / ${JSON.stringify(path.join(own, "sessions", "s2"))}`],
       ["read the skills it's given", `cat ${JSON.stringify(path.join(skills, "SKILL.md"))}`],
       ["change the skills it's given", `echo x >> ${JSON.stringify(path.join(skills, "SKILL.md"))}`],
       ["write in its project", "echo ok > made.txt"],
@@ -372,7 +374,7 @@ test("a coding agent run whole in the sandbox keeps its own sign-in and state (o
     assert.deepEqual(outcome(ran.stdout), {
       "read its sign-in": "allowed", "write its sessions": "allowed", "write its databases": "allowed", "write its sign-in anew": "allowed",
       "make another file at its top": mac, "put settings in its state": mac, "read its settings": "allowed",
-      "change its settings": mac, "add a plugin": mac, "put a link at its top": mac, "read the skills it's given": "allowed", "change the skills it's given": "refused",
+      "change its settings": mac, "add a plugin": mac, "put a link at its top": mac, "put a link in its state": mac, "read the skills it's given": "allowed", "change the skills it's given": "refused",
       "write in its project": "allowed", "read the box's files": "refused", "reach its tools": "allowed",
     }, ran.stdout + ran.stderr);
     if (!linux) assert.equal(fs.readFileSync(path.join(own, "config.toml"), "utf8"), "model = 'x'\n");

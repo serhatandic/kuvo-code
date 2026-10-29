@@ -208,6 +208,7 @@ export class AcpThread implements Thread {
     const launch = await this.flavor.command(mode)
     const whole = this.wholeLaunch(launch.argv, launch.env, launch.cleanEnv, skills)
     this.fenced = Boolean(whole)
+    const ended = whole?.ended
     const flavor = this.flavor
     const startedAt = Date.now()
     let asksSignIn = false
@@ -243,6 +244,7 @@ export class AcpThread implements Thread {
     rpc.onRequest = (method, params) => this.request(method, params)
     rpc.onExit = () => {
       launch.onExit?.()
+      ended?.()
       if (this.rpc === rpc) this.rpc = undefined
       // Asked for a new sign-in as it started: the one it keeps is gone.
       const young = Date.now() - startedAt < acpTiming.signInGrace
@@ -361,7 +363,7 @@ export class AcpThread implements Thread {
       port: relayed ? relayPort() : undefined,
     })
     if (!fence) throw new Error(`${this.name} runs in the sandbox here, and it isn't ready: restart Kuvo Code.`)
-    return { argv: [fence.command, ...argv.slice(1)], env: { ...env, ...whole.env, ...fence.env } }
+    return { argv: [fence.command, ...argv.slice(1)], env: { ...env, ...whole.env, ...fence.env }, ended: fence.ended }
   }
 
   /** Kuvo Code's own tools, for an agent that takes MCP servers over HTTP (through the relay, run whole in the sandbox). */

@@ -2681,9 +2681,12 @@ it's empty.
   caches), and in those never settings (`*.toml`, `.env`, `hooks.json`, `rules`); nothing else
   there (its settings, plugins, skills, helpers, shell snapshots, models' instructions, the ChatGPT
   app's state), and it can't reach the ChatGPT app's socket (`ipc`); on Linux, a machine's Codex
-  home (Kuvo Code's own copy) whole. Its memories' database it opens as it starts, so a command can
-  write it (what your Codex is told later, never what it runs). Files you attach are copied for it
-  to `run/fence/attachments`, which it only reads.
+  home (Kuvo Code's own copy) whole. In its state a command makes only files and folders, never a
+  link (your own agent would write through it, elsewhere); a link carried in inside a folder the
+  bridge takes away as the agent starts and stops (the agents make none there). Its memories'
+  database it opens as it starts, so a command can write it (what your Codex is told later, never
+  what it runs; so can a conversation of its, when you take it up). Files you attach are copied for
+  it to `run/fence/attachments`, which it only reads.
   Grok runs whole the same way (and so will the other agents that speak ACP): its process per
   session through `run/fence/shell/run`, its own sandbox off (`GROK_SANDBOX=off`), its memories
   off (`GROK_MEMORY=0`), never in a shared leader (`--no-leader`; on a Mac its socket in `~/.grok`
