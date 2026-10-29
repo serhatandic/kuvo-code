@@ -42,7 +42,7 @@ function setBots({ pixelWork } = {}) {
 
 // The engine: the bots' conversations, a session of the user's own, the models there are accounts
 // for; the sessions made, what each was sent, what each asks, and how each ask was answered.
-let sessions, prompts, made, asked, replied, interrupted, active;
+let sessions, prompts, made, asked, replied, interrupted, active, busy;
 const noTokens = () => ({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } });
 function resetEngine() {
   sessions = new Map([
@@ -56,6 +56,7 @@ function resetEngine() {
   replied = [];
   interrupted = [];
   active = new Set();
+  busy = new Map();
 }
 resetEngine();
 const engine = http.createServer((request, response) => {
@@ -85,7 +86,12 @@ const engine = http.createServer((request, response) => {
       sessions.set(id, { id, title: given.title, agent: given.agent, model: given.model, permissions: given.permissions, location: given.location, time: { created: Date.now(), updated: Date.now() }, cost: 0, tokens: noTokens() });
       return reply({ data: { id } });
     }
-    if (url.pathname === "/api/session/active") return reply({ data: Object.fromEntries([...active].map(id => [id, {}])) });
+    if (url.pathname === "/api/session/active") {
+      // A session given a task is at work for one look, then answers.
+      const looking = [...busy.entries()].filter(([, looks]) => looks > 0).map(([id]) => id);
+      for (const id of looking) busy.set(id, busy.get(id) - 1);
+      return reply({ data: Object.fromEntries([...active, ...looking].map(id => [id, {}])) });
+    }
     const one = url.pathname.match(/^\/api\/session\/([^/]+)(\/.*)?$/);
     const id = one && decodeURIComponent(one[1]);
     if (one && !one[2] && request.method === "GET") return sessions.has(id) ? reply({ data: sessions.get(id) }) : reply({ message: "No such session." }, 404);
@@ -97,9 +103,14 @@ const engine = http.createServer((request, response) => {
     }
     if (one?.[2] === "/prompt") {
       prompts.push({ to: id, ...JSON.parse(body) });
+      busy.set(id, 1);
       return reply({});
     }
-    if (one?.[2] === "/message") return reply({ data: [{ id: "msg_2", type: "assistant", content: [{ type: "text", text: `Done in ${id}.` }] }] });
+    if (one?.[2] === "/message") {
+      // Its answer, after the last message it was sent (ids sort by time).
+      const sent = prompts.filter(each => each.to === id).at(-1);
+      return reply({ data: [{ id: sent ? sent.id + "z" : "msg_2", type: "assistant", content: [{ type: "text", text: `Done in ${id}.` }] }] });
+    }
     if (one?.[2] === "/inbox") return reply({ data: [] });
     if (one?.[2] === "/interrupt") {
       interrupted.push(id);
