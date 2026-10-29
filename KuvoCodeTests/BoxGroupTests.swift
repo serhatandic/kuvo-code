@@ -269,6 +269,21 @@ import Testing
         #expect(app.chats.list.isEmpty)
     }
 
+    /// One machine added twice, at two addresses, found to be one: its chats are kept once, as
+    /// the address it's kept under says, not twice with one copy talking on.
+    @Test func aMachineAtTwoAddressesKeepsItsChatsOnce() throws {
+        defer { Self.clean(); mac.stop() }
+        let app = app()
+        let group = Self.group("grp_box0000001", members: ["bot_pal"])
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+                                                                                 "state": ["speaking": "bot_pal", "discussing": true, "paused": false]]), machine: "box-old")
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+                                                                                 "state": ["discussing": false, "paused": false]]), machine: "box")
+        app.boxGroups.fold("box-old", into: "box")
+        #expect(app.boxGroups.chats.filter { $0.group.id == "grp_box0000001" }.map(\.machine) == ["box"])
+        #expect(!app.boxGroups.isTalking(on: "box"))
+    }
+
     /// This Mac's bridge starting, then stopped: its chats show as last seen, and what you write
     /// waits in the composer; once it's up, it goes.
     @Test func thisMacsChatsWaitForItsBridge() async throws {

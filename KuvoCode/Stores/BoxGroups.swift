@@ -398,6 +398,9 @@ final class BoxGroups {
     /// A machine found to be another one's address: its chats are the other's.
     func fold(_ address: String, into machine: String) {
         guard chats.contains(where: { $0.machine == address }) else { return }
+        // One listed under both names is the other's, as it said last.
+        let there = Set(chats.filter { $0.machine == machine }.map(\.group.id))
+        chats.removeAll { $0.machine == address && there.contains($0.group.id) }
         for index in chats.indices where chats[index].machine == address { chats[index].machine = machine }
         running.remove(address)
         save()
