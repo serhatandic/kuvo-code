@@ -120,7 +120,7 @@ struct VaultSettings: View {
         }
         if state.agents == false {
             Section {
-                Label("Agents can’t use the vault on \(computer) yet. They ask you to sign in instead.", systemImage: "lock")
+                Label("Agents can’t use keys, files and notes from \(computer)’s vault yet. Sign-ins you let them use on their own still fill.", systemImage: "lock")
                     .foregroundStyle(.secondary)
             }
         }

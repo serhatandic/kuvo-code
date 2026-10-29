@@ -442,9 +442,25 @@ enum BrowserTools {
         return docs + "\n\n" + place + " Start with browser_navigate, read pages with browser_snapshot, and act on elements by their number. To sign in, use browser_sign_in; for a one-time code, browser_ask_code; for anything only the user can do (a CAPTCHA, approving on their phone), browser_ask_user. These ask the user in a card in Kuvo Code, where they can also say no. So whenever a page you open asks to sign in, call browser_sign_in right away, even if the user didn't mention signing in, rather than asking in the chat whether to; and never ask for a password or a code in the chat. For a \"Continue with Google\" (or Apple) sign-in, click it and sign in on the page it opens the same way; if that page won't let you, use browser_ask_user." + (vault ? vaultInstructions : "")
     }
 
-    /// The tools to list: browser_fill only with the vault's own (none while it isn't open to agents).
+    /// The tools to list: browser_fill, and browser_sign_in's vault item, only with the vault's own
+    /// (none while it isn't open to agents: then a sign-in fills only one you let agents make on
+    /// their own, or asks you).
     static func definitions(vault: [[String: Any]]) -> [[String: Any]] {
-        (vault.isEmpty ? definitions.filter { $0["name"] as? String != "browser_fill" } : definitions) + vault
+        guard vault.isEmpty else { return definitions + vault }
+        return definitions.compactMap { tool in
+            switch tool["name"] as? String {
+            case "browser_fill": return nil
+            case "browser_sign_in":
+                var tool = tool
+                var schema = tool["inputSchema"] as? [String: Any] ?? [:]
+                var properties = schema["properties"] as? [String: Any] ?? [:]
+                properties["item"] = nil
+                schema["properties"] = properties
+                tool["inputSchema"] = schema
+                return tool
+            default: return tool
+            }
+        }
     }
 
     private static func tool(_ name: String, _ description: String, _ properties: [String: Any] = [:], required: [String] = []) -> [String: Any] {

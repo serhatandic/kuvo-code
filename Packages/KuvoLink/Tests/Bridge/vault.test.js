@@ -565,25 +565,45 @@ test("after the box starts again the vault is locked, until a client's key unloc
   await box.stop();
 });
 
+test("the variable that opens the vault to agents opens it only in a test's own folder, never in a real box's, where a line in your shell's profile could set it", async () => {
+  const real = path.join(root, "run.kuvo.code", "box");
+  fs.mkdirSync(real, { recursive: true });
+  const other = await start({ KUVO_HOME: real, KUVO_VAULT_AGENTS: "1" });
+  try {
+    assert.deepEqual((await other.local("GET", "kuvo/vault/tools")).value.tools, []);
+  } finally {
+    await other.stop();
+  }
+});
+
 test("without the box's own process, a request says so plainly", async () => {
   const answer = await fromMac("GET", "kuvo/vault", undefined, key);
   assert.equal(answer.status, 503);
   assert.match(answer.value.message, /isn't open/);
 });
 
-test("on a box whose agents' commands aren't fenced, the vault is yours alone: agents get no tools, and a sign-in asks you", async () => {
+test("on a box whose agents' commands aren't fenced, agents get none of the vault's tools, but a sign-in you let them make on their own still fills, as before the vault", async () => {
   box = await start({ KUVO_VAULT_AGENTS: "" });
   try {
     assert.deepEqual((await box.local("GET", "kuvo/vault/tools")).value.tools, [], "no vault tools listed");
     const listed = await tool("ses_ship", "vault_items", {});
     assert.equal(listed.value.isError, true);
     assert.match(listed.value.text, /isn't open to agents/);
+    assert.match(listed.value.text, /without an item/, "it says how to sign in instead, never to call the tool it just called");
     assert.doesNotMatch(listed.value.text, /GitHub|NAS/, "no item named");
-    // Nothing's the conversation's, so its browser asks you, as without a vault.
-    const fill = await fillAs({ session: "ses_ship", origin: "https://github.com", purpose: "sign-in" });
-    assert.equal(fill.status, 404);
-    assert.equal(fill.value.values, undefined);
+    // The box started again, so its vault waits for a client's key, as after any start.
     assert.equal((await fromMac("POST", "kuvo/vault/unlock", { key }, key)).status, 200);
+    // GitHub is Ship's to sign in to on its own: filled into the page, as Kuvo Code did before.
+    const fill = await fillAs({ session: "ses_ship", origin: "https://github.com", purpose: "sign-in" });
+    assert.equal(fill.status, 200);
+    assert.equal(fill.value.values.password, SECRET);
+    // An item named, or a field: the vault's own, so not yet. Its browser asks you instead.
+    const named = await fillAs({ session: "ses_ship", origin: "https://github.com", purpose: "sign-in", item: "GitHub" });
+    assert.equal(named.status, 404);
+    assert.equal(named.value.values, undefined);
+    const field = await fillAs({ session: "ses_ship", origin: "https://github.com", purpose: "field", item: "GitHub", field: "password" });
+    assert.equal(field.status, 404);
+    assert.equal(field.value.values, undefined);
     const state = await fromMac("GET", "kuvo/vault", undefined, key);
     assert.equal(state.value.state.agents, false, "your Vault page can say so");
     assert.equal(state.value.items.length, 9, "your items are all still there");

@@ -2512,11 +2512,15 @@ as you there, can still reach a value a fill puts in a page: until agents' comma
 that's what a machine can't keep from them.)
 
 Agents use the vault only on a box whose agents' commands are fenced (not yet on any box; the
-tests open it with `KUVO_VAULT_AGENTS=1`, which a Mac's app never passes its box). Until then
-`GET kuvo/vault/tools` lists no tools, a call says the vault isn't open to agents, and a fill is
-`404` (nothing is the conversation's, so a sign-in asks you, as without a vault); the browser tools
-leave out `browser_fill` and the vault's sentence in their instructions. Your clients see and change
-everything as before, and the state says `agents: false`.
+tests open it with `KUVO_VAULT_AGENTS=1`, which a Mac's app never passes its box, and which a box
+takes only in a test's own folder, never the account's own `~/.kuvo-code` or a Mac's
+`run.kuvo.code…/box`). Until then `GET kuvo/vault/tools` lists no tools, and a call says the vault
+isn't open to agents. A fill does only what Kuvo Code did before the vault: for `browser_sign_in`
+with no item, the one sign-in for the page's site the conversation may use on its own (else `404`,
+and the browser asks you); an item named, or a field, is `404`. The browser tools leave out
+`browser_fill`, `browser_sign_in`'s `item` and the vault's sentence in their instructions. Your
+clients see and change everything as before, and the state says `agents: false` (every box that
+has the vault sends `agents`; a client reads its absence as `true`, a box from before the gate).
 
 - `POST kuvo/vault/tools {name, arguments, session}` → `{text, isError}`: `vault_items`, the items
   this conversation may use (by its bot, its project or everyone), never another's name, and a

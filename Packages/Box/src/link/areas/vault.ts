@@ -143,11 +143,16 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
     // Its values are for the browser's own process alone: on this Mac, the app's panel browser.
     // (On a machine, the browser and anything you run there share your account: PROTOCOL.md.)
     if (onHost() && !request.fromApp) return yield* json(403, { message: CLIENTS_ONLY });
-    // (Nothing's this conversation's: a sign-in asks you, as without a vault.)
-    if (!agentsUseVault()) return yield* json(404, { message: AGENTS_LATER });
+    // Until agents may use the vault here, only what Kuvo Code did before it: a sign-in you let
+    // agents make on their own on this site, for browser_sign_in. Anything else asks you, as
+    // without a vault.
+    const open = agentsUseVault();
+    if (!open && (given.purpose === "field" || (given.item !== undefined && given.item !== null && given.item !== ""))) {
+      return yield* json(404, { message: AGENTS_LATER });
+    }
     if (isLocked()) return yield* json(423, { message: LOCKED });
     // And one fill for each such call: what races the browser for it gets nothing more.
-    const call = await callingNow(stringOf(given.session), ["browser_sign_in", "browser_fill"], null, readEngine, readBridge);
+    const call = await callingNow(stringOf(given.session), open ? ["browser_sign_in", "browser_fill"] : ["browser_sign_in"], null, readEngine, readBridge);
     if (!call || filledFor.has(call)) return yield* json(403, { message: NOT_CALLING });
     filledFor.add(call);
     if (filledFor.size > 1000) filledFor.delete(filledFor.values().next().value!);

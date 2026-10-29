@@ -1984,6 +1984,16 @@ function vaultRoute(request, call, timeout = 60_000) {
 
 /// The vault's tools, as this machine's box lists them: kept once it's said.
 let vaultToolList = null;
+/// The browser's tools while this machine's vault isn't open to agents: no browser_fill, and no
+/// vault item to name in browser_sign_in.
+function closedVaultTools(tools) {
+  return tools.filter((tool) => tool.name !== "browser_fill").map((tool) => {
+    if (tool.name !== "browser_sign_in") return tool;
+    const { item, ...properties } = tool.inputSchema?.properties ?? {};
+    return { ...tool, inputSchema: { ...tool.inputSchema, properties } };
+  });
+}
+
 async function vaultTools() {
   if (vaultToolList) return vaultToolList;
   const answer = await vaultRoute({ method: "GET", path: "kuvo/vault/tools" }, null, 15_000);
@@ -2547,8 +2557,9 @@ async function mcp() {
         return reply({});
       case "tools/list":
         // With the vault's, in this machine's box's own words (none from a box without one).
-        // (browser_fill only with them: none while the vault isn't open to agents here.)
-        return vaultTools().then((more) => reply({ tools: [...CONFIG.tools.filter((tool) => more.length || tool.name !== "browser_fill"), ...more] }));
+        // (browser_fill, and browser_sign_in's vault item, only with them: none while the vault
+        // isn't open to agents here, when a sign-in fills only one you let agents make on their own.)
+        return vaultTools().then((more) => reply({ tools: [...(more.length ? CONFIG.tools : closedVaultTools(CONFIG.tools)), ...more] }));
       case "tools/call": {
         // The session it's for: the engine says so with each call; an agent of the agents bridge
         // starts this for one session, named in KUVO_SESSION.
