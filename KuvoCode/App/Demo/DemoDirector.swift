@@ -170,6 +170,16 @@ enum DemoDirector {
                 }
             }
         }
+        // KUVO_DEMO_PASSKEY=<site>: the agent of the session in view asks for a step on that site,
+        // which asked for a passkey (the card's line about it).
+        if let site = environment["KUVO_DEMO_PASSKEY"] {
+            Task {
+                await DemoWait.pause(.asked(2))
+                guard let id = app.tabs.sessionID else { return }
+                app.browserAsks.passkeyAsked(host: site, machine: nil)
+                app.browserAsks.add(BrowserAsks.Ask(id: "demo-passkey", kind: .action(instruction: "Sign in to \(site), then press Done."), host: site, machine: nil, session: id)) { _ in }
+            }
+        }
         // KUVO_DEMO_CYCLE_TABS=<seconds>: goes to the next session tab every so often, a few times.
         if let wait = environment["KUVO_DEMO_CYCLE_TABS"].flatMap(Double.init) {
             Task {
@@ -231,7 +241,13 @@ enum DemoDirector {
             let parts = item.split(separator: "=", maxSplits: 1).map(String.init)
             switch parts.first {
             case "terminal": utilities.newTerminal(in: app.tabs.focusedDirectory, environment: app.shellEnvironment)
-            case "browser": utilities.newBrowser(parts.count > 1 ? parts[1] : nil)
+            case "browser":
+                // Once the conversation is in view, so the tab is its panel's.
+                Task {
+                    await DemoWait.pause(.conversationShows)
+                    utilities.newBrowser(parts.count > 1 ? parts[1] : nil)
+                    app.tabs.showPanel()
+                }
             case "machine" where parts.count > 1:
                 let rest = parts[1].split(separator: "=", maxSplits: 1).map(String.init)
                 // Once a session there is in view, so the tab shows.
