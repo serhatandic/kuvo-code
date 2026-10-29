@@ -158,5 +158,14 @@ import Testing
         panel.run("true", in: folder.path, environment: shell)
         #expect(terminals() == 1)
     }
-}
 
+    /// A file a bot showed in a group chat, then another opened from the tree beside it, in a
+    /// folder there: the tree stays on the first file's folder, so you can go back up.
+    @Test func aGroupChatsFileKeepsItsFolderAsYouBrowse() {
+        panel.inView = .init(group: "group:grp_team")
+        panel.show(URL(filePath: "/tmp/kuvo-tests-group-files/notes.md"), isFolder: false)
+        panel.open(URL(filePath: "/tmp/kuvo-tests-group-files/docs/plan.md"))
+        #expect(panel.selected?.kind == .file(URL(filePath: "/tmp/kuvo-tests-group-files/docs/plan.md")))
+        #expect(panel.selected?.folder == "/tmp/kuvo-tests-group-files")
+    }
+}

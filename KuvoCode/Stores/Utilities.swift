@@ -30,6 +30,9 @@ final class Utilities {
         /// group chat's. A bot browses in its tabs out of sight. `Utilities.unclaimed` for a
         /// machine's page no conversation has yet.
         var owner: String
+        /// A file's tab outside a project (a file a group chat's bot showed): the folder its tree
+        /// shows, the first file's, kept as you open others from it.
+        var folder: String?
     }
 
     /// A machine's page whose conversation isn't known (one left open there when the app last
@@ -466,8 +469,13 @@ final class Utilities {
         } else if let current = selected, case .file = current.kind, let index = tabs.firstIndex(of: current) {
             tabs[index].kind = .file(url)
         } else {
-            add(Tab(kind: .file(url), owner: panelKey))
+            add(fileTab(url))
         }
+    }
+
+    /// A file's tab in the panel in view; outside a project, with the file's folder for its tree.
+    private func fileTab(_ url: URL) -> Tab {
+        Tab(kind: .file(url), owner: panelKey, folder: hasProject ? nil : RemoteFolder.folder(of: url.deletingLastPathComponent()))
     }
 
     /// A new tab: an empty browser tab of the place in view, which shows the tools and suggested
@@ -542,7 +550,7 @@ final class Utilities {
             // Shown again: as it is now (the agent may have changed it since).
             fileShown += 1
         } else {
-            add(Tab(kind: .file(url), owner: panelKey))
+            add(fileTab(url))
         }
         treeReveal = url
         revealRequest += 1
