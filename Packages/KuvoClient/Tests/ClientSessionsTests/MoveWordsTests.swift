@@ -21,4 +21,17 @@ struct MoveWordsTests {
         #expect(MoveWords.progress(sent: 50_000_000, size: 30_000_000) == "30 of 30 MB", "never more than all of it")
         #expect(MoveWords.progress(sent: nil, size: 0) == nil)
     }
+
+    @Test func askedFirstItSaysWhatGoesAndWhatsLeftWhere() {
+        let chat = MoveWords.question(kind: "chat", name: "“Trip plans”", place: "lab", placeIsMac: false, from: nil, fromMachine: false)
+        #expect(chat.title == "Move “Trip plans” to lab?")
+        #expect(chat.message == "Its conversation and wake-ups go there, and it carries on there. Nothing goes to it while it moves. Its folder here goes to the Trash, with a copy of its conversation in it.")
+        // From a machine, asked from elsewhere (a phone): what's left goes to Kuvo Code's trash there.
+        let bot = MoveWords.question(kind: "bot", name: "Ada", place: "Studio Mac", placeIsMac: true, from: "lab", fromMachine: true)
+        #expect(bot.message.hasSuffix("Its folder on lab goes to Kuvo Code’s trash folder there, with a copy of its conversation in it."))
+        #expect(MoveWords.question(kind: "group", name: "“Standup”", place: "this Mac", placeIsMac: true, toHere: true, from: "lab", fromMachine: true).message
+            .hasPrefix("Its messages and meeting come here, and it carries on here while this Mac is on"))
+        #expect(MoveWords.question(kind: "group", name: "“Standup”", place: "lab", placeIsMac: false, from: nil, fromMachine: false).message
+            .hasPrefix("Its messages and meeting go there, and it carries on there, also while your Macs are off."))
+    }
 }

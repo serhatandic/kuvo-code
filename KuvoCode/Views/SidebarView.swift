@@ -1806,30 +1806,13 @@ private struct MoveToComputerMenu: View {
     }
 
     private func move(to place: Moves.Place) {
-        let name: String
-        let what: String
-        switch thing {
-        case .bot(let bot):
-            name = bot.name
-            what = "Its memory, files, wake-ups and conversation go there, and it carries on there; its seats in group chats start afresh there."
-        case .chat(let session):
-            name = (session.title ?? "").isEmpty ? "this chat" : "“\(session.title ?? "")”"
-            what = "Its conversation and wake-ups go there, and it carries on there."
-        case .group(let group):
-            name = "“\(group.name)”"
-            what = place.key == app.phoneLink.macKey
-                ? "Its messages and meeting come here, and it carries on here while this Mac is on; its bots stay where they are."
-                : place.kind == "mac"
-                ? "Its messages and meeting go there, and it carries on there while that Mac is on; its bots stay where they are."
-                : "Its messages and meeting go there, and it carries on there, also while this Mac is off."
+        let name = switch thing {
+        case .bot(let bot): bot.name
+        case .chat(let session): (session.title ?? "").isEmpty ? "this chat" : "“\(session.title ?? "")”"
+        case .group(let group): "“\(group.name)”"
         }
-        let trash = here.map { "Kuvo Code’s trash folder on \(app.machines.engine($0)?.machine.name ?? $0)" } ?? "the Trash"
-        let leaves: String
-        if case .group = thing {
-            leaves = "Nothing goes to it while it moves. What it leaves here goes to \(trash)."
-        } else {
-            leaves = "Nothing goes to it while it moves. Its folder here goes to \(trash), with a copy of its conversation in it."
-        }
+        let question = MoveWords.question(kind: kind, name: name, place: place.name, placeIsMac: place.kind == "mac", toHere: place.key == app.phoneLink.macKey,
+                                          from: here.map { app.machines.engine($0)?.machine.name ?? $0 }, fromMachine: here != nil)
         Task {
             // Asked again as it's picked: what the menu showed may be old, or this Mac's own guess.
             let now = await app.moves.loadPlaces(kind, id, from: here, fresh: true)
@@ -1845,8 +1828,8 @@ private struct MoveToComputerMenu: View {
             }
             let confirmed = await Modal.run {
                 let alert = NSAlert()
-                alert.messageText = "Move \(name) to \(place.name)?"
-                alert.informativeText = "\(what) \(leaves)"
+                alert.messageText = question.title
+                alert.informativeText = question.message
                 alert.addButton(withTitle: "Move")
                 alert.addButton(withTitle: "Cancel")
                 return alert.runModal() == .alertFirstButtonReturn
