@@ -3,27 +3,36 @@ import ClientSessions
 import OpenCodeKit
 import SwiftUI
 
-/// A bot's sessions at work, in a bar over its composer ("At work: 3 sessions"), like the one for
-/// its subagents: each with where it stands and Open. All shows its whole work: what's done, the
-/// asks it answered and why, today's count, and Stop All.
+/// A bot's sessions at work, in a bar over its composer ("3 sessions at work"), like the one for
+/// its subagents: each with where it stands, Open and Stop. It stays, folded to its line, while the
+/// bot has done work today, for All: what's done, the asks it answered and why, and Stop All.
 struct BotWorkBar: View {
     let bot: Bot
     let report: BotWorkReport
     @Binding var isHidden: Bool
     @State private var showsAll = false
 
+    /// Whether it shows: sessions at work, or any started today.
+    static func shows(_ report: BotWorkReport?) -> Bool {
+        guard let report else { return false }
+        return !report.atWork.isEmpty || report.today.started > 0
+    }
+
     var body: some View {
         let atWork = report.atWork
-        WorkBar(items: atWork, title: Self.title(atWork.count), progress: Self.progress(report),
+        WorkBar(items: atWork, title: Self.title(report), progress: Self.progress(report),
                 detail: atWork.count == 1 ? atWork.first.map { Text($0.title).font(.system(size: 12)) } : nil,
+                symbol: atWork.isEmpty ? "checkmark.circle" : nil,
                 accessory: AnyView(all),
                 showHelp: "Show the sessions \(bot.name) runs", hideHelp: "Hide them: this line stays while they work", isHidden: $isHidden) { item in
-            BotWorkRow(item: item)
+            BotWorkRow(bot: bot, item: item)
         }
     }
 
     /// The bar's line, and in a few words, the card's line once its bars are tucked away.
-    static func title(_ count: Int) -> String { count == 1 ? "At work: 1 session" : "At work: \(count) sessions" }
+    static func title(_ report: BotWorkReport?) -> String {
+        WorkWords.barTitle(atWork: report?.atWork.count ?? 0, today: report?.today.started ?? 0)
+    }
 
     /// What it did today besides: asks it answered, tokens its sessions used.
     static func progress(_ report: BotWorkReport) -> String? {
@@ -61,11 +70,13 @@ struct BotWorkBar: View {
 }
 
 /// One of a bot's sessions: its title, then where it stands (its model and mode while it works,
-/// what it asks while it waits), and Open.
+/// what it asks while it waits), Open and Stop.
 private struct BotWorkRow: View {
+    let bot: Bot
     let item: BotWorkReport.Item
     @Environment(AppModel.self) private var app
     @Environment(Catalog.self) private var catalog
+    @State private var isStopping = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -92,6 +103,22 @@ private struct BotWorkRow: View {
             .font(.system(size: 13))
             .fixedSize()
             .help("Open its conversation, to watch it and talk to it")
+            .accessibilityLabel("Open \(item.title)")
+            Button("Stop", systemImage: "stop.circle") { stop() }
+                .buttonStyle(TextButtonStyle())
+                .font(.system(size: 13))
+                .fixedSize()
+                .disabled(isStopping)
+                .help("Stop it: \(bot.name) hears it was stopped")
+                .accessibilityLabel("Stop \(item.title)")
+        }
+    }
+
+    private func stop() {
+        isStopping = true
+        Task {
+            do { try await app.botWork.stop(item.session, of: bot) } catch { app.workspace.model(for: bot.sessionID)?.failure = error.localizedDescription }
+            isStopping = false
         }
     }
 }
@@ -126,7 +153,7 @@ struct BotWorkList: View {
             }
             if !report.answered.isEmpty { answers }
             if let limits = report.limits, !limits.isEmpty {
-                Text(Self.limitsLine(limits))
+                Text(WorkWords.limits(limits))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
@@ -231,13 +258,6 @@ struct BotWorkList: View {
     static func about(_ item: BotWorkReport.Item, catalog: Catalog) -> String {
         let model = item.model.map { model in catalog.model(ModelRef(id: model.id, providerID: model.providerID))?.name ?? model.id }
         return [model, item.model?.variant, item.mode == "plan" ? "Plan" : nil, item.project].compactMap { $0 }.joined(separator: " · ")
-    }
-
-    /// The limits you set, in a line.
-    static func limitsLine(_ limits: WorkLimits) -> String {
-        let parts = [limits.atOnce.map { "\($0) at once" }, limits.perDay.map { "\($0) a day" }, limits.depth.map { $0 == 1 ? "one level deep" : "\($0) levels deep" },
-                     limits.tokensPerDay.map { "\(WorkWords.tokens($0)) tokens a day" }].compactMap { $0 }
-        return "Your limits: " + parts.joined(separator: ", ") + " (Edit Bot › Work)"
     }
 
     private func stopAll() {

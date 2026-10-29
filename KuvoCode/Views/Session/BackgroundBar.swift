@@ -88,7 +88,7 @@ struct WorkBar<Item: Identifiable, Row: View>: View {
             AnyView(Image(systemName: symbol)
                 .font(.system(size: 13))
                 .foregroundStyle(.tint))
-        } ?? AnyView(Spinner(size: 14)), title: title, progress: progress, detail: detail, accessory: accessory, showHelp: showHelp, hideHelp: hideHelp, isHidden: $isHidden)
+        } ?? AnyView(Spinner(size: 14)), title: title, progress: progress, detail: detail, accessory: accessory, showHelp: showHelp, hideHelp: hideHelp, isHidden: $isHidden, opens: !items.isEmpty)
     }
 }
 

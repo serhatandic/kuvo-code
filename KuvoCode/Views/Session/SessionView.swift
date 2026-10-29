@@ -38,8 +38,6 @@ struct SessionView: View {
                     .environment(\.isConversationShown, isShown && isInSight)
                     .zIndex(isShown ? 1 : 0)
                     .environment(\.isOffline, Self.offlineMachine(of: each, in: app) != nil)
-                    // What its bot answered for it, on the steps that asked.
-                    .environment(\.workAnswers, WorkAnswer.byCall(each.session))
             }
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
@@ -195,7 +193,7 @@ private struct BottomStack: View {
             case .subagents:
                 return BarStripItem(bar: bar, symbol: nil, words: subagentsAtWork.count == 1 ? "A subagent" : "\(subagentsAtWork.count) subagents")
             case .work:
-                return BarStripItem(bar: bar, symbol: nil, words: BotWorkBar.title(workReport?.atWork.count ?? 0))
+                return BarStripItem(bar: bar, symbol: workReport?.atWork.isEmpty == false ? nil : "checkmark.circle", words: BotWorkBar.title(workReport))
             case .background:
                 return BarStripItem(bar: bar, symbol: nil, words: "\(backgroundJobs.count) running")
             case .wakes:
@@ -223,7 +221,7 @@ private struct BottomStack: View {
         if model.review != nil { bars.append(.review) }
         if let id = model.shownSideQuestion, model.sideQuestions.contains(where: { $0.id == id }) { bars.append(.sideQuestion) }
         if !subagentsAtWork.isEmpty { bars.append(.subagents) }
-        if !(workReport?.atWork.isEmpty ?? true) { bars.append(.work) }
+        if BotWorkBar.shows(workReport) { bars.append(.work) }
         if !backgroundJobs.isEmpty { bars.append(.background) }
         if wakeOwner != nil { bars.append(.wakes) }
         return bars
@@ -275,11 +273,13 @@ private struct BottomStack: View {
     /// Its sessions as its box last told them.
     private var workReport: BotWorkReport? { workBot.flatMap { app.botWork.reports[$0.id] } }
 
-    /// What its work is read again on: a session of it started, at work, asking, done.
+    /// What its work is read again on: a session of it started, at work or asking, or done, and the
+    /// bot hearing of one (each wake comes to its conversation). Not each step a session takes.
     private var workChanges: String? {
         guard let bot = workBot else { return nil }
-        return bot.id + workspace.sessions.filter { WorksFor($0)?.bot == bot.id }
-            .map { "\($0.id)·\($0.time.updated)·\(workspace.isWorking($0.id))·\(workspace.needsAttention($0.id))" }.joined(separator: ",")
+        let changes = workspace.sessions.lazy.filter { WorksFor($0)?.bot == bot.id }
+            .map { "\($0.id)\(workspace.isWorking($0.id) ? "w" : "")\(workspace.needsAttention($0.id) ? "a" : "")" }
+        return bot.id + "\(workspace.session(bot.sessionID)?.time.updated ?? 0)" + changes.joined(separator: ",")
     }
 
     /// Commands its agent left running, which the conversation doesn't show as they run: once
@@ -390,7 +390,7 @@ private struct BottomStack: View {
                                 .modifier(CardRow())
                                 .transition(.fold)
                         }
-                        if let bot = workBot, let report = workReport, !report.atWork.isEmpty {
+                        if let bot = workBot, let report = workReport, BotWorkBar.shows(report) {
                             BotWorkBar(bot: bot, report: report, isHidden: hidden(.work, $model.hidesWork))
                                 .modifier(CardRow())
                                 .transition(.fold)

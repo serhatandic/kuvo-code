@@ -10,15 +10,18 @@ final class BotWork {
     @ObservationIgnored weak var app: AppModel?
     /// Each bot's, by its id, as last read.
     private(set) var reports: [String: BotWorkReport] = [:]
-    /// Bots whose box doesn't tell its work (an older one): not asked again.
-    @ObservationIgnored private var unknown: Set<String> = []
+    /// Boxes that don't tell bots' work (from before bots ran sessions), by their ids: not asked
+    /// again until the app opens again (one that updates meanwhile is read then).
+    private(set) var older: Set<String> = []
     /// The box a bot lives on, by its id ("mac", or a machine's): the app's (a test's own).
     @ObservationIgnored var boxes: ((String) -> BoxClient)?
 
     private func box(of bot: Bot) -> BoxClient? {
-        let id = bot.machine ?? BoxClient.mac
-        return boxes?(id) ?? app?.box(id)
+        boxes?(bot.box) ?? app?.box(bot.box)
     }
+
+    /// Whether the box a bot lives on runs its work (one from before doesn't).
+    func runsWork(_ bot: Bot) -> Bool { !older.contains(bot.box) }
 
     /// The bot's work, read again from its box.
     func read(_ bot: Bot) async {
@@ -29,11 +32,13 @@ final class BotWork {
             return
         }
         #endif
-        guard !unknown.contains(bot.id), let box = box(of: bot) else { return }
+        guard runsWork(bot), let box = box(of: bot) else { return }
         guard let (status, data) = try? await box.send("GET", "kuvo/work?bot=\(bot.id)") else { return }
-        if status == 404, (try? JSONDecoder().decode([String: String].self, from: data))?["message"] == nil {
-            // A box from before bots ran sessions: no such route.
-            unknown.insert(bot.id)
+        if status == 404 || status == 403 || status == 405 {
+            // A box from before bots ran sessions says nothing; one that doesn't have the bot (it
+            // moved, or went) says so, and what it said of it before is gone.
+            if (try? JSONDecoder().decode([String: String].self, from: data))?["message"] == nil { older.insert(bot.box) }
+            reports[bot.id] = nil
             return
         }
         guard status == 200, let report = try? JSONDecoder().decode(BotWorkReport.self, from: data), report != reports[bot.id] else { return }
@@ -48,7 +53,17 @@ final class BotWork {
         await read(bot)
     }
 
-    /// The limits you set for a bot, kept on its box (`PATCH kuvo/bots/<id>`); nil for none.
+    /// One session of the bot's work stopped (what waits for it held, as Stop does); its work read
+    /// again.
+    func stop(_ session: String, of bot: Bot) async throws {
+        guard let box = box(of: bot) else { return }
+        let (status, data) = try await box.send("POST", "kuvo/sessions/\(session)/stop")
+        guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
+        await read(bot)
+    }
+
+    /// The limits you set for a bot, kept on its box (`PATCH kuvo/bots/<id>`); nil for none. The
+    /// bot as its box has it then is taken in, limits and all.
     func setLimits(_ limits: WorkLimits?, for bot: Bot) async throws {
         guard let box = box(of: bot) else { return }
         struct Change: Encodable {
@@ -58,7 +73,13 @@ final class BotWork {
         let body = try JSONEncoder().encode(Change(work: .init(limits: limits?.isEmpty == false ? limits : nil)))
         let (status, data) = try await box.send("PATCH", "kuvo/bots/\(bot.id)", body: body)
         guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
+        await app?.bots.refresh(bot.box)
         await read(bot)
+    }
+
+    /// What's kept of a bot's work, once it's gone from here (deleted, or moved).
+    func forget(_ bot: String) {
+        reports[bot] = nil
     }
 
     #if DEBUG
@@ -81,9 +102,4 @@ final class BotWork {
         return try? JSONDecoder().decode(BotWorkReport.self, from: Data(json.utf8))
     }
     #endif
-
-    func forget(_ bot: String) {
-        reports[bot] = nil
-        unknown.remove(bot)
-    }
 }

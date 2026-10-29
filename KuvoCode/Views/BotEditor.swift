@@ -303,7 +303,7 @@ struct BotEditor: View {
                             }
                         }
                     }
-                    section("Work", note: "Limits on the sessions \(bot.name) runs for you. It sizes its work to the job, with none until you set one; past one, it asks you.") {
+                    section("Work", note: "Limits on the sessions \(bot.name) runs for you. It sizes its work to the job, with none until you set one; past one, it asks you. Each changes as you pick it.") {
                         BotWorkLimits(bot: bot)
                     }
                     section("Wake-Ups", note: "The bot schedules these itself: wake-ups to carry on later, and watches, which check something without its model and wake it when that changes. Add a wake-up of your own, and at its time what it says to do arrives in its conversation.") {
@@ -1077,28 +1077,34 @@ struct ScheduleRow: View {
 }
 
 /// The limits you set on the sessions a bot runs (Edit Bot › Work), kept on its box: none until you
-/// set one, as it sizes its work to the job. Each changes as you pick it.
+/// set one, as it sizes its work to the job. Each changes as you pick it, from what its box says
+/// now (`kuvo/bots`), so a pick never undoes another.
 struct BotWorkLimits: View {
     let bot: Bot
     @Environment(AppModel.self) private var app
     @State private var failure: String?
     @State private var isSaving = false
 
-    private var limits: WorkLimits { app.botWork.reports[bot.id]?.limits ?? WorkLimits() }
+    private var limits: WorkLimits { app.bots.bot(bot.id)?.limits ?? WorkLimits() }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            WellGroup {
-                row("Sessions at once", symbol: "square.stack", value: limits.atOnce, choices: [1, 2, 3, 5, 8], words: { "\($0)" }) { $0.atOnce = $1 }
-                WellDivider()
-                row("New sessions a day", symbol: "calendar", value: limits.perDay, choices: [3, 5, 10, 20, 50], words: { "\($0)" }) { $0.perDay = $1 }
-                WellDivider()
-                row("Sessions they start", symbol: "arrow.turn.down.right", value: limits.depth, choices: [1, 2, 3],
-                    words: { $0 == 1 ? "None" : $0 == 2 ? "One level" : "Two levels" }) { $0.depth = $1 }
-                WellDivider()
-                row("Tokens a day", symbol: "gauge.with.dots.needle.33percent", value: limits.tokensPerDay, choices: [250_000, 1_000_000, 5_000_000, 20_000_000], words: { WorkWords.tokens($0) }) { $0.tokensPerDay = $1 }
+            if app.botWork.runsWork(bot) {
+                WellGroup {
+                    row("Sessions at once", symbol: "square.stack", value: limits.atOnce, choices: [1, 2, 3, 5, 8], words: { "\($0)" }) { $0.atOnce = $1 }
+                    WellDivider()
+                    row("New sessions a day", symbol: "calendar", value: limits.perDay, choices: [3, 5, 10, 20, 50], words: { "\($0)" }) { $0.perDay = $1 }
+                    WellDivider()
+                    row("Sessions they start", symbol: "arrow.turn.down.right", value: limits.depth, choices: [1, 2, 3], words: WorkWords.depth) { $0.depth = $1 }
+                    WellDivider()
+                    row("Tokens a day", symbol: "gauge.with.dots.needle.33percent", value: limits.tokensPerDay, choices: [250_000, 1_000_000, 5_000_000, 20_000_000], words: { WorkWords.tokens($0) }) { $0.tokensPerDay = $1 }
+                }
+                .disabled(isSaving)
+            } else {
+                Text("\(bot.machine.map { app.machines.engine($0)?.machine.name ?? $0 } ?? "This Mac") needs a newer Kuvo Code for \(bot.name) to run sessions.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
-            .disabled(isSaving)
             if let failure {
                 Text(failure)
                     .font(.callout)
@@ -1106,6 +1112,7 @@ struct BotWorkLimits: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        // Whether its box runs its work (one from before doesn't).
         .task { await app.botWork.read(bot) }
     }
 

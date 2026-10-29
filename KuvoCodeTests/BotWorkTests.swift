@@ -1,5 +1,6 @@
 import ClientSessions
 import Foundation
+import KuvoLink
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -46,6 +47,7 @@ import Testing
             "metadata": ["kuvo": ["startedBy": "ses_pixel", "by": ["bot": "bot_pixel00001", "name": "Pixel"], "depth": 1, "answers": [answer]]],
         ])
         engine.list([StubEngine.session("ses_pixel", title: "Pixel", directory: folder.appending(path: "workspace").path), signIn], running: ["ses_signin"])
+        engine.on("GET", "/api/session/ses_signin", json: ["data": signIn])
         engine.on("GET", "/api/session/ses_signin/permission", json: ["data": []])
         engine.on("GET", "/api/session/ses_signin/form", json: ["data": []])
         engine.on("PATCH", "/api/session/*", json: ["data": [:]])
@@ -66,7 +68,7 @@ import Testing
         await app.botWork.read(pixel)
         let report = try #require(app.botWork.reports[pixel.id])
         #expect(report.atWork.map(\.title) == ["Sign-in"])
-        #expect(BotWorkBar.title(report.atWork.count) == "At work: 1 session")
+        #expect(BotWorkBar.title(report) == "A session is at work")
         #expect(BotWorkBar.progress(report) == "answered 1 ask")
         let answer = try #require(report.answered.first)
         #expect(answer.verdict == "Allowed by Pixel" && answer.reason == "The plan runs the tests." && answer.session == "ses_signin")
@@ -78,10 +80,35 @@ import Testing
         let pixel = try #require(app.bots.bot("bot_pixel00001"))
         try await app.botWork.setLimits(WorkLimits(atOnce: 2, tokensPerDay: 1_000_000), for: pixel)
         #expect(app.botWork.reports[pixel.id]?.limits == WorkLimits(atOnce: 2, tokensPerDay: 1_000_000))
+        // Edit Bot's menus start from the bot as its box lists it, so the next pick keeps these.
+        #expect(app.bots.bot(pixel.id)?.limits == WorkLimits(atOnce: 2, tokensPerDay: 1_000_000))
         let kept = try JSONSerialization.jsonObject(with: Data(contentsOf: machine.folder.appending(path: "bots/bot_pixel00001/bot.json"))) as? [String: Any]
         #expect((kept?["work"] as? [String: Any])?["limits"] as? [String: Int] == ["atOnce": 2, "tokensPerDay": 1_000_000])
         #expect(kept?["name"] as? String == "Pixel", "the rest of its description kept")
         try await app.botWork.setLimits(nil, for: pixel)
         #expect(app.botWork.reports[pixel.id]?.limits == nil)
+        #expect(app.bots.bot(pixel.id)?.limits == nil)
+    }
+
+    @Test func oneOfItsSessionsStopsFromTheBar() async throws {
+        let machine = try await lab()
+        defer { done(machine) }
+        engine.on("GET", "/api/session/ses_signin/inbox", json: ["data": []])
+        engine.on("POST", "/api/session/ses_signin/interrupt", json: [:])
+        let pixel = try #require(app.bots.bot("bot_pixel00001"))
+        try await app.botWork.stop("ses_signin", of: pixel)
+        #expect(engine.requests("POST", "/api/session/ses_signin/interrupt").count == 1)
+    }
+
+    @Test func aBotOnABoxFromBeforeSaysItCantRunSessionsThere() async throws {
+        let machine = try await lab()
+        defer { done(machine) }
+        let pixel = try #require(app.bots.bot("bot_pixel00001"))
+        // An older box: no such route, and it says nothing.
+        app.botWork.boxes = { box in BoxClient(box: box, transport: LocalBox { _ in AsyncThrowingStream { $0.yield(.head(status: 404, headers: [:])); $0.yield(.body(Data("{}".utf8))); $0.finish() } }) }
+        #expect(app.botWork.runsWork(pixel))
+        await app.botWork.read(pixel)
+        #expect(!app.botWork.runsWork(pixel))
+        #expect(app.botWork.reports[pixel.id] == nil)
     }
 }

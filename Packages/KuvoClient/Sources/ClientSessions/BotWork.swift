@@ -159,6 +159,31 @@ public enum WorkWords {
         return what
     }
 
+    /// A bar's line over a bot's composer: "3 sessions at work", or, with none at work, how many
+    /// it started today.
+    public static func barTitle(atWork: Int, today: Int) -> String {
+        if atWork == 1 { return "A session is at work" }
+        if atWork > 1 { return "\(atWork) sessions at work" }
+        return today == 1 ? "1 session today, none at work" : "\(today) sessions today, none at work"
+    }
+
+    /// The depth limit, as Edit Bot › Work and the work list both say it: how deep the sessions a
+    /// bot starts may start their own.
+    public static func depth(_ depth: Int) -> String {
+        switch depth {
+        case ...1: "None"
+        case 2: "One level"
+        default: "\(depth - 1) levels"
+        }
+    }
+
+    /// The limits you set, in a line, for the work list.
+    public static func limits(_ limits: WorkLimits) -> String {
+        let parts = [limits.atOnce.map { "\($0) at once" }, limits.perDay.map { "\($0) a day" },
+                     limits.depth.map { "sessions they start: \(depth($0).lowercased())" }, limits.tokensPerDay.map { "\(tokens($0)) tokens a day" }].compactMap { $0 }
+        return "Your limits: " + parts.joined(separator: ", ") + " (Edit Bot › Work)"
+    }
+
     /// A count of tokens, short: "412k", "1.2M".
     public static func tokens(_ count: Int) -> String {
         switch count {

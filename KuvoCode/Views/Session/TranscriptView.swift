@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSessions
 import ClientText
 import OpenCodeKit
 import SwiftUI
@@ -69,6 +70,8 @@ struct TranscriptView: View {
         // What a widget writes back goes to this conversation's agent, as yours: as words, never
         // a command or keyword the page could run as you, and without your review comments.
         .environment(\.answerAgent) { text in model.send(text, for: nil, withComments: false) }
+        // What the bot that runs it answered for it, on the steps that asked (a subagent's too).
+        .environment(\.workAnswers, WorkAnswer.byCall(model.session))
         .overlay {
             if model.isLoaded && rows.isEmpty {
                 EmptyConversationView(directory: model.session.location.directory) { text in

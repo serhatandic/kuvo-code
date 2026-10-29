@@ -44,6 +44,11 @@ struct BotWorkTests {
         #expect(WorkWords.atWork(count: 2, projects: []) == "At work: 2 sessions")
         #expect(WorkWords.asking("Wants to run a command: npx expo install expo-haptics") == "Asks to run npx expo install expo-haptics")
         #expect(WorkWords.asking("Wants to work outside the project.") == "Asks to work outside the project.")
+        #expect(WorkWords.barTitle(atWork: 3, today: 5) == "3 sessions at work")
+        #expect(WorkWords.barTitle(atWork: 1, today: 1) == "A session is at work")
+        #expect(WorkWords.barTitle(atWork: 0, today: 5) == "5 sessions today, none at work")
+        #expect(WorkWords.limits(WorkLimits(atOnce: 2, depth: 1)) == "Your limits: 2 at once, sessions they start: none (Edit Bot › Work)")
+        #expect(WorkWords.depth(3) == "2 levels")
         #expect(WorkWords.tokens(412_300) == "412k")
         #expect(WorkWords.tokens(1_250_000) == "1.2M")
     }
