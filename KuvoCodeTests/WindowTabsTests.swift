@@ -404,6 +404,32 @@ import Testing
         #expect(!next.showsPanel, "what a version that kept less didn't keep is as it starts")
     }
 
+    /// Two new sessions written at once, and a terminal tab: what you open in the panel beside
+    /// one stays beside it, and a terminal tab's panel closes with the tab.
+    @Test func eachNewSessionAndTerminalTabHasAPanelOfItsOwn() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "KuvoCodeTests-panels-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        defer { done(); try? FileManager.default.removeItem(atPath: folder) }
+        let notes = URL(filePath: folder + "/a/notes.md"), log = URL(filePath: folder + "/build.log")
+        tabs.newSession(in: folder + "/a", conversation: true)
+        panelFollows()
+        app.utilities.open(notes)
+        tabs.newSession(in: folder + "/b", conversation: true)
+        panelFollows()
+        #expect(!app.utilities.visibleTabs.contains { $0.kind == .file(notes) }, "the other new session's file stays beside it")
+        tabs.openTerminalTab(command: nil, in: folder)
+        let terminal = try #require(tabs.selection)
+        panelFollows()
+        #expect(!app.utilities.visibleTabs.contains { $0.kind == .file(notes) })
+        app.utilities.open(log)
+        tabs.close(terminal)
+        panelFollows()
+        #expect(!app.utilities.tabs.contains { $0.kind == .file(log) }, "its panel closed with it")
+        tabs.open(.draft(folder + "/a"))
+        panelFollows()
+        #expect(app.utilities.visibleTabs.contains { $0.kind == .file(notes) }, "back to the first, its file is there")
+    }
+
     /// Text selected in a terminal tab of the window, Add to Message from its right-click menu: a
     /// new session in the terminal's folder, with the text in its message.
     @Test func addToMessageInATerminalTabStartsASessionWithTheSelection() throws {
