@@ -192,8 +192,8 @@ struct GoalLanes: View {
     /// Narrower than this, the words beside the lanes go (VoiceOver and the pointer still have them).
     static let wordsFrom: CGFloat = 520
 
-    /// How wide the lanes are, as last measured.
-    @State private var total: CGFloat = 0
+    /// Scrolled by you (or to the deadline): resizing keeps where it is.
+    @State private var moved = false
 
     static func height(_ row: Row) -> CGFloat {
         if case .phase = row { return phaseHeight }
@@ -210,14 +210,42 @@ struct GoalLanes: View {
         // A long goal's deadline has its chip; its finish, its line here.
         let footer = timeline.finish != nil || (window == nil && timeline.deadline != nil)
         let lanesHeight = rows.reduce(0) { $0 + Self.height($1) }
+        // Only the days around now scroll; a goal shown whole fits.
+        let height = Self.headerHeight + lanesHeight + (footer ? Self.footerHeight : 0) + (window != nil ? Self.scrollRoom : 0)
+        let chip = window != nil && timeline.deadline != nil
+        // As wide as the room, measured in the same pass, so it opens where it should.
+        GeometryReader { measured in
+            lanes(timeline, window: window, long: long, rows: rows, footer: footer, lanesHeight: lanesHeight, height: height, total: measured.size.width)
+        }
+        .frame(height: height + (chip ? Self.chipHeight + 2 : 0))
+        .font(.system(size: 13))
+        // Pinch, or ⌘-scroll, for the whole goal and back.
+        .gesture(MagnifyGesture().onEnded { value in
+            guard long else { return }
+            if value.magnification < 0.9, !zoomedOut { withAnimation(.ui) { zoomedOut = true } }
+            if value.magnification > 1.1, zoomedOut { withAnimation(.ui) { zoomedOut = false } }
+        })
+        .onHover { zoomKeys.hovering = $0 }
+        .onChange(of: long, initial: true) { _, isLong in
+            if isLong { zoomKeys.start($zoomedOut) } else { zoomKeys.stop() }
+        }
+        .onDisappear { zoomKeys.stop() }
+        .accessibilityElement(children: .contain)
+        .accessibilityActions {
+            if long {
+                Button(zoomedOut ? "Show the Days Around Today" : "Show the Whole Goal") { zoomedOut.toggle() }
+            }
+        }
+    }
+
+    private func lanes(_ timeline: GoalTimeline, window: DateInterval?, long: Bool, rows: [Row], footer: Bool, lanesHeight: CGFloat, height: CGFloat, total: CGFloat) -> some View {
         let showsWords = total >= Self.wordsFrom
         let nameWidth: CGFloat = total < 420 ? 84 : 112
         let room = max(40, total - nameWidth - 12 - (showsWords ? Self.wordsWidth + 12 : 0))
         let width = Self.width(timeline, window: window, room: room)
         let x = AxisX(timeline: timeline, width: width)
         let scrolls = width > room + 1
-        let height = Self.headerHeight + lanesHeight + (footer ? Self.footerHeight : 0) + (scrolls ? Self.scrollRoom : 0)
-        VStack(alignment: .trailing, spacing: 2) {
+        return VStack(alignment: .trailing, spacing: 2) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 0) {
                     Color.clear.frame(height: Self.headerHeight)
@@ -234,12 +262,17 @@ struct GoalLanes: View {
                 }
                 .scrollDisabled(!scrolls)
                 .onScrollGeometryChange(for: CGRect.self, of: { $0.visibleRect }) { _, rect in visible = rect }
-                // Opens on the days around now, once it's measured (and back there from the whole
-                // goal); not again as the window's resized.
-                .task(id: "\(zoomedOut)|\(total > 0)") {
-                    guard let window, total > 0 else { return position.scrollTo(edge: .leading) }
+                // Opens on the days around now (and back there from the whole goal), and keeps
+                // them in view as the window's resized, until you scroll it yourself.
+                .onScrollPhaseChange { _, phase in
+                    if phase == .interacting { moved = true }
+                }
+                .task(id: "\(zoomedOut)|\(Int(width))") {
+                    guard let window else { return position.scrollTo(edge: .leading) }
+                    guard !moved else { return }
                     position.scrollTo(x: max(0, x(window.start)))
                 }
+                .onChange(of: zoomedOut) { moved = false }
                 .frame(width: room, height: height)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(summary(timeline))
@@ -260,26 +293,7 @@ struct GoalLanes: View {
                     .frame(height: Self.chipHeight)
             }
         }
-        .font(.system(size: 13))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { total = $0 }
-        // Pinch, or ⌘-scroll, for the whole goal and back.
-        .gesture(MagnifyGesture().onEnded { value in
-            guard long else { return }
-            if value.magnification < 0.9, !zoomedOut { withAnimation(.ui) { zoomedOut = true } }
-            if value.magnification > 1.1, zoomedOut { withAnimation(.ui) { zoomedOut = false } }
-        })
-        .onHover { zoomKeys.hovering = $0 }
-        .onChange(of: long, initial: true) { _, isLong in
-            if isLong { zoomKeys.start($zoomedOut) } else { zoomKeys.stop() }
-        }
-        .onDisappear { zoomKeys.stop() }
-        .accessibilityElement(children: .contain)
-        .accessibilityActions {
-            if long {
-                Button(zoomedOut ? "Show the Days Around Today" : "Show the Whole Goal") { zoomedOut.toggle() }
-            }
-        }
     }
 
     /// The axis as VoiceOver reads it: now, the finish and the deadline (each lane reads itself).
@@ -691,6 +705,7 @@ struct GoalLanes: View {
         if visible.width > 0, !(visible.minX...visible.maxX).contains(x(deadline)) {
             let later = x(deadline) > visible.maxX
             Button {
+                moved = true
                 withAnimation(.ui) { position.scrollTo(x: max(0, x(deadline) - visible.width * (later ? 0.8 : 0.2))) }
             } label: {
                 HStack(spacing: 4) {
