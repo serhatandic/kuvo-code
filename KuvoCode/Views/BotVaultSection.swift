@@ -63,19 +63,23 @@ struct BotVaultSection: View {
                     }
                 }
                 if !others.isEmpty {
-                    Menu {
-                        ForEach(others) { item in
-                            Button(item.name) { grant(item, .own) }
+                    WellDivider()
+                    HStack {
+                        Menu {
+                            ForEach(others) { item in
+                                Button(item.name) { grant(item, .own) }
+                            }
+                        } label: {
+                            Label("Let It Use…", systemImage: "plus")
                         }
-                    } label: {
-                        WellRow { Image(systemName: "plus") } content: {
-                            Text("Let It Use…").foregroundStyle(.tint)
-                        }
-                        .contentShape(.rect)
+                        .menuStyle(.button)
+                        .buttonStyle(TextButtonStyle(outset: true))
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        Spacer()
                     }
-                    .menuStyle(.button)
-                    .buttonStyle(WellRowButtonStyle())
-                    .menuIndicator(.hidden)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
                 }
             }
             if !recent.isEmpty {
