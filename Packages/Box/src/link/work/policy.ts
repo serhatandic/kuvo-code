@@ -6,6 +6,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { gitIn } from "../git";
 import { homeFolder, K } from "../home";
 import type { KitRule } from "../bots/kit";
 
@@ -111,54 +112,86 @@ interface Place {
   folders: readonly string[];
 }
 
-// A path as the file system has it: `~` taken as the home folder, from where the command runs,
-// every link followed as far as there's something there (what doesn't exist yet, under its
-// parent's real place).
-function realPath(target: string, cwd: string): string {
-  let full = path.resolve(cwd, target.replace(/^~(?=$|\/)/, homeFolder()));
-  const rest: string[] = [];
-  for (let step = 0; step < 64; step++) {
-    try {
-      return path.join(fs.realpathSync(full), ...rest);
-    } catch {
-      const parent = path.dirname(full);
-      if (parent === full) break;
-      rest.unshift(path.basename(full));
-      full = parent;
-    }
-  }
-  return path.join(full, ...rest);
-}
 const under = (full: string, folder: string) => full.startsWith(folder.endsWith("/") ? folder : folder + "/");
+const realOf = (folder: string) => {
+  try {
+    return fs.realpathSync(folder);
+  } catch {
+    return path.resolve(folder);
+  }
+};
 
 // Where your keys and sign-ins are: never a bot's to let a session read or change, wherever its
 // folder is.
 function isSecret(full: string): boolean {
-  const home = realPath(homeFolder(), "/");
-  const kuvo = realPath(K, "/");
+  const home = realOf(homeFolder()).toLowerCase();
+  const kuvo = realOf(K).toLowerCase();
   const secrets = [path.join(kuvo, "keys"), path.join(kuvo, "box"), path.join(kuvo, "run"), path.join(kuvo, "agents"), path.join(kuvo, "integrations"),
-    ...[".ssh", ".aws", ".gnupg", ".kube", ".docker", ".config", ".netrc", ".git-credentials", ".npmrc", ".pypirc", "Library/Keychains", ".claude", ".codex", ".grok"].map(name => path.join(home, name))];
-  return secrets.some(secret => full === secret || under(full, secret));
+    ...[".ssh", ".aws", ".gnupg", ".kube", ".docker", ".config", ".netrc", ".git-credentials", ".npmrc", ".pypirc", "library/keychains", ".claude", ".codex", ".grok"].map(name => path.join(home, name))];
+  const lower = full.toLowerCase();
+  return secrets.some(secret => lower === secret || under(lower, secret));
 }
 
-// Files whose contents a later command runs or reads as settings: git's own (a repository's
-// `config`, `HEAD`, hooks, wherever they are, as a bare one makes them), hooks, package and build
-// settings, tools' configs, editors' tasks, what's installed. A change to one is the user's to allow.
-const RUNS_LATER = new RegExp([
-  "(^|/)(\\.git|\\.husky|\\.githooks|node_modules|\\.cargo|\\.vscode|\\.idea|\\.github|hooks|refs|objects|info)(/|$)",
-  "(^|/)(config|HEAD|packed-refs|commondir|gitdir|\\.gitattributes|\\.gitmodules|\\.npmrc|\\.yarnrc(\\.yml)?|\\.pnpmfile\\.cjs|package\\.json|bunfig\\.toml|Makefile|makefile|GNUmakefile|[^/]+\\.mk|build\\.rs|conftest\\.py|setup\\.py|setup\\.cfg|pyproject\\.toml|tox\\.ini|pytest\\.ini|[^/]+\\.pth|Package\\.swift|project\\.pbxproj|[^/]+\\.xcconfig|Podfile|Gemfile|Rakefile|[^/]+\\.gradle(\\.kts)?|lefthook\\.ya?ml|\\.pre-commit-config\\.yaml|\\.envrc|\\.eslintrc[^/]*|\\.babelrc[^/]*|\\.prettierrc[^/]*|[^/]+\\.config\\.[cm]?[jt]sx?|[^/]+rc\\.[cm]?js|Dockerfile|docker-compose\\.ya?ml)$",
-].join("|"));
+/** A path inside the session's folders as its parts below one of them, each a plain name, none a
+ * link: or why it isn't one. Written plainly (letters, digits, `.`, `_`, `-`, `/`), never `..`,
+ * never a part starting with `.` (git's, settings, `.env`), never through a link (a link may lead
+ * anywhere, and `..` after one goes where the link leads). Compared without case, as macOS does. */
+function partsInside(target: string, place: Place): { folder: string; parts: string[] } | { refused: string } {
+  if (!/^[A-Za-z0-9._/-]+$/.test(target)) return { refused: "a path it can't read plainly" };
+  const folders = place.folders.map(realOf);
+  // Written in full: from one of the folders (as named, or as its real place).
+  let folder: string | undefined, rest: string;
+  if (target.startsWith("/")) {
+    const named = [...place.folders.map(each => path.resolve(each)), ...folders];
+    const from = named.find(each => target === each || under(target, each));
+    if (!from) return { refused: "reading outside the project" };
+    folder = folders[named.indexOf(from) % folders.length] ?? realOf(from);
+    rest = target.slice(from.length);
+  } else {
+    folder = realOf(place.cwd);
+    rest = target;
+  }
+  const parts = rest.split("/").filter(part => part && part !== ".");
+  if (parts.some(part => part === ".." || part.startsWith("."))) return { refused: "a hidden or parent path" };
+  let at = folder;
+  for (const part of parts) {
+    at = path.join(at, part);
+    let link = false;
+    try { link = fs.lstatSync(at).isSymbolicLink(); } catch { break; }
+    if (link) return { refused: "a path through a link" };
+  }
+  if (isSecret(path.join(folder, ...parts))) return { refused: "your keys and sign-ins" };
+  return { folder, parts };
+}
 
-/** Why `target` can't be read (`read`) or changed (`write`) by what a bot allows, or null: a literal
- * path inside the session's folders by its real place, never your keys, nor (to change) a file a
- * later command runs or reads as settings. */
-export function pathRefusal(target: string, place: Place, use: "read" | "write"): string | null {
-  if (/[*?[\]]/.test(target)) return "a pattern of files it can't see";
-  const full = realPath(target, place.cwd);
-  if (isSecret(full)) return "your keys and sign-ins";
-  const folders = place.folders.map(folder => realPath(folder, "/"));
-  if (!folders.some(folder => under(full, folder) || full === folder)) return use === "read" ? "reading outside the project" : "changing files outside the project";
-  if (use === "write" && RUNS_LATER.test(full)) return "changing a file that later commands run";
+/** Why `target` can't be read by a command a bot allows, or null. */
+export function readRefusal(target: string, place: Place): string | null {
+  const inside = partsInside(target, place);
+  return "refused" in inside ? inside.refused : null;
+}
+
+// What a bot may let a session write, before fencing: source and text files, by their extension,
+// none of them a file a later command runs or reads as settings. Anything else is the user's.
+const EDITABLE = new Set(["ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "go", "rs", "swift", "kt", "kts", "java", "scala", "c", "h", "cc", "cpp", "hpp", "m", "mm", "cs", "php",
+  "dart", "lua", "ex", "exs", "erl", "hs", "ml", "clj", "css", "scss", "sass", "less", "html", "htm", "vue", "svelte", "astro", "md", "mdx", "txt", "rst", "json", "yaml", "yml",
+  "csv", "tsv", "sql", "graphql", "gql", "svg", "xcstrings", "strings"]);
+const PROTECTED_NAMES = new Set(["package.json", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "pnpm-workspace.yaml", "bun.lock", "tsconfig.json", "jsconfig.json",
+  "opencode.json", "opencode.jsonc", "composer.json", "deno.json", "deno.jsonc", "app.json", "eas.json", "firebase.json", "vercel.json", "turbo.json", "nx.json", "lerna.json", "angular.json",
+  "project.json", "workspace.json", "renovate.json", "nodemon.json", "devcontainer.json", "cmakelists.txt", "requirements.txt", "constraints.txt", "build.rs", "conftest.py", "setup.py",
+  "manage.py", "noxfile.py", "fabfile.py", "tasks.py", "dodo.py", "package.swift", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml", "taskfile.yml", "taskfile.yaml",
+  "azure-pipelines.yml", "bitbucket-pipelines.yml", "appveyor.yml", "mkdocs.yml", "pubspec.yaml", "codemagic.yaml", "bitrise.yml", "lefthook.yml", "lefthook.yaml", "dangerfile.swift"]);
+const PROTECTED_PATTERN = /(^|\.)(config|conf|workspace|setup|rc)\.|^(gulpfile|gruntfile|jakefile|dangerfile|fastfile|appfile|matchfile|pluginfile|webpack|vite|rollup|esbuild|tsup|metro|babel|jest|vitest|karma|playwright|cypress|next|nuxt|astro|svelte|remix|tailwind|postcss|eslint|prettier|stylelint|commitlint|lint-staged|release|mocha|nodemon|pm2|ecosystem|wrangler|vercel|netlify|serverless)\b/;
+const PROTECTED_FOLDERS = new Set(["node_modules", "hooks", "refs", "objects", "info", "fastlane", "gradle", "buildsrc"]);
+
+/** Why a bot can't let a session write `target` (making it, or changing it), or null. */
+export function editRefusal(target: string, place: Place): string | null {
+  const inside = partsInside(target, place);
+  if ("refused" in inside) return inside.refused === "reading outside the project" ? "changing files outside the project" : inside.refused;
+  const { parts } = inside;
+  const name = (parts[parts.length - 1] ?? "").toLowerCase();
+  const extension = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
+  if (!EDITABLE.has(extension)) return "a kind of file it can't tell is safe to change";
+  if (PROTECTED_NAMES.has(name) || PROTECTED_PATTERN.test(name) || parts.slice(0, -1).some(part => PROTECTED_FOLDERS.has(part.toLowerCase()))) return "changing a file that later commands run";
   return null;
 }
 
@@ -201,7 +234,7 @@ function checkSpec(spec: Spec, words: string[], place: Place): string | null {
       return CANT;
     }
     if (spec.rest === "read") {
-      const why = pathRefusal(word, place, "read");
+      const why = readRefusal(word, place);
       if (why) return why;
     } else if (spec.rest === "revisions") {
       if (!/^[A-Za-z0-9._/~^-]+$/.test(word) || word.includes("..")) return CANT;
@@ -220,15 +253,19 @@ function checkSpec(spec: Spec, words: string[], place: Place): string | null {
  * besides. Reading a command can't be made airtight, so everything else goes to the user until
  * the session is fenced. */
 export function commandRefusal(line: string, folders: readonly string[]): string | null {
+  // What a shell would split on, or take apart, beyond a space: never.
+  if (!/^[\x20-\x7E]*$/.test(line)) return `${CANT} (a character it can't read plainly)`;
   const read = readLine(line);
   if ("unreadable" in read) return `${CANT} (${read.unreadable})`;
   if (!read.parts.length || !folders.length) return CANT;
-  const place: Place = { cwd: realPath(folders[0], "/"), folders };
+  const place: Place = { cwd: realOf(folders[0]), folders };
   for (const part of read.parts) {
     const [program, ...rest] = part.words;
     if (!program || program.includes("=")) return CANT;
     if (program === "git") {
       if (rest[0] === "push") return "pushing";
+      // Only the session folder's own repository: never one above it (a parent's, your home's).
+      if (gitIn(place.cwd, ["rev-parse", "--show-toplevel"]) !== place.cwd) return "a repository that isn't the project's own";
       const spec = GIT[rest[0] ?? ""];
       const why = spec ? checkSpec(spec, rest.slice(1), place) : CANT;
       if (why) return why;
@@ -262,10 +299,10 @@ const EDITS = new Set(["edit", "write", "patch", "multiedit"]);
 /** Why a bot can't allow what's asked (`action` on `resources`), within its `rules` (`rulesOf`),
  * for a session working in `folders`; null when it may.
  *
- * Before fencing (phase 5), a bot answers only two kinds of ask: an edit to files inside the
- * session's folder (by their real place, never your keys nor a file a later command runs or reads
- * as settings), and the few commands `commandRefusal` reads as safe. Everything else, reading
- * included, goes to the user. */
+ * Before fencing (phase 5), a bot answers only two kinds of ask: making or changing a source or text
+ * file inside the session's folder (`editRefusal`: by extension, never a hidden path, a link, nor a
+ * file a later command runs or reads as settings), and the few commands `commandRefusal` reads as
+ * safe. Everything else, reading included, goes to the user. */
 export function allowRefusal(action: string, resources: readonly string[], folders: readonly string[], rules: readonly KitRule[], ruleFor: (rules: readonly KitRule[], action: string, resource: string) => KitRule["effect"]): string | null {
   const asked = resources.length ? resources : ["*"];
   if (action === "shell" || action === "bash") {
@@ -279,9 +316,9 @@ export function allowRefusal(action: string, resources: readonly string[], folde
   }
   if (!EDITS.has(action)) return action === "external_directory" ? "working outside the project" : "a tool it can't tell is safe";
   if (!folders.length) return "changing files outside the project";
-  const place: Place = { cwd: realPath(folders[0], "/"), folders };
+  const place: Place = { cwd: realOf(folders[0]), folders };
   for (const resource of asked) {
-    const why = pathRefusal(resource, place, "write");
+    const why = editRefusal(resource, place);
     if (why) return why;
   }
   return asked.every(resource => ruleFor(rules, action, resource) === "allow") ? null : "above";

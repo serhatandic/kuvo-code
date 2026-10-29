@@ -579,15 +579,16 @@ client shows it from the same routes.
   airtight, so until sessions are fenced (phase 5) a bot answers only two kinds of ask, and only
   where it could go ahead itself, part by part (the engine's rules for its own conversation allow
   each: the engine's defaults, Settings › Permissions, then the conversation's own):
-  - An edit to files inside the session's folder (its project's other folders too), by their
-    real place with links followed: never your keys and sign-ins (`~/.kuvo-code`'s keys and run
-    state, `~/.ssh`, `~/.config`, the Keychain…), and never a file a later command runs or reads as
-    settings (anything of git's, wherever it is, as a bare repository makes it: `config`, `HEAD`,
-    hooks; `.husky`, `node_modules`, `.vscode`, `package.json`, `Makefile`, tools' configs…).
-  - A few commands that read: `ls`, `cat`, `head`, `tail`, `wc`, and `git status`, `diff` and `log`,
-    each with a few options and none that write, read settings or run anything; every part of the
-    line one of those, with literal paths inside the folder. No redirects, patterns of files,
-    settings before it, `cd`, nor anything a shell expands or runs besides.
+  - Making or changing a source or text file inside the session's folder (its project's other
+    folders too): only by its extension from a known list (code, styles, Markdown, data), its path
+    written plainly (letters, digits, `.`, `_`, `-`, `/`), no part hidden (starting with `.`), no
+    `..`, nothing reached through a link, never a name a later command runs or reads as settings
+    (`package.json`, `tsconfig.json`, `opencode.json`, `*.config.*`, `build.rs`, `Package.swift`…,
+    compared without case, as macOS does), never your keys and sign-ins.
+  - A few commands that read: `ls`, `cat`, `head`, `tail`, `wc`, and `git status`, `diff` and `log`
+    (only where the folder is its repository's own top level), each with a few options; the line
+    printable ASCII, every part one of those, paths written plainly as above. No redirects,
+    patterns of files, settings before it, `cd`, nor anything a shell expands or runs besides.
   - Everything else goes to the user: reading through the engine, building, testing, installing,
     changing files from the shell, git that changes anything, fetching, integrations' tools. It may
     always deny, with its reason passed on.

@@ -12135,50 +12135,194 @@ function readLine(line) {
     return no("a part it can't read");
   return { parts };
 }
-function realPath(target, cwd) {
-  let full = path55.resolve(cwd, target.replace(/^~(?=$|\/)/, homeFolder()));
-  const rest = [];
-  for (let step = 0;step < 64; step++) {
-    try {
-      return path55.join(fs55.realpathSync(full), ...rest);
-    } catch {
-      const parent = path55.dirname(full);
-      if (parent === full)
-        break;
-      rest.unshift(path55.basename(full));
-      full = parent;
-    }
-  }
-  return path55.join(full, ...rest);
-}
 var under2 = (full, folder) => full.startsWith(folder.endsWith("/") ? folder : folder + "/");
+var realOf = (folder) => {
+  try {
+    return fs55.realpathSync(folder);
+  } catch {
+    return path55.resolve(folder);
+  }
+};
 function isSecret(full) {
-  const home = realPath(homeFolder(), "/");
-  const kuvo = realPath(K, "/");
+  const home = realOf(homeFolder()).toLowerCase();
+  const kuvo = realOf(K).toLowerCase();
   const secrets = [
     path55.join(kuvo, "keys"),
     path55.join(kuvo, "box"),
     path55.join(kuvo, "run"),
     path55.join(kuvo, "agents"),
     path55.join(kuvo, "integrations"),
-    ...[".ssh", ".aws", ".gnupg", ".kube", ".docker", ".config", ".netrc", ".git-credentials", ".npmrc", ".pypirc", "Library/Keychains", ".claude", ".codex", ".grok"].map((name) => path55.join(home, name))
+    ...[".ssh", ".aws", ".gnupg", ".kube", ".docker", ".config", ".netrc", ".git-credentials", ".npmrc", ".pypirc", "library/keychains", ".claude", ".codex", ".grok"].map((name) => path55.join(home, name))
   ];
-  return secrets.some((secret) => full === secret || under2(full, secret));
+  const lower = full.toLowerCase();
+  return secrets.some((secret) => lower === secret || under2(lower, secret));
 }
-var RUNS_LATER = new RegExp([
-  "(^|/)(\\.git|\\.husky|\\.githooks|node_modules|\\.cargo|\\.vscode|\\.idea|\\.github|hooks|refs|objects|info)(/|$)",
-  "(^|/)(config|HEAD|packed-refs|commondir|gitdir|\\.gitattributes|\\.gitmodules|\\.npmrc|\\.yarnrc(\\.yml)?|\\.pnpmfile\\.cjs|package\\.json|bunfig\\.toml|Makefile|makefile|GNUmakefile|[^/]+\\.mk|build\\.rs|conftest\\.py|setup\\.py|setup\\.cfg|pyproject\\.toml|tox\\.ini|pytest\\.ini|[^/]+\\.pth|Package\\.swift|project\\.pbxproj|[^/]+\\.xcconfig|Podfile|Gemfile|Rakefile|[^/]+\\.gradle(\\.kts)?|lefthook\\.ya?ml|\\.pre-commit-config\\.yaml|\\.envrc|\\.eslintrc[^/]*|\\.babelrc[^/]*|\\.prettierrc[^/]*|[^/]+\\.config\\.[cm]?[jt]sx?|[^/]+rc\\.[cm]?js|Dockerfile|docker-compose\\.ya?ml)$"
-].join("|"));
-function pathRefusal(target, place, use) {
-  if (/[*?[\]]/.test(target))
-    return "a pattern of files it can't see";
-  const full = realPath(target, place.cwd);
-  if (isSecret(full))
-    return "your keys and sign-ins";
-  const folders = place.folders.map((folder) => realPath(folder, "/"));
-  if (!folders.some((folder) => under2(full, folder) || full === folder))
-    return use === "read" ? "reading outside the project" : "changing files outside the project";
-  if (use === "write" && RUNS_LATER.test(full))
+function partsInside(target, place) {
+  if (!/^[A-Za-z0-9._/-]+$/.test(target))
+    return { refused: "a path it can't read plainly" };
+  const folders = place.folders.map(realOf);
+  let folder, rest;
+  if (target.startsWith("/")) {
+    const named = [...place.folders.map((each) => path55.resolve(each)), ...folders];
+    const from = named.find((each) => target === each || under2(target, each));
+    if (!from)
+      return { refused: "reading outside the project" };
+    folder = folders[named.indexOf(from) % folders.length] ?? realOf(from);
+    rest = target.slice(from.length);
+  } else {
+    folder = realOf(place.cwd);
+    rest = target;
+  }
+  const parts = rest.split("/").filter((part) => part && part !== ".");
+  if (parts.some((part) => part === ".." || part.startsWith(".")))
+    return { refused: "a hidden or parent path" };
+  let at = folder;
+  for (const part of parts) {
+    at = path55.join(at, part);
+    let link = false;
+    try {
+      link = fs55.lstatSync(at).isSymbolicLink();
+    } catch {
+      break;
+    }
+    if (link)
+      return { refused: "a path through a link" };
+  }
+  if (isSecret(path55.join(folder, ...parts)))
+    return { refused: "your keys and sign-ins" };
+  return { folder, parts };
+}
+function readRefusal(target, place) {
+  const inside = partsInside(target, place);
+  return "refused" in inside ? inside.refused : null;
+}
+var EDITABLE = new Set([
+  "ts",
+  "tsx",
+  "js",
+  "jsx",
+  "mjs",
+  "cjs",
+  "py",
+  "rb",
+  "go",
+  "rs",
+  "swift",
+  "kt",
+  "kts",
+  "java",
+  "scala",
+  "c",
+  "h",
+  "cc",
+  "cpp",
+  "hpp",
+  "m",
+  "mm",
+  "cs",
+  "php",
+  "dart",
+  "lua",
+  "ex",
+  "exs",
+  "erl",
+  "hs",
+  "ml",
+  "clj",
+  "css",
+  "scss",
+  "sass",
+  "less",
+  "html",
+  "htm",
+  "vue",
+  "svelte",
+  "astro",
+  "md",
+  "mdx",
+  "txt",
+  "rst",
+  "json",
+  "yaml",
+  "yml",
+  "csv",
+  "tsv",
+  "sql",
+  "graphql",
+  "gql",
+  "svg",
+  "xcstrings",
+  "strings"
+]);
+var PROTECTED_NAMES = new Set([
+  "package.json",
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "bun.lock",
+  "tsconfig.json",
+  "jsconfig.json",
+  "opencode.json",
+  "opencode.jsonc",
+  "composer.json",
+  "deno.json",
+  "deno.jsonc",
+  "app.json",
+  "eas.json",
+  "firebase.json",
+  "vercel.json",
+  "turbo.json",
+  "nx.json",
+  "lerna.json",
+  "angular.json",
+  "project.json",
+  "workspace.json",
+  "renovate.json",
+  "nodemon.json",
+  "devcontainer.json",
+  "cmakelists.txt",
+  "requirements.txt",
+  "constraints.txt",
+  "build.rs",
+  "conftest.py",
+  "setup.py",
+  "manage.py",
+  "noxfile.py",
+  "fabfile.py",
+  "tasks.py",
+  "dodo.py",
+  "package.swift",
+  "docker-compose.yml",
+  "docker-compose.yaml",
+  "compose.yml",
+  "compose.yaml",
+  "taskfile.yml",
+  "taskfile.yaml",
+  "azure-pipelines.yml",
+  "bitbucket-pipelines.yml",
+  "appveyor.yml",
+  "mkdocs.yml",
+  "pubspec.yaml",
+  "codemagic.yaml",
+  "bitrise.yml",
+  "lefthook.yml",
+  "lefthook.yaml",
+  "dangerfile.swift"
+]);
+var PROTECTED_PATTERN = /(^|\.)(config|conf|workspace|setup|rc)\.|^(gulpfile|gruntfile|jakefile|dangerfile|fastfile|appfile|matchfile|pluginfile|webpack|vite|rollup|esbuild|tsup|metro|babel|jest|vitest|karma|playwright|cypress|next|nuxt|astro|svelte|remix|tailwind|postcss|eslint|prettier|stylelint|commitlint|lint-staged|release|mocha|nodemon|pm2|ecosystem|wrangler|vercel|netlify|serverless)\b/;
+var PROTECTED_FOLDERS = new Set(["node_modules", "hooks", "refs", "objects", "info", "fastlane", "gradle", "buildsrc"]);
+function editRefusal(target, place) {
+  const inside = partsInside(target, place);
+  if ("refused" in inside)
+    return inside.refused === "reading outside the project" ? "changing files outside the project" : inside.refused;
+  const { parts } = inside;
+  const name = (parts[parts.length - 1] ?? "").toLowerCase();
+  const extension = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
+  if (!EDITABLE.has(extension))
+    return "a kind of file it can't tell is safe to change";
+  if (PROTECTED_NAMES.has(name) || PROTECTED_PATTERN.test(name) || parts.slice(0, -1).some((part) => PROTECTED_FOLDERS.has(part.toLowerCase())))
     return "changing a file that later commands run";
   return null;
 }
@@ -12211,7 +12355,7 @@ function checkSpec(spec, words, place) {
       return CANT;
     }
     if (spec.rest === "read") {
-      const why = pathRefusal(word, place, "read");
+      const why = readRefusal(word, place);
       if (why)
         return why;
     } else if (spec.rest === "revisions") {
@@ -12223,12 +12367,14 @@ function checkSpec(spec, words, place) {
   return null;
 }
 function commandRefusal(line, folders) {
+  if (!/^[\x20-\x7E]*$/.test(line))
+    return `${CANT} (a character it can't read plainly)`;
   const read = readLine(line);
   if ("unreadable" in read)
     return `${CANT} (${read.unreadable})`;
   if (!read.parts.length || !folders.length)
     return CANT;
-  const place = { cwd: realPath(folders[0], "/"), folders };
+  const place = { cwd: realOf(folders[0]), folders };
   for (const part of read.parts) {
     const [program, ...rest] = part.words;
     if (!program || program.includes("="))
@@ -12236,6 +12382,8 @@ function commandRefusal(line, folders) {
     if (program === "git") {
       if (rest[0] === "push")
         return "pushing";
+      if (gitIn(place.cwd, ["rev-parse", "--show-toplevel"]) !== place.cwd)
+        return "a repository that isn't the project's own";
       const spec = GIT[rest[0] ?? ""];
       const why = spec ? checkSpec(spec, rest.slice(1), place) : CANT;
       if (why)
@@ -12304,9 +12452,9 @@ function allowRefusal(action, resources, folders, rules, ruleFor) {
     return action === "external_directory" ? "working outside the project" : "a tool it can't tell is safe";
   if (!folders.length)
     return "changing files outside the project";
-  const place = { cwd: realPath(folders[0], "/"), folders };
+  const place = { cwd: realOf(folders[0]), folders };
   for (const resource of asked) {
-    const why = pathRefusal(resource, place, "write");
+    const why = editRefusal(resource, place);
     if (why)
       return why;
   }
