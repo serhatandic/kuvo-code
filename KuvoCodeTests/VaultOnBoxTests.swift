@@ -117,6 +117,22 @@ import Testing
         #expect(await Passwords.ready())
     }
 
+    /// One an earlier build moved before it could be only for signing in: made so as the move
+    /// finishes, as every sign-in moved from before is.
+    @Test func aSignInMovedByAnEarlierBuildIsMadeOnlyForSigningIn() async throws {
+        defer { done() }
+        #expect(await Passwords.ready())
+        UserDefaults.standard.removeObject(forKey: Passwords.movedKey)
+        let early = try await Vaults.shared.add(VaultDraft(kind: .login, name: "github.com", sites: ["github.com"], username: "kuvo-bots", values: ["password": "first-password"]), on: BoxClient.mac)
+        #expect(early.signInOnly != true)
+        savedBefore("github.com", "kuvo-bots", "first-password")
+
+        #expect(await Passwords.ready())
+        let items = try #require(Vaults.shared[BoxClient.mac].vault?.items)
+        #expect(items.count == 1, "not moved twice")
+        #expect(items.first?.signInOnly == true)
+    }
+
     @Test func aMacWithNothingSavedBeforeHasAnEmptyVault() async throws {
         defer { done() }
         #expect(await Passwords.ready())

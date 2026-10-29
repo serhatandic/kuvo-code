@@ -116,7 +116,8 @@ enum Passwords {
                 // One moved before, by a try that stopped before taking the old one away, is there.
                 let item: VaultItem
                 if let moved = signIns.first(where: { $0.sites.contains(old.host) && ($0.username ?? "") == old.account }) {
-                    item = moved
+                    // (Moved by a build from before sign-ins could be only for signing in: made so now.)
+                    item = moved.signInOnly == true ? moved : try await Vaults.shared.change(moved, to: VaultDraft(kind: .login, name: moved.name, sites: moved.sites, username: moved.username, signInOnly: true), on: BoxClient.mac)
                 } else {
                     // What it was before: a sign-in the browser fills in, never handed to a command.
                     item = try await Vaults.shared.add(VaultDraft(kind: .login, name: freeName(host: old.host, account: old.account), sites: [old.host], username: old.account.isEmpty ? nil : old.account, signInOnly: true, values: ["password": password]), on: BoxClient.mac)
