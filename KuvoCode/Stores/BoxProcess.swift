@@ -51,8 +51,9 @@ final class BoxProcess {
     /// `content` (what the engine starts with in `OPENCODE_CONFIG_CONTENT`) with what some providers
     /// need from the engine on top, as this Mac's box last learned it from its engine, or Kuvo Code
     /// knows them before it has (`kuvo-link.js engine-config`, as a machine's start adds it); as it
-    /// is when that can't be run.
-    static func engineConfig(engine: URL, content: String?, environment: [String: String]) async -> String? {
+    /// is when that can't be run, or doesn't answer within `timeout` seconds (the engine's start never
+    /// waits on it longer).
+    static func engineConfig(engine: URL, content: String?, environment: [String: String], timeout: TimeInterval = 10) async -> String? {
         guard let script else { return content }
         var env = environment
         env["BUN_BE_BUN"] = "1"
@@ -70,8 +71,11 @@ final class BoxProcess {
             process.standardError = FileHandle.nullDevice
             process.standardInput = FileHandle.nullDevice
             do { try process.run() } catch { return content }
+            let late = DispatchWorkItem { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: late)
             let data = output.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
+            late.cancel()
             guard process.terminationStatus == 0, let text = String(data: data, encoding: .utf8), text.hasPrefix("{"), text.hasSuffix("}") else { return content }
             return text
         }.value
