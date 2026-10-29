@@ -449,7 +449,9 @@ the same for every client and with none connected, and keeps them in `run/queues
   now; 404 for no such session here, 503 with no engine, 502 when the engine refused.
 - Clients show what's held and whether it's paused from these; the in-flight record of a message
   still on its way (and that Stop held it) stays with the client that sends it, which waits for its
-  request before it asks the box to stop.
+  request before it asks the box to stop, and for its hold before it asks the box to resume.
+- A box without `queue` in its features (its update didn't get through): each client carries that
+  box's queues itself, as clients did before.
 
 ### Updates
 

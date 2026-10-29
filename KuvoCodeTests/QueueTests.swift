@@ -1,4 +1,5 @@
 import Foundation
+import KuvoLink
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -43,7 +44,9 @@ import Testing
 
     /// The session, at work or not, with `inbox` waiting, and its box (this Mac's), as the app
     /// reaches it. `queues`: what the box keeps, before it starts.
-    private func open(running: Bool, inbox: [[String: Any]], queues: String? = nil, prompt: ((StubEngine.Request) -> Void)? = nil) async throws -> (SessionModel, TestBox, Inbox) {
+    /// `older`: its box is a machine's from before the box carried the queue (no `queue` in its
+    /// `kuvo/info`, none of the queue's routes).
+    private func open(running: Bool, inbox: [[String: Any]], queues: String? = nil, older: Bool = false, prompt: ((StubEngine.Request) -> Void)? = nil) async throws -> (SessionModel, TestBox, Inbox) {
         let session = StubEngine.session(id, title: "Queue", directory: "/tmp/kuvo-tests-queue")
         engine.list([session], running: running ? [id] : [])
         let kept = Inbox(inbox)
@@ -70,7 +73,15 @@ import Testing
             try Data(queues.utf8).write(to: BoxProcess.run.appending(path: "queues.json"))
         }
         let url = engine.url
-        workspace.boxes = { $0 == BoxClient.mac ? box.client(engine: url) : nil }
+        let olderBox = BoxClient(box: "lab", transport: LocalBox { request in
+            AsyncThrowingStream { answer in
+                let info = request.path == "kuvo/info"
+                answer.yield(.head(status: info ? 200 : 404, headers: ["content-type": "application/json"]))
+                answer.yield(.body(Data((info ? #"{"name":"lab","features":["sessions","agent-tools"]}"# : #"{"message":"Not here."}"#).utf8)))
+                answer.finish()
+            }
+        })
+        workspace.boxes = { $0 == BoxClient.mac ? (older ? olderBox : box.client(engine: url)) : nil }
         await workspace.refresh()
         let model = try #require(workspace.model(for: id))
         await model.load()
@@ -225,6 +236,38 @@ import Testing
         #expect(!model.isQueuePaused)
         try Data(#"{"ses_queue":{"paused":true,"held":[]}}"#.utf8).write(to: BoxProcess.run.appending(path: "queues.json"))
         try await until { model.isQueuePaused }
+    }
+
+    /// A machine whose box doesn't carry the queue yet (its update to this version didn't get
+    /// through): this Mac carries it, as before. Stop pauses it, Resume gives the agent the next
+    /// one, a run that ends starts the next, and Send Now gives one right away.
+    @Test func onABoxWithoutTheQueueThisMacCarriesIt() async throws {
+        let (model, box, kept) = try await open(running: true, inbox: [queued("msg_02", "Then update the docs"), queued("msg_03", "Also run the linter"), queued("msg_04", "And tag it")], older: true)
+        defer { box.stop(); engine.stop() }
+        model.stop()
+        try await until { !engine.requests("POST", "/interrupt").isEmpty }
+        #expect(model.isQueuePaused)
+        stopped()
+        model.apply(try engine.event("session.execution.interrupted", session: id, ["reason": "user"]))
+        #expect(model.isQueuePaused, "Stop pauses it")
+
+        model.resumeQueue()
+        try await until { !deliveries(of: "msg_02").isEmpty }
+        #expect(deliveries(of: "msg_02") == ["steer"])
+        #expect(!model.isQueuePaused && model.failure == nil)
+
+        kept.remove("msg_02")
+        model.apply(try engine.event("session.inbox.delivered", session: id, ["inboxID": "msg_02"]))
+        model.apply(try engine.event("session.execution.started", session: id))
+        model.apply(try engine.event("session.execution.succeeded", session: id))
+        try await until { !deliveries(of: "msg_03").isEmpty }
+        #expect(deliveries(of: "msg_03") == ["steer"], "the next goes as the run ends")
+
+        let last = try #require(model.waiting.first { $0.id == "msg_04" })
+        model.sendNow(last)
+        try await until { !deliveries(of: "msg_04").isEmpty }
+        #expect(deliveries(of: "msg_04") == ["steer"])
+        #expect(model.failure == nil)
     }
 
     /// A queued message removed by mistake: Undo puts it back in the queue, as it was, behind
