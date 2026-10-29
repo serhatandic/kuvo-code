@@ -1531,17 +1531,17 @@ function phoneCanAnswer() {
   }
 }
 
-/// Back in the page a call waited for you in, as the page in use: nil if it can go on there (it's
-/// open, not taken over, on `host`, and its `fields` are still the kinds they were), else what
-/// changed meanwhile.
-async function backTo(p, host, fields = []) {
-  if (!(await pages()).some((info) => info.targetId === p.target)) return "The page was closed while the user answered.";
+/// Back in the page a call waited for you in (or for the vault, `meanwhile` says), as the page in
+/// use: nil if it can go on there (it's open, not taken over, on `host`, and its `fields` are still
+/// the kinds they were), else what changed meanwhile.
+async function backTo(p, host, fields = [], meanwhile = "while the user answered") {
+  if (!(await pages()).some((info) => info.targetId === p.target)) return `The page was closed ${meanwhile}.`;
   if (held.has(p.target)) return "The user took the page over and still has it.";
   Object.assign(p, await use(p.target));
-  if (host && hostOf(await address(p)) !== host) return `The page left ${host} while the user answered.`;
+  if (host && hostOf(await address(p)) !== host) return `The page left ${host} ${meanwhile}.`;
   for (const [index, wanted] of fields) {
     const problem = index === null ? null : await checkField(p, index, wanted);
-    if (problem) return "The page changed while the user answered: " + problem;
+    if (problem) return `The page changed ${meanwhile}: ` + problem;
   }
   return null;
 }
@@ -2267,9 +2267,24 @@ async function vaultTools() {
   return vaultToolList ?? [];
 }
 
-/// What the vault fills on the page at `origin` for this conversation: `{status, value}` (200 with
-/// `values`; 403 refused, 404 nothing yours, 423 locked), or null without a vault to ask.
-const vaultFill = (body) => vaultRoute({ method: "POST", path: "kuvo/vault/fill", body: { session: caller, ...body } }, current, 16 * 60_000);
+/// What the vault fills on the page `p` (at `origin`) for this conversation: `{status, value}` (200
+/// with `values`; 403 refused, 404 nothing yours, 423 locked), or null without a vault to ask. The
+/// box may ask you first (an item its grant says to ask about), so this waits out of the line, as
+/// an ask does, with `p` staying this conversation's meanwhile: back in line, the page may have
+/// changed (`backTo`).
+function vaultFill(p, body) {
+  if (current.cancelled) throw new Cancelled();
+  const session = caller;
+  const request = { method: "POST", path: "kuvo/vault/fill", body: { session, ...body } };
+  return outOfLine(async (call) => {
+    const keep = session ? setInterval(() => link?.notify("Kuvo.claim", { targetId: p.target, session }), 5_000) : null;
+    try {
+      return await vaultRoute(request, call, 16 * 60_000);
+    } finally {
+      clearInterval(keep);
+    }
+  });
+}
 
 const startedSessions = new Map();
 
@@ -2715,10 +2730,14 @@ async function tool(name, args) {
       }
       // From the vault, when this conversation may use one of its sign-ins here (or the one named):
       // only on that sign-in's own site. Without one, you're asked, as always.
-      const vault = await vaultFill({ origin: url, purpose: "sign-in", ...(item ? { item } : {}) });
+      const vault = await vaultFill(p, { origin: url, purpose: "sign-in", ...(item ? { item } : {}) });
       if (vault?.status === 200) {
         const fields = [[username, vault.value.username, "the username", "text"], [password, vault.value.values?.password, "the password", "password"]].filter(([index, value]) => index !== null && value);
         if (!fields.length) return text(note() + `“${vault.value.item.name}” has nothing for those fields.`);
+        // Other calls went on while the vault answered (it may have asked you): a sign-in only
+        // goes into the fields it was asked for, on the site the vault was told.
+        const changed = await backTo(p, host, fields.map(([index, , , wanted]) => [index, wanted]), "meanwhile");
+        if (changed) return text(note() + changed + " Nothing was filled: take a fresh browser_snapshot, and try again if it's still needed.");
         const filled = [];
         for (const [index, value, what, wanted] of fields) {
           const outcome = await run(p, scripts.find + scripts.fill, { index, value, wanted, site: siteOf(host) });
@@ -2756,13 +2775,18 @@ async function tool(name, args) {
       const kind = await run(p, scripts.find + scripts.fieldKind, { index });
       if (kind === "missing") return text(note() + `There's no element [${index}] on the page now. Take a fresh browser_snapshot.`);
       if (kind !== "text" && kind !== "password") return text(note() + `[${index}] isn't a field to fill.`);
-      const vault = await vaultFill({ origin: url, purpose: "field", item, ...(string("field") ? { field: string("field") } : {}), ...(string("why") ? { why: string("why") } : {}) });
+      const vault = await vaultFill(p, { origin: url, purpose: "field", item, ...(string("field") ? { field: string("field") } : {}), ...(string("why") ? { why: string("why") } : {}) });
       if (!vault) return text(note() + "This machine's vault can't be reached now. Try again in a moment.", true);
       if (vault.status !== 200) return text(note() + (vault.value?.message || `The vault didn't fill that (${vault.status}).`), vault.status !== 403);
       const [field, value] = Object.entries(vault.value.values ?? {})[0] ?? [];
       if (value === undefined) return text(note() + `“${vault.value.item.name}” has nothing to fill there.`);
       // A password only into a password field; anything else into either.
-      const outcome = await run(p, scripts.find + scripts.fill, { index, value, wanted: field === "password" ? "password" : "code", site: siteOf(host) });
+      const wanted = field === "password" ? "password" : "code";
+      // Other calls went on while the vault answered (it may have asked you): only into the same
+      // field, on the site the vault was told.
+      const changed = await backTo(p, host, [[index, wanted]], "meanwhile");
+      if (changed) return text(note() + changed + " Nothing was filled: take a fresh browser_snapshot, and try again if it's still needed.");
+      const outcome = await run(p, scripts.find + scripts.fill, { index, value, wanted, site: siteOf(host) });
       if (outcome !== "ok") return text(note() + outcome);
       await sleep(300);
       return withNote(snapshot(p).then((page) => `Filled [${index}] with “${vault.value.item.name}”'s ${field} (you can't see it).\n\n` + page));
