@@ -6706,6 +6706,13 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
   };
 }
 var SCANNED_FILE = path34.join(RUN, "queues-scanned.json");
+async function endedBadly(target, session) {
+  const page = await asked(target, "GET", `api/session/${address(session)}/message?limit=1&order=desc`).catch(() => null);
+  if (!Array.isArray(page?.data))
+    return true;
+  const last = page.data[0];
+  return last?.type === "assistant" && isObject(last.error);
+}
 async function scanQueues(target) {
   const known = locked(QUEUES_LOCK, () => {
     let scanned = {};
@@ -6726,9 +6733,11 @@ async function scanQueues(target) {
     if (typeof session.id !== "string" || (session.time?.updated ?? 0) < week)
       continue;
     try {
-      if (known)
+      if (!(await inboxOf(target, session.id)).length || await isRunning(target, session.id))
+        continue;
+      if (known && !await endedBadly(target, session.id))
         await drain(target, session.id);
-      else if ((await inboxOf(target, session.id)).length && !await isRunning(target, session.id))
+      else
         await holdQueue(target, session.id);
     } catch {}
   }

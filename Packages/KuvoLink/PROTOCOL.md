@@ -428,7 +428,8 @@ the same for every client and with none connected, and keeps them in `run/queues
   order, then one for the next step (by resuming), then the queue, first queued first (by steering
   it). A run the engine ended itself (`superseded`, `inactivity`) goes on the same way, and so do
   the latest sessions' queues when a box starts again (or its stream comes back) beside the same
-  engine, for a run that ended while it couldn't hear.
+  engine, for a run that ended while it couldn't hear (one that was stopped or failed, its newest
+  answer ending in an error, is held and paused instead).
 - **Pauses**: Stop, from any client (the box's `stop`, or an interrupt a client sent the engine
   itself: with no run started again a moment later, as Send Now's resume does at once; while the
   session still says it's at work, looked at again, a few times); a run that failed; and a queue

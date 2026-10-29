@@ -19,7 +19,7 @@ const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // The engine: each session's inbox and whether it runs; what was asked of it, each time a test
 // waits on it looking again.
-let inboxes, running, asked, unsure = false, taken = new Set(), waiting = [];
+let inboxes, running, asked, unsure = false, taken = new Set(), waiting = [], latest = {};
 const heard = () => new Promise(resolve => waiting.push(resolve));
 const engine = http.createServer((request, response) => {
   let body = "";
@@ -33,6 +33,8 @@ const engine = http.createServer((request, response) => {
     else if (url.pathname === "/api/session/active") answer = unsure ? null : { data: Object.fromEntries([...running].map(id => [id, {}])) };
     else if (session && !rest && request.method === "GET") answer = inboxes[session] ? { data: { id: session } } : null;
     else if (rest === "/inbox") answer = { data: inboxes[session] ?? [] };
+    // Its newest message (the queue only asks for the one).
+    else if (rest === "/message") answer = { data: latest[session] ? [latest[session]] : [] };
     else if (rest?.startsWith("/inbox/") && request.method === "PATCH") {
       const item = (inboxes[session] ?? []).find(each => each.id === decodeURIComponent(rest.slice(7)));
       const { delivery } = JSON.parse(body);
@@ -62,6 +64,7 @@ beforeEach(() => {
   asked = [];
   unsure = false;
   taken = new Set();
+  latest = {};
   fs.rmSync(path.join(home, "run", "queues.json"), { force: true });
 });
 
@@ -213,16 +216,24 @@ test("a queue left with nothing running when the engine started again waits for 
   assert.equal(link.queueOf("ses_1").paused, true);
 });
 
-test("a run that ended while the box was starting again, beside the same engine: what waits goes on, unless it's paused", async () => {
+test("a run that ended while the box was starting again, beside the same engine: what waits goes on, unless it's paused, or the run was stopped or failed", async () => {
   await link.scanQueues({ ...target, pid: 30 });
   inboxes.ses_1 = [{ id: "msg_q1", delivery: "queue" }];
+  latest.ses_1 = { id: "msg_a1", type: "assistant", content: [{ type: "text", text: "Done." }] };
   inboxes.ses_2 = [{ id: "msg_q2", delivery: "queue" }];
   inboxes.ses_3 = [{ id: "msg_q3", delivery: "queue" }];
   running.add("ses_3");
+  // Stopped (from a client that couldn't reach the box), and failed.
+  inboxes.ses_4 = [{ id: "msg_q4", delivery: "queue" }, { id: "msg_s4", delivery: "steer" }];
+  latest.ses_4 = { id: "msg_a4", type: "assistant", content: [], error: { type: "aborted", message: "Stopped." } };
+  inboxes.ses_5 = [{ id: "msg_q5", delivery: "queue" }];
+  latest.ses_5 = { id: "msg_a5", type: "assistant", content: [], error: { type: "provider", message: "Overloaded." } };
   await ask("POST", "kuvo/sessions/ses_2/queue/hold");
   await link.scanQueues({ ...target, pid: 30 });
-  assert.deepEqual(asked, ["ses_1 msg_q1 steer"], "the one waiting goes; the paused one and the one at work don't");
+  assert.deepEqual(asked.filter(each => each.endsWith(" steer") || each.endsWith(" resume")), ["ses_1 msg_q1 steer"], "the one waiting goes; the paused one, the one at work, the stopped and the failed don't");
   assert.deepEqual(link.queueOf("ses_1"), { paused: false, held: [] });
+  assert.deepEqual(link.queueOf("ses_4"), { paused: true, held: ["msg_s4"] }, "held as a Stop holds it");
+  assert.deepEqual(link.queueOf("ses_5"), { paused: true, held: [] });
 });
 
 test("every client follows the queues: a line now, one each time they change", async () => {

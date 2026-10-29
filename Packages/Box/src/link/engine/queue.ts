@@ -268,10 +268,19 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
 // `run/` so a box that starts again beside the same engine doesn't take it for a new one.
 const SCANNED_FILE = path.join(RUN, "queues-scanned.json");
 
+// Whether `session`'s last run was stopped or failed, as its newest message says (an answer that
+// ended in an error); unknown, it was.
+async function endedBadly(target: Target, session: string): Promise<boolean> {
+  const page = await asked(target, "GET", `api/session/${address(session)}/message?limit=1&order=desc`).catch(() => null) as { data?: { type?: string; error?: unknown }[] } | null;
+  if (!Array.isArray(page?.data)) return true;
+  const last = page.data[0];
+  return last?.type === "assistant" && isObject(last.error);
+}
+
 /** Once for each engine started anew (its process changed): each of its latest sessions with
  * messages waiting and nothing running held and paused, as Stop holds them. The same engine (the
  * box started again, or its stream dropped and came back): their queues go on, as after a run
- * that ended while it couldn't hear. */
+ * that ended while it couldn't hear; held and paused as above if it was stopped or failed. */
 export async function scanQueues(target: Target & { pid?: number }): Promise<void> {
   const known = locked(QUEUES_LOCK, () => {
     let scanned: Record<string, unknown> = {};
@@ -286,8 +295,9 @@ export async function scanQueues(target: Target & { pid?: number }): Promise<voi
   for (const session of page?.data ?? []) {
     if (typeof session.id !== "string" || (session.time?.updated ?? 0) < week) continue;
     try {
-      if (known) await drain(target, session.id);
-      else if ((await inboxOf(target, session.id)).length && !(await isRunning(target, session.id))) await holdQueue(target, session.id);
+      if (!(await inboxOf(target, session.id)).length || (await isRunning(target, session.id))) continue;
+      if (known && !(await endedBadly(target, session.id))) await drain(target, session.id);
+      else await holdQueue(target, session.id);
     } catch {}
   }
 }
