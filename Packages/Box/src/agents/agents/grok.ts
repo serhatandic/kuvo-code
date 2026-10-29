@@ -18,6 +18,19 @@ import type { Model, Session } from "../wire"
 
 const places = [join(homedir(), ".grok/bin"), join(homedir(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"]
 
+/**
+ * Run whole in the box's sandbox (acp.ts `whole`): of Grok's home (GROK_HOME), the folders of its
+ * state, which it writes whole (its conversations, logs, traces)…
+ */
+const STATE_IN_HOME = ["sessions", "logs", "memtrace", "debug"]
+/**
+ * …and what at its top it never writes: its settings (config, sandbox, hooks' and deployments'
+ * `.toml`s), its language servers, the settings xAI sends (signed), and its models' list, which
+ * names where each model's requests go. Its other folders (its program, plugins, skills, memories)
+ * it only reads: they run outside the sandbox, or go to its model, when you use Grok yourself.
+ */
+const KEPT_IN_HOME = ["*.toml", "*.md", "lsp.json", "settings_cache.json", "models_cache.json"]
+
 export class GrokAgent implements Agent {
   id = "grok"
   readonly providerID: string
@@ -187,6 +200,7 @@ export class GrokAgent implements Agent {
         authMethod: () => (process.env.XAI_API_KEY ? "xai.api_key" : "cached_token"),
         restartAfterInterrupt: true,
         program: () => agent.program,
+        whole: { homes: (env) => [env.GROK_HOME ?? join(homedir(), ".grok")], state: STATE_IN_HOME, kept: KEPT_IN_HOME, env: { GROK_SANDBOX: "off" } },
         async command({ approvesAll, plan, skills }) {
           const executable = agent.executable()
           if (!executable) throw new Error(`Install Grok's CLI first: ${agent.install}`)

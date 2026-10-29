@@ -5912,14 +5912,14 @@ function ancestors(path) {
 }
 
 // Packages/Box/src/agents/agents/antigravity.ts
-import { createHash as createHash4 } from "crypto";
-import { chmodSync as chmodSync3, existsSync as existsSync10, mkdirSync as mkdirSync11, readdirSync as readdirSync10, readFileSync as readFileSync16, renameSync as renameSync8, rmSync as rmSync8, statSync as statSync6, writeFileSync as writeFileSync13 } from "fs";
-import { join as join16 } from "path";
+import { createHash as createHash5 } from "crypto";
+import { chmodSync as chmodSync3, existsSync as existsSync11, mkdirSync as mkdirSync12, readdirSync as readdirSync11, readFileSync as readFileSync17, renameSync as renameSync8, rmSync as rmSync9, statSync as statSync7, writeFileSync as writeFileSync13 } from "fs";
+import { join as join17 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
 
 // Packages/Box/src/agents/acp.ts
-import { existsSync as existsSync7, mkdirSync as mkdirSync8, readFileSync as readFileSync13, writeFileSync as writeFileSync10 } from "fs";
-import { dirname as dirname6, resolve as resolve3 } from "path";
+import { existsSync as existsSync8, mkdirSync as mkdirSync9, readFileSync as readFileSync14, writeFileSync as writeFileSync10 } from "fs";
+import { dirname as dirname7, resolve as resolve4 } from "path";
 
 // Packages/Box/src/agents/rpc.ts
 class RPCError extends Error {
@@ -6066,6 +6066,342 @@ class RPC {
   }
 }
 
+// Packages/Box/src/agents/fence.ts
+import { createHash as createHash3, randomBytes as randomBytes3 } from "crypto";
+import { constants as constants2, copyFileSync, existsSync as existsSync7, lstatSync as lstatSync3, mkdirSync as mkdirSync8, readdirSync as readdirSync9, readFileSync as readFileSync13, realpathSync as realpathSync3, rmSync as rmSync6, statSync as statSync5 } from "fs";
+import { basename as basename5, dirname as dirname6, join as join14, resolve as resolve3 } from "path";
+var folder = () => process.env.KUVO_FENCE ?? (machineHome ? join14(machineHome, "run", "fence") : undefined);
+function fenceOn() {
+  const where = folder();
+  return Boolean(where) && process.env.KUVO_SANDBOX !== "off" && existsSync7(join14(where, "on"));
+}
+function fenceRules() {
+  const where = folder();
+  if (!where || process.env.KUVO_SANDBOX === "off" || !existsSync7(join14(where, "on")))
+    return;
+  try {
+    const read = JSON.parse(readFileSync13(join14(where, "policy.json"), "utf8"));
+    const paths = (value) => Array.isArray(value) ? value.filter((each) => typeof each === "string" && each.startsWith("/")) : [];
+    return { hidden: paths(read.hidden), readable: paths(read.readable), writable: paths(read.writable), readOnly: paths(read.readOnly) };
+  } catch {
+    return;
+  }
+}
+var real = (place) => {
+  try {
+    return realpathSync3(place);
+  } catch {
+    return place;
+  }
+};
+function allowedFolders(directory) {
+  const where = folder();
+  if (!where)
+    return [];
+  try {
+    return readFileSync13(join14(where, "allowed", sum(real(directory))), "utf8").split(`
+`).filter((line) => line.startsWith("/") && real(line) === line).slice(0, 8);
+  } catch {
+    return [];
+  }
+}
+var fenceKey = () => JSON.stringify(fenceRules() ?? null);
+var sum = (place) => createHash3("sha256").update(place).digest("hex").slice(0, 32);
+function isRepository(git) {
+  try {
+    if (lstatSync3(git).isSymbolicLink() || !statSync5(join14(git, "HEAD")).isFile())
+      return false;
+    return statSync5(join14(git, "objects")).isDirectory() && statSync5(join14(git, "refs")).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function repositoryOf2(folder) {
+  const realOr = (place) => {
+    try {
+      return realpathSync3(place);
+    } catch {
+      return "";
+    }
+  };
+  for (let at = folder;at && at !== dirname6(at); at = dirname6(at)) {
+    const git = join14(at, ".git");
+    let link;
+    try {
+      link = lstatSync3(git);
+    } catch {
+      continue;
+    }
+    if (link.isSymbolicLink())
+      return "";
+    if (link.isDirectory())
+      return isRepository(git) ? realOr(git) : "";
+    try {
+      const named = readFileSync13(git, "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
+      if (!named)
+        return "";
+      const own = realOr(resolve3(at, named));
+      if (!own || basename5(dirname6(own)) !== "worktrees")
+        return "";
+      if (realOr(readFileSync13(join14(own, "gitdir"), "utf8").trim()) !== realOr(git))
+        return "";
+      const common = realOr(resolve3(own, readFileSync13(join14(own, "commondir"), "utf8").trim()));
+      return common && common === dirname6(dirname6(own)) && isRepository(common) ? common : "";
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+function fenceShell(directory) {
+  const where = folder();
+  if (!where || !fenceRules())
+    return;
+  const mine = basename5(process.env.SHELL ?? "");
+  const shell = [mine, "zsh", "bash"].filter((name) => name === "zsh" || name === "bash").map((name) => join14(where, "shell", name)).find((place) => existsSync7(place));
+  if (!shell)
+    return;
+  const work = real(directory);
+  const temporary = join14(where, "tmp", sum(work));
+  mkdirSync8(temporary, { recursive: true, mode: 448 });
+  return { shell, work, git: repositoryOf2(work), temporary };
+}
+var AGENT_FOLDERS = 4;
+function fenceAgent(program, directory, mine) {
+  const where = folder();
+  if (!where || !fenceRules())
+    return;
+  const command = join14(where, "shell", "run");
+  if (!existsSync7(command))
+    return;
+  const work = real(directory);
+  const places = (list) => [...new Set(list.map(real))].slice(0, AGENT_FOLDERS).join(`
+`);
+  const names = (list) => list.filter((name) => name && !name.includes("/") && !name.includes(`
+`)).join(`
+`);
+  return {
+    command,
+    env: {
+      KUVO_FENCE_SHELL: program,
+      KUVO_FENCE_WORK: work,
+      KUVO_FENCE_GIT: repositoryOf2(work),
+      KUVO_FENCE_OWN: places(mine.homes),
+      KUVO_FENCE_READ: places(mine.read),
+      KUVO_FENCE_STATE: names(mine.state),
+      KUVO_FENCE_KEPT: names(mine.kept),
+      KUVO_FENCE_PORT: String(mine.port ?? 0)
+    }
+  };
+}
+function fenceAttachments(directory) {
+  const where = folder();
+  if (!where || !fenceRules())
+    return;
+  const attached = join14(where, "attachments", sum(real(directory)));
+  try {
+    mkdirSync8(attached, { recursive: true, mode: 448 });
+    return attached;
+  } catch {
+    return;
+  }
+}
+function fenceCopy(directory, file) {
+  const attached = fenceAttachments(directory);
+  if (!attached)
+    return file;
+  const copy = join14(attached, `${randomBytes3(8).toString("hex")}-${basename5(file)}`);
+  try {
+    for (const name of readdirSync9(attached))
+      if (Date.now() - statSync5(join14(attached, name)).ctimeMs > 7 * 86400000)
+        rmSync6(join14(attached, name), { force: true });
+  } catch {}
+  try {
+    copyFileSync(file, copy, constants2.COPYFILE_EXCL);
+    return copy;
+  } catch {
+    return file;
+  }
+}
+
+// Packages/Box/src/agents/toolrelay.ts
+import { randomBytes as randomBytes4 } from "crypto";
+import { spawn as spawn3 } from "child_process";
+var server2;
+var keys = new Map;
+var sessionsByKey = new Map;
+var programs = new Map;
+function relayedTools(sessionID) {
+  const tools = kuvoTools(sessionID);
+  if (!tools)
+    return;
+  server2 ??= Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: answer });
+  let key = keys.get(sessionID);
+  if (!key) {
+    key = randomBytes4(24).toString("hex");
+    keys.set(sessionID, key);
+    sessionsByKey.set(key, sessionID);
+  }
+  return { kind: "http", name: tools.name, key: tools.key, timeout: tools.timeout, url: `http://127.0.0.1:${server2.port}/mcp`, headers: { Authorization: `Bearer ${key}` } };
+}
+var relayPort = () => server2?.port;
+function dropRelayed(sessionID) {
+  const key = keys.get(sessionID);
+  if (key)
+    sessionsByKey.delete(key);
+  keys.delete(sessionID);
+  programs.get(sessionID)?.stop();
+  programs.delete(sessionID);
+}
+async function answer(request) {
+  const key = /^Bearer (\S+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
+  const sessionID = key ? sessionsByKey.get(key) : undefined;
+  if (!sessionID)
+    return new Response("Not allowed.", { status: 401 });
+  const tools = kuvoTools(sessionID);
+  if (!tools)
+    return new Response("Kuvo Code's tools aren't here now.", { status: 503 });
+  let body;
+  if (request.method === "POST") {
+    try {
+      body = ownSession(await request.json(), sessionID);
+    } catch {
+      return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, { status: 400 });
+    }
+  }
+  if (tools.kind === "http") {
+    const headers = { ...tools.headers, Accept: request.headers.get("accept") ?? "application/json, text/event-stream" };
+    for (const name of ["content-type", "mcp-session-id", "mcp-protocol-version", "last-event-id"]) {
+      const value = request.headers.get(name);
+      if (value)
+        headers[name] = value;
+    }
+    try {
+      const signal = request.method === "POST" ? AbortSignal.any([request.signal, AbortSignal.timeout(tools.timeout)]) : request.signal;
+      const response = await fetch(tools.url, { method: request.method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal });
+      const back = new Headers;
+      for (const name of ["content-type", "mcp-session-id"]) {
+        const value = response.headers.get(name);
+        if (value)
+          back.set(name, value);
+      }
+      return new Response(response.body, { status: response.status, headers: back });
+    } catch {
+      return new Response("Kuvo Code's tools didn't answer.", { status: 502 });
+    }
+  }
+  if (request.method !== "POST")
+    return new Response(null, { status: 405, headers: { Allow: "POST" } });
+  let program = programs.get(sessionID);
+  if (!program || program.stopped || program.key !== tools.key) {
+    program?.stop();
+    program = new Program(tools);
+    programs.set(sessionID, program);
+  }
+  const messages = Array.isArray(body) ? body : [body];
+  const starts = messages.some((message) => message?.method === "initialize");
+  const connection = starts ? randomBytes4(12).toString("hex") : request.headers.get("mcp-session-id") ?? "";
+  const answers = await Promise.all(messages.map((message) => program.send(message, tools.timeout, connection)));
+  const replies = answers.filter((each) => each !== undefined);
+  const headers = starts ? { "mcp-session-id": connection } : undefined;
+  if (!replies.length)
+    return new Response(null, { status: 202, headers });
+  return Response.json(Array.isArray(body) ? replies : replies[0], { headers });
+}
+function ownSession(body, sessionID) {
+  const each = (message) => {
+    if (message?.method !== "tools/call" || typeof message.params !== "object" || !message.params)
+      return message;
+    return { ...message, params: { ...message.params, _meta: { ...message.params._meta ?? {}, "ai.opencode/sessionID": sessionID } } };
+  };
+  return Array.isArray(body) ? body.map(each) : each(body);
+}
+
+class Program {
+  key;
+  stopped = false;
+  child;
+  next = 1;
+  waiting = new Map;
+  ours = new Map;
+  constructor(tools) {
+    this.key = tools.key;
+    this.child = spawn3(tools.command, tools.args, { env: { ...process.env, ...tools.env }, stdio: ["pipe", "pipe", "ignore"] });
+    this.child.on("error", () => this.stop());
+    this.child.on("exit", () => this.stop());
+    let buffered = "";
+    this.child.stdout.setEncoding("utf8");
+    this.child.stdout.on("data", (chunk) => {
+      buffered += chunk;
+      let end;
+      while ((end = buffered.indexOf(`
+`)) >= 0) {
+        const line = buffered.slice(0, end);
+        buffered = buffered.slice(end + 1);
+        let message;
+        try {
+          message = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const waiting = typeof message?.id === "number" ? this.waiting.get(message.id) : undefined;
+        if (!waiting)
+          continue;
+        this.waiting.delete(message.id);
+        waiting.done({ ...message, id: waiting.id });
+      }
+    });
+  }
+  send(message, timeout, connection) {
+    if (this.stopped)
+      return Promise.resolve(message?.id === undefined ? undefined : failed(message.id, "Kuvo Code's tools stopped."));
+    if (message?.id === undefined || message.id === null) {
+      const requestId = message?.params?.requestId;
+      const ours = requestId === undefined ? undefined : this.ours.get(connection + " " + JSON.stringify(requestId));
+      if (message?.method === "notifications/cancelled" && ours === undefined)
+        return Promise.resolve(undefined);
+      this.write(ours === undefined ? message : { ...message, params: { ...message.params, requestId: ours } });
+      return Promise.resolve(undefined);
+    }
+    const id = this.next++;
+    const known = connection + " " + JSON.stringify(message.id);
+    this.ours.set(known, id);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.waiting.delete(id);
+        this.ours.delete(known);
+        this.write({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id, reason: "Took too long." } });
+        resolve(failed(message.id, "Kuvo Code's tools took too long."));
+      }, timeout);
+      this.waiting.set(id, {
+        id: message.id,
+        done: (answer) => {
+          clearTimeout(timer);
+          this.ours.delete(known);
+          resolve(answer);
+        }
+      });
+      this.write({ ...message, id });
+    });
+  }
+  write(message) {
+    try {
+      this.child.stdin.write(JSON.stringify(message) + `
+`);
+    } catch {}
+  }
+  stop() {
+    if (this.stopped)
+      return;
+    this.stopped = true;
+    this.child.kill();
+    for (const [, waiting] of this.waiting)
+      waiting.done(failed(waiting.id, "Kuvo Code's tools stopped."));
+    this.waiting.clear();
+  }
+}
+var failed = (id, message) => ({ jsonrpc: "2.0", id, error: { code: -32603, message } });
+
 // Packages/Box/src/agents/pictures.ts
 import { extname as extname2 } from "path";
 import { pathToFileURL } from "url";
@@ -6120,6 +6456,7 @@ class AcpThread {
   active;
   loading = false;
   stale;
+  fenced = false;
   startedOver = false;
   onOwnTurn;
   own;
@@ -6132,17 +6469,20 @@ class AcpThread {
   async open(input, hooks) {
     const skills = await this.flavor.skills?.(this.session.location.directory, hooks);
     const mode = { approvesAll: hooks.approvesAll(), plan: input.plan, skills };
-    const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key });
+    const fence = this.flavor.whole && fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) : "";
+    const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence });
     if (this.rpc && !this.rpc.isClosed && this.spawnedWith === key && this.rpc !== this.stale)
       return this.rpc;
     this.close();
     const launch = await this.flavor.command(mode);
+    const whole = this.wholeLaunch(launch.argv, launch.env, launch.cleanEnv, skills);
+    this.fenced = Boolean(whole);
     const flavor = this.flavor;
     const startedAt = Date.now();
     let asksSignIn = false;
-    const rpc = new RPC(launch.argv, {
-      cwd: launch.cwd ?? this.session.location.directory,
-      env: { ...launch.env, OPENCODE_SESSION_ID: this.session.id },
+    const rpc = new RPC(whole?.argv ?? launch.argv, {
+      cwd: whole ? this.session.location.directory : launch.cwd ?? this.session.location.directory,
+      env: { ...whole?.env ?? launch.env, OPENCODE_SESSION_ID: this.session.id },
       cleanEnv: launch.cleanEnv,
       jsonrpc: true,
       firstID: 2 ** 30,
@@ -6195,7 +6535,7 @@ class AcpThread {
       const watch = setInterval(() => {
         if (rpc.isClosed)
           return clearInterval(watch);
-        if (!existsSync7(file))
+        if (!existsSync8(file))
           return;
         clearInterval(watch);
         asksSignIn = true;
@@ -6267,8 +6607,27 @@ class AcpThread {
     }
     return rpc;
   }
+  wholeLaunch(argv, env, cleanEnv, skills) {
+    const whole = this.flavor.whole;
+    if (!whole || !fenceRules())
+      return;
+    const directory = this.session.location.directory;
+    const attached = fenceAttachments(directory);
+    const relayed = relayedTools(this.session.id);
+    const started = cleanEnv ? env ?? {} : { ...process.env, ...env };
+    const fence = fenceAgent(argv[0], directory, {
+      homes: whole.homes(started),
+      state: whole.state,
+      kept: whole.kept,
+      read: [...skills?.startsWith("/") ? [skills] : [], ...attached ? [attached] : []],
+      port: relayed ? relayPort() : undefined
+    });
+    if (!fence)
+      throw new Error(`${this.name} runs in the sandbox here, and it isn't ready: restart Kuvo Code.`);
+    return { argv: [fence.command, ...argv.slice(1)], env: { ...env, ...whole.env, ...fence.env } };
+  }
   mcpServers(init) {
-    const tools = kuvoTools(this.session.id);
+    const tools = this.fenced ? relayedTools(this.session.id) : kuvoTools(this.session.id);
     if (!tools || tools.kind === "http" && !init?.agentCapabilities?.mcpCapabilities?.http)
       return [];
     loadKuvoTools();
@@ -6326,7 +6685,7 @@ class AcpThread {
       if (file.mime.startsWith("image/") && data)
         prompt.push({ type: "image", data, mimeType: file.mime });
       else if (file.path)
-        others.push(file.path);
+        others.push(this.fenced ? fenceCopy(this.session.location.directory, file.path) : file.path);
     }
     let text = input.text;
     const instructions = hooks.instructions();
@@ -6673,13 +7032,13 @@ ${others.map((path) => `- ${path}`).join(`
       if (!path && !all)
         continue;
       const served = path && clientRead(call) ? active.served.get(path)?.shift() : undefined;
-      this.settleRead(active, id, served ?? (path && !existsSync7(path) ? { error: "There's no such file." } : { text: "" }));
+      this.settleRead(active, id, served ?? (path && !existsSync8(path) ? { error: "There's no such file." } : { text: "" }));
     }
   }
   readPath(call) {
     const raw = call.rawInput ?? {};
     const path = call.locations?.[0]?.path ?? raw.absolute_path ?? raw.path ?? raw.file_path ?? raw.filePath;
-    return typeof path === "string" && path ? resolve3(this.session.location.directory, path) : undefined;
+    return typeof path === "string" && path ? resolve4(this.session.location.directory, path) : undefined;
   }
   stepTokens(active) {
     return active.used === undefined ? undefined : { input: active.used, output: 0, reasoning: 0, cache: { read: 0, write: 0 } };
@@ -6750,7 +7109,7 @@ ${others.map((path) => `- ${path}`).join(`
     const active = this.active;
     if (!active)
       return;
-    const file = resolve3(this.session.location.directory, path);
+    const file = resolve4(this.session.location.directory, path);
     for (const [id, call] of active.tools) {
       if (this.openRead(call) && !call.settled && clientRead(call) && this.readPath(call) === file)
         return this.settleRead(active, id, served);
@@ -6812,10 +7171,10 @@ ${others.map((path) => `- ${path}`).join(`
       case "fs/read_text_file": {
         if (!this.flavor.fileSystem)
           break;
-        await this.allowFile(active, "read", resolve3(this.session.location.directory, params.path));
+        await this.allowFile(active, "read", resolve4(this.session.location.directory, params.path));
         let content;
         try {
-          content = readFileSync13(resolve3(this.session.location.directory, params.path), "utf8");
+          content = readFileSync14(resolve4(this.session.location.directory, params.path), "utf8");
         } catch (error) {
           this.served(params.path, { error: error?.code === "ENOENT" ? "There's no such file." : failure(error).message });
           throw error;
@@ -6833,10 +7192,10 @@ ${others.map((path) => `- ${path}`).join(`
       case "fs/write_text_file": {
         if (!this.flavor.fileSystem)
           break;
-        const file = resolve3(this.session.location.directory, params.path);
+        const file = resolve4(this.session.location.directory, params.path);
         if (active?.hooks.check({ action: "edit", resources: [file] }) === "deny")
           throw new RPCError(-32000, "Kuvo Code's settings don't allow this (Settings \u203A Permissions, or this session's rules).");
-        mkdirSync8(dirname6(file), { recursive: true });
+        mkdirSync9(dirname7(file), { recursive: true });
         writeFileSync10(file, params.content ?? "");
         return {};
       }
@@ -6890,6 +7249,9 @@ ${others.map((path) => `- ${path}`).join(`
   close() {
     this.rpc?.kill();
     this.rpc = undefined;
+    if (this.fenced)
+      dropRelayed(this.session.id);
+    this.fenced = false;
   }
 }
 function kuvoTool(call) {
@@ -7045,7 +7407,7 @@ function errorText(error) {
 }
 function safeBase64(path) {
   try {
-    return readFileSync13(path).toString("base64");
+    return readFileSync14(path).toString("base64");
   } catch {
     return;
   }
@@ -7063,12 +7425,12 @@ function questionFields(questions) {
 }
 
 // Packages/Box/src/agents/signin.ts
-import { chmodSync as chmodSync2, existsSync as existsSync8, mkdirSync as mkdirSync9, readFileSync as readFileSync14, rmSync as rmSync6, writeFileSync as writeFileSync11 } from "fs";
-import { join as join14 } from "path";
+import { chmodSync as chmodSync2, existsSync as existsSync9, mkdirSync as mkdirSync10, readFileSync as readFileSync15, rmSync as rmSync7, writeFileSync as writeFileSync11 } from "fs";
+import { join as join15 } from "path";
 function catcher(temporary) {
-  const path = join14(temporary, "bin", "kuvo-catch-url");
-  if (!existsSync8(path)) {
-    mkdirSync9(join14(temporary, "bin"), { recursive: true });
+  const path = join15(temporary, "bin", "kuvo-catch-url");
+  if (!existsSync9(path)) {
+    mkdirSync10(join15(temporary, "bin"), { recursive: true });
     writeFileSync11(path, `#!/bin/sh
 printf '%s\\n' "$1" >> "$KUVO_URL_FILE"
 `);
@@ -7077,7 +7439,7 @@ printf '%s\\n' "$1" >> "$KUVO_URL_FILE"
   return path;
 }
 async function commandSignIn(options) {
-  const urlFile = join14(options.temporary, `${newID("att")}.url`);
+  const urlFile = join15(options.temporary, `${newID("att")}.url`);
   const child = Bun.spawn([options.command, ...options.args], {
     env: { ...process.env, ...options.env, BROWSER: catcher(options.temporary), KUVO_URL_FILE: urlFile },
     stdin: "pipe",
@@ -7100,7 +7462,7 @@ async function commandSignIn(options) {
     options.onComplete?.();
   };
   child.exited.then(async (code) => {
-    rmSync6(urlFile, { force: true });
+    rmSync7(urlFile, { force: true });
     if (status.status !== "pending")
       return;
     const signedIn = await options.signedIn().catch(() => false);
@@ -7136,8 +7498,8 @@ async function commandSignIn(options) {
       if (printed)
         url = printed;
     } else {
-      if (existsSync8(urlFile))
-        url = readFileSync14(urlFile, "utf8").split(`
+      if (existsSync9(urlFile))
+        url = readFileSync15(urlFile, "utf8").split(`
 `)[0].trim();
       if (printed)
         printedAt ??= waited;
@@ -7193,16 +7555,16 @@ function lastLines(text) {
 }
 
 // Packages/Box/src/agents/skills.ts
-import { createHash as createHash3 } from "crypto";
-import { cpSync, existsSync as existsSync9, mkdirSync as mkdirSync10, readdirSync as readdirSync9, readFileSync as readFileSync15, renameSync as renameSync7, rmSync as rmSync7, statSync as statSync5, symlinkSync, utimesSync, writeFileSync as writeFileSync12 } from "fs";
-import { dirname as dirname7, join as join15, resolve as resolve4, sep as sep10 } from "path";
+import { createHash as createHash4 } from "crypto";
+import { cpSync, existsSync as existsSync10, mkdirSync as mkdirSync11, readdirSync as readdirSync10, readFileSync as readFileSync16, renameSync as renameSync7, rmSync as rmSync8, statSync as statSync6, symlinkSync, utimesSync, writeFileSync as writeFileSync12 } from "fs";
+import { dirname as dirname8, join as join16, resolve as resolve5, sep as sep10 } from "path";
 var link;
 var home;
 function setSkillSource(engine, folder) {
   link = engine;
   home = folder;
 }
-var skillsRoot = () => home ? join15(home, "skills") : undefined;
+var skillsRoot = () => home ? join16(home, "skills") : undefined;
 var listed = new Map;
 var said = new Map;
 function skillFolders() {
@@ -7222,9 +7584,9 @@ function engineSkills(directory) {
       for (const skill of list) {
         const name = typeof skill?.name === "string" ? skill.name : typeof skill?.id === "string" ? skill.id : undefined;
         const path = typeof skill?.path === "string" ? skill.path : undefined;
-        if (!name || !path || path.startsWith("/builtin/") || !path.endsWith("SKILL.md") || !existsSync9(path))
+        if (!name || !path || path.startsWith("/builtin/") || !path.endsWith("SKILL.md") || !existsSync10(path))
           continue;
-        found.push({ name, folder: dirname7(path) });
+        found.push({ name, folder: dirname8(path) });
       }
       if (!list.length)
         listed.delete(directory);
@@ -7240,10 +7602,10 @@ function engineSkills(directory) {
 }
 function upward(directory) {
   const folders = [];
-  let at = resolve4(directory);
+  let at = resolve5(directory);
   while (true) {
     folders.push(at);
-    const up = dirname7(at);
+    const up = dirname8(at);
     if (up === at)
       return folders;
     at = up;
@@ -7275,9 +7637,9 @@ function stamp2(folder) {
   let size = 0;
   let changed = 0;
   const visit = (at, depth) => {
-    for (const name of readdirSync9(at)) {
-      const path = join15(at, name);
-      const info = statSync5(path);
+    for (const name of readdirSync10(at)) {
+      const path = join16(at, name);
+      const info = statSync6(path);
       changed = Math.max(changed, info.mtimeMs);
       if (info.isDirectory()) {
         if (depth < 8 && !visit(path, depth + 1))
@@ -7317,7 +7679,7 @@ function copy(from, to) {
     cpSync(from, to, { recursive: true, dereference: true, errorOnExist: false, force: true });
     return true;
   } catch {
-    rmSync7(to, { recursive: true, force: true });
+    rmSync8(to, { recursive: true, force: true });
     return false;
   }
 }
@@ -7327,74 +7689,74 @@ function skillsFolder(skills) {
   const list = named(skills);
   if (!list.length)
     return;
-  const set = createHash3("sha256").update(list.map((entry) => `${entry.name}\x00${entry.skill.folder}\x00${entry.stamp}`).join(`
+  const set = createHash4("sha256").update(list.map((entry) => `${entry.name}\x00${entry.skill.folder}\x00${entry.stamp}`).join(`
 `)).digest("hex").slice(0, 16);
-  const root = join15(home, "skills");
-  const folder = join15(root, set);
+  const root = join16(home, "skills");
+  const folder = join16(root, set);
   const now = new Date;
-  if (existsSync9(join15(folder, ".claude-plugin", "plugin.json"))) {
+  if (existsSync10(join16(folder, ".claude-plugin", "plugin.json"))) {
     try {
       utimesSync(folder, now, now);
     } catch {}
     return folder;
   }
   tidy(root);
-  const making = join15(root, `.${set}-${process.pid}`);
-  rmSync7(making, { recursive: true, force: true });
-  mkdirSync10(join15(making, "skills"), { recursive: true, mode: 448 });
-  mkdirSync10(join15(making, ".claude-plugin"), { recursive: true });
-  mkdirSync10(join15(making, ".cursor"), { recursive: true });
+  const making = join16(root, `.${set}-${process.pid}`);
+  rmSync8(making, { recursive: true, force: true });
+  mkdirSync11(join16(making, "skills"), { recursive: true, mode: 448 });
+  mkdirSync11(join16(making, ".claude-plugin"), { recursive: true });
+  mkdirSync11(join16(making, ".cursor"), { recursive: true });
   for (const entry of list)
-    copy(entry.skill.folder, join15(making, "skills", entry.name));
-  writeFileSync12(join15(making, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "kuvo-code", description: "The skills in Kuvo Code's Settings \u203A Skills.", version: "1.0.0" }, null, 2) + `
+    copy(entry.skill.folder, join16(making, "skills", entry.name));
+  writeFileSync12(join16(making, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "kuvo-code", description: "The skills in Kuvo Code's Settings \u203A Skills.", version: "1.0.0" }, null, 2) + `
 `);
-  symlinkSync(join15("..", "skills"), join15(making, ".cursor", "skills"));
+  symlinkSync(join16("..", "skills"), join16(making, ".cursor", "skills"));
   try {
     renameSync7(making, folder);
   } catch {
-    rmSync7(making, { recursive: true, force: true });
+    rmSync8(making, { recursive: true, force: true });
   }
   return folder;
 }
 function tidy(root) {
   let names = [];
   try {
-    names = readdirSync9(root);
+    names = readdirSync10(root);
   } catch {
     return;
   }
   for (const name of names) {
-    const path = join15(root, name);
+    const path = join16(root, name);
     try {
-      if (Date.now() - statSync5(path).mtimeMs > 86400000)
-        rmSync7(path, { recursive: true, force: true });
+      if (Date.now() - statSync6(path).mtimeMs > 86400000)
+        rmSync8(path, { recursive: true, force: true });
     } catch {}
   }
 }
 function copySkillsInto(folder, skills) {
   const list = named(skills);
-  const record = join15(folder, ".kuvo-code");
+  const record = join16(folder, ".kuvo-code");
   let before = {};
   try {
-    before = JSON.parse(readFileSync15(record, "utf8"));
+    before = JSON.parse(readFileSync16(record, "utf8"));
   } catch {}
   const after = {};
   for (const entry of list)
     after[entry.name] = `${entry.skill.folder}\x00${entry.stamp}`;
   if (JSON.stringify(before) !== JSON.stringify(after)) {
-    mkdirSync10(folder, { recursive: true, mode: 448 });
+    mkdirSync11(folder, { recursive: true, mode: 448 });
     for (const name of Object.keys(before))
       if (before[name] !== after[name])
-        rmSync7(join15(folder, folderName(name)), { recursive: true, force: true });
+        rmSync8(join16(folder, folderName(name)), { recursive: true, force: true });
     for (const entry of list) {
-      if (before[entry.name] === after[entry.name] && existsSync9(join15(folder, entry.name)))
+      if (before[entry.name] === after[entry.name] && existsSync10(join16(folder, entry.name)))
         continue;
-      if (!existsSync9(join15(folder, entry.name)) && !copy(entry.skill.folder, join15(folder, entry.name)))
+      if (!existsSync10(join16(folder, entry.name)) && !copy(entry.skill.folder, join16(folder, entry.name)))
         delete after[entry.name];
     }
     writeFileSync12(record, JSON.stringify(after));
   }
-  return list.length ? createHash3("sha256").update(JSON.stringify(after)).digest("hex").slice(0, 16) : undefined;
+  return list.length ? createHash4("sha256").update(JSON.stringify(after)).digest("hex").slice(0, 16) : undefined;
 }
 
 // Packages/Box/src/agents/agents/antigravity.ts
@@ -7466,20 +7828,20 @@ function generatedImages(folder, input, since) {
     return [];
   let names;
   try {
-    names = readdirSync10(folder);
+    names = readdirSync11(folder);
   } catch {
     return [];
   }
   const types = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
   const images = names.map((name) => ({ name, type: types[name.split(".").pop()?.toLowerCase() ?? ""] })).filter((file) => file.type && (!stem || file.name.startsWith(`${stem}_`) || file.name.startsWith(`${stem}.`))).map((file) => ({ ...file, at: (() => {
     try {
-      return statSync6(join16(folder, file.name)).mtimeMs;
+      return statSync7(join17(folder, file.name)).mtimeMs;
     } catch {
       return 0;
     }
   })() })).filter((file) => stem || file.at >= since).sort((a, b) => b.at - a.at);
   const newest = images[0];
-  return newest ? [{ type: "file", uri: pathToFileURL2(join16(folder, newest.name)).href, mime: newest.type, name: newest.name }] : [];
+  return newest ? [{ type: "file", uri: pathToFileURL2(join17(folder, newest.name)).href, mime: newest.type, name: newest.name }] : [];
 }
 
 class AntigravityFollower {
@@ -7519,7 +7881,7 @@ class AntigravityFollower {
   }
   steps(conversation) {
     try {
-      return readFileSync16(join16(this.brain, conversation, ".system_generated", "logs", "transcript.jsonl"), "utf8").split(`
+      return readFileSync17(join17(this.brain, conversation, ".system_generated", "logs", "transcript.jsonl"), "utf8").split(`
 `).flatMap((line) => {
         try {
           const step = JSON.parse(line);
@@ -7697,22 +8059,22 @@ class AntigravityAgent {
     this.providerID = providerID("antigravity", instance.id);
   }
   get root() {
-    return join16(this.context.home, "antigravity");
+    return join17(this.context.home, "antigravity");
   }
   get folder() {
-    return join16(this.root, version);
+    return join17(this.root, version);
   }
   get profile() {
-    return this.instance.home ? join16(this.instance.home, "profile") : join16(this.root, "profile");
+    return this.instance.home ? join17(this.instance.home, "profile") : join17(this.root, "profile");
   }
   get tokenFile() {
-    return join16(this.profile, "antigravity-acp", "acp_token.json");
+    return join17(this.profile, "antigravity-acp", "acp_token.json");
   }
   get modelsFile() {
-    return join16(this.profile, "kuvo-models.json");
+    return join17(this.profile, "kuvo-models.json");
   }
   get isInstalled() {
-    return existsSync10(join16(this.folder, ".complete"));
+    return existsSync11(join17(this.folder, ".complete"));
   }
   methods() {
     return [{ type: "oauth", id: "oauth-personal", label: "Sign in with Google" }];
@@ -7720,7 +8082,7 @@ class AntigravityAgent {
   endedSignIn;
   signInEnded() {
     try {
-      this.endedSignIn = statSync6(this.tokenFile).mtimeMs;
+      this.endedSignIn = statSync7(this.tokenFile).mtimeMs;
     } catch {}
     emit("integration.updated", { integrationID: this.providerID });
   }
@@ -7731,13 +8093,13 @@ class AntigravityAgent {
     if (this.endedSignIn !== undefined) {
       let now;
       try {
-        now = statSync6(this.tokenFile).mtimeMs;
+        now = statSync7(this.tokenFile).mtimeMs;
       } catch {}
       if (now === this.endedSignIn)
         return { installed: this.isInstalled, signedIn: false, ended: true, message: "Google ended this sign-in. Sign in again." };
       this.endedSignIn = undefined;
     }
-    if (!existsSync10(this.tokenFile)) {
+    if (!existsSync11(this.tokenFile)) {
       return {
         installed: this.isInstalled,
         signedIn: false,
@@ -7756,14 +8118,14 @@ class AntigravityAgent {
     const release = releases[`${process.platform}-${process.arch}`];
     if (!release)
       throw new Error("Google doesn't make Antigravity's agent for this computer.");
-    const staging = join16(this.root, `.install-${newID("att")}`);
-    mkdirSync11(staging, { recursive: true });
+    const staging = join17(this.root, `.install-${newID("att")}`);
+    mkdirSync12(staging, { recursive: true });
     try {
-      const archive = join16(staging, "download.zip");
+      const archive = join17(staging, "download.zip");
       const response = await fetch(release.url);
       if (!response.ok || !response.body)
         throw new Error(`Couldn't download Antigravity's agent (HTTP ${response.status}).`);
-      const hash = createHash4("sha256");
+      const hash = createHash5("sha256");
       const writer = Bun.file(archive).writer();
       let bytes = 0;
       this.downloaded = { bytes, total: release.bytes };
@@ -7785,31 +8147,31 @@ class AntigravityAgent {
       const unzipped = await run(zip.program, zip.extract(archive, staging));
       if (unzipped.code !== 0)
         throw new Error(`Couldn't unpack Antigravity's agent: ${unzipped.stderr.trim()}`);
-      rmSync8(archive, { force: true });
+      rmSync9(archive, { force: true });
       for (const name of [executableName, harnessName])
-        chmodSync3(join16(staging, name), 493);
-      writeFileSync13(join16(staging, ".complete"), JSON.stringify({ version, sha256: release.sha256 }));
-      rmSync8(this.folder, { recursive: true, force: true });
+        chmodSync3(join17(staging, name), 493);
+      writeFileSync13(join17(staging, ".complete"), JSON.stringify({ version, sha256: release.sha256 }));
+      rmSync9(this.folder, { recursive: true, force: true });
       renameSync8(staging, this.folder);
-      for (const name of readdirSync10(this.root)) {
+      for (const name of readdirSync11(this.root)) {
         if (name !== version && name !== "profile" && /^\d/.test(name))
-          rmSync8(join16(this.root, name), { recursive: true, force: true });
+          rmSync9(join17(this.root, name), { recursive: true, force: true });
       }
     } finally {
       this.downloaded = undefined;
-      rmSync8(staging, { recursive: true, force: true });
+      rmSync9(staging, { recursive: true, force: true });
     }
   }
   ownSkillFolders(directory) {
-    return [join16(this.profile, "antigravity-cli", "skills"), join16(directory, ".agents", "skills"), join16(directory, ".gemini", "skills")];
+    return [join17(this.profile, "antigravity-cli", "skills"), join17(directory, ".agents", "skills"), join17(directory, ".gemini", "skills")];
   }
   launch() {
-    mkdirSync11(join16(this.profile, "antigravity-acp", "tmp"), { recursive: true, mode: 448 });
-    const settings = join16(this.profile, "antigravity-acp", "settings.json");
-    if (!existsSync10(settings))
+    mkdirSync12(join17(this.profile, "antigravity-acp", "tmp"), { recursive: true, mode: 448 });
+    const settings = join17(this.profile, "antigravity-acp", "settings.json");
+    if (!existsSync11(settings))
       writeFileSync13(settings, JSON.stringify({ auth: { type: "oauth-personal" } }));
-    const temporary = join16(this.context.temporary, "antigravity", newID("att"));
-    mkdirSync11(temporary, { recursive: true });
+    const temporary = join17(this.context.temporary, "antigravity", newID("att"));
+    mkdirSync12(temporary, { recursive: true });
     let env = {};
     for (const [key, value] of Object.entries(process.env))
       if (!scrubbed.includes(key.toUpperCase()))
@@ -7819,13 +8181,13 @@ class AntigravityAgent {
       GEMINI_HOME: this.profile,
       AGY_ACP_FORCE_FILE_STORAGE: "1",
       BROWSER: catcher(this.context.temporary),
-      KUVO_URL_FILE: join16(temporary, "url"),
+      KUVO_URL_FILE: join17(temporary, "url"),
       PYTHONUNBUFFERED: "1",
       TMPDIR: temporary,
-      ANTIGRAVITY_HARNESS_PATH: join16(this.folder, harnessName)
+      ANTIGRAVITY_HARNESS_PATH: join17(this.folder, harnessName)
     });
-    const argv = [join16(this.folder, executableName), "--nosyslog_on_start", ...process.platform === "linux" ? ["--uid="] : []];
-    return { argv, env, cleanEnv: true, onExit: () => rmSync8(temporary, { recursive: true, force: true }), signInFile: join16(temporary, "url") };
+    const argv = [join17(this.folder, executableName), "--nosyslog_on_start", ...process.platform === "linux" ? ["--uid="] : []];
+    return { argv, env, cleanEnv: true, onExit: () => rmSync9(temporary, { recursive: true, force: true }), signInFile: join17(temporary, "url") };
   }
   signsInRemotely = true;
   async signIn() {
@@ -7842,8 +8204,8 @@ class AntigravityAgent {
       if (cancelled)
         return;
       const launch = this.launch();
-      const cwd = join16(this.context.temporary, "antigravity", newID("att"));
-      mkdirSync11(cwd, { recursive: true });
+      const cwd = join17(this.context.temporary, "antigravity", newID("att"));
+      mkdirSync12(cwd, { recursive: true });
       rpc = new RPC(launch.argv, {
         cwd,
         env: launch.env,
@@ -7861,11 +8223,11 @@ class AntigravityAgent {
       });
       rpc.onExit = () => {
         launch.onExit();
-        rmSync8(cwd, { recursive: true, force: true });
+        rmSync9(cwd, { recursive: true, force: true });
       };
       const watch = setInterval(() => {
         try {
-          found(readFileSync16(launch.env.KUVO_URL_FILE, "utf8").split(`
+          found(readFileSync17(launch.env.KUVO_URL_FILE, "utf8").split(`
 `)[0].trim());
         } catch {}
       }, 300);
@@ -7917,8 +8279,8 @@ class AntigravityAgent {
     };
   }
   async signOut() {
-    rmSync8(this.tokenFile, { force: true });
-    rmSync8(this.modelsFile, { force: true });
+    rmSync9(this.tokenFile, { force: true });
+    rmSync9(this.modelsFile, { force: true });
   }
   saveModels(setup) {
     const option = (setup?.configOptions ?? []).find((option) => option.id === "model" || option.category === "model");
@@ -7938,14 +8300,14 @@ class AntigravityAgent {
       writeFileSync13(this.modelsFile, JSON.stringify({ current: option?.currentValue, models: flat }));
   }
   removeSessionFiles(sessionID) {
-    const folder = join16(this.profile, "antigravity-acp");
+    const folder = join17(this.profile, "antigravity-acp");
     for (const suffix of [".db", ".db-wal", ".db-shm", ".db-journal", ".meta"])
-      rmSync8(join16(folder, "conversations", sessionID + suffix), { force: true });
-    rmSync8(join16(folder, "brain", sessionID), { recursive: true, force: true });
+      rmSync9(join17(folder, "conversations", sessionID + suffix), { force: true });
+    rmSync9(join17(folder, "brain", sessionID), { recursive: true, force: true });
   }
   async models() {
     try {
-      const saved = JSON.parse(readFileSync16(this.modelsFile, "utf8"));
+      const saved = JSON.parse(readFileSync17(this.modelsFile, "utf8"));
       return saved.models.map((info, index) => model(this.providerID, info.value, info.name, { images: true, released: info.value === saved.current ? 2000 : 1000 - index, context: this.windows.get(info.value) ?? 1e6 }));
     } catch {
       return [];
@@ -7967,11 +8329,11 @@ class AntigravityAgent {
       follow: (sessionId, turn, hooks) => {
         let follower = followers.get(sessionId);
         if (!follower)
-          followers.set(sessionId, follower = new AntigravityFollower(join16(agent.profile, "antigravity-acp", "brain"), sessionId));
+          followers.set(sessionId, follower = new AntigravityFollower(join17(agent.profile, "antigravity-acp", "brain"), sessionId));
         return follower.follow(turn, hooks);
       },
       hides: (call) => /\b(start_subagent|invoke_subagent)\b/.test(`${call?.title ?? ""} ${call?.rawInput?.name ?? ""}`),
-      madeFiles: (call, sessionId, since) => /\bgenerate_image\b/.test(String(call?.title ?? "")) ? generatedImages(join16(agent.profile, "antigravity-acp", "brain", sessionId), call?.rawInput ?? {}, since) : [],
+      madeFiles: (call, sessionId, since) => /\bgenerate_image\b/.test(String(call?.title ?? "")) ? generatedImages(join17(agent.profile, "antigravity-acp", "brain", sessionId), call?.rawInput ?? {}, since) : [],
       authMethod: () => "oauth-personal",
       async command() {
         if (!agent.isInstalled)
@@ -7979,7 +8341,7 @@ class AntigravityAgent {
         return agent.launch();
       },
       async skills(directory, hooks) {
-        return copySkillsInto(join16(agent.profile, "config", "skills"), await skillsFor(directory, agent.ownSkillFolders(directory), turnedOff(hooks)));
+        return copySkillsInto(join17(agent.profile, "config", "skills"), await skillsFor(directory, agent.ownSkillFolders(directory), turnedOff(hooks)));
       },
       asksSignIn: (line) => line.includes(signInLine),
       limitReply: (text) => {
@@ -8041,8 +8403,8 @@ import { join as join19 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
 
 // Packages/Box/src/agents/maintenance.ts
-import { existsSync as existsSync11, realpathSync as realpathSync3 } from "fs";
-import { basename as basename5, join as join17 } from "path";
+import { existsSync as existsSync12, realpathSync as realpathSync4 } from "fs";
+import { basename as basename6, join as join18 } from "path";
 var checked = new Map;
 var newest = new Map;
 var underWay = new Map;
@@ -8162,25 +8524,25 @@ async function npmLatest(name, fresh, tag = "latest") {
 async function resolveUpdater(definition) {
   let realPath = definition.executable;
   try {
-    realPath = realpathSync3(definition.executable);
+    realPath = realpathSync4(definition.executable);
   } catch {}
-  const name = basename5(definition.executable);
+  const name = basename6(definition.executable);
   const native = definition.nativeUpdate;
   const nativeUpdater = native ? { command: [definition.executable, ...native.args], shown: [name, ...native.args].join(" "), distTag: native.distTag?.() } : {};
   if (native?.isNative(realPath) || native && native.isNative(definition.executable))
     return nativeUpdater;
   const prefix = npmGlobalPrefix(realPath, definition.npmPackage);
   if (prefix) {
-    const npm = existsSync11(join17(prefix, "bin", "npm")) ? join17(prefix, "bin", "npm") : "npm";
+    const npm = existsSync12(join18(prefix, "bin", "npm")) ? join18(prefix, "bin", "npm") : "npm";
     return {
       command: [npm, "install", "-g", "--prefix", prefix, `--allow-scripts=${definition.npmPackage}`, `${definition.npmPackage}@latest`],
       shown: `npm install -g ${definition.npmPackage}@latest`,
-      env: { PATH: `${join17(prefix, "bin")}:${process.env.PATH ?? ""}` }
+      env: { PATH: `${join18(prefix, "bin")}:${process.env.PATH ?? ""}` }
     };
   }
   const keg = homebrewKeg(realPath);
   if (keg && keg.name.toLowerCase() !== "mise") {
-    const brew = existsSync11(join17(keg.prefix, "bin", "brew")) ? join17(keg.prefix, "bin", "brew") : which("brew");
+    const brew = existsSync12(join18(keg.prefix, "bin", "brew")) ? join18(keg.prefix, "bin", "brew") : which("brew");
     if (brew) {
       const said = (await run(brew, ["--prefix"], { timeout: 15000 }).catch(() => {
         return;
@@ -8188,7 +8550,7 @@ async function resolveUpdater(definition) {
       let brewPrefix = said;
       try {
         if (said)
-          brewPrefix = realpathSync3(said);
+          brewPrefix = realpathSync4(said);
       } catch {}
       if (brewPrefix && brewPrefix === keg.prefix) {
         const cask = keg.kind === "cask";
@@ -8269,164 +8631,6 @@ class Queue {
         return Promise.resolve({ value: undefined, done: true });
       }
     };
-  }
-}
-
-// Packages/Box/src/agents/fence.ts
-import { createHash as createHash5, randomBytes as randomBytes3 } from "crypto";
-import { constants as constants2, copyFileSync, existsSync as existsSync12, lstatSync as lstatSync3, mkdirSync as mkdirSync12, readdirSync as readdirSync11, readFileSync as readFileSync17, realpathSync as realpathSync4, rmSync as rmSync9, statSync as statSync7 } from "fs";
-import { basename as basename6, dirname as dirname8, join as join18, resolve as resolve5 } from "path";
-var folder = () => process.env.KUVO_FENCE ?? (machineHome ? join18(machineHome, "run", "fence") : undefined);
-function fenceOn() {
-  const where = folder();
-  return Boolean(where) && process.env.KUVO_SANDBOX !== "off" && existsSync12(join18(where, "on"));
-}
-function fenceRules() {
-  const where = folder();
-  if (!where || process.env.KUVO_SANDBOX === "off" || !existsSync12(join18(where, "on")))
-    return;
-  try {
-    const read = JSON.parse(readFileSync17(join18(where, "policy.json"), "utf8"));
-    const paths = (value) => Array.isArray(value) ? value.filter((each) => typeof each === "string" && each.startsWith("/")) : [];
-    return { hidden: paths(read.hidden), readable: paths(read.readable), writable: paths(read.writable), readOnly: paths(read.readOnly) };
-  } catch {
-    return;
-  }
-}
-var real = (place) => {
-  try {
-    return realpathSync4(place);
-  } catch {
-    return place;
-  }
-};
-function allowedFolders(directory) {
-  const where = folder();
-  if (!where)
-    return [];
-  try {
-    return readFileSync17(join18(where, "allowed", sum(real(directory))), "utf8").split(`
-`).filter((line) => line.startsWith("/") && real(line) === line).slice(0, 8);
-  } catch {
-    return [];
-  }
-}
-var fenceKey = () => JSON.stringify(fenceRules() ?? null);
-var sum = (place) => createHash5("sha256").update(place).digest("hex").slice(0, 32);
-function isRepository(git) {
-  try {
-    if (lstatSync3(git).isSymbolicLink() || !statSync7(join18(git, "HEAD")).isFile())
-      return false;
-    return statSync7(join18(git, "objects")).isDirectory() && statSync7(join18(git, "refs")).isDirectory();
-  } catch {
-    return false;
-  }
-}
-function repositoryOf2(folder) {
-  const realOr = (place) => {
-    try {
-      return realpathSync4(place);
-    } catch {
-      return "";
-    }
-  };
-  for (let at = folder;at && at !== dirname8(at); at = dirname8(at)) {
-    const git = join18(at, ".git");
-    let link;
-    try {
-      link = lstatSync3(git);
-    } catch {
-      continue;
-    }
-    if (link.isSymbolicLink())
-      return "";
-    if (link.isDirectory())
-      return isRepository(git) ? realOr(git) : "";
-    try {
-      const named = readFileSync17(git, "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
-      if (!named)
-        return "";
-      const own = realOr(resolve5(at, named));
-      if (!own || basename6(dirname8(own)) !== "worktrees")
-        return "";
-      if (realOr(readFileSync17(join18(own, "gitdir"), "utf8").trim()) !== realOr(git))
-        return "";
-      const common = realOr(resolve5(own, readFileSync17(join18(own, "commondir"), "utf8").trim()));
-      return common && common === dirname8(dirname8(own)) && isRepository(common) ? common : "";
-    } catch {
-      return "";
-    }
-  }
-  return "";
-}
-function fenceShell(directory) {
-  const where = folder();
-  if (!where || !fenceRules())
-    return;
-  const mine = basename6(process.env.SHELL ?? "");
-  const shell = [mine, "zsh", "bash"].filter((name) => name === "zsh" || name === "bash").map((name) => join18(where, "shell", name)).find((place) => existsSync12(place));
-  if (!shell)
-    return;
-  const work = real(directory);
-  const temporary = join18(where, "tmp", sum(work));
-  mkdirSync12(temporary, { recursive: true, mode: 448 });
-  return { shell, work, git: repositoryOf2(work), temporary };
-}
-var AGENT_FOLDERS = 4;
-function fenceAgent(program, directory, mine) {
-  const where = folder();
-  if (!where || !fenceRules())
-    return;
-  const command = join18(where, "shell", "run");
-  if (!existsSync12(command))
-    return;
-  const work = real(directory);
-  const places = (list) => [...new Set(list.map(real))].slice(0, AGENT_FOLDERS).join(`
-`);
-  const names = (list) => list.filter((name) => name && !name.includes("/") && !name.includes(`
-`)).join(`
-`);
-  return {
-    command,
-    env: {
-      KUVO_FENCE_SHELL: program,
-      KUVO_FENCE_WORK: work,
-      KUVO_FENCE_GIT: repositoryOf2(work),
-      KUVO_FENCE_OWN: places(mine.homes),
-      KUVO_FENCE_READ: places(mine.read),
-      KUVO_FENCE_STATE: names(mine.state),
-      KUVO_FENCE_KEPT: names(mine.kept),
-      KUVO_FENCE_PORT: String(mine.port ?? 0)
-    }
-  };
-}
-function fenceAttachments(directory) {
-  const where = folder();
-  if (!where || !fenceRules())
-    return;
-  const attached = join18(where, "attachments", sum(real(directory)));
-  try {
-    mkdirSync12(attached, { recursive: true, mode: 448 });
-    return attached;
-  } catch {
-    return;
-  }
-}
-function fenceCopy(directory, file) {
-  const attached = fenceAttachments(directory);
-  if (!attached)
-    return file;
-  const copy = join18(attached, `${randomBytes3(8).toString("hex")}-${basename6(file)}`);
-  try {
-    for (const name of readdirSync11(attached))
-      if (Date.now() - statSync7(join18(attached, name)).ctimeMs > 7 * 86400000)
-        rmSync9(join18(attached, name), { force: true });
-  } catch {}
-  try {
-    copyFileSync(file, copy, constants2.COPYFILE_EXCL);
-    return copy;
-  } catch {
-    return file;
   }
 }
 
@@ -9999,184 +10203,6 @@ function safeBase642(path) {
 import { existsSync as existsSync14, lstatSync as lstatSync4, mkdirSync as mkdirSync13, readdirSync as readdirSync12, readFileSync as readFileSync19, readlinkSync, rmSync as rmSync10, symlinkSync as symlinkSync2 } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join20 } from "path";
-
-// Packages/Box/src/agents/toolrelay.ts
-import { randomBytes as randomBytes4 } from "crypto";
-import { spawn as spawn3 } from "child_process";
-var server2;
-var keys = new Map;
-var sessionsByKey = new Map;
-var programs = new Map;
-function relayedTools(sessionID) {
-  const tools = kuvoTools(sessionID);
-  if (!tools)
-    return;
-  server2 ??= Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: answer });
-  let key = keys.get(sessionID);
-  if (!key) {
-    key = randomBytes4(24).toString("hex");
-    keys.set(sessionID, key);
-    sessionsByKey.set(key, sessionID);
-  }
-  return { kind: "http", name: tools.name, key: tools.key, timeout: tools.timeout, url: `http://127.0.0.1:${server2.port}/mcp`, headers: { Authorization: `Bearer ${key}` } };
-}
-var relayPort = () => server2?.port;
-function dropRelayed(sessionID) {
-  const key = keys.get(sessionID);
-  if (key)
-    sessionsByKey.delete(key);
-  keys.delete(sessionID);
-  programs.get(sessionID)?.stop();
-  programs.delete(sessionID);
-}
-async function answer(request) {
-  const key = /^Bearer (\S+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
-  const sessionID = key ? sessionsByKey.get(key) : undefined;
-  if (!sessionID)
-    return new Response("Not allowed.", { status: 401 });
-  const tools = kuvoTools(sessionID);
-  if (!tools)
-    return new Response("Kuvo Code's tools aren't here now.", { status: 503 });
-  let body;
-  if (request.method === "POST") {
-    try {
-      body = ownSession(await request.json(), sessionID);
-    } catch {
-      return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, { status: 400 });
-    }
-  }
-  if (tools.kind === "http") {
-    const headers = { ...tools.headers, Accept: request.headers.get("accept") ?? "application/json, text/event-stream" };
-    for (const name of ["content-type", "mcp-session-id", "mcp-protocol-version", "last-event-id"]) {
-      const value = request.headers.get(name);
-      if (value)
-        headers[name] = value;
-    }
-    try {
-      const signal = request.method === "POST" ? AbortSignal.any([request.signal, AbortSignal.timeout(tools.timeout)]) : request.signal;
-      const response = await fetch(tools.url, { method: request.method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal });
-      const back = new Headers;
-      for (const name of ["content-type", "mcp-session-id"]) {
-        const value = response.headers.get(name);
-        if (value)
-          back.set(name, value);
-      }
-      return new Response(response.body, { status: response.status, headers: back });
-    } catch {
-      return new Response("Kuvo Code's tools didn't answer.", { status: 502 });
-    }
-  }
-  if (request.method !== "POST")
-    return new Response(null, { status: 405, headers: { Allow: "POST" } });
-  let program = programs.get(sessionID);
-  if (!program || program.stopped || program.key !== tools.key) {
-    program?.stop();
-    program = new Program(tools);
-    programs.set(sessionID, program);
-  }
-  const messages = Array.isArray(body) ? body : [body];
-  const starts = messages.some((message) => message?.method === "initialize");
-  const connection = starts ? randomBytes4(12).toString("hex") : request.headers.get("mcp-session-id") ?? "";
-  const answers = await Promise.all(messages.map((message) => program.send(message, tools.timeout, connection)));
-  const replies = answers.filter((each) => each !== undefined);
-  const headers = starts ? { "mcp-session-id": connection } : undefined;
-  if (!replies.length)
-    return new Response(null, { status: 202, headers });
-  return Response.json(Array.isArray(body) ? replies : replies[0], { headers });
-}
-function ownSession(body, sessionID) {
-  const each = (message) => {
-    if (message?.method !== "tools/call" || typeof message.params !== "object" || !message.params)
-      return message;
-    return { ...message, params: { ...message.params, _meta: { ...message.params._meta ?? {}, "ai.opencode/sessionID": sessionID } } };
-  };
-  return Array.isArray(body) ? body.map(each) : each(body);
-}
-
-class Program {
-  key;
-  stopped = false;
-  child;
-  next = 1;
-  waiting = new Map;
-  ours = new Map;
-  constructor(tools) {
-    this.key = tools.key;
-    this.child = spawn3(tools.command, tools.args, { env: { ...process.env, ...tools.env }, stdio: ["pipe", "pipe", "ignore"] });
-    this.child.on("error", () => this.stop());
-    this.child.on("exit", () => this.stop());
-    let buffered = "";
-    this.child.stdout.setEncoding("utf8");
-    this.child.stdout.on("data", (chunk) => {
-      buffered += chunk;
-      let end;
-      while ((end = buffered.indexOf(`
-`)) >= 0) {
-        const line = buffered.slice(0, end);
-        buffered = buffered.slice(end + 1);
-        let message;
-        try {
-          message = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        const waiting = typeof message?.id === "number" ? this.waiting.get(message.id) : undefined;
-        if (!waiting)
-          continue;
-        this.waiting.delete(message.id);
-        waiting.done({ ...message, id: waiting.id });
-      }
-    });
-  }
-  send(message, timeout, connection) {
-    if (this.stopped)
-      return Promise.resolve(message?.id === undefined ? undefined : failed(message.id, "Kuvo Code's tools stopped."));
-    if (message?.id === undefined || message.id === null) {
-      const requestId = message?.params?.requestId;
-      const ours = requestId === undefined ? undefined : this.ours.get(connection + " " + JSON.stringify(requestId));
-      if (message?.method === "notifications/cancelled" && ours === undefined)
-        return Promise.resolve(undefined);
-      this.write(ours === undefined ? message : { ...message, params: { ...message.params, requestId: ours } });
-      return Promise.resolve(undefined);
-    }
-    const id = this.next++;
-    const known = connection + " " + JSON.stringify(message.id);
-    this.ours.set(known, id);
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        this.waiting.delete(id);
-        this.ours.delete(known);
-        this.write({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id, reason: "Took too long." } });
-        resolve(failed(message.id, "Kuvo Code's tools took too long."));
-      }, timeout);
-      this.waiting.set(id, {
-        id: message.id,
-        done: (answer) => {
-          clearTimeout(timer);
-          this.ours.delete(known);
-          resolve(answer);
-        }
-      });
-      this.write({ ...message, id });
-    });
-  }
-  write(message) {
-    try {
-      this.child.stdin.write(JSON.stringify(message) + `
-`);
-    } catch {}
-  }
-  stop() {
-    if (this.stopped)
-      return;
-    this.stopped = true;
-    this.child.kill();
-    for (const [, waiting] of this.waiting)
-      waiting.done(failed(waiting.id, "Kuvo Code's tools stopped."));
-    this.waiting.clear();
-  }
-}
-var failed = (id, message) => ({ jsonrpc: "2.0", id, error: { code: -32603, message } });
 
 // Packages/Box/src/agents/agents/codex-citations.ts
 import { basename as basename7 } from "path";
@@ -12773,6 +12799,8 @@ import { homedir as homedir4 } from "os";
 import { mkdirSync as mkdirSync15, readFileSync as readFileSync21, writeFileSync as writeFileSync14 } from "fs";
 import { dirname as dirname9, join as join22 } from "path";
 var places3 = [join22(homedir4(), ".grok/bin"), join22(homedir4(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
+var STATE_IN_HOME2 = ["sessions", "logs", "memtrace", "debug"];
+var KEPT_IN_HOME2 = ["*.toml", "*.md", "lsp.json", "settings_cache.json", "models_cache.json"];
 
 class GrokAgent {
   context;
@@ -12914,6 +12942,7 @@ class GrokAgent {
       authMethod: () => process.env.XAI_API_KEY ? "xai.api_key" : "cached_token",
       restartAfterInterrupt: true,
       program: () => agent.program,
+      whole: { homes: (env) => [env.GROK_HOME ?? join22(homedir4(), ".grok")], state: STATE_IN_HOME2, kept: KEPT_IN_HOME2, env: { GROK_SANDBOX: "off" } },
       async command({ approvesAll, plan, skills }) {
         const executable = agent.executable();
         if (!executable)
@@ -21071,4 +21100,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 329ac93ea01fe792494b22decca30b2381f0c4da43eb1bcc64f2aa357b86abca
+// Built from Packages/Box/src/agents 1be9683c4f2e92fe4d265105d0f8cc3aecc86bed478b428ea81c30bbd40d033a

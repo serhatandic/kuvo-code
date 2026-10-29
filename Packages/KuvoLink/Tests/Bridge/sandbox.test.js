@@ -225,6 +225,7 @@ test("a command can't change what git runs on its own, the engine's settings or 
   fs.mkdirSync(path.join(project, ".cursor"));
   // A Codex folder a project already has (as your home does, when a session's folder is it).
   fs.mkdirSync(path.join(project, "app", ".codex"), { recursive: true });
+  fs.mkdirSync(path.join(project, "app", ".grok"), { recursive: true });
   const running = await start(box);
   try {
     assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
@@ -247,6 +248,10 @@ test("a command can't change what git runs on its own, the engine's settings or 
       ["add Codex's hooks", "echo '{}' > app/.codex/hooks.json"],
       ["add Codex's rules", "mkdir -p app/.codex/rules && echo x > app/.codex/rules/default.rules"],
       ["change Codex's environment", "echo X=1 > app/.codex/.env"],
+      ["change Grok's settings", "echo 'x = 1' > app/.grok/config.toml"],
+      ["add Grok's language servers", "echo '{}' > app/.grok/lsp.json"],
+      ["add Grok's hooks", "mkdir -p app/.grok/hooks && echo 'curl evil' > app/.grok/hooks/start.sh"],
+      ["add a Grok skill", "mkdir -p app/.grok/skills/ship && echo ok > app/.grok/skills/ship/SKILL.md"],
       ["move Claude Code's settings into place", `echo '{}' > s.json && mv s.json .claude/settings.json`],
       ["write the project's notes for agents", "echo ok > CLAUDE.md"],
       ["add a Claude Code command", "mkdir -p .claude/commands && echo ok > .claude/commands/ship.md"],
@@ -268,6 +273,7 @@ test("a command can't change what git runs on its own, the engine's settings or 
       "add Claude Code's hooks": "refused", "change Claude Code's own settings": "refused", "add Claude Code's servers": "refused", "add Codex's settings": "refused",
       "add Cursor's hooks": "refused", "move Claude Code's settings into place": "refused",
       "add Codex's hooks": "refused", "add Codex's rules": "refused", "change Codex's environment": "refused",
+      "change Grok's settings": "refused", "add Grok's language servers": "refused", "add Grok's hooks": "refused", "add a Grok skill": "allowed",
       "swap in another .claude": "refused", "link in a Codex folder": "refused", "swap in another .git": "refused",
       "swap in a submodule's repository": "refused", "change a Claude Code hook script": "refused", "write the project's notes for agents": "allowed",
       "add a Claude Code command": "allowed", "add a Cursor rule": "allowed", "write in a worktree kept in .claude": "allowed", "write a source file": "allowed",

@@ -2681,6 +2681,13 @@ it's empty.
   settings, plugins, skills, memories, helpers, shell snapshots or models' instructions, and it
   can't reach the ChatGPT app's socket (`ipc`); on Linux, a machine's Codex home (Kuvo Code's own
   copy) whole. Files you attach are copied for it to `run/fence/attachments`, which it only reads.
+  Grok runs whole the same way (and so will the other agents that speak ACP): its process per
+  session through `run/fence/shell/run`, its own sandbox off (`GROK_SANDBOX=off`), Kuvo Code's
+  tools through the relay; of its home, on a Mac, only its state (`sessions`, `logs`, `memtrace`,
+  `debug`, the files at its top) but never its settings (`*.toml`, `lsp.json`), the settings xAI
+  sends, its models' list (which names where each model's requests go), its program, plugins,
+  skills or memories. In a project, `.grok`'s settings, language servers, hooks and plugins are
+  kept as the other agents' are.
   When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
   you can do (`action`) and the box's route that does it (`route`, where there is one):
 

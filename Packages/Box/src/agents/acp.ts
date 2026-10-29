@@ -11,7 +11,9 @@ import { resetsIn, type Limit } from "./auto"
 import { fileDiff } from "./diff"
 import { newID } from "./ids"
 import { RPC, RPCError } from "./rpc"
+import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules } from "./fence"
 import { isKuvoTool, kuvoToolName, kuvoTools, loadKuvoTools, toolServerName } from "./kuvotools"
+import { dropRelayed, relayedTools, relayPort } from "./toolrelay"
 import { pictureData, withPictures } from "./pictures"
 import { elicitationField } from "./forms"
 import type { Turn } from "./turn"
@@ -90,6 +92,14 @@ export interface AcpFlavor {
   program?(): number
   /** How much the model holds, as the agent said (a usage update's size). */
   noteContext?(model: string, size: number): void
+  /**
+   * Runs whole in the box's sandbox while it's on, through its launcher: its homes, by the
+   * environment it starts with (its sign-in and state); in them, the folders of its state and what
+   * it never writes (on a Mac: what runs outside the sandbox when you use it yourself, its settings,
+   * plugins and the like); and what it's told to start with (its own sandbox off: one can't run
+   * inside another on a Mac). Kuvo Code's tools reach it through the agents bridge's relay.
+   */
+  whole?: { homes(env: Record<string, string | undefined>): string[]; state: string[]; kept: string[]; env?: Record<string, string> }
 }
 
 export interface AcpContext {
@@ -167,6 +177,8 @@ export class AcpThread implements Thread {
   private loading = false
   /** A process that was stopped mid-turn and can't go on: the next message starts another. */
   private stale?: RPC
+  /** Whether the process runs whole in the box's sandbox (`whole`). */
+  private fenced = false
   /** The conversation it had couldn't be picked up again: a new one took its place. */
   private startedOver = false
   onOwnTurn?: (note: OwnTurn) => boolean
@@ -185,18 +197,23 @@ export class AcpThread implements Thread {
     const mode = { approvesAll: hooks.approvesAll(), plan: input.plan, skills }
     // Kuvo Code's tools moving (the app started again) starts it again too, to reach them; so do
     // other skills.
-    const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key })
+    // So does the box's sandbox changing, for one run whole in it (its rules, the folders you let
+    // this project's commands write).
+    const fence = this.flavor.whole && fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) : ""
+    const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence })
     if (this.rpc && !this.rpc.isClosed && this.spawnedWith === key && this.rpc !== this.stale) return this.rpc
     // Started again for another approval mode (the agent takes it as it starts), or an updated program.
     this.close()
     const launch = await this.flavor.command(mode)
+    const whole = this.wholeLaunch(launch.argv, launch.env, launch.cleanEnv, skills)
+    this.fenced = Boolean(whole)
     const flavor = this.flavor
     const startedAt = Date.now()
     let asksSignIn = false
-    const rpc: RPC = new RPC(launch.argv, {
-      cwd: launch.cwd ?? this.session.location.directory,
+    const rpc: RPC = new RPC(whole?.argv ?? launch.argv, {
+      cwd: whole ? this.session.location.directory : (launch.cwd ?? this.session.location.directory),
       // Its commands know their conversation, as the engine's do (kuvo-wake schedules for it).
-      env: { ...launch.env, OPENCODE_SESSION_ID: this.session.id },
+      env: { ...(whole?.env ?? launch.env), OPENCODE_SESSION_ID: this.session.id },
       cleanEnv: launch.cleanEnv,
       jsonrpc: true,
       firstID: 2 ** 30,
@@ -322,9 +339,32 @@ export class AcpThread implements Thread {
     return rpc
   }
 
-  /** Kuvo Code's own tools, for an agent that takes MCP servers over HTTP. */
+  /**
+   * The agent run whole in the box's sandbox, while it's on and the agent can (`whole`): through
+   * the launcher, in the session's folder, with its own places, the session's skills and attached
+   * files to read, and the relay's port. Undefined to run it as it is.
+   */
+  private wholeLaunch(argv: string[], env: Record<string, string | undefined> | undefined, cleanEnv: boolean | undefined, skills?: string) {
+    const whole = this.flavor.whole
+    if (!whole || !fenceRules()) return undefined
+    const directory = this.session.location.directory
+    const attached = fenceAttachments(directory)
+    const relayed = relayedTools(this.session.id)
+    const started = cleanEnv ? (env ?? {}) : { ...process.env, ...env }
+    const fence = fenceAgent(argv[0], directory, {
+      homes: whole.homes(started),
+      state: whole.state,
+      kept: whole.kept,
+      read: [...(skills?.startsWith("/") ? [skills] : []), ...(attached ? [attached] : [])],
+      port: relayed ? relayPort() : undefined,
+    })
+    if (!fence) throw new Error(`${this.name} runs in the sandbox here, and it isn't ready: restart Kuvo Code.`)
+    return { argv: [fence.command, ...argv.slice(1)], env: { ...env, ...whole.env, ...fence.env } }
+  }
+
+  /** Kuvo Code's own tools, for an agent that takes MCP servers over HTTP (through the relay, run whole in the sandbox). */
   private mcpServers(init: any): unknown[] {
-    const tools = kuvoTools(this.session.id)
+    const tools = this.fenced ? relayedTools(this.session.id) : kuvoTools(this.session.id)
     if (!tools || (tools.kind === "http" && !init?.agentCapabilities?.mcpCapabilities?.http)) return []
     // Their names and arguments, to know their calls when they come.
     void loadKuvoTools()
@@ -384,7 +424,8 @@ export class AcpThread implements Thread {
     for (const file of input.files) {
       const data = file.data ?? (file.mime.startsWith("image/") && file.path ? safeBase64(file.path) : undefined)
       if (file.mime.startsWith("image/") && data) prompt.push({ type: "image", data, mimeType: file.mime })
-      else if (file.path) others.push(file.path)
+      // (Run whole in the sandbox, which hides Kuvo Code's folder where it's kept: a copy it reads.)
+      else if (file.path) others.push(this.fenced ? fenceCopy(this.session.location.directory, file.path) : file.path)
     }
     let text = input.text
     const instructions = hooks.instructions()
@@ -937,6 +978,9 @@ export class AcpThread implements Thread {
   close() {
     this.rpc?.kill()
     this.rpc = undefined
+    // Its key to Kuvo Code's tools goes with it (a new one for the next).
+    if (this.fenced) dropRelayed(this.session.id)
+    this.fenced = false
   }
 }
 

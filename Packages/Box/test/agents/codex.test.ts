@@ -9,11 +9,8 @@ import { existsSync, mkdirSync, readdirSync, realpathSync, symlinkSync } from "n
 import { createHash } from "node:crypto"
 import { createServer } from "node:net"
 import { CodexAgent } from "../../src/agents/agents/codex"
-import { agentShellScript, launcherScript, type FencePlaces } from "../../src/link/fence/files"
-import { LANDLOCK_RUNNER, landlockPolicy } from "../../src/link/fence/landlock"
-import type { FencePolicy } from "../../src/link/fence/policy"
-import { seatbeltProfile } from "../../src/link/fence/seatbelt"
 import { Auto } from "../../src/agents/auto"
+import { canFence, realFence } from "./support/fence"
 import type { Roster } from "../../src/agents/roster"
 import { Sessions } from "../../src/agents/sessions"
 import { Store } from "../../src/agents/store"
@@ -610,37 +607,6 @@ describe("Codex in the session's modes", () => {
     expect(tools(id)[0].state.status).toBe("error")
   })
 })
-
-/**
- * The box's sandbox, on, as the box sets it up (link/fence/state.ts): its launcher and its rules in
- * this system's terms, in Kuvo Code's folder `kuvo`, which it hides.
- */
-function realFence(kuvo: string, sockets: string[] = []) {
-  const folder = join(kuvo, "run", "fence")
-  const platform = process.platform === "darwin" ? "darwin" : "linux"
-  const places: FencePlaces = {
-    folder, launcher: join(kuvo, "bin", "kuvo-fence"), runner: join(kuvo, "bin", "kuvo-fence.js"), inside: [join(kuvo, "bots")], probe: join(folder, "probe"),
-    bots: join(kuvo, "bots"), wakes: join(kuvo, "wakes"), key: join(kuvo, "run", "socket.key"), sshFor: join(kuvo, "run", "ssh-for"), sshAgents: join(kuvo, "run", "ssh"), platform,
-  }
-  const policy: FencePolicy = { home: kuvo, kuvo: [kuvo], kuvoPatterns: [], kuvoReadable: [join(kuvo, "bin")], writable: ["/dev"], readOnly: [], secrets: [], ports: [], sockets }
-  mkdirSync(join(folder, "shell"), { recursive: true })
-  const write = (file: string, text: string, mode = 0o600) => {
-    mkdirSync(dirname(file), { recursive: true })
-    writeFileSync(file, text, { mode })
-  }
-  write(places.launcher, launcherScript(places), 0o700)
-  write(join(folder, "shell", "run"), agentShellScript(places), 0o700)
-  write(join(folder, "policy.json"), landlockPolicy(policy))
-  if (platform === "darwin") for (const inside of [false, true]) for (const agent of [false, true]) write(join(folder, `${inside ? "inside" : "project"}${agent ? "-agent" : ""}.sb`), seatbeltProfile(policy, { inside, agent }))
-  else {
-    write(places.runner, LANDLOCK_RUNNER, 0o700)
-    write(join(folder, "runtime"), process.execPath)
-  }
-  write(join(folder, "on"), "")
-  return folder
-}
-
-const canFence = process.platform === "darwin" ? existsSync("/usr/bin/sandbox-exec") : process.platform === "linux"
 
 describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
   const reply: [string, any][] = [["item/completed", { item: { type: "agentMessage", id: "m1", text: "Done." } }]]
