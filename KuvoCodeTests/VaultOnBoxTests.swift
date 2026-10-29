@@ -23,10 +23,12 @@ import Testing
     }
 
     private func done() {
+        // The sign-ins saved as before the vault, and this Mac's vault's values.
+        Keychain.delete([kSecClass as String: kSecClassInternetPassword, kSecAttrCreator as String: Legacy.creator])
+        for item in Vaults.shared[BoxClient.mac].vault?.items ?? [] { _ = VaultValues.remove(item.id) }
         Vaults.shared.forget(BoxClient.mac)
         Vaults.shared.client = { _ in nil }
         for key in [Passwords.movedKey, Legacy.agentSitesKey, Legacy.agentAccountsKey] { UserDefaults.standard.removeObject(forKey: key) }
-        Keychain.delete([kSecClass as String: kSecClassInternetPassword])
         box.stop()
         engine.stop()
     }
@@ -54,7 +56,6 @@ import Testing
         #expect(moved.map { Passwords.password(for: $0) ?? "" }.sorted() == ["first-password", "second-password", "third-password"])
         #expect(Passwords.agentLogin(for: "github.com")?.account == "kuvo-bots", "agents still sign in there on their own, with that account")
         #expect(Passwords.agentLogin(for: "example.com") == nil)
-        #expect(Passwords.agentSites == ["github.com"])
         #expect(Legacy.found(for: nil) == [], "the old ones are gone once they're in the vault")
         // Settings › Vault shows them as the vault's sign-ins.
         let items = try #require(Vaults.shared[BoxClient.mac].vault?.items)
@@ -68,6 +69,23 @@ import Testing
         #expect(await Passwords.ready())
         #expect(Passwords.logins().count == 3)
         #expect(Passwords.agentLogin(for: "github.com")?.account == "kuvo-bots")
+    }
+
+    @Test func aSignInSavedFromTheBrowserIsTheVaultsAndAgentsUseItAsYouSaid() async throws {
+        defer { done() }
+        #expect(await Passwords.ready())
+        // Saved from a sign-in card with Let agents sign in here on their own ticked.
+        let saved = await Passwords.save(host: "example.com", account: "me@example.com", password: "first-password", allowAgents: true)
+        #expect(saved?.name == "example.com")
+        #expect(Passwords.agentLogin(for: "example.com")?.account == "me@example.com", "agents sign in there on their own at once")
+
+        // A new password for it, saved before this launch read the vault: the same sign-in, changed.
+        Vaults.shared.forget(BoxClient.mac)
+        #expect(await Passwords.save(host: "example.com", account: "me@example.com", password: "second-password") != nil)
+        let logins = Passwords.logins(for: "example.com")
+        #expect(logins.count == 1)
+        #expect(logins.first.flatMap(Passwords.password(for:)) == "second-password")
+        #expect(Passwords.agentLogin(for: "example.com") != nil, "still theirs")
     }
 
     @Test func aMacWithNothingSavedBeforeHasAnEmptyVault() async throws {

@@ -245,10 +245,15 @@ final class BrowserSession: NSObject {
 
     func savePendingLogin() {
         guard let login = pendingLogin else { return }
-        Passwords.save(host: login.host, account: login.account, password: login.password)
         Analytics.shared.track("password_saved")
         pendingLogin = nil
-        refreshLogins()
+        Task {
+            // Not saved (this Mac's vault didn't answer): offered again, to try once more.
+            if await Passwords.save(host: login.host, account: login.account, password: login.password) == nil, pendingLogin == nil {
+                pendingLogin = login
+            }
+            refreshLogins()
+        }
     }
 
     func dismissPendingLogin(never: Bool) {

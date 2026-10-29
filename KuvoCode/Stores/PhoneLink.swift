@@ -1148,7 +1148,10 @@ final class PhoneLink {
                 let username = given.username.flatMap { $0.isEmpty ? nil : $0 }
                 let password = given.password.flatMap { $0.isEmpty ? nil : $0 }
                 guard username != nil || password != nil else { return (400, Data()) }
-                if given.save == true, let password { _ = Passwords.save(host: ask.host, account: username ?? "", password: password) }
+                if given.save == true, let password {
+                    let host = ask.host
+                    Task { await Passwords.save(host: host, account: username ?? "", password: password) }
+                }
                 asks.answer(id, .signIn(username: username, password: password))
             }
         case ("code", .code):
