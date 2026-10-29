@@ -14,7 +14,10 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { after, test as nodeTest } from "node:test";
+
+// Each fails, rather than hangs, when what it waits for never comes.
+const test = (name, run) => nodeTest(name, { timeout: 30_000 }, run);
 
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-moves-races-")));
 const home = path.join(support, "mac");
@@ -28,8 +31,9 @@ const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // An engine with its conversations, as its API exports, imports and deletes them; it counts imports.
 // Its imports can be held (`hold`, a promise: a big one on a small machine), and its deletes fail
-// (`down`: the engine went away; or one conversation's, `downFor`).
-const engine = { sessions: new Map(), imports: 0, hold: null, holding: false, down: false, downFor: null, refused: 0 };
+// (`down`: the engine went away; or one conversation's, `downFor`), as can one's export
+// (`exportFails`, counted in `exportsRefused`).
+const engine = { sessions: new Map(), imports: 0, hold: null, holding: false, down: false, downFor: null, refused: 0, exportFails: null, exportsRefused: 0 };
 const server = http.createServer((request, response) => {
   const chunks = [];
   request.on("data", chunk => chunks.push(chunk));
@@ -55,6 +59,10 @@ const server = http.createServer((request, response) => {
     const exported = url.pathname.match(/^\/api\/experimental\/session\/([^/]+)\/export$/);
     if (exported) {
       const session = engine.sessions.get(exported[1]);
+      if (session && engine.exportFails === session.id) {
+        engine.exportsRefused += 1;
+        return response.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ message: "It couldn't be read." }));
+      }
       return session ? send(200, { info: { id: session.id, title: session.title, ...(session.parentID ? { parentID: session.parentID } : {}) }, messages: session.messages }) : send(404, null);
     }
     const match = url.pathname.match(/^\/api\/session\/([^/]+)(\/inbox)?$/);
@@ -599,4 +607,78 @@ test("letting the original go, cut short partway: tried again, it keeps the whol
   const kept = fs.readdirSync(trash).map(each => path.join(trash, each, "ses_keep1", "conversation.json")).find(each => fs.existsSync(each));
   assert.ok(kept, "kept in the trash");
   assert.deepEqual(JSON.parse(fs.readFileSync(kept, "utf8")).map(each => each.info.id), ["ses_keep1", "ses_keep1sub"]);
+});
+
+test("a copy whose folder is a link (to a folder here) isn't set up, and that folder is left as it was", async () => {
+  const thing = "ses_dirlink1";
+  const mine = fs.mkdtempSync(path.join(support, "mine-"));
+  fs.writeFileSync(path.join(mine, "notes.txt"), "mine");
+  const packed = fs.mkdtempSync(path.join(support, "pack-"));
+  fs.writeFileSync(path.join(packed, "move.json"), JSON.stringify({ kind: "chat", thing, name: "“Notes”", wasPaused: false, folder: thing, exports: [{ info: { id: thing, title: "Notes" }, messages: [] }] }));
+  fs.symlinkSync(mine, path.join(packed, thing));
+  const file = path.join(packed, "bundle.tgz");
+  assert.equal(spawnSync("tar", ["-czf", file, "-C", packed, "move.json", thing]).status, 0);
+  const bytes = fs.readFileSync(file);
+  const hash = crypto.createHash("sha256").update(bytes).digest("base64url");
+  const id = "mov_dirlink1";
+  await say({ op: "offer", id, kind: "chat", thing, name: "“Notes”", size: bytes.length, hash, wasPaused: false, from: peerKey });
+  await say({ op: "part", id, hash, i: 0, of: 1, d: bytes.toString("base64url") });
+  await until(() => told.some(move => move.id === id && move.op === "failed"));
+  assert.match(told.find(move => move.id === id && move.op === "failed").message, /a link/);
+  assert.deepEqual(fs.readdirSync(mine), ["notes.txt"], "nothing written into the folder it pointed at");
+  assert.ok(!fs.existsSync(path.join(wakes, thing)) && !engine.sessions.has(thing));
+  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+});
+
+test("letting the original go, its engine refusing again and again to give its conversation to keep: it goes on here too, and says so", async () => {
+  chat("ses_stuck1");
+  labAnswers(null);
+  const answers = script;
+  // Lab switches; from then on this box's engine won't give the conversation up (it's up, and says no).
+  script = move => {
+    if (move.op !== "switch") return answers(move);
+    engine.exportFails = "ses_stuck1";
+    say({ op: "switched", id: move.id });
+  };
+  const asked = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_stuck1", to: peerKey });
+  try {
+    await until(() => recordOf("ses_stuck1")?.stage === "finishing" && engine.exportsRefused > 0);
+    // Tried again each minute, a while.
+    for (let tries = 0; tries < 12 && recordOf("ses_stuck1"); tries++) {
+      const refused = engine.exportsRefused;
+      link.keepMoving(Date.now() + 61_000);
+      await until(() => engine.exportsRefused > refused || !recordOf("ses_stuck1"));
+    }
+    assert.equal(recordOf("ses_stuck1"), null, "it doesn't stay half gone for ever");
+    const moved = await asked;
+    assert.equal(moved.status, 409);
+    assert.match(moved.json.message, /on both computers/);
+    await asItWas("ses_stuck1");
+  } finally {
+    engine.exportFails = null;
+  }
+});
+
+test("a copy whose setting up gets stuck (its engine not answering) is given up on after a while, and nothing of it is left", async () => {
+  script = () => {};
+  const thing = "ses_stuckin1";
+  const { bytes, hash } = bundleFor(thing, [{ info: { id: thing, title: "Notes" }, messages: [] }], { "wakes.json": "[]" });
+  // Its engine takes the import and never answers.
+  engine.hold = new Promise(() => {});
+  const id = "mov_stuckin1";
+  try {
+    await say({ op: "offer", id, kind: "chat", thing, name: "“Notes”", size: bytes.length, hash, wasPaused: false, from: peerKey });
+    const settingUp = say({ op: "part", id, hash, i: 0, of: 1, d: bytes.toString("base64url") });
+    await until(() => engine.holding);
+    // Half an hour and more later.
+    link.keepMoving(Date.now() + 31 * 60_000);
+    await until(() => told.some(move => move.id === id && move.op === "failed"));
+    assert.match(told.find(move => move.id === id && move.op === "failed").message, /too long/);
+    await settingUp;
+    assert.ok(!engine.sessions.has(thing) && !fs.existsSync(path.join(wakes, thing)), "nothing of it is left here");
+    assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+  } finally {
+    engine.hold = null;
+    engine.holding = false;
+  }
 });

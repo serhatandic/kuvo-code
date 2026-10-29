@@ -7029,9 +7029,16 @@ async function unpack(id) {
   if (!isObject(contents) || !Array.isArray(contents.exports))
     throw new NotTaken("What came isn’t a move.");
   const brought = contents.folder && /^[A-Za-z0-9_]+$/.test(contents.folder) ? path37.join(opened, contents.folder) : null;
-  if (brought && fs37.existsSync(brought))
+  let kind = null;
+  if (brought)
+    try {
+      kind = fs37.lstatSync(brought);
+    } catch {}
+  if (kind && !kind.isDirectory())
+    throw new NotTaken(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a folder"} for its folder, which isn’t taken.`);
+  if (brought && kind)
     plainOnly(brought);
-  return { contents, folder: brought && fs37.existsSync(brought) ? brought : null };
+  return { contents, folder: kind ? brought : null };
 }
 function plainOnly(folder) {
   for (const name of fs37.readdirSync(folder)) {
@@ -7061,11 +7068,11 @@ async function toTrash(folder) {
       } catch {}
   }
 }
-async function importAll(engine, exports, directory) {
+async function importAll(engine, exports, directory, signal) {
   for (const exported of exports) {
     if (!isObject(exported))
       continue;
-    await call(engine, "POST", "/api/experimental/session/import", { info: exported.info, messages: exported.messages, location: { directory } });
+    await call(engine, "POST", "/api/experimental/session/import", { info: exported.info, messages: exported.messages, location: { directory } }, signal);
   }
 }
 async function deleteSession(engine, id) {
@@ -7098,9 +7105,13 @@ var SETTLE_FOR = 60;
 var HELD_AT_MOST = 7 * 24 * 3600000;
 var GONE_FOR = 5 * 60000;
 var missing = new Map;
+var SET_UP_AT_MOST = 30 * 60000;
+var settingUp = new Map;
+var FINISH_TRIES = 10;
 var say = {
   notConnected: (place) => `${place} isn’t connected. Connect to it, then try again.`,
   working: (name) => `${name} is working. Move it once it’s done.`,
+  leftBoth: (name, place) => `${name} is on ${place} now, but couldn’t be let go of here, so it’s on both computers. Delete the one you don’t want.`,
   inProject: (name) => `${name} works in one of your projects, which stays where it is. Only a bot with a folder of its own can move.`,
   withAgents: (name) => `${name} talks with a coding agent, which keeps its conversation on this computer, so it can’t move yet.`,
   waiting: (name) => `${name} still has messages on their way. Try again in a moment.`,
@@ -7486,8 +7497,17 @@ async function finish(id) {
         });
       } catch (error) {
         const there = await call(engine, "GET", `/api/session/${encodeURIComponent(record.sessions[0])}`).then(() => true, () => false);
-        if (there)
+        if (there) {
+          const tries = (record.finishTries ?? 0) + 1;
+          if (tries >= FINISH_TRIES) {
+            console.error(`kuvo-link: a moved conversation couldn't be kept as it went, so it stays here: ${String(error?.message ?? error)}`);
+            return restore(record, say.leftBoth(record.name, nameOf(record.peer)));
+          }
+          changeMove(id, (each) => {
+            each.finishTries = tries;
+          });
           throw error;
+        }
       }
     }
     for (const session of [...record.sessions].reverse())
@@ -7686,30 +7706,39 @@ async function setUp(sender, id, file) {
     return;
   tell(sender.key, { op: "working", id });
   const beat = setInterval(() => tell(sender.key, { op: "working", id }), STEP_AGAIN);
+  const stop = new AbortController;
+  settingUp.set(id, stop);
+  changeMove(id, (each) => {
+    each.setUpSince = Date.now();
+  });
   try {
     if (await hashOf(file) !== record.hash)
       throw new NotTaken("What came wasn’t what was sent.");
-    const sessions = await bringIn(record);
+    const sessions = await bringIn(record, stop.signal);
+    stop.signal.throwIfAborted();
     changeMove(id, (each) => {
       each.sessions = sessions;
+      each.setUpSince = undefined;
     });
     tell(sender.key, { op: "arrived", id });
-  } catch (error) {
+  } catch (thrown) {
+    const error = stop.signal.aborted ? stop.signal.reason : thrown;
     if (!(error instanceof NotTaken))
       console.error(`kuvo-link: a move that came couldn't be set up: ${String(error?.message ?? error)}`);
     await drop(id).catch(() => {});
     tell(sender.key, { op: "failed", id, message: error instanceof NotTaken ? `It couldn’t be set up on ${HERE}: ${error.message}` : `It couldn’t be set up on ${HERE}.` });
   } finally {
     clearInterval(beat);
+    settingUp.delete(id);
   }
 }
-async function bringIn(record) {
+async function bringIn(record, signal) {
   const { contents, folder } = await unpack(record.id);
   if (record.kind === "group") {
     const held = contents.group;
     if (!held || !isObject(held.group))
       throw new NotTaken("The group chat didn’t come with it.");
-    const answer = await askGroups(readBridgeFile(), "PUT", `/${encodeURIComponent(record.thing)}`, { group: held.group, messages: held.messages, status: "held" }, undefined);
+    const answer = await askGroups(readBridgeFile(), "PUT", `/${encodeURIComponent(record.thing)}`, { group: held.group, messages: held.messages, status: "held" }, signal);
     if (answer.status !== 200)
       throw new Error(typeof answer.value?.message === "string" ? answer.value.message : `Its group chats answered ${answer.status}.`);
     return [];
@@ -7726,9 +7755,10 @@ async function bringIn(record) {
     throw new NotTaken("Its conversations aren’t its own.");
   const engine = readEngineFile();
   for (const session of idsOf(contents.exports)) {
-    if (await call(engine, "GET", `/api/session/${encodeURIComponent(session)}`).then(() => true, () => false))
+    if (await call(engine, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, signal).then(() => true, () => false))
       throw new NotTaken(`Its conversations are on ${HERE} already.`);
   }
+  signal.throwIfAborted();
   if (folder) {
     if (fs38.existsSync(place))
       await toTrash(place);
@@ -7746,7 +7776,7 @@ async function bringIn(record) {
   changeMove(record.id, (each) => {
     each.sessions = idsOf(contents.exports);
   });
-  await importAll(engine, contents.exports, directory);
+  await importAll(engine, contents.exports, directory, signal);
   for (const [integration, keys] of Object.entries(contents.keys ?? {})) {
     const given = await answerBotKeys("PUT", `kuvo/bots/${record.thing}/keys/${encodeURIComponent(integration)}`, { keys }, null);
     if (given.status !== 200)
@@ -7913,7 +7943,10 @@ function keepMoving(now = Date.now()) {
     }
     missing.delete(record.id);
     if (record.role === "to") {
-      if (now - record.started > HELD_AT_MOST)
+      const stop = settingUp.get(record.id);
+      if (stop && now - (record.setUpSince ?? now) > SET_UP_AT_MOST)
+        stop.abort(new NotTaken("It took too long to set up."));
+      else if (now - record.started > HELD_AT_MOST)
         inTurn(record.id, () => drop(record.id)).catch(() => {});
       continue;
     }

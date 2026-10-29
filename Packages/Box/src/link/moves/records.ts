@@ -42,6 +42,10 @@ export interface MoveRecord extends Move {
   /** The box it leaves: its conversation kept in its folder as the original goes (a try at that cut
    * short doesn't keep it again, with less of it). */
   kept?: boolean;
+  /** The box it leaves: tries at letting its original go that its engine, up, didn't take. */
+  finishTries?: number;
+  /** The box it goes to: since when it's been setting its copy up. */
+  setUpSince?: number;
   /** Since when the box it leaves has asked the other to switch to its copy. */
   switchSince?: number;
   /** Since when the box it leaves has asked the other to let its copy go (taken back). */

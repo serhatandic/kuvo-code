@@ -57,11 +57,18 @@ const HELD_AT_MOST = 7 * 24 * 3600_000;
 const GONE_FOR = 5 * 60_000;
 // Since when each move's other computer has been missing from your computers.
 const missing = new Map<string, number>();
+/** A copy being set up here this long (its engine stuck): given up on, and taken back. */
+const SET_UP_AT_MOST = 30 * 60_000;
+// What gives up on each copy being set up here.
+const settingUp = new Map<string, AbortController>();
+/** Letting an original go, refused this many times by its engine while it's up: it goes on here. */
+const FINISH_TRIES = 10;
 
 /** What a move says, in words to show. */
 export const say = {
   notConnected: (place: string) => `${place} isn’t connected. Connect to it, then try again.`,
   working: (name: string) => `${name} is working. Move it once it’s done.`,
+  leftBoth: (name: string, place: string) => `${name} is on ${place} now, but couldn’t be let go of here, so it’s on both computers. Delete the one you don’t want.`,
   inProject: (name: string) => `${name} works in one of your projects, which stays where it is. Only a bot with a folder of its own can move.`,
   withAgents: (name: string) => `${name} talks with a coding agent, which keeps its conversation on this computer, so it can’t move yet.`,
   waiting: (name: string) => `${name} still has messages on their way. Try again in a moment.`,
@@ -413,9 +420,18 @@ async function finish(id: string): Promise<void> {
         writePrivate(path.join(place, "conversation.json"), JSON.stringify(exports, null, 2));
         changeMove(id, each => { each.kept = true; });
       } catch (error) {
-        // Gone already: on. Still here: not yet.
+        // Gone already: on. Still here: not yet; refused that way, again and again, with its engine
+        // up, it never will be: it goes on here too, as it's on the other computer.
         const there = await call(engine, "GET", `/api/session/${encodeURIComponent(record.sessions[0])}`).then(() => true, () => false);
-        if (there) throw error;
+        if (there) {
+          const tries = (record.finishTries ?? 0) + 1;
+          if (tries >= FINISH_TRIES) {
+            console.error(`kuvo-link: a moved conversation couldn't be kept as it went, so it stays here: ${String((error as Error | null)?.message ?? error)}`);
+            return restore(record, say.leftBoth(record.name, nameOf(record.peer)));
+          }
+          changeMove(id, each => { each.finishTries = tries; });
+          throw error;
+        }
       }
     }
     for (const session of [...record.sessions].reverse()) await deleteSession(engine, session);
@@ -583,12 +599,18 @@ async function setUp(sender: MailSender, id: string, file: string): Promise<void
   // it came from doesn't take it back for want of an answer.
   tell(sender.key, { op: "working", id });
   const beat = setInterval(() => tell(sender.key, { op: "working", id }), STEP_AGAIN);
+  // Given up on if it takes too long (`keepMoving`), its engine stuck.
+  const stop = new AbortController();
+  settingUp.set(id, stop);
+  changeMove(id, each => { each.setUpSince = Date.now(); });
   try {
     if (await hashOf(file) !== record.hash) throw new NotTaken("What came wasn’t what was sent.");
-    const sessions = await bringIn(record);
-    changeMove(id, each => { each.sessions = sessions; });
+    const sessions = await bringIn(record, stop.signal);
+    stop.signal.throwIfAborted();
+    changeMove(id, each => { each.sessions = sessions; each.setUpSince = undefined; });
     tell(sender.key, { op: "arrived", id });
-  } catch (error) {
+  } catch (thrown) {
+    const error = stop.signal.aborted ? stop.signal.reason : thrown;
     // What was set up of it goes: the box it came from takes it back, and a switch for it is
     // answered `dropped`. Only what it brought is said back, never what this box found.
     if (!(error instanceof NotTaken)) console.error(`kuvo-link: a move that came couldn't be set up: ${String((error as Error | null)?.message ?? error)}`);
@@ -596,16 +618,17 @@ async function setUp(sender: MailSender, id: string, file: string): Promise<void
     tell(sender.key, { op: "failed", id, message: error instanceof NotTaken ? `It couldn’t be set up on ${HERE}: ${error.message}` : `It couldn’t be set up on ${HERE}.` });
   } finally {
     clearInterval(beat);
+    settingUp.delete(id);
   }
 }
 
 /** The bundle put in place here, held: its folder, its conversations, a bot's keys, a group chat. */
-async function bringIn(record: MoveRecord): Promise<string[]> {
+async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[]> {
   const { contents, folder } = await unpack(record.id);
   if (record.kind === "group") {
     const held = contents.group;
     if (!held || !isObject(held.group)) throw new NotTaken("The group chat didn’t come with it.");
-    const answer = await askGroups<{ message?: unknown }>(readBridgeFile(), "PUT", `/${encodeURIComponent(record.thing)}`, { group: held.group, messages: held.messages, status: "held" }, undefined);
+    const answer = await askGroups<{ message?: unknown }>(readBridgeFile(), "PUT", `/${encodeURIComponent(record.thing)}`, { group: held.group, messages: held.messages, status: "held" }, signal);
     if (answer.status !== 200) throw new Error(typeof answer.value?.message === "string" ? answer.value.message : `Its group chats answered ${answer.status}.`);
     return [];
   }
@@ -616,8 +639,9 @@ async function bringIn(record: MoveRecord): Promise<string[]> {
   if (!ownTree(contents.exports, root)) throw new NotTaken("Its conversations aren’t its own.");
   const engine = readEngineFile();
   for (const session of idsOf(contents.exports)) {
-    if (await call(engine, "GET", `/api/session/${encodeURIComponent(session)}`).then(() => true, () => false)) throw new NotTaken(`Its conversations are on ${HERE} already.`);
+    if (await call(engine, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, signal).then(() => true, () => false)) throw new NotTaken(`Its conversations are on ${HERE} already.`);
   }
+  signal.throwIfAborted();
   if (folder) {
     // One left by a move cut short, or by the copy before this one, goes first.
     if (fs.existsSync(place)) await toTrash(place);
@@ -634,7 +658,7 @@ async function bringIn(record: MoveRecord): Promise<string[]> {
   fs.mkdirSync(directory, { recursive: true });
   // Its conversations, noted before they're brought in: any that came go if it's taken back.
   changeMove(record.id, each => { each.sessions = idsOf(contents.exports); });
-  await importAll(engine, contents.exports, directory);
+  await importAll(engine, contents.exports, directory, signal);
   for (const [integration, keys] of Object.entries(contents.keys ?? {})) {
     const given = await answerBotKeys("PUT", `kuvo/bots/${record.thing}/keys/${encodeURIComponent(integration)}`, { keys }, null);
     if (given.status !== 200) console.error(`kuvo-link: a moved bot's own key for ${integration} didn't come with it (${given.status}).`);
@@ -781,7 +805,12 @@ export function keepMoving(now = Date.now()): void {
     }
     missing.delete(record.id);
     if (record.role === "to") {
-      if (now - record.started > HELD_AT_MOST) inTurn(record.id, () => drop(record.id)).catch(() => {});
+      // Setting it up stuck (its engine not answering): given up on, which lets what came of it go
+      // and says it failed, so the box it came from takes it back.
+      // (One cut short by a restart isn't set up still: the box it came from takes it back.)
+      const stop = settingUp.get(record.id);
+      if (stop && now - (record.setUpSince ?? now) > SET_UP_AT_MOST) stop.abort(new NotTaken("It took too long to set up."));
+      else if (now - record.started > HELD_AT_MOST) inTurn(record.id, () => drop(record.id)).catch(() => {});
       continue;
     }
     // Taken back, whatever step it was left at (`takeBack` always says `drop`; a record from before

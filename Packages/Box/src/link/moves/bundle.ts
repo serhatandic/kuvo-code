@@ -172,9 +172,13 @@ export async function unpack(id: string): Promise<{ contents: Contents; folder: 
   }
   if (!isObject(contents) || !Array.isArray(contents.exports)) throw new NotTaken("What came isn’t a move.");
   const brought = contents.folder && /^[A-Za-z0-9_]+$/.test(contents.folder) ? path.join(opened, contents.folder) : null;
-  // Only files and folders: never a link (to somewhere else on this computer) or anything else.
-  if (brought && fs.existsSync(brought)) plainOnly(brought);
-  return { contents, folder: brought && fs.existsSync(brought) ? brought : null };
+  // Only files and folders: never a link (to somewhere else on this computer) or anything else, the
+  // folder itself included (it's put in place, and written to, where it is).
+  let kind: fs.Stats | null = null;
+  if (brought) try { kind = fs.lstatSync(brought); } catch {}
+  if (kind && !kind.isDirectory()) throw new NotTaken(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a folder"} for its folder, which isn’t taken.`);
+  if (brought && kind) plainOnly(brought);
+  return { contents, folder: kind ? brought : null };
 }
 
 function plainOnly(folder: string): void {
@@ -202,12 +206,12 @@ export async function toTrash(folder: string): Promise<void> {
   }
 }
 
-/** Each export into `engine` at `directory`, under its own ID. */
-export async function importAll(engine: Target, exports: unknown[], directory: string): Promise<void> {
+/** Each export into `engine` at `directory`, under its own ID (until `signal` gives up on it). */
+export async function importAll(engine: Target, exports: unknown[], directory: string, signal?: AbortSignal): Promise<void> {
   for (const exported of exports) {
     if (!isObject(exported)) continue;
     // (One there already isn't replaced: what a move brought before goes first, `clearCopy`.)
-    await call(engine, "POST", "/api/experimental/session/import", { info: exported.info, messages: exported.messages, location: { directory } });
+    await call(engine, "POST", "/api/experimental/session/import", { info: exported.info, messages: exported.messages, location: { directory } }, signal);
   }
 }
 
