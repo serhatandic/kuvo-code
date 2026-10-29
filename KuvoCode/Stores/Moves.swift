@@ -28,8 +28,16 @@ final class Moves {
 
     /// Where each thing can go, as the box it lives on last said (`kuvo/moves/places`), by its ID:
     /// its Move to Computer menu.
-    private(set) var places: [String: [Place]] = [:]
-    @ObservationIgnored private var placesRead: [String: Date] = [:]
+    private var places: [String: Known] = [:]
+    private struct Known: Equatable {
+        /// The box that said it.
+        var box: String
+        var list: [Place]
+        var read: Date
+    }
+    /// Each thing's reads of its places, numbered: an answer older than one taken already isn't taken.
+    @ObservationIgnored private var placeReads: [String: Int] = [:]
+    @ObservationIgnored private var prefetching: Task<Void, Never>?
 
     /// A move of something, as its row shows it: the computer it's going to, by name, and how far.
     struct Going: Equatable {
@@ -49,6 +57,8 @@ final class Moves {
         var kind: String
         var ok: Bool
         var why: String?
+        /// The same, in a few words, for beside its name.
+        var note: String?
     }
 
     /// Conversations moving now (a bot's, a chat's, their subagents') and the bots and group chats
@@ -113,40 +123,73 @@ final class Moves {
 
     // MARK: Where it can go
 
+    /// Where `id` can go from the box it lives on (`machine`, nil: this Mac), as that box last said,
+    /// if it has lately.
+    func places(of id: String, from machine: String?) -> [Place]? {
+        places[id].flatMap { $0.box == (machine ?? BoxClient.mac) ? $0.list : nil }
+    }
+
     /// Where `id` can go from the box it lives on (`machine`, nil: this Mac), as that box says now;
     /// kept for its menu a while. Nil when it can't be asked (`whyNotAsked`), or didn't answer.
     @discardableResult
     func loadPlaces(_ kind: String, _ id: String, from machine: String?, fresh: Bool = false) async -> [Place]? {
-        if !fresh, let read = placesRead[id], Date.now.timeIntervalSince(read) < 30, let known = places[id] { return known }
-        guard whyNotAsked(from: machine) == nil, let client = client(machine ?? BoxClient.mac) else { return nil }
+        let box = machine ?? BoxClient.mac
+        if !fresh, let known = places[id], known.box == box, Date.now.timeIntervalSince(known.read) < 30 { return known.list }
+        guard whyNotAsked(from: machine) == nil, let client = client(box) else { return nil }
+        placeReads[id, default: 0] += 1
+        let read = placeReads[id]
         struct Answer: Decodable { var places: [Place] }
         let query = "kind=\(kind)&id=" + (id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)
         guard let answer = try? await client.value(Answer.self, "GET", "kuvo/moves/places?" + query) else { return nil }
-        places[id] = answer.places
-        placesRead[id] = .now
+        if placeReads[id] == read { places[id] = Known(box: box, list: answer.places, read: .now) }
         return answer.places
+    }
+
+    /// The bots' and group chats' places, read ahead so their menus open with them: as Kuvo Code
+    /// starts or a machine connects, and as moves change.
+    private func readPlacesAhead() {
+        prefetching?.cancel()
+        prefetching = Task { [weak self] in
+            guard let app = self?.app else { return }
+            let things = app.bots.list.map { ("bot", $0.id, $0.machine) } + app.chats.list.map { ("group", $0.id, app.chats.machine(of: $0.id)) }
+            for (kind, id, machine) in things {
+                guard !Task.isCancelled, let self else { return }
+                await self.loadPlaces(kind, id, from: machine)
+            }
+        }
     }
 
     /// Why the box of `machine` can't be asked to move something now (this Mac's, nil, always can:
     /// it says itself why not).
     func whyNotAsked(from machine: String?) -> String? {
-        guard let machine, let app else { return nil }
+        machine.flatMap(cantAsk)?.errorDescription
+    }
+
+    private func cantAsk(_ machine: String) -> Failure? {
+        guard let app else { return nil }
         let name = placeName(machine)
-        if app.machines.engine(machine)?.isReady != true { return Failure.notConnected(name).errorDescription }
-        if app.phoneLink.machineIsAnotherMacs(machine) { return Failure.anotherMacs(name).errorDescription }
-        if app.phoneLink.key(of: machine) == nil { return Failure.needsUpdate(name).errorDescription }
+        if app.machines.engine(machine)?.isReady != true { return .notConnected(name) }
+        if app.phoneLink.machineIsAnotherMacs(machine) { return .anotherMacs(name) }
+        if app.phoneLink.key(of: machine) == nil { return .needsUpdate(name) }
         return nil
     }
 
     /// Your other computers this Mac knows of, for a menu opened before its box has said (each is
-    /// asked again as it's picked): this Mac, and each machine with a box that moves things.
+    /// asked again as it's picked): this Mac, and each machine you added (one this Mac can't move
+    /// things with, with why).
     func knownPlaces(from machine: String?) -> [Place] {
         guard let app else { return [] }
         var known: [Place] = []
         if machine != nil, let key = app.phoneLink.macKey { known.append(Place(key: key, name: PhoneLink.computerName, kind: "mac", ok: true)) }
         for other in app.machines.list where other.id != machine {
-            guard let key = app.phoneLink.key(of: other.id), !app.phoneLink.machineIsAnotherMacs(other.id) else { continue }
-            known.append(Place(key: key, name: other.name, kind: "machine", ok: true))
+            let name = placeName(other.id)
+            if app.phoneLink.machineIsAnotherMacs(other.id) {
+                known.append(Place(key: "?" + other.id, name: name, kind: "machine", ok: false, why: Failure.anotherMacs(name).errorDescription, note: "Run from another Mac"))
+            } else if let key = app.phoneLink.key(of: other.id) {
+                known.append(Place(key: key, name: name, kind: "machine", ok: true))
+            } else {
+                known.append(Place(key: "?" + other.id, name: name, kind: "machine", ok: false, why: Failure.needsUpdate(name).errorDescription, note: "Needs a newer Kuvo Code"))
+            }
         }
         return known
     }
@@ -175,10 +218,10 @@ final class Moves {
     /// Asks the box it lives on (`from`, nil: this Mac) to move it to `place`, and waits until it's
     /// there (or why not); then it's shown where it went (`ended`), as a move asked from elsewhere is.
     func move(_ kind: String, _ id: String, from: String?, to place: Place) async throws {
-        if let why = whyNotAsked(from: from) { throw Failure.refused(why) }
-        // Where it lives already, nothing moves.
+        if let failure = from.flatMap(cantAsk) { throw failure }
+        guard underWay[id] == nil else { throw Failure.moving }
         let own = if let from { app?.phoneLink.key(of: from) } else { app?.phoneLink.macKey }
-        guard underWay[id] == nil, place.key != own else { return }
+        if place.key == own { throw Failure.refused("It’s on \(place.name) already.") }
         let key = place.key
         asked[id] = Going(place: place.name)
         show()
@@ -221,11 +264,8 @@ final class Moves {
             guard let key = app.phoneLink.macKey else { throw Failure.refused("This Mac’s link to your other computers isn’t ready yet. Try again in a moment.") }
             return key
         }
-        let name = placeName(machine)
-        guard app.machines.engine(machine)?.isReady == true else { throw Failure.notConnected(name) }
-        if app.phoneLink.machineIsAnotherMacs(machine) { throw Failure.anotherMacs(name) }
-        guard let key = app.phoneLink.key(of: machine) else { throw Failure.needsUpdate(name) }
-        return key
+        if let failure = cantAsk(machine) { throw failure }
+        return app.phoneLink.key(of: machine)
     }
 
     // MARK: What the boxes say
@@ -268,6 +308,7 @@ final class Moves {
     func reloadAll() async {
         await reload(BoxClient.mac)
         for machine in app?.machines.list.map(\.id) ?? [] { await reload(machine) }
+        readPlacesAhead()
     }
 
     /// A machine you removed: what it said goes.
@@ -288,8 +329,9 @@ final class Moves {
         guard stages(before?.moves ?? []) != stages(said?.moves ?? []) else { return }
         let over = (before?.moves ?? []).filter { old in !(said?.moves ?? []).contains { $0.id == old.id } }
         let ends = Set(((said?.moves ?? []) + (before?.moves ?? [])).map(\.peer))
-        // Where things can go changed with them ("moving already"): asked again as menus open.
-        placesRead = [:]
+        // Where things can go changed with them ("moving already", where one lives now).
+        places = [:]
+        readPlacesAhead()
         Task {
             for machine in machinesOf(keys: ends) where machine != box { await reload(machine) }
             for move in over { await ended(move, on: box) }
@@ -359,7 +401,7 @@ final class Moves {
                 frozen.formUnion([move.thing] + move.sessions)
                 guard move.role == "from" else { continue }
                 // Its name as the box says it, else as this Mac knows the machine.
-                let name = move.place ?? place(move.to).map { $0.map(placeName) ?? "this Mac" } ?? "another computer"
+                let name = move.to == app?.phoneLink.macKey ? "this Mac" : move.place ?? place(move.to).map { $0.map(placeName) ?? "this Mac" } ?? "another computer"
                 moving[move.thing] = Going(place: name, stage: move.stage, sent: move.sent, size: move.size)
             }
             for session in said.away { away[session] = .some(machine) }

@@ -106,7 +106,8 @@ import Testing
         let places = try #require(await app.moves.loadPlaces("chat", "ses_trip", from: nil))
         #expect(places.map(\.name) == ["lab"])
         #expect(places.first?.ok == true && places.first?.why == nil)
-        #expect(app.moves.places["ses_trip"] == places)
+        #expect(app.moves.places(of: "ses_trip", from: nil) == places)
+        #expect(app.moves.places(of: "ses_trip", from: "lab") == nil, "only as the box it lives on said")
 
         // Moving to lab (asked from a phone, say): its row says where to and how far its copy is.
         try underWay("mov_out2", thing: "ses_trip", role: "from", sessions: ["ses_trip"], to: Self.lab, sent: 12_400_000, size: 30_000_000)
@@ -116,7 +117,13 @@ import Testing
         let now = try #require(await app.moves.loadPlaces("chat", "ses_trip", from: nil))
         #expect(now.first?.ok == false)
         #expect(now.first?.why == "It’s moving to another computer. Try again once it’s there.")
+        #expect(now.first?.note == "Moving already", "short, beside lab's name")
+        // Asked to move again meanwhile, it says why rather than nothing.
+        let again = Moves.Place(key: Self.lab, name: "lab", kind: "machine", ok: true)
+        await #expect(throws: Moves.Failure.self) { try await app.moves.move("chat", "ses_trip", from: nil, to: again) }
         try over("mov_out2")
         try await until { !app.moves.isMoving("ses_trip") }
+        // Over: what its menu was told before isn't shown as now (it may live elsewhere now).
+        #expect(app.moves.places(of: "ses_trip", from: nil) == nil)
     }
 }

@@ -1776,7 +1776,7 @@ private struct MoveToComputerMenu: View {
     /// Where it can go, as the box it lives on said last (asked again as the menu opens); before
     /// it has, your other computers as this Mac knows them, each asked as it's picked.
     private var places: [Moves.Place] {
-        app.moves.places[id] ?? app.moves.knownPlaces(from: here)
+        app.moves.places(of: id, from: here) ?? app.moves.knownPlaces(from: here)
     }
 
     var body: some View {
@@ -1787,14 +1787,15 @@ private struct MoveToComputerMenu: View {
                 Text(why)
             } else if places.isEmpty {
                 Text("Add a machine in Settings › Machines to move things to it")
-            } else if places.count > 1, reasons.count == 1, let why = reasons.first ?? nil {
+            } else if places.count > 1, reasons.count == 1, let one = places.first, !one.ok {
                 // Why it can't go anywhere (it works in a project, it's moving already), once.
-                Text(why)
+                Text(one.note ?? one.why ?? "")
             } else {
+                // Why not one, in a few words beside its name (a menu doesn't wrap).
                 ForEach(places, id: \.key) { place in
                     Button { move(to: place) } label: {
                         Text(place.name)
-                        if let why = place.why { Text(why) }
+                        if let why = place.note ?? place.why { Text(why) }
                     }
                     .disabled(!place.ok)
                 }
@@ -1822,7 +1823,7 @@ private struct MoveToComputerMenu: View {
                 ? "Its messages and meeting go there, and it carries on there while that Mac is on; its bots stay where they are."
                 : "Its messages and meeting go there, and it carries on there, also while this Mac is off."
         }
-        let trash = here.map { "Kuvo Code’s trash folder on \($0)" } ?? "the Trash"
+        let trash = here.map { "Kuvo Code’s trash folder on \(app.machines.engine($0)?.machine.name ?? $0)" } ?? "the Trash"
         let leaves: String
         if case .group = thing {
             leaves = "Nothing goes to it while it moves. What it leaves here goes to \(trash)."
@@ -1832,7 +1833,12 @@ private struct MoveToComputerMenu: View {
         Task {
             // Asked again as it's picked: what the menu showed may be old, or this Mac's own guess.
             let now = await app.moves.loadPlaces(kind, id, from: here, fresh: true)
-            let why = now == nil ? app.moves.whyNotAsked(from: here) : now?.first { $0.key == place.key }?.why
+            let why = if let now {
+                // Gone from the list: it lives there now, or that computer isn't one of yours.
+                now.contains { $0.key == place.key } ? now.first { $0.key == place.key }?.why : "It can’t go to \(place.name) now."
+            } else {
+                app.moves.whyNotAsked(from: here)
+            }
             if let why {
                 Modal.show(Moves.Failure.refused(why))
                 return
