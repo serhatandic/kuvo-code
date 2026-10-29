@@ -109,18 +109,19 @@ enum Passwords {
     // MARK: Before the vault
 
     /// Done once the old sign-ins are in the vault.
-    private static let movedKey = "passwords.movedToVault"
+    static let movedKey = "passwords.movedToVault"
 
-    /// The sign-ins kept before the vault (internet passwords marked as Kuvo Code's own), moved into
-    /// it, each with whether agents signed in with it on their own; each old one taken away once
-    /// it's there. True once there's none left to move.
-    static func moveToVault() async -> Bool {
+    /// This Mac's vault read as the app starts, so the browser and agents find its sign-ins; then
+    /// the sign-ins kept before the vault (internet passwords marked as Kuvo Code's own) moved into
+    /// it, each with whether agents signed in with it on their own, each old one taken away once
+    /// it's there. True once its box answered and there's none left to move.
+    static func ready() async -> Bool {
+        await Vaults.shared.refresh(BoxClient.mac)
+        guard Vaults.shared[BoxClient.mac].vault != nil else { return false }
         if UserDefaults.standard.bool(forKey: movedKey) { return true }
         guard let found = await Task.detached(operation: { Legacy.found(for: nil) }).value else { return false }
         let allowed = Legacy.agentSites
         let accounts = Legacy.agentAccounts
-        await Vaults.shared.refresh(BoxClient.mac)
-        guard Vaults.shared[BoxClient.mac].vault != nil else { return false }
         var left = false
         for old in found {
             guard let password = await Task.detached(operation: { Legacy.password(for: old) }).value else { left = true; continue }
@@ -216,7 +217,7 @@ nonisolated enum Legacy {
 
     /// 'KUVO', the creator code on every item the app saved. A demo or test copy (another bundle
     /// ID) marked its own with 'KV' and two letters of its own.
-    private static let creator: OSType = {
+    static let creator: OSType = {
         guard AppInfo.bundleID != "run.kuvo.code" else { return 0x4B55_564F }
         var hash: UInt32 = 2_166_136_261
         for byte in AppInfo.bundleID.utf8 { hash = (hash ^ UInt32(byte)) &* 16_777_619 }

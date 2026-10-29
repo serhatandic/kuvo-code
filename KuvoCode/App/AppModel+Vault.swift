@@ -1,3 +1,4 @@
+import ClientVault
 import Foundation
 
 extension AppModel {
@@ -6,10 +7,11 @@ extension AppModel {
     func wireVault() {
         Vaults.shared.client = { [weak self] box in self?.box(box) }
         Vaults.shared.proof = { [weak self] machine in self?.phoneLink.vaultProof(machine: machine) }
-        // The panel browser's sign-ins kept before the vault, into this Mac's, once its box answers.
+        // This Mac's vault, for the panel browser's sign-ins (those kept before it moved in), once
+        // its box answers.
         Task {
             for _ in 0..<60 {
-                if await Passwords.moveToVault() { break }
+                if await Passwords.ready() { break }
                 try? await Task.sleep(for: .seconds(10))
             }
         }

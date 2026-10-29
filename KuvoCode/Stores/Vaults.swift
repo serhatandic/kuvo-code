@@ -94,6 +94,14 @@ final class Vaults {
         }
     }
 
+    /// Forgets what's shown of `box`'s vault and stops following it; a machine's unlock key too
+    /// (the machine removed from this Mac).
+    func forget(_ box: String) {
+        following.removeValue(forKey: box)?.cancel()
+        shown[box] = nil
+        if box != BoxClient.mac { VaultKeys.forget(box) }
+    }
+
     func activity(on box: String, item: String? = nil, bot: String? = nil, limit: Int = 100) async -> [VaultActivity] {
         (try? await ask(Entries.self, "GET", VaultRoutes.activity(item: item, bot: bot, limit: limit), on: box).entries) ?? []
     }
