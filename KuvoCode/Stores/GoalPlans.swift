@@ -35,6 +35,9 @@ final class GoalPlans {
         boxes?(box) ?? app?.box(box)
     }
 
+    /// `box`'s client, for what's read of it beside its goals (its sandbox).
+    func boxClient(_ box: String) -> BoxClient? { client(box) }
+
     /// The goal of the bot whose conversation is `session`, with its box: its latest, while it's
     /// proposed or running, or ended within the day.
     func plan(for session: String) -> (box: String, plan: GoalPlan)? {
@@ -57,6 +60,8 @@ final class GoalPlans {
     var demo: GoalPlan? {
         didSet { changed() }
     }
+    /// What the demo's box says of its sandbox (KUVO_DEMO_GOAL=<bot>:cant, KUVO_DEMO_SANDBOX).
+    @ObservationIgnored var demoSandbox: GoalSandbox.Reading?
     #endif
 
     /// `box`'s goals, from now on, until the task following it ends (a machine disconnecting, or
