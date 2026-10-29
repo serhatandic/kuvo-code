@@ -198,6 +198,8 @@ function listedAsk(ask, machine, asker) {
     listed.prompt = String(ask.prompt ?? "");
   if (ask.kind === "action")
     listed.instruction = String(ask.instruction ?? "");
+  if (ask.passkey === true)
+    listed.passkey = true;
   return listed;
 }
 function askAnswer(ask, given) {
@@ -13867,7 +13869,7 @@ import fs61 from "node:fs";
 import path62 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.110";
+var BRIDGE_VERSION = "0.9.111";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

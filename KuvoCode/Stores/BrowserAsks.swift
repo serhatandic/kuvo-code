@@ -42,6 +42,9 @@ final class BrowserAsks {
         /// The session whose agent asks, when it's a subagent of `session`'s: the run whose end
         /// takes the card away.
         var asking: String?
+        /// The site asked for a passkey, which these browsers can't use yet: you're told to sign in
+        /// another way.
+        var passkey = false
     }
 
     /// Waiting for you, the oldest first.
@@ -167,6 +170,7 @@ final class BrowserAsks {
             return
         }
         responders[ask.id] = respond
+        if askedPasskeyLately(ask) { ask.passkey = true }
         withAnimation(.ui) { asks.append(ask) }
         changed()
         Notifier.shared.notify(session: tab(ask) ?? "", title: title(ask), subtitle: ask.asker, body: body(ask), push: .init(.ask, ask: ask.id, machine: ask.machine))
@@ -205,6 +209,24 @@ final class BrowserAsks {
     }
 
     private func key(_ ask: Ask) -> String { (ask.machine ?? "") + "|" + ask.host }
+
+    /// Sites that asked for a passkey lately, by machine and site, and when.
+    @ObservationIgnored private var passkeySites: [String: Date] = [:]
+    private static let passkeyLately: TimeInterval = 600
+
+    /// A page on `host` asked for a passkey, in this Mac's browser or `machine`'s: its asks, now
+    /// and for a while, say so.
+    func passkeyAsked(host: String, machine: String?) {
+        passkeySites = passkeySites.filter { Date.now.timeIntervalSince($0.value) < Self.passkeyLately }
+        passkeySites[(machine ?? "") + "|" + host] = .now
+        withAnimation(.ui) {
+            for index in asks.indices where asks[index].machine == machine && asks[index].host == host { asks[index].passkey = true }
+        }
+    }
+
+    private func askedPasskeyLately(_ ask: Ask) -> Bool {
+        passkeySites[key(ask)].map { Date.now.timeIntervalSince($0) < Self.passkeyLately } ?? false
+    }
 
     func title(_ ask: Ask) -> String {
         switch ask.kind {

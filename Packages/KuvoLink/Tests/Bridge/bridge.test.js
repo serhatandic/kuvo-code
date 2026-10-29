@@ -1404,7 +1404,8 @@ test("a phone answers what an agent asks for while it browses on a machine, with
   fs.mkdirSync(run, { recursive: true });
   const asks = [
     { id: "ask-1", kind: "signIn", host: "github.com", targetId: "T1", username: true, password: true, session: "ses_sub" },
-    { id: "ask-2", kind: "code", host: "github.com", targetId: "T1", prompt: "The code GitHub sent", session: "ses_1" },
+    // Its site asked for a passkey, which the browser can't use: you're told to sign in another way.
+    { id: "ask-2", kind: "code", host: "github.com", targetId: "T1", prompt: "The code GitHub sent", session: "ses_1", passkey: true },
   ];
   fs.writeFileSync(path.join(run, "browser-asks.json"), JSON.stringify({ asks }));
   // The engine: a subagent's session, and the conversation it works for.
@@ -1444,6 +1445,7 @@ test("a phone answers what an agent asks for while it browses on a machine, with
     // A subagent's, in the conversation it works for, by that one's name.
     assert.deepEqual(listed.json.asks[0], { id: "ask-1", kind: "signIn", host: "github.com", machine: "Lokum", session: "ses_1", asker: "Fixer", username: true, password: true, saved: [], offersToSave: false });
     assert.equal(listed.json.asks[1].prompt, "The code GitHub sent");
+    assert.equal(listed.json.asks[1].passkey, true);
 
     assert.equal((await answer(handle, "POST", "kuvo/asks/ask-1", JSON.stringify({ answer: "signIn", saved: "me" }))).status, 400, "saved passwords are the Mac's");
     assert.equal((await answer(handle, "POST", "kuvo/asks/ask-1", JSON.stringify({ answer: "code", code: "1" }))).status, 400, "not what it asks");

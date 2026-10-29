@@ -25,6 +25,13 @@ final class BrowserSession: NSObject {
     @ObservationIgnored var onClose: (() -> Void)?
     /// A sign-in you just sent, which the toolbar offers to save.
     var pendingLogin: PendingLogin?
+    /// The site of the page, when it asked for a passkey (which this browser can't use yet), until
+    /// you leave the site: the agent's look at the page says so.
+    var passkeySite: String? {
+        didSet { if passkeySite != oldValue { passkeyNoteClosed = false } }
+    }
+    /// You closed the note about it.
+    var passkeyNoteClosed = false
     /// The saved logins for the page's site, and whether it has a field to fill them into.
     private(set) var savedLogins: [Passwords.Login] = []
     private(set) var hasLoginField = false
@@ -181,11 +188,17 @@ final class BrowserSession: NSObject {
         webView.allowsMagnification = true
         super.init()
         PasswordCapture.shared.register(self)
+        PasskeyAsks.shared.register(self)
         webView.uiDelegate = self
         webView.navigationDelegate = self
         observations = [
             webView.observe(\.title) { [weak self] view, _ in MainActor.assumeIsolated { self?.title = view.title ?? "" } },
-            webView.observe(\.url) { [weak self] view, _ in MainActor.assumeIsolated { self?.url = view.url } },
+            webView.observe(\.url) { [weak self] view, _ in
+                MainActor.assumeIsolated {
+                    self?.url = view.url
+                    if let site = self?.passkeySite, BrowserAgent.site(of: view.url) != site { self?.passkeySite = nil }
+                }
+            },
             webView.observe(\.isLoading) { [weak self] view, _ in
                 MainActor.assumeIsolated {
                     // A new page starts from nothing, not from where the last one finished.
@@ -596,6 +609,10 @@ struct BrowserPane<NewTab: View>: View {
             .padding(.bottom, 8)
             if let login = session.pendingLogin {
                 SaveLoginBar(login: login, session: session)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+            if session.passkeySite != nil, !session.passkeyNoteClosed {
+                PasskeyBar { withAnimation(.ui) { session.passkeyNoteClosed = true } }
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
             if let dialog = session.dialog {

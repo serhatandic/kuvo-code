@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientText
 import SwiftUI
 
 /// Asks Kuvo Code can't show in a conversation: from a bot in a group chat, or from an agent it
@@ -36,6 +37,7 @@ struct BrowserAskCard: View {
     var waiting = 0
     @Environment(AppModel.self) private var app
     @Environment(\.takesCardKeys) private var takesKeys
+    @Environment(\.colorScheme) private var scheme
     @State private var username = ""
     @State private var password = ""
     @State private var code = ""
@@ -71,6 +73,7 @@ struct BrowserAskCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
+            if ask.passkey { passkeyNote }
             footer
         }
         .padding(16)
@@ -88,6 +91,23 @@ struct BrowserAskCard: View {
             case .action: break
             }
         }
+    }
+
+    /// The site asked for a passkey, which the browser can't use yet: what to do instead.
+    private var passkeyNote: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "info.circle")
+                .foregroundStyle(.secondary)
+            Text(PasskeyWords.onCard(host: ask.host))
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .background(Surface.well(scheme), in: .rect(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
+        .transition(.opacity)
     }
 
     private var header: some View {

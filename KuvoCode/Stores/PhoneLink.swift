@@ -1071,11 +1071,14 @@ final class PhoneLink {
                 var offersToSave: Bool?
                 var prompt: String?
                 var instruction: String?
+                /// The site asked for a passkey, which the browser can't use yet.
+                var passkey: Bool?
             }
             var asks: [Ask]
         }
         let asks = (browserAsks?.asks ?? []).map { ask in
             var listed = Listed.Ask(id: ask.id, kind: "", host: ask.host, machine: ask.machine.map { machineName($0) ?? $0 }, session: ask.session, asker: ask.asker)
+            if ask.passkey { listed.passkey = true }
             switch ask.kind {
             case .signIn(let username, let password):
                 listed.kind = "signIn"

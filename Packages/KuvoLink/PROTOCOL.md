@@ -1647,7 +1647,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `POST kuvo/asks/<id>` answers one: `{"answer": "signIn", "username", "password", "save"}`
   (or `"saved": "<account>"`, which the Mac fills in from Passwords itself), `{"answer":
   "code", "code"}`, `{"answer": "done"}` or `{"answer": "declined"}`. What's typed goes into
-  the page, never to the agent.
+  the page, never to the agent. An ask has `"passkey": true` once its site asked for a passkey
+  (then, or in the ten minutes before): the browsers can't use passkeys yet, so a client tells
+  you to sign in another way.
 - A machine's bridge answers the same three for what's asked in that machine's
   browser, with the Mac closed too: `saved` is empty and `offersToSave` false (saved passwords
   are the Mac's), and a `saved` answer gets `400 {"message"}`. A Mac connected to the machine

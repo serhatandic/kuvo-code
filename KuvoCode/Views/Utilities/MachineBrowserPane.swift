@@ -33,6 +33,10 @@ struct MachineBrowserPane<NewTab: View>: View {
             }
             .padding(.horizontal, 10)
             .padding(.bottom, 8)
+            if isShown, let page, let site = browser.passkeyPages[page], site == browser.page(page).flatMap({ MachineBrowser.site(of: $0.url) }) {
+                PasskeyBar { withAnimation(.ui) { browser.passkeyPages[page] = nil } }
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
             if isShown, let dialog = browser.dialog {
                 DialogBar(dialog: dialog, browser: browser)
                     .transition(.move(edge: .top).combined(with: .opacity))

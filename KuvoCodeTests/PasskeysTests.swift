@@ -41,6 +41,39 @@ import WebKit
     func aPageAskingForAPasskeyHearsThereIsNone(how: String) async throws {
         #expect(try await asked(how) == "Passkeys can't be used in this browser.")
     }
+
+    /// You're told plainly: the tab notes it for its page, and the agent's ask for that site (open
+    /// already, or made soon after) says so. A page looking quietly whether passkeys are offered,
+    /// as it loads, isn't asking: nothing's said.
+    @Test func aSiteAskingForAPasskeyIsSaidOnItsTabAndItsAsks() async throws {
+        TestEnvironment.prepare()
+        let asks = BrowserAsks()
+        var told: [String] = []
+        PasskeyAsks.shared.onAsked = { site in
+            told.append(site)
+            asks.passkeyAsked(host: site, machine: nil)
+        }
+        defer { PasskeyAsks.shared.onAsked = { _ in } }
+        let tab = BrowserSession()
+        tab.webView.loadHTMLString("<!doctype html><title>Sign in</title><body>Sign in</body>", baseURL: URL(string: "https://accounts.example.com/login")!)
+        try await until { !tab.isLoading && tab.url != nil }
+        asks.add(BrowserAsks.Ask(id: "open", kind: .action(instruction: "Sign in"), host: "accounts.example.com", machine: nil, session: "ses_a")) { _ in }
+        asks.add(BrowserAsks.Ask(id: "elsewhere", kind: .action(instruction: "Sign in"), host: "accounts.example.com", machine: "box", session: "ses_b")) { _ in }
+
+        let publicKey = "{ challenge: new Uint8Array(32) }"
+        _ = try? await tab.webView.callAsyncJavaScript("await navigator.credentials.get({ publicKey: \(publicKey), mediation: 'conditional' }).catch(() => {})", contentWorld: .page)
+        _ = try? await tab.webView.callAsyncJavaScript("await navigator.credentials.get({ publicKey: \(publicKey) }).catch(() => {})", contentWorld: .page)
+        try await until { tab.passkeySite == "accounts.example.com" }
+        // (Pages' messages come in order: one from the quiet look would be here first.)
+        #expect(told == ["accounts.example.com"])
+        #expect(asks.asks.map(\.passkey) == [true, false], "only this Mac's browser's")
+        asks.add(BrowserAsks.Ask(id: "later", kind: .code(prompt: ""), host: "accounts.example.com", machine: nil, session: "ses_a")) { _ in }
+        #expect(asks.asks.last?.passkey == true)
+
+        // Gone once you leave the site.
+        tab.webView.loadHTMLString("<!doctype html><title>Home</title>", baseURL: URL(string: "https://example.org/")!)
+        try await until { tab.passkeySite == nil }
+    }
 }
 
 @MainActor

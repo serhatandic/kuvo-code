@@ -79,6 +79,8 @@ extension AppModel {
         // connection that brings the ask here.
         browserAsks.onChange = { [weak self] sessions in self?.workspace.askingInBrowser = sessions }
         browserAsks.conversation = { [weak self] session in self?.workspace.root(of: session) ?? session }
+        // A page in this Mac's browser asked for a passkey: an agent's ask for its site says so.
+        PasskeyAsks.shared.onAsked = { [weak self] site in self?.browserAsks.passkeyAsked(host: site, machine: nil) }
         workspace.botName = { [weak self] session in self?.bots.bot(forSession: session)?.name }
         workspace.botMachine = { [weak self] session in self?.bots.bot(forSession: session)?.machine }
         // One machine at two addresses: the one added later is one of the other's addresses, and
@@ -344,6 +346,10 @@ extension AppModel {
             self?.browserAsks.add(ask) { answer in browser?.answer(ask.id, answer) }
         }
         engine.browser.onAskClosed = { [weak self] id in self?.browserAsks.closed(id) }
+        engine.browser.onPasskeyAsked = { [weak self, weak browser = engine.browser] host in
+            guard let browser else { return }
+            self?.browserAsks.passkeyAsked(host: host, machine: browser.machine.id)
+        }
         engine.onEvent = { [weak self] event in
             self?.workspace.handle(event, machine: machine)
             // It signed in again, or a sign-in ran out and was renewed there: here too.

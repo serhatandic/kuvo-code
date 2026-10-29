@@ -1329,7 +1329,8 @@
          },
          "offersToSave?": "bool",
          "prompt?": "string",
-         "instruction?": "string"
+         "instruction?": "string",
+         "passkey?": "bool"
         }
        }
       }
