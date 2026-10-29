@@ -337,7 +337,7 @@ test("a letter for this Mac's conversation while it moves to another computer is
   const record = path.join(macHome, "run", "moves", "mov_letter1.json");
   fs.mkdirSync(path.dirname(record), { recursive: true });
   write(record, { id: "mov_letter1", kind: "chat", thing: "ses_mac1", name: "Release notes", from: mac, to: lab.key, role: "from", stage: "switching",
-    step: "switch", sentAt: Date.now() + 3_600_000, sessions: ["ses_mac1"], peer: lab.key, wasPaused: true, tries: 0, started: Date.now() });
+    step: "switch", sentAt: Date.now() + 3_600_000, switchSince: Date.now(), sessions: ["ses_mac1"], peer: lab.key, wasPaused: true, tries: 0, started: Date.now() });
   t.after(() => fs.rmSync(record, { force: true }));
   write(run("outbox/sending/ltr_moving1.json"), { from: "ses_lab1", to: "ses_mac1", text: "Are you there yet?", wait: false, at: Date.now() });
   // Said not now: still the machine's to send again, and nothing reached the conversation.
