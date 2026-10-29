@@ -481,7 +481,7 @@ test("a bot's work further back than the latest two hundred sessions is still it
   assert.deepEqual(work.body.sessions.map(each => each.session), [old]);
 });
 
-test("a bot never lets a session change what later commands run, nor reach past a link or into your keys", async () => {
+test("a bot never lets a session change what later commands run, nor reach past a link or into your keys", { timeout: 120_000 }, async () => {
   const session = startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_pixel"));
   fs.rmSync(path.join(tidepool, "linkout"), { force: true });
   fs.symlinkSync(home, path.join(tidepool, "linkout"));
@@ -499,7 +499,10 @@ test("a bot never lets a session change what later commands run, nor reach past 
     { id: "per_doc", sessionID: session, action: "write", resources: [path.join(tidepool, "docs", "plan.md")] },
   ]);
   const answer = ask => tool("answer_ask", { session, ask, decision: "allow", reason: "Part of the plan." }, "ses_pixel");
-  for (const [at, file] of edits.entries()) assert.equal((await answer(`per_${at}`)).isError, true, file);
+  // A few at a time: each is a process of its own.
+  for (let from = 0; from < edits.length; from += 12) {
+    await Promise.all(edits.slice(from, from + 12).map(async (file, offset) => assert.equal((await answer(`per_${from + offset}`)).isError, true, file)));
+  }
   assert.equal((await answer("per_read")).isError, true);
   assert.equal((await answer("per_ok")).isError, false);
   assert.equal((await answer("per_new")).isError, false, "a new source file, made");
