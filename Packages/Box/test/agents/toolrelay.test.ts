@@ -2,11 +2,12 @@
 // call is its own session's, whatever it says, and reaches the tools where the sandbox can't.
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setToolProgram, setToolServer } from "../../src/agents/kuvotools"
 import { dropRelayed, relayedTools } from "../../src/agents/toolrelay"
+import { noteToolServer } from "../../src/agents/fence"
 
 const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-relay-test-"))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
@@ -121,6 +122,25 @@ describe("on this Mac: the app's server", () => {
       expect(seen).toEqual([{ authorization: "Bearer app-password", session: "ses_one", claims: "ses_one" }])
     } finally {
       app.stop(true)
+    }
+  })
+})
+
+describe("this Mac's app's own server", () => {
+  test("where the app says it is is noted for the box's sandbox to refuse, as Kuvo Code's other servers, and forgotten when it's gone", () => {
+    const run = join(base, "run")
+    const fence = join(run, "fence")
+    const record = join(run, "tools.json")
+    mkdirSync(fence, { recursive: true })
+    process.env.KUVO_FENCE = fence
+    try {
+      noteToolServer("http://127.0.0.1:4567/mcp")
+      // (As the box's link reads it: link/fence/state.ts.)
+      expect(JSON.parse(readFileSync(record, "utf8"))).toEqual({ port: 4567 })
+      noteToolServer(undefined)
+      expect(existsSync(record)).toBe(false)
+    } finally {
+      delete process.env.KUVO_FENCE
     }
   })
 })

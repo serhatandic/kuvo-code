@@ -2659,7 +2659,10 @@ does it give the engine the plugin, and it takes it away (with what the engine n
 it's `on` again only once the engine has loaded it again) when a check fails, so commands run as
 before rather than not at all. (Kuvo Code's own kill switch, for a rollout, does the same: the box
 started with `KUVO_SANDBOX=off`. No client shows a reason for it.) It puts it back if it goes, and keeps
-Kuvo Code's own ports in the macOS rules as they change.
+Kuvo Code's own ports in the macOS rules as they change: the engine's, the agents bridge's, the
+app's (`run/host.json`) and its server for Kuvo Code's tools (`run/tools.json`, `{"port"}`, which
+the agents bridge writes as the app tells it where that is, `PUT kuvo/tools`, and removes when it
+says it's gone; only an agent's relay reaches it).
 Agents are told: each box starts its engine with `run/fence/agents.md` among its instructions
 (`engine-config`, beside what it's given), which the engine reads again as it changes. While it's
 `on` (the engine has loaded the plugin) it says what commands can't do, and how builds and tools that would fail run (on a

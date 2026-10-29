@@ -156,6 +156,8 @@ function kuvoPorts(): number[] {
     } catch {}
   }
   try { add(Number(new URL(JSON.parse(fs.readFileSync(path.join(RUN, "host.json"), "utf8")).url).port)); } catch {}
+  // The app's own server for Kuvo Code's tools (run/tools.json, as the agents bridge notes it).
+  try { add(JSON.parse(fs.readFileSync(path.join(RUN, "tools.json"), "utf8")).port); } catch {}
   add(ownPort);
   return [...ports].sort((a, b) => a - b);
 }

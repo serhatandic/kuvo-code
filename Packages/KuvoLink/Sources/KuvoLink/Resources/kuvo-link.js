@@ -10971,6 +10971,9 @@ function kuvoPorts() {
   try {
     add(Number(new URL(JSON.parse(fs50.readFileSync(path50.join(RUN, "host.json"), "utf8")).url).port));
   } catch {}
+  try {
+    add(JSON.parse(fs50.readFileSync(path50.join(RUN, "tools.json"), "utf8")).port);
+  } catch {}
   add(ownPort);
   return [...ports].sort((a, b) => a - b);
 }

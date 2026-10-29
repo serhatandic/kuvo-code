@@ -470,6 +470,11 @@ test("this Mac's box hides its app's whole folder, its chats but the conversatio
   fs.writeFileSync(path.join(chats, "chat_b", "secret.md"), "another chat's\n");
   fs.mkdirSync(path.join(box.app, "Attachments"), { recursive: true });
   fs.writeFileSync(path.join(box.app, "Attachments", "photo.txt"), "yours\n");
+  // The app's own server for Kuvo Code's tools, as the agents bridge notes where the app says it is.
+  const tools = net.createServer(socket => socket.end());
+  await new Promise(resolve => tools.listen(0, "127.0.0.1", resolve));
+  fs.mkdirSync(path.join(box.home, "run"), { recursive: true });
+  fs.writeFileSync(path.join(box.home, "run", "tools.json"), JSON.stringify({ port: tools.address().port }));
   const running = await start(box);
   try {
     const state = (await running.ask("GET", "kuvo/sandbox")).value;
@@ -480,10 +485,13 @@ test("this Mac's box hides its app's whole folder, its chats but the conversatio
       ["read another chat", `cat ${JSON.stringify(path.join(chats, "chat_b", "secret.md"))}`],
       ["read the app's files", `cat ${JSON.stringify(path.join(box.app, "Attachments", "photo.txt"))}`],
       ["reach the box", `curl -s -m 2 -o /dev/null ${running.url}/kuvo/info`],
+      // (Its connection only: this process answers nothing while the command runs.)
+      ["reach the app's tools", `nc -z -G 2 127.0.0.1 ${tools.address().port}`],
     ]));
-    assert.deepEqual(outcome(ran.out), { "write in its chat": "allowed", "read another chat": "refused", "read the app's files": "refused", "reach the box": "refused" }, ran.out);
+    assert.deepEqual(outcome(ran.out), { "write in its chat": "allowed", "read another chat": "refused", "read the app's files": "refused", "reach the box": "refused", "reach the app's tools": "refused" }, ran.out);
   } finally {
     await running.stop();
+    tools.close();
   }
 });
 

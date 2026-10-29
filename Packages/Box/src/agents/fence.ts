@@ -4,7 +4,7 @@
 // engine does; Codex runs whole in it.
 
 import { createHash, randomBytes } from "node:crypto"
-import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, type Dirent } from "node:fs"
+import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, type Dirent } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { machineHome } from "./machine"
 
@@ -19,6 +19,26 @@ export interface FenceRules {
 
 /** The box's sandbox folder: this Mac's (the app names it), or a machine's in `~/.kuvo-code`. */
 const folder = () => process.env.KUVO_FENCE ?? (machineHome ? join(machineHome, "run", "fence") : undefined)
+
+/**
+ * Where the app's own server for Kuvo Code's tools is (as the app says), noted for the box's link
+ * (`run/tools.json`), whose sandbox refuses it as Kuvo Code's other servers: only an agent's relay
+ * reaches it, with its password.
+ */
+export function noteToolServer(url: string | undefined) {
+  const where = folder()
+  if (!where) return
+  const record = join(dirname(where), "tools.json")
+  let port = 0
+  try {
+    port = Number(new URL(url ?? "").port)
+  } catch {}
+  try {
+    if (!port) return rmSync(record, { force: true })
+    writeFileSync(record + ".new", JSON.stringify({ port }), { mode: 0o600 })
+    renameSync(record + ".new", record)
+  } catch {}
+}
 
 /** Whether the box's sandbox is on here: its commands run in it. */
 export function fenceOn(): boolean {
