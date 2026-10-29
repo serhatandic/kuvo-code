@@ -230,7 +230,7 @@ struct BotWorkList: View {
                         Text(WorkWords.asking(answer.what))
                             .font(.system(size: 12))
                             .lineLimit(2)
-                        Text("\(answer.verdict): \(answer.reason)")
+                        Text(answer.reason.isEmpty ? answer.verdict : "\(answer.verdict): \(answer.reason)")
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                             .lineLimit(3)
