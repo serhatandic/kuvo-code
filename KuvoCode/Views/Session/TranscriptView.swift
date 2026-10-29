@@ -854,6 +854,11 @@ struct UserBubble: View {
         }
     }
 
+    /// Find's marks for each part, counted as Find counts them (`findParts`).
+    static func findMarks(_ highlight: FindHighlight?, in text: String, keyword: String?) -> [FindHighlight]? {
+        highlight?.spread(over: findParts(text, keyword: keyword))
+    }
+
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
             if !attachments.isEmpty {
@@ -868,7 +873,7 @@ struct UserBubble: View {
             }
             // What it replied to, each part above the words that answer it.
             let parts = Self.parts(text)
-            let marks = highlight?.spread(over: parts.map(\.text))
+            let marks = Self.findMarks(highlight, in: text, keyword: keyword)
             let agents = MessageMentions.agents(references, bots: app.bots)
             ForEach(parts.indices, id: \.self) { index in
                 Group {

@@ -121,6 +121,33 @@ import Testing
         #expect(marks(in: drawn) == 1)
     }
 
+    /// "/review" sent with your words under a quote, searched for "review": stepping to the last
+    /// place marks it, in the words the keyword's drawn in front of, as the bubble counts its places
+    /// as Find does.
+    @Test func thePlaceYoureOnBehindAKeywordIsTheOneMarked() async throws {
+        let text = "> Should we review this?\n\nReview the tests"
+        let find = await found("review", in: [.init(id: "you-1", parts: UserBubble.findParts(text, keyword: "/review").map(ConversationFind.Part.plain))])
+        find.step(-1)
+        let marks = try #require(UserBubble.findMarks(find.highlight(for: "you-1"), in: text, keyword: "/review"))
+        var drawn = MessageMentions.keyword("/review", before: AttributedString("Review the tests"))
+        FindText.mark(&drawn, marks[1])
+        #expect(find.places.count == 3)
+        #expect(marks[0].current == nil)
+        #expect(placeColors(in: drawn) == [FindText.place, FindText.currentPlace])
+    }
+
+    /// A group chat's "@Name" is drawn with the bot's face in the "@"'s place: Find, which reads it
+    /// as written, marks it where it finds it, as the place you're on.
+    @Test func aGroupChatsNameDrawnWithAFaceIsMarkedWhereFound() async throws {
+        let reply = "Ask @Scout about the deploy."
+        let find = await found("@scout", in: [.init(id: "gm-1", parts: [.markdown(reply)])])
+        let scout = Bot(id: "bot_scout", name: "Scout", job: "", instructions: "", jobInMemory: true, look: BotLook(color: .mint, shape: .round, face: .calm),
+                        machine: nil, project: nil, folder: "/bots/bot_scout", sessionID: "ses_scout", created: .now, model: nil, personality: nil)
+        let drawn = try FileLinkingParser(folders: { [] }, mentions: [scout], highlight: find.highlight(for: "gm-1")).attributedString(for: reply)
+        #expect(find.places.count == 1)
+        #expect(placeColors(in: drawn) == [FindText.currentPlace])
+    }
+
     /// A long message (a pasted log) of many runs, bold and links among them: each place is
     /// marked, the one you're on orange, and its words and links stay as they were.
     @Test func everyPlaceInALongMessageIsMarked() {
