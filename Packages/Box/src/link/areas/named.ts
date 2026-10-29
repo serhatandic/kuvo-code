@@ -18,5 +18,5 @@ export async function* namedRoute(context: RouteContext): AsyncGenerator<AnswerP
   const fresh = await ownAgents(readEngine, link?.id).catch(() => null);
   if (fresh) keepOwn(fresh, link?.id ?? null);
   const own = fresh ?? ownAsLast(link?.id ?? null);
-  return yield* json(200, { agents: namedAgents(own, peersOf(link), readPeerAgents(undefined, undefined, link), movedOf(link)) } satisfies Named);
+  return yield* json(200, { agents: namedAgents(own, peersOf(link), readPeerAgents(), movedOf(link)) } satisfies Named);
 }

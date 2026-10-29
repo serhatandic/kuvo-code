@@ -286,7 +286,7 @@ when you're there to answer.
 | `KUVO_AGENTS_SCRIPT` | Run the agents bridge from this script (a checkout's `Packages/Box/src/agents/main.ts`) instead of the app's bundle |
 | `KUVO_DEMO_FOLDER`, `KUVO_DEMO_PROMPT`, `KUVO_DEMO_MODEL` | Open a project and start a session with a prompt (`provider/model`) |
 | `KUVO_DEMO_WORKTREE` | Start that session in a worktree of its own |
-| `KUVO_DEMO_DRAFT` | With `KUVO_DEMO_FOLDER` and no prompt: a message typed, not sent, in the new session's composer |
+| `KUVO_DEMO_DRAFT` | With `KUVO_DEMO_FOLDER` and no prompt: a message typed, not sent, in the new session's composer; with `KUVO_DEMO_SESSION`, in that session's |
 | `KUVO_DEMO_THEN`, `KUVO_DEMO_THEN_DRAFT` | With `KUVO_DEMO_PROMPT`: messages separated by `\|`, each sent once the turn before it ended (a keyword too, like `/btw what changed?`); then text left, not sent, in its composer |
 | `KUVO_DEMO_DRAFT_FILES` | With `KUVO_DEMO_FOLDER` and no prompt: comma-separated paths attached, not sent, in the new session's composer |
 | `KUVO_DEMO_SHOW_IN_PANEL` | `<path>\|folder` or `<path>\|file`: as if the agent of the session in view showed that in the panel |
@@ -299,7 +299,10 @@ when you're there to answer.
 | `KUVO_DEMO_MOVE_TO_AGENTS` | `<provider>/<model>\|<seconds>`: the session in view carries on with the coding agents that long after launch, as picking their model does |
 | `KUVO_DEMO_QUEUE` | Messages to queue once that session's agent is working, separated by `\|` |
 | `KUVO_DEMO_SIDE_THREAD` | With `KUVO_DEMO_PROMPT`: a sample side thread of three questions over the composer, and an older one in its ⋯ (`answering` leaves its last one being answered), once the first turn ends |
-| `KUVO_DEMO_REVIEW` | With `KUVO_DEMO_PROMPT`: `running`, `stopped` or `done`, a sample security review of the whole project in parts over the composer once the first turn ends (no model reads it) |
+| `KUVO_DEMO_GOAL` | With `KUVO_DEMO_PROMPT`: `met` or `working`, a sample goal over the composer once the first turn ends (no model checks it) |
+| `KUVO_DEMO_OPEN_PART` | With a `KUVO_DEMO_PROMPT` of `/review …`: its first part, opened in the conversation's place once it reads in a session of its own |
+| `KUVO_DEMO_REVIEW` | With `KUVO_DEMO_PROMPT`: `starting` (nothing found yet), `running`, `stopped` or `done`, a sample security review of the whole project in parts over the composer once the first turn ends (no model reads it) |
+| `KUVO_DEMO_SIDE_THREAD_HOVER` | The side thread's Copy shown as with the pointer over it |
 | `KUVO_DEMO_WAITING` | With `KUVO_DEMO_SESSION`: these messages shown waiting in its queue, separated by `\|`, without sending them; `<words>@<picture path>` attaches a picture |
 | `KUVO_DEMO_NEW_PROJECT` | Open the New Project sheet with these comma-separated folders |
 | `KUVO_DEMO_BACKGROUND` | Don't bring the window forward, so it doesn't take the keyboard while you work elsewhere; it also asks nothing of macOS (above) |
@@ -334,7 +337,10 @@ when you're there to answer.
 | `KUVO_DEMO_SCREEN_ACCESS` | What macOS says of Screen Recording and Accessibility, for the first launch's last step: the allowed ones (`screenRecording,accessibility`), or `none` |
 | `KUVO_DEMO_ADD_ANOTHER` | With `KUVO_DEMO_ONBOARDING=subscriptions`: Add Another open, on `plans` or `keys`; `KUVO_DEMO_SHOW_KEYS` opens the API keys found in place instead |
 | `KUVO_DEMO_OPENCODE_AUTH` | An opencode `auth.json` of your own for the first launch to find, in place of `~/.local/share/opencode/auth.json` |
-| `KUVO_DEMO_SETTINGS` | Open Settings on a page, by its `SettingsPage` name: `general`, `appearance`, `storage`, `accounts`, `agents`, `mcp`, `git`, `browser`, `passwords` and so on; `permissions@<machine>` for a machine's |
+| `KUVO_DEMO_SETTINGS` | Open Settings on a page, by its `SettingsPage` name: `general`, `appearance`, `storage`, `accounts`, `agents`, `mcp`, `git`, `browser`, `vault` and so on; `permissions@<machine>` for a machine's |
+| `KUVO_DEMO_VAULT` | This Mac's vault with sample items (made only where they aren't yet), for a look at its pages |
+| `KUVO_DEMO_VAULT_ASK` | With `KUVO_DEMO_VAULT` and a bot: the first bot asks the vault for this, as `vault_ask` does, so its card shows over its composer and in Settings › Vault |
+| `KUVO_DEMO_VAULT_ITEM` | With `KUVO_DEMO_SETTINGS=vault`: the sheet of the item with this name, open |
 | `KUVO_DEMO_SETTINGS_TABS` | With `KUVO_DEMO_SETTINGS` and the tab bar on: these pages too, comma-separated, each in a tab of its own (`page@<machine>` for a machine's) |
 | `KUVO_DEMO_DISCONNECT` | Don't connect to this machine, as after Disconnect, so this copy reaches it only through the relay (set it up in an earlier launch) |
 | `KUVO_DEMO_ADD_MACHINE` | The Add Machine sheet, open, with `KUVO_DEMO_SETTINGS=machines` or over `KUVO_DEMO_NEW_PROJECT` |
@@ -358,6 +364,9 @@ when you're there to answer.
 | `KUVO_DEMO_UNDO` | Undo's lines in the card, held so they don't go: the goal put away and a message removed (with `KUVO_DEMO_BARS` and `KUVO_DEMO_WAITING`) |
 | `KUVO_DEMO_BOT_MODEL` | With `KUVO_DEMO_BOT`: the model a new bot gets, `<provider>/<model>` (a coding agent's, like `claude-code/haiku`, makes it run with the agents) |
 | `KUVO_DEMO_EDIT_BOT` | With `KUVO_DEMO_BOT`: that bot's editor, open (`bottom`: scrolled to its wake-ups and memory) |
+| `KUVO_DEMO_BOT_WORK` | A bot's name: its work, a sample (three sessions at work, one asking, two done, two asks answered), in the bar over its composer, and every session marked as its work counts as at work in the sidebar (`KUVO_DEMO_BOT_WORK_ALL`: its All list open too) |
+| `KUVO_DEMO_BOT_ASK` | A bot's name: as its conversation opens, it asks to make a project, the first time on its computer (the asking card, with where projects go) |
+| `KUVO_DEMO_MADE_BY` | A bot's name: as its conversation opens, your first project shows as one it made (its face on the folder) |
 | `KUVO_DEMO_EDIT_BOT_SAVE` | With `KUVO_DEMO_EDIT_BOT`: its job in a few words changed to this, and saved, ten seconds on (with `KUVO_DEMO_BOX_FAILED`, to see what Save says while this Mac's box is down) |
 | `KUVO_DEMO_MOVE_BOT` | With `KUVO_DEMO_BOT`: once that bot is done (and its prompt with it), it moves to this machine, or to this Mac when empty, as Move to Computer does |
 | `KUVO_DEMO_MOVE_GROUP` | With `KUVO_DEMO_GROUP`: that group chat moves to this machine, or to this Mac when empty, as Move to Computer does, before its message goes |
@@ -411,8 +420,8 @@ when you're there to answer.
 | `KUVO_DEMO_MAKE_HOME` | `<machine>`, with `KUVO_DEMO_SETTINGS=machines`: once it's connected, makes this Mac its home, as Make This Mac Its Home… does (to try a move between two demo copies) |
 | `KUVO_DEMO_MACHINE_ROOT` | A folder of its own in machines' home folders (like `.kuvo-code-demo`), so the demo copy's engine and browser there never touch your own copy's. What it starts there stops when it quits, except in `.kuvo-code-demo` while its phone link is on, so a phone tried with it reaches its bots with the Mac shut |
 | `KUVO_DEMO_COMMENT` | Add a review comment to the session in view, as `<path in the project>:<line>:<text>` |
-| `KUVO_DEMO_VOICE` | With `KUVO_DEMO_SESSION`: voice input listening for it with sample words, `composer` (in the composer) or `field` (the voice field), without the microphone |
-| `KUVO_DEMO_WHISPER` | Whisper's download as if it were `downloading`, `paused`, `waiting`, `failed`, `space`, `preparing` or `ready`, without the network (the ring on the mic, the note while listening, Settings › General › Speech model); `download` starts the real download, into the copy's own folder |
+| `KUVO_DEMO_VOICE` | With `KUVO_DEMO_SESSION`: voice input listening for it with sample words, `composer` (in the composer) or `field` (the voice field), without the microphone; `tip`, the one-time tip about more accurate voice input, from the mic |
+| `KUVO_DEMO_WHISPER` | Whisper's download as if it were `downloading`, `paused`, `waiting`, `failed`, `space`, `preparing` or `ready`, without the network (the ring on the mic, Settings › General › Voice Input); `download` starts the real download, into the copy's own folder |
 | `KUVO_DEMO_QUOTES` | With `KUVO_DEMO_SESSION`: that many quotes to answer in its composer (a session's or a group chat's, as `group:<id>`) |
 | `KUVO_DEMO_FIND` | With `KUVO_DEMO_SESSION`: Find in it, looking for these words |
 | `KUVO_DEMO_CONNECTED` | With `KUVO_DEMO_SETTINGS=integrations`: that integration's sign-in sheet, on its last step |

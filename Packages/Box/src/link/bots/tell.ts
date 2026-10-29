@@ -197,7 +197,7 @@ const isParticular = (rule: KitRule): boolean => rule.action === "external_direc
 
 // This box's Settings › Permissions (its settings' `permissions`), or null where they can't be read,
 // or aren't its own yet (a machine whose Mac hasn't made them so, which runs with what its Mac gave it).
-function permissionsHere(): KitRule[] | null {
+export function permissionsHere(): KitRule[] | null {
   if (!ownsSettings()) return null;
   const { settings } = readSettings();
   if (!settings) return null;

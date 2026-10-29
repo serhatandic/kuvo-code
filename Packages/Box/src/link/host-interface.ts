@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../shared/json";
 import { oneLine } from "../shared/text";
-import { KEYS_ON_HOST, LAUNCH_HOST, RUN } from "./home";
+import { HOST_VAULT_SECRET, KEYS_ON_HOST, LAUNCH_HOST, RUN } from "./home";
 
 /** A key store's trouble, said in plain words: the caller answers `503 {"message"}` with it. */
 export class KeysUnavailable extends Error {}
@@ -51,11 +51,14 @@ function helloProof(password: string, nonce: string, url: string): string {
   return crypto.createHmac("sha256", password).update(`kuvo-host-hello\0${nonce}\0${reached.hostname}:${reached.port || 80}`).digest("hex");
 }
 
-// What last proved it's this Mac's app (the host.json text it was found by): asked once for each.
+// What last proved it's this Mac's app (the host.json text it was found by): asked once for each;
+// and with the vault's secret, for the vault's calls.
 let provenBy: string | null = null;
+let vaultProvenBy: string | null = null;
 /** Its app's host interface started again (or failed): proved again before anything more is sent there. */
 export function forgetHostProof() {
   provenBy = null;
+  vaultProvenBy = null;
 }
 
 /** That it's this Mac's app at `host`, not whatever took its port after it (a host.json left by an
@@ -83,6 +86,34 @@ export async function proveHost(host: HostAddress): Promise<void> {
 }
 
 
+/** That it's this Mac's app at `host` that the vault's calls go to: it signs a nonce of ours, with
+ * where we reached it, with the vault's secret, which only the app and this box hold (the password
+ * is in a file an agent's command can read, and rewrite to send this box elsewhere). */
+async function proveVaultHost(host: HostAddress): Promise<void> {
+  if (!HOST_VAULT_SECRET) throw new KeysUnavailable("Kuvo Code on this Mac didn't give its vault its secret. Quit Kuvo Code and open it again.");
+  if (vaultProvenBy === host.said) return;
+  const nonce = crypto.randomBytes(32).toString("hex");
+  let proof: Buffer | null = null;
+  try {
+    const response = await fetch(`${host.url}/hello`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nonce, vault: true }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const answer = await (response.json() as Promise<{ vaultProof?: unknown } | null>).catch(() => null);
+    if (response.ok && typeof answer?.vaultProof === "string") proof = Buffer.from(answer.vaultProof);
+  } catch {}
+  const reached = new URL(host.url);
+  const expected = Buffer.from(crypto.createHmac("sha256", HOST_VAULT_SECRET).update(`kuvo-host-vault\0${nonce}\0${reached.hostname}:${reached.port || 80}`).digest("hex"));
+  if (!proof || proof.length !== expected.length || !crypto.timingSafeEqual(proof, expected)) throw new KeysUnavailable(NOT_ANSWERING);
+  vaultProvenBy = host.said;
+}
+
+/** What a vault call carries instead of the secret: its HMAC of the call, its body and when. */
+const vaultAuth = (call: string, body: string, at: number) =>
+  crypto.createHmac("sha256", HOST_VAULT_SECRET ?? "").update(`kuvo-host-vault-call\0${call}\0${crypto.createHash("sha256").update(body).digest("hex")}\0${at}`).digest("hex");
+
 /** What this Mac's box let go of (in its trash), moved on by its app to the Finder's Trash (`trash`);
  * nothing without its app. */
 export async function hostTrash(folder: string): Promise<void> {
@@ -103,18 +134,24 @@ export function askHost(host: HostAddress, call: string, body: unknown, missing?
 export function askHost(host: HostAddress, call: string, body: unknown, missing: boolean): Promise<HostAnswer | null>;
 export async function askHost(host: HostAddress, call: string, body: unknown, missing = false): Promise<HostAnswer | null> {
   await proveHost(host);
+  const sent = JSON.stringify(body);
+  // The vault's calls only to the app proved with the vault's secret, each with its own proof.
+  const vault = call.startsWith("vault/");
+  if (vault) await proveVaultHost(host);
+  const at = Date.now();
   let response;
   try {
     response = await fetch(`${host.url}/${call}`, {
       method: "POST",
-      headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json" },
-      body: JSON.stringify(body),
+      headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json", ...(vault ? { "x-kuvo-vault-auth": vaultAuth(call, sent, at), "x-kuvo-vault-at": String(at) } : {}) },
+      body: sent,
       // Reading or saving one can wait on you (a Keychain prompt on this Mac): two minutes for those.
-      signal: AbortSignal.timeout(["keys/get", "keys/set", "link/identity"].includes(call) ? 120_000 : 15_000),
+      signal: AbortSignal.timeout(["keys/get", "keys/set", "link/identity", "vault/get", "vault/set"].includes(call) ? 120_000 : 15_000),
     });
   } catch {
     // Gone from there: proved again before anything more is sent there.
     provenBy = null;
+    vaultProvenBy = null;
     throw new KeysUnavailable(NOT_ANSWERING);
   }
   if (missing && response.status === 404) {
@@ -154,10 +191,4 @@ export async function linkHost(call: string, body?: unknown): Promise<HostAnswer
   } catch {
     return null;
   }
-}
-
-// Whether one of this Mac's conversations is moving to or from another computer now: its app runs
-// the move (`link/moving`). Not when the app can't say (it isn't answering).
-export async function macMoving(session: string): Promise<boolean> {
-  return (await linkHost("link/moving", { session }))?.moving === true;
 }

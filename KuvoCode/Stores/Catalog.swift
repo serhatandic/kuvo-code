@@ -10,14 +10,6 @@ private let log = Logger(subsystem: "run.kuvo.code", category: "catalog")
 @Observable
 final class Catalog {
     var api: OpenCodeAPI?
-    /// This Mac's engine's, whose list of models says what every engine is started with
-    /// (`ProviderCompatibility`); a machine's would make the two take turns, and the machine's
-    /// engine look out of date each time.
-    let isMac: Bool
-
-    init(isMac: Bool = false) {
-        self.isMac = isMac
-    }
 
     /// The outside agents' bridge (Claude Code, Codex…), on this Mac's catalog: their accounts and
     /// models join the engine's.
@@ -328,7 +320,6 @@ final class Catalog {
         do {
             engineModels = try await models
             modelsRead = true
-            if isMac { ProviderCompatibility.learn(from: engineModels) }
             LogoImages.shared.prefetch(engineModels.flatMap { [$0.makerLogoID, $0.providerID] })
         } catch {
             log.error("models: \(String(describing: error), privacy: .public)")

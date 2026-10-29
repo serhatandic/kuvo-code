@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSessions
 import ClientText
 import OpenCodeKit
 import SwiftUI
@@ -36,6 +37,15 @@ struct TranscriptView: View {
         return nil
     }
 
+    /// The answers its bot gave, by the step that asked: kept on the session it is, or (a
+    /// subagent's) the one it works for.
+    private var workAnswers: [String: WorkAnswer] {
+        let root = workspace.root(of: model.id)
+        let own = WorkAnswer.byCall(model.session)
+        guard root != model.id, let above = workspace.session(root) else { return own }
+        return own.merging(WorkAnswer.byCall(above)) { mine, _ in mine }
+    }
+
     var body: some View {
         let rows = rows
         // More of a reply, in a row of its own, carries on from the row before rather than coming in.
@@ -70,6 +80,9 @@ struct TranscriptView: View {
         // What a widget writes back goes to this conversation's agent, as yours: as words, never
         // a command or keyword the page could run as you, and without your review comments.
         .environment(\.answerAgent) { text in model.send(text, for: nil, withComments: false) }
+        // What the bot that runs it answered for it, on the steps that asked; a subagent's are kept
+        // on the session it works for.
+        .environment(\.workAnswers, workAnswers)
         .overlay {
             if model.isLoaded && rows.isEmpty {
                 EmptyConversationView(directory: model.session.location.directory) { text in
@@ -303,6 +316,7 @@ struct TranscriptView: View {
         }
         func flushSteps(live: Bool) {
             guard !steps.isEmpty else { return }
+            if !live, StepsRow.saysTime(steps, detail: stepsDetail) { turn.stepsSayTime = true }
             rows.append(.steps(stepsID, steps, isLive: live))
             steps = []
         }
@@ -455,7 +469,12 @@ struct TranscriptView: View {
             case .synthetic(let notice)?, .system(let notice)?: quiet = notice.time.created
             default: break
             }
-            rows.append(.working(since: turn.started, quiet: quiet, followsHeard: followsHeard))
+            // A tool or a subagent at work shows it, moving: this line holds still meanwhile.
+            var stepWorks = false
+            if case .assistant(let step)? = messages.last {
+                stepWorks = step.content.contains { if case .tool(let call) = $0 { !call.state.isFinished } else { false } }
+            }
+            rows.append(.working(since: turn.started, quiet: quiet, followsHeard: followsHeard, holds: stepWorks))
         }
         return rows
     }
@@ -475,6 +494,8 @@ struct TurnStats: Hashable {
     var cost: Double = 0
     var outputTokens = 0
     var steps = 0
+    /// A line of its steps says how long they took ("Worked for 40s"), so its end doesn't.
+    var stepsSayTime = false
     /// What the agent wrote, for copying the reply.
     var text: [String] = []
     /// The mode that answered: a plan can be built from its end.
@@ -564,7 +585,7 @@ enum Row: Identifiable, Hashable {
     /// `quiet`: since when nothing has come back from the model.
     /// `followsHeard`: quiet since the model last sent anything, which new words move on without
     /// the rows being made again (see `RowView.heard`).
-    case working(since: Milliseconds?, quiet: Milliseconds?, followsHeard: Bool)
+    case working(since: Milliseconds?, quiet: Milliseconds?, followsHeard: Bool, holds: Bool)
 
     /// The words Find looks in, as the row shows them: messages, replies, and commands you ran
     /// with what they printed.
@@ -673,6 +694,7 @@ private struct RowView: View, Equatable {
     let reply: (String) -> Void
     @Environment(\.answerAgent) private var answerAgent
     @Environment(\.isOffline) private var isOffline
+    @Environment(\.takesNoMessages) private var takesNoMessages
     @Environment(\.subagentStarter) private var subagentStarter
 
     static func sentAt(_ created: Milliseconds) -> String {
@@ -743,12 +765,13 @@ private struct RowView: View, Equatable {
         case .subagent(let call):
             SubagentRow(call: call, directory: directory)
         case .turnEnd(let idle, let stats, let isLast):
-            TurnEndView(idle: idle, stats: stats, directory: directory, retry: isLast && !isOffline ? stats.message.map { message in { retry(message) } } : nil,
+            TurnEndView(idle: idle, stats: stats, directory: directory, retry: isLast && !isOffline && !takesNoMessages ? stats.message.map { message in { retry(message) } } : nil,
                         build: isLast && stats.agent == "plan" ? buildPlan : nil, reply: reply)
         case .shell(let shell):
             ShellRow(shell: shell)
-        case .notice(_, let symbol, let text):
-            Label(text, systemImage: symbol)
+        case .notice(_, _, let text):
+            // Its words say what it is: no symbol beside them.
+            Text(text)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -758,7 +781,7 @@ private struct RowView: View, Equatable {
                 .frame(maxWidth: .infinity)
         case .undone(let count):
             HStack(spacing: 10) {
-                Label("Undid " + count.counting("message"), systemImage: "arrow.uturn.backward")
+                Text("Undid " + count.counting("message"))
                 Button("Redo", action: redo)
                     .buttonStyle(.borderless)
                     .disabled(isOffline)
@@ -771,7 +794,7 @@ private struct RowView: View, Equatable {
             .background(.quaternary.opacity(0.5), in: .capsule)
             .frame(maxWidth: .infinity)
             .help("Sending a message makes the undo final")
-        case .working(let since, let quiet, let followsHeard):
+        case .working(let since, let quiet, let followsHeard, let holds):
             HStack(spacing: 8) {
                 // A bot shows itself at work.
                 if let bot {
@@ -781,8 +804,15 @@ private struct RowView: View, Equatable {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let latest = heard()
                     // Against the engine's clock, as its times are: a machine's may be behind.
-                    ShimmerText(text: Self.working(since: since, quiet: followsHeard ? latest.last ?? quiet : quiet, now: context.date.addingTimeInterval(-latest.offset / 1000)))
-                        .font(.callout)
+                    let text = Self.working(since: since, quiet: followsHeard ? latest.last ?? quiet : quiet, now: context.date.addingTimeInterval(-latest.offset / 1000))
+                    Group {
+                        if holds {
+                            Text(text).foregroundStyle(.secondary)
+                        } else {
+                            ShimmerText(text: text)
+                        }
+                    }
+                    .font(.callout)
                 }
             }
         }
@@ -1275,7 +1305,7 @@ private struct TurnEndView: View {
                     // runs (a machine signs in on its own).
                     if refused {
                         let machine = RemoteFolder.machine(of: directory)
-                        Button(signInEnded ? "Sign In Again" : "Open Accounts", systemImage: "person.crop.circle") { app.openAccounts(on: machine) }
+                        Button(signInEnded ? "Sign In Again" : "Open Accounts") { app.openAccounts(on: machine) }
                             .buttonStyle(.glass)
                             .controlSize(.small)
                             .help(machine.map { "Accounts, on \($0)" } ?? "Accounts")
@@ -1284,13 +1314,13 @@ private struct TurnEndView: View {
                     // on its own), Accounts open on it.
                     if idle.error?.type == "signin" {
                         let machine = RemoteFolder.machine(of: directory)
-                        Button(machine.map { "Sign In on \($0)" } ?? "Open Accounts", systemImage: "person.crop.circle") { app.openAccounts(on: machine) }
+                        Button(machine.map { "Sign In on \($0)" } ?? "Open Accounts") { app.openAccounts(on: machine) }
                             .buttonStyle(.glass)
                             .controlSize(.small)
                             .help(machine.map { "Sign in to the coding agents on \($0): its sign-ins are its own" } ?? "Sign in to the coding agents")
                     }
                     if let retry {
-                        Button("Try Again", systemImage: "arrow.clockwise", action: retry)
+                        Button("Try Again", action: retry)
                             .buttonStyle(.glass)
                             .controlSize(.small)
                             .help("Send your last message again")
@@ -1305,7 +1335,7 @@ private struct TurnEndView: View {
         // (One a newer engine says that this app doesn't know: it stopped.)
         case .interrupted, .unknown:
             HStack(spacing: 6) {
-                Label("Stopped", systemImage: "stop.circle")
+                Text("Stopped")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if !stats.files.isEmpty {
@@ -1325,7 +1355,7 @@ private struct TurnEndView: View {
                 }
                 replyButtons
                 if let build {
-                    Button("Build It", systemImage: "hammer", action: build)
+                    Button("Build It", action: build)
                         .buttonStyle(.glass)
                         .controlSize(.small)
                         .help("Switch to Build mode and have the agent carry out this plan")
@@ -1349,7 +1379,7 @@ private struct TurnEndView: View {
 
     private var parts: [String] {
         var parts: [String] = []
-        if let started = stats.started {
+        if let started = stats.started, !stats.stepsSayTime {
             let seconds = Int((idle.time.created - started) / 1000)
             if seconds >= 1 { parts.append("Worked for " + MessageTime.duration(seconds)) }
         }
@@ -1387,7 +1417,7 @@ private struct TurnFiles: View {
             Button {
                 app.utilities.show(RemoteFolder.fileURL(bot.memoryFile, in: bot.directory))
             } label: {
-                Label("Updated its memory", systemImage: "brain")
+                Text("Updated its memory")
                     .font(.caption)
             }
             .buttonStyle(TextButtonStyle(outset: true))
@@ -1401,7 +1431,7 @@ private struct TurnFiles: View {
         Button {
             isShowing.toggle()
         } label: {
-            Label("Edited " + files.count.counting("file"), systemImage: "plus.forwardslash.minus")
+            Text("Edited " + files.count.counting("file"))
                 .font(.caption)
         }
         .buttonStyle(TextButtonStyle(outset: true))
@@ -1568,6 +1598,8 @@ private struct AgentSentRow: View {
         // As it may have been named: "&Mira".
         let to = input?["to"]?.string.map { $0.hasPrefix("&") ? String($0.dropFirst()) : $0 } ?? "another agent"
         let address = AgentMail.shared.directory().first { $0.session == to || $0.name.caseInsensitiveCompare(to) == .orderedSame }
+            // One the list leaves out (untitled, older than the latest it names): as this Mac has it.
+            ?? app.workspace.session(to).map { AgentMail.Agent(session: $0.id, name: $0.title.flatMap { $0.isEmpty ? nil : $0 } ?? "New session", kind: "session") }
         let text = input?["text"]?.string ?? ""
         let answer = said.flatMap { said in said.range(of: " answered:\n\n").map { String(said[$0.upperBound...]) } }
         FoldingCard(id: call.id, summary: text, startsOpen: FoldingCard<EmptyView, EmptyView, EmptyView>.isShort(text + (answer ?? "")), help: "A message this agent sent another") {

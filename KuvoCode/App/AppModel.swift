@@ -23,7 +23,7 @@ final class AppModel {
     /// The login shell's environment (PATH and the like), for the engine and terminals.
     private(set) var shellEnvironment = ProcessInfo.processInfo.environment
 
-    let catalog = Catalog(isMac: true)
+    let catalog = Catalog()
     /// The right panel's tools; one window, so one set.
     let utilities = Utilities()
     /// Terminals that are tabs of the window, in place of a conversation; they end with it.
@@ -43,6 +43,10 @@ final class AppModel {
     let bots = Bots()
     /// Bots' and sessions' wake-ups and watches.
     let wakeUps = WakeUps()
+    /// The sessions bots run, as their boxes tell it.
+    let botWork = BotWork()
+    /// What bots ask you before they do it (making a project), on every box.
+    let botAsks = BotAsks()
     /// Voice input, for whichever composer listens.
     let dictation = Dictation()
     // COMPAT(0.7 mac-group-chats): `GroupMigration.run` before the box's group chats start. Goes 3 months after 0.8.0.
@@ -280,8 +284,13 @@ final class AppModel {
         workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
         bots.app = self
         wakeUps.app = self
+        botWork.app = self
+        botAsks.app = self
+        botAsks.onChange = { [weak self] sessions in self?.workspace.askingForWork = sessions }
         boxGroups.app = self
         moves.app = self
+        // What this Mac's box says is moving, as it changes.
+        Task { [moves] in await moves.follow() }
         workspace.onMovedToAgents = { [weak self] from, to in await self?.movedToAgents(from: from, to: to) ?? false }
         workspace.onBotToAgents = { [weak self] id, model in try await self?.bots.moveToAgents(session: id, model: model) }
         workspace.runsOnAgents(bots.agentSessionIDs)
@@ -298,7 +307,6 @@ final class AppModel {
         phoneLink.readyMachines = { [weak self] in self?.machines.engines.values.filter(\.isReady) ?? [] }
         // With machines, this Mac meets them at the relay, phone or not.
         phoneLink.hasMachines = { [weak self] in !(self?.machines.list.isEmpty ?? true) }
-        phoneLink.movedSessions = { [weak self] in self?.moves.livePlaces ?? [:] }
         Machines.linkKey = { [weak self] in self?.phoneLink.macKey }
         phoneLink.bots = bots
         phoneLink.browserAsks = browserAsks
@@ -308,6 +316,7 @@ final class AppModel {
         // Agents writing to each other, and what an earlier Kuvo Code kept of their letters, to
         // this Mac's box before its link meets your other computers (it starts before the machines).
         AgentMail.shared.app = self
+        AgentMail.shared.box = { [weak self] in self?.box(BoxClient.mac) }
         // COMPAT(beta.1 mac-letters): letters an earlier Kuvo Code kept, handed to the box. Goes 3 months after 0.8.0.
         phoneLink.handOver = { await AgentMail.shared.handOver(to: $0) }
         // This Mac's link is its box's: the app tells it what's wanted, and answers what it asks.
@@ -330,6 +339,17 @@ final class AppModel {
             self?.openMainWindow?()
         }
         return true
+    }
+
+    /// A local opencode build to run instead of the pinned download (KUVO_OPENCODE_BINARY), in a
+    /// debug build only: in the app you use, anything that can set its environment
+    /// (`launchctl setenv`) could have it run a program of its own as its engine and box.
+    static var engineOverride: String? {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["KUVO_OPENCODE_BINARY"]
+        #else
+        nil
+        #endif
     }
 
     /// The engine this Mac runs (KUVO_OPENCODE_BINARY's, or the one installed), once it has started.
@@ -374,10 +394,9 @@ final class AppModel {
         let began = SuspendingClock.now
         var downloaded = false
         do {
-            // Set KUVO_OPENCODE_BINARY to run a local opencode build instead of the pinned download.
             async let environment = ShellEnvironment.load()
             let binary: URL
-            if let override = ProcessInfo.processInfo.environment["KUVO_OPENCODE_BINARY"] {
+            if let override = Self.engineOverride {
                 binary = URL(filePath: override)
             } else if let installed = await Task.detached(operation: { [installer] in installer.installed() }).value {
                 // Checking its signature reads all of it, a second or so: off the main thread.
@@ -394,6 +413,12 @@ final class AppModel {
                 guard launch == self.launch else { return }
             }
 
+            // Neither the engine nor the box starts from an app changed since it was signed (the
+            // box's script is in it): the engine itself was checked as it was found or downloaded.
+            if Self.engineOverride == nil, await !Task.detached(operation: { BoxIntegrity.appIsSealed() }).value {
+                engine = .failed("Kuvo Code on this Mac was changed since it was installed, so its engine didn’t start. Install Kuvo Code again.")
+                return
+            }
             engineBinary = binary
             engine = .starting
             stage = "launch"
@@ -431,7 +456,7 @@ final class AppModel {
             shell["KUVO_INTEGRATIONS"] = integrations.path
             // This Mac's box, before the engine: it keeps the engine's settings (and the other
             // areas that have moved onto it), and goes on through the engine's restarts.
-            await box.start(engine: binary, environment: await boxEnvironment(shell))
+            await box.start(engine: binary, environment: await boxEnvironment(shell), checked: Self.engineOverride == nil)
             guard launch == self.launch else { return }
             // The settings as they are now (they can change while the engine is down, and the box
             // adds its defaults as it starts), brought up to date before the engine reads them;
@@ -439,9 +464,11 @@ final class AppModel {
             // them as they change after.
             await Self.atMost(.seconds(10)) { [weak self] in await self?.prepareSettings() }
             guard launch == self.launch else { return }
-            // What some providers need until opencode handles it (see ProviderCompatibility).
-            let compatibility = ProviderCompatibility.config
-            if !compatibility.isEmpty { shell["OPENCODE_CONFIG_CONTENT"] = Self.merged(compatibility, into: shell["OPENCODE_CONFIG_CONTENT"]) }
+            // What some providers need until opencode handles it, on top, as this Mac's box learned
+            // it from its engine (as a machine's start adds it).
+            shell["OPENCODE_CONFIG_CONTENT"] = await BoxProcess.engineConfig(engine: binary, content: shell["OPENCODE_CONFIG_CONTENT"], environment: shell)
+            // COMPAT(0.7 provider-compatibility): what the app learned before its box did, gone. Goes 3 months after 0.8.0.
+            UserDefaults.standard.removeObject(forKey: "copilotClaudeModels")
             #if DEBUG
             // KUVO_PERF_PROVIDER: the stand-in model a group chat's discussion is measured on (PerfGroups).
             if let perf = PerfGroups.providerConfig { shell["OPENCODE_CONFIG_CONTENT"] = Self.merged(perf, into: shell["OPENCODE_CONFIG_CONTENT"]) }
@@ -488,8 +515,8 @@ final class AppModel {
             Analytics.shared.catalog = catalog
             workspace.api = api
             wireStores()
-            // A move cut short (the app quit) is finished or taken back.
-            Task { await moves.recover() }
+            // What this Mac's box and your machines say is moving, from now on.
+            Task { await moves.reloadAll() }
             usage.api = api
             engineStarted = .now
             engine = .ready
@@ -504,7 +531,7 @@ final class AppModel {
             let boxEnvironment = await boxEnvironment(shell)
             guard launch == self.launch else { return }
             Task {
-                await box.start(engine: binary, environment: boxEnvironment)
+                await box.start(engine: binary, environment: boxEnvironment, checked: Self.engineOverride == nil)
                 // Your personalities, as it keeps them, before they're followed.
                 await Personalities.shared.refresh()
                 // Its worktrees, projects and wake-ups, as this Mac's box keeps them, from now on
@@ -513,17 +540,21 @@ final class AppModel {
                 if boxFollowed == nil, launch == self.launch {
                     boxFollowed = Task {
                         async let worktrees: Void = workspace.followWorktrees()
+                        async let queues: Void = workspace.followQueues()
                         async let wakes: Void = wakeUps.follow()
                         async let personalities: Void = Personalities.shared.follow()
                         async let bots: Void = bots.follow()
+                        async let asks: Void = botAsks.follow(BoxClient.mac)
                         // COMPAT(0.7 mac-personalities): what an earlier Kuvo Code changed in its own copy, taken in. Goes 3 months after 0.8.0.
                         // What a 0.8.0 beta changed of your personalities where it kept them.
                         await Personalities.shared.takeFromOld()
                         await workspace.followProjects()
                         await worktrees
+                        await queues
                         await wakes
                         await personalities
                         await bots
+                        await asks
                     }
                 }
             }
@@ -643,8 +674,6 @@ final class AppModel {
             Task {
                 // This Mac's group chats first: they're what shows from the cache meanwhile.
                 await self?.boxGroups.connected(nil)
-                // A move of a group chat to or from this Mac cut short, now its bridge is there.
-                await self?.moves.recover()
                 await self?.catalog.refreshAgents()
                 await self?.workspace.refreshAgents()
             }

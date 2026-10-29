@@ -10,7 +10,7 @@ import Testing
 @MainActor
 @Suite(.serialized) struct StartingModelTests {
     static let engine = "http://127.0.0.1:47999"
-    let catalog = Catalog(isMac: true)
+    let catalog = Catalog()
 
     init() {
         TestEnvironment.prepare()

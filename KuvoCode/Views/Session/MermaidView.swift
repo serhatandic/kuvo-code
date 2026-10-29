@@ -14,7 +14,7 @@ final class MermaidView: NSView {
     private let picture = NSImageView()
     private let code = ReplyCodeView()
     private let problem = NSTextField(wrappingLabelWithString: "")
-    private let toggle = ReplyChipButton(title: "Code", symbol: "curlybraces", widest: "Diagram")
+    private let toggle = ReplyChipButton(title: "Code", widest: "Diagram")
 
     private var shown: (source: String, dark: Bool)?
     /// The look the code was last shown in.
@@ -131,7 +131,7 @@ final class MermaidView: NSView {
         problem.isHidden = error == nil
         problem.stringValue = error.map { "Mermaid can't draw this:\n\($0)" } ?? ""
         toggle.isHidden = error != nil
-        toggle.show(title: showsCode ? "Diagram" : "Code", symbol: showsCode ? "flowchart" : "curlybraces")
+        toggle.show(title: showsCode ? "Diagram" : "Code")
         let label = showsCode ? "Show Diagram" : "Show Code"
         toggle.toolTip = label
         toggle.setAccessibilityLabel(label)

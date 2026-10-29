@@ -3,7 +3,8 @@ import Foundation
 /// What follows "/review": what it reads ("this branch", "since abc1234", "folder src/auth", "the
 /// whole project"; the changes not committed yet without), what to look for ("for security"), who
 /// reads it ("with DeepSeek V4.1 Flash": one of the conversation's models by its name; its own
-/// model without it), in any order, then anything else to look at, in your words. The composer's
+/// model without it), in any order, then your own words: what to look at, or, with nothing named
+/// before them, what to read ("the sign-in and its tests"), whose files the box finds. The composer's
 /// "What to review" and "Look for" write the first two, "with" looks for the third, and the
 /// keyword is drawn with all three.
 public struct ReviewCommand: Equatable, Sendable {
@@ -40,6 +41,9 @@ public struct ReviewCommand: Equatable, Sendable {
 
     /// What it reads; nil for the changes not committed yet.
     public var scope: ReviewScope?
+    /// What it reads said in your own words ("the sign-in and its tests"): words of your own with
+    /// nothing named before them. The box finds their files.
+    public var described: String?
     /// What it looks for, picked from "Look for".
     public var preset: Preset?
     /// Who reads it, when "with" names one; nil for the conversation's own model.
@@ -60,9 +64,16 @@ public struct ReviewCommand: Equatable, Sendable {
     /// A model's name that ends what's typed, as typed: longer names it starts may be meant.
     var readerTyped: String?
 
-    /// What the box is asked to look at: the preset, your words, or both.
+    /// What it reads, as the box is asked: what's named, or what your words describe.
+    public var scopeAsked: ReviewScope? {
+        scope ?? described.map { .described($0) }
+    }
+
+    /// What the box is asked to look at: the preset, your words, or both (not words that say what
+    /// to read).
     public var focusAsked: String? {
-        switch (preset, focus.isEmpty) {
+        let focus = described == nil ? focus : ""
+        return switch (preset, focus.isEmpty) {
         case (nil, true): nil
         case (nil, false): focus
         case (let preset?, true): preset.rawValue
@@ -78,6 +89,8 @@ public struct ReviewCommand: Equatable, Sendable {
         case .commits(let from, _): return "since " + (from.hasSuffix("^") ? String(from.dropLast()) : from)
         case .folder(let path): return "folder " + (path.contains(where: \.isWhitespace) ? "\"\(path)\"" : path)
         case .project: return projectPhrase
+        // In quotes, which end it (one inside would end it early).
+        case .described(let words, _): return words
         }
     }
 
@@ -163,7 +176,11 @@ public struct ReviewCommand: Equatable, Sendable {
             reader = named
             written = before
         }
-        focus = Self.isWord("for", at: Substring(written)) ? written.dropFirst(3).trimmingCharacters(in: .whitespaces) : written
+        let ownFocus = Self.isWord("for", at: Substring(written))
+        focus = ownFocus ? written.dropFirst(3).trimmingCharacters(in: .whitespaces) : written
+        // Alone after "/review" (as Something else… leaves them), they say what to read; after
+        // anything else named, what to look at, as they always did.
+        if scope == nil, preset == nil, reader == nil, !ownFocus, !written.isEmpty { described = written }
         // Nothing of your own yet, or the start of what a list offers: that list, for it.
         let lower = typed.lowercased()
         // (Something else… writes "for ", for words of your own after it.)
@@ -176,7 +193,7 @@ public struct ReviewCommand: Equatable, Sendable {
     }
 
     /// The words "What to review"'s rows are written and found by.
-    static let whatWords = [uncommittedPhrase, "uncommitted", branchPhrase, "branch", "since ", "commits", "folder ", "a folder", projectPhrase, "whole project", "project"]
+    static let whatWords = [uncommittedPhrase, "uncommitted", branchPhrase, "branch", "since ", "commits", "folder ", "a folder", projectPhrase, "whole project", "project", "something else"]
     /// "Look for"'s, past the first "for " (Something else… writes that, to type after).
     static let lookForWords = Preset.allCases.flatMap { [phrase($0), $0.rawValue] } + ["anything wrong", "something else"]
 
@@ -203,9 +220,9 @@ public struct ReviewCommand: Equatable, Sendable {
             let after = words.dropFirst(6)
             if after.allSatisfy(\.isWhitespace) { return (nil, words.endIndex, .folder("")) }
             let path = after.drop { $0.isWhitespace }
-            if path.first == "\"" {
+            if let first = path.first, isQuote(first) {
                 let inside = path.dropFirst()
-                guard let close = inside.firstIndex(of: "\"") else { return (inside.isEmpty ? nil : .folder(String(inside)), words.endIndex, .folder(String(inside))) }
+                guard let close = inside.firstIndex(where: isQuote) else { return (inside.isEmpty ? nil : .folder(String(inside)), words.endIndex, .folder(String(inside))) }
                 return (.folder(String(inside[..<close])), inside.index(after: close), nil)
             }
             let word = path.prefix { !$0.isWhitespace }
@@ -213,6 +230,11 @@ public struct ReviewCommand: Equatable, Sendable {
             return (.folder(String(word)), word.endIndex, word.endIndex == words.endIndex ? .folder(String(word)) : nil)
         }
         return nil
+    }
+
+    /// A straight quote, or a curly one, as a field that types them makes.
+    static func isQuote(_ character: Character) -> Bool {
+        character == "\"" || character == "“" || character == "”"
     }
 
     static func preset(in words: Substring) -> (Preset, String.Index)? {

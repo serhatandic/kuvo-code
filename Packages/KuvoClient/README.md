@@ -36,6 +36,13 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
 - `ReviewList`: "/review"'s lists over the message field (What to review, a commit or a folder for
   it, Look for), their rows and sizes from what the box measured, and loading those.
 
+## ClientVault
+
+A computer's vault as its box answers `kuvo/vault` (KuvoLink's PROTOCOL.md, "Vault"): its items
+without their values, who may use which (`Vault.how`, a bot's own `items(of:)`), the sign-ins for a
+page's site, what agents ask for (`VaultAsk`, a card's title), the activity as one sentence each
+(`VaultActivity.sentence`), and the routes' paths. Rules and shapes only: no views, no app state.
+
 ## ClientChanges
 
 A project's changes as both apps' Changes show them, from git's diff (a box's `kuvo/git/changes`,
@@ -71,6 +78,8 @@ phone's copies of the Mac's design files, a piece at a time.
 - `TerminalColors`: a command's output colored as a terminal shows it.
 - `BarFolds`: which bar in the card over a conversation's composer is open once the card is full
   (three bars or more): the newest change, none while a card asks, one at a time.
+- `FollowsEnd`: a list that follows its newest as it comes (a side thread's answers), until you
+  scroll up away from the end.
 - `PutAways`: what a bar's ✕ put away, with Undo in its place for a few seconds: what goes only
   once the moment passes (a goal, a wake-up), and what goes at once and comes back with Undo.
 

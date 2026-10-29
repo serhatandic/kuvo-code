@@ -20,7 +20,8 @@ import Testing
     /// Bun, with Node (`TestBox.node`); without it, this Mac's box doesn't start.
     private func fakeEngine(box node: URL? = nil) throws -> URL {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let box = node.map { "case \"$2\" in *kuvo-link.js) shift; exec '\($0.path(percentEncoded: false))' \"$@\";; esac\n" } ?? ""
+        // (The box runs as `run --config=/dev/null <script> serve`, Bun's settings from nowhere.)
+        let box = node.map { "case \"$3\" in *kuvo-link.js) shift 2; exec '\($0.path(percentEncoded: false))' \"$@\";; esac\n" } ?? ""
         let script = """
             #!/bin/sh
             \(box)# The coding agents' bridge, which runs with the engine's Bun: none here.

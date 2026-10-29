@@ -575,6 +575,8 @@ private struct GroupComposer: View {
     @State private var answerFocus: (id: UUID, request: MessageField.FocusRequest)?
     /// "&" and the bots and sessions it names, as in a session.
     @State private var agents = AgentPicker()
+    /// Who a group chat on a machine can name, as that machine's box says (`kuvo/named`).
+    @State private var chatAgents: [AgentMail.Agent]?
 
     private var canSend: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -583,9 +585,9 @@ private struct GroupComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // A group chat names those its computer can reach (a machine that can't be, Settings ›
-            // Machines says why).
-            if let named = agents.matches(in: text, excluding: nil, reaching: { AgentMail.shared.reachable($0, fromChatOn: machine) }) {
+            // A group chat names those its computer's box names: on a machine, its own and those of
+            // your other computers it meets at the relay.
+            if let named = agents.matches(in: text, excluding: nil, from: machine == nil ? nil : chatAgents ?? []) {
                 AgentReferenceList(agents: named, selected: min(agents.selected, named.count - 1)) { agents.insert($0, into: $text) }
             }
             if !quotes.isEmpty {
@@ -624,6 +626,23 @@ private struct GroupComposer: View {
         .onAppear(perform: focusAtEnd)
         .onChange(of: focusRequest) { focusAtEnd() }
         .onChange(of: quoteFocus) { _, focus in answerFocus = focus.map { (id: $0.id, request: MessageField.FocusRequest()) } }
+        // As an "&" starts, who its machine's box names now.
+        .task(id: machine.map { $0 + (AgentReferences.query(in: text) == nil ? "" : "&") }) {
+            guard let machine, AgentReferences.query(in: text) != nil || chatAgents == nil else { return }
+            chatAgents = await Self.named(on: machine) ?? chatAgents
+        }
+    }
+
+    /// Who a group chat on `machine` can name, as its box says: its own, there, and those of your
+    /// other computers. Nil when its box can't be asked now.
+    private static func named(on machine: String) async -> [AgentMail.Agent]? {
+        struct Named: Decodable { var agents: [AgentMail.Agent] }
+        guard let named = try? await BoxClient.machine(machine).value(Named.self, "GET", "kuvo/named") else { return nil }
+        return named.agents.map { agent in
+            var agent = agent
+            if agent.machine == nil { agent.machine = machine }
+            return agent
+        }
     }
 
     /// The keyboard, with the cursor after what's written, as in a session.
@@ -634,7 +653,7 @@ private struct GroupComposer: View {
     /// The field's keys: the "&" list's first while it's open; then Return sends (Shift- or
     /// Option-Return starts a new line) and Escape stops the discussion.
     private func key(_ key: MessageField.Key) -> Bool {
-        if agents.key(key, text: $text, excluding: nil, reaching: { AgentMail.shared.reachable($0, fromChatOn: machine) }) { return true }
+        if agents.key(key, text: $text, excluding: nil, from: machine == nil ? nil : chatAgents ?? []) { return true }
         return answerKey(key)
     }
 

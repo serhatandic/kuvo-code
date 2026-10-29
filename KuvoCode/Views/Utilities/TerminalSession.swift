@@ -14,6 +14,8 @@ final class TerminalSession: NSObject {
     /// Add to Message in the right-click menu, with the selected text.
     @ObservationIgnored var addToMessage: ((String) -> Void)?
     @ObservationIgnored private var appliedLook: (dark: Bool, focused: Bool)?
+    /// It has been on screen: shown again, it takes the keyboard only in the card you work in.
+    @ObservationIgnored var wasShown = false
 
     /// A shell, typing `command` once it starts (so it stays a shell when the command ends).
     init(directory: String, environment: [String: String], command: String? = nil) {
@@ -203,7 +205,12 @@ private struct TerminalRepresentable: NSViewRepresentable {
 
     func makeNSView(context: Context) -> LocalProcessTerminalView {
         session.apply(dark: dark, focused: focused)
-        DispatchQueue.main.async { session.view.window?.makeFirstResponder(session.view) }
+        // A new terminal takes the keyboard, and one you go back to in the card you work in; the
+        // panel coming in beside the conversation you type in leaves the keyboard there.
+        if !session.wasShown || focused {
+            DispatchQueue.main.async { session.view.window?.makeFirstResponder(session.view) }
+        }
+        session.wasShown = true
         return session.view
     }
 

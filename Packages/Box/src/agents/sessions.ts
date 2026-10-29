@@ -15,6 +15,8 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { Agent, OwnTurn, PermissionAsk, PromptFile, QuestionAsk, RunInput, RunResult, SubagentMessages, SubagentRun, SubagentTask, Thread, TurnHooks } from "./agent"
 import { failure } from "./agent"
+import { parseProvider } from "./accounts"
+import { citedIn, plainCitations } from "./agents/codex-citations"
 import { Auto, autoProvider, resetTime, type AutoEntry } from "./auto"
 import { emit } from "./events"
 import { handover, withHandover } from "./handover"
@@ -761,6 +763,12 @@ function didWork(message: Message): boolean {
 
 export class Sessions {
   private live = new Map<string, Live>()
+  /**
+   * Files Codex cited as what it made in replies kept from before its citations were read, and
+   * when, as those were read when the bridge started (`readCitations`): for the record of what
+   * was made to mark shown, as it does a file a reply shows now.
+   */
+  readonly cited: { path: string; at: number }[] = []
   /** Your `!` commands' process groups, by session, while anything in them runs (a server one left
    * in the background too): each stops with its session. A group's number the system gives
    * another command once it's gone is that command's: it leaves the others' (`ownShell`), and
@@ -787,6 +795,25 @@ export class Sessions {
   ) {
     // Turns a quit or crash cut short: ended, as Stop ends one.
     for (const session of store.all()) this.repair(session.id)
+    for (const session of store.all()) this.readCitations(session.id)
+  }
+
+  /** Its replies kept with Codex's directives in their words (`:codex-…`), read as a reply now reads them. */
+  private readCitations(id: string) {
+    const record = this.store.get(id)
+    if (!record) return
+    let changed = false
+    for (const message of record.messages) {
+      const found = citedIn(message)
+      if (!found) continue
+      changed = true
+      for (const path of found.made) this.cited.push({ path: resolve(record.session.location.directory, path), at: found.at })
+    }
+    if (record.session.title?.includes(":codex-") && parseProvider(record.session.model?.providerID ?? "")?.kind === "codex") {
+      record.session.title = plainCitations(record.session.title)
+      changed = true
+    }
+    if (changed) this.store.save(id, true)
   }
 
   /** The agent that runs a provider's models: an outside agent's account, or the engine. */

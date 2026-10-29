@@ -9,17 +9,14 @@ import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
 import { locked, writePrivate } from "../files";
 import { RUN } from "../home";
-import { readLink } from "../state";
-import { macsOf } from "./known";
+import { KEY } from "./known";
 import type { AgentsFile, ListedAgent, ToldAgents } from "../../shared/records";
 import type { EngineSession } from "../engine/sessions";
 import { type BotLook, LOOKS as LOOK_WORDS } from "../../shared/routes/bots";
-import type { LinkState } from "../state";
 import type { Peer } from "./known";
 
 export const PEER_AGENTS_FILE = path.join(RUN, "peer-agents.json");
-// What a Mac connected over SSH says its agents are (as it mails them), for when the relay can't
-// be reached.
+// COMPAT(beta.1 mac-agents): what a Mac connected over SSH said its agents were, for when the relay couldn't be reached; no Mac writes it now, and it's removed. Goes 3 months after 0.8.0.
 export const MAC_AGENTS_FILE = path.join(RUN, "mac-agents.json");
 export const AGENTS_FILE = path.join(RUN, "agents.json");
 
@@ -61,6 +58,11 @@ export const keptAgent = ({ session, name, kind, project, about, machine, id, lo
 // What a peer says it answers (`features`, as kuvo/info's), kept with its agents.
 export const keptFeatures = (features: unknown): string[] => (Array.isArray(features) ? features.filter((each): each is string => typeof each === "string" && each.length <= 60).slice(0, 80) : []);
 
+// The conversations a peer says it moved away, and where each lives now (PROTOCOL.md, "Peers").
+const keptMoved = (moved: unknown[]): NonNullable<ToldAgents["moved"]> => moved.filter((each): each is { session: string; key: string; at: number } => isObject(each)
+  && typeof each.session === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(each.session) && typeof each.key === "string" && KEY.test(each.key) && typeof each.at === "number").slice(0, 400)
+  .map(({ session, key, at }) => ({ session, key, at }));
+
 // What a peer said its agents are, the newest it said: false for an older list.
 export function takeAgents(sender: { key: string; kind: "mac" | "machine"; id?: string }, given: unknown, file = PEER_AGENTS_FILE, lock = PEER_LOCK): boolean {
   if (!isObject(given) || typeof given.at !== "number" || !Array.isArray(given.list)) return false;
@@ -69,28 +71,21 @@ export function takeAgents(sender: { key: string; kind: "mac" | "machine"; id?: 
     try { all = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
     if ((given.at as number) <= (all[sender.key]?.at ?? 0)) return false;
     all[sender.key] = { at: given.at as number, kind: sender.kind, ...(sender.id ? { id: sender.id } : {}), list: (given.list as unknown[]).filter(fitsAgent).slice(0, MOST_AGENTS).map(keptAgent),
-      ...(Array.isArray(given.features) ? { features: keptFeatures(given.features) } : {}) };
+      ...(Array.isArray(given.features) ? { features: keptFeatures(given.features) } : {}), ...(Array.isArray(given.moved) ? { moved: keptMoved(given.moved) } : {}) };
     writePrivate(file, JSON.stringify(all));
     return true;
   });
 }
 
-// What each peer told, by its key; a Mac's as it last said it, by mail or over SSH, whichever's newer.
-export function readPeerAgents(file = PEER_AGENTS_FILE, macFile = MAC_AGENTS_FILE, link: LinkState | null = null): Record<string, ToldAgents> {
+// What each peer told, by its key, as it last said it by mail.
+export function readPeerAgents(file = PEER_AGENTS_FILE): Record<string, ToldAgents> {
   let all: Record<string, ToldAgents> = {};
   try { all = JSON.parse(fs.readFileSync(file, "utf8")) ?? {}; } catch {}
-  try {
-    const given = JSON.parse(fs.readFileSync(macFile, "utf8"));
-    const macs = macsOf(link ?? readLink() ?? {});
-    if (macs.includes(given?.key) && typeof given.at === "number" && Array.isArray(given.list) && given.at > (all[given.key]?.at ?? 0)) {
-      all[given.key] = { at: given.at, kind: "mac", list: given.list.filter(fitsAgent).slice(0, MOST_AGENTS).map(keptAgent) };
-    }
-  } catch {}
   return all;
 }
 
-// The box a session is on, among the peers: the one a Mac says it moved to, else the one that
-// lists it. One listed by more than one is a Mac's when a Mac lists it, else nobody's (one of them
+// The box a session is on, among the peers: where the box that moved it says it went (or a Mac
+// says, `movedOf`), else the one that lists it. One listed by more than one is a Mac's when a Mac lists it, else nobody's (one of them
 // could be claiming another's).
 export function peerOf(session: string, peers: Peer[], told: Record<string, ToldAgents>, moved = new Map<string, string>()): Peer | null {
   if (moved.has(session)) return peers.find(peer => peer.key === moved.get(session)) ?? null;

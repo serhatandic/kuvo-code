@@ -12,12 +12,15 @@ import { GROUP_ROUTES } from "./groups";
 import { INTEGRATION_ROUTES } from "./integrations";
 import { MAC_ROUTES } from "./mac";
 import { MISC_ROUTES } from "./misc";
+import { MOVE_ROUTES } from "./moves";
 import { PERSONALITY_ROUTES } from "./personalities";
 import { PROJECT_ROUTES } from "./projects";
 import { SESSION_ROUTES } from "./sessions";
 import { SETTINGS_ROUTES } from "./settings";
 import { SKILL_ROUTES } from "./skills";
 import { WAKE_ROUTES } from "./wakes";
+import { VAULT_ROUTES } from "./vault";
+import { WORK_ROUTES } from "./work";
 import { WORKTREE_ROUTES } from "./worktrees";
 
 /** What a route that refuses says, as JSON: why, in words to show (`message`), and for a file that
@@ -36,6 +39,7 @@ export const ROUTES: RouteShape[] = [
   ...BOX_ROUTES,
   ...CHANGES_ROUTES,
   ...MAC_ROUTES,
+  ...MOVE_ROUTES,
   ...GROUP_ROUTES,
   ...INTEGRATION_ROUTES,
   ...MISC_ROUTES,
@@ -45,5 +49,7 @@ export const ROUTES: RouteShape[] = [
   ...SETTINGS_ROUTES,
   ...SKILL_ROUTES,
   ...WAKE_ROUTES,
+  ...VAULT_ROUTES,
+  ...WORK_ROUTES,
   ...WORKTREE_ROUTES,
 ];

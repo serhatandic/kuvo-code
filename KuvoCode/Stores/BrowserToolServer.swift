@@ -109,12 +109,13 @@ final class BrowserToolServer {
                 "protocolVersion": requested.flatMap { supported.contains($0) ? $0 : nil } ?? "2025-06-18",
                 "capabilities": ["tools": ["listChanged": false]],
                 "serverInfo": ["name": "kuvo-browser", "title": "Kuvo Code browser", "version": AppInfo.version],
-                "instructions": BrowserTools.instructions(machine: false),
+                "instructions": BrowserTools.instructions(machine: false, vault: !(await BrowserTools.vaultDefinitions()).isEmpty),
             ])
         case "ping":
             return reply([:])
         case "tools/list":
-            return reply(["tools": BrowserTools.definitions])
+            // With the vault's, in this Mac's box's own words.
+            return reply(["tools": BrowserTools.definitions(vault: await BrowserTools.vaultDefinitions())])
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
@@ -129,10 +130,11 @@ final class BrowserToolServer {
             if name == BrowserTools.showWidget { return reply(BrowserTools.showWidgetCall(arguments)) }
             let key = Self.key(id, client: client)
             let call: Task<CallResult, Never>
-            if BrowserTools.mailTools.contains(name) || BrowserTools.wakeTools.contains(name) || name == BrowserTools.setJob {
+            if BrowserTools.mailTools.contains(name) || BrowserTools.wakeTools.contains(name) || name == BrowserTools.setJob || BrowserTools.isVault(name) {
                 // Stopped as the others are: one waiting for an answer stops waiting.
                 call = Task {
-                    let result = name == BrowserTools.setJob ? await BrowserTools.job(arguments, caller)
+                    let result = BrowserTools.isVault(name) ? await BrowserTools.vault(name, arguments, caller)
+                        : name == BrowserTools.setJob ? await BrowserTools.job(arguments, caller)
                         : BrowserTools.wakeTools.contains(name) ? await BrowserTools.wake(name, arguments, caller) : await BrowserTools.mail(name, arguments, caller)
                     return CallResult(value: ["content": [["type": "text", "text": result.text]], "isError": result.isError])
                 }
@@ -189,9 +191,15 @@ enum BrowserTools {
         tool("browser_tabs", "List the browser's tabs (numbered like [1], with the one in use marked), switch to one to work in it, or close one.",
              ["action": ["type": "string", "enum": ["list", "switch", "close"], "description": "Defaults to list."],
               "tab": ["type": "integer", "description": "The tab's number from the list, to switch to or close."]]),
-        tool("browser_sign_in", "Sign in on the page with the user's own username and password: they type them in Kuvo Code (or pick a saved one), and they go straight into the fields you name. You never see them. Use this for every sign-in, and never ask for a password in the chat. Whenever a page you open asks to sign in, call it right away, even if the user didn't mention signing in: its card is how you ask them, and they can say Not Now there. Don't ask in the chat whether to sign in. Name the fields the page has now (on a sign-in that asks for the username and the password on pages of their own, call it on each; the user answers once). Then submit the form yourself.",
+        tool("browser_sign_in", "Sign in on the page with the user's own username and password: from their vault when this conversation may use one of its sign-ins on this site (it fills on its own), or else they type them in Kuvo Code (or pick one), and they go straight into the fields you name. You never see them. Use this for every sign-in, and never ask for a password in the chat. Whenever a page you open asks to sign in, call it right away, even if the user didn't mention signing in: its card is how you ask them, and they can say Not Now there. Don't ask in the chat whether to sign in. Name the fields the page has now (on a sign-in that asks for the username and the password on pages of their own, call it on each; the user answers once). Then submit the form yourself.",
              ["username": ["type": "integer", "description": "The number of the username or email field, if the page has one."],
-              "password": ["type": "integer", "description": "The number of the password field, if the page has one."]]),
+              "password": ["type": "integer", "description": "The number of the password field, if the page has one."],
+              "item": ["type": "string", "description": "A sign-in from vault_items to use, by name, when more than one could do. It's filled only on its own site."]]),
+        tool("browser_fill", "Fill one field on the page from the user's vault: a sign-in's username or password, or a field of a key or a note, by the item's name from vault_items. It's filled only on the item's own sites, and you never see it.",
+             ["index": ["type": "integer", "description": "The field's number."],
+              "item": ["type": "string", "description": "The vault item, by name."],
+              "field": ["type": "string", "description": "Which of its fields, when it has more than one (vault_items lists them)."],
+              "why": ["type": "string", "description": "Why you need it, in one sentence the user reads."]], required: ["index", "item"]),
         tool("browser_ask_code", "Ask the user for a one-time code (from a text message, an email or an authenticator app), which goes straight into the field with this number. You never see it. Then submit it if the page doesn't on its own.",
              ["index": ["type": "integer"], "prompt": ["type": "string", "description": "What to tell the user, like \"Enter the 6-digit code texted to your phone\"."]], required: ["index"]),
         tool("browser_ask_user", "Ask the user to do something on the page themselves: a CAPTCHA, approving the sign-in on their phone, or anything else you can't do. Waits until they say it's done (up to 15 minutes), then reads the page again. Not for a question or a choice: ask those with your question tool, or in your reply.",
@@ -229,12 +237,35 @@ enum BrowserTools {
         tool(setJob, "Keep your job, as one of the user's bots: what you do in a few words (Kuvo Code shows it under your name) and the details (what to watch, what to make, what never to do without asking). Call it whenever the user gives you a job or changes it, before anything else, with the whole job as it is now: it replaces the one you had. Only a bot keeps a job.",
              ["summary": ["type": "string", "description": "What you do, in a few words, like \"Keeps the build green\"."],
               "details": ["type": "string", "description": "The whole job: what to watch, what to make, when, and what never to do without asking."]], required: ["summary", "details"]),
-        tool("start_session", "Start a new session: another agent with a conversation of its own, to work on something alongside you (a separate task, a second opinion, one part of a bigger job). It works in this conversation's folder unless you name another, on your model, and gets the task as a message from you, so it knows who to report to. It shows beside this conversation for the user to follow, and you get its address to write to it with send_message; it can write back to you the same way. With wait, you get its first answer back here.",
+        tool("start_session", "Start a new session: another agent with a conversation of its own, to work on something alongside you (a separate task, a second opinion, one part of a bigger job). By default it works in this conversation's folder, on your model and with your approval, and gets the task as a message from you, so it knows who to report to. You can start it in one of the user's projects (by name) or a chat instead, in a worktree of its own, on another model and effort (from list_models), in plan mode, or asking first; never with more approval than you have. The user finds it under this conversation in their sidebar, to follow and talk to, and you get its address to write to it with send_message; it can write back to you the same way. A bot is woken when its sessions finish or ask (wake), so it never checks on them. With wait, you get its first answer back here.",
              ["task": ["type": "string", "description": "What it's to do: all it needs to know, as it hasn't seen this conversation."],
               "title": ["type": "string", "description": "A short name for it, like \"Write the tests\"."],
+              "project": ["type": "string", "description": "One of the user's projects, by name or folder, to work in."],
+              "chat": ["type": "boolean", "description": "Start it as a chat, in no project."],
               "folder": ["type": "string", "description": "The folder it works in, as a full path: this conversation's by default."],
-              "beside": ["type": "boolean", "description": "Show it beside this conversation (the default). False opens it in a tab instead."],
+              "worktree": ["type": "boolean", "description": "Work in a worktree of its project, on a branch of its own, so it doesn't get in the way of other sessions there."],
+              "model": ["type": "string", "description": "The model, as provider/model from list_models: yours by default."],
+              "effort": ["type": "string", "description": "The model's effort, one of those list_models gives for it."],
+              "mode": ["type": "string", "enum": ["build", "plan"], "description": "plan to have it plan first and change nothing until it's told to go on; build by default."],
+              "approval": ["type": "string", "enum": ["ask", "approveAll"], "description": "ask to have it ask before running commands and changing files; yours by default, and never more than yours."],
+              "wake": ["type": "string", "enum": ["finished", "asks", "both", "none"], "description": "What you're woken with: when it finishes, when it asks for something, both (a bot's default), or none (a session's default)."],
               "wait": ["type": "boolean", "description": "Wait for its first answer and get it back here (up to ten minutes)."]], required: ["task"]),
+        tool("list_sessions", "List the sessions you started (and the ones they started), the latest first, with where each stands: working, asking for something (and what, with the ask's id), finished, failed or stopped; its model, tokens, and the first lines of its last reply."),
+        tool("stop_session", "Stop one of the sessions you started, by its address from list_sessions; with archive, also put it away once its work is reported. Only your own: for another, ask the user.",
+             ["session": ["type": "string", "description": "Its address."],
+              "archive": ["type": "boolean", "description": "Also archive it."]], required: ["session"]),
+        tool("answer_ask", "Answer what one of your sessions asks: a permission (allow or deny), or a question (answer, in words). You may allow only what you could do yourself without asking, and for now only edits to files in the project and a few commands that read (ls, cat, head, tail, wc, git status, diff and log); everything else (building, testing, installing, pushing, anything outside the project or the plan they approved) comes to the user: tell them in a line, and they answer it on the session. You can always deny, saying why. Your answer and reason are shown to the user on the session.",
+             ["session": ["type": "string", "description": "The session's address."],
+              "ask": ["type": "string", "description": "The ask's id, from the [Session asks] message or list_sessions."],
+              "decision": ["type": "string", "enum": ["allow", "deny"], "description": "For a permission."],
+              "answer": ["type": "string", "description": "For a question: your answer, in words."],
+              "reason": ["type": "string", "description": "Why, in a line: the user sees it."]], required: ["session", "ask", "reason"]),
+        tool("list_models", "List the models a session can be started on here, the ones the user has an account for, as provider/model, with their efforts. Use it to pick a model for start_session."),
+        tool("make_project", "Make a new project: a folder named after it, in the folder the user picked for projects, with a new git repository (or one cloned into it), added to Kuvo Code's sidebar. The user is asked first (once for a bot, if they say Always), so it can take a while; if they haven't answered in ten minutes it stays asked, and you're told when they answer. Then start sessions in it with start_session.",
+             ["name": ["type": "string", "description": "The project's name, like Tidepool."],
+              "git": ["type": "boolean", "description": "false for a plain folder, without git."],
+              "clone": ["type": "string", "description": "A repository to clone into it instead: an https or ssh address."]], required: ["name"]),
+        tool("list_projects", "List the user's projects here: each one's folder, whether it's a git repository, and who made it, and where new projects go."),
     ]
 
     /// The folder a conversation works in, by its session (on this Mac).
@@ -256,8 +287,9 @@ enum BrowserTools {
     /// draws it from the call (see `WidgetCard`), for a session here or on a machine alike.
     nonisolated static let showWidget = "show_widget"
 
-    /// The tools agents write to each other with (see `AgentMail`).
-    nonisolated static let mailTools: Set<String> = ["list_agents", "send_message", "read_conversation", "start_session"]
+    /// The tools agents write to each other and run their sessions with, answered by this Mac's box
+    /// (see `AgentMail`).
+    nonisolated static let mailTools: Set<String> = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models", "make_project", "list_projects"]
     /// Carries out their calls from this Mac's conversations.
     /// The added integrations' sites, which the browser sends the agent away from, to their tools.
     static var integrationSites: () -> [Integrations.Site] = { [] }
@@ -296,6 +328,14 @@ enum BrowserTools {
     }
 
     static var mail: (_ name: String, _ arguments: [String: Any], _ caller: String?) async -> (text: String, isError: Bool) = { _, _, _ in ("Not available.", true) }
+    /// The vault's tools (`vault_items`, `vault_ask`, `vault_run`): this Mac's box lists them and
+    /// carries them out (KuvoLink's PROTOCOL.md, "Vault").
+    nonisolated static func isVault(_ name: String) -> Bool { name.hasPrefix("vault_") }
+    static var vaultDefinitions: () async -> [[String: Any]] = { [] }
+    static var vault: (_ name: String, _ arguments: [String: Any], _ caller: String?) async -> (text: String, isError: Bool) = { _, _, _ in ("Not available.", true) }
+    /// What the vault fills on a page for a conversation (`kuvo/vault/fill`): its status and answer,
+    /// or nil when this Mac's box can't be reached.
+    static var vaultFill: (_ body: [String: Any]) async -> (status: Int, value: [String: Any])? = { _ in nil }
     /// The tool a bot keeps its job with, in its box's record (`PATCH kuvo/bots/<id>` with `job`).
     nonisolated static let setJob = "set_job"
     /// Carries out its calls from this Mac's conversations.
@@ -389,13 +429,38 @@ enum BrowserTools {
     /// What the engine tells the model about the tools.
     /// Where Kuvo Code's own docs are, for when you ask the agent how to do something in the app.
     /// Every session has these tools, so it hears it wherever it works.
-    nonisolated static let docs = "You're working inside Kuvo Code, the Mac app the user talks to you in: sessions in projects, a side panel with changes, files, terminals and a browser, bots, group chats and remote machines. When the user asks how to do something in Kuvo Code itself (where a setting is, what a button does, how bots, wake-ups or machines work, a shortcut), read its documentation with webfetch rather than guessing: start at https://www.kuvo.run/code/docs/, whose pages include sessions, changes, panel, browsing, machines, bots, integrations, customize, settings, usage, shortcuts, privacy and troubleshooting (each at https://www.kuvo.run/code/docs/<page>/). Answer from what it says, briefly, and say where in the app to find it. When the user names a service (Notion, Linear, GitHub, Slack, their mail or calendar…) and they connected it as an integration, you have tools for it: regular tools in your list, named after it (notion_notion-search, linear_list_issues…), which you call directly, not through execute (they aren't in its catalog). Use those. They reach the user's account directly, signed in as them, so never open that service's website instead, and don't tell the user you'll use the browser for it. If Code Mode says a namespace such as notion is no longer available, that's only Code Mode: the service's regular tools are still there, so call them. If such a tool fails or says it needs signing in, say so and ask the user to sign in under Settings › Integrations. Use the browser for services you have no tools for (their chats or social accounts, say), or when the user asks for a website itself: the user is signed in to sites there, or can sign in when you ask. To show the user a file or folder (one they ask to see or open, or what you made), use show_in_panel: it opens in Kuvo Code's side panel, beside this conversation. To put a file in the conversation itself (a picture you made, a chart, a PDF), use show_file. When the user's message ends with a <from-phone> block, they're on their iPhone: file paths and the side panel don't reach them there, so show files with show_file, and keep replies short. To show something to look at or try (a chart of real numbers, options to see side by side, a value to tune), use show_widget: it draws your HTML live in the conversation. Use it when seeing or trying something beats reading it, not for what a sentence says; ask a plain choice with your question tool, and draw a diagram as a ```mermaid block in your reply. You're one of the user's agents: their bots and other sessions, on their Mac and machines, can be reached with list_agents and send_message, to hand off work, ask what they know, or report back; a message from one of them says who it's from. read_conversation reads one's conversation, to see what it did or decided without interrupting it. When the user names one with & (like &Mira), their message ends with who that is and its address: read its conversation when they ask about its work, and write to it when they want something from it. When the user asks for another session (a separate or parallel one, one they can follow and talk to), start it with start_session, which opens it beside this conversation; a subagent is only for work you hand off and get back yourself, out of view. You can come back to this conversation later, even while the user is away: schedule_wake_up has it wake you with your note at a time you choose (check a build in 20 minutes, look again tomorrow), or again and again with every, and watch_for_change wakes you only when something you watch changes (CI finishing, a deploy, a page), so don't keep checking or sleep in a command. Never say you can't come back later or run on a timer. list_wake_ups shows what's set, and cancel_wake_up cancels one. For work that's to go on for good (every morning, every week), suggest a bot for it (the + beside Bots in the sidebar), or hand it to a bot whose job it fits with send_message. Don't look for another way to schedule anything."
+    nonisolated static let docs = "You're working inside Kuvo Code, the Mac app the user talks to you in: sessions in projects, a side panel with changes, files, terminals and a browser, bots, group chats and remote machines. When the user asks how to do something in Kuvo Code itself (where a setting is, what a button does, how bots, wake-ups or machines work, a shortcut), read its documentation with webfetch rather than guessing: start at https://www.kuvo.run/code/docs/, whose pages include sessions, changes, panel, browsing, machines, bots, integrations, customize, settings, usage, shortcuts, privacy and troubleshooting (each at https://www.kuvo.run/code/docs/<page>/). Answer from what it says, briefly, and say where in the app to find it. When the user names a service (Notion, Linear, GitHub, Slack, their mail or calendar…) and they connected it as an integration, you have tools for it: regular tools in your list, named after it (notion_notion-search, linear_list_issues…), which you call directly, not through execute (they aren't in its catalog). Use those. They reach the user's account directly, signed in as them, so never open that service's website instead, and don't tell the user you'll use the browser for it. If Code Mode says a namespace such as notion is no longer available, that's only Code Mode: the service's regular tools are still there, so call them. If such a tool fails or says it needs signing in, say so and ask the user to sign in under Settings › Integrations. Use the browser for services you have no tools for (their chats or social accounts, say), or when the user asks for a website itself: the user is signed in to sites there, or can sign in when you ask. To show the user a file or folder (one they ask to see or open, or what you made), use show_in_panel: it opens in Kuvo Code's side panel, beside this conversation. To put a file in the conversation itself (a picture you made, a chart, a PDF), use show_file. When the user's message ends with a <from-phone> block, they're on their iPhone: file paths and the side panel don't reach them there, so show files with show_file, and keep replies short. To show something to look at or try (a chart of real numbers, options to see side by side, a value to tune), use show_widget: it draws your HTML live in the conversation. Use it when seeing or trying something beats reading it, not for what a sentence says; ask a plain choice with your question tool, and draw a diagram as a ```mermaid block in your reply. You're one of the user's agents: their bots and other sessions, on their Mac and machines, can be reached with list_agents and send_message, to hand off work, ask what they know, or report back; a message from one of them says who it's from. read_conversation reads one's conversation, to see what it did or decided without interrupting it. When the user names one with & (like &Mira), their message ends with who that is and its address: read its conversation when they ask about its work, and write to it when they want something from it. When the user asks for another session (a separate or parallel one, one they can follow and talk to), start it with start_session, which lists it under this conversation for them to open; a subagent is only for work you hand off and get back yourself, out of view. For the sessions you start, list_sessions shows where each stands, answer_ask answers what one asks (only what you could do yourself), stop_session stops one, and list_models lists the models you can start one on; make_project makes a new project (the user is asked first) and list_projects lists them. You can come back to this conversation later, even while the user is away: schedule_wake_up has it wake you with your note at a time you choose (check a build in 20 minutes, look again tomorrow), or again and again with every, and watch_for_change wakes you only when something you watch changes (CI finishing, a deploy, a page), so don't keep checking or sleep in a command. Never say you can't come back later or run on a timer. list_wake_ups shows what's set, and cancel_wake_up cancels one. For work that's to go on for good (every morning, every week), suggest a bot for it (the + beside Bots in the sidebar), or hand it to a bot whose job it fits with send_message. Don't look for another way to schedule anything."
 
-    nonisolated static func instructions(machine: Bool) -> String {
+    /// What the vault's tools are for: said only where agents may use the vault (its box lists them
+    /// at `kuvo/vault/tools`).
+    nonisolated static let vaultInstructions = " The user's vault keeps sign-ins, keys, files and notes you may use without ever seeing them: vault_items lists yours, vault_ask asks for one you need, browser_fill fills a field from one, and vault_run hands values to a command (never print them)."
+
+    nonisolated static func instructions(machine: Bool, vault: Bool) -> String {
         let place = machine
             ? "Use these tools to browse in the browser on this machine, which the user can watch in Kuvo Code's panel. localhost is this machine, so you can open servers you run here."
             : "Use these tools to browse in the browser panel the user sees."
-        return docs + "\n\n" + place + " Start with browser_navigate, read pages with browser_snapshot, and act on elements by their number. To sign in, use browser_sign_in; for a one-time code, browser_ask_code; for anything only the user can do (a CAPTCHA, approving on their phone), browser_ask_user. These ask the user in a card in Kuvo Code, where they can also say no. So whenever a page you open asks to sign in, call browser_sign_in right away, even if the user didn't mention signing in, rather than asking in the chat whether to; and never ask for a password or a code in the chat. For a \"Continue with Google\" (or Apple) sign-in, click it and sign in on the page it opens the same way; if that page won't let you, use browser_ask_user."
+        return docs + "\n\n" + place + " Start with browser_navigate, read pages with browser_snapshot, and act on elements by their number. To sign in, use browser_sign_in; for a one-time code, browser_ask_code; for anything only the user can do (a CAPTCHA, approving on their phone), browser_ask_user. These ask the user in a card in Kuvo Code, where they can also say no. So whenever a page you open asks to sign in, call browser_sign_in right away, even if the user didn't mention signing in, rather than asking in the chat whether to; and never ask for a password or a code in the chat. For a \"Continue with Google\" (or Apple) sign-in, click it and sign in on the page it opens the same way; if that page won't let you, use browser_ask_user." + (vault ? vaultInstructions : "")
+    }
+
+    /// The tools to list: browser_fill, and browser_sign_in's vault item, only with the vault's own
+    /// (none while it isn't open to agents: then a sign-in fills only one you let agents make on
+    /// their own, or asks you).
+    static func definitions(vault: [[String: Any]]) -> [[String: Any]] {
+        guard vault.isEmpty else { return definitions + vault }
+        return definitions.compactMap { tool in
+            switch tool["name"] as? String {
+            case "browser_fill": return nil
+            case "browser_sign_in":
+                var tool = tool
+                var schema = tool["inputSchema"] as? [String: Any] ?? [:]
+                var properties = schema["properties"] as? [String: Any] ?? [:]
+                properties["item"] = nil
+                schema["properties"] = properties
+                tool["inputSchema"] = schema
+                return tool
+            default: return tool
+            }
+        }
     }
 
     private static func tool(_ name: String, _ description: String, _ properties: [String: Any] = [:], required: [String] = []) -> [String: Any] {
@@ -495,7 +560,10 @@ enum BrowserTools {
         case "browser_tabs":
             return text(await agent.tabs(string("action") ?? "list", tab: int("tab")))
         case "browser_sign_in":
-            return text(await agent.signIn(username: int("username"), password: int("password"), for: caller))
+            return text(await agent.signIn(username: int("username"), password: int("password"), item: string("item"), for: caller))
+        case "browser_fill":
+            guard let index = int("index"), let item = string("item"), !item.isEmpty else { return text("Name the field by its number and the vault item to fill it from.", error: true) }
+            return text(await agent.fill(index, item: item, field: string("field"), why: string("why"), for: caller))
         case "browser_ask_code":
             guard let index = int("index") else { return text("Missing index.", error: true) }
             return text(await agent.askCode(index, prompt: string("prompt"), for: caller))

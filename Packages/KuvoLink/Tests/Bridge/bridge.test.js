@@ -1212,15 +1212,21 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "accounts.credentials": ["GET", "kuvo/accounts/credentials"], "accounts.ended": ["GET", "kuvo/accounts/ended"], "accounts.found": ["GET", "kuvo/accounts/found"], agents: ["GET", "kuvo/agents/api/session"], artifacts: ["GET", "kuvo/artifacts?bot=bot_none"], asks: ["GET", "kuvo/asks"], attention: ["GET", "kuvo/attention"],
     bots: ["GET", "kuvo/bots"], "bots.events": ["GET", "kuvo/bots/events"], "bots.job": ["GET", "kuvo/bots"], "bots.edit": ["DELETE", "kuvo/bots/bot_none"], "bots.keys": ["GET", "kuvo/bots/bot_none/keys"],
     "bots.make": ["GET", "kuvo/bots/templates"], config: ["GET", "kuvo/config"], "config.apply": ["GET", "kuvo/config/apply"], "engine.restart": ["GET", "kuvo/engine/restart"],
-    "engine.start": ["GET", "kuvo/engine/start"], file: ["GET", "kuvo/file"], git: ["POST", "kuvo/git/changes"], goals: ["GET", "kuvo/agents/api/kuvo/goals"], btw: ["GET", "kuvo/agents/api/kuvo/btw"], "btw.threads": ["DELETE", "kuvo/agents/api/kuvo/btw/ses_none/threads/thr_none"], handoff: ["POST", "kuvo/agents/api/kuvo/handoff/ses_none"], branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"], reviews: ["GET", "kuvo/agents/api/kuvo/reviews"], "reviews.scopes": ["GET", "kuvo/agents/api/kuvo/reviews/ses_none/choices"], groups: ["GET", "kuvo/groups"],
+    "engine.start": ["GET", "kuvo/engine/start"], file: ["GET", "kuvo/file"], git: ["POST", "kuvo/git/changes"], goals: ["GET", "kuvo/agents/api/kuvo/goals"], btw: ["GET", "kuvo/agents/api/kuvo/btw"], "btw.threads": ["GET", "kuvo/agents/api/kuvo/btw"], handoff: ["POST", "kuvo/agents/api/kuvo/handoff/ses_none"], branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"], reviews: ["GET", "kuvo/agents/api/kuvo/reviews"], "reviews.scopes": ["GET", "kuvo/agents/api/kuvo/reviews"], "reviews.parts": ["GET", "kuvo/agents/api/kuvo/reviews"], groups: ["GET", "kuvo/groups"],
     "groups.delete": ["DELETE", "kuvo/groups/grp_none"], "groups.edit": ["PATCH", "kuvo/groups/grp_none"], "groups.joinable": ["GET", "kuvo/groups/joinable"], "groups.make": ["POST", "kuvo/groups"],
     // Its turns for chats on other computers, which kuvo/groups/joinable shows from theirs.
     "groups.seats": ["GET", "kuvo/groups/joinable"],
-    integrations: ["GET", "kuvo/integrations"], keys: ["GET", "kuvo/keys"], "mcp.catalog": ["GET", "kuvo/mcp/catalog"], named: ["GET", "kuvo/named"], search: ["GET", "kuvo/search?q=none"],
+    integrations: ["GET", "kuvo/integrations"], keys: ["GET", "kuvo/keys"], "mcp.catalog": ["GET", "kuvo/mcp/catalog"], moves: ["GET", "kuvo/moves"], named: ["GET", "kuvo/named"], search: ["GET", "kuvo/search?q=none"],
     personalities: ["GET", "kuvo/personalities"], "personalities.events": ["POST", "kuvo/personalities/events"], phones: ["GET", "kuvo/phones"], "phones.pair": ["DELETE", "kuvo/phones/pair"], projects: ["GET", "kuvo/projects"],
     "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"], "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
     "sign-in.return": ["GET", "kuvo/sign-in/return"], skills: ["GET", "kuvo/skills"], "skills.trash": ["GET", "kuvo/skill-trash"], update: ["GET", "kuvo/update"], wakes: ["GET", "kuvo/wakes"],
     "wakes.edit": ["POST", "kuvo/wakes/ses_none/pause"], "wakes.events": ["POST", "kuvo/wakes/events"], worktrees: ["GET", "kuvo/worktrees"], "worktrees.events": ["POST", "kuvo/worktrees/events"], "worktrees.where": ["POST", "kuvo/worktrees/where"], folders: ["DELETE", "kuvo/folders"], "plugins.search": ["POST", "kuvo/plugins/search"], programs: ["POST", "kuvo/programs"], "providers.models": ["GET", "kuvo/providers/models"],
+    // What a side question's and a review's routes take besides, on the coding agents' bridge.
+    "btw.threads": ["GET", "kuvo/agents/api/kuvo/btw"], "reviews.scopes": ["GET", "kuvo/agents/api/kuvo/reviews"],
+    "agent-tools": ["POST", "kuvo/agent-tools"], "sessions.start": ["POST", "kuvo/sessions"],
+    // What its agents' mail says it takes (a letter that reads a conversation), on the agents' tools.
+    "letters-read": ["POST", "kuvo/agent-tools"], queue: ["GET", "kuvo/sessions/ses_none/queue"], work: ["GET", "kuvo/work"], "work.projects": ["GET", "kuvo/work/settings"],
+    vault: ["GET", "kuvo/vault/tools"],
   };
   const named = (await answer(handle, "GET", "kuvo/info")).json.features;
   assert.deepEqual([...named].sort(), Object.keys(routes).sort(), "every name has a route here, and every route here its name");

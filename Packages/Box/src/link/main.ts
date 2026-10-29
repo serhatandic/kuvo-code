@@ -23,6 +23,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sleep } from "../shared/wait";
 import { watchAsks } from "./areas/asks";
+import { watchWorkAsks } from "./work/asks";
 import { refreshBotsKeys } from "./areas/bot-keys";
 import { setBoxKey } from "./areas/box-keys";
 import { addMacDefaults, changeSettings, ownsSettings, readSettings } from "./areas/config";
@@ -42,15 +43,22 @@ import { docsChanged, macDocsChanged } from "./documents/exchange";
 import { newSigningSeed, ownSign, SIGN } from "./documents/format";
 import { docsWork, ownDocs, pruneDocs } from "./documents/work";
 import { peerTargets, readBridgeFile, readEngineFile } from "./engine/client";
+import { engineConfigContent } from "./engine/compatibility";
 import { watchBox } from "./engine/watch";
+import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
-import { IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, VERSION_FILE, homeFolder } from "./home";
+import { IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, takeVaultSecrets, VERSION_FILE, homeFolder } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
+import { noteRelay } from "./letters/leave";
 import { deliverLeftAnswers, sendOutbox } from "./letters/outbox";
 import { macLinkCheck } from "./mac/link";
 import { macNoticeHold, macTell } from "./mac/notices";
 import { runMacPeers } from "./mac/peers";
 import { runMacLink } from "./mac/relay";
+import { watchVaultAsks } from "./vault/asks";
+import { holdVault } from "./vault/holder";
+import { primeGenerations } from "./vault/store";
+import { setVaultTell } from "./vault/use";
 import { HELD_FILE, NoticeHold } from "./notices/hold";
 import { noticeJSON, pushTo } from "./notices/notice";
 import { announce, forgetMacsAgents, refreshOwn } from "./peers/agents";
@@ -86,6 +94,10 @@ export { IS_MAC, LINK_FILE } from "./home";
 export { BRIDGE_VERSION } from "./version";
 export { FEATURES } from "../shared/features";
 export { messageID } from "./engine/sessions";
+export { forgetMovesInMemory, keepMoving, sendMovesWith, takeMoveMail, watchMoves } from "./moves/move";
+export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
+export { queueOf, queueWatcher, readQueues, scanQueues } from "./engine/queue";
+export { workWatcher } from "./work/wakes";
 export { macLink, readLink, updateLink, writeLink } from "./state";
 export { searchPlugins } from "./areas/plugins";
 export { listFolders, makeFolder } from "./areas/folders";
@@ -136,7 +148,7 @@ export { composeAgents } from "./peers/directory";
 export { nameAgents, namedAgents, namesIn } from "./peers/naming";
 export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeSeat, tellSeatPeers, watchSeats } from "./peers/seats";
 export { announce, ownAgents, refreshOwn, writeAgents } from "./peers/agents";
-export { deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
+export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
 export { takeLetter } from "./letters/take";
 export { answerPersonalities, retellBots, takePersonalities, takePersonalitiesDocument } from "./personalities/take";
 export { docsChanged, macDocsChanged, receiveDocs } from "./documents/exchange";
@@ -281,7 +293,15 @@ async function run(): Promise<void> {
   watchBox({ tell, hold });
   // What its group chats send your other computers, carried on the relay connection that's up.
   watchSeats(() => current);
+  // Moves to and from your other computers, carried on the same connection.
+  watchMoves(() => current);
   watchAsks(tell, { answered });
+  // The vault, held here: its key in this process's memory, its asks told to your phones.
+  holdVault(engineHandler(readEngineFile, { name: os.hostname() }));
+  setVaultTell(tell);
+  watchVaultAsks(tell, answered);
+  // What its bots ask you before they do it (making a project): told the same way.
+  watchWorkAsks(tell, { answered });
   // Your other computers: this box's agents told to them while the relay connection is up (and
   // listed here, relay or not), and its agents' letters sent; without the relay a while, those
   // not sent yet go to the Mac.
@@ -309,6 +329,7 @@ async function run(): Promise<void> {
   setInterval(() => {
     if (current?.welcomed && docsNoted()) try { docsChanged(current, { tell: true }); } catch {}
     if (current?.welcomed) lastWelcomed = Date.now();
+    noteRelay(Boolean(current?.welcomed), lastWelcomed);
     try { sendOutbox(current ?? { send() {} }, undefined, Date.now(), current?.welcomed ? 0 : Date.now() - lastWelcomed); } catch {}
     deliverLeftAnswers().catch(() => {});
   }, 3_000);
@@ -391,17 +412,27 @@ async function box(command: string): Promise<void> {
       // A client's request, answered as the bridge answers a phone's: one that answers once,
       // never a stream that follows.
       answerOnce();
-      let given: { method?: unknown; path?: unknown; body?: unknown; headers?: unknown } | null = {};
+      let given: { method?: unknown; path?: unknown; body?: unknown; bodyText?: unknown; headers?: unknown } | null = {};
       try { given = JSON.parse(await input()); } catch {}
       const handle = engineHandler(readEngineFile, { name: os.hostname() });
       // With the folder it's asked about (`x-opencode-directory`), as a phone's request has it.
       const folder = (given?.headers as Record<string, unknown> | undefined)?.["x-opencode-directory"];
-      const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json", ...(typeof folder === "string" ? { "x-opencode-directory": folder } : {}) }, body: Buffer.from(given?.body === undefined ? "" : JSON.stringify(given.body)), fromMac: true };
+      // And the Mac's proof for a request to this machine's vault (or its unlock key, to unlock it),
+      // which makes it a client there (areas/vault.ts); with the body as it was sent, which the proof covers.
+      const vaultHeaders: Record<string, string> = {};
+      for (const name of ["x-kuvo-vault-key", "x-kuvo-vault-proof"]) {
+        const value = (given?.headers as Record<string, unknown> | undefined)?.[name];
+        if (typeof value === "string") vaultHeaders[name] = value;
+      }
+      const sentBody = typeof given?.bodyText === "string" ? given.bodyText : given?.body === undefined ? "" : JSON.stringify(given.body);
+      const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json", ...(typeof folder === "string" ? { "x-opencode-directory": folder } : {}), ...vaultHeaders }, body: Buffer.from(sentBody), fromMac: true };
       let status = 502;
       let type = "";
       const chunks: Buffer[] = [];
-      // A route that follows something answers with what it says now: its first line.
+      // A route that follows something answers with what it says now: its first line. Stopped by
+      // its caller (an agent's tool call that waits, cancelled), it stops waiting and answers.
       const stop = new AbortController();
+      process.once("SIGTERM", () => stop.abort());
       for await (const part of handle(request, {}, stop.signal) as AsyncIterable<AnyPiece>) {
         if (part.head) {
           status = part.head.status;
@@ -450,10 +481,37 @@ async function box(command: string): Promise<void> {
   }
 }
 
+/** The first line on stdin, as JSON (what the app sends `serve` there, before anything else). */
+function firstLine(): Promise<Record<string, unknown>> {
+  return new Promise(resolve => {
+    let given = "";
+    const take = (chunk: Buffer | string) => {
+      given += chunk.toString();
+      const end = given.indexOf("\n");
+      if (end < 0) return;
+      process.stdin.off("data", take);
+      process.stdin.off("end", done);
+      process.stdin.pause();
+      try { resolve(JSON.parse(given.slice(0, end))); } catch { resolve({}); }
+    };
+    const done = () => resolve({});
+    process.stdin.on("data", take);
+    process.stdin.once("end", done);
+  });
+}
+
 async function serve(): Promise<void> {
-  const password = process.env.OPENCODE_PASSWORD;
+  // Its password, and this Mac's vault's secrets, from the app on stdin (never its environment,
+  // which any of your processes can read); a test's box, in OPENCODE_PASSWORD.
+  let password = process.env.OPENCODE_PASSWORD;
+  delete process.env.OPENCODE_PASSWORD;
   if (!password) {
-    console.error("serve answers only with a password: set OPENCODE_PASSWORD.");
+    const given = await firstLine();
+    if (typeof given.password === "string") password = given.password;
+    takeVaultSecrets(given);
+  }
+  if (!password) {
+    console.error("serve answers only with a password: on its stdin, {\"password\"}, or in OPENCODE_PASSWORD.");
     process.exit(2);
   }
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
@@ -467,6 +525,20 @@ async function serve(): Promise<void> {
     server.listen(0, "127.0.0.1", resolve);
   });
   console.log(JSON.stringify({ url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }));
+  // The vault, held here (on a machine, `run` holds it; a test's box serves alone), its asks told
+  // to your phones through this Mac's link.
+  holdVault(engineHandler(readEngineFile, { name: os.hostname() }, readBridgeFile));
+  // This Mac's vault's newest generations, from its app, before agents use it (vault/store.ts).
+  if (IS_MAC) void (async () => {
+    for (let tries = 0; tries < 120; tries++) {
+      try { return await primeGenerations(); } catch {}
+      await sleep(1000);
+    }
+  })();
+  if (IS_MAC) {
+    setVaultTell(macTell);
+    watchVaultAsks(macTell, id => macLink.hold?.resolve(id));
+  }
   // Its bots' folders' settings, as its keys and integrations are now (after an update, say), as a
   // machine's bridge does as it starts; where its keys can't be reached yet, they stay as they were.
   refreshBotsKeys().catch(() => {});
@@ -683,6 +755,9 @@ if (main) {
   else if (mode === "box") await box(argument);
   else if (mode === "serve") await serve();
   else if (mode === "leave") leave(argument);
+  // A machine's start scripts' (`kuvo-launch`): what its engine starts with, its OPENCODE_CONFIG_CONTENT
+  // with what some providers need on top, as this box last learned it (PROTOCOL.md, "Settings per box").
+  else if (mode === "engine-config") process.stdout.write(engineConfigContent(process.env.OPENCODE_CONFIG_CONTENT));
   else if (mode === "update") {
     // `update [--now]`, and for a test's folder only, `--url <boxes.json> --key <public key>`. Once
     // it's updated, the running bridge goes, for the keeper to start the new one.
@@ -704,7 +779,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | update [--now] | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | update [--now] | selftest");
     process.exit(2);
   }
 }

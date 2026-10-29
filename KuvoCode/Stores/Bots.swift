@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSessions
 import KuvoLink
 import OpenCodeKit
 import os
@@ -40,6 +41,11 @@ struct Bot: Codable, Identifiable, Hashable {
     var agents: Bool?
     /// When an earlier version noted it changed; kept as it was.
     var updated: Date?
+    /// The limits you set on the sessions it runs (Edit Bot › Work), as its box keeps them; nil for
+    /// none, and from a box from before bots ran sessions.
+    var limits: WorkLimits?
+    /// What you allowed it to do without asking ("Always"), as its box keeps it.
+    var allowed: WorkActions?
 
     /// Where its session runs, the app's way of writing it.
     var directory: String {
@@ -96,6 +102,10 @@ struct ListedBot: Decodable, Equatable {
     var folder: String?
     var project: String?
     var created: String?
+    /// The limits you set on its work; nil for none.
+    var limits: WorkLimits?
+    /// What you allowed it to do without asking; nil for nothing.
+    var allowed: WorkActions?
 }
 
 /// Your bots, wherever each lives, as their computers' boxes keep them: this Mac's followed as they
@@ -244,7 +254,7 @@ final class Bots {
             var bot = Bot(id: entry.id, name: Self.oneLine(entry.name), job: entry.job ?? "", instructions: entry.jobDetails ?? "", jobInMemory: nil, look: entry.look,
                           machine: machine, project: entry.project.map { path in machine.map { RemoteFolder.folder(path, on: $0) } ?? path } ?? (entry.folder == nil ? before?.project : nil),
                           folder: folder, sessionID: entry.session, created: entry.created.flatMap(formatter.date(from:)) ?? before?.created ?? .now,
-                          model: entry.model, personality: entry.personality, agents: entry.agents == true ? true : nil, updated: before?.updated)
+                          model: entry.model, personality: entry.personality, agents: entry.agents == true ? true : nil, updated: before?.updated, limits: entry.limits, allowed: entry.allowed)
             if entry.jobDetails == nil, let before { bot.instructions = before.instructions }
             return bot
         }
@@ -278,7 +288,7 @@ final class Bots {
     private static func listed(_ bot: Bot) -> ListedBot {
         ListedBot(id: bot.id, session: bot.sessionID, name: bot.name, look: bot.look, job: bot.job, jobDetails: bot.instructions, agents: bot.agents,
                   personality: bot.personality, model: bot.model, folder: bot.folder, project: bot.project.map { RemoteFolder.parse($0)?.path ?? $0 },
-                  created: ISO8601DateFormatter().string(from: bot.created))
+                  created: ISO8601DateFormatter().string(from: bot.created), limits: bot.limits, allowed: bot.allowed)
     }
 
     /// The list as you see it: as the boxes said, with your waiting edits as made.
@@ -292,6 +302,7 @@ final class Bots {
     private func forgetHere(_ bot: Bot) {
         edits.drop(bot.id)
         app?.wakeUps.forget(key: bot.id)
+        app?.botWork.forget(bot.id)
         app?.utilities.closeTabs(of: bot.id)
         app?.workspace.drop(bot.sessionID)
         show()
@@ -588,32 +599,6 @@ final class Bots {
         // Told at once, as before, rather than at their next run.
         guard let client = client(BoxClient.mac) else { return }
         Task { _ = try? await client.send("POST", "kuvo/bots/retell") }
-    }
-
-    // MARK: Moving
-
-    /// A bot that moved to another computer (`Moves`): it lives on `machine` (nil: this Mac) from
-    /// now on, in `folder`, with its conversation carried there (`session`, the same ID). Its box
-    /// there makes it its own (`kuvo/bots/<id>/arrived`): what its folder says of where it is and
-    /// the clock it goes by, its rules there (its folder, that computer's Settings › Permissions),
-    /// and what it's told there. One that can't be asked now does so at the bot's next run there.
-    func moved(_ id: String, to machine: String?, folder: String, session: Session) async {
-        guard let index = known.firstIndex(where: { $0.id == id }) else { return }
-        known[index].machine = machine
-        known[index].folder = folder
-        save()
-        show()
-        app?.workspace.add(session)
-        let box = machine ?? BoxClient.mac
-        guard let client = client(box) else { return }
-        struct Answer: Decodable { var bot: ListedBot }
-        let path = "kuvo/bots/" + (id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id) + "/arrived"
-        do {
-            let answer = try await client.value(Answer.self, "POST", path)
-            take(one: answer.bot, from: box)
-        } catch {
-            log.error("A moved bot wasn't made its box's yet: \(error.localizedDescription, privacy: .public)")
-        }
     }
 
     // MARK: Words

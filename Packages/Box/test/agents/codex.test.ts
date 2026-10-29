@@ -277,6 +277,57 @@ describe("Codex's reply and its steps", () => {
   })
 })
 
+describe("Codex's file citations", () => {
+  test("a file it cites as what it made shows as a file in the conversation, one it cites in its words as its path, and no directive shows raw, however its words come", async () => {
+    const pdf = join(root, "output/pdf/moon.pdf")
+    const id = await run([
+      ["item/agentMessage/delta", { itemId: "m1", delta: "Created the field note: one page.\n\n:co" }],
+      ["item/agentMessage/delta", { itemId: "m1", delta: `dex-file-citation{path="${pdf}" purp` }],
+      ["item/agentMessage/delta", { itemId: "m1", delta: 'ose="output"}' }],
+      ["item/completed", { item: { type: "agentMessage", id: "m1", text: `Created the field note: one page.\n\n:codex-file-citation{path="${pdf}" purpose="output"}` } }],
+      ["item/started", { item: command("c1", "ls") }],
+      ["item/completed", { item: command("c1", "ls", { status: "completed", exitCode: 0, aggregatedOutput: "" }) }],
+      ["item/completed", { item: { type: "agentMessage", id: "m2", text: 'The review of :codex-file-citation{path="/w/review.pdf" purpose="source"} is due Friday. Time: 10:30.:codex-followup{text="More?"}\nA :codex-file-citation{path="unclosed is kept as words.\nThe rest stays.' } }],
+    ])
+    const content = steps(id).flatMap((step) => step.content)
+    const words = content.filter((part: any) => part.type === "text").map((part: any) => part.text)
+    expect(words.join("").replace(':codex-file-citation{path="unclosed', "")).not.toContain(":codex-")
+    expect(words).toEqual(["Created the field note: one page.\n\n", "The review of `/w/review.pdf` is due Friday. Time: 10:30.\nA :codex-file-citation{path=\"unclosed is kept as words.\nThe rest stays."])
+    const shown = tools(id).find((tool: any) => tool.name === "kuvo-browser_show_file")
+    expect(shown?.state).toMatchObject({ status: "completed", input: { path: pdf } })
+  })
+
+  test("a reply kept from before its citations were read shows as one does now once the bridge starts again: the file it made shown, and no directive", () => {
+    const pdf = join(root, "output/pdf/moon.pdf")
+    const store = new Store(join(root, "sessions"))
+    // Only to make it: Codex itself isn't asked anything.
+    const first = new Sessions(store, { find: (id: string | undefined) => (id === "codex-cli" ? { providerID: "codex-cli" } : undefined) } as unknown as Roster, new Auto(root))
+    const id = first.create({ title: "Codex", model: { providerID: "codex-cli", id: "gpt-test" }, location: { directory: root } }).id
+    const words = `Created the field note: one page.\n\n:codex-file-citation{path="${pdf}" purpose="output"}\n\nIt follows :codex-file-citation{path="/w/notes.md" purpose="source"}.`
+    const kept: Message = { type: "assistant", id: "msg_kept", time: { created: 1, completed: 2 }, agent: "build", model: { providerID: "codex-cli", id: "gpt-test" }, content: [{ type: "text", text: words }] }
+    // Another agent's words quoting one (Auto went on with Claude): words, as they were.
+    const quoted: Message = { type: "assistant", id: "msg_quoted", time: { created: 3, completed: 4 }, agent: "build", model: { providerID: "claude-code", id: "sonnet" }, content: [{ type: "text", text: words }] }
+    store.get(id)!.messages.push(kept, quoted)
+    store.save(id, true)
+    first.closeAll()
+
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: () => undefined } as unknown as Roster, new Auto(root))
+    const reply = sessions.messages(id).find((message) => message.id === "msg_kept") as any
+    expect(reply.content.map((part: any) => (part.type === "text" ? part.text : `[${part.name} ${part.state.status} ${part.state.input.path}]`))).toEqual([
+      "Created the field note: one page.\n\n",
+      `[kuvo-browser_show_file completed ${pdf}]`,
+      "\n\nIt follows `/w/notes.md`.",
+    ])
+    expect((sessions.messages(id).find((message) => message.id === "msg_quoted") as any).content).toEqual([{ type: "text", text: words }])
+    expect(sessions.cited).toEqual([{ path: pdf, at: 2 }])
+    // Kept as it reads now: read once, not again at the next start.
+    expect(readFileSync(join(root, "sessions", id, "messages.json"), "utf8").split(":codex-").length).toBe(3)
+    sessions.closeAll()
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: () => undefined } as unknown as Roster, new Auto(root))
+    expect(sessions.cited).toEqual([])
+  })
+})
+
 describe("What Codex asks you", () => {
   test("a command it asks to run waits for you on its step: Allow Once lets that one through and the next one asks again; No declines it", async () => {
     const id = start(

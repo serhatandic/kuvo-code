@@ -25,7 +25,7 @@ export interface EngineSession {
 /** Clients' own notes on a session (any JSON object), as far as a box reads them: Kuvo Code's,
  * whatever their values are until they're checked. */
 export interface SessionNotes {
-  kuvo?: { bot?: unknown; engineFor?: unknown; seat?: unknown; archived?: unknown; [more: string]: unknown };
+  kuvo?: { bot?: unknown; engineFor?: unknown; seat?: unknown; reviewPart?: unknown; archived?: unknown; [more: string]: unknown };
   "kuvo.archived"?: unknown;
   kuvoAgent?: unknown;
   "kuvo.carriedTo"?: unknown;
@@ -36,9 +36,10 @@ export interface SessionNotes {
 type SessionMetadata = Pick<EngineSession, "metadata">;
 
 // Kept out of sight, as the Mac keeps them: an engine run a coding agents' session started (Auto on
-// one of the engine's models), whose news the agents' bridge tells as its session's; and a bot's
-// seat in a group chat, whose chat tells what matters.
-export const isHiddenRun = (session: SessionMetadata | null | undefined) => Boolean(session?.metadata?.kuvo?.engineFor || session?.metadata?.kuvo?.seat);
+// one of the engine's models), whose news the agents' bridge tells as its session's; a bot's seat
+// in a group chat, whose chat tells what matters; and a review's part, read in a session of its
+// own, which its review shows.
+export const isHiddenRun = (session: SessionMetadata | null | undefined) => Boolean(session?.metadata?.kuvo?.engineFor || session?.metadata?.kuvo?.seat || session?.metadata?.kuvo?.reviewPart);
 
 // A message ID that sorts after earlier ones, as the engine's own do.
 let lastMessage = { time: 0, counter: 0 };

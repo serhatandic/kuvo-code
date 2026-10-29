@@ -55,6 +55,19 @@ enum DemoLoaders {
                     Text("Running tests").font(.system(size: 13))
                     StepActivity.Elapsed(since: started).font(.system(size: 13))
                 }
+                // A subagent open on its steps: its own ring holds, the step inside moves.
+                HStack(spacing: 6) {
+                    StepActivity(symbol: "person.2", running: true, holds: true)
+                    Text("Waiter 1").font(.system(size: 13))
+                    StepActivity.Elapsed(since: started).font(.system(size: 13))
+                    Text("Sleeping").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                HStack(spacing: 6) {
+                    StepActivity(symbol: "moon.zzz", running: true)
+                    Text("Sleep").font(.system(size: 13))
+                    StepActivity.Elapsed(since: started).font(.system(size: 13))
+                }
+                .padding(.leading, 22)
                 HStack(spacing: 6) {
                     StepActivity(symbol: "terminal", running: false)
                     Text("Ran tests").font(.system(size: 13))

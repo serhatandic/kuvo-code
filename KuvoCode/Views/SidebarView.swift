@@ -568,12 +568,18 @@ struct SidebarView: View {
         newChat(on: machine)
     }
 
-    /// A new chat on `machine`, in Kuvo Code's chats folder there (`Moves`): found over SSH the
-    /// first time.
+    /// A new chat on `machine`, in Kuvo Code's chats folder there, as its box names it (`kuvo/info`).
     private func newChat(on machine: String) {
         Task {
-            guard let home = try? await app.moves.transport.home(on: machine) else { return }
-            newSession(RemoteFolder.folder(home.chats, on: machine))
+            struct Info: Decodable { var chats: String? }
+            do {
+                guard let chats = try await app.box(machine).value(Info.self, "GET", "kuvo/info").chats else {
+                    throw BoxRefusal(status: 404, message: "\(app.machines.engine(machine)?.machine.name ?? machine) needs a newer Kuvo Code to start chats there. It updates by itself overnight.")
+                }
+                newSession(RemoteFolder.folder(chats, on: machine))
+            } catch {
+                Modal.show(error)
+            }
         }
     }
 
@@ -931,9 +937,19 @@ struct SidebarView: View {
                     if renaming == target { renaming = nil }
                 }
             } else {
-                Text(session.title ?? "New Session")
-                    .fontWeight(session.isUnread ? .semibold : .regular)
-                    .foregroundStyle(Workspace.isArchived(session) ? .secondary : .primary)
+                HStack(spacing: 6) {
+                    // A bot's work: its face, still, before the title.
+                    if let by = WorksFor(session), let bot = bots.bot(by.bot) {
+                        BotAvatar(look: bot.look, size: 15, animates: false)
+                            .help("Started by \(bot.name)")
+                            .accessibilityLabel("\(bot.name)’s work")
+                    }
+                    Text(session.title ?? "New Session")
+                        .fontWeight(session.isUnread ? .semibold : .regular)
+                        .foregroundStyle(Workspace.isArchived(session) ? .secondary : .primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
         } accessory: {
             if Workspace.isArchived(session) {
@@ -1295,9 +1311,30 @@ private struct ProjectRow: View {
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: 10) {
-                FolderIcon(isOpen: isOpen)
-                    .foregroundStyle(.secondary)
-                    .frame(width: SidebarMetrics.iconWidth)
+                Group {
+                    // One a bot made: its face, still, on the folder's corner, cut out of it.
+                    if let maker = app.workspace.madeBy[project.directory].flatMap({ app.bots.bot($0.bot) }) {
+                        FolderIcon(isOpen: isOpen)
+                            .foregroundStyle(.secondary)
+                            .mask {
+                                Rectangle()
+                                    .overlay(alignment: .bottomTrailing) {
+                                        Circle().frame(width: 15, height: 15).offset(x: 4.5, y: 4.5).blendMode(.destinationOut)
+                                    }
+                                    .compositingGroup()
+                            }
+                            .overlay(alignment: .bottomTrailing) {
+                                BotAvatar(look: maker.look, size: 12, animates: false)
+                                    .offset(x: 3, y: 3)
+                                    .help(WorkWords.madeBy(maker.name))
+                                    .accessibilityLabel(WorkWords.madeBy(maker.name))
+                            }
+                    } else {
+                        FolderIcon(isOpen: isOpen)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: SidebarMetrics.iconWidth)
                 Text(project.name)
                     .font(.system(size: 14))
                     .lineLimit(1)
@@ -1534,6 +1571,9 @@ private struct BotRow: View {
             ShimmerText(text: "Working…")
         } else if case let helpers = workspace.helpersAtWork(in: bot.sessionID), helpers > 0 {
             ShimmerText(text: helpers == 1 ? "Working on a task…" : "Working on \(helpers) tasks…")
+        } else if case let work = workspace.work(of: bot.id), !work.isEmpty {
+            // Its sessions at it: where, and how many (one waiting on you shows on its own row).
+            ShimmerText(text: WorkWords.atWork(count: work.count, projects: work.map { workspace.projectName($0.location.directory) }))
         } else if let place = bots.waitingFor(bot) {
             // What you changed while its machine was away, on its way once it's back.
             BotState(systemImage: "clock.arrow.circlepath", isSet: false) { Text("Changes waiting for \(place)") }

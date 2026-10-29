@@ -19,6 +19,7 @@ import { onMachine, ownFoldersConfig } from "../machine"
 import { install, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { which } from "../proc"
 import { RPC, RPCError } from "../rpc"
+import { CodexCitations, plainCitations, type Said } from "./codex-citations"
 import { engineSkills, skillsFolder, skillsFor, turnedOff, upward, within } from "../skills"
 import type { Turn } from "../turn"
 import type { FileDiff, FormField, Model, ModelRef, OAuthStatus, Session } from "../wire"
@@ -411,7 +412,7 @@ export class CodexAgent implements Agent {
       this.oneOffs.set(threadId, {
         rpc,
         notify: (method, params) => {
-          if (method === "item/completed" && params?.item?.type === "agentMessage" && typeof params.item.text === "string") text = params.item.text
+          if (method === "item/completed" && params?.item?.type === "agentMessage" && typeof params.item.text === "string") text = plainCitations(params.item.text)
           if (method !== "turn/completed") return
           if (params?.turn?.status === "completed") resolve(text.trim())
           else reject(new Error(params?.turn?.error?.message ?? "Codex couldn't answer."))
@@ -520,6 +521,14 @@ interface Lane {
   plan?: { id: string; todos: { content: string; status: string }[] }
   /** Notices it has given this turn (a reconnect's is given once). */
   noticed?: Set<string>
+  /** Its directives in each message's words, as they come. */
+  citations?: Map<string, CodexCitations>
+}
+
+function citationsOf(lane: Lane, item: string): CodexCitations {
+  let citations = lane.citations?.get(item)
+  if (!citations) (lane.citations ??= new Map()).set(item, (citations = new CodexCitations()))
+  return citations
 }
 
 /** An agent Codex spawned: its thread's work, told in a session of its own. */
@@ -970,7 +979,7 @@ class CodexThread implements Thread {
       case "item/agentMessage/delta":
         this.words(lane)
         lane.streamed.add(params.itemId)
-        turn.text(params.delta ?? "")
+        this.say(lane, citationsOf(lane, params.itemId).read(params.delta ?? ""))
         return
       case "item/reasoning/summaryTextDelta":
         this.words(lane)
@@ -1235,6 +1244,20 @@ class CodexThread implements Thread {
     lane.turn.startStep()
   }
 
+  /** Its words, with a file it cites as what it made shown in the conversation, as show_file shows one. */
+  private say(lane: Lane, said: Said[]) {
+    for (const each of said) {
+      if ("text" in each) {
+        lane.turn.text(each.text)
+        continue
+      }
+      // Part of its message, not a step of its own: the words after it go on in the same step.
+      const id = `cited-${newID("call")}`
+      lane.turn.toolStart(id, `${toolServerName}_show_file`, { path: each.made })
+      lane.turn.toolSucceeded(id, "Shown in the conversation.")
+    }
+  }
+
   private itemStarted(lane: Lane, item: any) {
     const active = lane
     const turn = lane.turn
@@ -1360,10 +1383,13 @@ class CodexThread implements Thread {
         return
       }
       case "agentMessage": {
+        const citations = citationsOf(active, item.id)
         if (!active.streamed.has(item.id) && item.text) {
           this.words(active)
-          turn.text(item.text)
+          this.say(active, citations.read(item.text))
         }
+        this.say(active, citations.end())
+        active.citations?.delete(item.id)
         // Questions it leaves for you, and what it remembered and where from.
         const questions = ((item.questions ?? []) as { title?: string; options?: string[] | null }[]).map((question) => `- ${question.title ?? ""}${question.options?.length ? ` (${question.options.join(" / ")})` : ""}`)
         if (questions.length) turn.text(`\n\n${questions.join("\n")}`)

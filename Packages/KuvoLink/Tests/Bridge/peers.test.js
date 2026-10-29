@@ -90,13 +90,6 @@ test("each box's agents: a newer list kept, and list_agents here names each by w
   const both = link.readPeerAgents(file);
   assert.equal(link.peerOf("ses_b2", [second.peer, stranger.peer], both), null);
   assert.equal(link.composeAgents([], "lokum", [second.peer, stranger.peer], both).agents.some(each => each.session === "ses_b2"), false);
-
-  // The Mac's list over SSH, for when the relay can't be reached: taken when it's newer than its mail.
-  const macFile = path.join(run, "mac.json");
-  fs.writeFileSync(macFile, JSON.stringify({ key: mac.pub, at: 2, list: [agent("ses_m2", "Over SSH")] }));
-  assert.deepEqual(link.readPeerAgents(file, macFile, link.readLink())[mac.pub].list.map(each => each.name), ["Over SSH"]);
-  fs.writeFileSync(macFile, JSON.stringify({ key: stranger.pub, at: 9, list: [agent("ses_x", "Not a Mac")] }));
-  assert.equal(link.readPeerAgents(file, macFile, link.readLink())[stranger.pub].list[0].name, "Claimed", "only a Mac's");
 });
 
 // An engine with one session, for letters to reach: its prompts, and an answer once it's done.
@@ -222,8 +215,6 @@ test("this box's letters go to the box their agent is on, again each minute unti
   const write = (id, letter) => fs.writeFileSync(path.join(sending, `${id}.json`), JSON.stringify({ from: "ses_here", name: "Here", at: now, ...letter }));
   write("ltr_waits", { to: "ses_target", text: "é".repeat(40_000), wait: true });
   write("ltr_nobody", { to: "ses_unknown", text: "Hello", wait: true });
-  // One left for the Mac (in the outbox itself) isn't this link's.
-  fs.writeFileSync(path.join(run, "outbox", "msg_mac.json"), JSON.stringify({ from: "ses_here", to: "ses_target", text: "Hi" }));
   const sent = [];
   const host = { send: bytes => sent.push(bytes) };
 
@@ -239,7 +230,6 @@ test("this box's letters go to the box their agent is on, again each minute unti
   assert.ok(sent[0].length <= 65_600 + 17);
   assert.equal(fs.existsSync(path.join(run, "replies", "ltr_nobody.json")), false, "no box lists its agent now: it waits");
   assert.ok(fs.existsSync(path.join(sending, "ltr_nobody.json")));
-  assert.ok(fs.existsSync(path.join(run, "outbox", "msg_mac.json")));
 
   link.sendOutbox(host, link.readLink(), now + 4000);
   assert.equal(sent.length, 1, "not again within the minute");
@@ -304,24 +294,31 @@ test("this box's letters go to the box their agent is on, again each minute unti
   link.sendOutbox(host, link.readLink(), now);
   assert.equal(fs.existsSync(path.join(sending, "ltr_old.json")), false);
 
-  // No relay for a while: letters not yet sent go to the Mac, which takes them on over SSH; its
-  // tool hears so. One already sent stays (it may have got there).
+  // No relay for a long while: letters wait for it, never handed to a Mac over SSH, and a tool
+  // waiting for one keeps waiting.
   write("ltr_stuck", { to: "ses_target", text: "Hi", wait: true });
   const before = sent.length;
-  link.sendOutbox(host, link.readLink(), now + 400_000, 6 * 60_000);
+  link.sendOutbox(host, link.readLink(), now + 400_000, 60 * 60_000);
   assert.equal(sent.length, before);
-  assert.equal(fs.existsSync(path.join(sending, "ltr_stuck.json")), false);
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(run, "outbox", "ltr_stuck.json"), "utf8")).wait, false);
-  assert.match(JSON.parse(fs.readFileSync(path.join(run, "replies", "ltr_stuck.json"), "utf8")).note, /through your Mac/);
-  assert.ok(fs.existsSync(path.join(sending, "ltr_slow.json")), "sent already: it stays for the relay");
-
-  // The relay back, and the Mac not here since: it comes back to this link. One the Mac took
-  // (`.mac-…`) stays the Mac's.
-  fs.renameSync(path.join(run, "outbox", "msg_mac.json"), path.join(run, "outbox", ".mac-msg_mac.json"));
-  link.sendOutbox(host, link.readLink(), now + 500_000);
   assert.ok(fs.existsSync(path.join(sending, "ltr_stuck.json")));
-  assert.equal(fs.existsSync(path.join(run, "outbox", "ltr_stuck.json")), false);
-  assert.ok(fs.existsSync(path.join(run, "outbox", ".mac-msg_mac.json")));
+  assert.deepEqual(fs.readdirSync(path.join(run, "outbox")).filter(name => name.endsWith(".json")), []);
+  assert.equal(fs.existsSync(path.join(run, "replies", "ltr_stuck.json")), false);
+  // The relay back: it goes.
+  link.sendOutbox(host, link.readLink(), now + 500_000);
+  assert.ok(sent.length > before);
+});
+
+test("letters an older Kuvo Code left for a Mac to collect over SSH go from the link instead, unless a Mac took one", () => {
+  fresh({ peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } });
+  const outbox = path.join(run, "outbox");
+  fs.mkdirSync(outbox, { recursive: true });
+  // As an older kuvo-browser.js left one, and as an older link handed one over without the relay.
+  fs.writeFileSync(path.join(outbox, "msg_0123456789.json"), JSON.stringify({ from: "ses_here", name: "Here", to: "ses_target", text: "Hi", wait: false, at: Date.now() }));
+  fs.writeFileSync(path.join(outbox, "ltr_handed1.json"), JSON.stringify({ from: "ses_here", to: "ses_target", text: "Hello", wait: false, at: Date.now(), handed: Date.now() }));
+  fs.writeFileSync(path.join(outbox, ".mac-msg_taken01.json"), JSON.stringify({ from: "ses_here", to: "ses_target", text: "Taken" }));
+  link.sendOutbox({ send() {} }, link.readLink(), Date.now(), 60_000);
+  assert.deepEqual(fs.readdirSync(path.join(outbox, "sending")).sort(), ["ltr_handed1.json", "msg_0123456789.json"]);
+  assert.deepEqual(fs.readdirSync(outbox).filter(name => name.endsWith(".json")), [".mac-msg_taken01.json"]);
 });
 
 test("a box tells its peers its agents as they change, and every ten minutes", async t => {
@@ -606,4 +603,22 @@ test("an answer that came just as the tool waiting for it stopped reaches its co
   await link.deliverLeftAnswers(now + 20_000, [target]);
   assert.equal(prompts.length, count);
   assert.equal(fs.existsSync(path.join(replies, "ltr_asked2.json")), false, "not kept either");
+});
+
+test("a conversation read by mail whose tool stopped waiting as it came is dropped, never delivered as a message", async () => {
+  fresh({ peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } });
+  const replies = path.join(run, "replies");
+  fs.mkdirSync(replies, { recursive: true });
+  // The letter that asked, as the link keeps it once the other computer has it.
+  fs.writeFileSync(path.join(replies, "ltr_read01.wait"), JSON.stringify({ from: "ses_here", to: "ses_target", text: "read", wait: true, sentTo: second.pub, read: {} }));
+  fs.writeFileSync(path.join(replies, "ltr_read01.alive"), "");
+  assert.equal(link.answered(second.peer, { answers: "ltr_read01", from: "ses_target", text: "# API\n\nEverything it said." }), true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(replies, "ltr_read01.json"), "utf8")), { text: "# API\n\nEverything it said.", read: true });
+  // Its tool stopped before it read it.
+  fs.rmSync(path.join(replies, "ltr_read01.alive"));
+  fs.writeFileSync(path.join(replies, "ltr_read01.gaveup"), "");
+  // (No engine here: one asked to take it would throw, and the answer would stay to try again.)
+  await link.deliverLeftAnswers(Date.now(), []);
+  assert.equal(fs.existsSync(path.join(replies, "ltr_read01.json")), false, "gone, not kept to deliver");
+  assert.equal(fs.existsSync(path.join(replies, "ltr_read01.gaveup")), false);
 });

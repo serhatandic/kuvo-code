@@ -36,6 +36,7 @@ struct ToolCallView: View {
     }
 
     @Environment(\.answerAgent) private var answerAgent
+    @Environment(\.workAnswers) private var workAnswers
 
     @ViewBuilder private var step: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -80,6 +81,13 @@ struct ToolCallView: View {
                 if let file {
                     Button("Copy Path") { Clipboard.copy(file.path) }
                 }
+            }
+
+            // Asked, and answered by the bot that runs this session: who, and why.
+            if let answer = workAnswers[call.id] {
+                WorkAnswerLine(answer: answer)
+                    .padding(.leading, Self.iconWidth + Self.iconGap)
+                    .padding(.top, 3)
             }
 
             if isExpanded, hasDetails {
@@ -151,7 +159,8 @@ struct ToolCallView: View {
             // One view running and done, so its ring closes as the step ends. Only a subagent's
             // step can be at work in the background, and only it says so.
             if call.name == "subagent" {
-                StepActivity(symbol: symbol, running: isWorking, size: Self.iconWidth)
+                // Open, its own steps show the work: its arc holds still.
+                StepActivity(symbol: symbol, running: isWorking, size: Self.iconWidth, holds: isExpanded)
                     .help(isAtWork ? "Working in the background" : "")
             } else {
                 StepActivity(symbol: symbol, running: isWorking, size: Self.iconWidth)
@@ -405,11 +414,16 @@ struct ToolCallView: View {
         return (RemoteFolder.fileURL(path, in: directory), isFolder)
     }
 
-    /// The session a start_session step started, once it's listed here.
+    /// The session a start_session step started, once it's listed here: by the address its result
+    /// gives, or while it waits for the session's first answer, the one started since it began.
     private var startedSession: String? {
-        guard call.name == "kuvo-browser_start_session", case .completed = call.state,
-              let id = Branches.started(byStep: outputText), app.workspace.session(id) != nil else { return nil }
-        return id
+        guard call.name == "kuvo-browser_start_session" else { return nil }
+        let id: String? = switch call.state {
+        case .completed: Branches.started(byStep: outputText)
+        case .running: Branches.started(byWaiting: call, among: app.workspace.sessions)
+        case .streaming, .failed: nil
+        }
+        return id.flatMap { app.workspace.session($0) != nil ? $0 : nil }
     }
 
     /// The session a subagent works in, once it has started.
@@ -498,6 +512,18 @@ struct SubagentSteps: View {
     @Environment(Workspace.self) private var workspace
     @State private var model: SessionModel?
 
+    /// A step of its own shows it at work (a tool running, its reply being written), so no
+    /// "Working…" under it says so twice.
+    static func showsWork(_ model: SessionModel) -> Bool {
+        guard case .assistant(let step)? = model.transcript.messages.last(where: { if case .assistant = $0 { true } else { false } }),
+              step.time.completed == nil, let block = step.content.last else { return false }
+        switch block {
+        case .text: return true
+        case .tool: return StepsRow.isUnfinished(block)
+        default: return false
+        }
+    }
+
     /// What it used, as a turn shows it: "4.2K tokens · $0.01".
     static func usage(_ model: SessionModel) -> String? {
         let steps = model.transcript.messages.compactMap { if case .assistant(let step) = $0 { step } else { nil } }
@@ -538,7 +564,8 @@ struct SubagentSteps: View {
                 }
                 // Its reply being written draws its words from it.
                 .environment(model.writing)
-                if model.isRunning {
+                // Between its steps, or waiting on its model: nothing above says it's at work.
+                if model.isRunning, !Self.showsWork(model) {
                     HStack(spacing: 8) {
                         StepActivity(symbol: nil, running: true)
                         Text("Working…")
@@ -565,5 +592,38 @@ struct SubagentSteps: View {
 extension Message.ToolState {
     var isFailure: Bool {
         if case .failed = self { true } else { false }
+    }
+}
+
+extension EnvironmentValues {
+    /// What a bot answered for the conversation's asks, by the tool call that asked (`kuvo.answers`).
+    @Entry var workAnswers: [String: WorkAnswer] = [:]
+}
+
+/// Under a step that asked: answered by the bot that runs the session, not by you ("Allowed by
+/// Pixel: the plan names the haptics package"), with its face.
+struct WorkAnswerLine: View {
+    let answer: WorkAnswer
+    @Environment(Bots.self) private var bots
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Group {
+                if let bot = bots.bot(answer.by.bot) {
+                    BotAvatar(look: bot.look, size: 14, animates: false)
+                } else {
+                    Image(systemName: answer.decision == .deny ? "xmark.circle" : "checkmark.circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
+            Text("\(Text(answer.verdict).fontWeight(.medium))\(Text(answer.reason.isEmpty ? "" : ": " + answer.reason).foregroundStyle(.secondary))")
+                .font(.system(size: 12))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .help("\(answer.verdict) at \(answer.date.formatted(date: .omitted, time: .shortened)), not by you: \(answer.reason)")
+        .accessibilityElement(children: .combine)
     }
 }

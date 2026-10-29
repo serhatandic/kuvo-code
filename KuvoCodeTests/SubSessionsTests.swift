@@ -106,7 +106,7 @@ import Testing
             session("ses_b", "The other", parent: "ses_a", created: 30, idle: 32, viewed: 4),
         ])
         await workspace.refresh()
-        #expect(workspace.hasNewSubSessions("ses_self"))
+        #expect(!workspace.hasNewSubSessions("ses_self"), "listed under itself, it isn't a sub-session of its own")
         #expect(workspace.hasNewSubSessions("ses_a"))
 
         workspace.markViewed("ses_a")

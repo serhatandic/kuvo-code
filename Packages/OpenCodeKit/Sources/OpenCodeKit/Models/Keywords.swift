@@ -48,20 +48,6 @@ public enum Keyword: String, CaseIterable, Sendable, Hashable {
         }
     }
 
-    /// What it will do, in the line under the field as it's typed. /loop's says its schedule
-    /// (`LoopCommand`), /review's its reviewer, so theirs are the client's.
-    public var hint: String {
-        switch self {
-        case .goal: "Checked after each turn. The agent keeps going until it’s met."
-        case .loop: "Repeats on a schedule."
-        case .plan: "Switches to Plan: the agent explores and plans, and changes no files."
-        case .review: "Reads the changes not committed yet with fresh eyes, and lists what it finds."
-        case .handoff: "Writes a handoff note, then carries on in a fresh conversation from it."
-        case .btw: "Answered on the side: nothing is added to this conversation."
-        case .compact: "Summarizes the conversation so far to make room in its context."
-        }
-    }
-
     /// Its mark, an SF Symbol: in the list, in place of its "/" as it's typed, and in the bubble.
     public var symbol: String {
         switch self {
@@ -189,15 +175,17 @@ public struct Handoff: Codable, Sendable, Hashable {
 
 /// What a review reads: the changes not committed yet, the branch's against its base (with those
 /// not committed yet), the commits after `from` up to `to` (git's `from..to`), or the files of a
-/// folder in the project or all of it.
+/// folder in the project, all of it, or those your words describe ("the auth module and its
+/// tests"), which the box finds: `paths` once it has.
 public enum ReviewScope: Codable, Sendable, Hashable {
     case uncommitted
     case branch(base: String?)
     case commits(from: String, to: String?)
     case folder(String)
     case project
+    case described(String, paths: [String]? = nil)
 
-    private enum Keys: String, CodingKey { case kind, base, from, to, path }
+    private enum Keys: String, CodingKey { case kind, base, from, to, path, words, paths }
 
     public init(from decoder: Decoder) throws {
         let keys = try decoder.container(keyedBy: Keys.self)
@@ -206,6 +194,7 @@ public enum ReviewScope: Codable, Sendable, Hashable {
         case "commits": self = .commits(from: try keys.decode(String.self, forKey: .from), to: try keys.decodeIfPresent(String.self, forKey: .to))
         case "folder": self = .folder(try keys.decode(String.self, forKey: .path))
         case "project": self = .project
+        case "described": self = .described(try keys.decode(String.self, forKey: .words), paths: try keys.decodeIfPresent([String].self, forKey: .paths))
         default: self = .uncommitted
         }
     }
@@ -225,6 +214,10 @@ public enum ReviewScope: Codable, Sendable, Hashable {
             try keys.encode("folder", forKey: .kind)
             try keys.encode(path, forKey: .path)
         case .project: try keys.encode("project", forKey: .kind)
+        case .described(let words, _):
+            // Only the words: the files they mean are the box's to find.
+            try keys.encode("described", forKey: .kind)
+            try keys.encode(words, forKey: .words)
         }
     }
 }
@@ -239,6 +232,7 @@ extension ReviewScope {
             from.hasSuffix("^") && to == nil ? "Commits since \(from.dropLast())" : "Commits \(from)..\(to ?? "HEAD")"
         case .folder(let path): path
         case .project: "The whole project"
+        case .described(let words, _): "“\(words)”"
         }
     }
 }
@@ -247,7 +241,7 @@ extension ReviewScope {
     /// It reads files as they are (a folder, the whole project), not changes.
     public var readsFiles: Bool {
         switch self {
-        case .folder, .project: true
+        case .folder, .project, .described: true
         default: false
         }
     }
@@ -261,6 +255,7 @@ extension ReviewScope {
             from.hasSuffix("^") && to == nil ? "the commits since \(from.dropLast())" : "the commits \(from)..\(to ?? "HEAD")"
         case .folder(let path): "the files in \(path)"
         case .project: "the whole project"
+        case .described: "the files that fit what you wrote"
         }
     }
 }
@@ -300,6 +295,8 @@ public struct ReviewChoices: Codable, Sendable, Hashable {
     public var branch: Branch?
     public var commits: [Commit]
     public var folders: [Folder]
+    /// It reads the files your words describe (`described`); nil from a box from before.
+    public var describes: Bool?
 
     public struct Branch: Codable, Sendable, Hashable {
         public var name: String
@@ -345,11 +342,12 @@ public struct ReviewChoices: Codable, Sendable, Hashable {
         }
     }
 
-    public init(repository: Bool, branch: Branch? = nil, commits: [Commit] = [], folders: [Folder] = []) {
+    public init(repository: Bool, branch: Branch? = nil, commits: [Commit] = [], folders: [Folder] = [], describes: Bool? = nil) {
         self.repository = repository
         self.branch = branch
         self.commits = commits
         self.folders = folders
+        self.describes = describes
     }
 }
 
@@ -371,7 +369,16 @@ public struct Review: Codable, Sendable, Hashable, Identifiable {
 
         /// As people write it: `src/timer.ts:88-92`.
         public var text: String {
-            file + (line.map { ":\($0)" } ?? "") + (endLine.map { "-\($0)" } ?? "")
+            file + lines
+        }
+
+        /// Its file's name and lines, for where there's no room for the path: `timer.ts:88-92`.
+        public var shortText: String {
+            (file.split(separator: "/").last.map(String.init) ?? file) + lines
+        }
+
+        private var lines: String {
+            (line.map { ":\($0)" } ?? "") + (endLine.map { "-\($0)" } ?? "")
         }
     }
     public struct Finding: Codable, Sendable, Hashable, Identifiable {
@@ -415,6 +422,46 @@ public struct Review: Codable, Sendable, Hashable, Identifiable {
     public var fix: String?
     public var started: Double
     public var ended: Double?
+    /// Its parts, each read by a reviewer of its own (nil from a box from before parts).
+    public var parts: [Part]?
+
+    /// A part of it, read by a reviewer of its own: what it reads, how it's going, and the
+    /// session it reads in, to watch it (none with the coding agents).
+    public struct Part: Codable, Sendable, Hashable, Identifiable {
+        public enum State: String, Codable, Sendable, Hashable {
+            case waiting, reading, done, failed, stopped
+            /// One a box from after this one says: as if it were done.
+            public init(from decoder: Decoder) throws {
+                self = State(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .done
+            }
+        }
+
+        public var n: Int
+        public var of: Int
+        /// Its first files (a box names 200 at most).
+        public var files: [String]
+        /// How many it reads, all of them.
+        public var fileCount: Int?
+        public var state: State
+        /// What it found.
+        public var found: Int
+        public var session: String?
+        /// What it's doing now, while it reads ("Reading src/a.ts").
+        public var now: String?
+
+        public var id: Int { n }
+
+        public init(n: Int, of: Int, files: [String], fileCount: Int? = nil, state: State, found: Int = 0, session: String? = nil, now: String? = nil) {
+            self.n = n
+            self.of = of
+            self.files = files
+            self.fileCount = fileCount
+            self.state = state
+            self.found = found
+            self.session = session
+            self.now = now
+        }
+    }
 }
 
 /// `kuvo.btw.updated`, `kuvo.review.updated` (null once put away) and `kuvo.handoff`.
@@ -485,7 +532,14 @@ extension OpenCodeAPI {
     /// when left out), read by `model` (its own when left out), looking especially at `focus`.
     public func startReview(session: String, model: ModelRef? = nil, focus: String? = nil, scope: ReviewScope? = nil) async throws -> Review {
         struct Body: Encodable { var model: ModelRef?; var focus: String?; var scope: ReviewScope? }
-        return try await client.send(try client.request("POST", "api/kuvo/reviews/\(session.pathEscaped)", body: Body(model: model, focus: focus.flatMap { $0.isEmpty ? nil : $0 }, scope: scope)), as: DataEnvelope<Review>.self).data
+        do {
+            return try await client.send(try client.request("POST", "api/kuvo/reviews/\(session.pathEscaped)", body: Body(model: model, focus: focus.flatMap { $0.isEmpty ? nil : $0 }, scope: scope)), as: DataEnvelope<Review>.self).data
+        } catch let error as ServerError where error.status == 400 {
+            // A box from before described scopes: your words are what it looks at in the changes
+            // not committed yet, as they were.
+            guard case .described(let words, _)? = scope else { throw error }
+            return try await startReview(session: session, model: model, focus: [focus, words].compactMap { $0 }.joined(separator: ": "), scope: nil)
+        }
     }
 
     /// How much a review of `scope` would read, to show before starting a big one.

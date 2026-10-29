@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import KuvoCode
 
-/// Agents writing to each other (send_message, read_conversation), sharing a bot as a .kuvobot
+/// Agents writing to each other (how a message from another reads), sharing a bot as a .kuvobot
 /// file, and parts of a group chat's work that wait on each other.
 @MainActor
 @Suite(.serialized) struct AgentMessagesTests {
@@ -24,27 +24,6 @@ import Testing
     @Test(arguments: ["[Message from · ses_abc] hi", "[Message from Ada · not-a-session] hi", "Message from Ada · ses_abc", "[Message from Ada · ses_a b] hi"])
     func yourOwnWordsArentOne(text: String) {
         #expect(AgentMail.parse(text) == nil)
-    }
-
-    /// What read_conversation gives with a query: each place with what's around it, the latest
-    /// kept when there's no room for all.
-    @Test func readingWithAQuery() {
-        let conversation = (1...30).map { "Paragraph \($0)" + ($0 % 10 == 0 ? " mentions deploy" : "") }.joined(separator: "\n\n")
-        let excerpt = AgentMail.excerpt(conversation, query: "deploy", limit: 120)
-        #expect(excerpt.hasPrefix("3 places mention \"deploy\""))
-        #expect(excerpt.contains("Paragraph 30 mentions deploy"))
-        #expect(excerpt.contains("Paragraph 29"))
-        #expect(!excerpt.contains("Paragraph 10 mentions"))
-        #expect(AgentMail.excerpt(conversation, query: "nowhere", limit: 500).hasPrefix("Nothing in it mentions"))
-    }
-
-    /// Without a query, a long conversation keeps how it began and its latest part.
-    @Test func readingALongOneWhole() {
-        let conversation = (1...200).map { "Paragraph \($0) with some words in it" }.joined(separator: "\n\n")
-        let excerpt = AgentMail.excerpt(conversation, query: nil, limit: 2000)
-        #expect(excerpt.count <= 2200)
-        #expect(excerpt.hasPrefix("Paragraph 1 "))
-        #expect(excerpt.contains("Paragraph 200 "))
     }
 
     // MARK: A bot to share

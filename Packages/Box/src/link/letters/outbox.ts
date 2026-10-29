@@ -1,6 +1,7 @@
 // The outbox: letters this box's agents leave for agents elsewhere
 // Each goes by mail to the box its agent is on, again each minute until that box says it has it
-// (or why not), for two days. A waiting tool reads its answer from `run/replies/<id>.json`.
+// (or why not), for two days; without the relay, it waits for it. A waiting tool reads its answer
+// from `run/replies/<id>.json`.
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -16,6 +17,7 @@ import { isPutAway, peerOf, readPeerAgents } from "../peers/directory";
 import { mailFor, movedOf, peersOf } from "../peers/known";
 import { bridgeAsk, giveUpSeat, ONLINE_STEP, SEAT_LETTER_LIFE, seatAge, seatRounds, sendSeatLetter } from "../peers/seats";
 import { readLink } from "../state";
+import { READ_BY_MAIL } from "./conversation";
 import { composeLetter, cutText, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, letterTries, OUTBOX, placeOfSession, SENDING } from "./letter";
 import type { Target } from "../../shared/records";
 import type { PutAwayable } from "../peers/directory";
@@ -34,6 +36,14 @@ export interface MailedLetter {
   wait: boolean;
   at: number;
   answers?: string;
+  read?: LetterRead;
+}
+
+/** A letter that asks for a conversation instead of saying something (read_conversation from another
+ * computer): its answer is the conversation, or the parts that mention `query`. Only to a box whose
+ * agents' mail says it takes them (`letters-read`). */
+export interface LetterRead {
+  query?: string;
 }
 
 /** An answer as it comes (a letter with `answers`): the letter it answers, its words, and the
@@ -50,11 +60,10 @@ export interface Delivered {
   answer?: boolean;
 }
 
-/** A letter in the outbox (`run/outbox/sending/<id>.json`, as a tool, this Mac's app or this box
- * left it): from and for which conversations, its sender's name, its words, whether a tool waits for
- * its answer, when it was left (ms), and the letter it answers; the box it's for (`peer`, an
- * answer's), the one it was last sent to (`sentTo`), and that a tool left it for the link (`via`).
- * One handed to the Mac (in `run/outbox`) is marked when (`handed`). */
+/** A letter in the outbox (`run/outbox/sending/<id>.json`, as a tool's call or this box left it):
+ * from and for which conversations, its sender's name, its words (or what it asks to read), whether
+ * a tool waits for its answer, when it was left (ms), and the letter it answers; the box it's for
+ * (`peer`), and the one it was last sent to (`sentTo`). */
 export interface OutboxLetter {
   from?: string | null;
   name?: string;
@@ -65,8 +74,7 @@ export interface OutboxLetter {
   answers?: string;
   peer?: string;
   sentTo?: string;
-  via?: "link";
-  handed?: number;
+  read?: LetterRead;
 }
 
 /** What waits in `outbox/sending/<id>.json`, as the outbox reads it: a letter, or with `seat`, a
@@ -80,6 +88,8 @@ export interface AnswerReply {
   to?: string | null;
   from?: string;
   name?: string;
+  /** A conversation read: only for the tool waiting, never a message. */
+  read?: boolean;
 }
 
 /** What a tool waiting for a letter's answer reads (`run/replies/<id>.json`, or on this Mac, its
@@ -92,6 +102,8 @@ export interface MacWaiter {
   sentTo: string | null;
   gone: () => boolean;
   done: (value: LetterReply) => void;
+  /** How much of its answer it takes (a conversation read is longer than an answer). */
+  most?: number;
 }
 
 // Senders being told of to their letters' boxes first (one made a moment ago, which those boxes
@@ -101,12 +113,10 @@ const introducing = new Map<string, number>();
 export const REPLIES = path.join(RUN, "replies");
 
 export const LETTER_BYTES = 24_000;
+// How much of an answer comes back to the agent waiting for it.
+export const ANSWER_TEXT = 8000;
 
-// Without the relay this long, this box's letters go to the Mac instead, which collects them
-// over SSH.
-export const RELAY_GONE_AFTER = 5 * 60_000;
-
-// This Mac's conversations waiting for a letter's answer, by the letter (`kuvo/link/letters`):
+// This Mac's conversations waiting for a letter's answer, by the letter (an agent's tool's call):
 // answered here, in memory, as the box takes the answer itself; once it's there, which box it went
 // to (only that one's answer counts).
 export const macWaiting = new Map<string, MacWaiter>();
@@ -117,6 +127,17 @@ function reply(id: string, value: LetterReply): void {
   try {
     fs.mkdirSync(REPLIES, { recursive: true, mode: 0o700 });
     writePrivate(path.join(REPLIES, `${id}.json`), JSON.stringify(value));
+  } catch {}
+}
+
+/** A letter whose tool stopped waiting: it goes on without waiting (its answer comes as a message),
+ * or, one that only asked to read a conversation, not at all. */
+export function givenUp(id: string): void {
+  const file = path.join(SENDING, `${id}.json`);
+  try {
+    const letter = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (isObject(letter?.read)) fs.rmSync(file, { force: true });
+    else writePrivate(file, JSON.stringify({ ...letter, wait: false }));
   } catch {}
 }
 
@@ -175,7 +196,7 @@ export function answered(sender: { key: string; name?: string }, { answers: id, 
   if (IS_MAC) {
     const waiter = macWaiting.get(id);
     if (!waiter || waiter.sentTo !== sender.key || waiter.gone()) return false;
-    waiter.done({ text: cutText(text, 8000) });
+    waiter.done({ text: cutText(text, waiter.most ?? ANSWER_TEXT) });
     return true;
   }
   const waiting = path.join(REPLIES, `${id}.wait`);
@@ -189,8 +210,13 @@ export function answered(sender: { key: string; name?: string }, { answers: id, 
   // Its sender as that box named it, when that box alone lists it.
   const told = readPeerAgents();
   const agent = peerOf(from, peersOf(readLink()), told)?.key === sender.key ? (told[sender.key]?.list ?? []).find(each => each.session === from) : null;
+  // A conversation read: for the tool alone.
+  if (letter.read) {
+    reply(id, { text: cutText(text, READ_BY_MAIL), read: true });
+    return true;
+  }
   // For the conversation that asked (as this box's letter has it, not as the answer says).
-  reply(id, { text: cutText(text, 8000), to: letter.from, from: agent ? from : "unknown", name: agent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}` });
+  reply(id, { text: cutText(text, ANSWER_TEXT), to: letter.from, from: agent ? from : "unknown", name: agent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}` });
   return true;
 }
 
@@ -206,10 +232,16 @@ export async function deliverLeftAnswers(now = Date.now(), targets: Target[] = p
     const file = path.join(REPLIES, name);
     let answer: Partial<AnswerReply> | null;
     try { answer = JSON.parse(fs.readFileSync(file, "utf8")); } catch { continue; }
-    if (typeof answer?.text !== "string" || typeof answer.to !== "string") continue;
     let alive = 0;
     try { alive = fs.statSync(path.join(REPLIES, `${id}.alive`)).mtimeMs; } catch {}
     if (!fs.existsSync(path.join(REPLIES, `${id}.gaveup`)) && now - alive <= 10_000) continue;
+    // A conversation read that came as its tool went: it just goes.
+    if (answer?.read === true) {
+      fs.rmSync(file, { force: true });
+      fs.rmSync(path.join(REPLIES, `${id}.gaveup`), { force: true });
+      continue;
+    }
+    if (typeof answer?.text !== "string" || typeof answer.to !== "string") continue;
     const taken = `${file}.delivering`;
     try { fs.renameSync(file, taken); } catch { continue; }
     try {
@@ -238,39 +270,34 @@ export function letterMail(peer: Pick<Peer, "key" | "address">, letter: MailedLe
   return null;
 }
 
-// The outbox, sent: each letter the tool left for this link (in `outbox/sending`; the Mac collects
-// the rest over SSH) goes to the box its agent is on (an answer, to the box it answers), again
-// each minute until that box says it has it (or why not), for two days. A tool that gave up
-// waiting (`replies/<id>.gaveup`) has its letter go on without waiting, and an answer that comes
-// later reaches its conversation as a message. Without the relay for a while (`offline`), letters
-// not yet sent go to the Mac instead. A group chat's letters given up are told to the coding
+// The outbox, sent: each letter left in `outbox/sending` goes to the box its agent is on (an
+// answer, to the box it answers), again each minute until that box says it has it (or why not),
+// for two days; without the relay (`offline`), they wait for it. A tool that gave up waiting
+// (`replies/<id>.gaveup`) has its letter go on without waiting, and an answer that comes later
+// reaches its conversation as a message. A group chat's letters given up are told to the coding
 // agents' bridge (`ask`); the tellings are what it returns.
 export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null = readLink(), now = Date.now(), offline = 0, ask: BridgeAsk = bridgeAsk): Promise<void[]> {
   const telling: Promise<void>[] = [];
   if (!link?.key) return Promise.all(telling);
   const peers = peersOf(link);
-  const told = readPeerAgents(undefined, undefined, link);
+  const told = readPeerAgents();
   const moved = movedOf(link);
-  // The relay back: letters given to the Mac it hasn't taken come back. (Not one a Mac took to
-  // deliver, `.mac-…`: each goes one way, by whichever renames it first.)
-  if (!offline) {
-    for (const name of listOf(OUTBOX)) {
-      if (!name.endsWith(".json") || name.startsWith(".")) continue;
-      try {
-        const letter: OutboxLetter | null = JSON.parse(fs.readFileSync(path.join(OUTBOX, name), "utf8"));
-        if (typeof letter?.handed !== "number") continue;
-        fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
-        fs.renameSync(path.join(OUTBOX, name), path.join(SENDING, name));
-      } catch {}
-    }
+  // COMPAT(beta.1 outbox): letters an older Kuvo Code left in `run/outbox` for a Mac to collect over SSH (its tools', and those its link handed over without the relay), taken on here. Goes 3 months after 0.8.0.
+  // No Mac collects them any more: they go as this link's own. (Not one a Mac took to deliver,
+  // `.mac-…`: each goes one way, by whichever renames it first.)
+  for (const name of listOf(OUTBOX)) {
+    if (!name.endsWith(".json") || name.startsWith(".")) continue;
+    try {
+      fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
+      fs.renameSync(path.join(OUTBOX, name), path.join(SENDING, name));
+    } catch {}
   }
   for (const name of listOf(REPLIES)) {
     if (!name.endsWith(".gaveup")) continue;
     const id = name.slice(0, -7);
     fs.rmSync(path.join(REPLIES, name), { force: true });
     fs.rmSync(path.join(REPLIES, `${id}.wait`), { force: true });
-    const file = path.join(SENDING, `${id}.json`);
-    try { writePrivate(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), wait: false })); } catch {}
+    givenUp(id);
   }
   const listed = new Set<string>();
   // Oldest first, as they were left.
@@ -321,17 +348,6 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
     }
     // No box lists its agent now (lists change as boxes come and go): it waits.
     if (!peer) continue;
-    // No relay for a while: one never sent goes to the Mac, which takes it on over SSH (on a
-    // machine: this Mac's box waits for the relay).
-    if (!IS_MAC && offline > RELAY_GONE_AFTER && !letter.sentTo && !letter.answers) {
-      try {
-        const { via, sentTo, peer: _, ...rest } = letter;
-        writePrivate(path.join(OUTBOX, `${id}.json`), JSON.stringify({ ...rest, wait: false, handed: now }));
-        fs.rmSync(file, { force: true });
-        if (letter.wait === true) reply(id, { note: "Your other computers can't be reached through the relay now: it goes through your Mac instead, and its answer comes to you as a message." });
-      } catch {}
-      continue;
-    }
     if (offline || now - (letterTries.get(id) ?? 0) < 60_000) continue;
     // Its sender, told of to that box first, so it's taken for one of this box's agents.
     if (letter.from && !toldPeers.get(peer.key)?.sessions?.has(letter.from) && !introducing.has(id)) {
@@ -341,7 +357,7 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
     }
     letterTries.set(id, now);
     const bytes = letterMail(peer, { id, from: letter.from, to: letter.to, text: cutText(letter.text), wait: letter.wait === true, at: made,
-      ...(letter.answers ? { answers: letter.answers } : {}) }, link, now);
+      ...(letter.answers ? { answers: letter.answers } : {}), ...(isObject(letter.read) ? { read: typeof letter.read.query === "string" ? { query: letter.read.query } : {} } : {}) }, link, now);
     if (!bytes) {
       fs.rmSync(file, { force: true });
       if (letter.wait === true) reply(id, { failed: "It's too long to send." });

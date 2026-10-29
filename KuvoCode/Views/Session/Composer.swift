@@ -177,7 +177,7 @@ struct Composer: View {
                 Menu {
                     Button("Discard Comments", role: .destructive, action: onDiscardComments)
                 } label: {
-                    Label(commentCount.counting("comment"), systemImage: "text.bubble")
+                    Text(commentCount.counting("comment"))
                         .font(.system(size: 12, weight: .medium))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
@@ -294,12 +294,7 @@ struct Composer: View {
                     .frame(height: ceil(min(max(voiceHeight, line), line * 12)))
                 }
             }
-            if keywordHint != nil {
-                // Read again each minute: /loop's says when it first sends.
-                TimelineView(.everyMinute) { _ in
-                    if let keywordHint { KeywordHint(text: keywordHint.text, isProblem: keywordHint.isProblem) }
-                }
-            }
+            if let keywordProblem { KeywordProblem(text: keywordProblem) }
 
             if let voice = listening {
                 // The chips make way for the voice: how long, how loud, Cancel and Done.
@@ -388,7 +383,7 @@ struct Composer: View {
             // now, where you type.
             let left = old ?? "new:" + (folders.first ?? "")
             if app.dictation.isListening(for: left) {
-                if app.dictation.voice?.phase == .listening { app.dictation.finish() } else { app.dictation.cancel() }
+                if app.dictation.voice?.phase == .listening || app.dictation.voice?.keepsWords == true { app.dictation.finish() } else { app.dictation.cancel() }
             }
             app.dictation.withdraw(left)
             if fieldHasKeyboard { offerVoice() }
@@ -555,10 +550,11 @@ struct Composer: View {
 
     private var placeholder: String {
         if let prompt { return prompt }
-        if isRunning { return "Add to the task, or ⌘↩ to queue a follow-up…" }
+        // ⌘↩ to queue instead is in the send button's help.
+        if isRunning { return "Add to the task…" }
         if let bot { return bot.job.isEmpty ? "Tell \(bot.name) its job…" : "Message \(bot.name)…" }
-        if folders.first.map(Workspace.isChat) == true { return "Ask anything…" }
-        return agent == "plan" ? "Ask the agent to plan something…" : "Ask the agent to build, fix or explain something…"
+        // The mode is named beside it, so it isn't said again here.
+        return "Ask anything…"
     }
 
     /// Where what's said goes: this composer's session, or a new session's draft.
@@ -583,18 +579,7 @@ struct Composer: View {
 
     /// Talk instead of typing: what you say goes after what's written, and nothing is sent.
     private var voiceButton: some View {
-        Button(action: startVoice) {
-            Image(systemName: "mic")
-                .font(.system(size: 14, weight: .medium))
-                .frame(width: 30, height: 28)
-                .overlay { MicRing(model: .shared) }
-                .hoverHighlight(in: Capsule(), mutesInk: true)
-        }
-        .buttonStyle(.plain)
-        .clickablePointer()
-        .help(["Talk Instead of Typing (⇧⌘Space)", MicRing.words(.shared)].compactMap(\.self).joined(separator: "\n"))
-        .accessibilityLabel("Voice Input")
-        .accessibilityValue(MicRing.words(.shared) ?? "")
+        MicButton(owner: voiceOwner, start: startVoice)
     }
 
     private func startVoice() {
@@ -698,33 +683,12 @@ struct Composer: View {
         return rest.allSatisfy(\.isWhitespace) ? keyword.argument : nil
     }
 
-    /// Under the field while a keyword is typed: what it will do. /loop's reads its schedule back
-    /// (or says it can't), /review's names who reads the changes.
-    private var keywordHint: (text: String, isProblem: Bool)? {
-        guard let (keyword, rest) = typedKeyword, commandMatches == nil else { return nil }
-        switch keyword {
-        case .loop:
-            let command = LoopCommand(rest)
-            guard let schedule = command.schedule else {
-                if loopChoices != nil || customLoop { return ("Pick how often, then write what to do each time.", false) }
-                return ("Can’t tell how often from that. Start with one like “every 30 min” or “weekdays at 9”.", true)
-            }
-            // Where it runs only when it isn't this Mac.
-            let place = folders.first.flatMap(RemoteFolder.machine(of:)).map { " · on \($0)" } ?? ""
-            // A wake-up sends words: what's attached goes with the first message, or stays.
-            let attached = files.isEmpty ? "" : schedule.keepsTimeOfDay ? " · attachments stay here" : " · attachments go with the first one only"
-            return ("\(schedule.title) · \(schedule.firstPhrase(now: .now))\(place)\(attached)", false)
-        case .review:
-            let command = reviewCommand(rest)
-            if let searching = command.searching {
-                return (searching.isEmpty ? "Write a model’s name after “with”." : "Finish the model’s name, or pick it from the list.", false)
-            }
-            let reader = command.reader?.name ?? currentModel?.name ?? "The conversation’s model"
-            if let hint = ReviewList.hint(command, listed: reviewList != nil, reader: reader, isAgent: isAgentConversation) { return (hint, false) }
-            return (ReviewList.summary(command, reader: reader), false)
-        default:
-            return (keyword.hint, false)
-        }
+    /// Under the field while a keyword is typed: only what's wrong with it (a /loop whose "how
+    /// often" can't be read); keywords explain nothing there.
+    private var keywordProblem: String? {
+        guard let (keyword, rest) = typedKeyword, commandMatches == nil, keyword == .loop, loopChoices == nil, !customLoop,
+              LoopCommand(rest).schedule == nil else { return nil }
+        return "Can’t tell how often from that. Start with one like “every 30 min” or “weekdays at 9”."
     }
 
     /// "/review"'s reading of what follows it, against this conversation's models.
@@ -809,6 +773,11 @@ struct Composer: View {
         case .start(let words):
             text = (head + words).trimmingCharacters(in: .whitespaces)
             send()
+        case .ownWords:
+            // Something else…: what to review, in your own words, after what's there.
+            text = head
+            dismissedReviewList = "What to review"
+            focusAtEnd()
         }
     }
 
@@ -1070,36 +1039,42 @@ struct ComposerSurface: ViewModifier {
 
 extension View {
     /// What's over a conversation's end (the composer and the cards over it): the conversation
-    /// scrolls on under it, fading out there in the card's own color, as it does under the card's
-    /// header. An inset rather than a bar: a bar gets AppKit's scroll edge effect, which replays the
+    /// scrolls on under it, out of sight there in the card's own color, and fades out just above
+    /// it (`ConversationEndFade`, which `ConversationScroll` draws under its scroll-to-end button).
+    /// An inset rather than a bar: a bar gets AppKit's scroll edge effect, which replays the
     /// window's background, not the card's, and drew a lighter band with a line across the card.
     func conversationBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
         scrollEdgeEffectHidden(true, for: .bottom)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bar()
                     .frame(maxWidth: .infinity)
-                    // From just above it, below the scroll-to-end button (`ConversationScroll`).
-                    .background { ConversationBarFade().padding(.top, -12) }
+                    .background { ConversationEndFade.Fill() }
             }
     }
 }
 
-private struct ConversationBarFade: View {
-    @Environment(\.colorScheme) private var scheme
-    @Environment(\.cardIsFocused) private var cardIsFocused
+/// The conversation fading out into the card's color above what's over its end, eased so no
+/// edge shows, over the room under the last message (so nothing is faded at the end).
+struct ConversationEndFade: View {
+    static let height: CGFloat = 32
 
     var body: some View {
-        Surface.cardFill(scheme, focused: cardIsFocused)
-            .mask {
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 12)
-                    Color.black
-                }
-            }
-            .animation(.ui, value: cardIsFocused)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+        Fill()
+            .mask { LinearGradient(stops: Surface.easedFade(.black), startPoint: .top, endPoint: .bottom) }
+            .frame(height: Self.height)
+    }
+
+    /// The card's color, under what's over the conversation's end.
+    struct Fill: View {
+        @Environment(\.colorScheme) private var scheme
+        @Environment(\.cardIsFocused) private var cardIsFocused
+
+        var body: some View {
+            Surface.cardFill(scheme, focused: cardIsFocused)
+                .animation(.ui, value: cardIsFocused)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 }
 
@@ -1204,11 +1179,9 @@ private struct ShellModeLabel: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "terminal")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.tint)
             Text("Shell")
                 .fontWeight(.medium)
+                .foregroundStyle(.tint)
             Text("runs \(place)")
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

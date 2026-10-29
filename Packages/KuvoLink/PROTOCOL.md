@@ -207,9 +207,7 @@ connection.
 - **Who**: each of a box's Macs' peers documents ("Documents") names its boxes: that Mac, and its
   machines whose bridge signs (`id`, the machine's name on that Mac). A box's peers are every box
   they name, itself left out, whoever passed the document on. Only a Mac says who a box's peers
-  are. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`, and the
-  peers document carries `moved`: conversations being moved, by the key of the computer each lives
-  on now (the one it left may still list it until it's let go).
+  are. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`.
 - **Mail**: a box opens mail from its Macs and its peers, and drops the rest. Every mail has `at`
   (milliseconds). A sealed mail frame is at most 65,600 bytes, and one larger isn't sent: letters'
   words and lists are cut to fit.
@@ -229,23 +227,27 @@ connection.
     app did before): its own agents are its bots and its engine's and coding agents' sessions, its
     `features` as its app gives them (`kuvo/link/config`), and it writes `box/run/agents.json`
     (what its group chats name with `&`).
-  - A moved session is the computer's a Mac says it lives on. A session listed by more than one
-    peer is the Mac's when a Mac lists it, and otherwise nobody's.
+  - Each box leaves out what doesn't live there (`kuvo/moves`' `away`), and its mail says what it
+    moved away in the last two days: `agents.moved: [{session, key, at}]`, `key` the box each lives
+    on now. A moved session is the box's that the box that moved it names (the newest word in the
+    last two days, this box's own too, a peer's only while it's a peer and never of this box's own
+    conversations); then the one a Mac's peers document says (`moved`, for 0.8.0-beta.1). A session
+    listed by more than one peer is the Mac's when a Mac lists it, and otherwise nobody's.
   - A Mac connected over SSH writes its list to `run/mac-agents.json` (`{key, at, list}`), which
     the bridge takes when it's newer than the Mac's mail. That list also names the agents of its
     machines whose bridge doesn't talk to peers, each with its `machine`, whose letters the Mac
     takes on over SSH (by mail, before bridge 0.9.63, too).
 - **Personalities**: each box's view is a document ("Documents"); a box meets a peer's with its
   own, and its bots whose personality changed are told what they are now.
-- **Letters**: `{"letter": {id, from, to, text, wait, at, answers?}}` goes to the box that listed
-  `to`.
+- **Letters**: `{"letter": {id, from, to, text, wait, at, answers?, read?}}` goes to the box that
+  listed `to`.
   - **Checks**: the receiver drops a letter older than a day. It delivers each `id` once (ids
     remembered two days, noted once delivered), at most 20 in ten minutes from a box, and only
     to a conversation an agent could be. A subagent's, a group chat's seat or one put away doesn't
     take letters. One it can't look up now (its engine starting) is answered `retry`, and so is one
     for a conversation moving to or from another computer now, or that lives on another one now
-    (`moved`): it reaches it where it lives once the move is over (bridge 0.9.63). This Mac's box
-    asks its app whether one of its conversations is moving (`link/moving`).
+    (`moved`): it reaches it where it lives once the move is over (bridge 0.9.63). A box knows by
+    its own moves (`kuvo/moves`; bridge 0.9.108, before which this Mac's box asked its app).
   - **Sender**: it names the sender as the sending box named that agent, when that box alone
     lists `from` and it isn't one of the receiver's own conversations. Otherwise the letter is from
     "an agent on <box>", with no address to answer.
@@ -257,28 +259,32 @@ connection.
     tool; otherwise it reaches the sender's conversation as a message.
   - **Sender side**: a sender takes `delivered` only from the box it sent to, and an answer for a
     waiting tool only from that box. Until `delivered` comes, it sends again each minute, for two
-    days, oldest first, and a letter whose agent no box lists now waits. One for a conversation a
-    Mac says moved (`moved`) goes where it lives now, whichever box it was left for. Before a
+    days, oldest first, and a letter whose agent no box lists now waits. One for a conversation that
+    moved (`moved`) goes where it lives now, whichever box it was left for. Before a
     letter goes, its sender is told of to that box, if it wasn't. Its words are cut on a character's
     boundary.
-- **On this Mac**: its app's conversations' letters for an agent on another computer go to its box
-  (`kuvo/link/letters`), which leaves each in its own `run/outbox/sending` and sends it as below;
-  a waiting one is answered as the route's answer. The box never hands its letters to anyone over
-  SSH: without the relay, they wait for it.
-- **On a machine**: `send_message` leaves a letter for a peer's agent in
-  `run/outbox/sending/<id>.json`, which the bridge sends, and others in `run/outbox` for the Mac
-  to collect over SSH.
-  - A subagent writes as its conversation.
-  - A waiting tool reads `run/replies/<id>.json` (`{text}`, `{failed}` or `{note}`), and touches
-    `<id>.alive` as it looks. An answer that comes once it isn't is delivered as a message, and so
-    is one it was given but never took (its turn stopped as the answer came): once the tool's gone
-    (`<id>.gaveup`, or `<id>.alive` ten seconds old), once (bridge 0.9.63).
-  - After eleven minutes, or its turn stopped, the tool leaves `<id>.gaveup`, and its letter goes on
-    without waiting.
-  - With no relay for five minutes, letters not yet sent move to `run/outbox` for the Mac, marked
-    `handed`. Once the relay is back, those the Mac hasn't connected to take since come back.
-  - The Mac takes each letter in `run/outbox` by renaming it `.mac-<name>` before it reads it,
-    and puts back the ones it couldn't deliver, so a letter goes one way only.
+  - **`read`** `{query?}` (bridge 0.9.100, to a peer whose `features` say `letters-read`): the
+    letter asks for `to`'s conversation instead of saying something (`read_conversation` from
+    another computer), with `wait` and a `from` to answer. The receiver checks it as any letter
+    (not a subagent's, a seat, or one put away) but doesn't count it, says it's there, and sends
+    back the conversation as `read_conversation` words it (or the parts that mention `query`),
+    about 20,000 characters at most, as an answer that also carries `read: {}`. An answer with
+    `read` that no tool waits for any more is dropped, never delivered as a message.
+- **Leaving one**: an agent's `send_message` or `read_conversation` for an agent on another
+  computer ("Agents' tools") leaves a letter in `run/outbox/sending/<id>.json`, which the link
+  sends. Without the relay, letters wait for it: no box hands them to anyone over SSH (bridge
+  0.9.100; before, a machine handed them to its Mac after five minutes).
+  - On this Mac, the box answering the tool is the one on the relay: it waits for the answer in
+    memory, up to eleven minutes, while the tool's request is open.
+  - On a machine, the tool's call is answered by a process of its own (`box route`): it reads
+    `run/replies/<id>.json` (`{text}`, `{failed}` or `{note}`), and touches `<id>.alive` as it
+    looks. An answer that comes once it isn't is delivered as a message, and so is one it was given
+    but never took (its turn stopped as the answer came): once the tool's gone (`<id>.gaveup`, or
+    `<id>.alive` ten seconds old), once (bridge 0.9.63). After eleven minutes, or stopped, it leaves
+    `<id>.gaveup`, and its letter goes on without waiting. The link notes `run/relay-down` while
+    it's been off the relay half a minute, so a tool says so at once rather than wait.
+  - Letters an older Kuvo Code left in `run/outbox` for a Mac to collect over SSH are taken on by
+    the link as its own (not one a Mac renamed `.mac-<name>` to deliver).
 - **Group chats**: a chat lives on one box (its host) and runs there. A member that lives on
   another box (its home, a peer whose `features` say `groups.seats`) takes its turn there, in a
   seat of the home's own, and does its part of the work and remembers the chat in its own
@@ -367,6 +373,291 @@ connection.
   forgets its documents, the peers only it named and what they told it, and leaves other Macs'
   alone. A Mac that can't reach the machine names it in its peers document's `left`, and mails it
   that document once; one that never gets it lets that Mac go after 30 days ("Paired phones").
+
+### kuvo/moves
+
+Move to Computer (bridge 0.9.108, feature `moves`): a bot, a chat or a group chat goes whole to
+another of your computers, the boxes doing it between themselves over peer mail ("Peers", `move`).
+A client asks the box it lives on once, and watches; the move goes on with no client there.
+
+- `GET kuvo/moves/places?kind=bot|chat|group&id=…` → `200 {places: [{key, name, kind, ok, why?}]}`:
+  each of your other computers (its box's key, its name, `mac` or `machine`), and whether it can go
+  there now, with why not in words to show (it works in a project, talks with a coding agent, is in
+  a group chat that lives here with its bots, is moving already; that computer's box is from before
+  moves, as the `features` its agents' mail last gave say). `404 {message}` when it isn't here.
+  A group chat's places say `ok` for every computer: the one it goes to checks its bots live there.
+- `POST kuvo/moves {kind, id, to}` (`to`: the box's key, as `places` gives it) answers once the move
+  ends: `200 {move}` (it lives there now); `409 {message}` refused or taken back, as it was (working,
+  messages still on their way, kept getting messages while it moved, too big, refused there);
+  `503 {message}` the other computer didn't answer; `404 {message}` it isn't here, or that isn't one
+  of your computers. A client that goes doesn't stop it.
+- `GET kuvo/moves` → `200 {moves: [Move], away: [session]}`, and `GET kuvo/moves/events`, the same
+  as a line now and each time it changes. `Move = {id, kind, thing, name, from, to, role, stage,
+  sessions, sent?, size?}`: `from` and `to` are boxes' keys; `role`, whether this box is where it
+  was (`from`) or where it's going (`to`); `stage`: `holding`, `copying`, `switching`,
+  `finishing`; `sessions`, its conversations, root first; `sent` and `size`, bytes, while its copy
+  is on its way. `away`: conversations this box's engine lists that don't live here (a copy not
+  switched to yet, an original still going): clients leave them out.
+- While it moves, nothing reaches it: a prompt to one of its conversations through the link answers
+  `409 {message}`, a letter `retry`, its wake-ups and watches are held (`paused` says `moving`), and
+  changing or deleting the bot answers `409`. A client shows it as moving.
+
+Between the boxes, each `{"move": {op, id, …}}` (`id`: `mov_…`), each step sent again each minute
+until it's answered:
+
+1. The box it leaves holds it, waits until its conversations are settled (no turn running, nothing
+   in their inbox; a minute at most), and packs one file: `move.json` (its conversations as the
+   engine exports them, root first; a bot's own keys; a group chat as its bridge held it, `POST
+   api/kuvo/groups/<id>/hold`) and its folder (a bot's; a chat's wake-ups'), tar, gzip; at most 1 GB.
+2. `offer {kind, thing, name, size, hash, wasPaused, pausedAs?, from, members?}` → `ready`, or
+   `refused {message}`: its engine or group chats aren't running, too big, a group chat's bots
+   (`members`) don't all live on that machine, one by that ID lives there already, or a move of it
+   is under way (only the computer whose move it is can offer it again). A first offer unanswered
+   for 30 seconds: the other computer isn't there (503). While it moves, its folder's `paused` says
+   `moving`; what it said before (your own pause) is `pausedAs`, put back where it lives after.
+3. `part {hash, i, of, d}` (30,000 bytes each, base64url), 16 on their way at once, each answered
+   `got {i}`; one unanswered for 20 seconds goes again. The box it goes to notes each part as it
+   comes (beside the bundle), so one it gets after starting again counts those before.
+4. Once all are there and its SHA-256 matches, the box it goes to puts it in place, held, in the
+   move's turn (a step about it that comes meanwhile waits), saying `working` now and each minute
+   until it's done: the folder where it keeps them (only files and folders: a link or anything else
+   in it or for it, or a `move.json` that isn't a file of its own, and it's refused), `paused` saying `moving`,
+   a chat's `directory` its chats folder; each conversation imported under its own ID (noted first;
+   they must be one conversation and its subagents', rooted at the chat or at the conversation a
+   bot's folder names, none of them on this box already); a bot's keys given; a group chat put there
+   held (`PUT api/kuvo/groups/<id>`, `status: "held"`). → `arrived`, or `failed {message}`, what it
+   set up gone again; the message says only what's wrong with what came, never what this box found.
+   Setting it up for 30 minutes (its engine stuck) is given up on the same way.
+5. The box it leaves settles and reads it again. Anything new, and it all goes again (from 1, three
+   tries; then 409, `busy`).
+6. It notes the switch, and sends `switch` → `switched`: the box it went to lets its wake-ups go (as
+   they were), starts a group chat (`activate`), and tells a bot what it is (as
+   `kuvo/bots/<id>/arrived` does).
+7. Then the box it left lets the original go: its conversation saved in its folder (or
+   `moved-<id>` in the box's folder) as `conversation.json`, its conversations deleted, a bot's own
+   keys removed, the folder to Kuvo Code's trash (on a Mac, on to the Finder's Trash), a group chat
+   released. It says for two days where those conversations live now ("Peers", `moved`).
+
+Each move's steps are taken one at a time on each box, in the order they come. The box it goes to
+sets a copy up once, whatever parts come again, and lets go of what it set up if setting it up
+fails. It keeps how each move that came to it ended, a dropped one for a week and a switched one
+for a year: a `switch` is answered `switched`
+only for a copy it has whole or switched to already, and `dropped` for any other (one it let go
+of, never set up, or doesn't know), and the box it left then goes on with its original, as it was.
+Before the switch, anything that goes wrong takes it back: the box it leaves sends `drop` →
+`dropped` (the copy there goes: its conversations, keys and folder, a group chat released) and
+goes on as it was. After it, only forward. Each box keeps its moves in `run/moves/<id>.json` (and
+the bundle beside it), so a move cut short by a restart carries on: one that switched finishes, one
+that didn't is taken back. Letting the original go after `switched` is tried again each minute
+until it's done (its engine was down); its engine, up, refusing to give its conversation to keep ten
+times, it goes on here as well, said in the move's 409 (two copies, never none). Before the switch, the other computer quiet about it for
+ten minutes takes it back (503); a `drop` never answered is given up after a day (the copy there
+goes by itself after a week). A `switch` with no answer either way for ten minutes turns into a
+`drop`, sent until it's answered: `switched` (it did switch) and the original goes, `dropped` and
+it goes on here; the box it leaves never lets its original go without `switched`. A held copy no
+box asks about for a week goes. One thing moves once at a time, whoever asks (a lock in
+`run/moves`), and a move taken back keeps no bundle. A peer gone from your computers for five
+minutes (not one left out a moment as they're read again) ends its moves: what's here goes back as
+it was (a copy that came, or an original, switching or not), and only one that heard `switched`
+finishes. So a peer removed after it switched but before its `switched` came leaves the original
+going on here as well as the copy there: two copies, never none. As a box starts, a `moving` hold no move of its own made (a released Mac's move cut
+short) is lifted.
+
+### Agents' tools
+
+Every box answers its agents' tools for writing to each other and starting sessions itself, the
+same on every computer (bridge 0.9.100). The tool servers (this Mac's app, a machine's
+`kuvo-browser.js`) only pass a call on; a machine's through `kuvo-link.js box route`, a process of
+its own, which a `SIGTERM` stops waiting.
+
+- **`POST kuvo/agent-tools`** `{name, arguments, session}` → `{text, isError}`: `name` is
+  `list_agents`, `send_message`, `read_conversation` or `start_session`, `arguments` the tool's,
+  `session` the conversation calling (as the engine names it; null outside one). The answer is the
+  tool's own words. One that waits for an answer holds the request up to eleven minutes; the
+  request going stops the wait, and an answer that comes later reaches the conversation as a
+  message. 400 for another `name`.
+  - A subagent, and a coding agent's engine run (`kuvo.engineFor`), act as their conversation: its
+    name, folder, model, approval, and where answers go. A group chat's seat may only list and read.
+  - Who there is: the box's own agents and its peers' (as `run/agents.json` has them), and any
+    conversation here named by its address. An agent is named by its address or its name (any case
+    or accents, with or without `&`).
+  - An agent here gets the message straight from the box; one on another computer by a letter
+    ("Peers"). Without a conversation to answer, or off the relay, a letter isn't waited for.
+    `read_conversation` reads one here, or asks a peer with `letters-read` for it by letter.
+- **`POST kuvo/sessions`** `{task, title?, folder? | project? | chat?, worktree?, model?, effort?,
+  mode?, approval?, wake?, startedBy?, wait? = false}` →
+  `{session, title, folder, project, answer?}` (`project` null for a chat; `answer` with
+  `wait`, its first answer in ten minutes, else null). `start_session` is this route, from the
+  calling conversation.
+  - From a conversation (`startedBy`, its root found as above): in its folder unless `folder` names
+    another (a bot's own folder is its chats), on its model and in its mode (Plan stays Plan) unless `model`, `effort` or `mode` names another, on the engine or coding agents' bridge
+    it runs on, with its approval made again with this box's Settings › Permissions (Ask First isn't
+    got around), its metadata `kuvo: {startedBy}` (it opens nothing by itself: clients list it under that
+    conversation), and the task as a message from it.
+  - From a client (no `startedBy`): in `folder`, approved as Approve All with Settings ›
+    Permissions, the task as the user's own first message.
+  - Either way its project's other folders are allowed to it and named in its instructions, one in
+    a worktree is told so, and a folder that's no project yet becomes one.
+  - 400 `{message}` (no task, not a folder here), 403 (a group chat's seat), 404 (`startedBy`
+    isn't a conversation here), 429 (too many lately), 502 `{message, session?}` (not made, or
+    made but its task didn't reach it), 503 (no engine).
+  - Where and how, each optional (bridge 0.9.106, "Work"): `project` (a project's name or folder
+    here) or `chat: true` instead of `folder`; `worktree: true`, a worktree of its project on a
+    branch of its own; `model` (`"provider/model"` or `{providerID, id}`, one there's an account for
+    here, on the engine or the coding agents' bridge as it runs) and `effort` (one of its variants);
+    `mode` `build` or `plan`; `approval` `ask` or `approveAll`, never above the starter's (a starter
+    that asks first starts one that does too); `wake` (`finished`, `asks`, `both`, `none`), what the
+    starter hears of it. `computer` other than this one: 400, for now.
+  - Unknown fields are ignored, so a newer client can send more to an older box.
+- **Limits**: one table on the box (`letters/limits.ts`): a conversation sends 20 messages in ten
+  minutes and starts 6 sessions in ten minutes at most, and letters from one peer count as one
+  sender. A bot's work is its own to size: only the limits you set for it hold ("Work"), and a net
+  of 40 sessions in ten minutes, counted for the bot and every session under it, stops a runaway. What each did lately is kept in `run/tool-limits.json`, so calls answered by separate
+  processes count together. A tool's call from no conversation this box has counts as one sender,
+  `outside` (its session asks first, and its task can't be answered); a session started by a
+  client (`kuvo/sessions` without `startedBy`) isn't counted.
+
+### The queue
+
+What you send a session waits in the engine's inbox (bridge 0.9.100): for the agent's next step
+(`steer`), or for the run to end (`queue`). The engine doesn't start the next one after every run,
+so every box carries its sessions' queues itself (the engine's and the coding agents' bridge's),
+the same for every client and with none connected, and keeps them in `run/queues.json`.
+
+- **Goes on**: a run that ends well, or a message queued while nothing runs, is followed a moment
+  later (1.5 s) by the next waiting message, unless the queue is paused: what Stop held, in its
+  order, then one for the next step (by resuming), then the queue, first queued first (by steering
+  it). A run the engine ended itself (`superseded`, `inactivity`) goes on the same way, and so do
+  the latest sessions' queues when a box starts again (or its stream comes back) beside the same
+  engine, for a run that ended while it couldn't hear (one that was stopped or failed, its newest
+  answer ending in an error, is held and paused instead).
+- **Pauses**: Stop, from any client (the box's `stop`, or an interrupt a client sent the engine
+  itself: with no run started again a moment later, as Send Now's resume does at once; while the
+  session still says it's at work, looked at again, a few times); a run that failed; and a queue
+  found with nothing running once the engine started anew (each engine process looked over once,
+  as `run/queues-scanned.json` keeps, so a box that starts again beside it doesn't). Each holds
+  what was for the next step in the queue, ahead of what was queued, the latest first: only what's
+  still waiting once it's moved there. A message you write to go now (`steer`) unpauses it;
+  another agent's letter, a wake-up or a note doesn't. A Resume or Send Now just after an interrupt
+  wins over the look at it. Once nothing waits, nothing's paused.
+- `GET kuvo/sessions/<id>/queue` → `{paused, held: [inboxID…]}`; `GET kuvo/sessions/queues/events`
+  follows them all (ndjson: `{"queues": {<session>: {paused, held}}}` now and at each change; a
+  session neither paused nor holding anything is left out).
+- `POST kuvo/sessions/<id>/stop`: held and paused, then the run stopped. `POST …/queue/hold` (`{items?}`):
+  held and paused without stopping (before an undo, or a move); `items`, messages a client held
+  as they went to the engine, go first, in that order. `POST …/queue/resume`: unpaused, and the
+  next one goes now. `POST …/queue/<item>/now` (Send Now): unpaused, the item steered, and a run
+  under way stopped to go on with it; 404 when it isn't waiting. Each answers the queue as it is
+  now; 404 for no such session here, 503 with no engine, 502 when the engine refused.
+- Clients show what's held and whether it's paused from these; the in-flight record of a message
+  still on its way (and that Stop held it) stays with the client that sends it, which waits for its
+  request before it asks the box to stop, and for its hold before it asks the box to resume.
+- A box without `queue` in its features (its update didn't get through): each client carries that
+  box's queues itself, as clients did before.
+
+### Work
+
+A bot runs sessions as you would (bridge 0.9.106): it starts them in your projects on the model,
+effort, mode and approval it picks, hears when they finish or ask, answers what they ask within
+what it may do itself, and stops them. Every box does this alike, with no client connected; every
+client shows it from the same routes.
+
+- **Marked as its work**: a session a bot starts, and every one under it, has metadata
+  `kuvo: {startedBy, by: {bot, name}, depth, wake?}`: the bot it works for, how deep it is
+  (1 for one the bot started), and what its starter hears of it (a bot: both, or only its asks
+  when it waited for the answer). What a starter hears is gathered a few seconds and sent as one
+  message (an ask to be read at its next step), kept in `run/work/wakes.json` until it's sent. Clients mark rows by `kuvo.by`.
+  Its task ends with the session's half of the playbook: review your work with reviewer subagents,
+  fix what they find, and end with a short report.
+- **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
+  `list_sessions` (each with where it stands: working, asking and what, with the ask's id,
+  finished, failed, stopped; its model, tokens and last reply's first lines), `stop_session`
+  (`{session, archive?}`; only one of its own), `answer_ask` (`{session, ask, decision: allow|deny,
+  reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
+  an account for here, `provider/model`, with their efforts).
+- **Answering asks, until the sandbox** (`work/policy.ts`): reading a command can't be made
+  airtight, so until sessions run in the sandbox a bot answers only two kinds of ask, judged by
+  the tool call itself (its whole input, found by the ask's `source`: never only what the ask
+  lists, which leaves out a command's `cd` and the folder it runs in), and only where it could go
+  ahead itself, part by part (the engine's rules for its own conversation allow each: the engine's
+  defaults, Settings › Permissions, then the conversation's own):
+  - Making or changing a source or text file inside the session's folder (its project's other
+    folders too), by a tool that edits (never another tool asked as an edit), never a folder:
+    only by its extension from a known list (code, styles, Markdown, data), its path
+    written plainly (letters, digits, `.`, `_`, `-`, `/`), no part hidden (starting with `.`), no
+    `..`, nothing reached through a link, never a name a later command runs or reads as settings
+    (`package.json`, `tsconfig.json`, `opencode.json`, `*.config.*`, `build.rs`, `Package.swift`…,
+    compared without case, as macOS does), never your keys and sign-ins.
+  - A few commands that read: `ls`, `cat`, `head`, `tail`, `wc`, and `git status`, `diff` and `log`
+    (only where the folder is its repository's own top level), each with a few options, run in the
+    session's folder (a `workdir` elsewhere goes to the user); the line printable ASCII, every part
+    one of those, paths written plainly as above. No redirects, patterns of files, settings before
+    it, `cd`, `pushd` or `popd`, nor anything a shell expands or runs besides.
+  - Everything else goes to the user: reading through the engine, building, testing, installing,
+    changing files from the shell, git that changes anything, fetching, integrations' tools. It may
+    always deny, with its reason passed on.
+  - What it can't close, until the sandbox:
+    - An edit it allowed, then a run the user allows later, runs what was edited: source reaches
+      `cargo build` and `swift build`, macros, and test runs. Each ask is judged alone, so the user
+      allowing a build or a test run allows the project's code as it is then.
+    - A file can change between the check and the run, and a hard link looks like any file.
+    - git follows the diff, textconv and LFS settings the user already has.
+  Each answer is kept on the session, `kuvo.answers: [{ask, call?, what, decision, reason, by:
+  {bot?, name}, at}]` (the latest 40), where clients show it on the ask's tool call ("Allowed by
+  Pixel") and in the bot's work.
+- **Limits you set** (Edit Bot › Work; `PATCH kuvo/bots/<id>` `{work: {limits}}`, null for none;
+  `limits` in `kuvo/bots`): `atOnce` (its sessions working at once), `perDay` (started since
+  midnight, archived ones too), `depth`, `tokensPerDay` (of the sessions started today). None until you set one; past one, `start_session` refuses
+  with words saying which.
+- **`GET kuvo/work?bot=<id>`** → `{bot, sessions: [{session, title, folder, project?, startedBy,
+  depth, model?, mode?, state, asks?, started, tokens, cost?, lastReply?}], answered: [answer with
+  its session], today: {started, working, tokens, cost?}, limits}`: its sessions the latest first,
+  archived ones left out. 400 without `bot`, 404 for no such bot here, 503 with no engine.
+- **`GET kuvo/work/events`** (ndjson): `{"changed": {<bot>: <ms>}}` now and at each change to a
+  bot's work (a session started, stopped, finished or asking, an ask answered, its limits); a
+  client reads that bot's work again when its time moves. Kept in `run/work/changes.json`.
+- **`POST kuvo/bots/<id>/stop-all`** → `{stopped}`: every session of its work that's working,
+  stopped (held and paused, as the queue's Stop), and the bot's own turn too, with what it was
+  still to hear of them dropped. 404 for no such bot here, 503 with no engine.
+- **A box starting again** (its link): what its followed sessions did while it was down (finished,
+  failed, asked) is told to their starters once, by what `run/work/told.json` says was told, and an
+  answer to an ask given after its tool stopped waiting goes to its conversation if it hadn't.
+
+**Projects** (bridge 0.9.107, feature `work.projects`): a bot makes new projects on its box, in a
+folder you pick once per box, after asking you.
+- **Where they go**: `GET|PATCH kuvo/work/settings` → `{projectsFolder: string|null, suggested?}`,
+  kept in `box/work.json`. None until you pick one; `suggested` is `~/Developer` or `~/Projects`
+  when there's one. PATCH `{projectsFolder}` takes a full path (`~` is fine) to a folder that's
+  there, or null; 400 otherwise. The box makes projects only there, and never deletes one.
+- **Tools**: `make_project` (`{name, git?, clone?}`: a folder named after it, lowercase with
+  dashes, a new git repository there unless `git: false`, or a repository cloned from an https or
+  ssh address), `list_projects` (each project here: its folder, whether it's git, who made it).
+  A folder that's there with files in it, a project there already, or an address git can't clone
+  is refused without asking.
+- **Asking you first**: `make_project` asks unless you said Always to that bot for that kind,
+  and a projects folder is picked. The ask is kept in `run/work/asks.json` until you answer; the
+  tool waits up to ten minutes, then says it stays asked, and the conversation gets
+  `[The user answered] …` as a message when you do.
+  - An ask goes with its bot (deleted), or after a week unanswered.
+  - `GET kuvo/work/asks` and `GET kuvo/work/asks/events` (ndjson, a line now and at each change)
+    → `{asks: [{id, action: makeProject|cloneProject, session, name, bot?, project, clone?,
+    folderName, folder: string|null, suggested?, at}]}`: `session` and `name` are the
+    conversation asking (a bot's own), `folderName` the folder it gets, `folder` where it would go
+    (null with no projects folder yet). A bot's are in its `kuvo/work` too, as `asks`, with the
+    projects it made, as `projects`.
+  - `POST kuvo/work/asks/<id>` `{answer: allow|always|deny, folder?}` → `{answer, text, isError}`:
+    what's asked is done there and then, `text` in the words its asker reads (`isError` when it
+    couldn't be: the ask is answered all the same). `folder` picks the projects folder while none
+    is picked (needed to allow then: 400 "Pick the folder…"), and is ignored once one is. Always keeps
+    `work.allowed: [makeProject|cloneProject]` in its bot.json (`allowed` in `kuvo/bots`; `PATCH
+    kuvo/bots/<id>` `{work: {allowed}}` takes it back, and `{work: {limits}}` alone leaves it). 404
+    for one answered already, from another client say.
+  - A machine's bridge tells your phones of each, as category `ask` with `answerable: "0"`, `data:
+    {session, ask}`: it opens the conversation. A Mac tells them itself.
+- **Made**: `box/projects.json` keeps it first, with `madeBy: {bot, name, at}` for a bot's. `POST
+  kuvo/projects/new` `{name, git?, clone?}` → 201 `{project, text}` makes one from a client
+  the same way (no `madeBy`): 403 `{needs: "projectsFolder"}` with none picked, 409 for one there,
+  400 for a name or address that won't do, 502 when git fails.
 
 ### Updates
 
@@ -1416,10 +1707,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 A conversation's goal ("/goal all tests in test/auth pass"): its agent works toward it on its own,
 turn after turn, until a check after each turn finds it met. Each box runs its own, in its agents
 bridge beside the engine, for the engine's sessions and the coding agents' alike, with no client
-there (a machine's with the Mac closed too). The check reads the conversation and the names of the
-files in its folder (what exists, so a plan isn't taken for proof), and runs nothing; a turn that
-ends waiting on you (a permission or a question of its open, or one the check finds asking you) isn't
-judged or nudged, and the turn after your answer is: on
+there (a machine's with the Mac closed too). The check reads the conversation and runs nothing: on
 the engine, the session's model afresh, apart from the agent (OpenCode's free models answer only in
 the session's own context, so there it's asked there); with the coding agents, their one-off
 answer, another agent you're signed in to answering for one that has none (Antigravity, Cursor,
@@ -1505,7 +1793,8 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   off to isn't carried over, and it starts unpinned and not archived; if the mark can't be written,
   it's answered without it). Show a conversation marked `kuvo.branchedFrom` or `kuvo.handoffFrom`,
   or `kuvo.startedBy` (one an agent started with its start_session tool, on a Mac or a machine;
-  `kuvo.beside` says where it first opens, and neither is carried over to a branch either),
+  it opens nowhere by itself, and the mark isn't carried over to a branch either; older ones also
+  carry `kuvo.beside`, which nothing reads),
   under that one when it's in the same list, newest first, and rank it in a list of the latest by
   its newest branch; a subagent's session (one with a `parentID`) is never shown so: it shows in
   the conversation it works for. A box from before branches answers `404` "Not available for this
@@ -1529,7 +1818,14 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   - `{"kind": "folder", "path"}` and `{"kind": "project"}`: the files themselves, of a folder in
     the project (a path inside it, never `..` or absolute: `400`) or all of it, numbered line by
     line: those git keeps or would (all but hidden ones and `node_modules` out of a repository),
-    but for links, lock files, `.env` files, big files and ones that aren't text.
+    but for links, lock files, `.env` files, big files and ones that aren't text;
+  - `{"kind": "described", "words"}` (bridge 0.9.101, when `choices` says `describes`): the files
+    `words` describe ("the auth module and its tests", "the files I changed today"), which the
+    conversation's model picks from the project's files, told what git says was worked on lately
+    and today's date; then read as a folder's are. A client sends only `words` (500 characters at
+    most); the box finds the files, keeps them for half an hour for the same conversation and
+    words (so a review asked for after `measure` reads the same ones), and a review's `scope` has
+    them as `paths` once found. Words that fit no file are `422` with what to do.
 
   One too big to read at once is read in parts, one after another (at most 30; more is left out,
   and its summary says how many files), each by a fresh model.
@@ -1545,16 +1841,38 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
     locations: [{file, line?, endLine?}]}`: what's wrong in a line, why and how to fix it (`""`
     when the title says it all), and every place it's in, none when it's about the change as a
     whole (a missing test). `fix` is what to send the agent, as your message, to fix them all.
+    `parts` (`reviews.parts`, bridge 0.9.102) are what it reads, each part by a reviewer of its
+    own: `[{n, of, files, state: "waiting" | "reading" | "done" | "failed" | "stopped", found,
+    session?, now?}]`, `files` the part's first 200, `found` what it found. On the engine each
+    part reads in a session of its own, `session`: under the conversation (`parentID`), marked
+    `kuvo.reviewPart: {review, part, of}` and kept out of lists like the box's other runs, its
+    agent `plan` with rules that let it read the project and nothing more. Its folder is the box's
+    own (`reviewers` beside its reviews, a git repository with one empty commit), reading the
+    project from outside it, so no "Always allow" saved for the project reaches it (a box that
+    can't make that folder so, without git, fails the part, saying why, rather than read it
+    elsewhere); `kuvo.messages` says it takes none. A client opens it as it
+    opens a subagent's, to watch it read and to look at it after; it goes when the review is put
+    away or another takes its place. `now` is what it's doing as it reads ("Reading src/a.ts",
+    "Looking for “token”", "Thinking", "Writing what it found"), told as it changes (not kept),
+    gone once it's done. Stop stops the part reading (`stopped`); those after it stay `waiting`.
+    A review's only part stopped from its own session ends the review as its Stop does. Parts'
+    sessions no kept review records (made as the box stopped) are deleted once the box's engine
+    is there again, and one left reading is stopped.
+    With the coding agents a part has no `session`. A box from before `parts` leaves it out.
   - `POST …/kuvo/reviews/<session>/measure` with `{"scope"?}` → `{data: {files, parts, leftOut,
-    commits?}}`: how much a review of it would read, to show before asking for a big one
-    (`commits` for a branch or a range of them); `422` with what's wrong when it can't be read
-    (not a repository, no such commit or folder).
+    commits?, found?}}`: how much a review of it would read, to show before asking for a big one
+    (`commits` for a branch or a range of them, `found` the first 10 files found for described
+    words that it reads); `422` with what's wrong when it can't be read (not a repository, no such
+    commit or folder, words that fit no file, or only files it can't read), `503` when the model
+    couldn't be asked. Described words still being found are waited for, not asked again, by a
+    review or another `measure` meanwhile.
   - `GET …/kuvo/reviews/<session>/choices` → `{data: {repository, branch?: {name, base, commits},
-    commits: [{id, short, title, time}], folders: [{path, files}]}}`: what "What to review"
+    commits: [{id, short, title, time}], folders: [{path, files}], describes?: true}}`: what "What to review"
     offers in the conversation's folder: the branch it's on with its base and how many commits
     of its own (left out on the base itself), its 30 latest commits (`time` in ms), and its
     folders by path, with how many files each has at any depth (500 at most, shallowest first).
-    Out of a repository, `repository` is `false` and only the folders come.
+    Out of a repository, `repository` is `false` and only the folders come. `describes` says it
+    reads what you describe (`described`; a box from before leaves it out).
   - `POST …/kuvo/reviews/<session>/stop` → `{data: review}`: one under way ends where it is,
     `done`, keeping what it found so far (its summary says how far it got); `409` once it's over.
   - `POST …/kuvo/reviews/<session>/fix` with `{"findings"?: [id]}` → `{data: {text}}`: what to send
@@ -1613,12 +1931,20 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
 | `reviews` | `kuvo/agents/api/kuvo/reviews…`: reviews with fresh eyes |
 | `reviews.scopes` | a review's `scope`, `measure`, `choices` and `stop` (bridge 0.9.97); without it a box reads the changes not committed yet whatever the scope |
+| `reviews.parts` | a review's `parts`, each on the engine read in a `session` a client can open (bridge 0.9.102) |
 | `groups` | `kuvo/groups`, `…/events`, one chat's events, and writing, stopping, keep going, viewed, undo and start |
 | `groups.make` | `POST kuvo/groups` |
 | `groups.edit` | `PATCH kuvo/groups/<id>` |
 | `groups.delete` | `DELETE kuvo/groups/<id>` |
 | `integrations` | `kuvo/integrations…` |
 | `named` | `kuvo/named` |
+| `moves` | `kuvo/moves`, `…/places`, `…/events`: Move to Computer, done by the boxes (bridge 0.9.108) |
+| `agent-tools` | `POST kuvo/agent-tools`: the agents' tools, answered by the box (bridge 0.9.100) |
+| `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
+| `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
+| `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
+| `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |
+| `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
 | `search` | `kuvo/search` |
 | `personalities` | `kuvo/personalities…` |
 | `personalities.events` | `kuvo/personalities/events` |
@@ -1759,6 +2085,9 @@ application/json`:
   signed in to the sites the agent uses there (X, LinkedIn, Reddit), as their cookies say: only
   those it can tell. The app reads the cookies again only once they've changed (or after 30
   seconds);
+- `vault/get {"id"}` → `{"values"}` (`404` for none), `vault/set {"id", "values"}` → `{}`,
+  `vault/delete {"id"}` → `{}`: the vault's values, by item, in the Keychain ("Vault", bridge
+  0.9.100);
 - `trash {"path"}` → `{}`: a folder the box put in its trash (`box/trash`, a deleted bot's), to the
   Finder's Trash (bridge 0.9.52); one anywhere else stays where it is;
 - for its link (bridge 0.9.61, "The relay, on this Mac's box"):
@@ -1770,10 +2099,7 @@ application/json`:
     `content-type` and `cache-control`, `x-kuvo-answer: 1` (the app's own answer, whatever its
     status), and its body as it comes, chunked (a followed route streams). One cut off partway
     (the engine went) ends without its last chunk, so the box tells the phone it was cut off. The
-    box closing the request (the phone went) stops what it asked, before any answer too;
-  - `link/moving {"session"}` → `{"moving": bool}`: whether one of this Mac's conversations is
-    moving to or from another computer now (bridge 0.9.63; the app runs the move). Before, mail
-    the box didn't take itself went to the app (`link/mailed`, 0.9.61 and 0.9.62).
+    box closing the request (the phone went) stops what it asked, before any answer too. Before bridge 0.9.63, mail the box didn't take itself went to the app (`link/mailed`, 0.9.61 and 0.9.62).
 
 Names are `KUVO_KEY_*` only (`^KUVO_KEY_[A-Z0-9_]+$`): the box never asks for another, and the app
 answers no other. The app keeps the files the engine reads (`KUVO_KEYS`) in step as it
@@ -1826,17 +2152,6 @@ For the app only (anyone else gets `403`):
 - `GET kuvo/link/phones` → `{"phones", "removed", "pairing"}`: its phones whole (with where each is),
   every removal, and whether Settings › Phone's pairing link is still waiting;
   `GET kuvo/link/phones/events` follows them.
-- `POST kuvo/link/letters {"peer", "from"?, "to", "text", "wait"?}` (bridge 0.9.63): a letter from
-  one of this Mac's conversations (`from`) for an agent on another of your computers (`peer`, its
-  key), left in the box's outbox and sent ("Peers": "Letters"). Answers `{"id"}` at once (with a
-  `note` when it was to be waited for but the box is off the relay now: it goes once the box is back
-  on it, and its answer comes as a message). With `wait` (and `from`), on the relay: lines
-  (`application/x-ndjson`), `{"id"}` once it's kept, so a request cut off after that knows it went,
-  then once its answer comes `{"text"}`, or `{"failed"}` or `{"note"}` when it didn't get there or
-  no answer can come, or `{"text": null}` after eleven minutes or the request closed (its turn
-  stopped), when it goes on without waiting and an answer that comes later reaches the
-  conversation as a message. The box keeps who waits in memory, and gives an answer to the
-  request only while it's still open. `404` for a `peer` that isn't one of this Mac's machines.
 - `POST kuvo/link/letters/take {"letters": [{id, from, to, text, peer, at, answers?}], "seen": {"<id>":
   <at>}}`: the letters an older Kuvo Code sent itself and had on their way (`agent-letters.json`),
   into the box's outbox, and those it delivered, remembered so one sent again isn't twice
@@ -2021,6 +2336,20 @@ as `{status, bodyBase64, type}`. (`kuvo-link.js box read | change` are the same,
 0.8.0-beta.1, which uses them; `key` sets one of its keys.) This Mac's own settings are its box's too
 ("This Mac's box").
 
+What some providers need from the engine until opencode handles it is each box's own too: a
+settings layer its engine starts with, on top of everything else (`OPENCODE_CONFIG_CONTENT`), never
+in your settings. Today that's GitHub Copilot's Claude models named with
+`{"compatibility": {"supportsThinkingBlockBinding": false}}` (anomalyco/opencode#55160). The box
+learns them from its own engine's `GET /api/model` (Copilot's models whose id starts `claude-` and
+that have a `family`; an engine with no Copilot model leaves what it learned) as it finds the engine
+and every ten minutes at most while it's at work (on a machine, while its bridge runs: it has
+peers or phones), and keeps the layer in `run/compatibility.json` (Copilot's Claude models as of
+October 2026 until it has learned any). Whatever starts the engine asks the box: `kuvo-link.js
+engine-config` prints the `OPENCODE_CONFIG_CONTENT` it's run with, the layer merged on top. This
+Mac's app runs it as it starts its engine, and a machine's start scripts do, so an engine started
+after a restart with no Mac there gets it too; a box too old to know it starts its engine as
+before. A Mac sends none.
+
 ### Personalities
 
 The personalities you make are one library on every computer: each keeps its copy (a Mac in
@@ -2071,6 +2400,152 @@ sends it for a phone, and the relay and `box route` never carry it), and anythin
 A change on one computer reaches the others it reaches by mail at once, and the rest as they
 connect. A bot made on a machine can have one there at once: its
 `kuvo/bots/templates` lists them, told as the Mac words them (the kit's `personalityWords`).
+
+### Vault
+
+Each box keeps a vault of its own (`vault` in `features`, bridge 0.9.100): sign-ins, keys, files
+and notes that its agents use without seeing a value. An agent names an item; the box fills it into
+a page (through the browser's own process), a command's environment or a temporary file. No answer
+an agent can get holds a value. Each computer keeps only its own; nothing is synced or fetched from
+another box.
+
+**Where it's kept.** In `box/vault/` under the box's folder: `items.json` (each item without its
+values), `grants.json`, `paused.json` and `activity.jsonl` (kept a year). The first three are
+`{"v": 2, "gen", "data", "sig"}`, signed (HMAC-SHA256 of `<file name>\0<gen>\0<data as JSON>`) with
+a key no agent can read: a machine's from its store key (so they can't be checked while it's
+locked), this Mac's given by its app from the Keychain to the box alone, on its stdin as it starts
+(below). `gen` goes up with each write. One that isn't signed with it, was changed, or is older than
+the newest the box knows counts for nothing. This Mac's app keeps each file's newest `gen` in the
+Keychain, in one item with the file key (host interface `vault/generations {file?, generation?}`
+→ `{generations}`), which the box reads before it answers anything of the vault and tells as it
+writes: a file there whose generation the app doesn't have counts as changed, and while one it told
+couldn't be kept, agents' use waits; a client remembers a machine's
+(the state's `generations`) and, seeing one go back, pauses every agent's use there. `paused.json`, made with the first item,
+then pauses everyone, and so does its being gone. The state says `tampered`. Values:
+
+- this Mac's are in the Keychain, through its app ("Host interface": `vault/get {"id"}` →
+  `{"values"}` or `404`, `vault/set {"id", "values"}`, `vault/delete {"id"}`), never in the box's
+  folder. The app gives the box a secret of the vault's (with its own password and the file key)
+  on `serve`'s stdin as it starts, `{"password", "hostVaultSecret", "vaultFileKey"}`, never in its
+  environment, which any of the user's processes can read (`ps -E`): the password in
+  `run/host.json` is in a file an agent's command can read, and rewrite. Before a vault call the
+  box asks `hello` with `"vault": true`, and goes on only if the answer's `vaultProof` is that
+  secret's HMAC-SHA256 of `kuvo-host-vault\0<nonce>\0<where it reached it>`; each call carries
+  `x-kuvo-vault-at` (ms) and `x-kuvo-vault-auth`, the secret's HMAC of
+  `kuvo-host-vault-call\0<call>\0<sha256 of its body, hex>\0<at>`, taken within a minute and once
+  (`403` otherwise);
+- a machine's are in `box/vault/values/<id>`, AES-256-GCM with the store key, which is only ever
+  in the memory of the process that holds the vault. `key.json` keeps the store key wrapped by the
+  unlock key, and an HMAC that checks one. Only clients keep the unlock key. After the box starts
+  again the vault is locked (`423 {"message"}`) until a client sends it.
+
+**The process that holds it.** The box's long-running process (`run` on a machine, `serve` on a
+Mac) holds the vault. A `box route` passes `kuvo/vault…` to it over `run/vault.sock` (`0600`, owned
+by the user, which the route checks first), one request a connection: `{"hello": <nonce>}`, answered
+`{"nonce", "proof"?}` (`proof`, while the holder has the unlock key: HMAC-SHA256 with it of
+`kuvo-vault-holder\0<the route's nonce>`, base64url); then a line of `{"method", "path", "headers",
+"body"}` (base64) there, `{"status", "type", "body"}` back. A request with the unlock key sends, to
+a holder that proves it has it, `x-kuvo-vault-auth` instead: HMAC-SHA256 with the key of
+`kuvo-vault-client\0<the holder's nonce>\0<METHOD>\0<path>\0<sha256 of the base64 body, base64url>`,
+for that request alone. To one whose proof is wrong, nothing (`403`); to one that gives none (a
+locked one), the key itself only for `kuvo/vault/unlock`, which a client sends when you ask
+(**Unlock** on a machine's Vault page), and `423` for anything else. It says `503 {"message"}` when nothing holds it. A
+machine's link keeps running while it has a vault.
+
+**Who may do what.** Clients are your phones (through the relay, by their keys), this Mac's own app
+(`x-kuvo-from: app`, on the box's own password, which it was given on its stdin), and a request from
+the computer itself (the Mac over SSH, `box route`) that carries the Mac's proof for that request
+alone in `x-kuvo-vault-proof`: base64url JSON `{mac, at, nonce, proof}`, its signing key's signature
+of `kuvo-vault-request\0<the machine's id>\0<at>\0<nonce>\0<METHOD>\0<path>\0<sha256 of the body,
+hex>`, within five minutes, each nonce once (`box route` takes the body as sent, `bodyText`, for
+it). The unlock key goes only to unlock (`x-kuvo-vault-key`, or `kuvo/vault/unlock`), when you ask:
+what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it on its way then. Anything else
+(an agent's command) gets `403 {"message"}` from every route but the agents' own two and `unlock`.
+
+- `POST kuvo/vault/key` → `{"key"}`, the unlock key (32 bytes, base64url), for a client to keep:
+  answered to a phone, this Mac's app, or the Mac over SSH proving it set the machine up:
+  `{"mac", "at", "nonce", "proof"}`, its link key, the time (ms), a nonce (16 to 64 base64url
+  characters) and its signing key's (link.json's `macSigns`) Ed25519 signature of
+  `kuvo-vault-key\0<the machine's id on its Macs>\0<at>\0<nonce>` (link.json's `id`), within five
+  minutes, each nonce once. It makes the vault
+  if there isn't one yet. `409` on this Mac (its Keychain needs no key), `423` while locked.
+- `POST kuvo/vault/unlock {"key"}` → the state; `403` for a key that isn't this vault's. Before
+  there's a vault, the state (`made: false`) whatever the key, so a client can tell whether to fetch
+  one without making it.
+- `GET kuvo/vault` → `{state, items, grants}`. `state` is `{made, locked, paused, pausedBots:
+  {<bot, or a conversation that isn't a bot's>: why}, store: "keychain" | "encrypted", keptDays,
+  agents, tampered?, generations: {items, grants, paused}}` (`agents`: whether agents may use it
+  on this box, below); an item is `{id, kind: "login" |
+  "key" | "file" | "note", name, sites, username?, fields, fileName?, readable?, signInOnly?,
+  created, changed, used?}` (`sites`: hosts, a site's own and those under it; `fields`: the names of the values it
+  holds, a sign-in's `password`, a file's `file` (base64), a note's `text`, a key's own); a grant
+  is `{item, who: {bot} | {project: <folder>} | {everyone: true}, how: "own" | "ask", at}`.
+- `POST kuvo/vault/items {kind, name, sites?, username?, fileName?, readable?, signInOnly?, values}`
+  → `{item, key?}`: `key` when this item made a machine's vault. A sign-in needs a site (a host, or a
+  name without dots on your network); names are unique; a value has at least 4 characters, so it can
+  be hidden. `signInOnly` (a sign-in) is filled in only to sign in, in the browser: never to
+  `vault_run`, nor `browser_fill`. `PATCH kuvo/vault/items/<id>` with any of those (a value `null` takes it away) →
+  `{item}`; `DELETE` → `{}`, with its values and grants.
+- `GET kuvo/vault/items/<id>/values` → `{values}`.
+- `POST kuvo/vault/grants {item, who, how}` (`how: null` takes it away) → `{grants}`;
+  `GET kuvo/vault/grants` → `{grants}`.
+- `POST kuvo/vault/pause {paused, bot?}` → the state: every agent's use, or one bot's (or, by its
+  root session, a conversation's that isn't a bot's).
+- `GET kuvo/vault/activity?item=&bot=&session=&before=&limit=` → `{entries}`, newest first:
+  `{id, at, what, item?, itemName?, kind?, bot?, botName?, session?, sessionName?, client?, site?,
+  program?, how?, why?}`, never a value. `what` is one of `used`, `asked`, `allowed`, `declined`,
+  `refused`, `added`, `changed`, `removed`, `granted`, `ungranted`, `paused`, `resumed`, `shown`.
+- `GET kuvo/vault/asks` → `{asks}`, and `GET kuvo/vault/asks/events` (`application/x-ndjson`, the
+  list now and on each change): what agents wait on you for, `{id, kind: "use" | "item", at,
+  session?, sessionName?, bot?, botName?, item?, itemName?, need?, why?, site?, machine?}`. `use`:
+  an item it may use only by asking (or has no grant for); `item`: something it needs (`need`).
+  `POST kuvo/vault/asks/<id> {answer: "once" | "always" | "no", item?}` → `{}` (`item`, for an
+  `item` ask, the one you give; `always` grants it on its own, to the bot or, for another session,
+  its project). An agent waits 15 minutes, then takes it as no. Your phones hear of one still open
+  after two seconds (`category: "ask"`, `data: {session?, vaultAsk}`).
+
+**The agents' own.** Both tool servers pass these on as they come, with the calling conversation.
+Each is answered only while that conversation is making the call: its engine (or the coding agents'
+bridge) has a tool call of that name running in it (`api/session/<id>/message`, a `tool` block,
+`running` or `pending`; for `tools`, with the same arguments; for `fill`, `browser_sign_in` or
+`browser_fill`, and one fill for each such call). Any program on the computer could name a session;
+only the conversation's own call uses its grants. (On a machine its browser, and anything that runs
+as you there, can still reach a value a fill puts in a page: until agents' commands are fenced off,
+that's what a machine can't keep from them.)
+
+Agents use the vault only on a box whose agents' commands are fenced (not yet on any box; the
+tests open it with `KUVO_VAULT_AGENTS=1`, which a Mac's app never passes its box, and which a box
+takes only in a test's own folder, never the account's own `~/.kuvo-code` or a Mac's
+`run.kuvo.code…/box`). Until then `GET kuvo/vault/tools` lists no tools, and a call says the vault
+isn't open to agents. A fill does only what Kuvo Code did before the vault: for `browser_sign_in`
+with no item, the one sign-in for the page's site the conversation may use on its own (else `404`,
+and the browser asks you); an item named, or a field, is `404`. The browser tools leave out
+`browser_fill`, `browser_sign_in`'s `item` and the vault's sentence in their instructions. Your
+clients see and change everything as before, and the state says `agents: false` (every box that
+has the vault sends `agents`; a client reads its absence as `true`, a box from before the gate).
+
+- `POST kuvo/vault/tools {name, arguments, session}` → `{text, isError}`: `vault_items`, the items
+  this conversation may use (by its bot, its project or everyone), never another's name, and a
+  note you let bots read; `vault_ask {need, why, site?}`, which asks you; `vault_run {command,
+  variables: {VAR: "Item" | "Item.field"}, why, timeout?}`, which runs the command with the user's
+  shell in the conversation's folder, the values in its environment (a file's as the path of a
+  `0600` copy in `run/vault-run/`, removed after), and gives back its output (64 KB at most) with
+  each value, raw, base64, hex, URL- and JSON-escaped, or a key file's lines, and a file's bytes
+  as base64 whole and wrapped at 76 and 64, and hex, shown as `[vault: <item>]`.
+- `POST kuvo/vault/fill {session, origin, purpose: "sign-in" | "field", item?, field?, why?}` →
+  `{item: {id, name}, username?, values}` for the browser's own process to fill (on this Mac, only
+  to its app, `403` otherwise; a machine's browser runs as you, as everything you run there does,
+  so there it's answered to anything on the machine, under the same grants): only on an `https`
+  page (`400`), only on one of the item's sites. A sign-in without an item takes the one sign-in
+  for the site the caller may use on its own (`404` for none or more, and the browser asks you as
+  before). An item named for another site is refused (`403`) and pauses that bot's use of the
+  vault (a conversation's that isn't a bot's, by its root session), telling your phones.
+
+Every use first checks Pause, then the grant: `own` goes ahead, `ask` (or no grant, for an item
+named) asks you and waits. An item you give through `vault_ask` "always" is granted on its own
+(to the bot, or the conversation's project, never a home folder); "once", its next use within
+half an hour goes ahead. A command's copies (`run/vault-run/`) go when it ends, when the box ends,
+and as a box starts.
 
 ### Paired phones
 
@@ -2215,8 +2690,19 @@ can go three months after 0.8.0 ships.
 - Machines' bots' keys of their own, which it kept in your Keychain: each given to its machine,
   then gone from the Keychain. <!-- compat: 0.7 bot-keys-keychain -->
 - The letters it sent its agents' way and those it had delivered (`agent-letters.json`,
-  `agent-letters-seen.json`, 0.8.0-beta.1), handed to the box's outbox (`kuvo/link/letters/take`).
+  `agent-letters-seen.json`, 0.8.0-beta.1), and the messages it kept for a machine that was away
+  (`agent-messages.json`), handed to the box's outbox (`kuvo/link/letters/take`).
   <!-- compat: beta.1 mac-letters -->
+- What it learned of GitHub Copilot's Claude models (`copilotClaudeModels` in its preferences),
+  which each box learns now ("Settings per box"): removed as the engine starts.
+  <!-- compat: 0.7 provider-compatibility -->
+- Moves it ran itself (`movesUnderWay` in its preferences), which each box runs now
+  (`kuvo/moves`): forgotten. A `moving` hold one cut short left in a folder is lifted by its box
+  as it starts. <!-- compat: 0.7 mac-moves-under-way -->
+- On a machine: letters its tools or link left in `run/outbox` for a Mac to collect over SSH,
+  sent by the link as its own. <!-- compat: beta.1 outbox -->
+- On a machine: `run/mac-agents.json`, the agents a Mac wrote there over SSH, no longer read, and
+  removed. <!-- compat: beta.1 mac-agents -->
 
 **Kuvo Code 0.8.0-beta.1.** It can go once 0.8.0 is out (a beta copy is offered the release).
 - It signs no documents: its setup and mail give its peers as a list (`peers`, with `peersAt` or
@@ -2240,6 +2726,9 @@ can go three months after 0.8.0 ships.
 - It reads and changes a machine's settings with `kuvo-link.js box read` and `box change` over SSH
   ("Settings per box"), which `box route` does for later Macs.
   <!-- compat: beta.1 box-read-change -->
+- It runs moves itself, over SSH, and its peers document's `moved` says where each conversation it
+  moves lives now. A box takes that word under its own boxes' ("Peers", `moved`).
+  <!-- compat: beta.1 mac-moves -->
 - It asks a machine to rename a worktree's branch (`POST kuvo/worktrees/rename`, through `box
   route`), which the box names itself now: it's refused, and that Mac reads the machine's records
   again.
