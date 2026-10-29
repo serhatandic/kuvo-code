@@ -5800,8 +5800,11 @@ async function ownAgents(readEngine, machine, kit = readKit(), readBridge = read
 }
 var ownList = null;
 var ownMachine = null;
+var refreshes = 0;
+var keptRefresh = 0;
 function keepOwn(list, machine) {
   ownList = list;
+  keptRefresh = refreshes;
   ownMachine = machine;
 }
 function ownAsLast(ownID) {
@@ -5828,9 +5831,12 @@ async function refreshOwn(readEngine, link = readLink()) {
   if (!link?.key && !IS_MAC)
     return ownList;
   ownMachine = link?.id ?? null;
+  const turn = ++refreshes;
   const list = await ownAgents(readEngine, link?.id);
-  if (list)
+  if (list && turn > keptRefresh) {
     ownList = list;
+    keptRefresh = turn;
+  }
   writeAgents(link);
   return ownList;
 }

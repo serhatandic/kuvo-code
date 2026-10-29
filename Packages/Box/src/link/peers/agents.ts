@@ -79,9 +79,12 @@ export async function ownAgents(readEngine: () => Target, machine?: string, kit:
 // This box's own agents, as last worked out (`refreshOwn`), for `run/agents.json`.
 let ownList: ListedAgent[] | null = null;
 let ownMachine: string | null = null;
+// Each working out's turn, and the latest one kept: one begun earlier, answered later, is older.
+let refreshes = 0, keptRefresh = 0;
 // Them, as just worked out elsewhere (`kuvo/named`), on box `machine`.
 export function keepOwn(list: ListedAgent[], machine: string | null): void {
   ownList = list;
+  keptRefresh = refreshes;
   ownMachine = machine;
 }
 
@@ -111,8 +114,12 @@ export async function refreshOwn(readEngine: () => Target, link: LinkState | nul
   // (This Mac's box lists its agents with its link off too: its group chats name them.)
   if (!link?.key && !IS_MAC) return ownList;
   ownMachine = link?.id ?? null;
+  const turn = ++refreshes;
   const list = await ownAgents(readEngine, link?.id);
-  if (list) ownList = list;
+  if (list && turn > keptRefresh) {
+    ownList = list;
+    keptRefresh = turn;
+  }
   writeAgents(link);
   return ownList;
 }

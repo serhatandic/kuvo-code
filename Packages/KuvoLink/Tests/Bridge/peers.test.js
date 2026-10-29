@@ -353,6 +353,35 @@ test("a box tells its peers its agents as they change, and every ten minutes", a
   assert.equal(opened(sent[6], to(sent[6])).payload.ask, "agents");
 });
 
+test("this box's agents worked out twice at once: the one begun last is kept, so an agent made meanwhile isn't dropped by the older", async t => {
+  fresh();
+  let asked = 0, firstAsked, letGo;
+  const first = new Promise(resolve => { firstAsked = resolve; });
+  const released = new Promise(resolve => { letGo = resolve; });
+  const server = http.createServer(async (request, response) => {
+    const json = value => { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+    if (!request.url.startsWith("/api/session?")) return json({});
+    // The older working out reads before the session is made, and is answered last.
+    if (++asked === 1) {
+      firstAsked();
+      await released;
+      return json({ data: [] });
+    }
+    return json({ data: [{ id: "ses_new", title: "New idea", time: { updated: 2 } }] });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const readEngine = () => ({ port: server.address().port, password: "secret" });
+
+  const older = link.refreshOwn(readEngine, link.readLink());
+  await first;
+  await link.refreshOwn(readEngine, link.readLink());
+  letGo();
+  await older;
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(run, "agents.json"), "utf8")).agents.map(agent => agent.session), ["ses_new"]);
+});
+
 test("a machine a Mac removed no longer counts that Mac: its peers and lists go, another Mac's stay", () => {
   const other = box("mac");
   fresh({ macs: [mac.pub, other.pub], peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] }, [other.pub]: { at: 1, peers: [other.peer] } },
