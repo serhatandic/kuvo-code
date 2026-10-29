@@ -4870,7 +4870,10 @@
          ]
         },
         "keptDays": "number",
-        "tampered?": "bool"
+        "tampered?": "bool",
+        "generations?": {
+         "map": "number"
+        }
        }
       },
       "items": {
@@ -5226,7 +5229,10 @@
        ]
       },
       "keptDays": "number",
-      "tampered?": "bool"
+      "tampered?": "bool",
+      "generations?": {
+       "map": "number"
+      }
      }
     }
    }
@@ -5263,7 +5269,10 @@
        ]
       },
       "keptDays": "number",
-      "tampered?": "bool"
+      "tampered?": "bool",
+      "generations?": {
+       "map": "number"
+      }
      }
     }
    }

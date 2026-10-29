@@ -6778,7 +6778,8 @@ var VAULT_STATE = object({
   pausedBots: map(string),
   store: words("keychain", "encrypted"),
   keptDays: number,
-  "tampered?": bool
+  "tampered?": bool,
+  "generations?": map(number)
 });
 var VAULT = object({ state: VAULT_STATE, items: list(VAULT_ITEM), grants: list(VAULT_GRANT) });
 var VAULT_ITEM_ANSWER = object({ item: VAULT_ITEM, "key?": string });
@@ -6859,6 +6860,30 @@ var fileKey = () => {
 var signatureOf = (key, file, generation, data) => crypto15.createHmac("sha256", key).update(`${path34.basename(file)}\x00${generation}\x00${JSON.stringify(data)}`).digest("base64url");
 var tampered = new Set;
 var newest = new Map;
+var primed = false;
+var STARTING = "This Mac's vault is starting. Try again in a moment.";
+async function primeGenerations() {
+  if (!onHost() || primed)
+    return;
+  const answer = await asHost(() => askHost(host(), "vault/generations", {}));
+  const kept = isObject(answer?.generations) ? answer.generations : {};
+  for (const file of [ITEMS, GRANTS, PAUSED]) {
+    const generation = kept[path34.basename(file, ".json")];
+    if (typeof generation === "number")
+      newest.set(file, Math.max(newest.get(file) ?? 0, generation));
+  }
+  primed = true;
+}
+var told = Promise.resolve();
+var rememberGeneration = (file, generation) => {
+  if (!onHost())
+    return;
+  const found = appHost();
+  if (found)
+    told = told.then(() => askHost(found, "vault/generations", { file: path34.basename(file, ".json"), generation })).catch(() => {});
+};
+var generationsTold = () => told;
+var generations = () => Object.fromEntries([ITEMS, GRANTS, PAUSED].map((file) => [path34.basename(file, ".json"), Number(readJSON(file, null)?.gen) || 0]));
 function readSigned(file, fallback) {
   const kept = readJSON(file, null);
   if (!kept)
@@ -6883,6 +6908,7 @@ function keepSigned(file, data) {
   const generation = Math.max(newest.get(file) ?? 0, readJSON(file, null)?.gen || 0) + 1;
   keepJSON(file, { v: 2, gen: generation, data, sig: signatureOf(key, file, generation, data) });
   newest.set(file, generation);
+  rememberGeneration(file, generation);
   tampered.delete(file);
 }
 var keepJSON = (file, value) => {
@@ -7235,6 +7261,8 @@ function setPaused(paused, who, why = "Paused by you.") {
   });
 }
 function pausedFor(bot, root) {
+  if (onHost() && !primed)
+    return STARTING;
   const now = readPaused();
   if (now.all)
     return tampered.has(PAUSED) ? TAMPERED : "The user paused the vault on this computer.";
@@ -7253,7 +7281,8 @@ function vaultState() {
     pausedBots: { ...paused.bots ?? {} },
     store: onHost() ? "keychain" : "encrypted",
     keptDays: KEPT_DAYS,
-    ...tampered.size ? { tampered: true } : {}
+    ...tampered.size ? { tampered: true } : {},
+    generations: generations()
   };
 }
 
@@ -11835,6 +11864,8 @@ function clientOf({ request, phone }) {
     return "Mac";
   if (request.vaultClient)
     return "Mac";
+  if (provedRequest(request))
+    return "Mac";
   const key = request.headers["x-kuvo-vault-key"];
   if (typeof key === "string" && unlockWith(key))
     return "Mac";
@@ -11842,7 +11873,7 @@ function clientOf({ request, phone }) {
 }
 var PROOF_FOR = 300000;
 var usedProofs = new Map;
-function provedMac(given) {
+function provedMac(given, tag = "kuvo-vault-key", rest = "") {
   const link = readLink();
   const mac = typeof given.mac === "string" ? given.mac : "";
   const at = Number(given.at);
@@ -11859,13 +11890,26 @@ function provedMac(given) {
   try {
     const key = crypto22.createPublicKey({ key: Buffer.concat([ED_SPKI2, Buffer.from(sign, "base64url")]), format: "der", type: "spki" });
     const signature = Buffer.from(given.proof, "base64url");
-    const good = signature.length === 64 && typeof link?.id === "string" && crypto22.verify(null, Buffer.from(`kuvo-vault-key\x00${link.id}\x00${at}\x00${nonce}`), key, signature);
+    const good = signature.length === 64 && typeof link?.id === "string" && crypto22.verify(null, Buffer.from(`${tag}\x00${link.id}\x00${at}\x00${nonce}${rest}`), key, signature);
     if (good)
       usedProofs.set(nonce, now + 2 * PROOF_FOR);
     return good;
   } catch {
     return false;
   }
+}
+function provedRequest(request) {
+  const header = request.headers["x-kuvo-vault-proof"];
+  if (typeof header !== "string")
+    return false;
+  let given = {};
+  try {
+    given = JSON.parse(Buffer.from(header, "base64url").toString("utf8"));
+  } catch {
+    return false;
+  }
+  const hash = crypto22.createHash("sha256").update(request.body ?? Buffer.alloc(0)).digest("hex");
+  return provedMac(given, `kuvo-vault-request`, `\x00${request.method.toUpperCase()}\x00${request.path}\x00${hash}`);
 }
 var idOf = (part) => {
   try {
@@ -11882,7 +11926,15 @@ async function* vaultRoute(context) {
     return yield* [{ head: { status: answer.status, headers: { "content-type": answer.type || "application/json" } } }, { body: Buffer.from(answer.body, "base64") }];
   }
   try {
-    yield* answerVault(context);
+    if (onHost())
+      await primeGenerations().catch(() => {});
+    let first = true;
+    for await (const piece of answerVault(context)) {
+      if (first && onHost())
+        await generationsTold();
+      first = false;
+      yield piece;
+    }
   } catch (error) {
     if (error instanceof VaultRefusal)
       return yield* context.json(error.status, { message: error.message });
@@ -11953,7 +12005,9 @@ async function* answerVault(context) {
   if (route === "kuvo/vault") {
     if (method !== "GET")
       return yield* json(405, {});
-    return yield* json(200, { state: vaultState(), items: isLocked() ? [] : readItems(), grants: readGrants() });
+    const items = isLocked() ? [] : readItems();
+    const grants = readGrants();
+    return yield* json(200, { state: vaultState(), items, grants });
   }
   if (route === "kuvo/vault/pause") {
     if (method !== "POST")
@@ -12590,8 +12644,14 @@ async function box(command) {
       } catch {}
       const handle = engineHandler(readEngineFile, { name: os10.hostname() });
       const folder = given?.headers?.["x-opencode-directory"];
-      const vaultKey = given?.headers?.["x-kuvo-vault-key"];
-      const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json", ...typeof folder === "string" ? { "x-opencode-directory": folder } : {}, ...typeof vaultKey === "string" ? { "x-kuvo-vault-key": vaultKey } : {} }, body: Buffer.from(given?.body === undefined ? "" : JSON.stringify(given.body)), fromMac: true };
+      const vaultHeaders = {};
+      for (const name of ["x-kuvo-vault-key", "x-kuvo-vault-proof"]) {
+        const value = given?.headers?.[name];
+        if (typeof value === "string")
+          vaultHeaders[name] = value;
+      }
+      const sentBody = typeof given?.bodyText === "string" ? given.bodyText : given?.body === undefined ? "" : JSON.stringify(given.body);
+      const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json", ...typeof folder === "string" ? { "x-opencode-directory": folder } : {}, ...vaultHeaders }, body: Buffer.from(sentBody), fromMac: true };
       let status = 502;
       let type = "";
       const chunks = [];
@@ -12693,6 +12753,15 @@ async function serve() {
   });
   console.log(JSON.stringify({ url: `http://127.0.0.1:${server.address().port}` }));
   holdVault(engineHandler(readEngineFile, { name: os10.hostname() }, readBridgeFile));
+  if (IS_MAC)
+    (async () => {
+      for (let tries = 0;tries < 120; tries++) {
+        try {
+          return await primeGenerations();
+        } catch {}
+        await sleep(1000);
+      }
+    })();
   if (IS_MAC) {
     setVaultTell(macTell);
     watchVaultAsks(macTell, (id) => macLink.hold?.resolve(id));

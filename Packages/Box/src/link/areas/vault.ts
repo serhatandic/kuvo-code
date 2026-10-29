@@ -18,7 +18,7 @@ import { answer as answerAsk, listAsks, onAsksChanged } from "../vault/asks";
 import { fill } from "../vault/fill";
 import { askHolder, holdsVault } from "../vault/holder";
 import {
-  addItem, changeItem, currentUnlockKey, givenWho, isLocked, isMade, itemByID, LOCKED, makeVault, onHost, readGrants, readItems,
+  addItem, changeItem, currentUnlockKey, generationsTold, givenWho, isLocked, isMade, itemByID, LOCKED, makeVault, onHost, primeGenerations, readGrants, readItems,
   removeItem, setGrant, setPaused, unlockWith, valuesOf, VaultRefusal, vaultState,
 } from "../vault/store";
 import { callTool, VAULT_TOOLS } from "../vault/tools";
@@ -42,6 +42,8 @@ function clientOf({ request, phone }: RouteContext): string | null {
   if (request.fromApp) return "Mac";
   // Proved over the vault's socket (vault/holder.ts), or with the key itself, which unlocks a locked one.
   if (request.vaultClient) return "Mac";
+  // Or the Mac's proof for this request alone.
+  if (provedRequest(request)) return "Mac";
   const key = request.headers["x-kuvo-vault-key"];
   if (typeof key === "string" && unlockWith(key)) return "Mac";
   return null;
@@ -54,7 +56,7 @@ const usedProofs = new Map<string, number>();
 /** Whether `proof` is a Mac that set this machine up, asking for its vault's key: its signing key's
  * signature of `kuvo-vault-key\0<this machine's id on its Macs>\0<at>\0<nonce>`, made within five
  * minutes, and not used before. */
-function provedMac(given: Record<string, unknown>): boolean {
+function provedMac(given: Record<string, unknown>, tag = "kuvo-vault-key", rest = ""): boolean {
   const link = readLink();
   const mac = typeof given.mac === "string" ? given.mac : "";
   const at = Number(given.at);
@@ -67,12 +69,25 @@ function provedMac(given: Record<string, unknown>): boolean {
   try {
     const key = crypto.createPublicKey({ key: Buffer.concat([ED_SPKI, Buffer.from(sign, "base64url")]), format: "der", type: "spki" });
     const signature = Buffer.from(given.proof, "base64url");
-    const good = signature.length === 64 && typeof link?.id === "string" && crypto.verify(null, Buffer.from(`kuvo-vault-key\0${link.id}\0${at}\0${nonce}`), key, signature);
+    const good = signature.length === 64 && typeof link?.id === "string" && crypto.verify(null, Buffer.from(`${tag}\0${link.id}\0${at}\0${nonce}${rest}`), key, signature);
     if (good) usedProofs.set(nonce, now + 2 * PROOF_FOR);
     return good;
   } catch {
     return false;
   }
+}
+
+/** Whether a request carries the proof of a Mac that set this machine up, for it alone
+ * (`x-kuvo-vault-proof`, base64url JSON `{mac, at, nonce, proof}`): its signing key's signature of
+ * `kuvo-vault-request\0<this machine's id>\0<at>\0<nonce>\0<METHOD>\0<path>\0<sha256 of the body, hex>`,
+ * within five minutes, each nonce once. The Mac's unlock key never goes with such a request. */
+function provedRequest(request: RouteContext["request"]): boolean {
+  const header = request.headers["x-kuvo-vault-proof"];
+  if (typeof header !== "string") return false;
+  let given: Record<string, unknown> = {};
+  try { given = JSON.parse(Buffer.from(header, "base64url").toString("utf8")); } catch { return false; }
+  const hash = crypto.createHash("sha256").update(request.body ?? Buffer.alloc(0)).digest("hex");
+  return provedMac(given, `kuvo-vault-request`, `\0${request.method.toUpperCase()}\0${request.path}\0${hash}`);
 }
 
 const idOf = (part: string | undefined) => {
@@ -86,7 +101,15 @@ export async function* vaultRoute(context: RouteContext): AsyncGenerator<AnswerP
     return yield* [{ head: { status: answer.status, headers: { "content-type": answer.type || "application/json" } } }, { body: Buffer.from(answer.body, "base64") }];
   }
   try {
-    yield* answerVault(context);
+    // This Mac's newest generations from its app before anything is read (vault/store.ts), and a
+    // change answered once its app has the new ones.
+    if (onHost()) await primeGenerations().catch(() => {});
+    let first = true;
+    for await (const piece of answerVault(context)) {
+      if (first && onHost()) await generationsTold();
+      first = false;
+      yield piece;
+    }
   } catch (error) {
     if (error instanceof VaultRefusal) return yield* context.json(error.status, { message: error.message });
     throw error;
@@ -151,7 +174,10 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
 
   if (route === "kuvo/vault") {
     if (method !== "GET") return yield* json(405, {});
-    return yield* json(200, { state: vaultState(), items: isLocked() ? [] : readItems(), grants: readGrants() });
+    // Its files read first: the state says what reading them found.
+    const items = isLocked() ? [] : readItems();
+    const grants = readGrants();
+    return yield* json(200, { state: vaultState(), items, grants });
   }
   if (route === "kuvo/vault/pause") {
     if (method !== "POST") return yield* json(405, {});

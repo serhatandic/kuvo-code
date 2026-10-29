@@ -72,6 +72,40 @@ const signatureOf = (key: Buffer, file: string, generation: number, data: unknow
 const tampered = new Set<string>();
 const newest = new Map<string, number>();
 
+// This Mac's newest generations are kept by its app too, in the Keychain, so a copy put back while
+// the box was stopped is caught as it starts: until they're read from it, agents' use waits.
+let primed = false;
+const STARTING = "This Mac's vault is starting. Try again in a moment.";
+
+/** This Mac's newest generations, from its app (once, as the box starts). */
+export async function primeGenerations(): Promise<void> {
+  if (!onHost() || primed) return;
+  const answer = await asHost(() => askHost(host(), "vault/generations", {}));
+  const kept = isObject(answer?.generations) ? answer.generations : {};
+  for (const file of [ITEMS, GRANTS, PAUSED]) {
+    const generation = kept[path.basename(file, ".json")];
+    if (typeof generation === "number") newest.set(file, Math.max(newest.get(file) ?? 0, generation));
+  }
+  primed = true;
+}
+
+// What's been told to this Mac's app, in order: a change is answered once its app has it.
+let told: Promise<unknown> = Promise.resolve();
+
+/** Tells this Mac's app a file's newest generation. */
+const rememberGeneration = (file: string, generation: number) => {
+  if (!onHost()) return;
+  const found = appHost();
+  if (found) told = told.then(() => askHost(found, "vault/generations", { file: path.basename(file, ".json"), generation })).catch(() => {});
+};
+
+/** Once this Mac's app has every generation told it so far. */
+export const generationsTold = () => told;
+
+/** Each signed file's generation now, for a client to remember and check (a machine's). */
+export const generations = (): Record<string, number> =>
+  Object.fromEntries([ITEMS, GRANTS, PAUSED].map(file => [path.basename(file, ".json"), Number(readJSON<{ gen?: unknown } | null>(file, null)?.gen) || 0]));
+
 /** A signed file's data: `fallback` when there's none, or it can't be checked now (locked), or it
  * wasn't signed with this vault's key. */
 function readSigned<T>(file: string, fallback: T): T {
@@ -96,6 +130,7 @@ function keepSigned(file: string, data: unknown) {
   const generation = Math.max(newest.get(file) ?? 0, readJSON<{ gen?: unknown } | null>(file, null)?.gen as number || 0) + 1;
   keepJSON(file, { v: 2, gen: generation, data, sig: signatureOf(key, file, generation, data) });
   newest.set(file, generation);
+  rememberGeneration(file, generation);
   tampered.delete(file);
 }
 
@@ -495,6 +530,7 @@ export function setPaused(paused: boolean, who?: string, why = "Paused by you.")
 
 /** Why agents can't use the vault now, for a bot or a conversation (its root session): null when they may. */
 export function pausedFor(bot: string | undefined, root?: string): string | null {
+  if (onHost() && !primed) return STARTING;
   const now = readPaused();
   if (now.all) return tampered.has(PAUSED) ? TAMPERED : "The user paused the vault on this computer.";
   if (bot && now.bots?.[bot]) return `The user paused this bot's use of the vault: ${now.bots[bot]}`;
@@ -512,6 +548,7 @@ export function vaultState(): VaultState {
     store: onHost() ? "keychain" : "encrypted",
     keptDays: KEPT_DAYS,
     ...(tampered.size ? { tampered: true } : {}),
+    generations: generations(),
   };
 }
 

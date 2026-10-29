@@ -109,6 +109,28 @@ async function fromMac(method, route, body, key) {
   return { status: answer.status, value: JSON.parse(answer.body || "{}") };
 }
 
+// The Mac over SSH as it reaches the vault now: each request with its proof for that request alone,
+// its body as sent, never the vault's key.
+async function fromMacProved(method, route, body, { proofFor = { method, route, body } } = {}) {
+  const text = body === undefined ? "" : JSON.stringify(body);
+  const at = Date.now();
+  const nonce = crypto.randomBytes(18).toString("base64url");
+  const signedText = proofFor.body === undefined ? "" : JSON.stringify(proofFor.body);
+  const hash = crypto.createHash("sha256").update(signedText).digest("hex");
+  const proof = crypto.sign(null, Buffer.from(`kuvo-vault-request\0lokum\0${at}\0${nonce}\0${proofFor.method}\0${proofFor.route}\0${hash}`), privateKey).toString("base64url");
+  const header = Buffer.from(JSON.stringify({ mac: macKey, at, nonce, proof })).toString("base64url");
+  const send = async () => {
+    const child = spawn(process.execPath, [script, "box", "route"], { env, stdio: ["pipe", "pipe", "pipe"] });
+    child.stdin.end(JSON.stringify({ method, path: route, ...(body === undefined ? {} : { body, bodyText: text }), headers: { "x-kuvo-vault-proof": header } }));
+    let out = "";
+    child.stdout.setEncoding("utf8");
+    for await (const chunk of child.stdout) out += chunk;
+    const answer = JSON.parse(out.trim().split("\n").at(-1));
+    return { status: answer.status, value: JSON.parse(answer.body || "{}") };
+  };
+  return { first: await send(), again: send };
+}
+
 // Everything the vault keeps on disk, as one text.
 const onDisk = () => {
   const all = [];
@@ -478,6 +500,23 @@ test("the Mac's proof works once, and what answers on the vault's socket gets th
     await new Promise(resolve => fake.close(resolve));
   }
   assert.equal((await fromMac("GET", "kuvo/vault", undefined, key)).status, 200, "the real one again");
+});
+
+test("the Mac reaches the vault with a proof for each request, never its key: one made for another request, or used again, gets nothing", async () => {
+  const read = await fromMacProved("GET", "kuvo/vault");
+  assert.equal(read.first.status, 200);
+  assert.ok(read.first.value.items.length > 0);
+  assert.equal((await read.again()).status, 403, "the same proof again");
+  // A proof for a read, put on a change.
+  const swapped = await fromMacProved("POST", "kuvo/vault/pause", { paused: true }, { proofFor: { method: "GET", route: "kuvo/vault" } });
+  assert.equal(swapped.first.status, 403);
+  // A proof for one body, sent with another.
+  const changed = await fromMacProved("POST", "kuvo/vault/pause", { paused: true }, { proofFor: { method: "POST", route: "kuvo/vault/pause", body: { paused: false } } });
+  assert.equal(changed.first.status, 403);
+  assert.equal((await fromMacProved("GET", "kuvo/vault")).first.value.state.paused, false);
+  // Its generations, which the Mac remembers to catch older copies put back.
+  const generations = read.first.value.state.generations;
+  assert.ok(generations.items > 0 && generations.grants > 0, JSON.stringify(generations));
 });
 
 test("a conversation that isn't a bot's is paused too when it's steered to another site, and a sign-in on a name without dots works", async () => {

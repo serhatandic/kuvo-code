@@ -112,6 +112,12 @@ struct VaultSettings: View {
                 }
             }
         }
+        if shown.rolledBack {
+            Section {
+                Label("Its files were put back to older copies while it was stopped, so its grants or sites may be ones you changed. Every agent’s use is paused: look over its items, then let them go on.", systemImage: "exclamationmark.octagon.fill")
+                    .foregroundStyle(.secondary)
+            }
+        }
         if state.tampered == true {
             Section {
                 Label("Its files were changed outside Kuvo Code, so it uses none of them, and every agent’s use is paused. Add its items again.", systemImage: "exclamationmark.octagon.fill")

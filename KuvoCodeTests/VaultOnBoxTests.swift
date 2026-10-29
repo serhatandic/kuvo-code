@@ -133,6 +133,30 @@ import Testing
         #expect(items.first?.signInOnly == true)
     }
 
+    /// The box runs with the engine's Bun, a file in the app's folder an agent's command could
+    /// replace: one that isn't opencode's own any more doesn't start, and says so.
+    @Test func theBoxDoesntStartWithAnEngineThatIsntOpencodesOwn() async throws {
+        defer { done() }
+        let other = BoxProcess()
+        await other.start(engine: URL(filePath: "/bin/sh"), environment: ProcessInfo.processInfo.environment)
+        #expect(other.endpoint == nil)
+        #expect(other.failure?.contains("isn’t opencode’s own") == true)
+    }
+
+    /// A machine's vault files put back to older copies while its box was stopped: this Mac, which
+    /// remembers the newest it saw, notices, once; what it says now is remembered from then on.
+    @Test func aMachinesVaultPutBackToOlderCopiesIsNoticed() {
+        let machine = "test-machine-\(UUID().uuidString)"
+        defer {
+            UserDefaults.standard.removeObject(forKey: "vault.generations.\(machine)")
+            done()
+        }
+        #expect(!Vaults.wentBack(machine, to: ["items": 3, "grants": 5, "paused": 1]), "the first look")
+        #expect(!Vaults.wentBack(machine, to: ["items": 4, "grants": 5, "paused": 1]), "newer")
+        #expect(Vaults.wentBack(machine, to: ["items": 4, "grants": 2, "paused": 1]), "its grants older than seen")
+        #expect(!Vaults.wentBack(machine, to: ["items": 4, "grants": 3, "paused": 1]), "noticed once, then going on from there")
+    }
+
     @Test func aMacWithNothingSavedBeforeHasAnEmptyVault() async throws {
         defer { done() }
         #expect(await Passwords.ready())

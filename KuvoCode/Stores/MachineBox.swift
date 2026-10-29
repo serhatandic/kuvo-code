@@ -187,9 +187,11 @@ enum MachineBox {
 
     /// A client's request to the machine's box, answered as its bridge answers a phone's (`box
     /// route`), over SSH: the status and body. Only for routes that answer once, never a stream.
-    static func route(_ method: String, _ path: String, body: [String: Any]? = nil, folder: String? = nil, headers: [String: String] = [:], on connection: SSHConnection) async throws -> (status: Int, body: Data) {
+    static func route(_ method: String, _ path: String, body: [String: Any]? = nil, bodyText: String? = nil, folder: String? = nil, headers: [String: String] = [:], on connection: SSHConnection) async throws -> (status: Int, body: Data) {
         var request: [String: Any] = ["method": method, "path": path]
         if let body { request["body"] = body }
+        // The body as it is, for what a proof covers.
+        if let bodyText { request["bodyText"] = bodyText }
         // The folder it's about, on the machine, as a phone's request names it.
         var given = headers
         if let folder { given["x-opencode-directory"] = folder }

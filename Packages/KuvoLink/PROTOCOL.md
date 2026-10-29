@@ -2082,7 +2082,10 @@ values), `grants.json`, `paused.json` and `activity.jsonl` (kept a year). The fi
 a key no agent can read: a machine's from its store key (so they can't be checked while it's
 locked), this Mac's given by its app from the Keychain to the box alone, on its stdin as it starts
 (below). `gen` goes up with each write. One that isn't signed with it, was changed, or is older than
-one the box has read since it started counts for nothing; `paused.json`, made with the first item,
+the newest the box knows counts for nothing. This Mac's app keeps each file's newest `gen` in the
+Keychain (host interface `vault/generations {file?, generation?}` → `{generations}`), which the box
+reads before it answers anything of the vault and tells as it writes; a client remembers a machine's
+(the state's `generations`) and, seeing one go back, pauses every agent's use there. `paused.json`, made with the first item,
 then pauses everyone, and so does its being gone. The state says `tampered`. Values:
 
 - this Mac's are in the Keychain, through its app ("Host interface": `vault/get {"id"}` →
@@ -2115,8 +2118,13 @@ locked one), the key itself only for `kuvo/vault/unlock`, which a client sends w
 machine's link keeps running while it has a vault.
 
 **Who may do what.** Clients are your phones (through the relay, by their keys), this Mac's own app
-(`x-kuvo-from: app`), and a request from the computer itself (the Mac over SSH, `box route`) that
-carries the unlock key in `x-kuvo-vault-key`, which also unlocks a locked vault. Anything else
+(`x-kuvo-from: app`, on the box's own password, which it was given on its stdin), and a request from
+the computer itself (the Mac over SSH, `box route`) that carries the Mac's proof for that request
+alone in `x-kuvo-vault-proof`: base64url JSON `{mac, at, nonce, proof}`, its signing key's signature
+of `kuvo-vault-request\0<the machine's id>\0<at>\0<nonce>\0<METHOD>\0<path>\0<sha256 of the body,
+hex>`, within five minutes, each nonce once (`box route` takes the body as sent, `bodyText`, for
+it). The unlock key goes only to unlock (`x-kuvo-vault-key`, or `kuvo/vault/unlock`), when you ask:
+what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it on its way then. Anything else
 (an agent's command) gets `403 {"message"}` from every route but the agents' own two and `unlock`.
 
 - `POST kuvo/vault/key` → `{"key"}`, the unlock key (32 bytes, base64url), for a client to keep:
@@ -2131,7 +2139,7 @@ carries the unlock key in `x-kuvo-vault-key`, which also unlocks a locked vault.
   one without making it.
 - `GET kuvo/vault` → `{state, items, grants}`. `state` is `{made, locked, paused, pausedBots:
   {<bot, or a conversation that isn't a bot's>: why}, store: "keychain" | "encrypted", keptDays,
-  tampered?}`; an item is `{id, kind: "login" |
+  tampered?, generations: {items, grants, paused}}`; an item is `{id, kind: "login" |
   "key" | "file" | "note", name, sites, username?, fields, fileName?, readable?, signInOnly?,
   created, changed, used?}` (`sites`: hosts, a site's own and those under it; `fields`: the names of the values it
   holds, a sign-in's `password`, a file's `file` (base64), a note's `text`, a key's own); a grant

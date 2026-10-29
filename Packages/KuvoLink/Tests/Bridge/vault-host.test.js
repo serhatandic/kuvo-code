@@ -46,6 +46,11 @@ before(async () => {
   });
   await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
   fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify({ port: engine.address().port, password: "engine-pw" }));
+  box = await startBox();
+});
+
+// This Mac's box, as the app starts it.
+async function startBox() {
   const child = spawn(process.execPath, [script, "serve"], { env: { ...env, OPENCODE_PASSWORD: "box-pw" }, stdio: ["pipe", "pipe", "pipe"] });
   let out = "";
   child.stdout.setEncoding("utf8");
@@ -55,8 +60,8 @@ before(async () => {
     const response = await fetch(`${url}/${path}`, { method, headers: { authorization: `Basic ${Buffer.from("opencode:box-pw").toString("base64")}`, "content-type": "application/json", ...(app ? { "x-kuvo-from": "app" } : {}) }, body: body && method !== "GET" ? JSON.stringify(body) : undefined });
     return { status: response.status, value: await response.json().catch(() => ({})) };
   };
-  box = { route, stop: () => { child.stdin.end(); return new Promise(resolve => child.once("exit", resolve)); } };
-});
+  return { route, stop: () => { child.stdin.end(); return new Promise(resolve => child.once("exit", resolve)); } };
+}
 after(async () => { await box?.stop(); engine?.closeAllConnections(); engine?.close(); });
 
 let item;
@@ -119,6 +124,22 @@ test("a host.json rewritten by something on this Mac sends nothing of the vault 
     await new Promise(resolve => fake.close(resolve));
   }
   assert.equal((await box.route("GET", `kuvo/vault/items/${item.id}/values`)).value.values.password, SECRET, "from the app again");
+});
+
+test("an older copy of the vault's files put back while the box was stopped counts for nothing: the app keeps their newest generations", async () => {
+  const grants = path.join(home, "box", "vault", "grants.json");
+  await box.route("POST", "kuvo/vault/grants", { item: item.id, who: { bot: "bot_scout" }, how: "own" });
+  const before = fs.readFileSync(grants, "utf8");
+  // Taken away, then the copy from before put back while the box is stopped.
+  await box.route("POST", "kuvo/vault/grants", { item: item.id, who: { bot: "bot_scout" }, how: null });
+  await box.stop();
+  fs.writeFileSync(grants, before);
+  box = await startBox();
+  // It reads the app's generations before it answers: the copy put back is seen for what it is.
+  const state = (await box.route("GET", "kuvo/vault")).value;
+  assert.equal(state.state.tampered, true);
+  assert.ok(!state.grants.some(grant => grant.who.bot === "bot_scout"), "the grant taken away stays away");
+  await box.route("POST", "kuvo/vault/grants", { item: item.id, who: { bot: "bot_ship" }, how: "own" });
 });
 
 test("with the app not answering, what needs the Keychain says so; removing an item takes its values from the Keychain", async () => {

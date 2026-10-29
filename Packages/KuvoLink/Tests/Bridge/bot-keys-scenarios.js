@@ -109,6 +109,7 @@ export async function standInHost(password) {
       case "/vault/get":
       case "/vault/set":
       case "/vault/delete":
+      case "/vault/generations":
         // Each with its own proof: an HMAC with the secret of the call, its body and when.
         if (host.vaultSecret && request.headers["x-kuvo-vault-auth"] !== crypto.createHmac("sha256", host.vaultSecret).update(`kuvo-host-vault-call\0${request.url.slice(1)}\0${crypto.createHash("sha256").update(Buffer.concat(chunks)).digest("hex")}\0${request.headers["x-kuvo-vault-at"]}`).digest("hex")) {
           host.turnedAway++;
@@ -117,6 +118,11 @@ export async function standInHost(password) {
         break;
     }
     switch (request.url) {
+      // The vault files' newest generations, as the app keeps them in the Keychain.
+      case "/vault/generations":
+        host.generations ??= {};
+        if (typeof given.file === "string" && given.generation > (host.generations[given.file] ?? 0)) host.generations[given.file] = given.generation;
+        return answer(200, { generations: host.generations });
       case "/vault/get":
         return host.vault?.has(given.id) ? answer(200, { values: host.vault.get(given.id) }) : answer(404, {});
       case "/vault/set":

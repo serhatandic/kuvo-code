@@ -242,6 +242,13 @@ final class HostInterface {
         case "/keys/delete":
             guard let name, Self.isKey(name) else { return .init(status: 400) }
             return await Task.detached(operation: { IntegrationKeys.set(nil, for: name) }).value ? .json([:]) : Self.failed
+        case "/vault/generations":
+            // The box's signed files' newest generations, kept here where agents can't put them back.
+            guard vaultCallProved(request) else { return .init(status: 403) }
+            if let file = given["file"] as? String, ["items", "grants", "paused"].contains(file), let generation = given["generation"] as? Int {
+                guard await Task.detached(operation: { VaultValues.remember(file, generation: generation) }).value else { return Self.failed }
+            }
+            return .json(["generations": await Task.detached(operation: { VaultValues.generations() }).value])
         case "/vault/get", "/vault/set", "/vault/delete":
             // The vault's values, by item, in the Keychain: the box keeps everything else about them.
             // Only to the box, which has the secret no file holds: each call with its own proof of it.

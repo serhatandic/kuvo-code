@@ -44,6 +44,7 @@ export const VAULT_STATE = object({
   store: words("keychain", "encrypted"),
   keptDays: number,
   "tampered?": bool,
+  "generations?": map(number),
 });
 
 /** Everything a client's Vault page shows at once. */

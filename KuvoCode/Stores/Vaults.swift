@@ -20,13 +20,18 @@ final class Vaults {
         var failure: String?
         /// A machine's vault, locked since it started again, until you unlock it (`unlock`).
         var locked = false
+        /// A machine's vault files were put back to older copies (its grants, its sites, Pause):
+        /// every agent's use there was paused for you to look.
+        var rolledBack = false
     }
 
     private(set) var shown: [String: Shown] = [:]
     /// Reaches a box (`AppModel.box`), set as the app starts.
     @ObservationIgnored var client: (String) -> BoxClient? = { _ in nil }
-    /// The Mac's proof for a machine it set up (`PhoneLink.vaultProof`).
+    /// The Mac's proof for a machine it set up, to be given its vault's key (`PhoneLink.vaultProof`).
     @ObservationIgnored var proof: (String) -> [String: Any]? = { _ in nil }
+    /// The Mac's proof for one request to a machine's vault (`PhoneLink.vaultRequestProof`).
+    @ObservationIgnored var requestProof: (_ machine: String, _ method: String, _ path: String, _ body: Data) -> String? = { _, _, _, _ in nil }
     /// Goes up with each read of a box, and as it's forgotten: a read that comes back after a
     /// later one, or after the box was forgotten, is dropped.
     @ObservationIgnored private var reads: [String: Int] = [:]
@@ -35,14 +40,9 @@ final class Vaults {
 
     // MARK: Asking a box
 
-    private func headers(for box: String) async throws -> [String: String] {
-        guard box != BoxClient.mac else { return [:] }
-        if let key = VaultKeys.key(for: box) { return ["x-kuvo-vault-key": key] }
-        return ["x-kuvo-vault-key": try await keyFromMachine(box)]
-    }
-
     /// The machine's unlock key, which it gives (making its vault, the first time) to the Mac that
-    /// set it up; kept once it's given.
+    /// set it up; kept once it's given. Asked for only to unlock it: what runs as you on the machine
+    /// could take it on its way, so it never goes with an ordinary request.
     private func keyFromMachine(_ box: String) async throws -> String {
         guard let proof = proof(box), let client = client(box) else { throw BoxRefusal(status: 503, message: "This Mac can't reach that machine's vault now. Try again in a moment.") }
         let (status, data) = try await client.send("POST", VaultRoutes.key, body: try JSONSerialization.data(withJSONObject: proof))
@@ -51,23 +51,17 @@ final class Vaults {
         return key
     }
 
-    /// Whether a machine has made its vault, which it says without its key: unlocking with none is
-    /// turned away only by a vault that's there.
-    private func hasVault(_ box: String) async -> Bool {
-        guard let client = client(box), let (status, _) = try? await client.send("POST", VaultRoutes.unlock, body: Data("{}".utf8)) else { return false }
-        return status == 403
-    }
-
-    /// `method path` on `box`'s vault, its answer's JSON as `T`.
+    /// `method path` on `box`'s vault, its answer's JSON as `T`: to a machine with this Mac's
+    /// proof for that request alone, never its unlock key.
     func ask<T: Decodable>(_ type: T.Type = T.self, _ method: String, _ path: String, body: [String: Any]? = nil, on box: String) async throws -> T {
         guard let client = client(box) else { throw BoxRefusal(status: 503, message: "Kuvo Code isn't ready yet.") }
         let sent = try body.map { try JSONSerialization.data(withJSONObject: $0) }
-        var (status, data) = try await client.send(method, path, body: sent, headers: try await headers(for: box))
-        // A key that isn't the machine's any more (its vault made again): asked for afresh, once,
-        // the old one kept until there's a new one.
-        if status == 403, box != BoxClient.mac, let old = VaultKeys.key(for: box), let fresh = try? await keyFromMachine(box), fresh != old {
-            (status, data) = try await client.send(method, path, body: sent, headers: ["x-kuvo-vault-key": fresh])
+        var headers: [String: String] = [:]
+        if box != BoxClient.mac {
+            guard let proof = requestProof(box, method, path, sent ?? Data()) else { throw BoxRefusal(status: 503, message: "This Mac can't reach that machine's vault now. Try again in a moment.") }
+            headers["x-kuvo-vault-proof"] = proof
         }
+        let (status, data) = try await client.send(method, path, body: sent, headers: headers)
         guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
         return try JSONDecoder().decode(T.self, from: data)
     }
@@ -96,6 +90,10 @@ final class Vaults {
             now.activity = try await ask(Entries.self, "GET", VaultRoutes.activity(limit: 50), on: box).entries
             now.failure = nil
             now.locked = false
+            if box != BoxClient.mac, let vault = now.vault, Self.wentBack(box, to: vault.state.generations ?? [:]) {
+                now.rolledBack = true
+                if (try? await ask(Nothing.self, "POST", VaultRoutes.pause, body: ["paused": true], on: box)) != nil { now.vault?.state.paused = true }
+            }
         } catch {
             now.failure = error.localizedDescription
             now.locked = (error as? BoxRefusal)?.status == 423
@@ -106,18 +104,14 @@ final class Vaults {
 
     /// Follows `box` while the caller's task runs (a view's): what its agents ask, read again
     /// every second on this Mac (with its vault every few, which the browser and agents' sign-ins
-    /// read) and every ten on a machine, whose box answers once over SSH. A machine's key is
-    /// fetched once its vault is there: following never makes one. A box from before the vault
-    /// stops it.
+    /// read) and every ten on a machine, whose box answers once over SSH, each with this Mac's
+    /// proof (never its key, and never making a vault). A box from before the vault stops it.
     func follow(_ box: String) async {
         var round = 0
         while !Task.isCancelled {
-            if box != BoxClient.mac, VaultKeys.key(for: box) == nil, round % 6 == 0, await hasVault(box) {
-                _ = try? await keyFromMachine(box)
-            }
             if box == BoxClient.mac, round % 5 == 0 {
                 await refresh(box)
-            } else if box == BoxClient.mac || VaultKeys.key(for: box) != nil {
+            } else {
                 // Dropped if a whole read began meanwhile, which has the asks too.
                 let read = reads[box]
                 do {
@@ -187,16 +181,32 @@ final class Vaults {
         await refresh(box)
     }
 
+    /// Whether a machine's vault files are older than this Mac saw them last (each newest one is
+    /// remembered here, where nothing on the machine reaches): a copy put back while its box was
+    /// stopped. What it says now is remembered from then on.
+    static func wentBack(_ box: String, to generations: [String: Int]) -> Bool {
+        let key = "vault.generations.\(box)"
+        let seen = UserDefaults.standard.dictionary(forKey: key) as? [String: Int] ?? [:]
+        let back = seen.contains { file, generation in (generations[file] ?? 0) < generation }
+        UserDefaults.standard.set(back ? generations : seen.merging(generations) { max($0, $1) }, forKey: key)
+        return back
+    }
+
     /// Unlocks a machine's vault, locked since it started again, with the key this Mac keeps: sent
     /// only now, when you ask, since what answers for it then can't prove it's the vault.
     func unlock(_ box: String) async throws {
-        guard let key = VaultKeys.key(for: box) else { throw BoxRefusal(status: 403, message: "This Mac doesn't keep that machine's vault key. Unlock it from your iPhone.") }
+        // (A locked vault doesn't give its key: then only a client that kept it can, your iPhone say.)
+        var key = VaultKeys.key(for: box)
+        if key == nil { key = try? await keyFromMachine(box) }
+        guard let key else { throw BoxRefusal(status: 423, message: "This Mac doesn't keep that machine's vault key. Unlock it from your iPhone.") }
         _ = try await ask(Nothing.self, "POST", VaultRoutes.unlock, body: ["key": key], on: box)
         await refresh(box)
     }
 
     /// Pauses (or lets go again) every agent's use, or one bot's.
     func pause(_ paused: Bool, bot: String? = nil, on box: String) async throws {
+        // Letting every agent go on is looking over what was put back.
+        if !paused, bot == nil { shown[box]?.rolledBack = false }
         var body: [String: Any] = ["paused": paused]
         if let bot { body["bot"] = bot }
         _ = try await ask(Nothing.self, "POST", VaultRoutes.pause, body: body, on: box)

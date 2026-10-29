@@ -53,6 +53,7 @@ import { runMacPeers } from "./mac/peers";
 import { runMacLink } from "./mac/relay";
 import { watchVaultAsks } from "./vault/asks";
 import { holdVault } from "./vault/holder";
+import { primeGenerations } from "./vault/store";
 import { setVaultTell } from "./vault/use";
 import { HELD_FILE, NoticeHold } from "./notices/hold";
 import { noticeJSON, pushTo } from "./notices/notice";
@@ -396,14 +397,20 @@ async function box(command: string): Promise<void> {
       // A client's request, answered as the bridge answers a phone's: one that answers once,
       // never a stream that follows.
       answerOnce();
-      let given: { method?: unknown; path?: unknown; body?: unknown; headers?: unknown } | null = {};
+      let given: { method?: unknown; path?: unknown; body?: unknown; bodyText?: unknown; headers?: unknown } | null = {};
       try { given = JSON.parse(await input()); } catch {}
       const handle = engineHandler(readEngineFile, { name: os.hostname() });
       // With the folder it's asked about (`x-opencode-directory`), as a phone's request has it.
       const folder = (given?.headers as Record<string, unknown> | undefined)?.["x-opencode-directory"];
-      // And the vault's unlock key, which makes the Mac a client of this machine's vault (areas/vault.ts).
-      const vaultKey = (given?.headers as Record<string, unknown> | undefined)?.["x-kuvo-vault-key"];
-      const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json", ...(typeof folder === "string" ? { "x-opencode-directory": folder } : {}), ...(typeof vaultKey === "string" ? { "x-kuvo-vault-key": vaultKey } : {}) }, body: Buffer.from(given?.body === undefined ? "" : JSON.stringify(given.body)), fromMac: true };
+      // And the Mac's proof for a request to this machine's vault (or its unlock key, to unlock it),
+      // which makes it a client there (areas/vault.ts); with the body as it was sent, which the proof covers.
+      const vaultHeaders: Record<string, string> = {};
+      for (const name of ["x-kuvo-vault-key", "x-kuvo-vault-proof"]) {
+        const value = (given?.headers as Record<string, unknown> | undefined)?.[name];
+        if (typeof value === "string") vaultHeaders[name] = value;
+      }
+      const sentBody = typeof given?.bodyText === "string" ? given.bodyText : given?.body === undefined ? "" : JSON.stringify(given.body);
+      const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json", ...(typeof folder === "string" ? { "x-opencode-directory": folder } : {}), ...vaultHeaders }, body: Buffer.from(sentBody), fromMac: true };
       let status = 502;
       let type = "";
       const chunks: Buffer[] = [];
@@ -504,6 +511,13 @@ async function serve(): Promise<void> {
   // The vault, held here (on a machine, `run` holds it; a test's box serves alone), its asks told
   // to your phones through this Mac's link.
   holdVault(engineHandler(readEngineFile, { name: os.hostname() }, readBridgeFile));
+  // This Mac's vault's newest generations, from its app, before agents use it (vault/store.ts).
+  if (IS_MAC) void (async () => {
+    for (let tries = 0; tries < 120; tries++) {
+      try { return await primeGenerations(); } catch {}
+      await sleep(1000);
+    }
+  })();
   if (IS_MAC) {
     setVaultTell(macTell);
     watchVaultAsks(macTell, id => macLink.hold?.resolve(id));

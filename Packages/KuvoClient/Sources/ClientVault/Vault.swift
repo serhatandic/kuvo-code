@@ -46,6 +46,9 @@ public struct VaultState: Codable, Equatable, Sendable {
     public var keptDays: Int
     /// Its files were changed outside Kuvo Code, so it uses none of them.
     public var tampered: Bool?
+    /// Each signed file's generation (`items`, `grants`, `paused`), for a client to remember and
+    /// check: lower than one seen before means an older copy was put back.
+    public var generations: [String: Int]?
 
     public init(made: Bool = true, locked: Bool = false, paused: Bool = false, pausedBots: [String: String] = [:], store: String = "keychain", keptDays: Int = 365, tampered: Bool? = nil) {
         self.made = made
