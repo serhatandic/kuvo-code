@@ -30,15 +30,17 @@ struct GoalPlanBar: View {
     private var isBusy: Bool { isChanging || app.goalPlans.answering.contains(plan.id) }
 
     var body: some View {
-        // Kept current: how long it has been at it, and now on the axis.
-        TimelineView(.periodic(from: .now, by: 30)) { context in
+        // Kept current while it runs: how long it has been at it, and now on the axis. Once
+        // it's over, it stays as it ended.
+        TimelineView(.periodic(from: .now, by: isOver ? 365 * 86400 : 30)) { context in
             VStack(alignment: .leading, spacing: 0) {
                 BarLine(mark: AnyView(mark), title: title, progress: progress(now: context.date), detail: Text(plan.title ?? plan.goal),
                         accessory: AnyView(actions), folded: AnyView(strip), showHelp: "Show each step on the plan’s time line", hideHelp: "Hide them: this line stays",
                         isHidden: $isHidden, close: isOver ? putAway : nil, closeHelp: "Put the goal away")
                 if !isHidden {
                     VStack(alignment: .leading, spacing: 10) {
-                        GoalLanes(plan: plan, now: context.date, showsDone: $showsDone)
+                        // A goal that's over, as it was when it ended.
+                        GoalLanes(plan: plan, now: isOver ? plan.ended.map { Date(timeIntervalSince1970: $0 / 1000) } ?? context.date : context.date, showsDone: $showsDone)
                         if !plan.waiting.isEmpty {
                             VStack(spacing: 4) {
                                 ForEach(plan.waiting) { item in waitingRow(item, now: context.date) }
@@ -177,91 +179,90 @@ struct GoalLanes: View {
     @State private var visible: CGRect = .zero
     @State private var zoomKeys = ZoomKeys()
 
-    private enum Row: Identifiable {
-        case phase(String)
-        case done([GoalTimeline.Lane])
-        case later([GoalTimeline.Lane])
-        case lane(GoalTimeline.Lane)
-
-        var id: String {
-            switch self {
-            case .phase(let name): "phase:\(name)"
-            case .done: "done"
-            case .later: "later"
-            case .lane(let lane): lane.id
-            }
-        }
-
-        var height: CGFloat {
-            if case .phase = self { return GoalLanes.phaseHeight }
-            return GoalLanes.laneHeight
-        }
-    }
+    typealias Row = GoalTimeline.Row
 
     static let headerHeight: CGFloat = 22
     static let laneHeight: CGFloat = 26
     static let phaseHeight: CGFloat = 20
     static let footerHeight: CGFloat = 20
-    /// Under the lanes of a long goal, for the scroll bar.
+    /// Under the lanes of a goal that scrolls, for its bar.
     static let scrollRoom: CGFloat = 10
     static let chipHeight: CGFloat = 28
-    static let nameWidth: CGFloat = 112
     static let wordsWidth: CGFloat = 186
+    /// Narrower than this, the words beside the lanes go (VoiceOver and the pointer still have them).
+    static let wordsFrom: CGFloat = 520
+
+    /// How wide the lanes are, as last measured.
+    @State private var total: CGFloat = 0
+
+    static func height(_ row: Row) -> CGFloat {
+        if case .phase = row { return phaseHeight }
+        return laneHeight
+    }
 
     var body: some View {
         let timeline = GoalTimeline(plan, now: now)
         // A long goal: one that opens on the days around now.
-        let long = timeline.window() != nil
-        let window = zoomedOut ? nil : timeline.window()
-        let rows = rows(timeline, long: long)
+        let opens = timeline.window()
+        let long = opens != nil
+        let window = zoomedOut ? nil : opens
+        let rows = timeline.rows(showsDone: showsDone, showsLater: showsLater)
         // A long goal's deadline has its chip; its finish, its line here.
         let footer = timeline.finish != nil || (window == nil && timeline.deadline != nil)
-        let lanesHeight = rows.reduce(0) { $0 + $1.height }
-        let height = Self.headerHeight + lanesHeight + (footer ? Self.footerHeight : 0) + (window != nil ? Self.scrollRoom : 0)
+        let lanesHeight = rows.reduce(0) { $0 + Self.height($1) }
+        let showsWords = total >= Self.wordsFrom
+        let nameWidth: CGFloat = total < 420 ? 84 : 112
+        let room = max(40, total - nameWidth - 12 - (showsWords ? Self.wordsWidth + 12 : 0))
+        let width = Self.width(timeline, window: window, room: room)
+        let x = AxisX(timeline: timeline, width: width)
+        let scrolls = width > room + 1
+        let height = Self.headerHeight + lanesHeight + (footer ? Self.footerHeight : 0) + (scrolls ? Self.scrollRoom : 0)
         VStack(alignment: .trailing, spacing: 2) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 0) {
                     Color.clear.frame(height: Self.headerHeight)
-                    ForEach(rows) { row in name(row).frame(height: row.height) }
+                    ForEach(rows) { row in name(row, words: !showsWords).frame(height: Self.height(row)) }
                 }
-                .frame(width: Self.nameWidth, alignment: .leading)
-                GeometryReader { room in
-                    let width = Self.width(timeline, window: window, room: room.size.width)
-                    let x = AxisX(timeline: timeline, width: width)
-                    ScrollView(.horizontal) {
-                        axis(timeline, window: window, rows: rows, x: x, height: height, lanesHeight: lanesHeight, footer: footer, long: long)
-                    }
-                    .scrollPosition($position)
-                    .scrollIndicators(.never)
-                    .overlay(alignment: .bottomLeading) {
-                        if window != nil { indicator(content: width, room: room.size.width) }
-                    }
-                    .scrollDisabled(width <= room.size.width + 1)
-                    .onScrollGeometryChange(for: CGRect.self, of: { $0.visibleRect }) { _, rect in visible = rect }
-                    // Opens on the days around now (and back there from the whole goal).
-                    .task(id: "\(zoomedOut)|\(Int(room.size.width))") {
-                        guard let window else { return position.scrollTo(edge: .leading) }
-                        position.scrollTo(x: max(0, x(window.start)))
-                    }
+                .frame(width: nameWidth, alignment: .leading)
+                ScrollView(.horizontal) {
+                    axis(timeline, window: window, rows: rows, x: x, height: height, lanesHeight: lanesHeight, footer: footer)
                 }
-                .frame(height: height)
-                .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 0) {
-                    Color.clear.frame(height: Self.headerHeight)
-                    ForEach(rows) { row in
-                        words(row, long: long)
-                            .frame(height: row.height)
-                            .accessibilityHidden(true)
-                    }
+                .scrollPosition($position)
+                .scrollIndicators(.never)
+                .overlay(alignment: .bottomLeading) {
+                    if scrolls { indicator(content: width, room: room) }
                 }
-                .frame(width: Self.wordsWidth, alignment: .leading)
+                .scrollDisabled(!scrolls)
+                .onScrollGeometryChange(for: CGRect.self, of: { $0.visibleRect }) { _, rect in visible = rect }
+                // Opens on the days around now, once it's measured (and back there from the whole
+                // goal); not again as the window's resized.
+                .task(id: "\(zoomedOut)|\(total > 0)") {
+                    guard let window, total > 0 else { return position.scrollTo(edge: .leading) }
+                    position.scrollTo(x: max(0, x(window.start)))
+                }
+                .frame(width: room, height: height)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(summary(timeline))
+                if showsWords {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Color.clear.frame(height: Self.headerHeight)
+                        ForEach(rows) { row in
+                            words(row, long: long)
+                                .frame(height: Self.height(row))
+                                .accessibilityHidden(true)
+                        }
+                    }
+                    .frame(width: Self.wordsWidth, alignment: .leading)
+                }
             }
             if window != nil, let deadline = timeline.deadline {
-                deadlineChip(deadline, timeline: timeline)
+                deadlineChip(deadline, x: x, showsWords: showsWords)
                     .frame(height: Self.chipHeight)
             }
         }
         .font(.system(size: 13))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { total = $0 }
         // Pinch, or ⌘-scroll, for the whole goal and back.
         .gesture(MagnifyGesture().onEnded { value in
             guard long else { return }
@@ -269,7 +270,9 @@ struct GoalLanes: View {
             if value.magnification > 1.1, zoomedOut { withAnimation(.ui) { zoomedOut = false } }
         })
         .onHover { zoomKeys.hovering = $0 }
-        .onAppear { if long { zoomKeys.start($zoomedOut) } }
+        .onChange(of: long, initial: true) { _, isLong in
+            if isLong { zoomKeys.start($zoomedOut) } else { zoomKeys.stop() }
+        }
         .onDisappear { zoomKeys.stop() }
         .accessibilityElement(children: .contain)
         .accessibilityActions {
@@ -279,7 +282,17 @@ struct GoalLanes: View {
         }
     }
 
-    /// A thin bar under a long goal's lanes: where along the goal the days shown are.
+    /// The axis as VoiceOver reads it: now, the finish and the deadline (each lane reads itself).
+    private func summary(_ timeline: GoalTimeline) -> String {
+        let format: Date.FormatStyle = timeline.unit == .hour ? .dateTime.hour().minute() : .dateTime.weekday(.wide).month(.wide).day()
+        var said = ["Time line"]
+        if plan.state == .running { said.append("now \(now.formatted(format))") }
+        if let finish = timeline.finish { said.append("likely done around \(finish.formatted(format))") }
+        if let deadline = timeline.deadline { said.append("due \(deadline.formatted(format))") }
+        return said.joined(separator: ", ")
+    }
+
+    /// A thin bar under lanes that scroll: where along the goal what shows is.
     private func indicator(content: CGFloat, room: CGFloat) -> some View {
         let share = content > 0 ? room / content : 1
         return Capsule()
@@ -296,46 +309,14 @@ struct GoalLanes: View {
     }
 
     /// How wide the axis is drawn: the days around now across the room, the rest a scroll away;
-    /// a goal shown whole across the room, so many points an hour at least.
+    /// a goal shown whole across the room.
     static func width(_ timeline: GoalTimeline, window: DateInterval?, room: CGFloat) -> CGFloat {
-        if let window { return room * timeline.end.timeIntervalSince(timeline.start) / window.duration }
-        let span = timeline.end.timeIntervalSince(timeline.start)
-        return timeline.unit == .hour ? max(room, span / 3600 * 64) : room
+        guard let window, window.duration > 0 else { return room }
+        return room * timeline.end.timeIntervalSince(timeline.start) / window.duration
     }
 
-    // MARK: Rows
-
-    private func rows(_ timeline: GoalTimeline, long: Bool) -> [Row] {
-        let done = timeline.lanes.filter { $0.step.state == .done || $0.step.state == .skipped }
-        let later = timeline.lanes.filter { $0.step.state == .todo }
-        var rows: [Row] = []
-        var left = timeline.lanes
-        if (long && !done.isEmpty) || (timeline.lanes.count > 6 && done.count >= 2) {
-            rows.append(.done(done))
-            if showsDone { rows += done.map(Row.lane) }
-            left.removeAll { lane in done.contains { $0.id == lane.id } }
-        }
-        let foldsLater = long && later.count > 2
-        if foldsLater { left.removeAll { lane in later.contains { $0.id == lane.id } } }
-        if plan.phases.count > 1 {
-            for phase in plan.phases {
-                let lanes = left.filter { $0.step.phase == phase }
-                guard !lanes.isEmpty else { continue }
-                rows.append(.phase(phase))
-                rows += lanes.map(Row.lane)
-            }
-            rows += left.filter { $0.step.phase.map { !plan.phases.contains($0) } ?? true }.map(Row.lane)
-        } else {
-            rows += left.map(Row.lane)
-        }
-        if foldsLater {
-            rows.append(.later(later))
-            if showsLater { rows += later.map(Row.lane) }
-        }
-        return rows
-    }
-
-    @ViewBuilder private func name(_ row: Row) -> some View {
+    /// `words`: what the step is at goes in its help, where there's no room beside the lanes.
+    @ViewBuilder private func name(_ row: Row, words: Bool) -> some View {
         switch row {
         case .phase(let phase):
             Text(phase.uppercased())
@@ -356,7 +337,7 @@ struct GoalLanes: View {
                     .truncationMode(.tail)
             }
             .foregroundStyle(ink(lane.step.state))
-            .help(lane.step.text)
+            .help(words ? "\(lane.step.text): \(status(lane.step).text)" : lane.step.text)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(GoalPlanWords.spoken(lane.step, now: now))
             .accessibilityValue(status(lane.step).text)
@@ -443,7 +424,7 @@ struct GoalLanes: View {
 
     // MARK: The axis
 
-    private func axis(_ timeline: GoalTimeline, window: DateInterval?, rows: [Row], x: AxisX, height: CGFloat, lanesHeight: CGFloat, footer: Bool, long: Bool) -> some View {
+    private func axis(_ timeline: GoalTimeline, window: DateInterval?, rows: [Row], x: AxisX, height: CGFloat, lanesHeight: CGFloat, footer: Bool) -> some View {
         let days = window != nil ? Self.days(timeline) : []
         let ticks = window != nil ? days : timeline.ticks()
         let nowX = x(now)
@@ -475,8 +456,8 @@ struct GoalLanes: View {
                     header(timeline, ticks: ticks, x: x, width: x.width)
                 }
                 ForEach(rows) { row in
-                    bar(row, window: window, lanes: timeline.lanes, x: x)
-                        .frame(width: x.width, height: row.height, alignment: .leading)
+                    bar(row, window: window, timeline: timeline, x: x)
+                        .frame(width: x.width, height: Self.height(row), alignment: .leading)
                 }
                 if footer {
                     footerLabel(timeline, x: x, width: x.width)
@@ -565,7 +546,8 @@ struct GoalLanes: View {
         .frame(width: width, height: Self.headerHeight, alignment: .topLeading)
     }
 
-    @ViewBuilder private func bar(_ row: Row, window: DateInterval?, lanes: [GoalTimeline.Lane], x: AxisX) -> some View {
+    @ViewBuilder private func bar(_ row: Row, window: DateInterval?, timeline: GoalTimeline, x: AxisX) -> some View {
+        let lanes = timeline.lanes
         switch row {
         case .phase:
             Color.clear
@@ -611,7 +593,7 @@ struct GoalLanes: View {
                     .frame(width: max(0, visible.maxX - 4), alignment: .trailing)
                 } else {
                     let start = from ?? now
-                    let end = (lanes.compactMap(\.likelyEnd) + [plan.ends.map { Date(timeIntervalSince1970: $0 / 1000) } ?? GoalTimeline(plan, now: now).end]).max() ?? now
+                    let end = (lanes.compactMap(\.likelyEnd) + [timeline.deadline ?? timeline.end]).max() ?? now
                     Hatched()
                         .frame(width: max(12, x(end) - x(start)), height: 7)
                         .offset(x: x(start))
@@ -637,14 +619,14 @@ struct GoalLanes: View {
                 if let likely = lane.likelyEnd, likely > to {
                     Dashes()
                         .stroke(accent.opacity(0.75), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                        .frame(width: x(likely) - x(to) - 2, height: 2)
+                        .frame(width: max(0, x(likely) - x(to) - 2), height: 2)
                         .offset(x: x(to) + 2)
                 }
                 // Paused: held until it carries on.
                 if step.state == .paused, let resumes = resumes(step), resumes > to {
                     Dashes()
                         .stroke(Color.secondary.opacity(0.6), style: StrokeStyle(lineWidth: 3, dash: [1.5, 2.5]))
-                        .frame(width: x(resumes) - x(to) - 2, height: 3)
+                        .frame(width: max(0, x(resumes) - x(to) - 2), height: 3)
                         .offset(x: x(to) + 2)
                 }
             } else if step.state == .todo, let at = startsAround(step, lanes: lanes) {
@@ -705,8 +687,7 @@ struct GoalLanes: View {
     }
 
     /// A deadline out of sight: a chip under the lanes that scrolls there.
-    @ViewBuilder private func deadlineChip(_ deadline: Date, timeline: GoalTimeline) -> some View {
-        let x = AxisX(timeline: timeline, width: visible.width > 0 ? Self.width(timeline, window: timeline.window(), room: visible.width) : 0)
+    @ViewBuilder private func deadlineChip(_ deadline: Date, x: AxisX, showsWords: Bool) -> some View {
         if visible.width > 0, !(visible.minX...visible.maxX).contains(x(deadline)) {
             let later = x(deadline) > visible.maxX
             Button {
@@ -723,7 +704,7 @@ struct GoalLanes: View {
             .buttonStyle(GoalPillButtonStyle(bordered: true))
             .controlSize(.small)
             .help("Scroll to the deadline")
-            .padding(.trailing, Self.wordsWidth + 12)
+            .padding(.trailing, showsWords ? Self.wordsWidth + 12 : 0)
         }
     }
 
