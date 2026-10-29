@@ -27,7 +27,9 @@ Object.assign(process.env, {
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // An engine with its conversations, as its API exports, imports and deletes them; it counts imports.
-const engine = { sessions: new Map(), imports: 0 };
+// Its imports can be held (`hold`, a promise: a big one on a small machine), and its deletes fail
+// (`down`: the engine went away).
+const engine = { sessions: new Map(), imports: 0, hold: null, holding: false, down: false, refused: 0 };
 const server = http.createServer((request, response) => {
   const chunks = [];
   request.on("data", chunk => chunks.push(chunk));
@@ -39,11 +41,16 @@ const server = http.createServer((request, response) => {
     if (url.pathname === "/api/session" && url.searchParams.get("parentID")) return send(200, []);
     if (url.pathname === "/api/session/active") return send(200, {});
     if (url.pathname === "/api/experimental/session/import") {
-      if (engine.sessions.has(given.info.id)) return response.writeHead(409).end("{}");
-      if (engine.refuse === given.info.id) return response.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ message: "The disk is full." }));
-      engine.imports += 1;
-      engine.sessions.set(given.info.id, { id: given.info.id, title: given.info.title, directory: given.location.directory, messages: given.messages });
-      return send(200, listed(engine.sessions.get(given.info.id)));
+      const bring = () => {
+        if (engine.sessions.has(given.info.id)) return response.writeHead(409).end("{}");
+        if (engine.refuse === given.info.id) return response.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ message: "The disk is full." }));
+        engine.imports += 1;
+        engine.sessions.set(given.info.id, { id: given.info.id, title: given.info.title, directory: given.location.directory, messages: given.messages });
+        return send(200, listed(engine.sessions.get(given.info.id)));
+      };
+      if (!engine.hold) return bring();
+      engine.holding = true;
+      return void engine.hold.then(() => { engine.holding = false; bring(); });
     }
     const exported = url.pathname.match(/^\/api\/experimental\/session\/([^/]+)\/export$/);
     if (exported) {
@@ -55,6 +62,10 @@ const server = http.createServer((request, response) => {
     if (!session) return send(404, null);
     if (match[2]) return send(200, []);
     if (request.method === "DELETE") {
+      if (engine.down) {
+        engine.refused += 1;
+        return response.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ message: "The engine went away." }));
+      }
       engine.sessions.delete(session.id);
       return send(200, true);
     }
@@ -337,4 +348,184 @@ test("where a moved conversation lives: by the computer that moved it, lately, a
   const moved = link.movedOf(link.readLink());
   assert.equal(moved.get("ses_went1"), studio.key);
   assert.ok(!moved.has("ses_mine1") && !moved.has("ses_old1") && !moved.has("ses_gone1"));
+});
+
+// The record of the move of `thing` here, as it's kept.
+const movesFolder = path.join(home, "run", "moves");
+function recordOf(thing) {
+  for (const name of fs.readdirSync(movesFolder).filter(name => /^mov_[A-Za-z0-9]+\.json$/.test(name))) {
+    try {
+      const record = JSON.parse(fs.readFileSync(path.join(movesFolder, name), "utf8"));
+      if (record.thing === thing) return record;
+    } catch {}
+  }
+  return null;
+}
+// Lab answers each step as a box would, and switch with `onSwitch` (nothing: it's gone quiet).
+function labAnswers(onSwitch) {
+  script = move => {
+    if (move.op === "offer") say({ op: "ready", id: move.id });
+    if (move.op === "part") {
+      say({ op: "got", id: move.id, i: move.i });
+      if (move.i === move.of - 1) say({ op: "arrived", id: move.id });
+    }
+    if (move.op === "switch" && onSwitch) say({ op: onSwitch, id: move.id });
+    if (move.op === "drop") say({ op: "dropped", id: move.id });
+  };
+}
+
+test("the other computer removed just as it was told to switch: the original stays here, as it was", async () => {
+  chat("ses_gone1");
+  labAnswers(null);
+  const before = told.length;
+  const asked = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_gone1", to: peerKey });
+  await until(() => told.slice(before).some(move => move.op === "switch"));
+  // Lab goes from your computers (removed, or just left out as they're read again).
+  link.writeLink({ macPeers: [studio] });
+  let moved;
+  try {
+    const now = Date.now();
+    link.keepMoving(now);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(recordOf("ses_gone1")?.stage, "switching", "left out a moment: nothing changes");
+    assert.ok(engine.sessions.has("ses_gone1"));
+    // Gone a while: it never heard `switched`, so the original goes on here.
+    link.keepMoving(now + 6 * 60_000);
+    moved = await asked;
+  } finally {
+    link.writeLink({ macPeers: [lab, studio] });
+  }
+  assert.equal(moved.status, 409, JSON.stringify(moved.json));
+  await asItWas("ses_gone1");
+});
+
+test("a drop that comes while a copy's being set up waits for it, then lets all of it go", async () => {
+  script = () => {};
+  const thing = "ses_slow1";
+  const { bytes, hash } = bundleFor(thing, [{ info: { id: thing, title: "Notes" }, messages: [] }], { "wakes.json": "[]" });
+  let release;
+  engine.hold = new Promise(resolve => { release = resolve; });
+  const id = "mov_slow1";
+  await say({ op: "offer", id, kind: "chat", thing, name: "“Notes”", size: bytes.length, hash, wasPaused: false, from: peerKey });
+  const settingUp = say({ op: "part", id, hash, i: 0, of: 1, d: bytes.toString("base64url") });
+  await until(() => engine.holding);
+  // Lab takes it back now (it stopped hearing from this box), as its conversation comes in here.
+  const dropping = say({ op: "drop", id });
+  // A drop that doesn't wait for it is done before the import is (it can't be answered before then
+  // when it waits).
+  for (let tries = 0; tries < 2000 && !told.some(move => move.id === id && move.op === "dropped"); tries++) await new Promise(resolve => setImmediate(resolve));
+  engine.hold = null;
+  release();
+  await Promise.all([settingUp, dropping]);
+  await until(() => told.some(move => move.id === id && move.op === "dropped"));
+  assert.ok(!engine.sessions.has(thing), "its conversation isn't left here, live, beside the original");
+  assert.ok(!fs.existsSync(path.join(wakes, thing)), "nor its folder");
+  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+  // And lab heard, as it was set up, that it was still at it.
+  assert.ok(told.some(move => move.id === id && move.op === "working"));
+});
+
+test("a switch heard while this box's engine is down: the original goes once it's back", async () => {
+  chat("ses_fin1");
+  labAnswers("switched");
+  engine.down = true;
+  const asked = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_fin1", to: peerKey });
+  await until(() => recordOf("ses_fin1")?.stage === "finishing" && engine.refused > 0);
+  assert.ok(engine.sessions.has("ses_fin1"));
+  engine.down = false;
+  link.keepMoving(Date.now() + 2 * 60_000);
+  await until(() => !engine.sessions.has("ses_fin1") && !recordOf("ses_fin1"));
+  const moved = await asked;
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  assert.deepEqual((await ask("GET", "kuvo/moves")).json.moves, []);
+});
+
+test("a switch never answered: it asks the other computer to let its copy go, and the original goes on here", async () => {
+  chat("ses_ask1");
+  labAnswers(null);
+  const before = told.length;
+  const asked = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_ask1", to: peerKey });
+  await until(() => told.slice(before).some(move => move.op === "switch"));
+  link.keepMoving(Date.now() + 11 * 60_000);
+  await until(() => told.slice(before).some(move => move.op === "drop"));
+  const moved = await asked;
+  assert.equal(moved.status, 409);
+  await asItWas("ses_ask1");
+});
+
+test("a move taken back, left at any step, lets its copy there go and is forgotten; never offered again", async () => {
+  const id = "mov_left1";
+  const file = path.join(movesFolder, `${id}.json`);
+  fs.writeFileSync(file, JSON.stringify({
+    id, kind: "chat", thing: "ses_left1", name: "“Left”", from: "", to: peerKey, role: "from", stage: "copying", sessions: ["ses_left1"],
+    peer: peerKey, wasPaused: false, tries: 0, started: Date.now(), offered: true, step: "offer", sentAt: Date.now() - 120_000, failed: "It didn’t get there.", failedStatus: 409,
+  }));
+  labAnswers(null);
+  const before = told.length;
+  link.keepMoving();
+  await until(() => !fs.existsSync(file));
+  assert.deepEqual(told.slice(before).filter(move => move.id === id).map(move => move.op), ["drop"]);
+});
+
+test("a switch asked again long after it switched (the other computer asleep all that while) is answered switched", async () => {
+  const file = path.join(movesFolder, "ended.json");
+  let kept = {};
+  try { kept = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
+  kept.mov_long1 = { as: "switched", at: Date.now() - 8 * 24 * 3600_000 };
+  fs.writeFileSync(file, JSON.stringify(kept));
+  await say({ op: "switch", id: "mov_long1" });
+  assert.deepEqual(told.filter(move => move.id === "mov_long1").map(move => move.op), ["switched"]);
+});
+
+test("a copy whose conversations aren't its own is refused, and what lives here is left as it is", async () => {
+  chat("ses_mine2");
+  // One that names a conversation of this box's as its subagent's.
+  const thing = "ses_tie1";
+  const one = bundleFor(thing, [{ info: { id: thing, title: "Notes" }, messages: [] }, { info: { id: "ses_mine2", parentID: thing, title: "Not yours" }, messages: [] }]);
+  await say({ op: "offer", id: "mov_tie1", kind: "chat", thing, name: "“Notes”", size: one.bytes.length, hash: one.hash, wasPaused: false, from: peerKey });
+  await say({ op: "part", id: "mov_tie1", hash: one.hash, i: 0, of: 1, d: one.bytes.toString("base64url") });
+  await until(() => told.some(move => move.id === "mov_tie1" && move.op === "failed"));
+  assert.equal(engine.sessions.get("ses_mine2")?.title, "Trip plans", "this box's own is still here, as it was");
+  assert.ok(!engine.sessions.has(thing));
+  // And one whose conversation isn't the chat it says it moves.
+  const other = bundleFor("ses_tie2", [{ info: { id: "ses_else1", title: "Else" }, messages: [] }]);
+  await say({ op: "offer", id: "mov_tie2", kind: "chat", thing: "ses_tie2", name: "“Notes”", size: other.bytes.length, hash: other.hash, wasPaused: false, from: peerKey });
+  await say({ op: "part", id: "mov_tie2", hash: other.hash, i: 0, of: 1, d: other.bytes.toString("base64url") });
+  await until(() => told.some(move => move.id === "mov_tie2" && move.op === "failed"));
+  assert.ok(!engine.sessions.has("ses_else1"));
+  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+});
+
+test("a copy whose move.json is a link to a file here isn't set up, and nothing of that file is said back", async () => {
+  const secret = path.join(support, "secret.txt");
+  fs.writeFileSync(secret, "SECRET-7f3a not for the other computer");
+  const packed = fs.mkdtempSync(path.join(support, "pack-"));
+  fs.symlinkSync(secret, path.join(packed, "move.json"));
+  const file = path.join(packed, "bundle.tgz");
+  assert.equal(spawnSync("tar", ["-czf", file, "-C", packed, "move.json"]).status, 0);
+  const bytes = fs.readFileSync(file);
+  const hash = crypto.createHash("sha256").update(bytes).digest("base64url");
+  await say({ op: "offer", id: "mov_sym1", kind: "chat", thing: "ses_sym1", name: "“Notes”", size: bytes.length, hash, wasPaused: false, from: peerKey });
+  await say({ op: "part", id: "mov_sym1", hash, i: 0, of: 1, d: bytes.toString("base64url") });
+  await until(() => told.some(move => move.id === "mov_sym1" && move.op === "failed"));
+  const said = told.find(move => move.id === "mov_sym1" && move.op === "failed").message;
+  assert.doesNotMatch(said, /SECRET/);
+  assert.match(said, /isn’t a move/);
+});
+
+test("a computer with a Kuvo Code from before moves says it needs a newer one, as a place and when asked", async () => {
+  chat("ses_old2");
+  const file = path.join(home, "run", "peer-agents.json");
+  fs.writeFileSync(file, JSON.stringify({ [peerKey]: { at: Date.now(), kind: "machine", list: [], features: ["sessions", "bots"] } }));
+  try {
+    const places = (await ask("GET", "kuvo/moves/places?kind=chat&id=ses_old2")).json.places;
+    assert.deepEqual(places.find(place => place.key === peerKey), { key: peerKey, name: "lab", kind: "machine", ok: false, why: "lab needs a newer Kuvo Code before things can move to or from it." });
+    assert.equal(places.find(place => place.key === studio.key)?.ok, true, "one that hasn't said what it answers is tried");
+    const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_old2", to: peerKey });
+    assert.equal(moved.status, 409);
+    assert.match(moved.json.message, /needs a newer Kuvo Code/);
+    await asItWas("ses_old2");
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
 });

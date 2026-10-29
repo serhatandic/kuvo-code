@@ -39,6 +39,8 @@ export interface MoveRecord extends Move {
   /** Offered to the other box at least once: a copy may be there, to drop if it's taken back. */
   offered?: boolean;
   sentAt?: number;
+  /** Since when the box it leaves has asked the other to switch to its copy. */
+  switchSince?: number;
   /** Since when the box it leaves has asked the other to let its copy go (taken back). */
   dropSince?: number;
   started: number;
@@ -156,17 +158,20 @@ export function forgetMovedAway(sessions: readonly string[], now = Date.now()): 
 
 export type { Move, MoveKind, MoveStage };
 
-// How each move that came here ended, for a week (`switched` or `dropped`): a step about it sent
-// again later is answered as it ended, never taken for one this box doesn't know.
+// How each move that came here ended (`switched` or `dropped`): a step about it sent again later is
+// answered as it ended, never taken for one this box doesn't know. One dropped, for a week; one
+// switched, for a year: the box it came from, asleep all that while, still hears it switched (and
+// lets its original go) rather than `dropped` (and keeps it, a second copy).
 const ENDED_FILE = path.join(MOVES, "ended.json");
-const ENDED_FOR = 7 * 24 * 3600_000;
+const ENDED_FOR = { dropped: 7 * 24 * 3600_000, switched: 365 * 24 * 3600_000 };
+const keptFor = (one: { as?: unknown; at?: unknown } | undefined, now: number): boolean =>
+  typeof one?.at === "number" && (one.as === "switched" || one.as === "dropped") && now - one.at < ENDED_FOR[one.as];
 
 export function endedAs(id: string, now = Date.now()): "switched" | "dropped" | null {
   try {
     const kept = JSON.parse(fs.readFileSync(ENDED_FILE, "utf8")) as Record<string, { as?: unknown; at?: unknown }>;
     const one = kept?.[id];
-    if (!one || typeof one.at !== "number" || now - one.at > ENDED_FOR) return null;
-    return one.as === "switched" || one.as === "dropped" ? one.as : null;
+    return keptFor(one, now) ? one!.as as "switched" | "dropped" : null;
   } catch {
     return null;
   }
@@ -175,7 +180,7 @@ export function endedAs(id: string, now = Date.now()): "switched" | "dropped" | 
 export function noteEnded(id: string, as: "switched" | "dropped", now = Date.now()): void {
   let kept: Record<string, { as: string; at: number }> = {};
   try { kept = JSON.parse(fs.readFileSync(ENDED_FILE, "utf8")) ?? {}; } catch {}
-  for (const [other, one] of Object.entries(kept)) if (!(typeof one?.at === "number" && now - one.at < ENDED_FOR)) delete kept[other];
+  for (const [other, one] of Object.entries(kept)) if (!keptFor(one, now)) delete kept[other];
   kept[id] = { as, at: now };
   writePrivate(ENDED_FILE, JSON.stringify(kept));
 }

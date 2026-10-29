@@ -245,7 +245,7 @@ async function askMachine(method, p, given) {
 let lab = null;
 
 before(async () => {
-  assert.notEqual((await ask("PUT", "kuvo/link/config", { phones: false, machines: true, relay: relay.url, name: "Studio Mac", app: "0.9.0", features: ["mac"] })).json?.state, "failed");
+  assert.notEqual((await ask("PUT", "kuvo/link/config", { phones: false, machines: true, relay: relay.url, name: "Studio Mac", app: "0.9.0", features: ["mac", "moves"] })).json?.state, "failed");
   const setup = await ask("GET", "kuvo/link/setup");
   assert.equal(setup.status, 200);
   const result = spawnSync(process.execPath, [script, "setup"], {

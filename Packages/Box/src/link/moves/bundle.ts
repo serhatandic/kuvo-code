@@ -93,6 +93,19 @@ async function childrenOf(engine: Target, parent: string): Promise<{ id: string 
   }
 }
 
+/** What's wrong with a bundle that came, in words that may be said back to the box that sent it
+ * (anything else that goes wrong as it's set up is this box's own business). */
+export class NotTaken extends Error {}
+
+/** Whether `exports` are one conversation and its subagents', rooted at `root`: each its own ID,
+ * once; one with no parent, `root`; every other's parent among them. */
+export function ownTree(exports: unknown[], root: string): boolean {
+  const infos = exports.map(each => (isObject(each) && isObject(each.info) ? each.info : null));
+  const ids = infos.map(info => info?.id);
+  if (!root || !ids.length || ids.some(id => typeof id !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(id)) || new Set(ids).size !== ids.length || !ids.includes(root)) return false;
+  return infos.every(info => (info!.id === root ? info!.parentID == null : typeof info!.parentID === "string" && ids.includes(info!.parentID)));
+}
+
 /** Each export's session ID, root first. */
 export const idsOf = (exports: unknown[]): string[] => exports.flatMap(each => {
   const id = isObject(each) && isObject(each.info) ? each.info.id : null;
@@ -146,9 +159,18 @@ export async function unpack(id: string): Promise<{ contents: Contents; folder: 
   const opened = path.join(folder, "opened");
   fs.rmSync(opened, { recursive: true, force: true });
   fs.mkdirSync(opened, { recursive: true, mode: 0o700 });
-  await run("tar", ["-xzf", path.join(folder, "bundle.tgz"), "-C", opened]);
-  const contents: Contents = JSON.parse(fs.readFileSync(path.join(opened, "move.json"), "utf8"));
-  if (!isObject(contents) || !Array.isArray(contents.exports)) throw new Error("What came isn't a move.");
+  await run("tar", ["-xzf", path.join(folder, "bundle.tgz"), "-C", opened]).catch(() => { throw new NotTaken("What came isn’t a move."); });
+  // A file of its own, read as it came (never through a link, to a file of this computer's), and
+  // what's wrong with it never said back.
+  let contents: Contents;
+  try {
+    const file = path.join(opened, "move.json");
+    if (!fs.lstatSync(file).isFile()) throw new Error();
+    contents = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    throw new NotTaken("What came isn’t a move.");
+  }
+  if (!isObject(contents) || !Array.isArray(contents.exports)) throw new NotTaken("What came isn’t a move.");
   const brought = contents.folder && /^[A-Za-z0-9_]+$/.test(contents.folder) ? path.join(opened, contents.folder) : null;
   // Only files and folders: never a link (to somewhere else on this computer) or anything else.
   if (brought && fs.existsSync(brought)) plainOnly(brought);
@@ -160,7 +182,7 @@ function plainOnly(folder: string): void {
     const entry = path.join(folder, name);
     const kind = fs.lstatSync(entry);
     if (kind.isDirectory()) plainOnly(entry);
-    else if (!kind.isFile()) throw new Error(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a file"} (${path.basename(entry)}), which isn’t taken.`);
+    else if (!kind.isFile()) throw new NotTaken(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a file"} (${path.basename(entry)}), which isn’t taken.`);
   }
 }
 
