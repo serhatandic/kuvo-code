@@ -161,6 +161,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A machine's group chat that was talking when you disconnected, restarted its engine or connected again no longer stays "thinking" with a Stop button that does nothing; a chat whose talk ended, or that was deleted, while Kuvo Code read it again stays that way.
 - A wake-up canceled or sent on a machine (from your phone, say) leaves the sidebar within a minute, instead of staying until Kuvo Code opens again.
 - Renaming, making or deleting a bot on a machine just as Kuvo Code reads that machine's bots again keeps your change, instead of the old name coming back or a new bot's conversation closing.
+- A group chat's part of the work in a state only a newer Kuvo Code knows no longer shows "Working" forever, or stops you moving that chat to another computer.
+- A group chat moved to a machine shows there once it has moved, instead of sometimes disappearing until Kuvo Code opens again.
 
 ## 0.7.2
 
