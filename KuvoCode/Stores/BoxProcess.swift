@@ -102,8 +102,8 @@ final class BoxProcess {
             env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
         }
         if checksRuntime {
-            // And what it runs is what it was: the engine's Bun opencode's own, the very build this
-            // Mac first ran of that version, and the box's script the app's own, sealed with it.
+            // And what it runs is what it was: the engine's Bun the pinned build (opencode's
+            // signature and the binary's own hash), and the box's script the app's own, sealed with it.
             // Checked again each time, as a file replaced in the app's folder or its bundle (both
             // yours to write, so an agent's command's too) would run as the box. (Off the main
             // thread: reading them takes a second or so.)
@@ -291,18 +291,27 @@ nonisolated enum BoxIntegrity {
         return nil
     }
 
-    /// Whether the app's bundle on disk, its code and every resource (the box's script), is what
-    /// this running app was signed as: its own designated requirement (its team and identifier; an
-    /// ad-hoc build, its own hash), so one changed and signed again by anyone else fails.
+    /// Whether the app's bundle on disk, its code and every resource (the box's script), is the very
+    /// one this app was launched from: its code directory's hash, which seals every resource too, as
+    /// the kernel has it for the running app (not as the bundle on disk says, which a swapped and
+    /// signed-again copy would say of itself). An app rebuilt while it runs fails until it's opened again.
     static func appIsSealed() -> Bool {
-        var running: SecCode?
-        var signed: SecStaticCode?
-        var requirement: SecRequirement?
+        guard let requirement = launchRequirement else { return false }
         var bundle: SecStaticCode?
-        guard SecCodeCopySelf([], &running) == errSecSuccess, let running,
-              SecCodeCopyStaticCode(running, [], &signed) == errSecSuccess, let signed,
-              SecCodeCopyDesignatedRequirement(signed, [], &requirement) == errSecSuccess, let requirement,
-              SecStaticCodeCreateWithPath(Bundle.main.bundleURL as CFURL, [], &bundle) == errSecSuccess, let bundle else { return false }
+        guard SecStaticCodeCreateWithPath(Bundle.main.bundleURL as CFURL, [], &bundle) == errSecSuccess, let bundle else { return false }
         return SecStaticCodeCheckValidity(bundle, [], requirement) == errSecSuccess
     }
+
+    /// `cdhash H"<the running app's>"`, from the kernel (`csops`), made once.
+    nonisolated(unsafe) static let launchRequirement: SecRequirement? = {
+        var hash = [UInt8](repeating: 0, count: 20)
+        guard csops(getpid(), 5 /* CS_OPS_CDHASH */, &hash, hash.count) == 0, hash.contains(where: { $0 != 0 }) else { return nil }
+        var requirement: SecRequirement?
+        let text = "cdhash H\"" + hash.map { String(format: "%02x", $0) }.joined() + "\""
+        return SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess ? requirement : nil
+    }()
 }
+
+/// The kernel's code-signing calls for a process (`<sys/codesign.h>`): here, its code directory's hash.
+@_silgen_name("csops")
+nonisolated private func csops(_ pid: pid_t, _ ops: UInt32, _ address: UnsafeMutableRawPointer?, _ size: Int) -> Int32
