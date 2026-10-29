@@ -108,9 +108,17 @@ public enum ReadState {
     }
 
     /// One of `id`'s sub-sessions, or theirs, is new. `subSessions`: each session's, by the one
-    /// that started them; `rootViewed`: when a sub-session's top session was last read.
+    /// that started them; `rootViewed`: when a sub-session's top session was last read. Each
+    /// session's are looked through once, so a box listing them in a loop (one its own sub-session,
+    /// or two each other's) can't send it round and round.
     public static func hasNew(under id: String, in subSessions: [String: [Session]], rootViewed: (Session) -> Milliseconds?) -> Bool {
-        (subSessions[id] ?? []).contains { isNew($0, rootViewed: rootViewed($0)) || hasNew(under: $0.id, in: subSessions, rootViewed: rootViewed) }
+        var seen: Set<String> = [id]
+        var next = subSessions[id] ?? []
+        while let sub = next.popLast() {
+            if isNew(sub, rootViewed: rootViewed(sub)) { return true }
+            if seen.insert(sub.id).inserted { next += subSessions[sub.id] ?? [] }
+        }
+        return false
     }
 
     /// Reads `id`: itself (one of `sessions`, or a sub-session, under `parent(id)`), and its
@@ -127,11 +135,14 @@ public enum ReadState {
             subSessions[above]?[index].time.viewed = idle
             if !read.contains(where: { $0.id == id }) { read.append((id, idle)) }
         }
+        // Each session's once, and each read told once, however a box lists them (in a loop too).
+        var walked: Set<String> = []
         func readUnder(_ id: String) {
+            guard walked.insert(id).inserted else { return }
             for (index, child) in (subSessions[id] ?? []).enumerated() {
                 if child.isUnread, let idle = child.time.idle {
                     subSessions[id]?[index].time.viewed = idle
-                    read.append((child.id, idle))
+                    if !read.contains(where: { $0.id == child.id }) { read.append((child.id, idle)) }
                 }
                 readUnder(child.id)
             }

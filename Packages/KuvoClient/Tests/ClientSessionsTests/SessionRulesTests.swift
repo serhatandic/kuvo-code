@@ -40,6 +40,26 @@ struct SessionRulesTests {
         #expect(!ReadState.hasNew(under: "ses_timer", in: subs, rootViewed: rootViewed))
     }
 
+    /// A box that lists a session as its own sub-session, or two as each other's (A under B under
+    /// A): what's new and reading go through each once, rather than round and round, which
+    /// crashed both apps.
+    @Test func subSessionsInALoopAreReadOnce() throws {
+        var sessions = [try session("ses_a", idle: 5, viewed: 5)]
+        var subs: [String: [Session]] = [
+            "ses_a": [try session("ses_a", idle: 6), try session("ses_b", idle: 7)],
+            "ses_b": [try session("ses_a", idle: 6)],
+        ]
+        let parents = ["ses_b": "ses_a"]
+        let rootViewed = { (_: Session) in Milliseconds(5) }
+        #expect(ReadState.hasNew(under: "ses_a", in: subs, rootViewed: rootViewed))
+        #expect(ReadState.hasNew(under: "ses_b", in: subs, rootViewed: rootViewed))
+
+        let read = ReadState.read("ses_a", sessions: &sessions, subSessions: &subs) { parents[$0] }
+        #expect(read.map(\.id) == ["ses_a", "ses_b"])
+        #expect(!ReadState.hasNew(under: "ses_a", in: subs, rootViewed: rootViewed))
+        #expect(!ReadState.hasNew(under: "ses_b", in: subs, rootViewed: rootViewed))
+    }
+
     @Test func aReadElsewhereIsTakenWhenItsLater() throws {
         var sessions = [try session("ses_timer", idle: 9, viewed: 4)]
         var subs = ["ses_timer": [try session("ses_find", idle: 12, viewed: 1)]]
