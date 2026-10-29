@@ -379,6 +379,12 @@ final class BoxGroups {
         noteSeats(seatIDs, agents: agentSeatIDs)
     }
 
+    /// What a meeting's notification says: what was said last, or only that it came when that's
+    /// of a kind a newer Kuvo Code says (left out of the chat).
+    static func metLine(_ last: GroupMessage) -> String {
+        last.kind.isKnown ? ReplyPreview.line(last.text) : "The meeting came."
+    }
+
     /// A machine you removed: its chats go from here (they stay there, for when you add it again).
     func forget(machine: String) {
         running.remove(machine)
@@ -449,7 +455,7 @@ final class BoxGroups {
                     return
                 }
                 Notifier.shared.notify(session: BotGroups.tabKey(met.id), title: met.name, subtitle: met.who.map { last.kind == .wrapUp ? "\($0)’s wrap-up" : $0 },
-                                       body: ReplyPreview.line(last.text), replies: true, push: .init(.message, group: met.id, machine: machine))
+                                       body: Self.metLine(last), replies: true, push: .init(.message, group: met.id, machine: machine))
             case "kuvo.group.done":
                 let done = try decoded(event, as: Done.self)
                 Notifier.shared.notify(session: BotGroups.tabKey(done.id), title: done.name, subtitle: "\(done.who) finished its part",

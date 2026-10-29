@@ -218,6 +218,19 @@ import Testing
         #expect(kept?.compactMap { $0["kind"] as? String } == ["message", "chart"])
     }
 
+    /// A meeting whose last word is of a kind a newer Kuvo Code says: its notification says the
+    /// meeting came, not that message's raw text.
+    @Test func aMeetingEndingInANewerKindSaysItCame() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let last = try decoder.decode(GroupMessage.self, from: JSONSerialization.data(withJSONObject:
+            ["id": "gm_9", "author": "bot_pal", "text": "{\"chart\": 1}", "time": "2026-10-22T08:01:00Z", "kind": "chart"]))
+        let said = try decoder.decode(GroupMessage.self, from: JSONSerialization.data(withJSONObject:
+            ["id": "gm_8", "author": "bot_pal", "text": "All green.", "time": "2026-10-22T08:00:00Z", "kind": "wrapUp"]))
+        #expect(BoxGroups.metLine(last) == "The meeting came.")
+        #expect(BoxGroups.metLine(said) == "All green.")
+    }
+
     /// This Mac's bridge starting, then stopped: its chats show as last seen, and what you write
     /// waits in the composer; once it's up, it goes.
     @Test func thisMacsChatsWaitForItsBridge() async throws {
