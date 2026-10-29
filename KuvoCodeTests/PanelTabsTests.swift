@@ -106,12 +106,31 @@ import Testing
 
     /// The tabs you opened while writing a new session's first message are the session's.
     @Test func aNewSessionKeepsItsDraftsTabs() {
-        panel.inView = .init(session: nil)
+        panel.inView = .init(session: nil, draft: "draft:/p")
         panel.open(a)
         let chosen = panel.selection
-        panel.adoptDraft(as: "ses_new")
+        panel.adoptDraft("draft:/p", as: "ses_new")
         panel.inView = .init(session: "ses_new")
         #expect(panel.visibleTabs.contains { $0.kind == .file(a) })
         #expect(panel.selection == chosen)
+    }
+
+    /// Each new session's draft, and each terminal tab of the window, has a panel of its own: a
+    /// terminal opened writing one in project A doesn't show beside one for project B, nor go to
+    /// B's session once that's sent.
+    @Test func eachDraftHasItsOwnPanel() {
+        panel.inView = .init(session: nil, draft: "draft:/a")
+        panel.open(a)
+        panel.inView = .init(session: nil, draft: "draft:/b")
+        #expect(!panel.visibleTabs.contains { $0.kind == .file(a) })
+        panel.open(b)
+        panel.adoptDraft("draft:/b", as: "ses_b")
+        panel.inView = .init(session: "ses_b")
+        #expect(panel.visibleTabs.contains { $0.kind == .file(b) })
+        #expect(!panel.visibleTabs.contains { $0.kind == .file(a) })
+        panel.inView = .init(session: nil, draft: "draft:/a")
+        #expect(panel.visibleTabs.contains { $0.kind == .file(a) }, "still A's draft's")
+        panel.inView = .init(session: nil, draft: "terminal:T1")
+        #expect(!panel.visibleTabs.contains { $0.kind == .file(a) })
     }
 }

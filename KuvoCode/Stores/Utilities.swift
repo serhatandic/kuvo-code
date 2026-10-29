@@ -100,6 +100,9 @@ final class Utilities {
         /// The bots on this Mac whose conversation is in view (one, or a group chat's): their tabs
         /// show beside yours.
         var bots: Set<String> = []
+        /// The window's tab in view when it's no conversation's (a new session's draft, a
+        /// terminal), by its key (`draft:<folder>`, `terminal:<id>`): its panel is its own.
+        var draft: String?
     }
 
     var inView = InView() {
@@ -114,11 +117,12 @@ final class Utilities {
     @ObservationIgnored var panelOf: (String) -> String = { $0 }
 
     /// The conversation whose panel shows: the group chat in view, else the session you work in
-    /// (either half of a split); "" for none (a new session's draft).
+    /// (either half of a split), else the window's tab in view (a new session's draft, a
+    /// terminal); "" for none.
     var panelKey: String { panelKey(of: inView) }
 
     private func panelKey(of view: InView) -> String {
-        view.group ?? (view.worksBeside ?? view.session).map(panelOf) ?? ""
+        view.group ?? (view.worksBeside ?? view.session).map(panelOf) ?? view.draft ?? ""
     }
 
     /// The session whose agent a tab you pick in the panel is: the one you work in.
@@ -731,11 +735,12 @@ final class Utilities {
         remove(id, refills: refills)
     }
 
-    /// A new session's draft became the session: the tabs you opened while writing it are its.
-    func adoptDraft(as session: String) {
+    /// A new session's draft (by its tab's key) became the session: the tabs you opened while
+    /// writing it are its.
+    func adoptDraft(_ draft: String, as session: String) {
         let panel = panelOf(session)
-        for index in tabs.indices where tabs[index].owner == "" { tabs[index].owner = panel }
-        if let tab = chosen.removeValue(forKey: chosenKey("", place)) { chosen[chosenKey(panel, place)] = tab }
+        for index in tabs.indices where tabs[index].owner == draft { tabs[index].owner = panel }
+        if let tab = chosen.removeValue(forKey: chosenKey(draft, place)) { chosen[chosenKey(panel, place)] = tab }
     }
 
     /// A conversation that carries on in another (moved to the coding agents): its panel's tabs,

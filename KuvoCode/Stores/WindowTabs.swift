@@ -240,7 +240,8 @@ final class WindowTabs {
             group: groupID.map { TabKey.group($0).text },
             worksBeside: workedBesideID,
             place: focusedDirectory.flatMap(RemoteFolder.machine(of:)),
-            bots: Set(botsInView.filter { $0.machine == nil }.map(\.id))
+            bots: Set(botsInView.filter { $0.machine == nil }.map(\.id)),
+            draft: sessionID == nil && groupID == nil ? selection?.text : nil
         )
     }
 
@@ -322,6 +323,8 @@ final class WindowTabs {
         }
         if remember && !key.isTerminal { rememberClosed([ClosedTab(key: key, index: index, beside: beside)]) }
         terminals.close(key.text)
+        // A terminal's tab doesn't come back: its panel goes with it.
+        if key.isTerminal { app.utilities.closeTabs(of: key.text) }
         withAnimation(.ui) {
             self.keys = keys
             if selection == key {
@@ -337,6 +340,7 @@ final class WindowTabs {
         for closed in keys where closed != key {
             Analytics.shared.sessionEnded(closed.text)
             terminals.close(closed.text)
+            if closed.isTerminal { app.utilities.closeTabs(of: closed.text) }
             if let beside = pairs[closed] { Analytics.shared.sessionEnded(beside) }
         }
         withAnimation(.ui) {
@@ -503,7 +507,7 @@ final class WindowTabs {
     /// view; more attempts open at the end.
     func draftSent(_ draft: TabKey, as id: String) {
         if let index = keys.firstIndex(of: draft) {
-            app.utilities.adoptDraft(as: id)
+            app.utilities.adoptDraft(draft.text, as: id)
             keys[index] = .session(id)
             selection = .session(id)
         } else if !keys.contains(.session(id)) {
