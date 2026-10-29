@@ -269,6 +269,22 @@ import Testing
         #expect(app.chats.list.isEmpty)
     }
 
+    /// A wrap-up's part in a state a newer Kuvo Code says: that computer's chats still show, with
+    /// the wrap-up in them.
+    @Test func aPartInANewerStateLeavesTheChatsShowing() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_pal", "Pal", "box")])
+        let wrapUp: [String: Any] = ["id": "gm_2", "author": "bot_pal", "text": "Here's the plan.", "time": "2026-10-22T08:01:00Z", "kind": "wrapUp",
+                                     "tasks": [["id": "task_1", "bot": "bot_pal", "task": "Fix the build", "state": "canceled"]]]
+        there.add(Self.group("grp_box0000001", members: ["bot_pal"]), messages: [Self.said, wrapUp])
+        let app = app()
+
+        await app.boxGroups.connected("box")
+
+        #expect(app.chats.list.map(\.id) == ["grp_box0000001"])
+        #expect(app.chats.messages(in: "grp_box0000001").map(\.text) == ["Morning.", "Here's the plan."])
+    }
+
     /// One machine added twice, at two addresses, found to be one: its chats are kept once, as
     /// the address it's kept under says, not twice with one copy talking on.
     @Test func aMachineAtTwoAddressesKeepsItsChatsOnce() throws {

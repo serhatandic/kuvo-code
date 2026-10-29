@@ -163,6 +163,12 @@ struct GroupTask: Codable, Hashable, Identifiable {
         case done
         /// It couldn't be done: the bot's machine away, an error.
         case failed
+
+        /// One a newer Kuvo Code says, as under way (as the phone reads it), rather than the
+        /// computer's chats failing to read.
+        init(from decoder: Decoder) throws {
+            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .working
+        }
     }
 }
 
