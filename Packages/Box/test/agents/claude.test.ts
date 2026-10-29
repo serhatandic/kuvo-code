@@ -596,6 +596,20 @@ describe("Claude Code in the box's sandbox", () => {
     expect(env.CLAUDE_CODE_TMPDIR).toBe(join(fence, "tmp", createHash("sha256").update(work).digest("hex").slice(0, 32)))
   })
 
+  test("on, with no shell of the box's for it yet (a box from before), Claude Code runs no command rather than one outside the sandbox", async () => {
+    turnOn()
+    rmSync(join(fence, "shell"), { recursive: true })
+    await begin()
+    expect(fake.options.env.CLAUDE_CODE_SHELL).toBeUndefined()
+    expect(await fake.hook("Bash", { command: "ls" }, "toolu_1")).toMatchObject({ decision: "deny" })
+  })
+
+  test("its own sandbox stays off while the box's is on, whatever your settings or a project's say (one can't run inside the other)", async () => {
+    turnOn()
+    await begin()
+    expect(fake.options.sandbox).toEqual({ enabled: false })
+  })
+
   test("off, Claude Code runs its commands as it always does; turned on, its next turn starts it again in the sandbox", async () => {
     const { id, first } = await begin()
     expect(fake.options.env.CLAUDE_CODE_SHELL).toBeUndefined()

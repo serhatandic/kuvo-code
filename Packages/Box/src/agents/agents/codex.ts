@@ -11,7 +11,7 @@ import type { Limit } from "../auto"
 import { accountName, ContextWindows, failure, model } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
 import { emit } from "../events"
-import { allowedFolders, fenceKey, fenceRules, worktreeGitFolders, type FenceRules } from "../fence"
+import { allowedFolders, fenceKey, fenceOn, fenceRules, wakeFolder, worktreeGitFolders, type FenceRules } from "../fence"
 import { kuvoTools, toolServerName } from "../kuvotools"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import { elicitationField } from "../forms"
@@ -35,24 +35,30 @@ const outputLimit = 30_000
 // What a command in the sandbox can't change in a project (as the engine's can't): git's hooks and
 // settings, a worktree's pointers to its repository, the engine's settings, and the coding agents'
 // folders whole (Codex's rules are by path, so a folder moved into place would get past a rule for
-// a file in it). Only at the top of each folder it works in: Codex's rules can't reach deeper.
+// a file in it). In its conversation's wake-up folder, all but its inbox, as the launcher has it
+// (what's there says which conversation and folder it is). Only at the top of each folder it works
+// in: Codex's rules can't reach deeper.
 const KEPT_IN_PROJECT = [".git/hooks", ".git/config", "config.worktree", "commondir", "gitdir", ".opencode", "opencode.json", "opencode.jsonc",
-  ".mcp.json", ".claude", ".codex", ".cursor", ".gemini", ".grok"]
+  ".mcp.json", ".claude", ".codex", ".cursor", ".gemini", ".grok", "session", "directory", "wakes", "watches"]
 
 const toml = (text: string) => JSON.stringify(text)
+
+// What the launcher keeps out of a command's environment (link/fence/files.ts), out of Codex's too:
+// the engine's settings and passwords, Kuvo Code's, and your SSH agent (the keys the sandbox hides).
+// (Its conversation's name it gets back: `set` comes after.)
+const KEPT_FROM_COMMANDS = ["OPENCODE_*", "*PASSWORD*", "*SECRET*", "*TOKEN*", "*KEY*", "KUVO_HOST_*", "KUVO_VAULT_*", "SSH_AUTH_SOCK", "KUVO_WAKE_FOLDER"]
 
 /**
  * The box's sandbox as Codex's own permission profiles, for its app-server (`-c`): `kuvo`, where the
  * folders it works in are written (but `KEPT_IN_PROJECT`), and `kuvo_read` for Plan, where they're
  * only read. Both read everything but Kuvo Code's folders and your secrets, write the temporary
- * folders and tools' caches (not what runs later in them), where Kuvo Code keeps wake-ups, and reach
- * the network.
+ * folders and tools' caches (not what runs later in them), and reach the network. (Its
+ * conversation's wake-up folder is a turn's: `wakeFolder`.)
  */
 export function fenceProfiles(rules: FenceRules): string[] {
   const filesystem = (projects: "write" | "read") => {
     const access = new Map<string, string>([["/", "read"]])
     for (const folder of rules.writable) access.set(folder, "write")
-    for (const folder of [process.env.KUVO_WAKES, process.env.KUVO_BOTS]) if (folder) access.set(folder, "write")
     for (const place of rules.readOnly) access.set(place, "read")
     for (const place of rules.hidden) access.set(place, "deny")
     for (const place of rules.readable) access.set(place, "read")
@@ -678,19 +684,25 @@ class CodexThread implements Thread {
 
   private policy(hooks: TurnHooks, plan: boolean) {
     // In the box's sandbox (fenceProfiles), with what a commit in a worktree writes in its
-    // repository's folder, and the folders you let this project's commands write in (Also Allowed). Codex never runs a command outside it on its own: it isn't let ask to (a
-    // command that needs it is `sandbox_ask`'s, which only you answer), and what its own rules would
-    // ask about (rm -f) it turns down itself. Ask First asks before its commands as Codex does, and
-    // a command you allow it runs outside its sandbox, as Codex runs every command it asked about.
+    // repository's folder, its wake-up folder (kuvo-wake), and the folders you let this project's
+    // commands write in (Also Allowed). Codex never runs a command outside it on its own: it isn't
+    // let ask to (a command that needs it is `sandbox_ask`'s, which only you answer), nor asks
+    // about what its own rules would (rm -f), which it turns down itself. Ask First asks before its
+    // commands as Codex does, and a command you allow it runs outside its sandbox, as Codex runs
+    // every command it asked about.
     if (this.agent.fenced) {
       const directory = this.session.location.directory
-      const roots = { runtimeWorkspaceRoots: [directory, ...worktreeGitFolders(directory), ...allowedFolders(directory)] }
-      const inside = { granular: { sandbox_approval: false, rules: true, mcp_elicitations: true, request_permissions: false } }
+      const wakes = wakeFolder(this.session.id, directory)
+      const roots = { runtimeWorkspaceRoots: [directory, ...worktreeGitFolders(directory), ...(wakes ? [wakes] : []), ...allowedFolders(directory)] }
+      const inside = { granular: { sandbox_approval: false, rules: false, mcp_elicitations: true, request_permissions: false } }
       if (plan) return { approvalPolicy: inside, permissions: "kuvo_read", ...roots }
       if (hooks.approvesAll()) return { approvalPolicy: inside, permissions: "kuvo", ...roots }
       return { approvalPolicy: "untrusted", permissions: "kuvo", ...roots }
     }
     if (plan) return { approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly", networkAccess: true } }
+    // The box's sandbox just turned on, while this Codex was still at work: its own sandbox until
+    // it starts again with the box's, whatever the mode.
+    if (fenceOn()) return { approvalPolicy: hooks.approvesAll() ? "on-request" : "untrusted", sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: true } }
     // Approve All: what Codex's own rules ask about (rm -f) is asked too, and your rules let it
     // through without a card; with "never", Codex refuses it itself.
     if (hooks.approvesAll()) return { approvalPolicy: "on-request", sandboxPolicy: { type: "dangerFullAccess" } }
@@ -727,8 +739,13 @@ class CodexThread implements Thread {
     const server = tools?.kind === "http" ? { url: tools.url, http_headers: tools.headers, ...timeout } : tools?.kind === "stdio" ? { command: tools.command, args: tools.args, env: tools.env, ...timeout } : undefined
     // Its commands know their conversation, as the engine's do (kuvo-wake schedules for it).
     // (On a machine, the machine's own folders too: Codex keeps its own in Kuvo Code's folder.)
+    const wakes = this.agent.fenced ? wakeFolder(this.session.id, this.session.location.directory) : undefined
     const config = {
       "shell_environment_policy.set.OPENCODE_SESSION_ID": this.session.id,
+      // In the box's sandbox, what the launcher keeps out of commands; its wake-up folder, as the
+      // launcher names it.
+      ...(this.agent.fenced ? { "shell_environment_policy.exclude": KEPT_FROM_COMMANDS } : {}),
+      ...(wakes ? { "shell_environment_policy.set.KUVO_WAKE_FOLDER": wakes } : {}),
       ...(onMachine ? ownFoldersConfig() : {}),
       ...(tools && server ? { [`mcp_servers.${tools.name}`]: server } : {}),
       ...(turnedOffHere.length ? { "skills.config": [...this.agent.ownSkillSettings(), ...turnedOffHere] } : {}),

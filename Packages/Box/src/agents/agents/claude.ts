@@ -21,7 +21,7 @@ import { newID } from "../ids"
 import { kuvoTools } from "../kuvotools"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
 import { onMachine, ownFoldersScript } from "../machine"
-import { fenceKey, fenceShell } from "../fence"
+import { fenceKey, fenceOn, fenceShell } from "../fence"
 import { addShell, endShell } from "../shells"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import type { Turn } from "../turn"
@@ -801,6 +801,9 @@ class ClaudeThread implements Thread {
         ...(resume ? { resume: id } : { sessionId: id }),
         // Its commands know their conversation, as the engine's do (kuvo-wake schedules for it).
         env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id, ...this.fenced() },
+        // Its own sandbox off while the box's is on (yours, or a project's settings, may turn it
+        // on): one sandbox can't run inside another on a Mac, and every command would fail.
+        ...(this.fenceShellMissing !== undefined ? { sandbox: { enabled: false } } : {}),
         stderr: () => {},
       },
     })
@@ -814,9 +817,15 @@ class ClaudeThread implements Thread {
    */
   private fenced(): Record<string, string> {
     const fence = fenceShell(this.session.location.directory)
+    // On, but its shell isn't there (a box from before it had one, until it starts again): no
+    // commands, rather than outside it.
+    this.fenceShellMissing = fenceOn() ? !fence : undefined
     if (!fence) return {}
     return { CLAUDE_CODE_SHELL: fence.shell, CLAUDE_CODE_TMPDIR: fence.temporary, KUVO_FENCE_WORK: fence.work, KUVO_FENCE_GIT: fence.git }
   }
+
+  /** While the box's sandbox is on: whether its shell for Claude Code is missing. */
+  private fenceShellMissing?: boolean
 
   private async read(query: any) {
     let ended: unknown
@@ -1281,6 +1290,9 @@ class ClaudeThread implements Thread {
     if (input?.hook_event_name !== "PreToolUse") return {}
     // What a command runs, before it does (one left running is named by it in the bar).
     if (input.tool_name === "Bash" && typeof input.tool_use_id === "string" && typeof input.tool_input?.command === "string") this.commands.set(input.tool_use_id, input.tool_input.command)
+    if (input.tool_name === "Bash" && this.fenceShellMissing) {
+      return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "Commands run in the sandbox here, and it isn't ready for Claude Code yet: ask the user to restart Kuvo Code." } }
+    }
     await this.ownTaken()
     const hooks = this.active?.hooks ?? this.lastHooks
     if (!hooks) return {}

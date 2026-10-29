@@ -6,8 +6,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { mkdirSync, realpathSync } from "node:fs"
+import { existsSync, mkdirSync, realpathSync } from "node:fs"
 import { CodexAgent, fenceProfiles } from "../../src/agents/agents/codex"
+import { setWakePlaces } from "../../src/agents/fence"
 import { Auto } from "../../src/agents/auto"
 import type { Roster } from "../../src/agents/roster"
 import { Sessions } from "../../src/agents/sessions"
@@ -596,6 +597,48 @@ describe("Codex in the box's sandbox", () => {
     writeFileSync(join(root, "fence", "allowed", createHash("sha256").update(realpathSync(root)).digest("hex").slice(0, 32)), extra + "\n")
     await run(reply)
     expect(turnStart().runtimeWorkspaceRoots).toEqual([root, extra])
+  })
+
+  test("a worktree's commits reach its repository; a .git a command wrote naming another repository reaches nothing", async () => {
+    const repository = join(realpathSync(root), "repo")
+    spawnSync("git", ["init", "-q", repository])
+    spawnSync("git", ["-C", repository, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "first"])
+    spawnSync("git", ["-C", repository, "worktree", "add", "-q", join(repository, "..", "tree")])
+    // The session's folder (not a repository), where a command left a .git naming the worktree's.
+    writeFileSync(join(root, ".git"), `gitdir: ${join(repository, ".git", "worktrees", "tree")}\n`)
+    await run(reply)
+    expect(turnStart().runtimeWorkspaceRoots).toEqual([root])
+  })
+
+  test("its commands keep their conversation's wake-ups (kuvo-wake) in its own folder, and get none of Kuvo Code's passwords or your SSH agent", async () => {
+    setWakePlaces({ wakes: join(realpathSync(root), "wakes") })
+    try {
+      const id = await run(reply)
+      const own = join(realpathSync(root), "wakes", id)
+      expect(readFileSync(join(own, "session"), "utf8")).toBe(id)
+      expect(turnStart().runtimeWorkspaceRoots).toEqual([root, own])
+      const config = sent().find((message) => message.method === "thread/start").params.config
+      expect(config["shell_environment_policy.set.KUVO_WAKE_FOLDER"]).toBe(own)
+      expect(config["shell_environment_policy.exclude"]).toEqual(expect.arrayContaining(["SSH_AUTH_SOCK", "*PASSWORD*", "KUVO_VAULT_*"]))
+    } finally {
+      setWakePlaces({})
+    }
+  })
+
+  test("turned on while Codex is still at work, its turns run in Codex's own sandbox until it starts again with the box's", async () => {
+    // Off as a session's turn starts, which goes on (Codex at work), then on: another session's
+    // turn starts on the same Codex.
+    delete process.env.KUVO_FENCE
+    start([untilStopped])
+    await until(() => existsSync(join(root, "sent.jsonl")) && sent().some((message) => message.method === "turn/start"))
+    expect(turnStart().sandboxPolicy).toEqual({ type: "dangerFullAccess" })
+    process.env.KUVO_FENCE = join(root, "fence")
+    const second = sessions.create({ title: "Codex", model: { providerID: codex!.providerID, id: "gpt-test" }, location: { directory: root } }).id
+    sessions.prompt(second, { id: "msg_codex_test_101", text: "go", files: [], delivery: "steer" })
+    await until(() => sent().filter((message) => message.method === "turn/start").length === 2)
+    const last = sent().filter((message) => message.method === "turn/start").at(-1).params
+    expect(last.sandboxPolicy).toMatchObject({ type: "workspaceWrite" })
+    expect(last.permissions).toBeUndefined()
   })
 
   test("Plan only reads, in the sandbox", async () => {

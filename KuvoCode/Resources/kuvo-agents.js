@@ -1,6 +1,6 @@
 // @bun
 // Packages/Box/src/agents/main.ts
-import { mkdirSync as mkdirSync18, readdirSync as readdirSync14, readFileSync as readFileSync27, renameSync as renameSync12, rmSync as rmSync13, writeFileSync as writeFileSync18 } from "fs";
+import { mkdirSync as mkdirSync18, readdirSync as readdirSync15, readFileSync as readFileSync27, renameSync as renameSync12, rmSync as rmSync13, writeFileSync as writeFileSync19 } from "fs";
 import { join as join26 } from "path";
 
 // Packages/Box/src/agents/accounts.ts
@@ -8272,11 +8272,14 @@ class Queue {
 }
 
 // Packages/Box/src/agents/fence.ts
-import { spawnSync as spawnSync2 } from "child_process";
 import { createHash as createHash5 } from "crypto";
-import { existsSync as existsSync12, lstatSync as lstatSync3, mkdirSync as mkdirSync12, readFileSync as readFileSync17, realpathSync as realpathSync4, statSync as statSync7 } from "fs";
+import { existsSync as existsSync12, lstatSync as lstatSync3, mkdirSync as mkdirSync12, readdirSync as readdirSync11, readFileSync as readFileSync17, realpathSync as realpathSync4, statSync as statSync7, writeFileSync as writeFileSync14 } from "fs";
 import { basename as basename6, dirname as dirname8, join as join18, resolve as resolve5 } from "path";
 var folder = () => process.env.KUVO_FENCE ?? (machineHome ? join18(machineHome, "run", "fence") : undefined);
+function fenceOn() {
+  const where = folder();
+  return Boolean(where) && process.env.KUVO_SANDBOX !== "off" && existsSync12(join18(where, "on"));
+}
 function fenceRules() {
   const where = folder();
   if (!where || process.env.KUVO_SANDBOX === "off" || !existsSync12(join18(where, "on")))
@@ -8309,14 +8312,10 @@ function allowedFolders(directory) {
 }
 var fenceKey = () => JSON.stringify(fenceRules() ?? null);
 function worktreeGitFolders(directory) {
-  const read = spawnSync2("git", ["-C", directory, "rev-parse", "--path-format=absolute", "--git-common-dir", "--git-dir"], { encoding: "utf8", timeout: 1e4 });
-  if (read.status !== 0)
+  const git = gitOf(real(directory));
+  if (!git.common || !git.own)
     return [];
-  const [common, own] = read.stdout.trim().split(`
-`);
-  if (!common || !own || common === own)
-    return [];
-  return [join18(common, "objects"), join18(common, "refs"), join18(common, "logs"), own];
+  return [join18(git.common, "objects"), join18(git.common, "refs"), join18(git.common, "logs"), git.own];
 }
 var sum = (place) => createHash5("sha256").update(place).digest("hex").slice(0, 32);
 function isRepository(git) {
@@ -8329,6 +8328,9 @@ function isRepository(git) {
   }
 }
 function repositoryOf2(folder) {
+  return gitOf(folder).common;
+}
+function gitOf(folder) {
   const realOr = (place) => {
     try {
       return realpathSync4(place);
@@ -8345,25 +8347,25 @@ function repositoryOf2(folder) {
       continue;
     }
     if (link.isSymbolicLink())
-      return "";
+      return { common: "" };
     if (link.isDirectory())
-      return isRepository(git) ? realOr(git) : "";
+      return { common: isRepository(git) ? realOr(git) : "" };
     try {
       const named = readFileSync17(git, "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
       if (!named)
-        return "";
+        return { common: "" };
       const own = realOr(resolve5(at, named));
       if (!own || basename6(dirname8(own)) !== "worktrees")
-        return "";
+        return { common: "" };
       if (realOr(readFileSync17(join18(own, "gitdir"), "utf8").trim()) !== realOr(git))
-        return "";
+        return { common: "" };
       const common = realOr(resolve5(own, readFileSync17(join18(own, "commondir"), "utf8").trim()));
-      return common && common === dirname8(dirname8(own)) && isRepository(common) ? common : "";
+      return common && common === dirname8(dirname8(own)) && isRepository(common) ? { common, own } : { common: "" };
     } catch {
-      return "";
+      return { common: "" };
     }
   }
-  return "";
+  return { common: "" };
 }
 function fenceShell(directory) {
   const where = folder();
@@ -8377,6 +8379,41 @@ function fenceShell(directory) {
   const temporary = join18(where, "tmp", sum(work));
   mkdirSync12(temporary, { recursive: true, mode: 448 });
   return { shell, work, git: repositoryOf2(work), temporary };
+}
+var wakePlaces = {};
+function setWakePlaces(places) {
+  wakePlaces = places;
+}
+function wakeFolder(sessionID, directory) {
+  if (!/^ses_[A-Za-z0-9_]+$/.test(sessionID))
+    return;
+  const { bots, wakes } = wakePlaces;
+  let own;
+  try {
+    for (const bot of bots ? readdirSync11(bots) : []) {
+      try {
+        if (readFileSync17(join18(bots, bot, "session"), "utf8") === sessionID) {
+          own = join18(bots, bot);
+          break;
+        }
+      } catch {}
+    }
+    if (!own) {
+      if (!wakes)
+        return;
+      own = join18(wakes, sessionID);
+      if (!existsSync12(join18(own, "session"))) {
+        mkdirSync12(own, { recursive: true, mode: 448 });
+        writeFileSync14(join18(own, "session"), sessionID, { mode: 384 });
+        writeFileSync14(join18(own, "directory"), real(directory), { mode: 384 });
+      }
+    }
+    for (const part of ["wakes", "watches", "inbox"])
+      mkdirSync12(join18(own, part), { recursive: true, mode: 448 });
+    return realpathSync4(own);
+  } catch {
+    return;
+  }
 }
 
 // Packages/Box/src/agents/shells.ts
@@ -9043,6 +9080,7 @@ class ClaudeThread {
         ...skills ? { plugins: [{ type: "local", path: skills, skipMcpDiscovery: true }] } : {},
         ...resume ? { resume: id } : { sessionId: id },
         env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id, ...this.fenced() },
+        ...this.fenceShellMissing !== undefined ? { sandbox: { enabled: false } } : {},
         stderr: () => {}
       }
     });
@@ -9050,10 +9088,12 @@ class ClaudeThread {
   }
   fenced() {
     const fence = fenceShell(this.session.location.directory);
+    this.fenceShellMissing = fenceOn() ? !fence : undefined;
     if (!fence)
       return {};
     return { CLAUDE_CODE_SHELL: fence.shell, CLAUDE_CODE_TMPDIR: fence.temporary, KUVO_FENCE_WORK: fence.work, KUVO_FENCE_GIT: fence.git };
   }
+  fenceShellMissing;
   async read(query) {
     let ended;
     try {
@@ -9526,6 +9566,9 @@ class ClaudeThread {
       return {};
     if (input.tool_name === "Bash" && typeof input.tool_use_id === "string" && typeof input.tool_input?.command === "string")
       this.commands.set(input.tool_use_id, input.tool_input.command);
+    if (input.tool_name === "Bash" && this.fenceShellMissing) {
+      return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "Commands run in the sandbox here, and it isn't ready for Claude Code yet: ask the user to restart Kuvo Code." } };
+    }
     await this.ownTaken();
     const hooks = this.active?.hooks ?? this.lastHooks;
     if (!hooks)
@@ -9939,7 +9982,7 @@ function safeBase642(path) {
 }
 
 // Packages/Box/src/agents/agents/codex.ts
-import { existsSync as existsSync14, lstatSync as lstatSync4, mkdirSync as mkdirSync13, readdirSync as readdirSync11, readFileSync as readFileSync19, readlinkSync, rmSync as rmSync9, symlinkSync as symlinkSync2 } from "fs";
+import { existsSync as existsSync14, lstatSync as lstatSync4, mkdirSync as mkdirSync13, readdirSync as readdirSync12, readFileSync as readFileSync19, readlinkSync, rmSync as rmSync9, symlinkSync as symlinkSync2 } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join20 } from "path";
 
@@ -10090,17 +10133,19 @@ var KEPT_IN_PROJECT = [
   ".codex",
   ".cursor",
   ".gemini",
-  ".grok"
+  ".grok",
+  "session",
+  "directory",
+  "wakes",
+  "watches"
 ];
 var toml = (text) => JSON.stringify(text);
+var KEPT_FROM_COMMANDS = ["OPENCODE_*", "*PASSWORD*", "*SECRET*", "*TOKEN*", "*KEY*", "KUVO_HOST_*", "KUVO_VAULT_*", "SSH_AUTH_SOCK", "KUVO_WAKE_FOLDER"];
 function fenceProfiles(rules) {
   const filesystem = (projects) => {
     const access = new Map([["/", "read"]]);
     for (const folder of rules.writable)
       access.set(folder, "write");
-    for (const folder of [process.env.KUVO_WAKES, process.env.KUVO_BOTS])
-      if (folder)
-        access.set(folder, "write");
     for (const place of rules.readOnly)
       access.set(place, "read");
     for (const place of rules.hidden)
@@ -10609,8 +10654,9 @@ class CodexThread {
   policy(hooks, plan) {
     if (this.agent.fenced) {
       const directory = this.session.location.directory;
-      const roots = { runtimeWorkspaceRoots: [directory, ...worktreeGitFolders(directory), ...allowedFolders(directory)] };
-      const inside = { granular: { sandbox_approval: false, rules: true, mcp_elicitations: true, request_permissions: false } };
+      const wakes = wakeFolder(this.session.id, directory);
+      const roots = { runtimeWorkspaceRoots: [directory, ...worktreeGitFolders(directory), ...wakes ? [wakes] : [], ...allowedFolders(directory)] };
+      const inside = { granular: { sandbox_approval: false, rules: false, mcp_elicitations: true, request_permissions: false } };
       if (plan)
         return { approvalPolicy: inside, permissions: "kuvo_read", ...roots };
       if (hooks.approvesAll())
@@ -10619,6 +10665,8 @@ class CodexThread {
     }
     if (plan)
       return { approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly", networkAccess: true } };
+    if (fenceOn())
+      return { approvalPolicy: hooks.approvesAll() ? "on-request" : "untrusted", sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: true } };
     if (hooks.approvesAll())
       return { approvalPolicy: "on-request", sandboxPolicy: { type: "dangerFullAccess" } };
     const writableRoots = [process.env.KUVO_WAKES, process.env.KUVO_BOTS].filter((root) => Boolean(root));
@@ -10642,8 +10690,11 @@ class CodexThread {
     this.instructions = instructions;
     const timeout = tools ? { tool_timeout_sec: Math.ceil(tools.timeout / 1000) } : {};
     const server = tools?.kind === "http" ? { url: tools.url, http_headers: tools.headers, ...timeout } : tools?.kind === "stdio" ? { command: tools.command, args: tools.args, env: tools.env, ...timeout } : undefined;
+    const wakes = this.agent.fenced ? wakeFolder(this.session.id, this.session.location.directory) : undefined;
     const config = {
       "shell_environment_policy.set.OPENCODE_SESSION_ID": this.session.id,
+      ...this.agent.fenced ? { "shell_environment_policy.exclude": KEPT_FROM_COMMANDS } : {},
+      ...wakes ? { "shell_environment_policy.set.KUVO_WAKE_FOLDER": wakes } : {},
       ...onMachine ? ownFoldersConfig() : {},
       ...tools && server ? { [`mcp_servers.${tools.name}`]: server } : {},
       ...turnedOffHere.length ? { "skills.config": [...this.agent.ownSkillSettings(), ...turnedOffHere] } : {}
@@ -11765,7 +11816,7 @@ function shadowHome(home) {
   const own = join20(homedir2(), ".codex");
   const kept = new Set(["auth.json", "models_cache.json"]);
   mkdirSync13(home, { recursive: true, mode: 448 });
-  const wanted = existsSync14(own) ? readdirSync11(own).filter((name) => !kept.has(name)) : [];
+  const wanted = existsSync14(own) ? readdirSync12(own).filter((name) => !kept.has(name)) : [];
   for (const name of wanted) {
     const link = join20(home, name);
     const target = join20(own, name);
@@ -11780,7 +11831,7 @@ function shadowHome(home) {
       symlinkSync2(target, link);
     } catch {}
   }
-  for (const name of readdirSync11(home)) {
+  for (const name of readdirSync12(home)) {
     const link = join20(home, name);
     try {
       if (lstatSync4(link).isSymbolicLink() && !wanted.includes(name))
@@ -12488,7 +12539,7 @@ function withTimeout2(promise, milliseconds) {
 
 // Packages/Box/src/agents/agents/grok.ts
 import { homedir as homedir4 } from "os";
-import { mkdirSync as mkdirSync15, readFileSync as readFileSync21, writeFileSync as writeFileSync14 } from "fs";
+import { mkdirSync as mkdirSync15, readFileSync as readFileSync21, writeFileSync as writeFileSync15 } from "fs";
 import { dirname as dirname9, join as join22 } from "path";
 var places3 = [join22(homedir4(), ".grok/bin"), join22(homedir4(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
 
@@ -12525,7 +12576,7 @@ class GrokAgent {
       return;
     try {
       mkdirSync15(dirname9(this.effortsFile), { recursive: true });
-      writeFileSync14(this.effortsFile, JSON.stringify(known));
+      writeFileSync15(this.effortsFile, JSON.stringify(known));
     } catch {}
   }
   constructor(context, instance = { id: "default" }) {
@@ -16461,7 +16512,7 @@ function seatRules(folder, askFirst, denies) {
 }
 
 // Packages/Box/src/agents/groups/store.ts
-import { existsSync as existsSync16, mkdirSync as mkdirSync16, readdirSync as readdirSync12, readFileSync as readFileSync23, renameSync as renameSync9, rmSync as rmSync11, writeFileSync as writeFileSync15 } from "fs";
+import { existsSync as existsSync16, mkdirSync as mkdirSync16, readdirSync as readdirSync13, readFileSync as readFileSync23, renameSync as renameSync9, rmSync as rmSync11, writeFileSync as writeFileSync16 } from "fs";
 import { join as join24 } from "path";
 var version2 = 1;
 var strings = (value) => Array.isArray(value) && value.every((item) => typeof item === "string");
@@ -16514,7 +16565,7 @@ var text2 = (file) => {
   }
 };
 function write(file, value) {
-  writeFileSync15(file + ".new", JSON.stringify(value, null, 2), { mode: 384 });
+  writeFileSync16(file + ".new", JSON.stringify(value, null, 2), { mode: 384 });
   renameSync9(file + ".new", file);
 }
 
@@ -16535,7 +16586,7 @@ class GroupStore {
     const all = new Map;
     let names = [];
     try {
-      names = readdirSync12(this.root);
+      names = readdirSync13(this.root);
     } catch {}
     for (const id of names) {
       if (!/^grp_[a-z0-9]+$/.test(id))
@@ -16566,7 +16617,7 @@ class GroupStore {
   setAwake(id, awake) {
     const file = join24(this.folder(id), "awake");
     if (awake && !existsSync16(file) && existsSync16(this.folder(id)))
-      writeFileSync15(file, "");
+      writeFileSync16(file, "");
     if (!awake)
       rmSync11(file, { force: true });
   }
@@ -16597,7 +16648,7 @@ class GroupStore {
   allBots() {
     let names = [];
     try {
-      names = readdirSync12(this.bots);
+      names = readdirSync13(this.bots);
     } catch {}
     return names.flatMap((name) => this.bot(name) ?? []);
   }
@@ -16703,7 +16754,7 @@ class GroupStore {
   }
   writeFile(path, contents) {
     mkdirSync16(join24(path, ".."), { recursive: true });
-    writeFileSync15(path + ".new", contents, { mode: 384 });
+    writeFileSync16(path + ".new", contents, { mode: 384 });
     renameSync9(path + ".new", path);
   }
   removeFile(path) {
@@ -17308,7 +17359,7 @@ async function make(runner, store, given, here) {
 }
 
 // Packages/Box/src/agents/groups/post.ts
-import { existsSync as existsSync17, readFileSync as readFileSync25, renameSync as renameSync10, writeFileSync as writeFileSync16 } from "fs";
+import { existsSync as existsSync17, readFileSync as readFileSync25, renameSync as renameSync10, writeFileSync as writeFileSync17 } from "fs";
 
 // Packages/Box/src/shared/seats.ts
 var SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "report", "memory"];
@@ -19797,7 +19848,7 @@ class PeerPost {
     if (!this.file)
       return;
     try {
-      writeFileSync16(this.file + ".new", JSON.stringify(this.kept), { mode: 384 });
+      writeFileSync17(this.file + ".new", JSON.stringify(this.kept), { mode: 384 });
       renameSync10(this.file + ".new", this.file);
     } catch {}
   }
@@ -20465,7 +20516,7 @@ ${all}`;
 }
 
 // Packages/Box/src/agents/store.ts
-import { mkdirSync as mkdirSync17, readdirSync as readdirSync13, readFileSync as readFileSync26, renameSync as renameSync11, rmSync as rmSync12, statSync as statSync10, writeFileSync as writeFileSync17 } from "fs";
+import { mkdirSync as mkdirSync17, readdirSync as readdirSync14, readFileSync as readFileSync26, renameSync as renameSync11, rmSync as rmSync12, statSync as statSync10, writeFileSync as writeFileSync18 } from "fs";
 import { join as join25 } from "path";
 
 class Store {
@@ -20475,7 +20526,7 @@ class Store {
   constructor(root) {
     this.root = root;
     mkdirSync17(root, { recursive: true });
-    for (const id of readdirSync13(root)) {
+    for (const id of readdirSync14(root)) {
       try {
         const folder = join25(root, id);
         const session = JSON.parse(readFileSync26(join25(folder, "session.json"), "utf8"));
@@ -20543,7 +20594,7 @@ class Store {
         ["agent.json", record.agent]
       ]) {
         const file = join25(folder, name);
-        writeFileSync17(file + ".new", JSON.stringify(value));
+        writeFileSync18(file + ".new", JSON.stringify(value));
         renameSync11(file + ".new", file);
       }
     } catch (error) {
@@ -20583,7 +20634,7 @@ var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join26(home2, "tmp");
 mkdirSync18(temporary, { recursive: true });
 rmSync13(join26(temporary, "antigravity"), { recursive: true, force: true });
 try {
-  for (const name of readdirSync14(join26(home2, "antigravity")))
+  for (const name of readdirSync15(join26(home2, "antigravity")))
     if (name.startsWith(".install-"))
       rmSync13(join26(home2, "antigravity", name), { recursive: true, force: true });
 } catch {}
@@ -20626,6 +20677,7 @@ var groupFolders = onMachine ? { root: join26(machineHome, "groups"), bots: proc
 var groupMemoryKey = process.env.KUVO_GROUPS_MEMORY_KEY || undefined;
 var artifactsFolder = onMachine ? join26(machineHome, "artifacts") : process.env.KUVO_ARTIFACTS || undefined;
 var botsFolder = groupFolders?.bots ?? (onMachine ? join26(machineHome, "bots") : process.env.KUVO_BOTS || undefined);
+setWakePlaces({ bots: botsFolder, wakes: process.env.KUVO_WAKES });
 var agentsFile = onMachine ? join26(machineHome, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined;
 for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", ...onMachine ? [] : ["KUVO_BOTS"]])
   delete process.env[name];
@@ -20753,7 +20805,7 @@ link2.whenReady().then(() => {
 });
 var record2 = onMachine ? join26(machineHome, "run", "bridge.json") : undefined;
 if (record2) {
-  writeFileSync18(record2 + ".new", JSON.stringify({ pid: process.pid, port: server3.port, password }), { mode: 384 });
+  writeFileSync19(record2 + ".new", JSON.stringify({ pid: process.pid, port: server3.port, password }), { mode: 384 });
   renameSync12(record2 + ".new", record2);
 }
 var stopping = false;
@@ -20789,4 +20841,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents caeaaf86928957fa076c8b0716a26a51faa1de4a09e03673822a4f3a74d57c3b
+// Built from Packages/Box/src/agents 4137cdc6dd6c8fbc5284742ec494f6f1d58fb94f74557836275bf69273880525
