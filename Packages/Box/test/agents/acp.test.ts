@@ -80,6 +80,7 @@ const tries = ${JSON.stringify(script.tries ?? null)}
 let servers = []
 async function attempt(how, place) {
   if (how === "env") return process.env[place] ?? "none"
+  if (how === "arg") return process.argv.includes(place) ? "yes" : "no"
   try {
     if (how === "write") require("node:fs").writeFileSync(place, "x")
     else if (how === "read") require("node:fs").readFileSync(place)
@@ -646,7 +647,7 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
     home = realpathSync(mkdtempSync(join(base, "grok-home-")))
     elsewhere = realpathSync(mkdtempSync(join(base, "elsewhere-")))
     writeFileSync(join(kuvo, "secret"), "s")
-    for (const folder of ["sessions", "bin"]) mkdirSync(join(home, folder))
+    for (const folder of ["sessions/project", "bin"]) mkdirSync(join(home, folder), { recursive: true })
     process.env.GROK_HOME = home
     process.env.XAI_API_KEY = "xai-test"
     process.env.KUVO_FENCE = realFence(kuvo)
@@ -661,23 +662,32 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
   /** Grok whose prompts try `tries` where it runs. */
   const trying = (tries: Record<string, [string, string]>) => new TestGrok(program(fakeAcp([], [], undefined, { tries }), join(root, "grok")), root)
 
-  test("Grok runs whole in it: what it runs, even a command you allowed, writes the session's folder and Grok's own state, never its settings or program (on a Mac), nor elsewhere, and can't read Kuvo Code's folder", async () => {
+  test("Grok runs whole in it: what it runs, even a command you allowed, writes the session's folder and Grok's own state, never its settings, hooks or program (on a Mac), nor elsewhere, and can't read Kuvo Code's folder", async () => {
     const id = await run(trying({
       project: ["write", join(root, "made.txt")],
-      state: ["write", join(home, "sessions", "conversation.json")],
+      state: ["write", join(home, "sessions", "project", "conversation.json")],
       signin: ["write", join(home, "auth.json")],
+      lock: ["write", join(home, "grok.lock")],
       settings: ["write", join(home, "config.toml")],
+      hooks: ["write", join(home, "hooks-paths")],
+      shared: ["write", join(home, "settings.json")],
+      statusline: ["write", join(home, "statusline.sh")],
+      // What a project always allows, kept with its conversations.
+      grants: ["write", join(home, "sessions", "project", "permission.toml")],
       models: ["write", join(home, "models_cache.json")],
       program: ["write", join(home, "bin", "grok")],
       elsewhere: ["write", join(elsewhere, "e.txt")],
       kuvo: ["read", join(kuvo, "secret")],
-      // Its own sandbox off (one can't run in another on a Mac), and its key, which it signs in with.
+      // Its own sandbox off (one can't run in another on a Mac), its memories off (what it writes
+      // there it's told as it starts), never in a shared leader, and its key, which it signs in with.
       sandbox: ["env", "GROK_SANDBOX"],
+      memory: ["env", "GROK_MEMORY"],
+      leader: ["arg", "--no-leader"],
       key: ["env", "XAI_API_KEY"],
     }), 1, { permissions: askFirst })
     // (Linux grants its home whole: there, a machine's, it's Kuvo Code's own copy of Grok's.)
     const mac = process.platform === "darwin" ? "no" : "yes"
-    expect(words(id)).toBe(`project=yes state=yes signin=yes settings=${mac} models=${mac} program=${mac} elsewhere=no kuvo=no sandbox=off key=xai-test`)
+    expect(words(id)).toBe(`project=yes state=yes signin=yes lock=yes settings=${mac} hooks=${mac} shared=${mac} statusline=${mac} grants=${mac} models=${mac} program=${mac} elsewhere=no kuvo=no sandbox=off memory=0 leader=yes key=xai-test`)
   })
 
   test("Kuvo Code's tools reach it through the bridge, as its own session's; the app's server itself it can't use", async () => {
@@ -715,7 +725,7 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
 
   test("with the sandbox off, it runs as before: its own program, its own sandbox as you set it", async () => {
     delete process.env.KUVO_FENCE
-    const id = await run(trying({ sandbox: ["env", "GROK_SANDBOX"], elsewhere: ["write", join(elsewhere, "e.txt")] }))
-    expect(words(id)).toBe("sandbox=none elsewhere=yes")
+    const id = await run(trying({ sandbox: ["env", "GROK_SANDBOX"], leader: ["arg", "--no-leader"], elsewhere: ["write", join(elsewhere, "e.txt")] }))
+    expect(words(id)).toBe("sandbox=none leader=no elsewhere=yes")
   })
 })

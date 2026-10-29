@@ -19,17 +19,19 @@ import type { Model, Session } from "../wire"
 const places = [join(homedir(), ".grok/bin"), join(homedir(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"]
 
 /**
- * Run whole in the box's sandbox (acp.ts `whole`): of Grok's home (GROK_HOME), the folders of its
- * state, which it writes whole (its conversations, logs, traces)…
+ * Run whole in the box's sandbox (acp.ts `whole`), Grok writes of its home (GROK_HOME) only its
+ * state (on a Mac; on Linux, a machine's Grok home is Kuvo Code's own, and written whole): its
+ * conversations, logs and traces, its sign-in and its locks. Nothing else there: what Grok reads as
+ * it starts or as you work with it, and runs or takes as its instructions (its settings, hooks and
+ * the paths it loads them from, language servers, the settings xAI sends, its models' list, which
+ * names where each model's requests go; its program, plugins, skills and memories).
  */
-const STATE_IN_HOME = ["sessions", "logs", "memtrace", "debug"]
-/**
- * …and what at its top it never writes: its settings (config, sandbox, hooks' and deployments'
- * `.toml`s), its language servers, the settings xAI sends (signed), and its models' list, which
- * names where each model's requests go. Its other folders (its program, plugins, skills, memories)
- * it only reads: they run outside the sandbox, or go to its model, when you use Grok yourself.
- */
-const KEPT_IN_HOME = ["*.toml", "*.md", "lsp.json", "settings_cache.json", "models_cache.json"]
+const STATE_IN_HOME = [
+  "sessions", "logs", "memtrace", "debug", "crash",
+  "auth.json*", "agent_id", "*.lock", ".metadata_version", "worktrees.db*", "active_sessions.json", "experiments_state.json", "*.log", "sandbox-events.jsonl",
+]
+/** What it never writes in its state either: settings put there (the commands each project always allows are kept in its sessions). */
+const KEPT_IN_HOME = ["*.toml", "hooks-paths", "disabled-hooks", "*.sh"]
 
 export class GrokAgent implements Agent {
   id = "grok"
@@ -200,12 +202,14 @@ export class GrokAgent implements Agent {
         authMethod: () => (process.env.XAI_API_KEY ? "xai.api_key" : "cached_token"),
         restartAfterInterrupt: true,
         program: () => agent.program,
-        whole: { homes: (env) => [env.GROK_HOME ?? join(homedir(), ".grok")], state: STATE_IN_HOME, kept: KEPT_IN_HOME, env: { GROK_SANDBOX: "off" } },
-        async command({ approvesAll, plan, skills }) {
+        whole: { homes: (env) => [env.GROK_HOME ?? join(homedir(), ".grok")], state: STATE_IN_HOME, kept: KEPT_IN_HOME, env: { GROK_SANDBOX: "off", GROK_MEMORY: "0" } },
+        async command({ approvesAll, plan, skills, whole }) {
           const executable = agent.executable()
           if (!executable) throw new Error(`Install Grok's CLI first: ${agent.install}`)
           // Settings › Skills' skills, as a plugin for this process alone.
-          const plugin = skills ? ["--plugin-dir", skills] : []
+          // Run whole in the box's sandbox: never in a shared leader (one you started yourself runs its
+          // commands outside it).
+          const plugin = [...(whole ? ["--no-leader"] : []), ...(skills ? ["--plugin-dir", skills] : [])]
           const argv = plan
             ? [executable, "--permission-mode", "plan", "agent", ...plugin, "stdio"]
             : approvesAll

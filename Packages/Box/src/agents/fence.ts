@@ -140,11 +140,11 @@ const AGENT_FOLDERS = 4
 
 /** An agent's own places, as it runs whole in the sandbox (`fenceAgent`). */
 export interface AgentPlaces {
-  /** Its homes: what's at their top read and written, but `kept`; their folders only read, but `state`. */
+  /** Its homes: read, and written only in its state (on a Mac; on Linux, whole). */
   homes: string[]
-  /** The folders in its homes it writes whole (its databases, conversations, logs), by name. */
+  /** What at its homes' top it writes (its sign-in, databases, conversations, logs): files, or folders whole, by name (`*` for any letters). */
   state: string[]
-  /** What at its homes' top it never writes (its settings), by name (`*` for any letters). */
+  /** What it never writes anywhere in its homes (settings it keeps in its state), by name (`*` for any letters). */
   kept: string[]
   /** Folders it only reads (in Kuvo Code's, hidden from commands: the skills it's given). */
   read: string[]
@@ -153,11 +153,12 @@ export interface AgentPlaces {
 }
 
 /**
- * For an agent run whole in the sandbox (Codex): the launcher that runs it (`run/fence/shell/run`)
- * and what it's told: its program, the conversation's folder and repository, and its own places.
- * (On a Mac, its homes but their state and the files at their top only read: what runs outside
- * the sandbox when you use it yourself, its plugins and skills, stays as it was. On Linux, its
- * homes whole: Landlock can't keep folders apart inside one it lets the agent make files in.)
+ * For an agent run whole in the sandbox (Codex, Grok): the launcher that runs it
+ * (`run/fence/shell/run`) and what it's told: its program, the conversation's folder and
+ * repository, and its own places. (On a Mac, its homes only read but their state: what runs
+ * outside the sandbox when you use it yourself, its settings, plugins and skills, stays as it was.
+ * On Linux, its homes whole: Landlock can't keep folders apart inside one it lets the agent make
+ * files in; a machine's agents' homes are Kuvo Code's own there.)
  * Undefined while the sandbox is off here.
  */
 export function fenceAgent(program: string, directory: string, mine: AgentPlaces): { command: string; env: Record<string, string> } | undefined {

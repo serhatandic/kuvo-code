@@ -37,7 +37,7 @@ export interface FencePolicy {
    * passwords are in files a command can't read. */
   ports: number[];
   /** Other apps' sockets that run what they're asked, outside the sandbox (folders), refused where
-   * the system can (macOS): the ChatGPT app's. */
+   * the system can (macOS): the ChatGPT app's, and Grok's shared leader's (`~/.grok/leader.sock`). */
   sockets?: string[];
 }
 
@@ -132,7 +132,7 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
         `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
       ],
       writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES])],
-      sockets: inHome([".codex/ipc"]),
+      sockets: inHome([".codex/ipc", ".grok"]),
       secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...sshKeys(home).map(realish), ...ghHosts(home).map(realish)],
     };
   }

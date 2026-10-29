@@ -24,8 +24,8 @@ const outputLimit = 30_000
 const limitWords = /RESOURCE_EXHAUSTED|usage limit (?:reached|exceeded)|quota exceeded|exceeded your (?:current )?quota|rate limit exceeded|too many requests/i
 
 export interface AcpFlavor {
-  /** The command that starts the agent, for this session's approval mode (and its skills folder, from `skills`). */
-  command(options: { approvesAll: boolean; plan: boolean; skills?: string }): Promise<{
+  /** The command that starts the agent, for this session's approval mode (and its skills folder, from `skills`; `whole`: run whole in the box's sandbox). */
+  command(options: { approvesAll: boolean; plan: boolean; skills?: string; whole?: boolean }): Promise<{
     argv: string[]
     env?: Record<string, string | undefined>
     cleanEnv?: boolean
@@ -97,7 +97,8 @@ export interface AcpFlavor {
    * environment it starts with (its sign-in and state); in them, the folders of its state and what
    * it never writes (on a Mac: what runs outside the sandbox when you use it yourself, its settings,
    * plugins and the like); and what it's told to start with (its own sandbox off: one can't run
-   * inside another on a Mac). Kuvo Code's tools reach it through the agents bridge's relay.
+   * inside another on a Mac). Kuvo Code's tools reach it through the agents bridge's relay. Never
+   * with `fileSystem`: the bridge reads and writes outside the sandbox.
    */
   whole?: { homes(env: Record<string, string | undefined>): string[]; state: string[]; kept: string[]; env?: Record<string, string> }
 }
@@ -194,7 +195,7 @@ export class AcpThread implements Thread {
 
   private async open(input: RunInput, hooks: TurnHooks) {
     const skills = await this.flavor.skills?.(this.session.location.directory, hooks)
-    const mode = { approvesAll: hooks.approvesAll(), plan: input.plan, skills }
+    const mode = { approvesAll: hooks.approvesAll(), plan: input.plan, skills, ...(this.flavor.whole && fenceRules() ? { whole: true } : {}) }
     // Kuvo Code's tools moving (the app started again) starts it again too, to reach them; so do
     // other skills.
     // So does the box's sandbox changing, for one run whole in it (its rules, the folders you let
@@ -347,6 +348,7 @@ export class AcpThread implements Thread {
   private wholeLaunch(argv: string[], env: Record<string, string | undefined> | undefined, cleanEnv: boolean | undefined, skills?: string) {
     const whole = this.flavor.whole
     if (!whole || !fenceRules()) return undefined
+    if (this.flavor.fileSystem) throw new Error(`${this.name} can't run in the sandbox here: it reads and writes files through Kuvo Code.`)
     const directory = this.session.location.directory
     const attached = fenceAttachments(directory)
     const relayed = relayedTools(this.session.id)

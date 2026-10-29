@@ -5,10 +5,11 @@
 // regexes as ALLOW0_RE…), and the tag
 // its refusals are logged with (TAG: `kuvo-sandbox <session>`). A coding agent run whole in it
 // (Codex; Grok, Cursor, Antigravity) has homes of its own too (OWN0…, escaped as OWN0_RE…), of
-// which it writes only the files at the top and the folders of its state, by name (STATE: its
-// sign-in, databases and conversations), never what's named KEPT there (its settings, which run as
-// it starts, outside the sandbox, when you use it yourself) nor its other folders (its plugins and
-// skills' code); folders it only reads (READ0…: the skills it's given, in Kuvo Code's); and the one
+// which it writes only what's named its state at their top (STATE: its sign-in, databases and
+// conversations, files or folders), never what's named KEPT anywhere in them (settings it keeps
+// inside its state), nor anything else there (its settings, plugins and skills, which run as it
+// starts, outside the sandbox, when you use it yourself); folders it only reads (READ0…: the
+// skills it's given, in Kuvo Code's); and the one
 // port of its own Kuvo Code tools (PORT, in its profiles of their own: `-agent`).
 //
 // Later rules win, so each part carves out of the ones before it. Two profiles: one for a folder
@@ -48,7 +49,7 @@ const param = (name: string) => `(subpath (param ${quote(name)}))`;
 // only by its own name, never by what's in it, so the folders that hold those (`.git`, a submodule's
 // or a worktree's repository, the agents' folders) can't be made, moved or removed, only written in.
 const GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)/[^/]+$)`;
-const AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/(config\.toml|hooks\.json|\.env|rules(/.*)?)|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.grok/(config\.toml|sandbox\.toml|lsp\.json|(hooks|plugins)(/.*)?)|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
+const AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/(config\.toml|hooks\.json|\.env|rules(/.*)?)|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.grok/(config\.toml|sandbox\.toml|lsp\.json|(hooks|plugins|agents|workflows)(/.*)?)|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
 const GUARDED = String.raw`(.*/)?(\.git$|\.git/(${GIT_GUARDED})|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
 
 export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): string {
@@ -87,14 +88,14 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   const HIDDEN = "file-read-data file-write*";
   deny(HIDDEN, ...policy.kuvo.map(subpath), ...policy.kuvoPatterns.map(regex));
   allow("file-read-data", ...policy.kuvoReadable.map(subpath));
-  // A coding agent's own homes, run whole in the sandbox: read, and written only in the files at
-  // their top (never a folder or a link: one moved or linked into place there would run outside)
-  // and the folders of its state; and the folders it only reads.
+  // A coding agent's own homes, run whole in the sandbox: read, and written only where its state is
+  // named at their top (a file, or a folder and all in it; never a link: one put in place there
+  // would lead elsewhere); and the folders it only reads.
   const homes = Array.from({ length: AGENT_FOLDERS }, (_, at) => `OWN${at}`);
   allow("file-read-data", ...homes.map(param), ...Array.from({ length: AGENT_FOLDERS }, (_, at) => param(`READ${at}`)));
   const inHome = (home: string, rest: string) => `(regex (string-append "^" (param ${quote(`${home}_RE`)}) ${rest}))`;
   allow("file-write*", ...homes.flatMap(home => [
-    `(require-all ${under(`${home}_RE`, "/[^/]+$")} (vnode-type REGULAR-FILE))`,
+    `(require-all ${inHome(home, `"/(" (param "STATE") ")$"`)} (vnode-type REGULAR-FILE))`,
     `(require-all ${inHome(home, `"/(" (param "STATE") ")$"`)} (vnode-type DIRECTORY))`,
     inHome(home, `"/(" (param "STATE") ")/"`),
   ]));
@@ -108,7 +109,7 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   out.push(";; what runs outside the sandbox, or changes the engine");
   deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED),
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
-  deny("file-write*", ...homes.map(home => inHome(home, `"/(" (param "KEPT") ")(/|$)"`)));
+  deny("file-write*", ...homes.map(home => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
 
   out.push(";; your secrets");
   deny("file-read*", ...policy.secrets.map(subpath));

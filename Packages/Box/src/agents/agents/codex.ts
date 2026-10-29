@@ -32,19 +32,20 @@ const outputLimit = 30_000
 /**
  * While the box's sandbox is on, Codex runs whole in it, with its commands and all it starts (its
  * own sandbox off: one can't be made inside another). Besides the session's folder it writes its
- * home's state: the files at its top (its sign-in, its databases) and these folders (its
- * conversations, logs, caches), never its settings there (`KEPT_IN_HOME`) nor its other folders
- * (plugins, skills, what drives your computer), which run outside the sandbox when you use Codex
- * yourself.
+ * home's state (on a Mac; on Linux, a machine's Codex home is Kuvo Code's own, and written whole):
+ * its sign-in, its databases and these folders (its conversations, logs, caches). Nothing else
+ * there: what your Codex reads as it starts or as you work with it, and runs or takes as its
+ * instructions (its settings, hooks and rules; its plugins, their repository in `.tmp`, its helpers
+ * in `tmp`, the scripts it sources in `shell_snapshots`; its models' instructions; the ChatGPT
+ * app's state and socket). (Its memories' database it opens as it starts, so it writes that too.)
  */
-const STATE_IN_HOME = ["sessions", "archived_sessions", "log", "logs", "cache", "sqlite", "thread-writer-locks", "generated_images"]
-/**
- * Not its state: what your Codex reads as it starts or as you work with it, and runs or takes as
- * its instructions (its plugins' repository in `.tmp`, its helpers in `tmp`, the scripts it
- * sources in `shell_snapshots`, its memories and their skills, the ChatGPT app's socket in `ipc`),
- * and at the top, its settings, its models' instructions and the ChatGPT app's state.
- */
-const KEPT_IN_HOME = ["*.toml", "*.md", ".env", "hooks.json", "rules", "models_cache.json", ".codex-global-state.json*"]
+const STATE_IN_HOME = [
+  "sessions", "archived_sessions", "log", "logs", "cache", "sqlite", "thread-writer-locks", "generated_images",
+  "auth.json*", "installation_id", "version.json", "history.jsonl", ".personality_migration", ".sandbox_migration", "*.lock",
+  "state_*.sqlite*", "logs_*.sqlite*", "goals_*.sqlite*", "queue_*.sqlite*", "thread_history_*.sqlite*", "memories_*.sqlite*",
+]
+/** What it never writes in its state either: settings put there. */
+const KEPT_IN_HOME = ["*.toml", ".env", "hooks.json", "rules"]
 
 /**
  * Codex's plugins that drive your computer (ChatGPT's Computer Use), off for every thread here

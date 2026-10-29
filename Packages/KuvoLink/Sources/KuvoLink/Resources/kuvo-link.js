@@ -10334,7 +10334,7 @@ function fencePolicy(ports = []) {
         `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`
       ],
       writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES])],
-      sockets: inHome([".codex/ipc"]),
+      sockets: inHome([".codex/ipc", ".grok"]),
       secrets: [...inHome([...SECRETS, ...MAC_SECRETS]), ...keychainDaemons(home).map(realish), ...sshKeys(home).map(realish), ...ghHosts(home).map(realish)]
     };
   }
@@ -10510,7 +10510,7 @@ var subpath = (folder) => `(subpath ${quote2(folder)})`;
 var regex = (pattern) => `(regex ${quote2(pattern)})`;
 var param = (name) => `(subpath (param ${quote2(name)}))`;
 var GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)/[^/]+$)`;
-var AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/(config\.toml|hooks\.json|\.env|rules(/.*)?)|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.grok/(config\.toml|sandbox\.toml|lsp\.json|(hooks|plugins)(/.*)?)|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
+var AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/(config\.toml|hooks\.json|\.env|rules(/.*)?)|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.grok/(config\.toml|sandbox\.toml|lsp\.json|(hooks|plugins|agents|workflows)(/.*)?)|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
 var GUARDED = String.raw`(.*/)?(\.git$|\.git/(${GIT_GUARDED})|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
 function seatbeltProfile(policy, options) {
   const mode = options.mode ?? "enforce";
@@ -10542,7 +10542,7 @@ function seatbeltProfile(policy, options) {
   allow("file-read-data", ...homes.map(param), ...Array.from({ length: AGENT_FOLDERS }, (_, at) => param(`READ${at}`)));
   const inHome = (home, rest) => `(regex (string-append "^" (param ${quote2(`${home}_RE`)}) ${rest}))`;
   allow("file-write*", ...homes.flatMap((home) => [
-    `(require-all ${under(`${home}_RE`, "/[^/]+$")} (vnode-type REGULAR-FILE))`,
+    `(require-all ${inHome(home, `"/(" (param "STATE") ")$"`)} (vnode-type REGULAR-FILE))`,
     `(require-all ${inHome(home, `"/(" (param "STATE") ")$"`)} (vnode-type DIRECTORY))`,
     inHome(home, `"/(" (param "STATE") ")/"`)
   ]));
@@ -10553,7 +10553,7 @@ function seatbeltProfile(policy, options) {
   allow(HIDDEN, `(subpath (string-append (param "WAKES") "/inbox"))`);
   out.push(";; what runs outside the sandbox, or changes the engine");
   deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED), ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
-  deny("file-write*", ...homes.map((home) => inHome(home, `"/(" (param "KEPT") ")(/|$)"`)));
+  deny("file-write*", ...homes.map((home) => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
   out.push(";; your secrets");
   deny("file-read*", ...policy.secrets.map(subpath));
   out.push(";; Kuvo Code's own servers and sockets");

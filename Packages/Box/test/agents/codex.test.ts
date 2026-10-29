@@ -11,6 +11,7 @@ import { createServer } from "node:net"
 import { CodexAgent } from "../../src/agents/agents/codex"
 import { Auto } from "../../src/agents/auto"
 import { canFence, realFence } from "./support/fence"
+import { fencePolicy } from "../../src/link/fence/policy"
 import type { Roster } from "../../src/agents/roster"
 import { Sessions } from "../../src/agents/sessions"
 import { Store } from "../../src/agents/store"
@@ -637,8 +638,13 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
     const id = await run([[tries, {
       project: ["write", join(root, "made.txt")],
       own: ["write", join(home, "state_5.sqlite-wal")],
+      signin: ["write", join(home, "auth.json")],
       state: ["write", join(home, "sessions", "rollout.jsonl")],
       settings: ["write", join(home, "config.toml")],
+      // A file it never writes.
+      other: ["write", join(home, "notes.txt")],
+      // Settings put in its state.
+      kept: ["write", join(home, "sessions", "config.toml")],
       plugin: ["write", join(home, "plugins", "plugin.js")],
       // What Codex runs or tells its model later, outside a turn: a shell it sources, what each model is told.
       snapshot: ["write", join(home, "shell_snapshots", "s.sh")],
@@ -648,7 +654,7 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
     }]], { permissions: askFirst })
     // (Linux grants its home whole: there, a machine's, it's Kuvo Code's own copy of Codex's.)
     const mac = process.platform === "darwin" ? "no" : "yes"
-    expect(said(id)).toBe(`project=yes own=yes state=yes settings=${mac} plugin=${mac} snapshot=${mac} models=${mac} elsewhere=no kuvo=no`)
+    expect(said(id)).toBe(`project=yes own=yes signin=yes state=yes settings=${mac} other=${mac} kept=${mac} plugin=${mac} snapshot=${mac} models=${mac} elsewhere=no kuvo=no`)
   })
 
   test("what it runs can't ask the ChatGPT app to run something outside it (its socket in Codex's folder), and still reaches other sockets", async () => {
@@ -667,6 +673,8 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
       const id = await run([[tries, { app: ["connect", join(home, "ipc", "s.sock")], other: ["connect", join(elsewhere, "s.sock")] }]], { permissions: askFirst })
       // (Linux can't refuse a socket: a machine has no ChatGPT app.)
       expect(said(id)).toBe(`app=${process.platform === "darwin" ? "no" : "yes"} other=yes`)
+      // The box's own rules name your Codex's socket so (and Grok's shared leader's).
+      if (process.platform === "darwin") expect(fencePolicy().sockets?.filter((folder) => folder.endsWith("/.codex/ipc") || folder.endsWith("/.grok"))).toHaveLength(2)
     } finally {
       app.close()
       other.close()

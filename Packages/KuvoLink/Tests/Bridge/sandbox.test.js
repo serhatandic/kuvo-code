@@ -330,7 +330,7 @@ test("Claude Code's commands, run with the box's shell for it as Claude Code run
   }
 });
 
-test("a coding agent run whole in the sandbox keeps its own sign-in and state, but not what it runs as it starts or its plugins, reads the skills it's given, and reaches its own Kuvo Code tools", async () => {
+test("a coding agent run whole in the sandbox keeps its own sign-in and state (only what's named so), but not what it runs as it starts or its plugins, reads the skills it's given, and reaches its own Kuvo Code tools", async () => {
   const box = boxAt("whole", !linux);
   const project = path.join(root, "whole-project");
   fs.mkdirSync(project);
@@ -351,7 +351,10 @@ test("a coding agent run whole in the sandbox keeps its own sign-in and state, b
     const whole = (port) => spawnSync(path.join(box.home, "run", "fence", "shell", "run"), ["-c", tries([
       ["read its sign-in", `cat ${JSON.stringify(path.join(own, "auth.json"))}`],
       ["write its sessions", `echo x > ${JSON.stringify(path.join(own, "sessions", "s1"))}`],
-      ["make its own files beside its settings", `echo x > ${JSON.stringify(path.join(own, "state.sqlite-wal"))}`],
+      ["write its databases", `echo x > ${JSON.stringify(path.join(own, "state_5.sqlite-wal"))}`],
+      ["write its sign-in anew", `echo x > ${JSON.stringify(path.join(own, "auth.json.tmp"))} && mv ${JSON.stringify(path.join(own, "auth.json.tmp"))} ${JSON.stringify(path.join(own, "auth.json"))}`],
+      ["make another file at its top", `echo x > ${JSON.stringify(path.join(own, "hooks-paths"))}`],
+      ["put settings in its state", `echo x > ${JSON.stringify(path.join(own, "sessions", "permission.toml"))}`],
       ["read its settings", `cat ${JSON.stringify(path.join(own, "config.toml"))}`],
       ["change its settings", `echo 'hook = 1' >> ${JSON.stringify(path.join(own, "config.toml"))}`],
       ["add a plugin", `echo x > ${JSON.stringify(path.join(own, "plugins", "p.js"))}`],
@@ -361,13 +364,14 @@ test("a coding agent run whole in the sandbox keeps its own sign-in and state, b
       ["write in its project", "echo ok > made.txt"],
       ["read the box's files", `cat ${JSON.stringify(path.join(box.home, "run", "engine.json"))}`],
       ["reach its tools", `curl -s -m 2 -o /dev/null http://127.0.0.1:${toolsPort}/kuvo/info`],
-    ])], { cwd: project, encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, KUVO_FENCE_SHELL: "/bin/sh", KUVO_FENCE_WORK: project, KUVO_FENCE_OWN: own, KUVO_FENCE_STATE: "sessions\nlogs", KUVO_FENCE_KEPT: "*.toml\nhooks.json", KUVO_FENCE_READ: skills, ...(port ? { KUVO_FENCE_PORT: port } : {}) } });
+    ])], { cwd: project, encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, KUVO_FENCE_SHELL: "/bin/sh", KUVO_FENCE_WORK: project, KUVO_FENCE_OWN: own, KUVO_FENCE_STATE: "sessions\nlogs\nauth.json*\nstate_*.sqlite*", KUVO_FENCE_KEPT: "*.toml\nhooks.json", KUVO_FENCE_READ: skills, ...(port ? { KUVO_FENCE_PORT: port } : {}) } });
     const ran = whole(toolsPort);
     // (Linux grants its homes whole: what macOS keeps only read there, it can't, without stopping
     // the agent making its own files beside it. A machine's agents' homes are Kuvo Code's own.)
     const mac = linux ? "allowed" : "refused";
     assert.deepEqual(outcome(ran.stdout), {
-      "read its sign-in": "allowed", "write its sessions": "allowed", "make its own files beside its settings": "allowed", "read its settings": "allowed",
+      "read its sign-in": "allowed", "write its sessions": "allowed", "write its databases": "allowed", "write its sign-in anew": "allowed",
+      "make another file at its top": mac, "put settings in its state": mac, "read its settings": "allowed",
       "change its settings": mac, "add a plugin": mac, "put a link at its top": mac, "read the skills it's given": "allowed", "change the skills it's given": "refused",
       "write in its project": "allowed", "read the box's files": "refused", "reach its tools": "allowed",
     }, ran.stdout + ran.stderr);

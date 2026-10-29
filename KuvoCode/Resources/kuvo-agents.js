@@ -6468,7 +6468,7 @@ class AcpThread {
   }
   async open(input, hooks) {
     const skills = await this.flavor.skills?.(this.session.location.directory, hooks);
-    const mode = { approvesAll: hooks.approvesAll(), plan: input.plan, skills };
+    const mode = { approvesAll: hooks.approvesAll(), plan: input.plan, skills, ...this.flavor.whole && fenceRules() ? { whole: true } : {} };
     const fence = this.flavor.whole && fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) : "";
     const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence });
     if (this.rpc && !this.rpc.isClosed && this.spawnedWith === key && this.rpc !== this.stale)
@@ -6611,6 +6611,8 @@ class AcpThread {
     const whole = this.flavor.whole;
     if (!whole || !fenceRules())
       return;
+    if (this.flavor.fileSystem)
+      throw new Error(`${this.name} can't run in the sandbox here: it reads and writes files through Kuvo Code.`);
     const directory = this.session.location.directory;
     const attached = fenceAttachments(directory);
     const relayed = relayedTools(this.session.id);
@@ -10337,8 +10339,30 @@ function parse2(directive) {
 // Packages/Box/src/agents/agents/codex.ts
 var places2 = ["/opt/homebrew/bin", "/usr/local/bin", join20(homedir2(), ".local/bin"), join20(homedir2(), ".codex/bin")];
 var outputLimit4 = 30000;
-var STATE_IN_HOME = ["sessions", "archived_sessions", "log", "logs", "cache", "sqlite", "thread-writer-locks", "generated_images"];
-var KEPT_IN_HOME = ["*.toml", "*.md", ".env", "hooks.json", "rules", "models_cache.json", ".codex-global-state.json*"];
+var STATE_IN_HOME = [
+  "sessions",
+  "archived_sessions",
+  "log",
+  "logs",
+  "cache",
+  "sqlite",
+  "thread-writer-locks",
+  "generated_images",
+  "auth.json*",
+  "installation_id",
+  "version.json",
+  "history.jsonl",
+  ".personality_migration",
+  ".sandbox_migration",
+  "*.lock",
+  "state_*.sqlite*",
+  "logs_*.sqlite*",
+  "goals_*.sqlite*",
+  "queue_*.sqlite*",
+  "thread_history_*.sqlite*",
+  "memories_*.sqlite*"
+];
+var KEPT_IN_HOME = ["*.toml", ".env", "hooks.json", "rules"];
 var noComputerUse = ["unified-computer-use@openai-bundled", "computer-use@openai-bundled"];
 var SHARED = "";
 var ACCOUNT = "account";
@@ -12799,8 +12823,23 @@ import { homedir as homedir4 } from "os";
 import { mkdirSync as mkdirSync15, readFileSync as readFileSync21, writeFileSync as writeFileSync14 } from "fs";
 import { dirname as dirname9, join as join22 } from "path";
 var places3 = [join22(homedir4(), ".grok/bin"), join22(homedir4(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
-var STATE_IN_HOME2 = ["sessions", "logs", "memtrace", "debug"];
-var KEPT_IN_HOME2 = ["*.toml", "*.md", "lsp.json", "settings_cache.json", "models_cache.json"];
+var STATE_IN_HOME2 = [
+  "sessions",
+  "logs",
+  "memtrace",
+  "debug",
+  "crash",
+  "auth.json*",
+  "agent_id",
+  "*.lock",
+  ".metadata_version",
+  "worktrees.db*",
+  "active_sessions.json",
+  "experiments_state.json",
+  "*.log",
+  "sandbox-events.jsonl"
+];
+var KEPT_IN_HOME2 = ["*.toml", "hooks-paths", "disabled-hooks", "*.sh"];
 
 class GrokAgent {
   context;
@@ -12942,12 +12981,12 @@ class GrokAgent {
       authMethod: () => process.env.XAI_API_KEY ? "xai.api_key" : "cached_token",
       restartAfterInterrupt: true,
       program: () => agent.program,
-      whole: { homes: (env) => [env.GROK_HOME ?? join22(homedir4(), ".grok")], state: STATE_IN_HOME2, kept: KEPT_IN_HOME2, env: { GROK_SANDBOX: "off" } },
-      async command({ approvesAll, plan, skills }) {
+      whole: { homes: (env) => [env.GROK_HOME ?? join22(homedir4(), ".grok")], state: STATE_IN_HOME2, kept: KEPT_IN_HOME2, env: { GROK_SANDBOX: "off", GROK_MEMORY: "0" } },
+      async command({ approvesAll, plan, skills, whole }) {
         const executable = agent.executable();
         if (!executable)
           throw new Error(`Install Grok's CLI first: ${agent.install}`);
-        const plugin = skills ? ["--plugin-dir", skills] : [];
+        const plugin = [...whole ? ["--no-leader"] : [], ...skills ? ["--plugin-dir", skills] : []];
         const argv = plan ? [executable, "--permission-mode", "plan", "agent", ...plugin, "stdio"] : approvesAll ? [executable, "agent", ...plugin, "--always-approve", "stdio"] : [executable, "--permission-mode", "default", "agent", ...plugin, "stdio"];
         return { argv, env: agent.env() };
       },
@@ -21100,4 +21139,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 1be9683c4f2e92fe4d265105d0f8cc3aecc86bed478b428ea81c30bbd40d033a
+// Built from Packages/Box/src/agents 77db9a45e7b389a08a26cf49248359e46812f92f6d94c43fda64e2c6facc8efa
