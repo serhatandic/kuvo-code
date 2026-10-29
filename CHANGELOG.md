@@ -183,6 +183,11 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A machine whose relay connection drops right after it connects (another copy at its address, say) now waits longer between tries, instead of reconnecting every second and each time cutting off your phone and its agents' messages to your other computers.
 - A bot or conversation just made on a computer shows in & names, and to agents on your other computers, at once, instead of sometimes going missing for up to a minute.
 - A machine Kuvo Code finds at two addresses no longer shows a group chat as talking there while it's away, and a chat that starts talking just as it's read again keeps showing so.
+- Each new session you're writing, and each terminal tab of the window, has a side panel of its own: a terminal opened while writing one no longer shows beside another, or goes to whichever session is sent first.
+- Run again after a new session is sent, or after a conversation moves to the coding agents, restarts the command in the same terminal instead of starting a second copy beside the first.
+- A file a bot shows you in a group chat opens in the side panel, instead of "No Project".
+- Reload in the Files tab while you're filtering reads the files again, instead of leaving the filter loading.
+- Add to Message in a terminal tab of the window starts a new session in its folder with what you selected, instead of doing nothing.
 
 ## 0.7.2
 
