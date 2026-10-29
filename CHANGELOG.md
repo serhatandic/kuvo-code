@@ -180,6 +180,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A group chat's part of the work in a state only a newer Kuvo Code knows no longer shows "Working" forever, or stops you moving that chat to another computer.
 - A group chat moved to a machine shows there once it has moved, instead of sometimes disappearing until Kuvo Code opens again.
 - Kuvo Code no longer crashes when a computer lists a conversation's subagents in a loop.
+- A machine whose relay connection drops right after it connects (another copy at its address, say) now waits longer between tries, instead of reconnecting every second and each time cutting off your phone and its agents' messages to your other computers.
+- A bot or conversation just made on a computer shows in & names, and to agents on your other computers, at once, instead of sometimes going missing for up to a minute.
+- A machine Kuvo Code finds at two addresses no longer shows a group chat as talking there while it's away, and a chat that starts talking just as it's read again keeps showing so.
 
 ## 0.7.2
 
