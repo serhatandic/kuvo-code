@@ -399,6 +399,9 @@ test("the goal as it goes: tracks with real progress only, steps added as the pl
   assert.equal(moved.isError, false, moved.text);
   assert.match(moved.text, /The user is away now/);
   assert.equal((await tool("goal_progress", { step: 2, progress: 1.5 })).isError, true, "progress is a share, never a guess past it");
+  const bare = await tool("goal_progress", { step: 2, progress: 0.6 });
+  assert.equal(bare.isError, true, "a share with nothing counted: the user sees the count, never a bare percentage");
+  assert.match(bare.text, /note/);
   assert.equal((await tool("goal_progress", { steps: [{ step: 1, state: "done" }, { step: 99, state: "done" }], watching: ["DNS"] })).isError, true);
   let goal = (await goals())[0];
   assert.deepEqual(goal.steps.map(each => [each.state, each.progress ?? null]), [["done", 1], ["doing", 0.5], ["todo", null], ["todo", null], ["todo", null], ["todo", null]]);

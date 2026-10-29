@@ -283,8 +283,8 @@ enum BrowserTools {
              ["steps": ["type": "array", "items": ["type": "object", "properties": [
                   "step": ["type": "integer", "description": "The step's number, from 1."],
                   "state": ["type": "string", "enum": ["todo", "doing", "done", "waiting", "paused", "skipped"]],
-                  "progress": ["type": "number", "description": "How far along, from 0 to 1, only where you can measure it (3 of 8 pages is 0.375)."],
-                  "note": ["type": "string", "description": "A few words, like \"looks again at 2:40\"."]], "required": ["step"]]],
+                  "progress": ["type": "number", "description": "How far along, from 0 to 1, only where you can count it, with what you counted in note (3 of 8 pages is 0.375)."],
+                  "note": ["type": "string", "description": "A few words: what you counted (\"3 of 8 pages\"), which the user sees, or like \"looks again at 2:40\"."]], "required": ["step"]]],
               "add": ["type": "array", "items": ["type": "string"], "description": "New steps, as the plan changes."],
               "waiting": ["type": "object", "properties": [
                   "kind": ["type": "string", "enum": ["you", "judgment", "outside"], "description": "you: only the user can fix it; judgment: a call that's theirs before anything public; outside: not in the plan."],

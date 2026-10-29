@@ -725,7 +725,8 @@ beside it.
   in `run/work/goals.json`; `kuvo/work/events` moves too. While it's proposed, the box's own checks
   come first: `alone` (failed where this box can't work on it alone yet), `power` (a Mac on battery),
   `projectsFolder` (needs, when the plan makes a project and none is picked). `progress` is given only
-  where the bot measured it; a step without it is in progress, not some share of it. `site` (a step,
+  where the bot counted it, always with what it counted in `note` ("3 of 8 pages"), which is what
+  the apps show; a step without it is in progress, not some share of it. `site` (a step,
   a check or what waits, tied to a service: `stripe.com`, from its page's address or as the bot
   names it) is for the service's own icon, which each client loads from the site itself.
 - **Alone, or with you there**: a goal goes on alone only where the box's commands run in the

@@ -535,6 +535,8 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
     if (!isObject(mark) || !running.steps[stepAt(mark.step, running.steps)]) return { refused: `There's no step ${isObject(mark) ? String(mark.step) : ""}: the plan has ${running.steps.length} (add new ones with add).` };
     if (mark.state !== undefined && !STEP_STATES.includes(mark.state as (typeof STEP_STATES)[number])) return { refused: "A step's state is todo, doing, done, waiting, paused or skipped." };
     if (mark.progress !== undefined && mark.progress !== null && !(typeof mark.progress === "number" && mark.progress >= 0 && mark.progress <= 1)) return { refused: "A step's progress is a share from 0 to 1, given only where you can measure it (3 of 8 pages is 0.375)." };
+    // The user sees what was counted, and the track fills by it: never a bare share.
+    if (typeof mark.progress === "number" && mark.progress < 1 && !text(mark.note, 300)) return { refused: "Say what you counted with the share, in note: progress 0.375 with note \"3 of 8 pages\". The user sees the count." };
   }
   if (isObject(given.waiting) && (!text(given.waiting.text, 300) || !WAITING_KINDS.includes(given.waiting.kind as (typeof WAITING_KINDS)[number]))) return { refused: "What waits needs its kind (you, judgment or outside) and what it is (text)." };
   const spent = Array.isArray(given.spent) ? given.spent : isObject(given.spent) ? [given.spent] : [];
