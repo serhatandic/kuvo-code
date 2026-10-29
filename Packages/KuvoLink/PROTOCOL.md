@@ -2703,9 +2703,10 @@ it's empty.
   Cursor, whose SDK runs its tools in the process that runs it (the bridge's, otherwise), runs whole
   the same way: its SDK in a process of its own for each session (the engine's runtime run as Bun:
   `KUVO_FENCE_BUN=1`, which commands don't get), which the bridge asks over its stdin and stdout,
-  Cursor's own sandbox off. Your sign-in stays with the bridge, which hands it the key it runs with;
-  of its folders it writes only its conversations, notes, sandbox policies and computer use's
-  (on a Mac; on Linux, whole), and it reads its SDK.
+  Cursor's own sandbox off, stopped once it's been done 15 minutes. Your sign-in stays with the
+  bridge, which hands it the key it runs with, out of its reach: of Cursor's folders it reads and
+  writes only its conversations and a folder of its own for its notes, sandbox policies and computer
+  use's (`cursor/in-sandbox`, never what Cursor keeps run in the bridge), and it reads its SDK.
   When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
   you can do (`action`) and the box's route that does it (`route`, where there is one):
 

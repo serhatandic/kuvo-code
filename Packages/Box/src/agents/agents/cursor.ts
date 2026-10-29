@@ -26,11 +26,8 @@ const effortParameters = ["effort", "reasoning", "reasoning_effort"]
 
 const SDK = [{ name: "@cursor/sdk", version: "1.0.35" }]
 const outputLimit = 30_000
-/**
- * What Cursor's agent writes in its folders, run whole in the sandbox: its conversations, notes for
- * each project, sandbox policies, computer use's (`sdk`). Never your sign-in, which the bridge keeps.
- */
-const STATE_IN_FOLDER = ["agents", "data", "sandbox-policies", "computer-use"]
+/** How long a session's Cursor, run whole in the sandbox, stays started once it's done (its conversation picked up again after). */
+const workerIdle = 15 * 60_000
 
 export class CursorAgent implements Agent {
   id = "cursor"
@@ -270,6 +267,8 @@ class CursorThread implements Thread {
   private startedFence?: string
   /** Its SDK in a process of its own, run whole in the box's sandbox while it's on. */
   private worker?: CursorWorker
+  /** Stops the worker once it's been done a while. */
+  private idle?: ReturnType<typeof setTimeout>
   private active?: Active
 
   constructor(
@@ -282,6 +281,7 @@ class CursorThread implements Thread {
   private startedOver = false
 
   async prepare(input: RunInput, hooks: TurnHooks) {
+    clearTimeout(this.idle)
     const sdk = await this.owner.sdk()
     const apiKey = await this.owner.apiKey(sdk)
     if (!apiKey || hooks.signal.aborted) return undefined
@@ -354,7 +354,8 @@ class CursorThread implements Thread {
     if (fence && !this.worker) this.worker = await this.startWorker(options)
     const agents = fence ? this.worker! : sdk
     const id = this.state.cursorAgent as string | undefined
-    this.agent = id ? await agents.Agent.resume(id, options).catch(() => undefined) : undefined
+    // (The worker says one that's gone; it stopping isn't that.)
+    this.agent = id ? await (fence ? agents.Agent.resume(id, options) : agents.Agent.resume(id, options).catch(() => undefined)) : undefined
     if (!this.agent && id) {
       // In place of one it had: the instructions go again, and what came before is handed over.
       this.startedOver = true
@@ -466,6 +467,8 @@ class CursorThread implements Thread {
       return { outcome: "failed", error: failure(error) }
     } finally {
       if (this.active === active) this.active = undefined
+      clearTimeout(this.idle)
+      if (this.worker) this.idle = setTimeout(() => this.active || this.stop(), workerIdle)
     }
   }
 
@@ -578,17 +581,21 @@ class CursorThread implements Thread {
   /**
    * Cursor's agent run whole in the box's sandbox: its SDK in a process of its own (the engine's
    * Bun) through the launcher, in the session's folder, with its folders (written only where it
-   * keeps its conversations and notes), its SDK, the session's skills and attached files to read,
-   * and the relay's port for Kuvo Code's tools. Your sign-in stays with the bridge, which hands the
-   * agent the key it runs with.
+   * keeps its conversations, and a folder of its own for its notes, sandbox policies and computer
+   * use's), its SDK, the session's skills and attached files to read, and the relay's port for Kuvo
+   * Code's tools. Your sign-in stays with the bridge, which hands the agent the key it runs with, and
+   * what Cursor keeps run in the bridge (with the sandbox off) out of its reach.
    */
   private async startWorker(options: any): Promise<CursorWorker> {
     const runtime = await this.owner.runtime()
     const directory = this.session.location.directory
     const attached = fenceAttachments(directory)
+    const conversations = options.local.store.root as string
+    const own = join(this.owner.context.home, "cursor", "in-sandbox")
+    for (const folder of [conversations, own]) mkdirSync(folder, { recursive: true, mode: 0o700 })
     const fence = fenceAgent(process.execPath, directory, {
-      homes: [...new Set([this.owner.folder, join(this.owner.context.home, "cursor")])],
-      state: STATE_IN_FOLDER,
+      homes: [conversations, own],
+      state: ["*"],
       kept: [],
       read: [runtime, dirname(process.execPath), ...(options.local?.dirs ?? []), ...(attached ? [attached] : [])],
       port: options.mcpServers ? relayPort() : undefined,
@@ -596,27 +603,33 @@ class CursorThread implements Thread {
     if (!fence) throw new Error("Cursor runs in the sandbox here, and it isn't ready: restart Kuvo Code.")
     return new CursorWorker([fence.command, "--config=/dev/null", "--no-env-file", cursorWorker(runtime)], {
       cwd: directory,
-      // (The engine's runtime, run as Bun.)
-      env: { ...fence.env, KUVO_FENCE_BUN: "1" },
+      env: {
+        ...fence.env,
+        // (The engine's runtime, run as Bun.)
+        KUVO_FENCE_BUN: "1",
+        OPENCODE_SESSION_ID: this.session.id,
+        CURSOR_DATA_DIR: join(own, "data"),
+        CURSOR_SANDBOX_POLICY_DIR: join(own, "sandbox-policies"),
+        CUA_APP_SUPPORT_DIR: join(own, "computer-use"),
+      },
       ended: fence.ended,
     })
   }
 
-  /** Its agent stopped, and the worker it ran in. */
+  /** Its agent stopped, and the worker it ran in (its key to Kuvo Code's tools kept for the next). */
   private stop() {
+    clearTimeout(this.idle)
     try {
       this.agent?.close?.()
     } catch {}
     this.agent = undefined
-    if (this.worker) {
-      this.worker.stop()
-      this.worker = undefined
-      dropRelayed(this.session.id)
-    }
+    this.worker?.stop()
+    this.worker = undefined
   }
 
   close() {
     this.stop()
+    dropRelayed(this.session.id)
   }
 }
 

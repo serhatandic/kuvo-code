@@ -5,7 +5,7 @@
 // nothing of the agent's. The worker answers as the SDK's own `Agent` does, so a thread uses either
 // the same way.
 
-import { writeFileSync } from "node:fs"
+import { readFileSync, renameSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { RPC, RPCError } from "../rpc"
 
@@ -22,7 +22,7 @@ const sdk = await import(Bun.resolveSync("@cursor/sdk", import.meta.dir))
 const agents = new Map()
 const runs = new Map()
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n")
-const plain = (error) => ({ message: String(error?.message ?? error), code: error?.code, name: error?.name, status: error?.status })
+const plain = (error) => ({ message: String(error?.message ?? (typeof error?.error === "string" ? error.error : error)), code: error?.code, name: error?.name, status: error?.status })
 // Its conversations' store, by its folder (\`JsonlLocalAgentStore\`).
 const made = (options) => (options?.local?.store ? { ...options, local: { ...options.local, store: new sdk.JsonlLocalAgentStore(options.local.store.root) } } : options)
 async function answer(method, params) {
@@ -35,7 +35,16 @@ async function answer(method, params) {
   if (method === "send") {
     const agent = agents.get(params.agent)
     if (!agent) throw new Error("Cursor's agent isn't here anymore.")
-    const run = await agent.send(params.message, { ...params.options, onDelta: async ({ update }) => send({ method: "delta", params: { run: params.run, update } }) })
+    const run = await agent.send(params.message, {
+      ...params.options,
+      onDelta: async ({ update }) => {
+        try {
+          send({ method: "delta", params: { run: params.run, update } })
+        } catch (error) {
+          console.error("Cursor sent an update Kuvo Code couldn't pass on: " + plain(error).message)
+        }
+      },
+    })
     runs.set(params.run, run)
     run.wait().then(
       (result) => send({ method: "ended", params: { run: params.run, result: result?.error ? { ...result, error: plain(result.error) } : result } }),
@@ -76,10 +85,15 @@ process.stdin.on("data", (chunk) => {
 process.stdin.on("end", () => process.exit(0))
 `
 
-/** The worker's file, written beside Cursor's SDK in `folder` (where only the bridge writes). */
+/** The worker's file, written beside Cursor's SDK in `folder` (where only the bridge writes), whole before another session's worker reads it. */
 export function cursorWorker(folder: string): string {
   const file = join(folder, "kuvo-cursor-worker.mjs")
-  writeFileSync(file, WORKER, { mode: 0o600 })
+  try {
+    if (readFileSync(file, "utf8") === WORKER) return file
+  } catch {}
+  const written = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}`
+  writeFileSync(written, WORKER, { mode: 0o600 })
+  renameSync(written, file)
   return file
 }
 

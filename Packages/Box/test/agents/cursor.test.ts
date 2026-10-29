@@ -361,7 +361,9 @@ async function attempt(how, place, options, message) {
     process.exit(1)
   }
   try {
-    if (how === "write") {
+    // (\`data\`: in the folder it keeps its notes in.)
+    if (how === "data") place = join(process.env.CURSOR_DATA_DIR ?? "/nowhere", place)
+    if (how === "write" || how === "data") {
       mkdirSync(dirname(place), { recursive: true })
       writeFileSync(place, "x")
     } else if (how === "read") readFileSync(place)
@@ -419,6 +421,7 @@ describe.skipIf(!canFence)("Cursor in the box's sandbox", () => {
     mkdirSync(runtime, { recursive: true })
     writeFileSync(join(kuvo, "secret"), "s")
     mkdirSync(join(bridge, "codex"), { recursive: true })
+    mkdirSync(join(bridge, "cursor"), { recursive: true })
     writeFileSync(join(bridge, "codex", "auth.json"), "{}")
     process.env.KUVO_FENCE = realFence(kuvo)
   })
@@ -437,12 +440,17 @@ describe.skipIf(!canFence)("Cursor in the box's sandbox", () => {
   }
   const words = (opened: Sessions, id: string) => steps(opened, id).flatMap((step) => step.content.filter((content: any) => content.type === "text").map((content: any) => content.text)).join("")
 
-  test("Cursor runs whole in it, in a process of its own: what it runs writes the project and its own conversations and notes, never your sign-in (on a Mac), nor elsewhere, and can't read Kuvo Code's folder", async () => {
+  test("Cursor runs whole in it, in a process of its own: what it runs writes the project and its own conversations and notes, never reads or writes your sign-in or what Cursor keeps run with the sandbox off, nor writes elsewhere, and can't read Kuvo Code's folder", async () => {
+    writeFileSync(join(bridge, "cursor", "auth.json"), "{}")
     const { opened, id } = session({
       project: ["write", join(project, "made.txt")],
       conversation: ["store", "conversation.jsonl"],
-      notes: ["write", join(bridge, "cursor", "data", "notes.md")],
+      notes: ["data", "notes.md"],
       signin: ["write", join(bridge, "cursor", "auth.json")],
+      signinread: ["read", join(bridge, "cursor", "auth.json")],
+      // (Its notes and its own sandbox's policies, as Cursor keeps them run in the bridge.)
+      theirs: ["write", join(bridge, "cursor", "data", "notes.md")],
+      policies: ["write", join(bridge, "cursor", "sandbox-policies", "sandbox-policy-1")],
       elsewhere: ["write", join(elsewhere, "e.txt")],
       kuvo: ["read", join(kuvo, "secret")],
       others: ["read", join(bridge, "codex", "auth.json")],
@@ -453,9 +461,7 @@ describe.skipIf(!canFence)("Cursor in the box's sandbox", () => {
       bun: ["env", "BUN_BE_BUN"],
     })
     await send(opened, id)
-    // (Linux grants its folders whole: there, a machine's, they're Kuvo Code's own.)
-    const mac = process.platform === "darwin" ? "no" : "yes"
-    expect(words(opened, id)).toBe(`project=yes conversation=yes notes=yes signin=${mac} elsewhere=no kuvo=no others=no sandbox=off key=key_test bun=none`)
+    expect(words(opened, id)).toBe("project=yes conversation=yes notes=yes signin=no signinread=no theirs=no policies=no elsewhere=no kuvo=no others=no sandbox=off key=key_test bun=none")
   })
 
   test("a file you attach (one it reads itself, like a PDF) it reads, though Kuvo Code keeps it where the sandbox hides", async () => {
@@ -483,6 +489,22 @@ describe.skipIf(!canFence)("Cursor in the box's sandbox", () => {
       const { opened, id } = session({ tools: ["tools", ""] })
       await send(opened, id)
       expect(words(opened, id)).toBe(`tools=${id}`)
+    } finally {
+      app.stop(true)
+    }
+  })
+
+  test("Kuvo Code's tools still reach it once it's started again (Also Allowed changed)", async () => {
+    const app = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: "ok" }] } }) })
+    try {
+      setToolServer({ url: `http://127.0.0.1:${app.port}/mcp`, token: "app-token", timeout: 30_000 })
+      const { opened, id } = session({ tools: ["tools", ""] })
+      await send(opened, id)
+      const allowed = join(kuvo, "run", "fence", "allowed", createHash("sha256").update(realpathSync(project)).digest("hex").slice(0, 32))
+      mkdirSync(dirname(allowed), { recursive: true })
+      writeFileSync(allowed, elsewhere + "\n")
+      await send(opened, id, "again")
+      expect(words(opened, id)).toBe("tools=oktools=ok")
     } finally {
       app.stop(true)
     }
