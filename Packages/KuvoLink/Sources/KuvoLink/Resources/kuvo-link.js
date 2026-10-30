@@ -10959,6 +10959,8 @@ function agentsNote(platform) {
       "- Commands can't open apps (`open`) or start launchd jobs."
     ] : [],
     "",
+    "`npx` can't fetch a package the project doesn't have (its packages there are only read, and npm says to `chown` its cache: don't). Run it with `npm exec --cache \"$TMPDIR/npm\" --yes -- <package>` instead, or add it to the project.",
+    "",
     "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
     "",
     `When the sandbox refuses something a task needs ("Operation not permitted" or "Permission denied" outside these folders), don't work around it: ask the user with sandbox_ask, giving the command as you ran it and why the task needs it. They can let it run outside the sandbox once (and let your commands write in the folder it was stopped writing in from now on), or say no; allowed, it runs for you and you get its output.`,
