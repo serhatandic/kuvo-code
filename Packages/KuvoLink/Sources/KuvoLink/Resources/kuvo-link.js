@@ -11689,6 +11689,22 @@ async function answerTo(target, session, id, { wait = 2000, signal } = {}) {
   return null;
 }
 var BRIDGE_DOWN = "The coding agents there aren't running right now: it comes again once they are.";
+var BRIDGE_WAIT = 30 * 60000;
+var bridgeWaits = new Map;
+function noConversation(id, bridgeDown, now) {
+  if (!bridgeDown) {
+    bridgeWaits.delete(id);
+    return ["There's no such conversation here.", false];
+  }
+  for (const [letter, since] of bridgeWaits)
+    if (now - since > LETTER_MEMORY)
+      bridgeWaits.delete(letter);
+  const since = bridgeWaits.get(id) ?? now;
+  bridgeWaits.set(id, since);
+  if (now - since < BRIDGE_WAIT)
+    return [BRIDGE_DOWN, true];
+  return ["There's no such conversation here, and the coding agents there aren't running.", false];
+}
 async function takeLetter(sender, letter, { send, targets, answer = () => {}, told = readPeerAgents(), peers = peersOf(readLink()), moved = movedOf(readLink()), now = Date.now(), wait, moving = async () => false, bridgeDown = false } = {}) {
   if (!isObject(letter) || typeof letter.id !== "string" || !LETTER_ID.test(letter.id))
     return;
@@ -11718,7 +11734,7 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
       return no("It's moving to another computer: it comes again once it's there.", true);
     place = await placeOfSession(letter.to, targets);
     if (!place)
-      return bridgeDown ? no(BRIDGE_DOWN, true) : no("There's no such conversation here.");
+      return no(...noConversation(id, bridgeDown, now));
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
       return no("That conversation doesn't take messages.");
@@ -11759,7 +11775,7 @@ async function readFor(sender, letter, { send, targets, answer = () => {}, now =
       return no("It's moving to another computer: it's read once it's there.", true);
     const place = await placeOfSession(letter.to, targets);
     if (!place)
-      return bridgeDown ? no(BRIDGE_DOWN, true) : no("There's no such conversation here.");
+      return no(...noConversation(id, bridgeDown, now));
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
       return no("That conversation can't be read.");

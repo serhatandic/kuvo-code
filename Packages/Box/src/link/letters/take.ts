@@ -113,6 +113,24 @@ export async function answerTo(target: Target, session: string, id: string, { wa
 // Said of a letter for a conversation the engine doesn't have while the coding agents' bridge
 // isn't running: it may be one of theirs, so it comes again.
 const BRIDGE_DOWN = "The coding agents there aren't running right now: it comes again once they are.";
+// How long a letter waits for them that way, from the first time it was told to: past that, they
+// aren't coming back by themselves (stopped for good), and it's refused as one for no conversation.
+export const BRIDGE_WAIT = 30 * 60_000;
+const bridgeWaits = new Map<string, number>();
+
+// What a letter for a conversation this box doesn't have is told: to come again while the bridge
+// may be starting, else that there's none.
+function noConversation(id: string, bridgeDown: boolean, now: number): [string, boolean] {
+  if (!bridgeDown) {
+    bridgeWaits.delete(id);
+    return ["There's no such conversation here.", false];
+  }
+  for (const [letter, since] of bridgeWaits) if (now - since > LETTER_MEMORY) bridgeWaits.delete(letter);
+  const since = bridgeWaits.get(id) ?? now;
+  bridgeWaits.set(id, since);
+  if (now - since < BRIDGE_WAIT) return [BRIDGE_DOWN, true];
+  return ["There's no such conversation here, and the coding agents there aren't running.", false];
+}
 
 // A letter from a peer: delivered once, said to be there (or why not, and whether to try again),
 // and with `wait`, answered by a letter back. Who it's from is the sending box's own agent, by the
@@ -146,7 +164,7 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     const lives = moved.get(letter.to);
     if ((lives && lives !== ownKey(readLink() ?? {})) || (await moving(letter.to))) return no("It's moving to another computer: it comes again once it's there.", true);
     place = await placeOfSession(letter.to, targets);
-    if (!place) return bridgeDown ? no(BRIDGE_DOWN, true) : no("There's no such conversation here.");
+    if (!place) return no(...noConversation(id, bridgeDown, now));
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return no("That conversation doesn't take messages.");
     // Its sender: that box's own agent, as it named it; one of this box's own claimed from there isn't.
@@ -189,7 +207,7 @@ async function readFor(sender: LetterSender, letter: ReadLetter, { send, targets
     const lives = moved.get(letter.to);
     if ((lives && lives !== ownKey(readLink() ?? {})) || (await moving(letter.to))) return no("It's moving to another computer: it's read once it's there.", true);
     const place = await placeOfSession(letter.to, targets);
-    if (!place) return bridgeDown ? no(BRIDGE_DOWN, true) : no("There's no such conversation here.");
+    if (!place) return no(...noConversation(id, bridgeDown, now));
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return no("That conversation can't be read.");
     const markdown = await readConversation(place.target, letter.to, place.data ?? {}, String(place.data?.title || "New session"));
