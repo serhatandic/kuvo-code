@@ -1661,7 +1661,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `every` 30m, 2h, 1d, 1w or weekdays, at least 5m), with the computer's own clock and weekends;
   `400 {"message"}` for what can't be one, `409` with 50 waiting. `POST
   kuvo/wakes/<session>/pause` with `{"paused": true}` holds them (a pause of your own), `false`
-  lets them go (not archiving's hold: they still wait until it's back, bridge 0.9.119); with `{"archived": true}` they're held as archiving holds them (a client that
+  lets them go (not archiving's hold: they still wait until it's back, bridge 0.9.121); with `{"archived": true}` they're held as archiving holds them (a client that
   archived it on the engine directly says so), `false` lets go of only that hold. Both answer the
   list as it is then. `POST
   kuvo/wakes/<session>/cancel` with `{"wake": "<id>"}` or `{"watch": "<letters>"}` cancels one;
@@ -1789,7 +1789,7 @@ Grok). With none to answer, the goal pauses and says so. A client reaches them a
   you stop pauses it ("The turn was stopped."); so does one that fails. A turn cut short as the box
   stopped is checked once it's back, as any turn, and one is never checked twice. While its
   conversation is archived (`kuvo.archived` in its metadata, or the engine's own), the goal waits,
-  still `working`: its last turn is checked once the conversation is brought back (bridge 0.9.120).
+  still `working`: its last turn is checked once the conversation is brought back (bridge 0.9.121).
 - "/goal" in a composer: `/goal <condition>` sets it, `/goal` alone shows it, and `/goal pause`,
   `/goal resume` and `/goal clear` (or `stop`, `off`, `reset`, `none`, `cancel`) do what they say
   (OpenCodeKit's `GoalCommand`, for every client alike).
