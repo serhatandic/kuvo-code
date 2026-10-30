@@ -8479,6 +8479,7 @@ ${reply ? cut(reply, 1200) : "(It ended without a reply.)"}`;
 var wakeText = (lines) => lines.join(`
 
 `);
+var LATE_AGAIN = 300000;
 var ARCHIVED_FOR = 7 * 86400000;
 var readTold = (file) => {
   try {
@@ -8509,7 +8510,7 @@ async function lastReplyID(target, session) {
       return message.id;
   return null;
 }
-function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge } = {}) {
+function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge, signal } = {}) {
   const due = new Set;
   const failures = new Map;
   const putBack = (starter, waiting) => changeWaiting(file, (all) => {
@@ -8620,6 +8621,18 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     changeTold(toldFile, () => {});
   };
   const caughtUp = Promise.all([catchUp().catch(() => {}), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
+  const lateAgain = () => {
+    if (signal?.aborted)
+      return;
+    const timer = schedule(async () => {
+      if (signal?.aborted)
+        return;
+      await tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {});
+      lateAgain();
+    }, LATE_AGAIN);
+    timer?.unref?.();
+  };
+  caughtUp.then(lateAgain);
   const watch = (event) => {
     const id = event.data?.sessionID ?? event.data?.form?.sessionID;
     if (typeof id !== "string" || !["session.execution.succeeded", "session.execution.failed", "permission.asked", "form.created", "permission.replied", "form.replied"].includes(event.type))
@@ -9028,7 +9041,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
       const source = read();
       const steer = steers ? steering((session) => backgroundTools(source, session).catch(() => {}), { after: steerAfter, signal: connection.signal }) : null;
       const queue = queues ? queueWatcher(source) : null;
-      const followWork = work ? workWatcher(source, peerTargets) : null;
+      const followWork = work ? workWatcher(source, peerTargets, { signal: connection.signal }) : null;
       const response = await fetch(`http://127.0.0.1:${source.port}/api/event`, {
         headers: { authorization: `Basic ${Buffer.from(`opencode:${source.password}`).toString("base64")}`, accept: "text/event-stream" },
         signal

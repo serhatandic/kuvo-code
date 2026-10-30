@@ -673,7 +673,8 @@ folder you pick once per box, after asking you.
 - **Asking you first**: `make_project` asks unless you said Always to that bot for that kind,
   and a projects folder is picked. The ask is kept in `run/work/asks.json` until you answer; the
   tool waits up to ten minutes, then says it stays asked, and the conversation gets
-  `[The user answered] …` as a message when you do.
+  `[The user answered] …` as a message when you do (for a conversation the engine doesn't know
+  while the coding agents' bridge isn't running, tried again every few minutes, a week at most).
   - An ask goes with its bot (deleted), or after a week unanswered.
   - `GET kuvo/work/asks` and `GET kuvo/work/asks/events` (ndjson, a line now and at each change)
     → `{asks: [{id, action: makeProject|cloneProject, session, name, bot?, project, clone?,

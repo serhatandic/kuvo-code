@@ -107,6 +107,9 @@ export async function wakeLine(event: WorkEvent, session: Partial<EngineSession>
 /** What goes to a conversation, from the lines gathered for it. */
 export const wakeText = (lines: string[]) => lines.join("\n\n");
 
+// How often answers given late that couldn't be told yet are tried again.
+const LATE_AGAIN = 300_000;
+
 // How long what a conversation would hear waits while it's archived.
 const ARCHIVED_FOR = 7 * 86_400_000;
 
@@ -150,6 +153,9 @@ export interface WorkWatch {
   gather?: number;
   toldFile?: string;
   schedule?: (run: () => Promise<void>, ms: number) => unknown;
+  /** Ends what it keeps doing on its own (trying late answers again): the engine's connection it
+   * follows, gone. */
+  signal?: AbortSignal;
   file?: string;
   /** Whether the coding agents' bridge runs now (a conversation the engine doesn't know may be its). */
   bridgeRuns?: () => boolean;
@@ -158,7 +164,7 @@ export interface WorkWatch {
 /** Follows `source`'s events for the work of bots and of any conversation that started sessions:
  * each one that ends or asks, told to whoever started it (as its `kuvo.wake` says), close ones as
  * one message; each, a change to its bot's work. `targets()`: where conversations here run. */
-export function workWatcher(source: Target, targets: () => Target[], { gather = GATHER, schedule = setTimeout, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge }: WorkWatch = {}): ((event: WorkEvent) => Promise<void>) & { caughtUp: Promise<void> } {
+export function workWatcher(source: Target, targets: () => Target[], { gather = GATHER, schedule = setTimeout, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge, signal }: WorkWatch = {}): ((event: WorkEvent) => Promise<void>) & { caughtUp: Promise<void> } {
   const due = new Set<string>();
   // How many tries in a row each has failed, for the wait before the next.
   const failures = new Map<string, number>();
@@ -266,6 +272,18 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     changeTold(toldFile, () => {});
   };
   const caughtUp = Promise.all([catchUp().catch(() => {}), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
+  // Answers given late that waited (the coding agents' bridge not running), tried again every few
+  // minutes while the box runs.
+  const lateAgain = () => {
+    if (signal?.aborted) return;
+    const timer = schedule(async () => {
+      if (signal?.aborted) return;
+      await tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {});
+      lateAgain();
+    }, LATE_AGAIN);
+    (timer as { unref?: () => void } | undefined)?.unref?.();
+  };
+  void caughtUp.then(lateAgain);
   // (What each event set going, for a test to wait on.)
   const watch = (event: WorkEvent) => {
     const id = event.data?.sessionID ?? event.data?.form?.sessionID;

@@ -282,6 +282,26 @@ test("an answer given after its bot stopped waiting reaches it as the box starts
   assert.equal(prompts.length, 1);
 });
 
+test("an answer given late that waited for the coding agents' bridge reaches its conversation once the bridge runs, with the box still running", async () => {
+  const asksFile = path.join(home, "run", "work", "asks.json");
+  fs.mkdirSync(path.dirname(asksFile), { recursive: true });
+  fs.writeFileSync(asksFile, JSON.stringify({ asks: [{ id: "wak_3", action: "makeProject", session: "ses_later", name: "Pixel", project: "Tidepool", folderName: "tidepool", folder: null, at: 1,
+    given: { name: "Tidepool" }, late: true, answered: { answer: "allow", text: "Made Tidepool at ~/Developer/tidepool.", isError: false, at: Date.now() - 60 * 60_000 } }] }));
+  let bridge = false;
+  const { schedule, runAll } = clock();
+  await link.workWatcher(source, () => [source], { schedule, bridgeRuns: () => bridge }).caughtUp;
+  assert.equal(prompts.length, 0);
+  // The bridge starts, and its conversation is there now.
+  bridge = true;
+  sessions.ses_later = { id: "ses_later", title: "Pixel", location: { directory: tidepool }, time: { created: 1, updated: 1 } };
+  try {
+    await runAll();
+    assert.deepEqual(prompts.map(each => [each.to, each.text]), [["ses_later", "[The user answered] Made Tidepool at ~/Developer/tidepool."]]);
+  } finally {
+    delete sessions.ses_later;
+  }
+});
+
 test("an answer given late for a bot that runs with the coding agents waits while their bridge isn't running, rather than being taken as told", async () => {
   const asksFile = path.join(home, "run", "work", "asks.json");
   fs.mkdirSync(path.dirname(asksFile), { recursive: true });
