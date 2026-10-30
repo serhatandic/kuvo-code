@@ -87,6 +87,8 @@ export interface SeatTurnOptions {
   checkSeat?: boolean
   /** How far it got before (the bridge restarted): it goes on from there, its message never sent twice. */
   resume?: SeatProgress
+  /** Only its message there followed (`resume`): one that isn't there any more, or its seat gone, ends it (`SeatGone`), and nothing is sent. */
+  followOnly?: boolean
   /** Told how far it gets, before each step that mustn't be taken twice (a seat made, its message sent), to keep. */
   progress?: (progress: SeatProgress) => void
   /** For a turn to another computer: what the bot hasn't heard, cut to its latest, for when the turn is too big for mail. */
@@ -361,7 +363,7 @@ export class Seats implements SeatHome {
         // chat. Asked without it (the chat's computer had heard its words were with its seat),
         // it's asked again with it.
         if (!(await this.seatThere(resume.seat, resumed))) {
-          if (!ownConversation && turn.seat && turn.fresh === undefined) throw new SeatGone()
+          if (options.followOnly || (!ownConversation && turn.seat && turn.fresh === undefined)) throw new SeatGone()
           resume = undefined
         }
         going()
@@ -442,6 +444,7 @@ export class Seats implements SeatHome {
         const there = promptID ? await this.sentAlready(seat, promptID, sent, api) : false
         going()
         if (!promptID || !there) {
+          if (options.followOnly) throw new SeatGone()
           promptID ??= newID("msg")
           sent = Date.now()
           progress?.({ seat, agents, prompt: promptID, sent })

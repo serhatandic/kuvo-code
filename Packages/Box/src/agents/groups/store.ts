@@ -25,7 +25,31 @@ export interface Kept {
   talking?: boolean
   /** Paused at its limit of turns: it waits for Keep Going, however often the runner starts over. */
   paused?: boolean
+  /** A bot here answering, its message with its seat: if the runner starts over, its answer is read there still. */
+  turning?: Turning
   messages: GroupMessage[]
+}
+
+/** A bot's turn under way in a seat on this computer: its message there, and when it went. */
+export interface Turning {
+  bot: string
+  seat: string
+  agents: boolean
+  prompt: string
+  sent: number
+  wrapUp?: boolean
+}
+
+function isTurning(value: any): value is Turning {
+  return (
+    value &&
+    typeof value.bot === "string" &&
+    typeof value.seat === "string" &&
+    typeof value.agents === "boolean" &&
+    typeof value.prompt === "string" &&
+    typeof value.sent === "number" &&
+    (value.wrapUp === undefined || typeof value.wrapUp === "boolean")
+  )
 }
 
 /** What the Mac says for every chat on this machine. */
@@ -210,12 +234,12 @@ export class GroupStore {
     const messages = read(join(this.folder(id), "messages.json")) ?? []
     // One whose messages won't read is left as it is, for a newer version or a person to look at.
     if (!isMessages(messages)) return undefined
-    return { group: record.group, status: record.status === "held" ? "held" : "active", talking: record.talking === true, paused: record.paused === true, messages }
+    return { group: record.group, status: record.status === "held" ? "held" : "active", talking: record.talking === true, paused: record.paused === true, ...(isTurning(record.turning) ? { turning: record.turning } : {}), messages }
   }
 
   saveGroup(kept: Kept) {
     mkdirSync(this.folder(kept.group.id), { recursive: true, mode: 0o700 })
-    write(join(this.folder(kept.group.id), "group.json"), { kuvo: version, status: kept.status, ...(kept.talking ? { talking: true } : {}), ...(kept.paused ? { paused: true } : {}), group: kept.group })
+    write(join(this.folder(kept.group.id), "group.json"), { kuvo: version, status: kept.status, ...(kept.talking ? { talking: true } : {}), ...(kept.paused ? { paused: true } : {}), ...(kept.turning ? { turning: kept.turning } : {}), group: kept.group })
   }
 
   saveMessages(kept: Kept) {

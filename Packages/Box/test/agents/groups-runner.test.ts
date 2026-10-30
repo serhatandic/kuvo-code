@@ -492,6 +492,28 @@ describe("a group chat on a machine", () => {
     expect(runner().groups.talk("grp_team000001").paused).toBe(false)
   }, 20_000)
 
+  test("a bot answering as the bridge started over: its answer still reaches the chat, once, and the chat waits for Keep Going", async () => {
+    // The bridge that goes: from then on, nothing it asks of the engine comes back.
+    let gone = false
+    const engineOf = server(engine.url, "x")
+    const { groups } = runner({ engine: { request: (...args: Parameters<typeof engineOf.request>) => (gone ? new Promise<never>(() => {}) : engineOf.request(...args)) } })
+    engine.lines = { Ada: ["Here it is."], Ben: [] }
+    engine.held.add("Ada")
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Go")
+    await until(() => engine.prompts().length === 1)
+    gone = true
+    const { groups: again } = runner()
+    again.start()
+    expect(again.talk("grp_team000001").paused).toBe(true)
+    engine.release("Ada")
+    const answers = () => again.get("grp_team000001")!.messages.filter((message) => message.author === "bot_ada" && message.text === "Here it is.")
+    await until(() => answers().length === 1)
+    // Followed, not asked again.
+    expect(engine.prompts()).toHaveLength(1)
+    expect(again.talk("grp_team000001").paused).toBe(true)
+  })
+
   test("let go of (moved away), its seats stay; deleted, they go", async () => {
     const { groups } = runner()
     const seated = { ...group(), seats: { bot_ada: "ses_seatA" } }

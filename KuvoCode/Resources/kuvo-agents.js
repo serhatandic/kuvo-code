@@ -16284,6 +16284,9 @@ function seatRules(folder, askFirst, denies) {
 import { existsSync as existsSync15, mkdirSync as mkdirSync15, readdirSync as readdirSync12, readFileSync as readFileSync22, renameSync as renameSync9, rmSync as rmSync11, writeFileSync as writeFileSync15 } from "fs";
 import { join as join23 } from "path";
 var version2 = 1;
+function isTurning(value) {
+  return value && typeof value.bot === "string" && typeof value.seat === "string" && typeof value.agents === "boolean" && typeof value.prompt === "string" && typeof value.sent === "number" && (value.wrapUp === undefined || typeof value.wrapUp === "boolean");
+}
 var strings = (value) => Array.isArray(value) && value.every((item) => typeof item === "string");
 var stringMap = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.values(value).every((item) => typeof item === "string");
 var isDate = (value) => typeof value === "string" && !Number.isNaN(Date.parse(value));
@@ -16373,11 +16376,11 @@ class GroupStore {
     const messages = read(join23(this.folder(id), "messages.json")) ?? [];
     if (!isMessages(messages))
       return;
-    return { group: record.group, status: record.status === "held" ? "held" : "active", talking: record.talking === true, paused: record.paused === true, messages };
+    return { group: record.group, status: record.status === "held" ? "held" : "active", talking: record.talking === true, paused: record.paused === true, ...isTurning(record.turning) ? { turning: record.turning } : {}, messages };
   }
   saveGroup(kept) {
     mkdirSync15(this.folder(kept.group.id), { recursive: true, mode: 448 });
-    write(join23(this.folder(kept.group.id), "group.json"), { kuvo: version2, status: kept.status, ...kept.talking ? { talking: true } : {}, ...kept.paused ? { paused: true } : {}, group: kept.group });
+    write(join23(this.folder(kept.group.id), "group.json"), { kuvo: version2, status: kept.status, ...kept.talking ? { talking: true } : {}, ...kept.paused ? { paused: true } : {}, ...kept.turning ? { turning: kept.turning } : {}, group: kept.group });
   }
   saveMessages(kept) {
     mkdirSync15(this.folder(kept.group.id), { recursive: true, mode: 448 });
@@ -17485,7 +17488,7 @@ class Seats {
         if (!resumed)
           throw new Error("the coding agents aren\u2019t running");
         if (!await this.seatThere(resume.seat, resumed)) {
-          if (!ownConversation && turn.seat && turn.fresh === undefined)
+          if (options.followOnly || !ownConversation && turn.seat && turn.fresh === undefined)
             throw new SeatGone;
           resume = undefined;
         }
@@ -17568,6 +17571,8 @@ class Seats {
         const there = promptID ? await this.sentAlready(seat, promptID, sent, api) : false;
         going();
         if (!promptID || !there) {
+          if (options.followOnly)
+            throw new SeatGone;
           promptID ??= newID("msg");
           sent = Date.now();
           progress?.({ seat, agents, prompt: promptID, sent });
@@ -17878,6 +17883,7 @@ class GroupRunner {
   live = new Map;
   runs = 0;
   following = new Set;
+  answering = new Map;
   seats;
   rulesChanged() {
     this.seats.rulesChanged();
@@ -17910,6 +17916,7 @@ class GroupRunner {
   }
   start() {
     this.resumeWork();
+    this.followTurns();
     this.scheduleMeetings(1e4);
     this.dropLeftScratch();
   }
@@ -18013,7 +18020,7 @@ class GroupRunner {
     if (!kept)
       return;
     const working = kept.messages.some((message) => message.tasks?.some((task) => task.state === "working" || task.state === "waiting"));
-    this.context.store.setAwake(id, kept.status === "active" && (kept.group.meeting !== undefined || this.state(id).abort !== undefined || working));
+    this.context.store.setAwake(id, kept.status === "active" && (kept.group.meeting !== undefined || this.state(id).abort !== undefined || this.answering.has(id) || working));
   }
   put(group, messages, status, replace) {
     const existing = this.chats.get(group.id);
@@ -18210,6 +18217,7 @@ class GroupRunner {
     live.abort?.abort();
     live.abort = undefined;
     live.run = undefined;
+    this.answering.get(id)?.abort();
     this.setPaused(id, false);
     live.speaking = undefined;
     live.activity = undefined;
@@ -18241,6 +18249,49 @@ class GroupRunner {
     kept.talking = talking;
     this.context.store.saveGroup(kept);
     this.keepAwake(id);
+  }
+  setTurning(id, turning) {
+    const kept = this.chats.get(id);
+    if (!kept)
+      return;
+    if (turning)
+      kept.turning = turning;
+    else
+      delete kept.turning;
+    this.context.store.saveGroup(kept);
+  }
+  followTurns() {
+    for (const [id, kept] of this.chats) {
+      const turning = kept.turning;
+      if (!turning)
+        continue;
+      const bot = this.member(turning.bot);
+      if (!bot || bot.box || kept.status !== "active" || !kept.group.members.includes(turning.bot)) {
+        this.setTurning(id, undefined);
+        continue;
+      }
+      const abort = new AbortController;
+      this.answering.set(id, abort);
+      this.keepAwake(id);
+      const { seat, agents, prompt, sent } = turning;
+      this.seats.turn({ id: turnID(), chat: this.context_(kept.group), bot: turning.bot, seat, agentsSeat: agents, kind: turning.wrapUp ? "wrapUp" : "turn", text: "" }, () => {}, abort.signal, { resume: { seat, agents, prompt, sent }, followOnly: true }).then((result) => {
+        if (abort.signal.aborted || !this.chat(id)?.group.members.includes(turning.bot))
+          return;
+        if (result.ok)
+          this.answered(id, turning.bot, result, turning.wrapUp ?? false);
+        else
+          this.note(`${bot.name} couldn\u2019t answer: ${result.why}`, id);
+      }).catch((error) => {
+        if (!(error instanceof Cancelled) && !(error instanceof SeatGone))
+          console.error(`${turning.bot}'s answer in ${id} couldn't be read:`, reason3(error));
+      }).finally(() => {
+        if (this.answering.get(id) === abort)
+          this.answering.delete(id);
+        if (this.chats.get(id)?.turning?.prompt === prompt)
+          this.setTurning(id, undefined);
+        this.keepAwake(id);
+      });
+    }
   }
   begin(id) {
     const live = this.state(id);
@@ -18368,6 +18419,7 @@ class GroupRunner {
     const left = () => !guest && !this.chat(id)?.group.members.includes(botID);
     const own = new AbortController;
     const stopped = either(signal, own.signal);
+    let turning;
     try {
       const kept = this.chat(id);
       if (!kept)
@@ -18411,37 +18463,22 @@ class GroupRunner {
         kind: guest ? "guest" : wrapUp ? "wrapUp" : "turn",
         text,
         ...guest ? {} : { chatSize: new TextEncoder().encode(chatText(botID, kept.group, all, name)).length }
-      }, (state) => this.heardOf(state, { id, botID, box: bot.box, guest, run, last: last?.id, retracted, own }), stopped.signal, { shorter: seat ? () => turnText(botID, kept.group, unheard, wrapUp, name, named2(unheard), chatBudget) : undefined });
+      }, (state) => this.heardOf(state, { id, botID, box: bot.box, guest, run, last: last?.id, retracted, own }), stopped.signal, {
+        shorter: seat ? () => turnText(botID, kept.group, unheard, wrapUp, name, named2(unheard), chatBudget) : undefined,
+        progress: (now) => {
+          if (guest || bot.box || now.prompt === undefined || now.sent === undefined || stopped.signal.aborted)
+            return;
+          turning = now.prompt;
+          this.setTurning(id, { bot: botID, seat: now.seat, agents: now.agents, prompt: now.prompt, sent: now.sent, ...wrapUp ? { wrapUp: true } : {} });
+        }
+      });
       if (left())
         return "absent";
       if (!result.ok) {
         this.note(result.moving ? `${bot.name} is moving to another computer, so it sat this out.` : result.away && bot.box && peers ? `${bot.name} is on ${peers.name(bot.box)}, which can\u2019t be reached now, so it sat this out.` : `${bot.name} couldn\u2019t answer: ${result.why}`, id);
         return "absent";
       }
-      if (result.outgrown) {
-        const now = this.chat(id);
-        const went = now?.group.seats[botID];
-        if (now && went) {
-          delete now.group.seats[botID];
-          delete now.group.heard[botID];
-          if (now.group.agentSeats?.includes(went))
-            now.group.agentSeats = now.group.agentSeats.filter((each) => each !== went);
-          this.changed(id);
-        }
-      }
-      if (!result.text)
-        return "passed";
-      if (!wrapUp && isPass(result.text))
-        return "passed";
-      this.append({
-        id: groupMessageID(),
-        author: botID,
-        text: ampersands(result.text, this.everyone().map((each) => each.name)),
-        time: stamp3(),
-        kind: wrapUp ? "wrapUp" : "message",
-        ...result.steps.length ? { steps: result.steps.map(trimmed) } : {}
-      }, id);
-      return "said";
+      return this.answered(id, botID, result, wrapUp);
     } catch (error) {
       if (signal.aborted || own.signal.aborted || error instanceof Cancelled || left())
         return "absent";
@@ -18450,12 +18487,40 @@ class GroupRunner {
       return "absent";
     } finally {
       stopped.done();
+      if (turning && this.chats.get(id)?.turning?.prompt === turning)
+        this.setTurning(id, undefined);
       if (live.speaking === botID && live.run === run) {
         live.speaking = undefined;
         live.activity = undefined;
       }
       this.told(id);
     }
+  }
+  answered(id, botID, result, wrapUp) {
+    if (result.outgrown) {
+      const now = this.chat(id);
+      const went = now?.group.seats[botID];
+      if (now && went) {
+        delete now.group.seats[botID];
+        delete now.group.heard[botID];
+        if (now.group.agentSeats?.includes(went))
+          now.group.agentSeats = now.group.agentSeats.filter((each) => each !== went);
+        this.changed(id);
+      }
+    }
+    if (!result.text)
+      return "passed";
+    if (!wrapUp && isPass(result.text))
+      return "passed";
+    this.append({
+      id: groupMessageID(),
+      author: botID,
+      text: ampersands(result.text, this.everyone().map((each) => each.name)),
+      time: stamp3(),
+      kind: wrapUp ? "wrapUp" : "message",
+      ...result.steps.length ? { steps: result.steps.map(trimmed) } : {}
+    }, id);
+    return "said";
   }
   context_(group) {
     return {
@@ -20635,4 +20700,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents e84e6f4aa3f82f1158774a00d447e65a44a9dbcb91c2a4dda1536a3b55a5a6dd
+// Built from Packages/Box/src/agents c8f3400b83692d4a53e58f7f677e135f98675f35ae828292647c7c8bd83308bf
