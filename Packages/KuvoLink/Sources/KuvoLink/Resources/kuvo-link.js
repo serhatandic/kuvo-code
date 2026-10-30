@@ -16170,11 +16170,10 @@ async function answerAskTool(caller, args, targets, signal) {
     const folder = data.location?.directory ?? data.directory ?? "";
     const rules = rulesOf(caller.place.data.permissions ?? []);
     const seen = await callOf(target, permission, signal);
-    const sandboxed = commandsInSandbox(target, permission);
-    const always = sandboxed && (permission.action === "shell" || permission.action === "bash") ? null : alwaysAsks(permission.action, permission.resources, seen);
+    const always = alwaysAsks(permission.action, permission.resources, seen);
     if (always)
       return refused(`That's ${ALWAYS[always]}, which always comes to the user: you can't allow it. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
-    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, sandboxed);
+    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, commandsInSandbox(target, permission));
     const user = `The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`;
     if (why === "above")
       return refused(`You can't allow that: you'd have to ask the user about it yourself. ${user}`);

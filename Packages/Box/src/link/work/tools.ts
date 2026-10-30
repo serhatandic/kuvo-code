@@ -155,13 +155,11 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
     const folder = data.location?.directory ?? data.directory ?? "";
     const rules = rulesOf((caller.place.data.permissions ?? []) as KitRule[]);
     const seen = await callOf(target, permission, signal);
-    // A command that runs in the sandbox is the sandbox's to judge (`allowRefusal`): anything but
-    // what acts beyond this computer. Otherwise, what always comes to the user, whatever the mode,
-    // the plan or the goal's switches.
-    const sandboxed = commandsInSandbox(target, permission);
-    const always = sandboxed && (permission.action === "shell" || permission.action === "bash") ? null : alwaysAsks(permission.action, permission.resources, seen);
+    // What always comes to the user, whatever the mode, the plan or the goal's switches. In the
+    // sandbox too: its rule is within the engine's, which ask for these in every session of a bot's.
+    const always = alwaysAsks(permission.action, permission.resources, seen);
     if (always) return refused(`That's ${ALWAYS[always]}, which always comes to the user: you can't allow it. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
-    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, sandboxed);
+    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, commandsInSandbox(target, permission));
     const user = `The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`;
     if (why === "above") return refused(`You can't allow that: you'd have to ask the user about it yourself. ${user}`);
     if (why) return refused(`That's ${why}, which always comes to the user: you can't allow it. ${user}`);

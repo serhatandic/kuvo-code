@@ -685,9 +685,10 @@ folder you pick once per box, after asking you.
   the same way (no `madeBy`): 403 `{needs: "projectsFolder"}` with none picked, 409 for one there,
   400 for a name or address that won't do, 502 when git fails.
 
-**What always comes to you** (bridge 0.9.111, `work/always.ts`): payments, permanent deletes,
+**What always comes to you** (bridge 0.9.122, `work/always.ts`): payments, permanent deletes,
 changes to who may do what, new accounts, messages to people, your passwords, keys and sign-ins,
-and git's settings. No mode, Always, plan or goal's switch turns this off.
+and git's settings. No mode, Always, plan or goal's switch turns this off, nor the sandbox: what a
+bot may allow there is within these rules.
 - `answer_ask` checks it first, before the policy above, by the tool call's whole input: a
   command's programs and subcommands, git's past its own options (`rm`, `chmod`, `sudo`, `git -C x
   config`, `git push --force` or `+ref`, `gh pr create`, `gh api` that writes, `stripe … create`,
@@ -705,7 +706,7 @@ and git's settings. No mode, Always, plan or goal's switch turns this off.
   integration's) can't be named ahead in the engine's rules: on Approve All, only the bot's answers
   and words hold it back.
 
-**Goals** (bridge 0.9.112, feature `work.goals`, `work/goals.ts`): you give a bot a goal of any
+**Goals** (bridge 0.9.122, feature `work.goals`, `work/goals.ts`): you give a bot a goal of any
 length, a couple of hours or a month, and it takes it end to end. It's the conversation's own goal
 ("Goals", below: the agents bridge keeps the bot at it turn after turn), with a plan kept here
 beside it.
