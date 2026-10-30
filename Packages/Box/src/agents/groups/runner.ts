@@ -343,6 +343,8 @@ export class GroupRunner {
     this.chats.set(group.id, kept)
     this.context.store.saveMessages(kept)
     this.changed(group.id)
+    // Replaced: what's said there is new to those following it.
+    if (existing) emit("kuvo.group.reset", { id: group.id })
     if (status === "active") this.began(group.id)
     return true
   }
