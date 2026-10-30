@@ -248,6 +248,8 @@ struct SidebarView: View {
             isSearchingConversations = true
             searchAsked = [BoxClient.mac] + workspace.connectedMachines.sorted()
             searchAnswered = []
+            // What an earlier search found doesn't stay under this one's while it's asked.
+            conversationFinds = [:]
             // Each box's as it answers: one that's slow or far holds none of the others up.
             var answered: Set<String> = []
             let found = await workspace.searchConversations(query) { box, finds in

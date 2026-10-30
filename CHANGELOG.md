@@ -221,6 +221,11 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A project's own "/" commands show once the engine is up, when you opened the project while it was starting.
 - A command typed in full (a project's /view, say) is what Return picks, over a keyword that has its name inside.
 - A new session's error goes away when you send again.
+- A session that finishes while Settings, a bot's or group chat's editor, or the expanded side panel covers it stays new until you see it, instead of counting as read.
+- A conversation on a machine you read stays read after you quit and open Kuvo Code again, also when you read it while the machine was away; a coding agent's conversation read that way is marked read on the machine once it connects.
+- A conversation you just read no longer turns bold again when the sessions are read again before the engine has the read.
+- Deleting a conversation closes the tab of its subagent you had open in its place.
+- Searching the sidebar again clears what the earlier search found in conversations, instead of leaving it under the new search until each computer answers.
 
 ## 0.7.2
 

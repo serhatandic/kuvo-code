@@ -213,6 +213,14 @@ final class WindowTabs {
     /// The sessions on screen: the tab's, and the one beside it.
     var sessionsInView: [String] { [sessionID, besideID].compactMap(\.self) }
 
+    /// The sessions you can see now, which count as read: none under Settings, and not the tab's
+    /// while a bot's or group chat's editor takes its place or the expanded panel covers it.
+    var sessionsSeen: [String] {
+        guard !app.showsSettings else { return [] }
+        let covered = botEditor != nil || groupEditor != nil || (showsPanel && panelExpanded)
+        return [covered ? nil : sessionID, besideID].compactMap(\.self)
+    }
+
     var activeModel: SessionModel? { sessionID.flatMap(workspace.model(for:)) }
 
     /// The session you're working in: the one beside, once you've clicked into it (and while you

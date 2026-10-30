@@ -89,8 +89,12 @@ final class Workspace {
     /// A machine's sessions as last seen, in the lists until it connects.
     private func showLastSeen(_ machine: String) {
         guard !connectedMachines.contains(machine), !sessions.contains(where: { RemoteFolder.machine(of: $0.location.directory) == machine }) else { return }
-        let seen = SessionCopies.sessions(of: machine).filter { !isHidden($0) }
+        var seen = SessionCopies.sessions(of: machine).filter { !isHidden($0) }
         for session in seen { sessionMachines[session.id] = machine }
+        // Read while it was away, before a quit: read here too.
+        for index in seen.indices {
+            if let idle = unsentViews[seen[index].id], (seen[index].time.viewed ?? 0) < idle { seen[index].time.viewed = idle }
+        }
         sessions += seen
     }
 
@@ -1495,6 +1499,8 @@ final class Workspace {
         onDeleted?(id)
         if let machine = session(id).flatMap({ RemoteFolder.machine(of: $0.location.directory) }) { keepList(of: machine) }
         sessions.removeAll { $0.id == id }
+        // Its subagents' (and theirs), which have no row: a tab showing one goes with it.
+        for key in subSessions.keys where key == id || root(of: key) == id { subSessions[key] = nil }
         models[id] = nil
         if running.contains(id) { running.remove(id) }
         shellJobs[id] = nil
@@ -1523,7 +1529,7 @@ final class Workspace {
             // (This Mac's: a machine's agents' are its own, with its engine's.)
             let theAgents = sessions.filter { OutsideAgents.isAgentSession($0) && !RemoteFolder.isRemote($0.location.directory) }
             let before = sessions
-            sessions = local + theAgents + sessions.filter { RemoteFolder.isRemote($0.location.directory) }
+            sessions = keepingReads(local + theAgents) + sessions.filter { RemoteFolder.isRemote($0.location.directory) }
             noteArchiving(since: before)
             SessionCopies.saveLocalSessions(local + theAgents)
             // Read before the engine was up: so here, and told it now.
@@ -1573,7 +1579,7 @@ final class Workspace {
             keepSubSessions(everything, box: "mac-agents")
             let listed = all.filter { !isHidden($0) }
             let before = sessions
-            sessions = sessions.filter { !isMacs($0) } + listed
+            sessions = sessions.filter { !isMacs($0) } + keepingReads(listed)
             noteArchiving(since: before)
             // Read while the bridge was away: so here, and told it now.
             let listedIDs = Set(listed.map(\.id))
@@ -1796,7 +1802,7 @@ final class Workspace {
             let reconnected = connectedOnce.contains(machine)
             tellMissedNews(in: theirs, machine: machine)
             let before = sessions
-            sessions = sessions.filter { RemoteFolder.machine(of: $0.location.directory) != machine } + theirs
+            sessions = sessions.filter { RemoteFolder.machine(of: $0.location.directory) != machine } + keepingReads(theirs)
             noteArchiving(since: before)
             for session in theirs { sessionMachines[session.id] = machine }
             remoteSessions = remoteSessions.filter { $0.value.machine != machine }
@@ -1808,9 +1814,16 @@ final class Workspace {
             Task { await loadProjects(on: machine) }
             // Read while it was away: so here, and told there now.
             for (id, idle) in unsentViews where sessionMachines[id] == machine {
+                // Gone from it since: nothing to tell.
+                guard let session = theirs.first(where: { $0.id == id }) else {
+                    unsentViews[id] = nil
+                    continue
+                }
+                // A coding agent's to its bridge (once that answers), the rest to its engine.
+                guard let target = OutsideAgents.isAgentSession(session) ? bridge : api else { continue }
                 unsentViews[id] = nil
                 if let index = sessions.firstIndex(where: { $0.id == id }), (sessions[index].time.viewed ?? 0) < idle { sessions[index].time.viewed = idle }
-                Task { try? await api.markViewed(id, idle: idle) }
+                Task { try? await target.markViewed(id, idle: idle) }
             }
             // Commands its agents left running, as it lists them now (they were forgotten while it
             // was away, and a restart ended some): in its open and working sessions' folders and
@@ -1973,6 +1986,7 @@ final class Workspace {
             for id in gone {
                 models[id] = nil
                 Drafts.shared.remove(id)
+                unsentViews[id] = nil
             }
             for (id, session) in remoteSessions where session.machine == machine { SessionCopies.remove(id) }
             SessionCopies.removeSessions(of: machine)
@@ -2555,12 +2569,26 @@ final class Workspace {
         sessions = listed
         subSessions = subs
         for (id, idle) in read {
+            // A machine's: its copy here keeps the read for the next launch, before it connects.
+            if let machine = sessionMachines[id] ?? session(id).flatMap({ RemoteFolder.machine(of: $0.location.directory) }) { keepList(of: machine) }
             // Its engine away (a machine out of reach): told once it's back (see `refresh`).
             guard let api = api(forSession: id) else {
                 unsentViews[id] = idle
                 continue
             }
             Task { try? await api.markViewed(id, idle: idle) }
+        }
+    }
+
+    /// `listed` as a box read them, with how far each was read here when that's further: a read
+    /// still on its way to the box (or that didn't reach it) isn't taken back.
+    private func keepingReads(_ listed: [Session]) -> [Session] {
+        let read = Dictionary(sessions.compactMap { session in session.time.viewed.map { (session.id, $0) } }) { max($0, $1) }
+        return listed.map { session in
+            guard let here = read[session.id], here > (session.time.viewed ?? 0) else { return session }
+            var session = session
+            session.time.viewed = here
+            return session
         }
     }
 
@@ -2583,8 +2611,25 @@ final class Workspace {
     /// How far each session was read on another client, for news that was on its way meanwhile.
     @ObservationIgnored private var readElsewhere: [String: Milliseconds] = [:]
 
-    /// Sessions read while their machine was away, with what was read, to tell it when it's back.
-    @ObservationIgnored private var unsentViews: [String: Milliseconds] = [:]
+    /// Sessions read while their machine was away, with what was read, to tell it when it's back;
+    /// kept over a quit, so a read made while it was away isn't lost (nor shown unread again).
+    /// (A machine's, kept: this Mac's engine is told as soon as it's up, in the same run.)
+    @ObservationIgnored private var unsentViews: [String: Milliseconds] = Workspace.savedUnsentViews() {
+        didSet {
+            let machines = unsentViews.filter { sessionMachines[$0.key] != nil || keptUnsentViews.contains($0.key) }
+            UserDefaults.standard.set(try? JSONEncoder().encode(machines), forKey: Self.unsentViewsKey)
+        }
+    }
+
+    /// Those kept from before this launch: still a machine's before its sessions are listed.
+    @ObservationIgnored private let keptUnsentViews = Set(Workspace.savedUnsentViews().keys)
+
+    private static let unsentViewsKey = "machineUnsentViews"
+
+    private static func savedUnsentViews() -> [String: Milliseconds] {
+        guard let data = UserDefaults.standard.data(forKey: unsentViewsKey) else { return [:] }
+        return (try? JSONDecoder().decode([String: Milliseconds].self, from: data)) ?? [:]
+    }
 
     /// Sessions being read again as the engine said they changed (what a test waits for).
     @ObservationIgnored private(set) var reloading: [String: Task<Void, Never>] = [:]
