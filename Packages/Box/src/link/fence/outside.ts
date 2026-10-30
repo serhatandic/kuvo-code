@@ -147,6 +147,9 @@ const failed = (text: string): ToolAnswer => ({ text, isError: true });
 
 async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolAnswer> {
   const started = Date.now();
+  // A bot's seat in a group chat runs no commands, so the sandbox never stopped one of its own; and
+  // it's a conversation you can't open, to see what it asks.
+  if (caller.seat) return failed("In a group chat you don't run commands, in the sandbox or outside it. Say in your reply what should run, and who should do it.");
   const command = typeof args.command === "string" ? args.command.trim() : "";
   const why = oneLine(typeof args.why === "string" ? args.why : "", 300).trim();
   const error = typeof args.error === "string" ? cut(args.error.trim(), 2000) : "";
@@ -158,8 +161,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
 
   // (By the command as it ran, whitespace and all.)
   const stopped = caller.session ? await stopsFor(caller.session, String(args.command)) : [];
-  // (A group chat's seat: once, or not at all.)
-  const always = caller.seat ? undefined : alwaysFor(stopped, project);
+  const always = alwaysFor(stopped, project);
   const answered = await book.ask({
     ...(caller.root ? { session: caller.root, ...(caller.sessionName ? { sessionName: caller.sessionName } : {}) } : {}),
     ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}),

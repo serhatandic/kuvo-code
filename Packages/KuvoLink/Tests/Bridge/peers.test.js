@@ -757,6 +757,21 @@ test("an answer that came just as the tool waiting for it stopped reaches its co
   assert.equal(fs.existsSync(path.join(replies, "ltr_asked2.json")), false, "not kept either");
 });
 
+test("an answer left for a conversation the engine doesn't know is kept while the coding agents' bridge isn't running (it may be the bridge's), and dropped once it runs and has none", async t => {
+  fresh({ peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } });
+  const { prompts, target } = await engine(t);
+  const replies = path.join(run, "replies");
+  fs.mkdirSync(replies, { recursive: true });
+  // Its tool stopped waiting as the answer came, for Scout's conversation (a coding agent's).
+  fs.writeFileSync(path.join(replies, "ltr_scout1.json"), JSON.stringify({ text: "Done.", to: "ses_scout", from: "ses_remote", name: "Remote" }));
+  fs.writeFileSync(path.join(replies, "ltr_scout1.gaveup"), "");
+  await link.deliverLeftAnswers(Date.now(), [target], false);
+  assert.equal(fs.existsSync(path.join(replies, "ltr_scout1.json")), true, "kept for when the bridge runs");
+  await link.deliverLeftAnswers(Date.now(), [target], true);
+  assert.equal(fs.existsSync(path.join(replies, "ltr_scout1.json")), false, "the bridge runs and has no such conversation: gone");
+  assert.deepEqual(prompts, []);
+});
+
 test("a conversation read by mail whose tool stopped waiting as it came is dropped, never delivered as a message", async () => {
   fresh({ peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } });
   const replies = path.join(run, "replies");

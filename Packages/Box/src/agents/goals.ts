@@ -246,8 +246,8 @@ export class Goals {
     emit("kuvo.goal.updated", { sessionID: session, goal: null })
   }
 
-  /** A session deleted: its goal goes with it. (Not once the box has stopped: a look that was
-   * under way then leaves it, for the box that starts next to find gone.) */
+  /** A session deleted: its goal goes with it (not once the box has stopped: a look that ends
+   * after it keeps and tells nothing, as the box started again does that). */
   forget(session: string) {
     if (!this.stopped && this.goals.has(session)) this.clear(session)
   }
@@ -332,8 +332,7 @@ export class Goals {
     try {
       messages = await this.messages(session, place)
     } catch (error: any) {
-      // (Stopped meanwhile, the bridge is going: another may keep its goals now, so nothing here.)
-      if (error?.status === 404) return this.stopped ? undefined : this.forget(session)
+      if (error?.status === 404) return this.forget(session)
       return this.lookLater(session)
     }
     if (!current()) return

@@ -130,6 +130,66 @@ test("a wake that can't reach the bot now (its engine starting again) is kept an
   assert.match(prompts[0].text, /^\[Session finished\] "Sign-in"/);
 });
 
+test("a wake for a bot that runs with the coding agents is kept while their bridge isn't running, and goes once it is", async t => {
+  // Scout's conversation is the bridge's (the engine doesn't know it); it started Docs, in the engine.
+  sessions.ses_docs = { id: "ses_docs", title: "Docs", location: { directory: tidepool }, time: { created: 1, updated: 1 }, metadata: { kuvo: { startedBy: "ses_scout", by: { bot: "bot_scout00001", name: "Scout" }, depth: 1, wake: ["finished"] } } };
+  t.after(() => { delete sessions.ses_docs; });
+  const told = [];
+  const bridge = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+      if (request.url === "/api/session/ses_scout") return reply({ data: { id: "ses_scout", title: "Scout" } });
+      if (request.url === "/api/session/ses_scout/prompt") { told.push(JSON.parse(body)); return reply({}); }
+      reply({ message: "No such session." }, 404);
+    });
+  });
+  await new Promise(resolve => bridge.listen(0, "127.0.0.1", resolve));
+  t.after(() => { bridge.closeAllConnections(); bridge.close(); });
+  const atBridge = { port: bridge.address().port, password: "b" };
+  let bridgeRuns = false;
+  const { schedule, runAll } = clock();
+  const watch = link.workWatcher(source, () => (bridgeRuns ? [source, atBridge] : [source]), { schedule, bridgeRuns: () => bridgeRuns });
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_docs" } });
+  await runAll();
+  assert.deepEqual(told, []);
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(wakesFile, "utf8"))), ["ses_scout"], "kept, not taken for a conversation that's gone");
+  bridgeRuns = true;
+  await runAll();
+  assert.equal(told.length, 1);
+  assert.match(told[0].text, /^\[Session finished\] "Docs"/);
+});
+
+test("what a conversation hears of its sessions waits while it's archived, as its wake-ups do, and reaches it once it's brought back", async t => {
+  sessions.ses_pixel.metadata = { "kuvo.archived": true };
+  t.after(() => { delete sessions.ses_pixel.metadata; });
+  const { schedule, runAll } = clock();
+  const watch = link.workWatcher(source, () => [source], { schedule });
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_signin" } });
+  await runAll();
+  assert.deepEqual(prompts, [], "no turn out of sight");
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(wakesFile, "utf8"))), ["ses_pixel"], "kept");
+  delete sessions.ses_pixel.metadata;
+  await runAll();
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0].text, /^\[Session finished\] "Sign-in"/);
+});
+
+test("what a conversation archived for over a week would have heard of its sessions goes, rather than waiting for ever", async t => {
+  sessions.ses_pixel.metadata = { "kuvo.archived": true };
+  t.after(() => { delete sessions.ses_pixel.metadata; });
+  fs.mkdirSync(path.dirname(wakesFile), { recursive: true });
+  fs.writeFileSync(wakesFile, JSON.stringify({ ses_pixel: { lines: ["[Session finished] \"Sign-in\": done."], asks: false, since: Date.now() - 8 * 86_400_000 } }));
+  const { schedule, runAll } = clock();
+  link.workWatcher(source, () => [source], { schedule });
+  await runAll();
+  assert.deepEqual(JSON.parse(fs.readFileSync(wakesFile, "utf8")), {});
+  delete sessions.ses_pixel.metadata;
+  await runAll();
+  assert.deepEqual(prompts, []);
+});
+
 test("what happened while the box was down reaches the bot as it starts again, once", async () => {
   const toldFile = path.join(home, "run", "work", "told.json");
   // It last heard of anything a while ago; since, Sign-in finished and Haptics asked something.
@@ -159,6 +219,54 @@ test("what happened while the box was down reaches the bot as it starts again, o
   }
 });
 
+test("a session told of while the box runs isn't told again as it starts, however many others it has told of since", async () => {
+  const toldFile = path.join(home, "run", "work", "told.json");
+  fs.mkdirSync(path.dirname(toldFile), { recursive: true });
+  // A bot that has run a lot: Sign-in was first told of long ago, and hundreds have been since.
+  const many = Object.fromEntries(Array.from({ length: 399 }, (_, index) => [`ses_done${index}`, { reply: "msg_1" }]));
+  fs.writeFileSync(toldFile, JSON.stringify({ since: 5, sessions: { ses_signin: { reply: "msg_old" }, ...many } }));
+  try {
+    const first = clock();
+    const watch = link.workWatcher(source, () => [source], { schedule: first.schedule });
+    await watch.caughtUp;
+    await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_signin" } });
+    await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_haptics" } });
+    await first.runAll();
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0].text, /"Sign-in"[\s\S]*"Haptics"/);
+    // Renamed while the box was down, with no new reply: nothing to tell.
+    sessions.ses_signin.time.updated = Date.now() + 86_400_000;
+    const again = clock();
+    await link.workWatcher(source, () => [source], { schedule: again.schedule }).caughtUp;
+    await again.runAll();
+    assert.equal(prompts.length, 1, "told once");
+  } finally {
+    for (const each of Object.values(sessions)) each.time.updated = 1;
+  }
+});
+
+test("a session stopped while the box was down (Stop All, or cut short) isn't told to its bot as finished once it starts again", async () => {
+  const toldFile = path.join(home, "run", "work", "told.json");
+  fs.mkdirSync(path.dirname(toldFile), { recursive: true });
+  fs.writeFileSync(toldFile, JSON.stringify({ since: 5, sessions: {} }));
+  sessions.ses_signin.time.updated = 10;
+  sessions.ses_signin.outcome = "interrupted";
+  try {
+    const first = clock();
+    await link.workWatcher(source, () => [source], { schedule: first.schedule }).caughtUp;
+    await first.runAll();
+    assert.deepEqual(prompts, [], "you stopped it: the bot isn't woken to carry on");
+    // Nor later, as the box starts again.
+    const again = clock();
+    await link.workWatcher(source, () => [source], { schedule: again.schedule }).caughtUp;
+    await again.runAll();
+    assert.deepEqual(prompts, []);
+  } finally {
+    delete sessions.ses_signin.outcome;
+    for (const each of Object.values(sessions)) each.time.updated = 1;
+  }
+});
+
 test("an answer given after its bot stopped waiting reaches it as the box starts, if the box stopped first", async () => {
   const asksFile = path.join(home, "run", "work", "asks.json");
   fs.mkdirSync(path.dirname(asksFile), { recursive: true });
@@ -172,4 +280,38 @@ test("an answer given after its bot stopped waiting reaches it as the box starts
   // Told once.
   await link.workWatcher(source, () => [source], { schedule }).caughtUp;
   assert.equal(prompts.length, 1);
+});
+
+test("an answer given late that waited for the coding agents' bridge reaches its conversation once the bridge runs, with the box still running", async () => {
+  const asksFile = path.join(home, "run", "work", "asks.json");
+  fs.mkdirSync(path.dirname(asksFile), { recursive: true });
+  fs.writeFileSync(asksFile, JSON.stringify({ asks: [{ id: "wak_3", action: "makeProject", session: "ses_later", name: "Pixel", project: "Tidepool", folderName: "tidepool", folder: null, at: 1,
+    given: { name: "Tidepool" }, late: true, answered: { answer: "allow", text: "Made Tidepool at ~/Developer/tidepool.", isError: false, at: Date.now() - 60 * 60_000 } }] }));
+  let bridge = false;
+  const { schedule, runAll } = clock();
+  await link.workWatcher(source, () => [source], { schedule, bridgeRuns: () => bridge }).caughtUp;
+  assert.equal(prompts.length, 0);
+  // The bridge starts, and its conversation is there now.
+  bridge = true;
+  sessions.ses_later = { id: "ses_later", title: "Pixel", location: { directory: tidepool }, time: { created: 1, updated: 1 } };
+  try {
+    await runAll();
+    assert.deepEqual(prompts.map(each => [each.to, each.text]), [["ses_later", "[The user answered] Made Tidepool at ~/Developer/tidepool."]]);
+  } finally {
+    delete sessions.ses_later;
+  }
+});
+
+test("an answer given late for a bot that runs with the coding agents waits while their bridge isn't running, rather than being taken as told", async () => {
+  const asksFile = path.join(home, "run", "work", "asks.json");
+  fs.mkdirSync(path.dirname(asksFile), { recursive: true });
+  fs.writeFileSync(asksFile, JSON.stringify({ asks: [{ id: "wak_2", action: "makeProject", session: "ses_scout", name: "Scout", project: "Tidepool", folderName: "tidepool", folder: null, at: 1,
+    given: { name: "Tidepool" }, late: true, answered: { answer: "allow", text: "Made Tidepool at ~/Developer/tidepool.", isError: false, at: Date.now() - 60 * 60_000 } }] }));
+  const { schedule } = clock();
+  await link.workWatcher(source, () => [source], { schedule, bridgeRuns: () => false }).caughtUp;
+  assert.equal(JSON.parse(fs.readFileSync(asksFile, "utf8")).asks[0].toldLate, undefined, "still to tell");
+  // The bridge runs, and has no such conversation either: gone, so it's done with.
+  await link.workWatcher(source, () => [source], { schedule, bridgeRuns: () => true }).caughtUp;
+  assert.deepEqual(JSON.parse(fs.readFileSync(asksFile, "utf8")).asks, []);
+  assert.equal(prompts.length, 0);
 });

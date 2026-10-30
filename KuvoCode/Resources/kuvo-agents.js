@@ -3580,7 +3580,7 @@ class Goals {
       messages = await this.messages(session, place);
     } catch (error) {
       if (error?.status === 404)
-        return this.stopped ? undefined : this.forget(session);
+        return this.forget(session);
       return this.lookLater(session);
     }
     if (!current())
@@ -17366,7 +17366,8 @@ function seatRules(folder, askFirst, denies) {
     "kuvo-browser_browser_upload",
     "kuvo-browser_schedule_wake_up",
     "kuvo-browser_watch_for_change",
-    "kuvo-browser_set_job"
+    "kuvo-browser_set_job",
+    "kuvo-browser_sandbox_ask"
   ].map((action) => ({ action, resource: "*", effect: "deny" }));
   if (askFirst)
     rules.push({ action: "webfetch", resource: "*", effect: "deny" });
@@ -21888,4 +21889,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents cac6e39483d9e1ef785cea3a3c1cec8c759335498eda836d3329268cd903f885
+// Built from Packages/Box/src/agents 1fe9ec6bd42098c7dc8793ebdadef89cc65e4d04f5246b829ac2f21d39612df5

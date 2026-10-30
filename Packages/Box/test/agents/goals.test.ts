@@ -418,8 +418,24 @@ describe("a goal", () => {
     engine.conversations.delete("ses_other")
     goals = makeGoals()
     goals.start()
-    await until(() => told("ses_work") === null && told("ses_other") === null)
-    expect(goals.list()).toEqual([])
+    await until(() => goals.list().length === 0)
+    expect([told("ses_work"), told("ses_other")]).toEqual([null, null])
+  })
+
+  test("a look under way as the box stops keeps and tells nothing as it ends, though its conversation is gone by then", async () => {
+    engine.holding = true
+    await goals.set("ses_work", "the build is green")
+    engine.holdingReads = true
+    engine.finish()
+    await until(() => engine.readsHeld === 1)
+    goals.stopAll()
+    engine.conversations.delete("ses_work")
+    const before = settled
+    engine.answerReads()
+    await until(() => settled > before)
+    // The box started again finds it gone and says so; the stopped one leaves that to it.
+    expect(told()?.state).toBe("working")
+    expect(JSON.parse(readFileSync(join(root, "goals.json"), "utf8")).map((kept: Goal) => kept.session)).toEqual(["ses_work"])
   })
 
   test("is left as it is by a box that has stopped, whatever the engine answers it late", async () => {
