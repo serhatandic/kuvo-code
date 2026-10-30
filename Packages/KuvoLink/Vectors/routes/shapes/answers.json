@@ -2213,6 +2213,9 @@
             "literal": "folders"
            },
            {
+            "literal": "folders.files"
+           },
+           {
             "literal": "git"
            },
            {
@@ -2464,6 +2467,9 @@
             "literal": "folders"
            },
            {
+            "literal": "folders.files"
+           },
+           {
             "literal": "git"
            },
            {
@@ -2622,7 +2628,17 @@
           "mac": "string",
           "name?": "string"
          }
-        }
+        },
+        "macs?": {
+         "list": {
+          "object": {
+           "key": "string",
+           "name?": "string",
+           "seen": "number"
+          }
+         }
+        },
+        "phones?": "number"
        }
       }
      ]
@@ -4426,7 +4442,22 @@
          "repository?": "bool"
         }
        }
+      },
+      "files?": {
+       "list": "string"
       }
+     }
+    },
+    "403": {
+     "object": {
+      "message": "string",
+      "reason?": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string",
+      "reason?": "string"
      }
     }
    }

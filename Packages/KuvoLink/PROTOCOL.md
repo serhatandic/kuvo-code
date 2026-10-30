@@ -687,6 +687,8 @@ app's version, written by a Mac after it sets the box up, or by the box when it 
 - **Setup** also sends the Mac's ID (`macID`, as its engine launches name it). The bridge keeps
   `tolerantIDs[macID]`, set again at each setup, and notes in `run/launchers.json` which Mac
   started the engine (from `run/engine.json`'s `notes.mac`).
+- **Setup** also sends the Mac's name (`macName`), which the bridge keeps by the Mac's key
+  (`macNames`), dropped with that Mac, for `kuvo/info`'s `macs`.
 
 A Mac with Kuvo Code 0.7 or before still connects, and puts its own files there as it always
 did: the box keeps working as itself ("For released Macs").
@@ -957,7 +959,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   one there through the engine, as for a project). A machine's bridge also says whether its engine
   is `running`, and whether it's `stopped` on purpose (it stays down until it's started, from a Mac
   or a phone), and `home`, the Mac that started its engine (`{"mac", "name"?}`, its name where
-  its start noted one); a Mac also names `integrations`, each integration's name by its MCP
+  its start noted one). It also says who uses it, for an uninstall to name whom it would stop it
+  for: `macs`, the Macs that set it up (`[{key, name?, seen}]`: each one's key, its name where its
+  setup gave one, `macName`, and when it was last heard from, in ms), and `phones`, how many phones
+  reach it. A Mac also names `integrations`, each integration's name by its MCP
   server's (`{"microsoft-365": "Outlook and Microsoft 365", …}`), for a card when one asks something.
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
   Antigravity), through the agents bridge beside the host's engine, which answers the same paths
@@ -1305,6 +1310,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     sessions, bots, sign-ins and keys, and still in `kuvo/hosts`: `200 {}`. `POST
     kuvo/machines/<id>/uninstall` does as Uninstall from <machine> does: also stops its engine
     there and deletes the sign-ins and keys it keeps, and it leaves `kuvo/hosts`: `200 {}`.
+  - A machine connecting has `step` (`{name, sent?, total?, fraction?}`): `name` is `checking`,
+    `downloading` (the engine's package to the Mac, `fraction` of it), `copying` (it, to the
+    machine over SSH: `sent` bytes of `total`), `starting` or `reading` (its sessions), for a
+    client to show how far. One whose box said who else uses it has `alsoUsedBy` (`{macs: [name],
+    phones}`, this Mac left out), for Remove's dialog to name whom Uninstall would stop it for.
   - A machine another Mac runs has `home` (`{"name"?}`, that Mac's name where its start noted
     one, as `kuvo/info`'s `home` says it); one this Mac runs has none. `POST kuvo/machines/<id>/home` makes this Mac its home, as Make This Mac Its Home does:
     the engine starts again there as this Mac's, with this Mac's accounts; its sessions, bots and
@@ -1392,7 +1402,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   "home", "parent", "folders": [{name, repository?}]}`, ordered as Finder orders names, without
   hidden ones unless `hidden=1`. No `path`, or `~`: the home folder; `~/` starts there. `parent` is
   null at `/`; `repository`, a git repository's own checkout. `404 {"message"}` for no folder there,
-  `403` for one it can't read, `400` for a path that isn't a full one.
+  `403` for one it can't read, `400` for a path that isn't a full one; each refusal with `reason`,
+  why as the computer says it (`Permission denied`, `No such folder`, `Not a folder`), so a client
+  never shows a folder it couldn't read as empty. With `files=1` (`folders.files`), its files too,
+  as a Files panel lists a folder: `files`, their names in the same order (with `hidden=1`, hidden
+  ones too; `.DS_Store` left out).
   `POST kuvo/folders {"path"}` makes a new folder in one that's there, as a folder panel's New
   Folder does → `{"path"}`; `409 {"message"}` for something there already, `404` when the folder
   it's in isn't there, `403` when one can't be made there, `400` for a path that isn't a full one.
@@ -1933,6 +1947,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `engine.restart` | `POST kuvo/engine/restart` |
 | `file` | `kuvo/file` |
 | `folders` | `kuvo/folders` |
+| `folders.files` | `kuvo/folders?files=1`: a folder's files too, and `reason` on a refusal |
 | `git` | `kuvo/git/…`: Changes (bridge 0.9.94) |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
@@ -2012,7 +2027,7 @@ On a machine the bridge keeps its state in `~/.kuvo-code/run/link.json` (mode 60
 
 ```json
 {"relay": "wss://…", "secret": "…", "key": "<static private key>", "sign": "<signing key's seed>", "mac": "<the last Mac's static key>",
- "macs": ["<each Mac that set it up>"], "macSigns": {"<Mac>": "<its signing key>"}, "macSeen": {"<Mac>": <when it came, here>},
+ "macs": ["<each Mac that set it up>"], "macSigns": {"<Mac>": "<its signing key>"}, "macSeen": {"<Mac>": <when it came, here>}, "macNames": {"<Mac>": "<its name>"},
  "docs": {"<origin> <kind>": {"d": "…", "s": "…"}}, "own": {"<kind>": {"n", "h", "b"}}, "views": {"<origin>": {"n", "h"}},
  "phones": [{"key": "…", "name": "…", "added": 1760000000, "from": "mac", "mac": "<the Mac that listed it>", "address": "…", "pairing": "…"}],
  "removed": [{"key": "…", "pairing": "…"}]}
