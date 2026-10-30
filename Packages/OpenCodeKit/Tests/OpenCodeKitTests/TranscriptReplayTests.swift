@@ -94,6 +94,31 @@ struct TranscriptReplayTests {
         #expect(!transcript.isStale)
     }
 
+    /// The engine's own notice (a background command finished) waiting to go in when the
+    /// conversation was read: it shows when it goes in, once, as one that waited while it was open does.
+    @Test func aNoticeWaitingWhenReadShowsWhenItGoesIn() throws {
+        let delivered = try ServerEvent(json: Data(#"""
+        {"id":"evt_9","created":9,"type":"session.inbox.delivered","data":{"sessionID":"ses_1","inboxID":"msg_n1"}}
+        """#.utf8))
+        let waiting = InboxItem(id: "msg_n1", sessionID: "ses_1", type: "synthetic",
+                                payload: .object(["text": .string("Command `npm test` finished"), "description": .string("Background command")]), delivery: .steer)
+        func notices(_ transcript: Transcript) -> [String] {
+            transcript.messages.compactMap { if case .synthetic(let notice) = $0 { notice.text } else { nil } }
+        }
+
+        var transcript = Transcript(sessionID: "ses_1")
+        transcript.load(messages: [], inbox: [waiting], permissions: [], forms: [], isRunning: true)
+        #expect(notices(transcript).isEmpty, "not before it goes in")
+        transcript.apply(delivered)
+        #expect(notices(transcript) == ["Command `npm test` finished"])
+
+        // Read again, with the engine's copy of it, then the event again: still once.
+        let engine = transcript.messages
+        transcript.load(messages: engine, inbox: [], permissions: [], forms: [], isRunning: true)
+        transcript.apply(delivered)
+        #expect(notices(transcript) == ["Command `npm test` finished"])
+    }
+
     /// A conversation read again while the agent writes: what shows has every word once, whether
     /// the read has none of the words so far (the engine's) or some (the coding agents' bridge),
     /// and whether the conversation was showing already or is opened now.

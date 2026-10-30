@@ -79,6 +79,12 @@ public struct Transcript: Sendable, Equatable {
             }
             return read
         } + local
+        // The engine's own notices waiting too, for when they go in (when they were queued, the
+        // read doesn't say: 0 until then).
+        waitingNotices = Dictionary(inbox.filter { item in item.type == "synthetic" && !messages.contains { $0.id == item.id } }.map { item in
+            (item.id, Message.Notice(id: item.id, time: Message.Time(created: 0), text: item.text ?? "", description: item.payload["description"]?.string,
+                                     metadata: item.payload["metadata"]))
+        }, uniquingKeysWith: { first, _ in first })
         self.permissions = permissions
         self.forms = forms.filter(isOurs)
         self.isRunning = isRunning
@@ -383,7 +389,10 @@ public struct Transcript: Sendable, Equatable {
         case "session.inbox.delivered":
             let id = try event.payload(as: EventPayload.InboxChanged.self).inboxID
             guard let index = pending.firstIndex(where: { $0.id == id }) else {
-                if let notice = waitingNotices.removeValue(forKey: id) { append(.synthetic(notice)) }
+                if var notice = waitingNotices.removeValue(forKey: id) {
+                    if notice.time.created == 0 { notice.time = Message.Time(created: now) }
+                    append(.synthetic(notice))
+                }
                 // Otherwise not ours to show (a compaction input), or we missed it.
                 return
             }
