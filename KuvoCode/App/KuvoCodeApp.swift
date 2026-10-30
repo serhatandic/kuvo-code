@@ -49,6 +49,9 @@ enum Launch {
             // prompt fails at once instead (see `AppInfo.neverPrompts`).
             if AppInfo.neverPrompts { Keychain.neverAsk() }
             #endif
+            // This Mac's keeper, as launchd starts it (`Keeper`), and a command to the one running.
+            if CommandLine.arguments.contains("--box") { Keeper.main() }
+            if let index = CommandLine.arguments.firstIndex(of: "--box-control") { Keeper.control(Array(CommandLine.arguments[(index + 1)...])) }
             KuvoCodeApp.main()
         }
     }
@@ -165,11 +168,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.boxGroups.flush()
         // Closing the engine's stdin shuts it down cleanly (it would also exit with us).
         model.stop()
-        // This Mac's box, and its record of the agents bridge, which goes with the app too.
-        model.box.stop()
-        BoxProcess.agentsChanged(nil, pid: nil)
+        // This Mac's box: the keeper's goes on; the app's own goes with it.
+        model.stopBox()
         model.stopMachines()
-        IntegrationKeys.removeFiles()
         Analytics.shared.flushBeforeQuit()
     }
 
@@ -208,6 +209,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
+
+    /// Quit, while this Mac's keeper runs its box: the work goes on, and Kuvo Code goes to the menu
+    /// bar (`InBackground`). It quits for real for Stop Background Work, an update, and macOS
+    /// logging out, restarting or shutting down.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard model.keepsWorkingAfterQuit, !InBackground.shared.quitsForReal, !InBackground.systemIsQuitting else { return .terminateNow }
+        InBackground.shared.enter(model)
+        return .terminateCancel
+    }
+
+    /// Opened again (the Finder, Spotlight) while in the background: back with its window.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        guard InBackground.shared.isOn else { return true }
+        InBackground.shared.leave()
+        return false
+    }
 }
 
 /// Menu commands. They act on whatever the focused window exposes.
@@ -219,6 +236,13 @@ struct AppCommands: Commands {
     @AppStorage(TabBar.showsKey) private var showsTabBar = TabBar.showsByDefault
 
     var body: some Commands {
+        CommandGroup(after: .appTermination) {
+            // Quit leaves the work going (`InBackground`); this stops it too.
+            if model.keepsWorkingAfterQuit {
+                Button("Stop Background Work…") { Task { await InBackground.shared.stop(model) } }
+                    .keyboardShortcut("q", modifiers: [.command, .option])
+            }
+        }
         CommandGroup(after: .appInfo) {
             if updates.isAvailable {
                 Button("Check for Updates…") { updates.check() }

@@ -35,6 +35,8 @@ here.
 
 - **Plan limits for the host** (`Embedding/PlanLimits.swift`): the latest limits of one provider,
   read from what the panel already has, for Kuvo Code to show beside a session.
+- **A card of the host's** (`Embedding/HostCard.swift`): shown at the foot of the dashboard, above
+  the footer's row, for Kuvo Code's "Working in the background" while its window is closed.
 - **The panel for the host's phones** (`Embedding/UsageMenuBar+Phone.swift`): what the Bars view
   lists, as JSON (providers in its order with their brand color, mark, notice and lines), and a
   refresh of everything, for Kuvo Code for iPhone.

@@ -3304,7 +3304,7 @@ async function engineControl(command) {
   const start = path22.join(K, "bin", "kuvo-start");
   if (!fs23.existsSync(start))
     return { status: 409, message: "Kuvo Code hasn't set this machine up yet." };
-  if (![path22.join(K, "bin", "kuvo-launch"), path22.join(RUN, "launch.env")].every((file) => fs23.existsSync(file))) {
+  if (!IS_MAC && ![path22.join(K, "bin", "kuvo-launch"), path22.join(RUN, "launch.env")].every((file) => fs23.existsSync(file))) {
     return { status: 409, message: "Start it once from Kuvo Code on your Mac." };
   }
   if (isUpdating() && !ENGINE_UP_WHILE.includes(updateState().running)) {

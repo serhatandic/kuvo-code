@@ -93,6 +93,7 @@ for Linux's tools).
 | An agent shows you a file in the conversation (show_file), on the Mac and a phone | PhoneAwareTests (the tool's checks), PhoneFilesTests (the phone fetching it) | how it shows (UI) |
 | J1 The network goes away mid-reply | NetworkDropTests | |
 | J3 The engine stops; the app brings it back | EngineRestartTests | |
+| You quit the app and this Mac's box goes on (its engine, box and coding agents' bridge, where letters reach them), the app following it as a client; a keeper asked to make way for a newer app waits while a session runs | BackgroundWorkTests (the keeper's box in the test's process); the bridge's peers.test.js (a letter while the agents' bridge is down comes again) | launchd and Login Items, the Keychain and privacy prompts of a signed copy (by hand) |
 | J4 A huge file, a binary file in the changes; a command that prints a lot | ChangesDiscardTests, ChangesBinaryTests, CommandOutputTests | how much output the engine keeps (its own) |
 | K1 Settings keep what you change, in this Mac's settings file through its box; a phone's change shows; a file with comments left alone; its tabs | SettingsOnBoxTests, SettingsTabsTests; the route scenarios (settings.json) and the bridge's config tests | |
 | L42 Web search works from the start (the engine has no search chosen; every search failed) | SettingsOnBoxTests | |

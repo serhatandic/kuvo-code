@@ -96,8 +96,12 @@ nonisolated private final class UpdateSteps: NSObject, SPUUpdaterDelegate {
     func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
         let to = Self.version(item)
         track("update_installed") { ["from": AppInfo.version, "to": to] }
-        // It quits to install: what's queued goes now.
-        Task { @MainActor in Analytics.shared.flush() }
+        // It quits to install, for real (not to the menu bar): what's queued goes now.
+        let quit = { @MainActor in
+            InBackground.shared.quitsForReal = true
+            Analytics.shared.flush()
+        }
+        if Thread.isMainThread { MainActor.assumeIsolated(quit) } else { Task { @MainActor in quit() } }
     }
 
     func updater(_ updater: SPUUpdater, didAbortWithError error: any Error) {

@@ -1702,6 +1702,12 @@ final class Workspace {
         return Set(ids.compactMap { session($0)?.location.directory }.filter { RemoteFolder.machine(of: $0) == machine })
     }
 
+    /// The sessions working on this Mac now (not your machines'): the usage item's "Working in
+    /// the background" card lists them.
+    var runningHere: [String] {
+        running.filter { id in sessionMachines[id] == nil && !(session(id).map { RemoteFolder.isRemote($0.location.directory) } ?? false) }.sorted()
+    }
+
     /// Whether a session on the machine is working (or waiting for an answer).
     func isRunning(on machine: String) -> Bool {
         running.contains { id in

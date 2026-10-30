@@ -56,7 +56,8 @@ export async function engineControl(command: "start" | "restart"): Promise<Engin
   const start = path.join(K, "bin", "kuvo-start");
   if (!fs.existsSync(start)) return { status: 409, message: "Kuvo Code hasn't set this machine up yet." };
   // Started from a Mac once, which keeps how (`run/launch.env`) and what starts it (`bin/kuvo-launch`).
-  if (![path.join(K, "bin", "kuvo-launch"), path.join(RUN, "launch.env")].every(file => fs.existsSync(file))) {
+  // (A Mac's own `kuvo-start` asks its keeper, which knows how: PROTOCOL.md, "The keeper".)
+  if (!IS_MAC && ![path.join(K, "bin", "kuvo-launch"), path.join(RUN, "launch.env")].every(file => fs.existsSync(file))) {
     return { status: 409, message: "Start it once from Kuvo Code on your Mac." };
   }
   // An update stops the engine on purpose while it swaps its files, and starts it once that's done.

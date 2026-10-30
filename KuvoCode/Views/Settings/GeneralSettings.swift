@@ -17,7 +17,6 @@ struct GeneralSettings: View {
     @State private var importing: ImportRequest?
     @State private var reading = false
     @State private var importNote: String?
-    private var openAtLogin: OpenAtLogin { .shared }
 
     var body: some View {
         ScrollingSettingsForm {
@@ -56,12 +55,7 @@ struct GeneralSettings: View {
             }
             VoiceSettings()
             Section("While Agents Work") {
-                Toggle(isOn: Binding(get: { openAtLogin.isOn }, set: { openAtLogin.set($0) })) {
-                    Text("Open at login, in the background")
-                    Text(openAtLogin.failure ?? "Your bots and sessions on this Mac keep working from the moment you log in, without the window.")
-                }
-                .help("Kuvo Code opens when you log in, without its window, and stays in the menu bar. Open it to see the window.")
-                .onAppear { openAtLogin.refresh() }
+                BackgroundWorkRow()
                 Toggle(isOn: $keepsAwake) {
                     Text("Keep this Mac awake")
                     Text("While an agent or a bot works. The display can still sleep.")
@@ -303,6 +297,51 @@ struct UsageSettings: View {
                 Text("Usage tracking is a fork of OpenUsage by Robin Ebers (MIT). It isn’t affiliated with or endorsed by OpenUsage.")
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+}
+
+/// Background work: this Mac's keeper, which keeps your bots, goals, wake-ups and sessions going
+/// when Kuvo Code is closed (`BackgroundWork`), as macOS has it: on, with Stop; waiting for your OK
+/// in Login Items & Extensions, which opens there; or off, which turns it on.
+private struct BackgroundWorkRow: View {
+    @Environment(AppModel.self) private var app
+    private var work: BackgroundWork { .shared }
+
+    var body: some View {
+        LabeledContent {
+            switch work.state {
+            case .on:
+                HStack(spacing: 10) {
+                    Label("On", systemImage: "circle.fill")
+                        .labelStyle(.titleAndIcon)
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.secondary, .green)
+                        .imageScale(.small)
+                    if app.keepsWorkingAfterQuit {
+                        Button("Stop…") { Task { await InBackground.shared.stop(app) } }
+                            .help("Stop Background Work (⌥⌘Q): the work stops, and Kuvo Code quits, until you open it or log in again")
+                    }
+                }
+            case .needsApproval:
+                Button("Open Login Items") { work.openLoginItems() }
+                    .buttonStyle(.borderedProminent)
+            case .off:
+                Button("Turn On") { work.register() }
+            }
+        } label: {
+            Text("Background work")
+            Text(caption)
+        }
+        .onAppear { work.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in work.refresh() }
+    }
+
+    private var caption: String {
+        switch work.state {
+        case .on: "Bots, goals and wake-ups go on when Kuvo Code is closed."
+        case .needsApproval: "Waiting for your OK in Login Items & Extensions. Until then, the work stops when you quit."
+        case .off: work.failure ?? "Off: the work stops when you quit."
         }
     }
 }

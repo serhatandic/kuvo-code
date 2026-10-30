@@ -34,8 +34,34 @@ final class HostInterface {
     private var lastFailure: Date?
     private static let firstWait = 2.0
     private static let longestWait = 60.0
-    /// This Mac's link, for what its box's link asks of the app; set by AppModel.
+    /// This Mac's link, for what its box's link asks of the app; set by AppModel (and by the keeper,
+    /// for this Mac's keys alone).
     weak var phoneLink: PhoneLink?
+    /// What only the open app answers (the panel's browser, the Mac's own routes for a phone): the
+    /// keeper's (`Keeper`) asks the open app's (`appHost`), and says so while it isn't open.
+    var appAnswers = true
+    /// The open app's own, for the keeper's: where it answers, and its password.
+    private var appHost: (url: URL, password: String)?
+
+    /// The open app's (`{url, password}`), or that it has quit (`{}`).
+    func useApp(_ given: [String: Any]) {
+        if let url = (given["url"] as? String).flatMap(URL.init(string:)), let password = given["password"] as? String {
+            appHost = (url, password)
+        } else {
+            appHost = nil
+        }
+    }
+
+    /// Where it answers once started without telling the box (the open app's, while the keeper
+    /// runs the box: the keeper's tells it, and asks this one for what only the app answers).
+    var address: [String: String]? {
+        server.port.map { ["url": "http://127.0.0.1:\($0)", "password": password] }
+    }
+
+    /// Starts answering without telling the box (see `address`).
+    func startForKeeper() async throws {
+        _ = try await server.start()
+    }
 
     init() {
         // Quitting, crashes aside: the box's record of where it answers goes with it, so nothing
@@ -57,6 +83,7 @@ final class HostInterface {
     /// box was told before goes first, so a start that fails leaves it nothing to follow.
     @discardableResult
     func start() async throws -> [String: String] {
+        tried = true
         if !isAnswering { Self.forget() }
         let port = try await server.start()
         let url = "http://127.0.0.1:\(port)"
@@ -79,13 +106,19 @@ final class HostInterface {
         return false
     }
 
-    /// Stops answering, and tells the box so (its keys out of reach until it starts again).
+    /// Stops answering, and tells the box so (its keys out of reach until it starts again): one that
+    /// never answered leaves the record alone (the keeper's, while the app quits).
     func stop() {
         retrying?.cancel()
         retrying = nil
         server.stop()
+        guard tried else { return }
+        tried = false
         Self.forget()
     }
+
+    /// It started answering, or tried to, so the record is its own to take away.
+    private var tried = false
 
     /// Its listener failed by itself: tried again after a wait that doubles with each failure that
     /// comes soon after the last one, up to a minute.
@@ -269,6 +302,9 @@ final class HostInterface {
             default:
                 return await Task.detached(operation: { VaultValues.remove(id) }).value ? .json([:]) : Self.failed
             }
+        case "/sites/signed-in", "/link/route" where !appAnswers:
+            guard let appHost else { return Self.needsApp }
+            return await Self.forward(request, to: appHost) ?? Self.needsApp
         case "/sites/signed-in":
             // Whether the panel's browser is signed in to the sites the agent uses there, as their
             // cookies say (read again once they've changed): only those it can tell.
@@ -293,6 +329,46 @@ final class HostInterface {
         default:
             return .init(status: 404)
         }
+    }
+}
+
+extension HostInterface {
+    /// What the box asked, to the open app's host interface, as it came: nil when it doesn't answer.
+    static func forward(_ request: HTTPRequest, to app: (url: URL, password: String)) async -> HTTPResponse? {
+        var forwarded = URLRequest(url: app.url.appending(path: String(request.path.dropFirst())), timeoutInterval: 120)
+        forwarded.httpMethod = request.method
+        forwarded.setValue("Bearer \(app.password)", forHTTPHeaderField: "Authorization")
+        forwarded.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        forwarded.httpBody = request.body
+        // As it comes: a route that follows something (a phone's stream) answers for as long as it lasts.
+        guard let (bytes, response) = try? await URLSession.shared.bytes(for: forwarded), let response = response as? HTTPURLResponse else { return nil }
+        let stream = AsyncThrowingStream<Data, Error> { continuation in
+            let reading = Task {
+                var chunk = Data()
+                do {
+                    for try await byte in bytes {
+                        chunk.append(byte)
+                        if byte == 0x0A || chunk.count >= 16_384 {
+                            continuation.yield(chunk)
+                            chunk = Data()
+                        }
+                    }
+                    if !chunk.isEmpty { continuation.yield(chunk) }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in reading.cancel() }
+        }
+        return HTTPResponse(status: response.statusCode, headers: ["Content-Type": response.value(forHTTPHeaderField: "Content-Type") ?? "application/json"], stream: stream)
+    }
+
+    /// What only the open app answers, asked while it isn't.
+    static var needsApp: HTTPResponse {
+        var answer = HTTPResponse.json(["message": "Kuvo Code isn’t open on this Mac."])
+        answer.status = 503
+        return answer
     }
 }
 

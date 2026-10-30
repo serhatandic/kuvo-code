@@ -2022,7 +2022,7 @@ used the machine (`run/link.seen`).
 
 ### This Mac's box
 
-A Mac runs the same box a machine does: the app starts `kuvo-link.js serve` (bridge 0.9.33 and
+A Mac runs the same box a machine does: its keeper ("The keeper", below) starts `kuvo-link.js serve` (bridge 0.9.33 and
 later) beside its engine, with the engine's Bun and `KUVO_HOME` in the app's own folder
 (`~/Library/Application Support/run.kuvo.code/box`), never `~/.kuvo-code`, and
 `KUVO_ENGINE_CONFIG`, the app's engine's settings folder (its `XDG_CONFIG_HOME`), where it keeps
@@ -2031,8 +2031,46 @@ routes over HTTP on `127.0.0.1`, as the agents bridge answers the app: it says `
 first line once it listens, takes only Basic `opencode:<OPENCODE_PASSWORD>`, checks a path as
 the relay does (403 for one that isn't what it seems), sends a stream as it comes (a line at a
 time for `application/x-ndjson`), and goes when its stdin closes. It finds the engine and the
-coding agents' bridge as on a machine, by `run/engine.json` and `run/bridge.json`, which the app
+coding agents' bridge as on a machine, by `run/engine.json` and `run/bridge.json`, which the keeper
 writes (only you can read them) as they start and removes as they stop.
+
+#### The keeper
+
+This Mac's box keeps running whether or not the app is open, as a machine's does with its Mac
+closed: its keeper is Kuvo Code's own executable run with `--box`, which launchd starts from the
+launch agent in the app (`Contents/Library/LaunchAgents/<bundle id>.box.plist`, registered with
+`SMAppService` the first time the app opens), at each login and again if it stops by itself. It has
+no window. It runs the engine, the box and the coding agents' bridge, starts each again when it
+stops (up to three times in five minutes), and records each in the box's `run` folder, as a
+machine's keeper does, so a client finds them there:
+
+- `run/keeper.json`: `{"pid", "version", "build", "url", "password", "started"}` (milliseconds).
+  `run/keeper.lock` is held while it runs: one at a time.
+- `run/engine.json` and `run/bridge.json`, as on a machine; `run/engine-stopped` (its reason) when
+  the engine stopped and isn't started again until asked.
+- `run/serve.json`: `{"pid", "port", "password"}`, where the box answers.
+- `bin/kuvo-start`: as a machine's (`kuvo-start restart`), here calling the keeper
+  (`--box-control`).
+
+It answers on `127.0.0.1` at `url`, to `Authorization: Bearer <password>`: `GET status` (`pid`,
+`version`, `build`, `started`, `engine {state: starting | downloading | ready | failed, progress?,
+reason?}`, `busy`, `updating`, and `box`/`agents` `{failure}` when either stopped for good), and
+`POST` `restart-engine`, `restart-agents`, `restart-box`, `stop` (Stop Background Work: it stops
+everything and itself, and launchd leaves it stopped until the app opens or you log in again),
+`update {within?}` (an app of another version opened: it goes once nothing is under way on the
+engine or with the coding agents, or after `within` seconds, 30 minutes unless given, and launchd
+starts the installed app's), and `app {tools?, host?}` (below).
+
+The app is a client: it reads those records (again as the `run` folder changes) and connects to
+the engine, the box and the bridge as they say, starting the keeper with launchd when there's none.
+While macOS doesn't let the keeper run (switched off in Login Items & Extensions), the app runs the
+same three itself, and they stop when it quits.
+
+The engine and the agents reach the panel's browser tools through the keeper's own MCP server,
+whose address doesn't change as the app opens and quits: the open app says where its tools answer
+(`app {tools: {url, token}}`, again whenever a new keeper starts), and each call goes there as it
+is. With the app closed, the tools are listed as the app last listed them (`run/tools-list.json`),
+and a call answers `isError` with "The browser needs Kuvo Code open on this Mac".
 
 Its group chats run in its coding agents' bridge, as a machine's do, with folders in the app's
 own: the chats in `groups` (`KUVO_GROUPS`), its bots' in `bots` (`KUVO_BOTS`), what it lets go
@@ -2062,7 +2100,10 @@ there.
 
 #### Host interface
 
-What only the app can do for this Mac's box, the box asks the app for (bridge 0.9.46): its keys,
+What only the app can do for this Mac's box, the box asks the app for (bridge 0.9.46): the keeper
+answers it, as Kuvo Code's own executable (so the Keychain trusts it as it trusts the app), and asks
+the open app for what only it can answer (what the panel's browser is signed in to, the Mac's own
+routes for a phone: `app {host: {url, password}}`), answering `503 {"message"}` while it's closed. Its keys,
 which the app keeps in the Keychain, and (bridge 0.9.50) what its browser is signed in to, and moving what it lets go of to the Finder's Trash. The app listens on `127.0.0.1` and, each time it
 starts listening, writes where and with what password to the box's `run/host.json` (`{"url",
 "password"}`, made `0600` and moved into place; bridge 0.9.60). It takes it away before each start,
