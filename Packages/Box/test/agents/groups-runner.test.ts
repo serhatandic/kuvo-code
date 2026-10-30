@@ -562,6 +562,28 @@ describe("a group chat on a machine", () => {
     expect(again.talk("grp_team000001").paused).toBe(true)
   })
 
+  test("a bot whose answer was cut off as the bridge started over: what it had half said isn't put in the chat as its answer, and the chat says so", async () => {
+    let gone = false
+    const engineOf = server(engine.url, "x")
+    const { groups } = runner({ engine: { request: (...args: Parameters<typeof engineOf.request>) => (gone ? new Promise<never>(() => {}) : engineOf.request(...args)) } })
+    engine.lines = { Ada: ["Here it"], Ben: [] }
+    engine.held.add("Ada")
+    engine.cutShort.add("Ada")
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Go")
+    await until(() => engine.prompts().length === 1)
+    gone = true
+    const { groups: again } = runner()
+    again.start()
+    engine.release("Ada")
+    const notes = () => again.get("grp_team000001")!.messages.filter((message) => message.kind === "note")
+    const ada = () => again.get("grp_team000001")!.messages.filter((message) => message.author === "bot_ada")
+    await until(() => notes().length > 0 || ada().length > 0)
+    expect(ada()).toEqual([])
+    expect(notes()[0].text).toContain("cut off")
+    expect(again.talk("grp_team000001").paused).toBe(true)
+  })
+
   test("Keep Going while a bot's answer from before the bridge started over is still coming: it isn't asked again, and its answer is in the chat once", async () => {
     let gone = false
     const engineOf = server(engine.url, "x")

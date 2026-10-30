@@ -477,6 +477,9 @@ export class Seats implements SeatHome {
       }
       const reply = await this.reply(seat, promptID, sent, api)
       going()
+      // Followed after the runner started over, and its run was lost with it (the coding agents'
+      // bridge marks it so): what it had half said isn't its answer.
+      if (options.followOnly && reply.cutShort) return { ok: false, why: "its answer was cut off as Kuvo Code started over" }
       // Grown well past the chat it's in (pages it read, drafts, long answers): it starts over at
       // its next turn, in a new seat given the whole chat, and this one goes. Grown from its first
       // turn here, so what every turn carries (its instructions and tools) doesn't count.
@@ -756,6 +759,8 @@ export class Seats implements SeatHome {
     const since = sent - 2000
     const tokens = [...data].reverse().find((message) => message?.type === "assistant" && message.tokens)?.tokens
     const size = tokens ? (tokens.input ?? 0) + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0) : undefined
-    return { ...said(start >= 0 ? data.slice(start + 1) : data.filter((message) => (message?.time?.created ?? 0) >= since)), size: size as number | undefined }
+    const after = start >= 0 ? data.slice(start + 1) : data.filter((message) => (message?.time?.created ?? 0) >= since)
+    const cutShort = after.findLast((message) => message?.type === "idle")?.outcome === "interrupted"
+    return { ...said(after), size: size as number | undefined, cutShort }
   }
 }

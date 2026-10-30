@@ -23,6 +23,8 @@ export class Engine {
   heldPrompts = new Set<string>()
   private releases = new Map<string, (() => void)[]>()
   stuck = new Set<string>()
+  /** Bots whose runs end cut short (an idle `interrupted`, as a bridge that started over marks a run it lost), what they'd said so far kept. */
+  cutShort = new Set<string>()
   /** Bots whose seats take a message steered in too late for the run under way: it waits in the inbox once the run ends. */
   lateSteers = new Set<string>()
   /** Seats being made wait until `letMake`: so a turn can be stopped while its seat is made. */
@@ -167,7 +169,7 @@ export class Engine {
           ...(size ? { tokens: { input: size, output: 10, reasoning: 0, cache: { read: 0, write: 0 } } } : {}) })
       }
       const finish = () => {
-        conversation.push({ type: "idle", id: body.id + "_i", time: { created: at + 3 }, outcome: "succeeded" })
+        conversation.push({ type: "idle", id: body.id + "_i", time: { created: at + 3 }, outcome: bot && this.cutShort.has(bot) ? "interrupted" : "succeeded" })
         this.conversations.set(session, conversation)
         this.busy.delete(session)
       }
