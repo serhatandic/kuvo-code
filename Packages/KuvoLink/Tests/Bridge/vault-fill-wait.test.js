@@ -19,7 +19,12 @@ import { sshAgentsOf } from "./bot-keys-scenarios.js";
 
 // (Short: the vault's and the browser's sockets are in it.)
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kvf-")));
-after(() => { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(sshAgentsOf(home), { recursive: true, force: true }); });
+// (Once the box and the tool have stopped: they write in its folder until they have.)
+after(async () => {
+  await Promise.all([box, mcp].map(child => child && child.exitCode === null && child.signalCode === null ? new Promise(done => { child.once("exit", done); child.kill(); }) : null));
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(sshAgentsOf(home), { recursive: true, force: true });
+});
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
@@ -138,7 +143,6 @@ before(async () => {
   box.stdout.setEncoding("utf8");
   await new Promise(resolve => box.stdout.on("data", chunk => { out += chunk; if (out.includes("\n")) resolve(); }));
 });
-after(() => box?.kill());
 
 // The Mac over SSH: `box route`, with the vault's key when it has one.
 async function fromMac(method, route, body, key) {
@@ -160,7 +164,6 @@ async function askedNow(key) {
 
 // The tool, as the engine starts it, and its calls, as the engine makes them for each conversation.
 const mcp = spawn(process.execPath, [tool, "mcp"], { env, stdio: ["pipe", "pipe", "ignore"] });
-after(() => mcp.kill());
 const answers = new Map();
 let buffer = "";
 mcp.stdout.on("data", chunk => {

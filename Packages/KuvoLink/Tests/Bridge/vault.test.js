@@ -595,7 +595,10 @@ const sshTool = (tool, args, socket) => new Promise(resolve => {
   child.on("close", status => resolve({ status, stdout, stderr }));
 });
 
-test("an SSH key you keep for a project signs through its conversations' own agent, as git over SSH uses it, and another project's agent doesn't offer it (on Linux, only a key you keep for everyone)", async () => {
+test("an SSH key you keep for a project signs through its conversations' own agent, as git over SSH uses it, and another project's agent doesn't offer it (on Linux, only a key you keep for everyone)", async t => {
+  // (A socket's path is at most 107 bytes on Linux: a machine's agents are in its own folder, which
+  // fits, but this test's may be too deep in its temporary folder.)
+  if (Buffer.byteLength(path.join(sshAgents, "x".repeat(33))) > (process.platform === "darwin" ? 103 : 107)) return t.skip("this test's folder is too deep for a socket's path: run it with a shorter TMPDIR");
   box = await start();
   let left = [];
   try {

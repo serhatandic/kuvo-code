@@ -16,7 +16,12 @@ import { sshAgentsOf } from "./bot-keys-scenarios.js";
 
 // (Short: the vault's socket is in it.)
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kvt-")));
-after(() => { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(sshAgentsOf(home), { recursive: true, force: true }); });
+// (Once the box and the tool have stopped: they write in its folder until they have.)
+after(async () => {
+  await Promise.all([box, mcp].map(child => child && child.exitCode === null && child.signalCode === null ? new Promise(done => { child.once("exit", done); child.kill(); }) : null));
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(sshAgentsOf(home), { recursive: true, force: true });
+});
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
@@ -68,11 +73,9 @@ before(async () => {
     return { status: response.status, value: await response.json().catch(() => ({})) };
   };
 });
-after(() => box?.kill());
 
 // The tool, as the engine starts it, and its calls, as the engine makes them.
 const mcp = spawn(process.execPath, [tool, "mcp"], { env, stdio: ["pipe", "pipe", "ignore"] });
-after(() => mcp.kill());
 const answers = new Map();
 let buffer = "";
 mcp.stdout.on("data", chunk => {
