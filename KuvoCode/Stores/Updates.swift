@@ -104,6 +104,26 @@ nonisolated private final class UpdateSteps: NSObject, SPUUpdaterDelegate {
         if Thread.isMainThread { MainActor.assumeIsolated(quit) } else { Task { @MainActor in quit() } }
     }
 
+    /// An update downloaded on its own, to install when Kuvo Code quits. While the work goes on in
+    /// the background, Quit doesn't quit, so it's installed as Quit takes Kuvo Code there (or at
+    /// once, if it's there already), and Kuvo Code opens again in the background
+    /// (`InBackground.installWaitingUpdate`). Stop Background Work, and any quit for real, still
+    /// install it as they quit, as Sparkle always does.
+    func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem, immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
+        // Only while Quit goes to the background: otherwise Quit installs it as always, and
+        // Sparkle may still offer it meanwhile.
+        guard Thread.isMainThread, MainActor.assumeIsolated({ InBackground.shared.isOn || InBackground.shared.keepsWorking() }) else { return false }
+        let install = InstallNow(run: immediateInstallHandler)
+        // After this returns: the handler is only to be used once Sparkle has the answer.
+        Task { @MainActor in InBackground.shared.waitingUpdate = install.run }
+        return true
+    }
+
+    /// Sparkle's install-now handler, handed to the main actor, where Sparkle runs.
+    nonisolated private struct InstallNow: @unchecked Sendable {
+        let run: () -> Void
+    }
+
     func updater(_ updater: SPUUpdater, didAbortWithError error: any Error) {
         let error = error as NSError
         // Finding no update isn't a failure, and a failed download was counted as it failed.
