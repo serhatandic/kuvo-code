@@ -147,6 +147,33 @@ struct RemoteEngineTests {
         let port = try RemoteServer.freeLocalPort()
         #expect((1024...65535).contains(port))
     }
+
+    /// A machine whose entry in `~/.ssh/config` runs a command of its own (`RemoteCommand tmux …`)
+    /// and asks for a terminal (`RequestTTY force`), as dev boxes often do: Kuvo Code's commands go
+    /// as they are, with plain output, and its terminal still gets one. (Asked of the real `ssh`,
+    /// which says what it would do without connecting.)
+    @Test func aMachinesOwnRemoteCommandDoesntGetInTheWay() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "kuvo-ssh-config-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let config = folder.appending(path: "config")
+        try "Host devbox\n  RemoteCommand tmux new -A -s main\n  RequestTTY force\n".write(to: config, atomically: true, encoding: .utf8)
+        func effective(_ arguments: [String]) async throws -> [String: String] {
+            let result = try await ChildProcess.run("/usr/bin/ssh", ["-G", "-F", config.path] + arguments)
+            #expect(result.succeeded)
+            return Dictionary(result.outputText.split(separator: "\n").compactMap { line in
+                let parts = line.split(separator: " ", maxSplits: 1).map(String.init)
+                return parts.count == 2 ? (parts[0], parts[1]) : nil
+            }, uniquingKeysWith: { first, _ in first })
+        }
+        let connection = SSHConnection(destination: "devbox")
+        let command = try await effective(connection.arguments(running: "uname -sm", shared: false))
+        #expect(command["remotecommand"] == nil, "its own command left out")
+        #expect(command["requesttty"] == "false", "no terminal, so its output comes back plain")
+        let terminal = try await effective(connection.arguments(running: "exec \"$SHELL\" -l", extra: ["-t"], shared: false))
+        #expect(terminal["remotecommand"] == nil)
+        #expect(terminal["requesttty"] == "true", "the panel's terminal still gets one")
+    }
 }
 
 /// Against a real machine over SSH. Skipped unless KUVO_TEST_SSH_HOST names one this Mac can reach

@@ -40,9 +40,14 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     }
 
     /// For every connection: never a password prompt (there's no terminal to type it in), a
-    /// timeout to connect, and a check that notices when the machine goes away.
+    /// timeout to connect, and a check that notices when the machine goes away. A command and a
+    /// terminal of the machine's own in `~/.ssh/config` (`RemoteCommand tmux …`, `RequestTTY
+    /// force`) are left out: ssh refuses a command beside one, and a terminal mangles what comes
+    /// back. (The panel's terminal asks for one with `-t`, which still counts.)
     static let options = [
         "-o", "BatchMode=yes",
+        "-o", "RemoteCommand=none",
+        "-o", "RequestTTY=no",
         "-o", "ConnectTimeout=15",
         "-o", "ServerAliveInterval=15",
         "-o", "ServerAliveCountMax=3",
