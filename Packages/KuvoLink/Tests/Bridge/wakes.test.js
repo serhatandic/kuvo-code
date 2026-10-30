@@ -86,5 +86,8 @@ test("an archived session's first wake-up waits with it", async () => {
   const added = await ask("POST", "kuvo/wakes/ses_plain", { due: inAnHour(), note: "After the break" });
   assert.equal(added.status, 200);
   assert.equal(added.json.paused, true);
+  // Resumed while it's still archived: it waits until it's back.
+  assert.equal((await ask("POST", "kuvo/wakes/ses_plain/pause", { paused: false })).json.paused, true);
+  assert.equal((await ask("POST", "kuvo/wakes/ses_plain/pause", { archived: false })).json.paused, false);
   archived = false;
 });
