@@ -466,6 +466,8 @@ final class Utilities {
     func open(_ url: URL) {
         if let tab = visibleTabs.first(where: { $0.kind == .file(url) }) {
             selection = tab.id
+            // Opened again: read again, as it is now (a machine's file isn't watched).
+            fileShown += 1
         } else if let current = selected, case .file = current.kind, let index = tabs.firstIndex(of: current) {
             tabs[index].kind = .file(url)
         } else {

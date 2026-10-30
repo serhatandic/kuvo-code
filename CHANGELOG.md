@@ -16,6 +16,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- The panel's file tree keeps up as the agent adds, removes or renames files, a link to a folder (a linked package) opens like a folder, and a file removed while it's shown says so instead of showing nothing.
+- A machine's file open in the panel shows what the agent changed since when you click it again, and in a machine's session a path in a reply never opens this Mac's file of the same name.
+- Links in a Markdown file's preview open the right file: from the project's folder for links starting with "/", and on the machine for a machine's file.
 - Changes keeps up with a project full of new files (an install in a project with no `.gitignore`): each new file is read once, not again every few seconds, and a machine's are read several at a time.
 - A review comment stays with its line when the agent adds or removes lines above it, and goes to the agent with the line's new number; a comment you're still writing keeps its words.
 - A small change in a big file (a lock file, a page with a picture in it) shows in Changes with some lines around it, instead of "Too big to show".

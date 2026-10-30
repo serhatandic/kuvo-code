@@ -80,7 +80,7 @@ struct FilesView: View {
 
 @Observable
 final class FileTree {
-    struct Entry: Identifiable, Hashable {
+    nonisolated struct Entry: Identifiable, Hashable, Sendable {
         let url: URL
         let isDirectory: Bool
         var id: URL { url }
@@ -142,23 +142,57 @@ final class FileTree {
     func entries(in directory: URL) -> [Entry] {
         if let cached = children[directory] { return cached }
         if !directory.isFileURL {
-            // On a machine: read in the background, shown when it's in.
+            // On a machine: read in the background, shown when it's in. One that can't be read
+            // shows empty until the next look (`refresh`) reads it again.
             children[directory] = []
             Task {
-                let listed = await Task.detached { RemoteShell.list(directory) ?? [] }.value
-                children[directory] = listed
-                    .map { Entry(url: directory.appending(path: $0.name, directoryHint: $0.isDirectory ? .isDirectory : .notDirectory), isDirectory: $0.isDirectory) }
-                    .sorted(by: Entry.inFinderOrder)
+                if let listed = await Task.detached(operation: { Self.list(directory) }).value { children[directory] = listed }
             }
             return []
         }
-        let urls = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
-        let entries = urls
-            .filter { $0.lastPathComponent != ".DS_Store" }
-            .map { Entry(url: $0, isDirectory: (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true) }
-            .sorted(by: Entry.inFinderOrder)
+        let entries = Self.list(directory) ?? []
         children[directory] = entries
         return entries
+    }
+
+    /// A folder's entries, folders first; nil when it can't be read (a machine out of reach).
+    /// A link to a folder is a folder, as on a machine (a package manager's linked packages).
+    nonisolated static func list(_ directory: URL) -> [Entry]? {
+        if !directory.isFileURL {
+            return RemoteShell.list(directory)?
+                .map { Entry(url: directory.appending(path: $0.name, directoryHint: $0.isDirectory ? .isDirectory : .notDirectory), isDirectory: $0.isDirectory) }
+                .sorted(by: Entry.inFinderOrder)
+        }
+        // A linked folder's contents, read where it leads, named under the link.
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.resolvingSymlinksInPath().path(percentEncoded: false)) else { return nil }
+        return names
+            .filter { $0 != ".DS_Store" }
+            .map { directory.appending(path: $0) }
+            .map { url in
+                let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                let isFolder = values?.isSymbolicLink == true
+                    ? (try? url.resolvingSymlinksInPath().resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+                    : values?.isDirectory == true
+                return Entry(url: url, isDirectory: isFolder)
+            }
+            .sorted(by: Entry.inFinderOrder)
+    }
+
+    /// Reads again what's been read, keeping what's open, so files the agent made, removed or
+    /// renamed since show; a folder that can't be read now keeps what it showed.
+    func refresh() async {
+        for directory in children.keys {
+            guard let listed = await Task.detached(operation: { Self.list(directory) }).value else { continue }
+            if children[directory] != listed { children[directory] = listed }
+        }
+        // The list a filter searches: read again while one's typed, otherwise when one is.
+        if filter.isEmpty {
+            allFiles = nil
+        } else if allFiles != nil {
+            let roots = roots
+            let files = await Task.detached { ProjectFiles.list(roots) }.value
+            if files != allFiles { allFiles = files }
+        }
     }
 
     /// Opens the tree down to `target` (and it too, a folder), reading it afresh: an agent just
@@ -221,6 +255,15 @@ private struct FileTreeView: View {
             .padding(10)
             // Filtering, the files are read (again, after Reload).
             .task(id: !tree.filter.isEmpty && tree.allFiles == nil) { if !tree.filter.isEmpty { await tree.loadAllFiles() } }
+            // What the agent changes shows while the tree does: looked at again every few seconds,
+            // a machine's less often (each look is a round trip).
+            .task {
+                let pause: Duration = tree.roots.allSatisfy(\.isFileURL) ? .seconds(3) : .seconds(10)
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: pause)
+                    if !Task.isCancelled { await tree.refresh() }
+                }
+            }
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
@@ -349,7 +392,7 @@ private func copyPath(_ url: URL) {
 
 /// One file: Markdown rendered (or its source), code highlighted with line numbers,
 /// pictures shown, anything else in Quick Look.
-private struct FileViewer: View {
+struct FileViewer: View {
     let url: URL
     let root: String
     let mention: String
@@ -362,7 +405,7 @@ private struct FileViewer: View {
         case text(String)
         case image(NSImage)
         case preview
-        /// What a machine's box said of it: gone, too big to show, can't be read.
+        /// Why it can't be shown: gone, or what a machine's box said (too big, can't be read).
         case unavailable(String)
     }
 
@@ -383,10 +426,10 @@ private struct FileViewer: View {
                                 // pictures, beside it; none from the web (a README's badges and tracking
                                 // pixels would reach their hosts as you open it).
                                 ReplyView(markdown: text, parser: MathMarkdownParser(), images: url.deletingLastPathComponent(), diagrams: true) { link in
-                                    // Another file of the project's, here; web links in the browser.
-                                    let file = link.isFileURL ? link : link.scheme == nil && !link.path.isEmpty
-                                        ? URL(filePath: link.path(percentEncoded: false), relativeTo: url.deletingLastPathComponent()).standardizedFileURL : nil
-                                    guard let file else { return false }
+                                    // Another file of the project's, here; web links in the browser. A
+                                    // link to a heading in the file opens nothing else.
+                                    if link.scheme == nil, link.path.isEmpty { return true }
+                                    guard let file = Self.linked(link, from: url, root: root) else { return false }
                                     app.utilities.show(file)
                                     return true
                                 }
@@ -439,6 +482,20 @@ private struct FileViewer: View {
                 }
             }
         }
+    }
+
+    /// The file a Markdown file's link names (`link`, in `file`, in the project folder `root`):
+    /// relative to it, or to the project's folder for "/docs/setup.md", as GitHub reads them; on
+    /// the machine the file is on. nil for a web link.
+    static func linked(_ link: URL, from file: URL, root: String) -> URL? {
+        if link.isFileURL { return link.standardizedFileURL }
+        guard link.scheme == nil, !link.path.isEmpty else { return nil }
+        let path = link.path(percentEncoded: false)
+        if path.hasPrefix("/") { return RemoteFolder.fileURL(String(path.dropFirst()), in: root).standardized }
+        // Its folder without the "/" a machine's URL ends it with.
+        var folder = RemoteFolder.folder(of: file.deletingLastPathComponent())
+        while folder.count > 1, folder.hasSuffix("/") { folder.removeLast() }
+        return RemoteFolder.fileURL(path, in: folder).standardized
     }
 
     /// Read from the disk each time (a URL keeps the values it was asked for).
@@ -515,6 +572,8 @@ private struct FileViewer: View {
                 if data.count <= 2_000_000, !data.contains(0), let text = String(data: data, encoding: .utf8) { return .text(text) }
                 return .preview
             }
+            // Removed since it was listed (by the agent, say), as a machine's box says it.
+            guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else { return .unavailable("That file isn’t there anymore.") }
             if type?.conforms(to: .image) == true, let image = NSImage(contentsOf: url) { return .image(image) }
             if type?.conforms(to: .pdf) == true { return .preview }
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
