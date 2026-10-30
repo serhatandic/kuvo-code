@@ -215,6 +215,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     const now = told.sessions[session] ?? {};
     if (note.reply) now.reply = note.reply;
     if (note.ask) now.asks = [...(now.asks ?? []).filter(each => each !== note.ask), note.ask].slice(-20);
+    // Last, as the latest told of: the oldest are let go first.
+    delete told.sessions[session];
     told.sessions[session] = now;
   });
   // What happened while the box was down (its link starting again): each followed session that

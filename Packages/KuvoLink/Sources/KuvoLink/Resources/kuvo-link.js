@@ -8560,6 +8560,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       now.reply = note.reply;
     if (note.ask)
       now.asks = [...(now.asks ?? []).filter((each) => each !== note.ask), note.ask].slice(-20);
+    delete told.sessions[session];
     told.sessions[session] = now;
   });
   const catchUp = async () => {

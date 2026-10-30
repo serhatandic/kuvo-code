@@ -205,6 +205,32 @@ test("what happened while the box was down reaches the bot as it starts again, o
   }
 });
 
+test("a session told of while the box runs isn't told again as it starts, however many others it has told of since", async () => {
+  const toldFile = path.join(home, "run", "work", "told.json");
+  fs.mkdirSync(path.dirname(toldFile), { recursive: true });
+  // A bot that has run a lot: Sign-in was first told of long ago, and hundreds have been since.
+  const many = Object.fromEntries(Array.from({ length: 399 }, (_, index) => [`ses_done${index}`, { reply: "msg_1" }]));
+  fs.writeFileSync(toldFile, JSON.stringify({ since: 5, sessions: { ses_signin: { reply: "msg_old" }, ...many } }));
+  try {
+    const first = clock();
+    const watch = link.workWatcher(source, () => [source], { schedule: first.schedule });
+    await watch.caughtUp;
+    await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_signin" } });
+    await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_haptics" } });
+    await first.runAll();
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0].text, /"Sign-in"[\s\S]*"Haptics"/);
+    // Renamed while the box was down, with no new reply: nothing to tell.
+    sessions.ses_signin.time.updated = Date.now() + 86_400_000;
+    const again = clock();
+    await link.workWatcher(source, () => [source], { schedule: again.schedule }).caughtUp;
+    await again.runAll();
+    assert.equal(prompts.length, 1, "told once");
+  } finally {
+    for (const each of Object.values(sessions)) each.time.updated = 1;
+  }
+});
+
 test("a session stopped while the box was down (Stop All, or cut short) isn't told to its bot as finished once it starts again", async () => {
   const toldFile = path.join(home, "run", "work", "told.json");
   fs.mkdirSync(path.dirname(toldFile), { recursive: true });
