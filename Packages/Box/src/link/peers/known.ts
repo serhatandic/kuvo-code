@@ -68,11 +68,23 @@ export const ADDRESS = /^[A-Za-z0-9_-]{22}$/;
 // The Macs that set this machine up (`setup`), whose documents and mail it takes.
 export const macsOf = (link: LinkState | null | undefined): string[] => [...new Set([...(Array.isArray(link?.macs) ? link.macs : []), ...(typeof link?.mac === "string" ? [link.mac] : [])])];
 
-// A Mac this machine hasn't heard from in 30 days, by its own clock (gone, or its key made anew):
-// it's no longer one of its Macs, and its documents no longer count. One back sets the machine up
-// again. `keep`, heard from now.
+// Only time this machine was online counts toward a Mac's 30 days: while it was off, or had no
+// relay, no Mac could reach it, so a machine back after five weeks off keeps the Mac that writes
+// second. `online`, its last moment online, noted each minute while the relay is up (and as a Mac
+// is heard from); a longer gap since was time away, and each Mac's last word moves on by it.
+const AWAY_AFTER = 5 * 60_000;
+export function countAway(link: LinkState, now = Date.now()): void {
+  const away = typeof link.online === "number" ? now - link.online : 0;
+  if (away > AWAY_AFTER && link.macSeen) for (const mac of Object.keys(link.macSeen)) link.macSeen[mac]! += away;
+  link.online = now;
+}
+
+// A Mac this machine hasn't heard from in 30 days of its own time online (gone, or its key made
+// anew): it's no longer one of its Macs, and its documents no longer count. One back sets the
+// machine up again. `keep`, heard from now.
 const MAC_GONE_AFTER = 30 * 24 * 3600 * 1000;
 export function forgetOldMacs(link: LinkState, keep?: string, now = Date.now()): void {
+  countAway(link, now);
   link.macSeen ??= {};
   for (const mac of macsOf(link)) link.macSeen[mac] ??= now;
   if (keep) link.macSeen[keep] = now;

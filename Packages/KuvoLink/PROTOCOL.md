@@ -2052,7 +2052,7 @@ On a machine the bridge keeps its state in `~/.kuvo-code/run/link.json` (mode 60
 
 ```json
 {"relay": "wss://…", "secret": "…", "key": "<static private key>", "sign": "<signing key's seed>", "mac": "<the last Mac's static key>",
- "macs": ["<each Mac that set it up>"], "macSigns": {"<Mac>": "<its signing key>"}, "macSeen": {"<Mac>": <when it came, here>}, "macNames": {"<Mac>": "<its name>"},
+ "macs": ["<each Mac that set it up>"], "macSigns": {"<Mac>": "<its signing key>"}, "macSeen": {"<Mac>": <when it came, here, moved on by time away since>}, "online": <its last moment online>, "macNames": {"<Mac>": "<its name>"},
  "docs": {"<origin> <kind>": {"d": "…", "s": "…"}}, "own": {"<kind>": {"n", "h", "b"}}, "views": {"<origin>": {"n", "h"}},
  "phones": [{"key": "…", "name": "…", "added": 1760000000, "from": "mac", "mac": "<the Mac that listed it>", "address": "…", "pairing": "…"}],
  "removed": [{"key": "…", "pairing": "…"}]}
@@ -2870,8 +2870,9 @@ machine's bridge, held to `Vectors/link.json` (`phoneBooks`):
   own; a phone a Mac's document no longer lists goes off, not for good, and another Mac's phones
   stay. A removal in any phones document a box takes is noted there too, so one removed anywhere
   is removed everywhere, reached or not. One from before Macs were named (no `mac`) stays until a
-  Mac signs its phones. A Mac the machine hasn't heard from in 30 days (setup or any mail), by its
-  own clock, no longer counts, and its phones go; it counts again once it sets the machine up.
+  Mac signs its phones. A Mac the machine hasn't heard from in 30 days (setup or any mail) of its
+  own time online (noted each minute while its relay is up; time off, or without the relay, doesn't
+  count) no longer counts, and its phones go; it counts again once it sets the machine up.
 
 On both, for a paired phone:
 

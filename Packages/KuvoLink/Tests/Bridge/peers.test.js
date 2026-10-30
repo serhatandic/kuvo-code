@@ -58,6 +58,21 @@ test("a Mac that signs no documents yet (Kuvo Code 0.8.0-beta.1): its peers come
   assert.deepEqual(heard, [mac.pub]);
 });
 
+test("a machine that was off for weeks keeps both its Macs when one writes first: only time it was online counts toward a Mac's 30 days", () => {
+  const other = box("mac"), phone = { key: k(crypto.randomBytes(32)), name: "Other iPhone", added: 1, from: "mac", mac: other.pub, pairing: "" };
+  const then = Date.now() - 35 * 24 * 3600 * 1000;
+  // Last online five weeks ago, when both Macs had just written.
+  fresh({ macs: [mac.pub, other.pub], macSeen: { [mac.pub]: then, [other.pub]: then }, online: then, phones: [phone] });
+  link.receiveMail(mailFrom(mac, { agents: { at: 1, list: [] } }));
+  assert.deepEqual(link.macsOf(link.readLink()), [mac.pub, other.pub]);
+  assert.deepEqual(link.readLink().phones.map(each => each.name), ["Other iPhone"]);
+  // Online all that time, and not a word from the other Mac: it no longer counts, nor its phones.
+  fresh({ macs: [mac.pub, other.pub], macSeen: { [mac.pub]: then, [other.pub]: then }, online: Date.now() - 60_000, phones: [phone] });
+  link.receiveMail(mailFrom(mac, { agents: { at: 1, list: [] } }));
+  assert.deepEqual(link.macsOf(link.readLink()), [mac.pub]);
+  assert.deepEqual(link.readLink().phones, []);
+});
+
 test("each box's agents: a newer list kept, and list_agents here names each by where it is", () => {
   fresh();
   const file = path.join(run, "told.json"), lock = path.join(run, ".told.lock");
