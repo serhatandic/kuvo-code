@@ -236,7 +236,13 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       if (wakes.includes("finished") && !working.has(data.id)) {
         const reply = await lastReplyID(source, data.id);
         if (!reply || reply === was.reply) continue;
-        const failed = (data as { outcome?: string }).outcome === "failed";
+        const outcome = (data as { outcome?: string }).outcome;
+        // Stopped (by you, or cut short): nothing to tell, as while the box runs.
+        if (outcome === "interrupted") {
+          noteTold(data.id, { reply });
+          continue;
+        }
+        const failed = outcome === "failed";
         const line = await wakeLine({ type: failed ? "session.execution.failed" : "session.execution.succeeded", data: { sessionID: data.id } }, data, source);
         if (line) tell(starter, line, false);
         noteTold(data.id, { reply });

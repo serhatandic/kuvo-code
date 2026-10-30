@@ -159,6 +159,28 @@ test("what happened while the box was down reaches the bot as it starts again, o
   }
 });
 
+test("a session stopped while the box was down (Stop All, or cut short) isn't told to its bot as finished once it starts again", async () => {
+  const toldFile = path.join(home, "run", "work", "told.json");
+  fs.mkdirSync(path.dirname(toldFile), { recursive: true });
+  fs.writeFileSync(toldFile, JSON.stringify({ since: 5, sessions: {} }));
+  sessions.ses_signin.time.updated = 10;
+  sessions.ses_signin.outcome = "interrupted";
+  try {
+    const first = clock();
+    await link.workWatcher(source, () => [source], { schedule: first.schedule }).caughtUp;
+    await first.runAll();
+    assert.deepEqual(prompts, [], "you stopped it: the bot isn't woken to carry on");
+    // Nor later, as the box starts again.
+    const again = clock();
+    await link.workWatcher(source, () => [source], { schedule: again.schedule }).caughtUp;
+    await again.runAll();
+    assert.deepEqual(prompts, []);
+  } finally {
+    delete sessions.ses_signin.outcome;
+    for (const each of Object.values(sessions)) each.time.updated = 1;
+  }
+});
+
 test("an answer given after its bot stopped waiting reaches it as the box starts, if the box stopped first", async () => {
   const asksFile = path.join(home, "run", "work", "asks.json");
   fs.mkdirSync(path.dirname(asksFile), { recursive: true });
