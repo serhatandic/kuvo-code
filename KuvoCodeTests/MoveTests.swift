@@ -112,6 +112,16 @@ import Testing
         #expect(places.first?.ok == true && places.first?.why == nil)
         #expect(app.moves.places(of: "ses_trip", from: nil) == places)
         #expect(app.moves.places(of: "ses_trip", from: "lab") == nil, "only as the box it lives on said")
+        // Read again with nothing changed (ahead, as the panel slides in, say): the sidebar's menus
+        // aren't drawn again.
+        nonisolated final class Heard: @unchecked Sendable { var changed = false }
+        let same = Heard()
+        withObservationTracking { _ = app.moves.places(of: "ses_trip", from: nil) } onChange: { same.changed = true }
+        await app.moves.loadPlaces("chat", "ses_trip", from: nil, fresh: true)
+        await app.moves.loadPlaces("chat", "ses_trip", from: nil, fresh: true)
+        #expect(!same.changed, "the same places, read twice")
+        let changed = Heard()
+        withObservationTracking { _ = app.moves.places(of: "ses_trip", from: nil) } onChange: { changed.changed = true }
 
         // Moving to lab (asked from a phone, say): its row says where to and how far its copy is.
         try underWay("mov_out2", thing: "ses_trip", role: "from", sessions: ["ses_trip"], to: Self.lab, sent: 12_400_000, size: 30_000_000)
@@ -122,6 +132,7 @@ import Testing
         #expect(now.first?.ok == false)
         #expect(now.first?.why == "It’s moving to another computer. Try again once it’s there.")
         #expect(now.first?.note == "Moving already", "short, beside lab's name")
+        #expect(changed.changed, "places that did change are drawn")
         // Asked to move again meanwhile, it says why rather than nothing.
         let again = Moves.Place(key: Self.lab, name: "lab", kind: "machine", ok: true)
         await #expect(throws: Moves.Failure.self) { try await app.moves.move("chat", "ses_trip", from: nil, to: again) }
