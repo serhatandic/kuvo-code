@@ -317,6 +317,28 @@ describe("a group chat on a machine", () => {
     expect(engine.requests.some((request) => request.path.endsWith("/interrupt"))).toBe(true)
   })
 
+  test("stopped as a bot's first seat is made, then written to again: the stopped turn's seat goes, and the bot keeps its next turn's", async () => {
+    const { groups } = runner()
+    engine.lines = { Ada: ["Hello again."], Ben: [] }
+    engine.holdMaking = true
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Go")
+    await until(() => engine.waitingToMake === 1)
+    groups.stop("grp_team000001")
+    groups.send("grp_team000001", "Go, really")
+    await until(() => engine.waitingToMake === 2)
+    engine.letMake()
+    await until(() => groups.get("grp_team000001")!.messages.some((message) => message.text === "Hello again.") && !groups.talk("grp_team000001").discussing)
+    const kept = groups.get("grp_team000001")!.group.seats.bot_ada
+    const made = engine.requests.filter((request) => request.method === "POST" && request.path === "/api/session" && request.body.title === "Ada in Team").length
+    const dropped = engine.requests.filter((request) => request.method === "DELETE" && request.path.startsWith("/api/session/ses_seat")).map((request) => request.path.split("/").pop())
+    expect(made).toBe(2)
+    expect(dropped).toHaveLength(1)
+    expect(dropped).not.toContain(kept)
+    // The seat kept is the one that heard the chat: its prompt went there.
+    expect(engine.prompts(kept).length).toBeGreaterThan(0)
+  })
+
   test("a bot taken out of the chat as it speaks: the chat goes on without it", async () => {
     const { groups } = runner()
     engine.lines = { Ada: ["A long answer."], Ben: ["Here."] }

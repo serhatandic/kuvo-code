@@ -827,6 +827,13 @@ export class GroupRunner {
         turn.own.abort()
         return
       }
+      // One made for a run that's been stopped: unless it's the seat the bot has, it goes, so the seat
+      // a later run makes (or made already) stays the bot's.
+      if (live.run !== turn.run) {
+        if (now.group.seats[botID] !== state.seat) void this.home(turn.box).drop(state.seat, state.agents, { bot: botID, chat: id })
+        turn.own.abort()
+        return
+      }
       if (state.replaced) {
         if (now.group.agentSeats?.includes(state.replaced)) now.group.agentSeats = now.group.agentSeats.filter((each) => each !== state.replaced)
         delete now.group.heard[botID]

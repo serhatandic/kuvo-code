@@ -21,6 +21,13 @@ export class Engine {
   held = new Set<string>()
   private releases = new Map<string, (() => void)[]>()
   stuck = new Set<string>()
+  /** Seats being made wait until `letMake`: so a turn can be stopped while its seat is made. */
+  holdMaking = false
+  private making: (() => void)[] = []
+  /** How many seats wait to be made. */
+  get waitingToMake() {
+    return this.making.length
+  }
   /** How much a bot's seat sends the model at each step (its context, in tokens): one for every reply, or one for each in turn (the last kept). */
   sizes: Record<string, number | number[]> = {}
   /** Prompts that take this long, by what they say. */
@@ -62,6 +69,11 @@ export class Engine {
   }
 
   /** A held bot's runs end now, and its next ones aren't held. */
+  letMake() {
+    this.holdMaking = false
+    for (const go of this.making.splice(0)) go()
+  }
+
   release(bot: string) {
     this.held.delete(bot)
     for (const finish of this.releases.get(bot) ?? []) finish()
@@ -92,6 +104,10 @@ export class Engine {
       return ok()
     }
     if (request.method === "POST" && url.pathname === "/api/session") {
+      if (this.holdMaking) {
+        await new Promise<void>((resolve) => this.making.push(resolve))
+        this.onRequest?.()
+      }
       const id = `ses_seat${this.next++}`
       this.seats.set(id, String(body.title).split(" ")[0])
       return ok({ id, title: body.title, model: body.model, location: body.location })
