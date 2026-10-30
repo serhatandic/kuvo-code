@@ -611,20 +611,34 @@ function writePrivate(file, text) {
   fs5.writeFileSync(temporary, text, { mode: 384 });
   fs5.renameSync(temporary, file);
 }
+function take(lock, stale) {
+  try {
+    fs5.mkdirSync(lock);
+    return true;
+  } catch {
+    try {
+      if (Date.now() - fs5.statSync(lock).mtimeMs > stale)
+        fs5.rmdirSync(lock);
+    } catch {}
+    return false;
+  }
+}
 function hold(lock, stale, wait) {
   fs5.mkdirSync(path4.dirname(lock), { recursive: true, mode: 448 });
   const nap = new Int32Array(new SharedArrayBuffer(4));
   for (let i = 0;i < wait / 10; i++) {
-    try {
-      fs5.mkdirSync(lock);
+    if (take(lock, stale))
       return true;
-    } catch {
-      try {
-        if (Date.now() - fs5.statSync(lock).mtimeMs > stale)
-          fs5.rmdirSync(lock);
-      } catch {}
-      Atomics.wait(nap, 0, 0, 10);
-    }
+    Atomics.wait(nap, 0, 0, 10);
+  }
+  return false;
+}
+async function holdAwaiting(lock, stale, wait) {
+  fs5.mkdirSync(path4.dirname(lock), { recursive: true, mode: 448 });
+  for (let i = 0;i < wait / 10; i++) {
+    if (take(lock, stale))
+      return true;
+    await sleep(10);
   }
   return false;
 }
@@ -640,7 +654,7 @@ function locked(lock, work, { stale = 1e4, wait = 3000 } = {}) {
   }
 }
 async function lockedWhile(lock, work, { stale = 1e4, wait = 3000 } = {}) {
-  const held = hold(lock, stale, wait);
+  const held = await holdAwaiting(lock, stale, wait);
   try {
     return await work();
   } finally {
@@ -1608,7 +1622,7 @@ function changeKept(change, file = WORK_ASKS) {
   const result = locked(LOCK2, () => {
     const asks = readKept(file);
     const value = change(asks);
-    const kept = asks.filter((each) => each.answered ? Date.now() - each.answered.at < 15 * 60000 || each.late === true && !each.toldLate : (!each.bot || botHere(each.bot)) && Date.now() - each.at < 7 * 86400000);
+    const kept = asks.filter((each) => each.answered ? Date.now() - each.answered.at < 15 * 60000 || each.late === true && !each.toldLate && Date.now() - each.answered.at < 7 * 86400000 : (!each.bot || botHere(each.bot)) && Date.now() - each.at < 7 * 86400000);
     writePrivate(file, JSON.stringify({ asks: kept }, null, 2));
     return value;
   });
@@ -1764,13 +1778,15 @@ async function answerWork(id, given, targets, file = WORK_ASKS) {
     await tellLate(id, targets, file);
   return { answered };
 }
-async function tellLate(id, targets, file) {
+async function tellLate(id, targets, file, bridgeRuns = () => peerPlaces().bridge) {
   const ask = readKept(file).find((each) => each.id === id);
   if (!ask?.answered || !ask.late || ask.toldLate)
     return;
   const place = await placeOfSession(ask.session, targets()).catch(() => {
     return;
   });
+  if (place === null && !bridgeRuns())
+    return;
   if (place !== null) {
     if (!place)
       return;
@@ -1784,9 +1800,9 @@ async function tellLate(id, targets, file) {
       kept.toldLate = true;
   }, file);
 }
-async function tellLateAnswers(targets, file = WORK_ASKS) {
+async function tellLateAnswers(targets, file = WORK_ASKS, bridgeRuns) {
   for (const ask of readKept(file).filter((each) => each.answered && each.late && !each.toldLate))
-    await tellLate(ask.id, targets, file);
+    await tellLate(ask.id, targets, file, bridgeRuns);
 }
 function workAskWords(ask) {
   const where = ask.folder ? ` in ${shownPath(path13.dirname(ask.folder))}` : "";
@@ -8481,7 +8497,7 @@ async function lastReplyID(target, session) {
       return message.id;
   return null;
 }
-function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, file = WORK_WAKES, toldFile = WORK_TOLD } = {}) {
+function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge } = {}) {
   const due = new Set;
   const failures = new Map;
   const putBack = (starter, waiting) => changeWaiting(file, (all) => {
@@ -8500,11 +8516,13 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const place = await placeOfSession(starter, targets()).catch(() => {
       return;
     });
-    if (place === null)
+    if (place === null && (bridgeRuns() || Date.now() - waiting.since > LETTER_LIFE))
       return;
     try {
       if (!place)
         throw new Error("Not reached.");
+      if (isPutAway(place.data))
+        throw new Error("Archived.");
       await asked(place.target, "POST", `api/session/${encodeURIComponent(starter)}/prompt`, { id: messageID(), text: wakeText(waiting.lines), delivery: waiting.asks ? "steer" : "queue" });
       failures.delete(starter);
     } catch {
@@ -8571,7 +8589,12 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
         const reply = await lastReplyID(source, data.id);
         if (!reply || reply === was.reply)
           continue;
-        const failed = data.outcome === "failed";
+        const outcome = data.outcome;
+        if (outcome === "interrupted") {
+          noteTold(data.id, { reply });
+          continue;
+        }
+        const failed = outcome === "failed";
         const line = await wakeLine({ type: failed ? "session.execution.failed" : "session.execution.succeeded", data: { sessionID: data.id } }, data, source);
         if (line)
           tell(starter, line, false);
@@ -8580,7 +8603,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     }
     changeTold(toldFile, () => {});
   };
-  const caughtUp = Promise.all([catchUp().catch(() => {}), tellLateAnswers(targets).catch(() => {})]).then(() => {});
+  const caughtUp = Promise.all([catchUp().catch(() => {}), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
   const watch = (event) => {
     const id = event.data?.sessionID ?? event.data?.form?.sessionID;
     if (typeof id !== "string" || !["session.execution.succeeded", "session.execution.failed", "permission.asked", "form.created", "permission.replied", "form.replied"].includes(event.type))
@@ -12191,7 +12214,7 @@ function answered(sender, { answers: id, text, from }, now = Date.now()) {
   reply(id, { text: cutText(text, ANSWER_TEXT), to: letter.from, from: agent ? from : "unknown", name: agent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}` });
   return true;
 }
-async function deliverLeftAnswers(now = Date.now(), targets = peerTargets()) {
+async function deliverLeftAnswers(now = Date.now(), targets = peerTargets(), bridgeRuns = peerPlaces().bridge) {
   for (const name of listOf(REPLIES)) {
     if (!name.endsWith(".json"))
       continue;
@@ -12224,6 +12247,8 @@ async function deliverLeftAnswers(now = Date.now(), targets = peerTargets()) {
     }
     try {
       const place = await placeOfSession(answer.to, targets);
+      if (place === null && !bridgeRuns && now - fs53.statSync(taken).mtimeMs <= LETTER_LIFE)
+        throw new Error("Its coding agents aren't running here now.");
       const kuvo = place?.data?.metadata?.kuvo ?? {};
       if (place && !place.data?.parentID && !kuvo.seat && !isPutAway(place.data)) {
         await asked(place.target, "POST", `api/session/${encodeURIComponent(answer.to)}/prompt`, { id: messageID(), text: composeLetter(String(answer.name ?? "another agent"), String(answer.from ?? "unknown"), answer.text, false), delivery: "steer" });
@@ -14483,45 +14508,82 @@ var INLINE = {
 var RUNS_SCRIPTS = new Set(["npm", "pnpm", "yarn", "bun"]);
 var LOCAL_URL = /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])([:/]|$)/i;
 var SENDS = /^(-[a-zA-Z]*[TFd]|--upload-file|--form.*|--data.*|--json|--post-(data|file)|--body-(data|file)|-X|--request|--method)$/;
+var RUNNERS = { npm: ["exec", "x"], pnpm: ["exec", "dlx"], yarn: ["exec", "dlx"], bun: ["x"] };
+var FIND_RUNS = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
+var GIT_SENDS = new Set(["push", "send-pack", "send-email", "http-push"]);
+var GIT_SENDS_UNDER = { subtree: "push", lfs: "push", svn: "dcommit", p4: "submit" };
 function outwardRefusal(line) {
   const read = readLine(line, true);
   if ("unreadable" in read)
     return `${CANT} (${read.unreadable})`;
   for (const part of read.parts) {
-    let words = part.words;
-    while (words.length && (WRAPPERS.has(path60.basename(words[0])) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]) || /^[-0-9]/.test(words[0])))
-      words = words.slice(1);
-    const [program, ...rest] = words;
-    if (!program)
-      continue;
-    const name = path60.basename(program);
-    if (OUTWARD[name])
-      return OUTWARD[name];
-    if (name === "eval")
-      return "running a command it can't read";
-    if (SHELLS.has(name) && (rest.length === 0 || rest.some((word) => /^-[a-zA-Z]*c/.test(word))))
-      return "running a command it can't read";
-    if (INLINE[name] && rest.some((word) => INLINE[name].includes(word)))
-      return "running code it can't read";
-    if ([program, ...rest].some((word) => !word.startsWith("-") && /(deploy|release|publish)/i.test(path60.basename(word)) && (word === program || /\.[a-z]+$/i.test(word))))
-      return "releasing or deploying";
-    const subs = rest.filter((word, at) => !word.startsWith("-") && !(name === "git" && ["-C", "-c"].includes(rest[at - 1] ?? "")));
-    const sub = subs[0];
-    if (name === "git" && sub === "push")
+    const why = outwardWords(part.words);
+    if (why)
+      return why;
+  }
+  return null;
+}
+function outwardWords(words) {
+  for (;; ) {
+    const first = words[0];
+    if (first === undefined)
+      return null;
+    if (/^GIT_CONFIG/.test(first) && first.includes("="))
+      return CANT;
+    if (!(WRAPPERS.has(path60.basename(first)) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(first) || /^[-0-9]/.test(first)))
+      break;
+    words = words.slice(1);
+  }
+  const [program, ...rest] = words;
+  const name = path60.basename(program);
+  if (OUTWARD[name])
+    return OUTWARD[name];
+  if (name === "eval")
+    return "running a command it can't read";
+  if (SHELLS.has(name) && (rest.length === 0 || rest.some((word) => /^-[a-zA-Z]*c/.test(word))))
+    return "running a command it can't read";
+  if (INLINE[name] && rest.some((word) => INLINE[name].includes(word)))
+    return "running code it can't read";
+  if ([program, ...rest].some((word) => !word.startsWith("-") && /(deploy|release|publish)/i.test(path60.basename(word)) && (word === program || /\.[a-z]+$/i.test(word))))
+    return "releasing or deploying";
+  if (rest.includes("--push"))
+    return "sending it beyond this computer";
+  const subs = rest.filter((word, at) => !word.startsWith("-") && !(name === "git" && ["-C", "-c"].includes(rest[at - 1] ?? "")));
+  const sub = subs[0];
+  if (name === "git") {
+    if (rest.some((word) => /^alias\./i.test(word) || word.startsWith("--config-env")))
+      return CANT;
+    if (GIT_SENDS.has(sub ?? "") || sub && Object.hasOwn(GIT_SENDS_UNDER, sub) && GIT_SENDS_UNDER[sub] === subs[1])
       return "pushing";
-    if (sub === "publish" || sub === "deploy" || sub === "release" && name !== "git")
-      return sub === "publish" ? "publishing" : "releasing or deploying";
-    if (sub === "push" || sub === "upload")
-      return "sending it beyond this computer";
-    if (name === "xcrun" && (sub === "altool" || sub === "notarytool"))
-      return "sending to a store";
-    if (RUNS_SCRIPTS.has(name) && ["run", "run-script"].includes(sub ?? "") && /(deploy|release|publish|push|upload)/i.test(subs[1] ?? ""))
-      return "releasing or deploying";
-    if ((name === "curl" || name === "wget") && rest.some((word) => SENDS.test(word))) {
-      const targets = rest.filter((word) => /^[a-z][a-z0-9+.-]*:\/\//i.test(word) || LOCAL_URL.test(word) || /^[\w-]+(\.[\w-]+)+(:\d+)?(\/|$)/.test(word));
-      if (!targets.length || !targets.every((word) => LOCAL_URL.test(word)))
-        return "sending something beyond this computer";
+  }
+  if (sub === "publish" || sub === "deploy" || sub === "release" && name !== "git")
+    return sub === "publish" ? "publishing" : "releasing or deploying";
+  if (sub === "push" || sub === "upload")
+    return "sending it beyond this computer";
+  if (name === "xcrun" && (sub === "altool" || sub === "notarytool"))
+    return "sending to a store";
+  if (RUNS_SCRIPTS.has(name) && ["run", "run-script"].includes(sub ?? "") && /(deploy|release|publish|push|upload)/i.test(subs[1] ?? ""))
+    return "releasing or deploying";
+  if (sub && RUNNERS[name]?.includes(sub)) {
+    const why = outwardWords(rest.slice(rest.indexOf(sub) + 1));
+    if (why)
+      return why;
+  }
+  if (name === "find") {
+    for (const [at, word] of rest.entries()) {
+      if (!FIND_RUNS.has(word))
+        continue;
+      const after = rest.slice(at + 1);
+      const end = after.findIndex((each) => each === ";" || each === "+");
+      const why = outwardWords(end < 0 ? after : after.slice(0, end));
+      if (why)
+        return why;
     }
+  }
+  if ((name === "curl" || name === "wget") && rest.some((word) => SENDS.test(word))) {
+    const targets = rest.filter((word) => /^[a-z][a-z0-9+.-]*:\/\//i.test(word) || LOCAL_URL.test(word) || /^[\w-]+(\.[\w-]+)+(:\d+)?(\/|$)/.test(word));
+    if (!targets.length || !targets.every((word) => LOCAL_URL.test(word)))
+      return "sending something beyond this computer";
   }
   return null;
 }
@@ -16503,6 +16565,8 @@ function watchSandboxAsks(tell, answered = () => {}, after = 2000) {
 var failed = (text) => ({ text, isError: true });
 async function askToRun(caller, args, signal) {
   const started = Date.now();
+  if (caller.seat)
+    return failed("In a group chat you don't run commands, in the sandbox or outside it. Say in your reply what should run, and who should do it.");
   const command = typeof args.command === "string" ? args.command.trim() : "";
   const why = oneLine(typeof args.why === "string" ? args.why : "", 300).trim();
   const error = typeof args.error === "string" ? cut(args.error.trim(), 2000) : "";
@@ -16516,7 +16580,7 @@ async function askToRun(caller, args, signal) {
   if (!project)
     return failed("This conversation's folder isn't there, so nothing can run for it.");
   const stopped = caller.session ? await stopsFor(caller.session, String(args.command)) : [];
-  const always = caller.seat ? undefined : alwaysFor(stopped);
+  const always = alwaysFor(stopped);
   const answered = await book.ask({
     ...caller.root ? { session: caller.root, ...caller.sessionName ? { sessionName: caller.sessionName } : {} } : {},
     ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {},

@@ -12,6 +12,7 @@ import { asked, call, peerPlaces } from "../engine/client";
 import { messageID } from "../engine/sessions";
 import { locked, writePrivate } from "../files";
 import { LETTER_LIFE, placeOfSession } from "../letters/letter";
+import { isPutAway, type PutAwayable } from "../peers/directory";
 import { describeForm, describePermission } from "../notices/news";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { asksIn } from "./answers";
@@ -177,6 +178,9 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     if (place === null && (bridgeRuns() || Date.now() - waiting.since > LETTER_LIFE)) return;
     try {
       if (!place) throw new Error("Not reached.");
+      // Archived (from any app): kept until it's brought back, as its own wake-ups and goal wait,
+      // rather than running a turn no one sees.
+      if (isPutAway(place.data as PutAwayable)) throw new Error("Archived.");
       await asked(place.target, "POST", `api/session/${encodeURIComponent(starter)}/prompt`, { id: messageID(), text: wakeText(waiting.lines), delivery: waiting.asks ? "steer" : "queue" });
       failures.delete(starter);
     } catch {

@@ -161,6 +161,21 @@ test("a wake for a bot that runs with the coding agents is kept while their brid
   assert.match(told[0].text, /^\[Session finished\] "Docs"/);
 });
 
+test("what a conversation hears of its sessions waits while it's archived, as its wake-ups do, and reaches it once it's brought back", async t => {
+  sessions.ses_pixel.metadata = { "kuvo.archived": true };
+  t.after(() => { delete sessions.ses_pixel.metadata; });
+  const { schedule, runAll } = clock();
+  const watch = link.workWatcher(source, () => [source], { schedule });
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_signin" } });
+  await runAll();
+  assert.deepEqual(prompts, [], "no turn out of sight");
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(wakesFile, "utf8"))), ["ses_pixel"], "kept");
+  delete sessions.ses_pixel.metadata;
+  await runAll();
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0].text, /^\[Session finished\] "Sign-in"/);
+});
+
 test("what happened while the box was down reaches the bot as it starts again, once", async () => {
   const toldFile = path.join(home, "run", "work", "told.json");
   // It last heard of anything a while ago; since, Sign-in finished and Haptics asked something.
