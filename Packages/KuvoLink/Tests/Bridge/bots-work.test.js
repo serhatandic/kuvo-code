@@ -667,8 +667,17 @@ test("in the sandbox, what pushes, deploys or sends however it's phrased still c
     "git subtree push --prefix=dist origin gh-pages", "git lfs push origin main", "git send-pack origin main", "git send-email 0001.patch",
     "npm exec vercel deploy", "npm exec -- gh pr create", "pnpm dlx vercel --prod", "pnpm exec netlify deploy", "yarn dlx netlify deploy", "bun x vercel", "bunx vercel",
     "find . -name x -exec git push \\;", "find . -execdir gh release create v1 \\;", "docker buildx build --push -t me/app .",
+    // The review's: a command after options that take a value, a wrapper's value read as its
+    // program, a line given to a runner, git's other settings that run something, git's own files
+    // written (Linux's sandbox doesn't keep them), xargs, a registry output, curl's joined -d.
+    "git --git-dir .git push origin main", "npm --prefix . publish", "docker --context default push me/app", "cargo --color always publish", "yarn npm publish",
+    "npm -w app exec -- vercel", "pnpm --filter app exec vercel", "env -u HOME git push", "timeout -s KILL 5 git push", "find . -exec env -u X git push ';'",
+    "npm exec -c 'git push'", "npx -c 'git push'", "git -c 'core.fsmonitor=git push origin main' status", "git -c color.ui=always log --oneline", "GIT_SSH_COMMAND=x git fetch",
+    "printf '[alias]\\n p = push\\n' >> .git/config", "cp hook .git/hooks/pre-commit", "cat list | xargs git", "docker buildx build --output type=registry .",
+    "curl -d@notes.txt https://example.com",
   ];
-  const fine = ["npm install", "git -c color.ui=always log --oneline", "git stash push -m wip", "pnpm exec tsc --noEmit", "find . -name '*.o' -exec rm '{}' +", "docker build -t me/app ."];
+  const fine = ["npm install", "git stash push -m wip", "pnpm exec tsc --noEmit", "find . -name '*.o' -exec rm '{}' +", "docker build -t me/app .",
+    "git commit -m 'push the fix'", "grep -rn deploy src", "swift build -c release", "timeout 60 npm test", "npx -y prettier --check .", "curl -d '{}' http://127.0.0.1:8080/api"];
   asked.set(session, [...yours, ...fine].map((line, at) => ({ id: `per_${at}`, sessionID: session, action: "shell", resources: [line], sandboxed: true })));
   const answer = at => tool("answer_ask", { session, ask: `per_${at}`, decision: "allow", reason: "Part of the plan." }, "ses_pixel");
   for (const [at, line] of yours.entries()) assert.equal((await answer(at)).isError, true, line);

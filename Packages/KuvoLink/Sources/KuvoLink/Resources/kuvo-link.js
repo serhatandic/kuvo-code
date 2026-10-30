@@ -14519,16 +14519,37 @@ var INLINE = {
 };
 var RUNS_SCRIPTS = new Set(["npm", "pnpm", "yarn", "bun"]);
 var LOCAL_URL = /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])([:/]|$)/i;
-var SENDS = /^(-[a-zA-Z]*[TFd]|--upload-file|--form.*|--data.*|--json|--post-(data|file)|--body-(data|file)|-X|--request|--method)$/;
+var SENDS = /^(-[a-zA-Z]*[TFdX]|--upload-file|--form|--data|--json|--post-(data|file)|--body-(data|file)|--request|--method)/;
 var RUNNERS = { npm: ["exec", "x"], pnpm: ["exec", "dlx"], yarn: ["exec", "dlx"], bun: ["x"] };
 var FIND_RUNS = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
-var GIT_SENDS = new Set(["push", "send-pack", "send-email", "http-push"]);
-var GIT_SENDS_UNDER = { subtree: "push", lfs: "push", svn: "dcommit", p4: "submit" };
+var SENDING2 = {
+  push: "sending it beyond this computer",
+  upload: "sending it beyond this computer",
+  publish: "publishing",
+  deploy: "releasing or deploying",
+  "send-pack": "pushing",
+  "send-email": "pushing",
+  "http-push": "pushing",
+  dcommit: "pushing"
+};
+var QUIET = new Set(["grep", "rg", "ag", "echo", "printf", "cat", "ls", "head", "tail", "wc", "sort", "uniq", "diff", "file", "stat", "du", "which", "type", "man", "jq", "less", "tree"]);
+var BARE = {
+  npx: /^(-y|--yes|-q|--quiet)$/,
+  bunx: /^--bun$/,
+  timeout: /^([0-9.]+[smhd]?|--foreground|--preserve-status|-v|--verbose)$/,
+  nice: /^(-n|-?[0-9]+)$/,
+  env: /^(-i|--ignore-environment)$/,
+  time: /^-p$/,
+  command: /^-p$/
+};
+var GIT_OWN = /(^|\/)\.git(\/|$)|(^|\/)\.git(config|modules)$/;
 function outwardRefusal(line) {
   const read = readLine(line, true);
   if ("unreadable" in read)
     return `${CANT} (${read.unreadable})`;
   for (const part of read.parts) {
+    if (part.writes.some((each) => GIT_OWN.test(each)))
+      return `${CANT} (it changes git's own settings)`;
     const why = outwardWords(part.words);
     if (why)
       return why;
@@ -14540,11 +14561,24 @@ function outwardWords(words) {
     const first = words[0];
     if (first === undefined)
       return null;
-    if (/^GIT_CONFIG/.test(first) && first.includes("="))
+    if (/^GIT_[A-Za-z0-9_]*=/.test(first))
       return CANT;
-    if (!(WRAPPERS.has(path60.basename(first)) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(first) || /^[-0-9]/.test(first)))
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) {
+      words = words.slice(1);
+      continue;
+    }
+    const wrapper = path60.basename(first);
+    if (wrapper === "xargs")
+      return CANT;
+    if (!WRAPPERS.has(wrapper))
       break;
     words = words.slice(1);
+    for (;words.length && (words[0].startsWith("-") || /^[0-9]/.test(words[0])); words = words.slice(1)) {
+      if (words[0] === "--")
+        continue;
+      if (!BARE[wrapper]?.test(words[0]))
+        return CANT;
+    }
   }
   const [program, ...rest] = words;
   const name = path60.basename(program);
@@ -14556,30 +14590,39 @@ function outwardWords(words) {
     return "running a command it can't read";
   if (INLINE[name] && rest.some((word) => INLINE[name].includes(word)))
     return "running code it can't read";
+  if (words.some((word) => GIT_OWN.test(word)))
+    return `${CANT} (it changes git's own settings)`;
   if ([program, ...rest].some((word) => !word.startsWith("-") && /(deploy|release|publish)/i.test(path60.basename(word)) && (word === program || /\.[a-z]+$/i.test(word))))
     return "releasing or deploying";
-  if (rest.includes("--push"))
+  if (rest.some((word) => /^--push(=|$)/.test(word) || /(^|[=,])(type=registry|push=true)(,|$)/.test(word)))
     return "sending it beyond this computer";
-  const subs = rest.filter((word, at) => !word.startsWith("-") && !(name === "git" && ["-C", "-c"].includes(rest[at - 1] ?? "")));
-  const sub = subs[0];
-  if (name === "git") {
-    if (rest.some((word) => /^alias\./i.test(word) || word.startsWith("--config-env")))
-      return CANT;
-    if (GIT_SENDS.has(sub ?? "") || sub && Object.hasOwn(GIT_SENDS_UNDER, sub) && GIT_SENDS_UNDER[sub] === subs[1])
-      return "pushing";
+  if (name === "git" && rest.some((word) => /^(-c|--config-env)/.test(word)))
+    return CANT;
+  const subs = rest.filter((word) => !word.startsWith("-"));
+  if (!QUIET.has(name)) {
+    const sending = subs.find((word, at) => Object.hasOwn(SENDING2, word) && !(name === "git" && subs[at - 1] === "stash"));
+    if (sending)
+      return name === "git" ? "pushing" : SENDING2[sending];
   }
-  if (sub === "publish" || sub === "deploy" || sub === "release" && name !== "git")
-    return sub === "publish" ? "publishing" : "releasing or deploying";
-  if (sub === "push" || sub === "upload")
-    return "sending it beyond this computer";
-  if (name === "xcrun" && (sub === "altool" || sub === "notarytool"))
-    return "sending to a store";
-  if (RUNS_SCRIPTS.has(name) && ["run", "run-script"].includes(sub ?? "") && /(deploy|release|publish|push|upload)/i.test(subs[1] ?? ""))
+  if (name === "git" && subs.includes("p4") && subs.includes("submit"))
+    return "pushing";
+  if (subs[0] === "release" && name !== "git" || name === "xcrun" && subs.some((word) => word === "altool" || word === "notarytool"))
+    return subs[0] === "release" ? "releasing or deploying" : "sending to a store";
+  if (RUNS_SCRIPTS.has(name) && subs.some((word) => /(deploy|release|publish|push|upload)/i.test(word)))
     return "releasing or deploying";
-  if (sub && RUNNERS[name]?.includes(sub)) {
-    const why = outwardWords(rest.slice(rest.indexOf(sub) + 1));
-    if (why)
-      return why;
+  if (RUNNERS[name]) {
+    if (rest.some((word) => /^(-c|--call)(=|$)/.test(word)))
+      return "running a command it can't read";
+    const at = rest.findIndex((word) => RUNNERS[name].includes(word));
+    if (at >= 0) {
+      let after = rest.slice(at + 1);
+      for (;after[0]?.startsWith("-"); after = after.slice(1))
+        if (!/^(-y|--yes|--)$/.test(after[0]))
+          return CANT;
+      const why = outwardWords(after);
+      if (why)
+        return why;
+    }
   }
   if (name === "find") {
     for (const [at, word] of rest.entries()) {
