@@ -13,11 +13,15 @@ var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 var pause = (ms, signal) => new Promise((resolve) => {
   if (signal?.aborted)
     return resolve();
-  const timer = setTimeout(resolve, ms);
-  signal?.addEventListener("abort", () => {
+  const stopped = () => {
     clearTimeout(timer);
     resolve();
-  }, { once: true });
+  };
+  const timer = setTimeout(() => {
+    signal?.removeEventListener("abort", stopped);
+    resolve();
+  }, ms);
+  signal?.addEventListener("abort", stopped, { once: true });
 });
 var soon = (run, ms) => setTimeout(run, ms).unref?.();
 
@@ -10933,6 +10937,7 @@ async function readConversation(target, session, data, name, signal) {
 
 // Packages/Box/src/link/letters/outbox.ts
 var introducing = new Map;
+var INTRODUCING_FOR = 60000;
 var REPLIES = path52.join(RUN, "replies");
 var LETTER_BYTES = 24000;
 var ANSWER_TEXT = 8000;
@@ -11004,6 +11009,8 @@ function letterWent(sender, { id, ok, why, retry, answer }) {
     reply(id, { note: words ?? "It got your message, but its answer can't come back to you here." });
 }
 function answered(sender, { answers: id, text, from }, now = Date.now()) {
+  if (LETTER_ID.test(id) && fs49.existsSync(path52.join(SENDING, `${id}.json`)))
+    letterWent(sender, { id, ok: true });
   if (IS_MAC) {
     const waiter = macWaiting.get(id);
     if (!waiter || waiter.sentTo !== sender.key || waiter.gone())
@@ -11170,10 +11177,18 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
       continue;
     if (offline || now - (letterTries.get(id) ?? 0) < 60000)
       continue;
-    if (letter.from && !toldPeers.get(peer.key)?.sessions?.has(letter.from) && !introducing.has(id)) {
-      introducing.set(id, now);
-      announce(host, readEngineFile, link).catch(() => {});
-      continue;
+    if (letter.from && !toldPeers.get(peer.key)?.sessions?.has(letter.from)) {
+      const introduced = introducing.get(id);
+      if (!introduced) {
+        const introduction = { at: now, done: false };
+        introducing.set(id, introduction);
+        telling.push(announce(host, readEngineFile, link).catch(() => {}).finally(() => {
+          introduction.done = true;
+        }));
+        continue;
+      }
+      if (!introduced.done && now - introduced.at < INTRODUCING_FOR)
+        continue;
     }
     letterTries.set(id, now);
     const bytes = letterMail(peer, {
@@ -11687,6 +11702,7 @@ var LIMITS2 = {
 };
 var LIMITS_FILE = path55.join(RUN, "tool-limits.json");
 var LIMITS_LOCK = path55.join(RUN, ".tool-limits.lock");
+var STARTING_FOR = 120000;
 function changeCounts(now, change, file) {
   return locked(LIMITS_LOCK, () => {
     let counts = {};
@@ -11704,6 +11720,13 @@ function changeCounts(now, change, file) {
       }
       counts[kind] = byKey;
     }
+    const starting = {};
+    for (const [bot, starts] of Object.entries(isObject(counts.starting) ? counts.starting : {})) {
+      const lately = Object.entries(isObject(starts) ? starts : {}).filter(([, start]) => isObject(start) && typeof start.at === "number" && now - start.at < STARTING_FOR);
+      if (lately.length)
+        starting[bot] = Object.fromEntries(lately);
+    }
+    counts.starting = starting;
     const value = change(counts);
     try {
       writePrivate(file, JSON.stringify(counts));
@@ -11732,8 +11755,55 @@ function takeBack2(kind, key, at, file = LIMITS_FILE) {
       delete counts[kind][key];
   }, file);
 }
+function noteStarting(bot, now = Date.now(), file = LIMITS_FILE) {
+  const token = `${now}-${Math.random().toString(36).slice(2, 10)}`;
+  return changeCounts(now, (counts) => {
+    const starts = counts.starting[bot] ?? {};
+    counts.starting[bot] = { ...starts, [token]: { at: now } };
+    return { token, before: Object.keys(starts) };
+  }, file);
+}
+function startsBefore(bot, before, file = LIMITS_FILE) {
+  return changeCounts(Date.now(), (counts) => {
+    const starts = counts.starting[bot] ?? {};
+    return before.flatMap((token) => starts[token] ? [starts[token]] : []);
+  }, file);
+}
+function startedAs(bot, token, session, prompted = false, file = LIMITS_FILE) {
+  changeCounts(Date.now(), (counts) => {
+    const starts = counts.starting[bot] ?? {};
+    if (!starts[token])
+      return;
+    if (session)
+      starts[token] = { ...starts[token], session, ...prompted ? { prompted } : {} };
+    else
+      delete starts[token];
+    if (Object.keys(starts).length)
+      counts.starting[bot] = starts;
+    else
+      delete counts.starting[bot];
+  }, file);
+}
 
 // Packages/Box/src/link/letters/take.ts
+function answerAfter(messages, id) {
+  const replies = [];
+  let answered = false;
+  for (const message of messages) {
+    if (message.id <= id)
+      continue;
+    if (message.type === "assistant") {
+      const parts = message.content ?? [];
+      const text = parts.filter((part) => part.type === "text").map((part) => part.text).join(`
+`);
+      if (text)
+        replies.push(text);
+      answered = Boolean(text) && !parts.some((part) => part.type === "tool");
+    } else if (message.type === "user" && answered)
+      break;
+  }
+  return replies;
+}
 function lettersSeen(now) {
   let seen = {};
   try {
@@ -11753,7 +11823,6 @@ function noteSeen(id, now = Date.now()) {
   });
 }
 var delivering = new Set;
-var tooMany = (key, now = Date.now()) => allowed2("messages", `peer:${key}`, now) === null;
 async function answerTo(target, session, id, { wait = 2000, signal } = {}) {
   const began = Date.now();
   let started = false;
@@ -11769,8 +11838,7 @@ async function answerTo(target, session, id, { wait = 2000, signal } = {}) {
     if (!started && Date.now() - began < 3 * wait)
       continue;
     const page = await asked(target, "GET", `api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`).catch(() => null);
-    const replies = (page?.data ?? []).filter((message) => message.type === "assistant" && message.id > id).reverse().map((message) => (message.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join(`
-`)).filter(Boolean);
+    const replies = answerAfter((page?.data ?? []).slice().reverse(), id);
     if (replies.length)
       return cutText(replies.join(`
 
@@ -11799,20 +11867,27 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
   }
   if (isObject(letter.read))
     return readFor(sender, letter, { send, targets, answer, now, moved, moving });
-  if (tooMany(sender.key, now))
+  let counted = allowed2("messages", `peer:${sender.key}`, now);
+  if (counted === null)
     return no("It's sent a lot of messages in the last few minutes.", true);
+  const notDelivered = (why, again = false) => {
+    if (again && counted !== null)
+      takeBack2("messages", `peer:${sender.key}`, counted);
+    counted = null;
+    return no(why, again);
+  };
   delivering.add(id);
   let place, prompt, fromAgent = null;
   try {
     const lives = moved.get(letter.to);
     if (lives && lives !== ownKey(readLink() ?? {}) || await moving(letter.to))
-      return no("It's moving to another computer: it comes again once it's there.", true);
+      return notDelivered("It's moving to another computer: it comes again once it's there.", true);
     place = await placeOfSession(letter.to, targets);
     if (!place)
-      return no("There's no such conversation here.");
+      return notDelivered("There's no such conversation here.");
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
-      return no("That conversation doesn't take messages.");
+      return notDelivered("That conversation doesn't take messages.");
     const listed = peerOf(letter.from, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find((agent) => agent.session === letter.from) : null;
     if (listed && !await placeOfSession(letter.from, targets).catch(() => ({})))
       fromAgent = listed;
@@ -11821,7 +11896,7 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
     const waits = letter.wait === true && Boolean(fromAgent);
     await asked(place.target, "POST", `api/session/${encodeURIComponent(letter.to)}/prompt`, { id: prompt, text: composeLetter(name, fromAgent ? letter.from : "unknown", cutText(letter.text), waits), delivery: "steer" });
   } catch (error) {
-    return no(`It didn't reach it: ${String(error?.message ?? error)}`, true);
+    return notDelivered(`It didn't reach it: ${String(error?.message ?? error)}`, true);
   } finally {
     delivering.delete(id);
   }
@@ -12689,28 +12764,44 @@ async function startSession(given, by, place) {
     picked.push("Plan");
   if (!target)
     return no(503, `The engine on ${HERE} isn't running.`);
-  if (bot) {
-    const limits = botLimits(bot.bot);
-    if (limits) {
-      const targets = [engine, bridge].filter((each) => Boolean(each));
-      const work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
-      const working = await workingNow(targets, place.signal);
-      const midnight = new Date().setHours(0, 0, 0, 0);
-      const today = work.filter((each) => (each.data.time?.created ?? 0) >= midnight);
-      const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
-      const past = pastLimit(limits, { depth, working: work.filter((each) => working.has(each.data.id)).length, started: today.length, tokens });
-      if (past)
-        return no(429, past);
+  const limits = bot ? botLimits(bot.bot) : null;
+  const noted = bot && limits ? noteStarting(bot.bot) : null;
+  const went = (session, prompted = false) => {
+    if (bot && noted)
+      startedAs(bot.bot, noted.token, session, prompted);
+  };
+  if (bot && limits && noted) {
+    const targets = [engine, bridge].filter((each) => Boolean(each));
+    const work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
+    const working = await workingNow(targets, place.signal);
+    const midnight = new Date().setHours(0, 0, 0, 0);
+    const today = work.filter((each) => (each.data.time?.created ?? 0) >= midnight);
+    const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
+    const workIDs = new Set(work.map((each) => each.data.id));
+    const todayIDs = new Set(today.map((each) => each.data.id));
+    const earlier = startsBefore(bot.bot, noted.before);
+    const past = pastLimit(limits, {
+      depth,
+      working: work.filter((each) => working.has(each.data.id)).length + earlier.filter((each) => !each.session || !each.prompted || !workIDs.has(each.session)).length,
+      started: todayIDs.size + earlier.filter((each) => !each.session || !todayIDs.has(each.session)).length,
+      tokens
+    });
+    if (past) {
+      went(null);
+      return no(429, past);
     }
   }
   const kind = bot ? "botSessions" : "sessions";
   const key = by ? bot ? `bot:${bot.bot}` : by.place ? by.session : "outside" : null;
   const counted = key ? allowed2(kind, key) : null;
-  if (key && counted === null)
+  if (key && counted === null) {
+    went(null);
     return no(429, bot ? "You've started a great many sessions in the last few minutes, which looks like a loop. Stop, check on the ones you have (list_sessions), and tell the user." : "You've started several sessions in the last few minutes. Write to those (send_message), or ask the user before starting more.");
+  }
   const giveBack = () => {
     if (key && counted !== null)
       takeBack2(kind, key, counted);
+    went(null);
   };
   let madeTree = null;
   if (given.worktree === true) {
@@ -12719,7 +12810,7 @@ async function startSession(given, by, place) {
       giveBack();
       return no(400, "A chat has no worktree: give a project.");
     }
-    const made = await answerWorktrees("POST", "kuvo/worktrees", { project }, engine, place.signal);
+    const made = await answerWorktrees("POST", "kuvo/worktrees", { project }, engine, place.signal).catch((error) => ({ status: 502, value: { message: String(error?.message ?? error) } }));
     const tree = made.value;
     if (made.status !== 200 || typeof tree.folder !== "string") {
       giveBack();
@@ -12742,6 +12833,7 @@ async function startSession(given, by, place) {
     if (!isObject(made) || typeof made.id !== "string" || !made.id)
       throw new Error("No session was made.");
     session = made.id;
+    went(session);
   } catch (error) {
     giveBack();
     if (madeTree)
@@ -12768,8 +12860,10 @@ ${sessionNote(bot.name)}` : "") : task;
   try {
     await asked(target, "POST", `api/session/${address}/prompt`, { id, text, delivery: "steer" });
   } catch (error) {
+    went(session, true);
     return no(502, `Started a session (${session}), but the task didn't reach it: ${String(error?.message ?? error)}`, session);
   }
+  went(session, true);
   const started = { session, title, folder, project: project?.name ?? null, ...picked.length ? { picked: picked.join(" · ") } : {}, ...askedFirst ? { askedFirst } : {}, ...wakes.length ? { wakes } : {} };
   if (!waits)
     return { started };
@@ -14617,7 +14711,7 @@ import fs62 from "node:fs";
 import path65 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.116";
+var BRIDGE_VERSION = "0.9.117";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

@@ -242,7 +242,8 @@ connection.
 - **Letters**: `{"letter": {id, from, to, text, wait, at, answers?, read?}}` goes to the box that
   listed `to`.
   - **Checks**: the receiver drops a letter older than a day. It delivers each `id` once (ids
-    remembered two days, noted once delivered), at most 20 in ten minutes from a box, and only
+    remembered two days, noted once delivered), at most 20 in ten minutes from a box (one answered
+    `retry` isn't counted, so one tried again and again leaves room for the rest), and only
     to a conversation an agent could be. A subagent's, a group chat's seat or one put away doesn't
     take letters. One it can't look up now (its engine starting) is answered `retry`, and so is one
     for a conversation moving to or from another computer now, or that lives on another one now
@@ -255,13 +256,15 @@ connection.
     now (an engine restarting, too many lately), so the sender tries again. `answer: false`: there,
     but no answer will come (its sender couldn't be verified, or its machine is away).
   - **`wait`**: the receiver watches for an answer for ten minutes and sends it back as a letter
-    of its own, with `answers` naming the first. If a tool still waits for it, it goes to that
+    of its own, with `answers` naming the first. The answer is what the agent wrote after the
+    letter, up to the next message someone else gave it once it had answered. If a tool still waits for it, it goes to that
     tool; otherwise it reaches the sender's conversation as a message.
   - **Sender side**: a sender takes `delivered` only from the box it sent to, and an answer for a
-    waiting tool only from that box. Until `delivered` comes, it sends again each minute, for two
+    waiting tool only from that box; an answer from it stands for `delivered` should that be lost. Until `delivered` comes, it sends again each minute, for two
     days, oldest first, and a letter whose agent no box lists now waits. One for a conversation that
     moved (`moved`) goes where it lives now, whichever box it was left for. Before a
-    letter goes, its sender is told of to that box, if it wasn't. Its words are cut on a character's
+    letter goes, its sender is told of to that box, if it wasn't: it waits until that's sent (or
+    couldn't be), a minute at most. Its words are cut on a character's
     boundary.
   - **`read`** `{query?}` (bridge 0.9.100, to a peer whose `features` say `letters-read`): the
     letter asks for `to`'s conversation instead of saying something (`read_conversation` from
@@ -611,7 +614,9 @@ client shows it from the same routes.
 - **Limits you set** (Edit Bot › Work; `PATCH kuvo/bots/<id>` `{work: {limits}}`, null for none;
   `limits` in `kuvo/bots`): `atOnce` (its sessions working at once), `perDay` (started since
   midnight, archived ones too), `depth`, `tokensPerDay` (of the sessions started today). None until you set one; past one, `start_session` refuses
-  with words saying which.
+  with words saying which. Starts asked for at once count each other: each is noted in
+  `run/tool-limits.json` before the limits are looked at, and counts those before it the engine
+  doesn't show as the bot's yet.
 - **`GET kuvo/work?bot=<id>`** → `{bot, sessions: [{session, title, folder, project?, startedBy,
   depth, model?, mode?, state, asks?, started, tokens, cost?, lastReply?}], answered: [answer with
   its session], today: {started, working, tokens, cost?}, limits}`: its sessions the latest first,
@@ -2357,7 +2362,7 @@ before. A Mac sends none.
 
 A machine's engine, its coding agents and its link find programs on the PATH your login shell sets
 up there (`~/.local/bin` from your profile, nvm's node from `.bashrc`), not the bare one a start over
-SSH or from cron gets: `kuvo-link.js login-path` (bridge 0.9.116) prints it, read from an interactive
+SSH or from cron gets: `kuvo-link.js login-path` (bridge 0.9.117) prints it, read from an interactive
 login shell, then a login shell only (`$SHELL`; on Linux your account's when that's cron's `/bin/sh`;
 none for nushell or csh), followed by the folders of the PATH it was run with; or nothing when neither
 answers in time. A machine's start scripts run it once before starting the engine, and it keeps what
