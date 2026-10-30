@@ -1,5 +1,6 @@
 import ClientDesign
 import ClientText
+import ClientVault
 import OpenCodeKit
 import SwiftUI
 
