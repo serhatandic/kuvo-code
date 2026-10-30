@@ -54,15 +54,19 @@ interface EngineMessage {
 }
 
 // What it wrote after message `id`, oldest first: up to the next message someone else gave it once
-// it's answered, whose answer is theirs (one that came before it answered, it answered with this).
+// it had answered (said something and gone on to no tool), whose answer is theirs. One that came
+// while it was still at it (before it answered, or as it ran a tool) it answers with this.
 function answerAfter(messages: EngineMessage[], id: string): string[] {
   const replies: string[] = [];
+  let answered = false;
   for (const message of messages) {
     if (message.id <= id) continue;
     if (message.type === "assistant") {
-      const text = (message.content ?? []).filter(part => part.type === "text").map(part => part.text).join("\n");
+      const parts = message.content ?? [];
+      const text = parts.filter(part => part.type === "text").map(part => part.text).join("\n");
       if (text) replies.push(text);
-    } else if (message.type === "user" && replies.length) break;
+      answered = Boolean(text) && !parts.some(part => part.type === "tool");
+    } else if (message.type === "user" && answered) break;
   }
   return replies;
 }

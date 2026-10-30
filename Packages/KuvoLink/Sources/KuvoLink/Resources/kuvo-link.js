@@ -11690,15 +11690,18 @@ function startedAs(bot, token, session, prompted = false, file = LIMITS_FILE) {
 // Packages/Box/src/link/letters/take.ts
 function answerAfter(messages, id) {
   const replies = [];
+  let answered = false;
   for (const message of messages) {
     if (message.id <= id)
       continue;
     if (message.type === "assistant") {
-      const text = (message.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join(`
+      const parts = message.content ?? [];
+      const text = parts.filter((part) => part.type === "text").map((part) => part.text).join(`
 `);
       if (text)
         replies.push(text);
-    } else if (message.type === "user" && replies.length)
+      answered = Boolean(text) && !parts.some((part) => part.type === "tool");
+    } else if (message.type === "user" && answered)
       break;
   }
   return replies;
