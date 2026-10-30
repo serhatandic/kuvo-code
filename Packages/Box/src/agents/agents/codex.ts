@@ -756,7 +756,7 @@ class CodexThread implements Thread {
 
   constructor(
     private readonly agent: CodexAgent,
-    private readonly session: Session,
+    readonly session: Session,
     private readonly state: Record<string, unknown>,
   ) {
     this.nativeID = state.codexThread as string | undefined

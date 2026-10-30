@@ -12,6 +12,7 @@ const clock = jest as unknown as { advanceTimersByTime(ms: number): void }
 
 test("an ask nobody answers runs nothing and isn't taken for the user's no", async () => {
   const home = mkdtempSync(join(tmpdir(), "kuvo-sandbox-"))
+  const before = process.env.KUVO_HOME
   process.env.KUVO_HOME = home
   const { callSandboxTool, listSandboxAsks } = await import("../src/link/fence/outside")
   jest.useFakeTimers()
@@ -26,6 +27,8 @@ test("an ask nobody answers runs nothing and isn't taken for the user's no", asy
     expect(await Bun.file(join(home, "made.txt")).exists()).toBe(false)
   } finally {
     jest.useRealTimers()
+    if (before === undefined) delete process.env.KUVO_HOME
+    else process.env.KUVO_HOME = before
     rmSync(home, { recursive: true, force: true })
   }
 })

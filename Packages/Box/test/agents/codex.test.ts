@@ -17,7 +17,8 @@ import { Sessions } from "../../src/agents/sessions"
 import { Store } from "../../src/agents/store"
 import type { Message, PermissionRule } from "../../src/agents/wire"
 
-const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-codex-test-"))
+// By its real place (`/var` is `/private/var` on a Mac): the fake Codex knows the session's own by its folder.
+const base = realpathSync(mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-codex-test-")))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
 
 /** In a turn's events: Codex works on until you press Stop. */
@@ -817,7 +818,7 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
     const agent = codex
     sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
     const id = sessions.create({ title: "Codex", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: root } }).id
-    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [{ mime: "image/png", uri: pathToFileURL(attached).href, name: "shot.png" }], delivery: "steer" })
+    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [{ uri: pathToFileURL(attached).href, name: "shot.png" }], delivery: "steer" })
     await until(() => ended(id))
     const picture = turnStart().input.find((item: any) => item.type === "localImage")
     expect(picture.path).not.toBe(attached)
@@ -836,7 +837,7 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
     const agent = codex
     sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
     const id = sessions.create({ title: "Codex", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: root } }).id
-    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [{ mime: "image/png", uri: pathToFileURL(attached).href, name: "shot.png" }], delivery: "steer" })
+    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [{ uri: pathToFileURL(attached).href, name: "shot.png" }], delivery: "steer" })
     await until(() => ended(id))
     expect(said(id)).toBe("picture=yes change=no")
     expect(readdirSync(elsewhere)).toEqual([])

@@ -25,7 +25,7 @@ async function call(tools: { url: string; headers: Record<string, string> }, id:
     headers: { ...tools.headers, "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "show_in_panel", arguments: {}, ...(claims ? { _meta: { "ai.opencode/sessionID": claims } } : {}) } }),
   })
-  return { status: response.status, body: response.status === 200 ? await response.json() : undefined }
+  return { status: response.status, body: (response.status === 200 ? await response.json() : undefined) as any }
 }
 
 describe("on a machine: the program, run outside the sandbox", () => {
@@ -80,7 +80,7 @@ process.stdin.on("data", (chunk) => {
     const connect = async () => (await post({ jsonrpc: "2.0", id: 0, method: "initialize", params: {} })).headers.get("mcp-session-id")!
     const [first, second] = [await connect(), await connect()]
     expect(first).not.toBe(second)
-    const call = (connection: string) => post({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "show_in_panel", arguments: {} } }, connection).then((response) => response.json())
+    const call = (connection: string) => post({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "show_in_panel", arguments: {} } }, connection).then((response) => response.json() as Promise<any>)
     let secondDone = false
     const firstCall = call(first)
     const secondCall = call(second).then((answer) => ((secondDone = true), answer))
