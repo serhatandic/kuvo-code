@@ -409,6 +409,8 @@ struct MainView: View {
         }
         .onChange(of: workspace.sessions.map(\.id)) { tabs.dropClosed() }
         .onChange(of: groups.list.map(\.id)) { tabs.dropClosed() }
+        // A terminal ended for you (its machine removed): its tab goes.
+        .onChange(of: terminals.entries.count) { tabs.dropClosed() }
         .onChange(of: workspace.isLoaded) {
             // The list arrives just before loading counts as done, so check it again here.
             tabs.dropClosed()

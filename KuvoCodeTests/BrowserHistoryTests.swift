@@ -35,6 +35,17 @@ import Testing
         #expect(history.suggestions(5).map(\.host).contains("example.com"))
     }
 
+    /// Two dev servers on localhost are two sites, each opening its own front page.
+    @Test func eachPortIsASiteOfItsOwn() {
+        defer { done() }
+        let history = BrowserHistory(folder: folder)
+        let icon = URL(string: "https://example.com/icon.png")
+        history.record(URL(string: "http://localhost:3000/")!, title: "Shop", iconURL: icon)
+        history.record(URL(string: "http://localhost:5173/")!, title: "Docs", iconURL: icon)
+        #expect(Set(history.suggestions(5).map(\.url.absoluteString)) == ["http://localhost:3000/", "http://localhost:5173/"])
+        #expect(history.site(for: URL(string: "http://localhost:5173/guide"))?.title == "Docs", "a tab on that port has that site's icon")
+    }
+
     /// Clear: nothing of it on this Mac, though a site's icon was still on its way.
     @Test func clearLeavesNothing() async throws {
         defer { done() }

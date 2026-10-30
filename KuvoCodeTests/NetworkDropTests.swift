@@ -64,4 +64,71 @@ import Testing
         #expect(workspace.waitingCount == 1)
         #expect(workspace.needsAttention(id))
     }
+
+    /// Back while the agent is still writing: the reply goes on from the words on screen, none lost
+    /// and none twice, though the engine's copy has none of a block's words until it ends, and more
+    /// of them came while it was read.
+    @Test func aReplyStillBeingWrittenKeepsItsWordsWhenItsBack() async throws {
+        defer { engine.stop() }
+        engine.list([session()], running: [id])
+        engine.conversation(id, [you])
+        await workspace.refresh()
+        let model = try #require(workspace.model(for: id))
+        await model.load()
+        let step: [String: Any] = ["assistantMessageID": "msg_02", "agent": "build", "model": ["id": "m", "providerID": "p"]]
+        model.apply(try engine.event("session.step.started", session: id, step))
+        model.apply(try engine.event("session.text.started", session: id, ["assistantMessageID": "msg_02", "ordinal": 0]))
+        model.apply(try engine.event("session.text.delta", session: id, ["assistantMessageID": "msg_02", "ordinal": 0, "delta": "The linker can't"]))
+
+        // Back: the conversation is read again, and more words come while it's on its way.
+        let writing: [String: Any] = ["id": "msg_02", "type": "assistant", "agent": "build", "time": ["created": 2],
+                                      "model": ["id": "m", "providerID": "p"], "content": [["type": "text", "text": ""]]]
+        let gate = Gate()
+        defer { gate.open() }
+        engine.on("GET", "/api/session/\(id)/message") { [you] _ in
+            gate.wait()
+            return StubWeb.json(["data": [writing, you]])
+        }
+        let reads = engine.requests("GET", "/api/session/\(id)/message").count
+        let resync = Task { await workspace.resync() }
+        try await until { engine.requests("GET", "/api/session/\(id)/message").count > reads }
+        model.apply(try engine.event("session.text.delta", session: id, ["assistantMessageID": "msg_02", "ordinal": 0, "delta": " find libz"]))
+        gate.open()
+        await resync.value
+
+        let texts = model.transcript.messages.compactMap { message -> String? in
+            guard case .assistant(let assistant) = message else { return nil }
+            return assistant.content.compactMap { if case .text(let text) = $0 { text.text } else { nil } }.joined()
+        }
+        #expect(texts == ["The linker can't find libz"])
+    }
+
+    /// This Mac's engine back while a machine's ask is answered elsewhere (on the phone): it stays
+    /// answered, rather than coming back as waiting on you.
+    @Test func aMachinesAskAnsweredWhileThisMacsEngineIsReadStaysAnswered() async throws {
+        defer { engine.stop() }
+        engine.list([session()])
+        engine.conversation(id, [you])
+        workspace.machines = ["far.invalid"]
+        await workspace.refresh()
+        // A conversation of this Mac's open, read again as its engine comes back.
+        await try #require(workspace.model(for: id)).load()
+        let asked: [String: Any] = ["id": "per_far", "sessionID": "ses_far", "action": "shell", "resources": ["make deploy"]]
+        workspace.handle(try engine.event("permission.asked", asked), machine: "far.invalid")
+        #expect(workspace.waitingCount == 1)
+
+        let gate = Gate()
+        defer { gate.open() }
+        engine.on("GET", "/api/session/\(id)/message") { [you] _ in
+            gate.wait()
+            return StubWeb.json(["data": [you]])
+        }
+        let reads = engine.requests("GET", "/api/session/\(id)/message").count
+        let resync = Task { await workspace.resync() }
+        try await until { engine.requests("GET", "/api/session/\(id)/message").count > reads }
+        workspace.handle(try engine.event("permission.replied", ["requestID": "per_far", "sessionID": "ses_far", "reply": "once"]), machine: "far.invalid")
+        gate.open()
+        await resync.value
+        #expect(workspace.waitingCount == 0)
+    }
 }

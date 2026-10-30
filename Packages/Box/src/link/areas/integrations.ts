@@ -50,10 +50,10 @@ export function integrationCatalog(file = INTEGRATIONS_FILE): CatalogIntegration
  * won't start until it's turned on. Just turned on, while the engine still says it's off, it's
  * starting. A server that signs in by itself with a code the first time it's used (Outlook's,
  * `signInFile` in the catalog) waits for that code until its sign-in is there. */
-function integrationHealth(entry: CatalogIntegration, server: EngineServer | undefined, off: boolean, signedIn: Set<string>): IntegrationHealth {
+function integrationHealth(entry: CatalogIntegration, server: EngineServer | undefined, off: boolean, signedIn: Set<string> | null): IntegrationHealth {
   if (off) return "disabled";
   let health: IntegrationHealth = ({ connected: "connected", needs_auth: "needsSignIn", failed: "failed" } as Record<string, IntegrationHealth>)[server?.status?.status as string] ?? "starting";
-  if (health === "connected" && server?.integrationID && !signedIn.has(server.integrationID) && ["official", "app"].includes(entry.way)) health = "needsSignIn";
+  if (health === "connected" && server?.integrationID && signedIn && !signedIn.has(server.integrationID) && ["official", "app"].includes(entry.way)) health = "needsSignIn";
   if (health === "connected" && typeof entry.signInFile === "string" && !fs.existsSync(path.join(INTEGRATION_DATA, entry.id, path.basename(entry.signInFile)))) health = "waitsForCode";
   return health;
 }
@@ -64,15 +64,16 @@ function integrationHealth(entry: CatalogIntegration, server: EngineServer | und
 async function integrationEntries(catalog: CatalogIntegration[], engine: EngineRecord | null, signal: AbortSignal | undefined): Promise<{ entries: Integration[]; engineDown: boolean }> {
   const { settings } = readSettings();
   let servers: EngineServer[] | null = null;
-  let signedIn: Set<string> = new Set();
+  // Null where the engine didn't say (busy, or not answering): not the same as none.
+  let signedIn: Set<string> | null = new Set();
   // Integrations it has had a sign-in for, in use or not: one of them needing a sign-in had one that ended.
   let hadSignIn: Set<string> = new Set();
   if (engine) {
     // (As the engine answers it: its MCP servers, a list.)
     servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => null) as EngineServer[] | null;
-    const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
+    const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => null);
     const oauth = (Array.isArray(credentials) ? credentials as EngineCredential[] : []).filter(each => each?.value?.type === "oauth");
-    signedIn = new Set(oauth.filter(each => each.active).map(each => each.integrationID));
+    signedIn = Array.isArray(credentials) ? new Set(oauth.filter(each => each.active).map(each => each.integrationID)) : null;
     hadSignIn = new Set(oauth.map(each => each.integrationID));
   }
   const engineDown = !Array.isArray(servers);
@@ -203,19 +204,25 @@ async function integrationsAnswer(method: string, requestPath: string, body: Bod
     }
     let newKeys = false;
     if (names.length) {
-      if (names.every(name => typeof given[name] === "string" && given[name].trim())) {
-        // All of them, one change at a time with any other key work here.
-        await keyWork(async () => {
-          for (const name of names) await writeKey(variables[name], (given[name] as string).trim());
-        });
-        newKeys = true;
-      } else if (!(await keepsAll(names.map(name => variables[name])))) {
+      // Those sent saved (Change Key may send only the one you changed), the rest kept already.
+      const sent = names.filter(name => typeof given[name] === "string" && given[name].trim());
+      if (sent.length < names.length && !(await keepsAll(names.filter(name => !sent.includes(name)).map(name => variables[name])))) {
         const labels = (entry.keys ?? []).map(key => key.label).join(" and ");
         return { status: 400, value: { message: `${entry.title} needs ${labels}: send them as {"keys": {"${names[0]}": …}}.` } };
       }
+      if (sent.length) {
+        // One change at a time with any other key work here.
+        await keyWork(async () => {
+          for (const name of sent) await writeKey(variables[name], (given[name] as string).trim());
+        });
+        newKeys = true;
+      }
     }
-    // One there already is written again as it is (the engine reads its keys again).
-    const value = added ? valueAt(settings, [...SERVERS, entry.id]) : entry.settings;
+    // One there already is written again as it is now, with what another client changed while its
+    // keys were saved (the engine reads its keys again); one removed meanwhile stays removed.
+    const now = valueAt(readSettings().settings ?? {}, [...SERVERS, entry.id]);
+    if (added && now === undefined) return { status: 409, value: { message: `${entry.title} was removed meanwhile.` } };
+    const value = now ?? entry.settings;
     const changed = changeSettings([{ path: [...SERVERS, entry.id], value }]);
     if (changed.status !== 200) return { status: changed.status, value: { message: changed.message } };
     // The engine reads its keys as it reads its settings again: its server connects again a

@@ -106,6 +106,8 @@ export async function standInHost(password) {
         return host.keys.has(given.name) ? answer(200, { value: host.keys.get(given.name) }) : answer(404, {});
       case "/keys/set":
         host.keys.set(given.name, given.value);
+        // What happens elsewhere while a key is saved (a prompt waiting for the Keychain, say).
+        host.onSet?.();
         return answer(200, {});
       case "/keys/delete":
         host.keys.delete(given.name);

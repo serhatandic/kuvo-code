@@ -372,6 +372,12 @@ final class Workspace {
 
     private static let archivedKey = "kuvo.archived"
 
+    /// The session an archived one carries on in, when a box moved it to the coding agents (from a
+    /// phone, or on a machine): its box notes it.
+    static func carriedTo(_ session: Session) -> String? {
+        session.metadata?["kuvo.carriedTo"]?.string
+    }
+
     /// Kept at the top of the sidebar, a note in the session's metadata.
     static func isPinned(_ session: Session) -> Bool {
         session.metadata?[pinnedKey]?.bool == true
@@ -385,27 +391,30 @@ final class Workspace {
     func setArchived(_ id: String, _ archived: Bool) async -> Bool {
         // Not archived if the engine didn't take it: its wake-ups aren't held for it.
         guard await setFlag(Self.archivedKey, archived, of: id) else { return false }
-        onArchived?(id, archived)
+        onArchived?(id, archived, nil)
         return true
     }
 
-    /// A session was archived, or brought back. The app sets it.
-    @ObservationIgnored var onArchived: ((_ session: String, _ isArchived: Bool) -> Void)?
+    /// A session was archived, or brought back. The app sets it. `carriedTo`: archived as its box
+    /// carried it on in that session (moved it to the coding agents) just now, never for one
+    /// carried on before, brought back and archived again.
+    @ObservationIgnored var onArchived: ((_ session: String, _ isArchived: Bool, _ carriedTo: String?) -> Void)?
 
     /// The sessions read again: one archived or brought back meanwhile (from a phone, while the
     /// feed was down) is told, as `upsert` tells one.
     private func noteArchiving(since before: [Session]) {
         guard onArchived != nil else { return }
-        let was = Dictionary(before.map { ($0.id, Self.isArchived($0)) }, uniquingKeysWith: { first, _ in first })
+        let was = Dictionary(before.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for session in sessions {
-            if let wasArchived = was[session.id] { noteArchiving(session, was: wasArchived) }
+            if let earlier = was[session.id] { noteArchiving(session, was: earlier) }
         }
     }
 
-    /// `session` as it is now, archived or brought back since it was `wasArchived`: told.
-    private func noteArchiving(_ session: Session, was wasArchived: Bool) {
+    /// `session` as it is now, archived or brought back since it was `earlier`: told.
+    private func noteArchiving(_ session: Session, was earlier: Session) {
         let archived = Self.isArchived(session)
-        if archived != wasArchived { onArchived?(session.id, archived) }
+        guard archived != Self.isArchived(earlier) else { return }
+        onArchived?(session.id, archived, archived && Self.carriedTo(earlier) == nil ? Self.carriedTo(session) : nil)
     }
 
     /// Pins a session to the top of the sidebar, or takes it off.
@@ -760,7 +769,7 @@ final class Workspace {
         var metadata = sessions[index].metadata?.object ?? [:]
         metadata[Self.archivedKey] = .bool(true)
         sessions[index].metadata = .object(metadata)
-        onArchived?(id, true)
+        onArchived?(id, true, nil)
     }
 
     /// The project's name: its own, or its primary folder's. A worktree has its project's.
@@ -1838,11 +1847,16 @@ final class Workspace {
                 let isAgents = OutsideAgents.isAgentSession(model.session)
                 guard let place = isAgents ? (bridgeListed == nil ? nil : bridge) : api else { continue }
                 if !model.isSubagent, !known.contains(id) {
-                    guard let session = try? await place.session(id) else {
-                        models[id] = nil
-                        continue
+                    do {
+                        model.session = try await place.session(id)
+                    } catch {
+                        // Not there: it goes. Not answered (busy, or the connection still settling): it
+                        // stays, read again with the others, and goes on following the agent there.
+                        if (error as? ServerError)?.status == 404 {
+                            models[id] = nil
+                            continue
+                        }
                     }
-                    model.session = session
                 } else if let session = listed.first(where: { $0.id == id }) {
                     model.session = session
                 }
@@ -1998,11 +2012,14 @@ final class Workspace {
     func resync() async {
         await refresh()
         let before = asking
-        asking = [:]
-        for directory in Set(models.values.map(\.session.location.directory)) { await readShellJobs(in: directory) }
+        // A machine's asks are its own connection's, which may change them while this reads: as they are.
+        asking = asking.filter { sessionMachines[$0.value] != nil }
+        // A machine's are read again by its own connection when that's back (see `refresh(_ engine:)`):
+        // its feed is its own, and waiting on it here would hold up this Mac's.
+        let here = models.values.filter { !RemoteFolder.isRemote($0.session.location.directory) }
+        for directory in Set(here.map(\.session.location.directory)) { await readShellJobs(in: directory) }
         for model in models.values {
-            // A machine's are read when it's connected (see `refresh(_ engine:)`).
-            if RemoteFolder.machine(of: model.session.location.directory).map(connectedMachines.contains) ?? true { await model.load() }
+            if !RemoteFolder.isRemote(model.session.location.directory) { await model.load() }
             for request in model.permissions { asking[request.id] = request.sessionID }
             for form in model.forms { note(form, in: model) }
         }
@@ -2012,12 +2029,8 @@ final class Workspace {
                 asking[request] = session
                 continue
             }
-            // On a machine not connected now: as it was, read again when it is (and not told
-            // again then as news).
-            guard sessionMachines[session].map(connectedMachines.contains) ?? true else {
-                asking[request] = session
-                continue
-            }
+            // On a machine: answered meanwhile, as its connection says.
+            guard sessionMachines[session] == nil else { continue }
             // A closed session's: still asked (or not known), it stays; its notification goes otherwise.
             if sharedForms[request] == nil, let api = api(forSession: session) {
                 guard let asked = await Self.stillAsked(in: session, api: api), !asked.contains(request) else {
@@ -2883,14 +2896,14 @@ final class Workspace {
         nameBranch(of: session)
         var session = session
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
-            let wasArchived = Self.isArchived(sessions[index])
+            let earlier = sessions[index]
             // Read since this was asked for (here, or on the phone): that stands, as the box keeps
             // the later look.
             if let seen = sessions[index].time.viewed, seen > (session.time.viewed ?? 0) { session.time.viewed = seen }
             sessions[index] = session
             // Archived or brought back elsewhere (from a phone): its wake-ups wait, or come back,
             // as with Archive here. (Archive here notes it first, so it isn't told twice.)
-            noteArchiving(session, was: wasArchived)
+            noteArchiving(session, was: earlier)
         } else {
             sessions.insert(session, at: 0)
             tellWorktree(session)

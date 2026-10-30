@@ -3291,7 +3291,7 @@ var at = (session) => "/api/session/" + encodeURIComponent(session);
 async function sessionInfo(api, session) {
   const data = (await api.request("GET", at(session)))?.data ?? {};
   const model = typeof data.model?.providerID === "string" && typeof data.model?.id === "string" ? { providerID: data.model.providerID, id: data.model.id, ...typeof data.model.variant === "string" && data.model.variant !== "default" ? { variant: data.model.variant } : {} } : undefined;
-  return { id: session, model, permissions: Array.isArray(data.permissions) ? data.permissions : undefined, directory: data.location?.directory, title: data.title || undefined, agent: data.agent, parentID: data.parentID || undefined, metadata: data.metadata };
+  return { id: session, model, permissions: Array.isArray(data.permissions) ? data.permissions : undefined, directory: data.location?.directory, title: data.title || undefined, agent: data.agent, parentID: data.parentID || undefined, metadata: data.metadata, archived: data.metadata?.["kuvo.archived"] === true || Boolean(data.metadata?.kuvo?.archived) || Boolean(data.time?.archived) };
 }
 var text = (answer) => String(answer?.data?.text ?? "");
 async function freshAnswer(api, onEngine, info, prompt, model = info.model) {
@@ -3387,12 +3387,12 @@ class Goals {
   }
   start() {
     for (const goal of this.goals.values()) {
-      if (goal.state === "working" || goal.state === "paused")
-        this.follow(goal.session);
+      this.follow(goal.session);
       if (goal.state === "working") {
         this.firstLooks.add(goal.session);
         this.look(goal.session);
-      }
+      } else
+        this.forgetIfGone(goal.session);
     }
   }
   list() {
@@ -3480,6 +3480,12 @@ class Goals {
     if (this.goals.has(session))
       this.clear(session);
   }
+  async forgetIfGone(session) {
+    await this.place(session).api.request("GET", at2(session)).catch((error) => {
+      if (error?.status === 404 && !this.stopped)
+        this.forget(session);
+    });
+  }
   stopAll() {
     this.stopped = true;
     for (const timer of this.later.values())
@@ -3499,10 +3505,10 @@ class Goals {
           return;
         if (type === "session.deleted")
           return this.forget(session);
-        if (type === "session.execution.succeeded" || type === "session.execution.failed" || type === "session.execution.interrupted")
+        if (type === "session.execution.succeeded" || type === "session.execution.failed" || type === "session.execution.interrupted" || type === "session.metadata.updated")
           this.look(session);
       },
-      reconnected: () => this.look(session)
+      reconnected: () => this.goals.get(session)?.state === "working" ? this.look(session) : void this.forgetIfGone(session)
     }));
   }
   look(session) {
@@ -3578,11 +3584,19 @@ class Goals {
       return this.pause(goal, "error", idle.error?.message ? `The turn failed: ${sentence(String(idle.error.message))}` : "The turn failed.");
     }
     const worked = turn.some((message) => message.type === "assistant" && (message.content ?? []).some((part) => part?.type === "tool"));
+    const info = await sessionInfo(place.api, session).catch(() => ({ id: session }));
+    if (!current())
+      return;
+    if (info.archived) {
+      if (afterStart)
+        this.firstLooks.add(session);
+      return;
+    }
     goal.checking = true;
     this.changed(goal);
     let verdict;
     try {
-      verdict = await this.check(session, place, goal.condition, messages, goal.started);
+      verdict = await this.check(info, place, goal.condition, messages, goal.started);
     } catch (error) {
       goal.checking = false;
       if (!current())
@@ -3601,8 +3615,6 @@ class Goals {
       goal.ended = this.now();
       if (verdict.verdict === "impossible")
         goal.note = verdict.reason;
-      this.stops.get(session)?.();
-      this.stops.delete(session);
       return void this.changed(goal);
     }
     goal.quiet = worked ? 0 : goal.quiet + 1;
@@ -3633,8 +3645,7 @@ class Goals {
     settle();
     this.save();
   }
-  async check(session, place, condition, messages, since) {
-    const info = await sessionInfo(place.api, session).catch(() => ({ id: session }));
+  async check(info, place, condition, messages, since) {
     return parseVerdict(await freshAnswer(place.api, place === this.places.engine, info, checkPrompt(condition, transcript(messages, since))));
   }
   async isActive(session, place) {
@@ -13860,8 +13871,10 @@ class Turn {
         step.time.streamed = Date.now();
       this.send(`session.${kind}.started`, { assistantMessageID: step.id, ordinal });
     }
-    this.block.content.text += delta;
-    this.send(`session.${kind}.delta`, { assistantMessageID: step.id, ordinal: this.block.ordinal, delta });
+    const content = this.block.content;
+    const at = content.text.length;
+    content.text += delta;
+    this.send(`session.${kind}.delta`, { assistantMessageID: step.id, ordinal: this.block.ordinal, delta, at });
     this.save();
   }
   blockStart(key, kind) {
@@ -13885,8 +13898,10 @@ class Turn {
     const step = this.step;
     if (!block || !step)
       return;
-    block.content.text += delta;
-    this.send(`session.${kind}.delta`, { assistantMessageID: step.id, ordinal: block.ordinal, delta });
+    const content = block.content;
+    const at = content.text.length;
+    content.text += delta;
+    this.send(`session.${kind}.delta`, { assistantMessageID: step.id, ordinal: block.ordinal, delta, at });
     this.save();
   }
   blockEnd(key) {
@@ -13942,8 +13957,9 @@ class Turn {
     const tool = this.tools.get(id);
     if (!tool || tool.call.state.status !== "streaming" || this.ended)
       return;
+    const at = tool.call.state.input.length;
     tool.call.state.input += delta;
-    this.send("session.tool.input.delta", { assistantMessageID: tool.step.id, id, delta });
+    this.send("session.tool.input.delta", { assistantMessageID: tool.step.id, id, delta, at });
   }
   toolCalled(id, input) {
     if (this.ended)
@@ -21772,4 +21788,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 4394daf2ce9c0a603da04d4c28b057540086c48abcee3b54435cdd95b1bce623
+// Built from Packages/Box/src/agents 1d11668531821c53caccf81149f08c2ce633022cc90cbaa92795c878b9e013c8

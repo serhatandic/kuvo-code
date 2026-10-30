@@ -1215,12 +1215,13 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     set aside in Accounts (Settings says Sign In Again, not Sign In). `problem`: the settings
     file can't be changed.
   - `POST kuvo/integrations/<id>` with `{"keys"?: {"<name>": "<value>"}}` adds it, as Connect
-    (or Add Key…) does: with the keys given, or those the computer has; one added already is
-    written again (the engine reads its keys again), and with new keys its server connects again a
+    (or Add Key…) does: with the keys given, and those not given as the computer has them (Change
+    Key may send only the one you changed); one added already is written again as it is then,
+    with what another client changed meanwhile (the engine reads its keys again), and with new keys its server connects again a
     moment later, in the engine's own copy and in every folder it has open (`api/debug/location`;
     over `box route`, in a process of its own, `kuvo-link.js box reconnect <id>`). `200 {"integration"}`, as listed; `400 {"message"}` without the keys it needs;
-    `404` for none; `409 {"message"}` for one used on its site, or a settings file that can't be
-    changed; `503 {"message"}` when its keys can't be kept (this Mac's Keychain, through its app).
+    `404` for none; `409 {"message"}` for one used on its site, a settings file that can't be
+    changed, or one removed while its keys were saved; `503 {"message"}` when its keys can't be kept (this Mac's Keychain, through its app).
   - `DELETE kuvo/integrations/<id>` removes it, as Remove… does: bots' own keys for it there first
     (each computer keeps its bots' keys itself: "Bots' own keys"), then it, its sign-in, what its
     server kept and its keys. `200 {}`; for one not added, `200 {}` when keys of it were left (a
@@ -1399,8 +1400,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     branch left `base` for `branch`, or git's empty tree before the first commit); `patch` git's
     diff of the folder's files with each whole file as context (`a/` and `b/` prefixes, paths not
     quoted, renames found); `untracked` the new files git doesn't know (not for `staged`; a
-    repository inside this one ends in `/`), and `hashes` git's hash of each, by path, so a client
-    reads one again (`kuvo/file`) only when it changed; `uncommitted`, anything not committed yet
+    repository inside this one ends in `/`), and `hashes` a stamp of each (its size and when it
+    last changed, opaque to a client), by path, so a client reads one again (`kuvo/file`) only when
+    it changed; `uncommitted`, anything not committed yet
     (always true but for `branch`). `500 {"message"}` when git couldn't say.
   - `POST kuvo/git/stage`, `…/unstage` or `…/discard` with `{"root", "path", "oldPath"?, "status":
     "added|deleted|modified|renamed", "scope"?}` → `200 {}`, or `422 {"message"}` with what went
@@ -1659,7 +1661,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `every` 30m, 2h, 1d, 1w or weekdays, at least 5m), with the computer's own clock and weekends;
   `400 {"message"}` for what can't be one, `409` with 50 waiting. `POST
   kuvo/wakes/<session>/pause` with `{"paused": true}` holds them (a pause of your own), `false`
-  lets them go; with `{"archived": true}` they're held as archiving holds them (a client that
+  lets them go (not archiving's hold: they still wait until it's back, bridge 0.9.121); with `{"archived": true}` they're held as archiving holds them (a client that
   archived it on the engine directly says so), `false` lets go of only that hold. Both answer the
   list as it is then. `POST
   kuvo/wakes/<session>/cancel` with `{"wake": "<id>"}` or `{"watch": "<letters>"}` cancels one;
@@ -1780,11 +1782,14 @@ Grok). With none to answer, the goal pauses and says so. A client reaches them a
   "not_met" | "impossible", reason, at}`, its reason what's left or what shows it's met. Times in
   ms since 1970.
 - The bridge's events (`kuvo/agents/api/event`) carry `kuvo.goal.updated` `{sessionID, goal}` for
-  each change, `goal` null once it's put away (or its conversation deleted).
+  each change, `goal` null once it's put away (or its conversation deleted, over or not, also while
+  the box was stopped).
 - In the conversation, the goal's messages to the agent are notes (`synthetic`) whose text starts
   with `[Goal] `: show their `description` ("Goal: …", "Not met yet: …") as the goal's. A turn
   you stop pauses it ("The turn was stopped."); so does one that fails. A turn cut short as the box
-  stopped is checked once it's back, as any turn, and one is never checked twice.
+  stopped is checked once it's back, as any turn, and one is never checked twice. While its
+  conversation is archived (`kuvo.archived` in its metadata, or the engine's own), the goal waits,
+  still `working`: its last turn is checked once the conversation is brought back (bridge 0.9.121).
 - "/goal" in a composer: `/goal <condition>` sets it, `/goal` alone shows it, and `/goal pause`,
   `/goal resume` and `/goal clear` (or `stop`, `off`, `reset`, `none`, `cancel`) do what they say
   (OpenCodeKit's `GoalCommand`, for every client alike).

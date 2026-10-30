@@ -697,7 +697,7 @@ final class SessionModel {
             fresh.helpers.formUnion(helpers)
             // Unknown (the engine didn't answer): as it was, not stopped.
             fresh.load(messages: kept + page.data, inbox: waiting, permissions: asked, forms: open, isRunning: running ?? transcript.isRunning)
-            for event in cameDuringRead[read] ?? [] { fresh.apply(event) }
+            fresh.catchUp(on: cameDuringRead[read] ?? [], shown: live ?? transcript)
             // It has what streamed in so far.
             discardLive()
             transcript = fresh
@@ -1386,22 +1386,35 @@ final class SessionModel {
                 ? "A subagent’s conversation can’t have a goal of its own. Set it in the conversation it works for."
                 : goalBridge()?.api != nil
                 ? "This computer’s agents bridge is from before goals. Set it up again in Settings › Machines to update it."
-                : "Goals run in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment."
+                : Self.goalsNotRunning
             return
         }
         changeGoal(command) { [weak self] in self?.restore(text: written) }
     }
 
-    /// The goal bar's Stop: the goal taken away, and the turn under way stopped.
+    private static let goalsNotRunning = "Goals run in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment."
+
+    /// The goal bar's Stop: the goal taken away, and, while it's at work, the turn under way
+    /// stopped. A paused goal's turn under way is yours (or the one Pause let finish): it goes on.
     func stopGoal() {
-        changeGoal(.clear)
-        if isRunning { stop() }
+        let stopsTurn = goal?.state == .working && isRunning
+        guard changeGoal(.clear) else { return }
+        if stopsTurn { stop() }
     }
 
     /// Changes the goal on its computer's box (the goal bar's buttons too); what can't be done is
-    /// said over the composer.
-    func changeGoal(_ command: GoalCommand, failed: @escaping () -> Void = {}) {
-        guard let bridge = goalBridge(), let api = bridge.api, !isChangingGoal else { return failed() }
+    /// said over the composer. Whether it was sent.
+    @discardableResult
+    func changeGoal(_ command: GoalCommand, failed: @escaping () -> Void = {}) -> Bool {
+        guard !isChangingGoal else {
+            failed()
+            return false
+        }
+        guard let bridge = goalBridge(), let api = bridge.api else {
+            failure = Self.goalsNotRunning
+            failed()
+            return false
+        }
         let session = id
         failure = nil
         isChangingGoal = true
@@ -1425,6 +1438,7 @@ final class SessionModel {
                 fail(error)
             }
         }
+        return true
     }
 
     /// "!" at the start of a message: the rest is a command to run in the session's folder.
