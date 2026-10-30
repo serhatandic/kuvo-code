@@ -7,6 +7,7 @@ extension AppModel {
     /// alike ("Sandbox").
     func wireVault() {
         Vaults.shared.client = { [weak self] box in self?.box(box) }
+        Sandboxes.shared.client = { [weak self] box in self?.box(box) }
         Vaults.shared.proof = { [weak self] machine in self?.phoneLink.vaultProof(machine: machine) }
         Vaults.shared.requestProof = { [weak self] machine, method, path, body in self?.phoneLink.vaultRequestProof(machine: machine, method: method, path: path, body: body) }
         // This Mac's vault, for the panel browser's sign-ins (those kept before it moved in), once

@@ -37,6 +37,7 @@ struct ToolCallView: View {
 
     @Environment(\.answerAgent) private var answerAgent
     @Environment(\.workAnswers) private var workAnswers
+    @Environment(\.sandboxStopped) private var sandboxStopped
 
     @ViewBuilder private var step: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -129,6 +130,9 @@ struct ToolCallView: View {
             if let stat = diffStat {
                 DiffStat(additions: stat.additions, deletions: stat.deletions)
             }
+            if let mark = sandboxMark {
+                mark
+            }
             if case .failed(_, let error, _, _) = call.state {
                 if error.isInterruption {
                     Text("Stopped")
@@ -215,6 +219,10 @@ struct ToolCallView: View {
         case "webfetch": return (isActive ? "Fetching " : "Fetched ") + (string("url") ?? "a page")
         case "websearch": return "Searched the web for “\(string("query") ?? "")”"
         case "question": return isActive ? "Asking you a question" : "Asked you a question"
+        case _ where isSandboxAsk:
+            let command = string("command").map { "`\($0)`" } ?? "a command"
+            if isActive { return "Asking to run \(command) outside the sandbox" }
+            return (Self.sandboxOutcome(outputText) == "You said no" ? "Didn’t run " : "Ran ") + command
         case "subagent": return (string("description") ?? (isActive ? "Starting a subagent…" : "A subagent's task")) + (string("agent").map { " · \($0)" } ?? "")
         case "skill": return "Used a skill"
         case "tool_search": return (isActive ? "Looking for a tool" : "Looked for a tool") + (string("query").map { ": “\($0)”" } ?? "")
@@ -348,6 +356,7 @@ struct ToolCallView: View {
         case "write": "doc.badge.plus"
         case "edit", "patch": "pencil"
         case "shell": wake == nil ? "terminal" : "alarm"
+        case _ where isSandboxAsk: "terminal"
         case "grep", "glob": "magnifyingglass"
         case "webfetch", "websearch": "globe"
         case "question": "questionmark.bubble"
@@ -387,6 +396,30 @@ struct ToolCallView: View {
         case "show_file": "doc.richtext"
         default: "safari"
         }
+    }
+
+    /// The agents' `sandbox_ask` (each kind of agent names Kuvo Code's tools its own way).
+    private var isSandboxAsk: Bool { call.name.hasSuffix("sandbox_ask") }
+
+    /// How a `sandbox_ask` was answered, from what it returned: the words its mark shows.
+    static func sandboxOutcome(_ output: String) -> String? {
+        if output.hasPrefix("Ran outside the sandbox · Always for this") { return "Ran outside the sandbox · Always for this" }
+        if output.hasPrefix("Ran outside the sandbox · Allowed once") { return "Ran outside the sandbox · Allowed once" }
+        if output.hasPrefix("The user said no") { return "You said no" }
+        return nil
+    }
+
+    /// A command's quiet mark beside its row: stopped by the sandbox while its ask waits for you;
+    /// run outside it, once or always, or not, once you answered.
+    private var sandboxMark: Text? {
+        if call.name == "shell", wake == nil, let command = string("command"), sandboxStopped.contains(command.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return Text("Stopped by the sandbox").foregroundStyle(.orange)
+        }
+        guard isSandboxAsk else { return nil }
+        if isActive { return Text("Waiting for you").foregroundStyle(.orange) }
+        guard let outcome = Self.sandboxOutcome(outputText) else { return nil }
+        let symbol = outcome == "You said no" ? "" : "\(Image(systemName: "lock.open")) "
+        return Text("\(symbol)\(outcome)").foregroundStyle(.secondary)
     }
 
     private var diffs: [FileDiff] {
@@ -438,7 +471,7 @@ struct ToolCallView: View {
     }
 
     private var hasDetails: Bool {
-        subagentSession != nil || !diffs.isEmpty || (call.name == "shell" && !outputText.isEmpty) || code != nil || call.state.isFailure || !pictures.isEmpty
+        subagentSession != nil || !diffs.isEmpty || ((call.name == "shell" || isSandboxAsk) && !outputText.isEmpty) || code != nil || call.state.isFailure || !pictures.isEmpty
     }
 
     /// Pictures the step brought back, like a screenshot of the page.
@@ -473,7 +506,7 @@ struct ToolCallView: View {
                 }
             }
         } else {
-            OutputBlock(text: outputText, command: call.name == "shell" ? string("command") ?? "" : nil)
+            OutputBlock(text: outputText, command: call.name == "shell" || isSandboxAsk ? string("command") ?? "" : nil)
         }
     }
 }
@@ -596,6 +629,8 @@ extension Message.ToolState {
 }
 
 extension EnvironmentValues {
+    /// The commands its agents ask to run outside the sandbox now, which their rows mark stopped.
+    @Entry var sandboxStopped: Set<String> = []
     /// What a bot answered for the conversation's asks, by the tool call that asked (`kuvo.answers`).
     @Entry var workAnswers: [String: WorkAnswer] = [:]
 }

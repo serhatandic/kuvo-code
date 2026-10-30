@@ -287,6 +287,7 @@ final class AppModel {
         botWork.app = self
         botAsks.app = self
         botAsks.onChange = { [weak self] sessions in self?.workspace.askingForWork = sessions }
+        Sandboxes.shared.onChange = { [weak self] sessions in self?.workspace.askingOutsideSandbox = sessions }
         boxGroups.app = self
         moves.app = self
         // What this Mac's box says is moving, as it changes.
@@ -545,6 +546,7 @@ final class AppModel {
                         async let personalities: Void = Personalities.shared.follow()
                         async let bots: Void = bots.follow()
                         async let asks: Void = botAsks.follow(BoxClient.mac)
+                        async let sandboxAsks: Void = Sandboxes.shared.follow(BoxClient.mac)
                         // COMPAT(0.7 mac-personalities): what an earlier Kuvo Code changed in its own copy, taken in. Goes 3 months after 0.8.0.
                         // What a 0.8.0 beta changed of your personalities where it kept them.
                         await Personalities.shared.takeFromOld()
@@ -555,6 +557,7 @@ final class AppModel {
                         await personalities
                         await bots
                         await asks
+                        await sandboxAsks
                     }
                 }
             }
