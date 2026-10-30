@@ -3477,12 +3477,12 @@ class Goals {
     emit("kuvo.goal.updated", { sessionID: session, goal: null });
   }
   forget(session) {
-    if (this.goals.has(session))
+    if (!this.stopped && this.goals.has(session))
       this.clear(session);
   }
   async forgetIfGone(session) {
     await this.place(session).api.request("GET", at2(session)).catch((error) => {
-      if (error?.status === 404 && !this.stopped)
+      if (error?.status === 404)
         this.forget(session);
     });
   }
@@ -21788,4 +21788,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents c3749e1fb8f96e449f8fc51849ac39f660ad67dda1009082b86c6e74078f0f48
+// Built from Packages/Box/src/agents 813555072b38d089619f26d2b03a4ffe6eceb42c059e326e9f49aa21dea1a4e6
