@@ -97,8 +97,21 @@ struct ChangesPanel: View {
                 highlighting[file.id] = await DiffHighlighting.make(for: file)
             }
         }
-        // A comment half written is the session's it was begun in: not saved to another's.
+        // A comment half written is the session's it was begun in, and the folder's: not saved
+        // to another's.
         .onChange(of: model?.id) { draft = nil }
+        .onChange(of: changes.directory) { draft = nil }
+        // Comments follow their lines as the agent adds lines above them, so the agent is told
+        // where they are now, and they're found there by number next time.
+        .onChange(of: changes.files) {
+            guard let model else { return }
+            let moved = CommentPlace.follow(model.reviewComments, prefix: commentPrefix, in: changes.files)
+            if moved != model.reviewComments { model.reviewComments = moved }
+            if let target = draft, let lines = changes.files.first(where: { $0.id == target.file })?.lines,
+               let at = CommentPlace.index(side: target.side, number: target.number, text: target.text, in: lines) {
+                draft?.number = lines[at].number
+            }
+        }
         .onChange(of: model?.isRunning) { Task { await changes.refresh(fallback: engineChanges, edits: editedFiles) } }
         .onChange(of: engineChanges) { Task { await changes.refresh(fallback: engineChanges, edits: editedFiles) } }
         .onChange(of: editedFiles) { Task { await changes.refresh(fallback: engineChanges, edits: editedFiles) } }
@@ -892,6 +905,19 @@ enum CommentPlace {
             (lines[at].kind == .removed ? ReviewComment.Side.old : .new) == side && lines[at].text.trimmingCharacters(in: .whitespaces) == text
         }
         return same.first { lines[$0].number == number } ?? (same.count == 1 ? same[0] : nil)
+    }
+
+    /// `comments` with the line each of `files`' is on now (those named after `prefix`, the
+    /// folder's), where it's found; the rest as they are.
+    static func follow(_ comments: [ReviewComment], prefix: String, in files: [ChangedFile]) -> [ReviewComment] {
+        comments.map { comment in
+            guard comment.file.hasPrefix(prefix),
+                  let lines = files.first(where: { prefix + $0.path == comment.file })?.lines,
+                  let at = index(side: comment.side, number: comment.line, text: comment.snippet, in: lines) else { return comment }
+            var moved = comment
+            moved.line = lines[at].number
+            return moved
+        }
     }
 }
 

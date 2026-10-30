@@ -39,6 +39,9 @@ struct ChangesReviewTests {
         let at = try #require(CommentPlace.index(side: comment.side, number: comment.line, text: comment.snippet, in: lines))
         #expect(lines[at].text == "let b = 3")
         #expect(lines[at].number == 4)
+        // And the agent is told where it is now.
+        let followed = CommentPlace.follow([comment], prefix: "", in: changes.files)
+        #expect(ReviewComments.text("Have a look", adding: followed).contains("[app.js:4]"))
     }
 
     /// A comment on a line that reads like others ("}") moves with it only when it can't be
