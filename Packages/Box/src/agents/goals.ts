@@ -116,14 +116,15 @@ export class Goals {
     } catch {}
   }
 
-  /** Follows the goals kept from before, and looks at those still working: their last turn may have ended meanwhile. */
+  /** Follows the goals kept from before, and looks at those still working: their last turn may have
+   * ended meanwhile. The others go if their conversation was deleted meanwhile. */
   start() {
     for (const goal of this.goals.values()) {
-      if (goal.state === "working" || goal.state === "paused") this.follow(goal.session)
+      this.follow(goal.session)
       if (goal.state === "working") {
         this.firstLooks.add(goal.session)
         this.look(goal.session)
-      }
+      } else void this.forgetIfGone(goal.session)
     }
   }
 
@@ -218,6 +219,14 @@ export class Goals {
     if (this.goals.has(session)) this.clear(session)
   }
 
+  /** A conversation deleted while the box was stopped, or its feed away: its goal goes (a working
+   * one's look finds that itself). */
+  private async forgetIfGone(session: string) {
+    await this.place(session).api.request("GET", at(session)).catch((error: any) => {
+      if (error?.status === 404 && !this.stopped) this.forget(session)
+    })
+  }
+
   /** The bridge is stopping: nothing more is followed, checked or kept. */
   stopAll() {
     this.stopped = true
@@ -231,6 +240,7 @@ export class Goals {
 
   // MARK: Following a session
 
+  /** Followed while it has a goal, over or not, so its goal goes with it. */
   private follow(session: string) {
     if (this.stops.has(session)) return
     this.stops.set(
@@ -242,7 +252,7 @@ export class Goals {
           if (type === "session.deleted") return this.forget(session)
           if (type === "session.execution.succeeded" || type === "session.execution.failed" || type === "session.execution.interrupted") this.look(session)
         },
-        reconnected: () => this.look(session),
+        reconnected: () => (this.goals.get(session)?.state === "working" ? this.look(session) : void this.forgetIfGone(session)),
       }),
     )
   }
@@ -344,8 +354,6 @@ export class Goals {
       goal.state = verdict.verdict === "met" ? "met" : "unmet"
       goal.ended = this.now()
       if (verdict.verdict === "impossible") goal.note = verdict.reason
-      this.stops.get(session)?.()
-      this.stops.delete(session)
       return void this.changed(goal)
     }
     goal.quiet = worked ? 0 : goal.quiet + 1

@@ -299,6 +299,40 @@ describe("a goal", () => {
     await until(() => told() === null)
     expect(goal()).toBeUndefined()
   })
+
+  test("that's over goes with its conversation too", async () => {
+    await goals.set("ses_work", "the build is green")
+    await until(() => goal()?.state === "met")
+    engine.emit("session.deleted", { sessionID: "ses_work" })
+    await until(() => told() === null)
+    expect(goal()).toBeUndefined()
+  })
+
+  test("over or paused, goes once the box starts again when its conversation was deleted meanwhile", async () => {
+    engine.session("ses_other", [{ id: "msg_0000", type: "idle", outcome: "succeeded", time: { created: 1 } }])
+    await goals.set("ses_work", "the build is green")
+    await until(() => goal()?.state === "met")
+    await goals.set("ses_other", "the lint is clean")
+    goals.pauseByYou("ses_other")
+    await until(() => goal("ses_other")?.state === "paused" && engine.checks.length === 1)
+    goals.stopAll()
+    engine.conversations.delete("ses_work")
+    engine.conversations.delete("ses_other")
+    goals = makeGoals()
+    goals.start()
+    await until(() => told("ses_work") === null && told("ses_other") === null)
+    expect(goals.list()).toEqual([])
+  })
+
+  test("over, goes when its conversation was deleted while the engine was away", async () => {
+    await goals.set("ses_work", "the build is green")
+    await until(() => goal()?.state === "met")
+    engine.conversations.delete("ses_work")
+    // The engine started again (a new password): the bridge's link to it is told where it is anew.
+    link.configure(engine.url, "y")
+    await until(() => told() === null)
+    expect(goal()).toBeUndefined()
+  })
 })
 
 describe("a goal in a coding agent's conversation", () => {

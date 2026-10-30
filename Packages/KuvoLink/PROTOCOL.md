@@ -1747,7 +1747,8 @@ Grok). With none to answer, the goal pauses and says so. A client reaches them a
   "not_met" | "impossible", reason, at}`, its reason what's left or what shows it's met. Times in
   ms since 1970.
 - The bridge's events (`kuvo/agents/api/event`) carry `kuvo.goal.updated` `{sessionID, goal}` for
-  each change, `goal` null once it's put away (or its conversation deleted).
+  each change, `goal` null once it's put away (or its conversation deleted, over or not, also while
+  the box was stopped).
 - In the conversation, the goal's messages to the agent are notes (`synthetic`) whose text starts
   with `[Goal] `: show their `description` ("Goal: …", "Not met yet: …") as the goal's. A turn
   you stop pauses it ("The turn was stopped."); so does one that fails. A turn cut short as the box
