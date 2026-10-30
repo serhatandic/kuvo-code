@@ -1160,7 +1160,7 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
   if (action === "pause") {
     if (given.paused)
       fs9.writeFileSync(path8.join(folder, "paused"), "paused");
-    else
+    else if (textOf(path8.join(folder, "paused")) !== "archived")
       fs9.rmSync(path8.join(folder, "paused"), { force: true });
     return yield* changed(200, listed());
   }

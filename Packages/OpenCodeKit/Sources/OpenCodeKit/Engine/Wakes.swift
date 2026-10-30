@@ -361,7 +361,8 @@ public enum Wakes {
       case "$1" in
         +*[mhd])
           n=${1#+}; unit=${n#"${n%?}"}; n=${n%?}
-          case "$n" in ''|*[!0-9]*|???????*) return 1;; esac
+          # No leading zero, which is octal here: 08 an error, 010 eight.
+          case "$n" in ''|0*|*[!0-9]*|???????*) return 1;; esac
           case "$unit" in m) echo $((now + n * 60));; h) echo $((now + n * 3600));; d) echo $((now + n * 86400));; esac ;;
         *[!0-9]*)
           t=$(echo "$1" | sed 's/T/ /')
@@ -489,7 +490,7 @@ public enum Wakes {
 
     # Seconds in a watch's interval: 5m or more, 2h, 1d.
     period() {
-      p_n=${1%?}; case "$p_n" in ''|*[!0-9]*) return 1;; esac
+      p_n=${1%?}; case "$p_n" in ''|0*|*[!0-9]*|???????*) return 1;; esac
       case "$1" in *m) [ "$p_n" -ge 5 ] && echo $((p_n * 60));; *h) [ "$p_n" -ge 1 ] && echo $((p_n * 3600));; *d) [ "$p_n" -ge 1 ] && echo $((p_n * 86400));; *) return 1;; esac
     }
 
@@ -617,6 +618,16 @@ public enum Wakes {
     delivered() { [ -f "$1/pending" ] && mv -f "$1/pending" "$1/last"; rm -f "$1/message"; }
 
     random() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c "$1"; }
+    # A folder's path as a header carries it, as encodeURIComponent does: each byte but letters,
+    # digits and -_.!~*'() as %XX (UTF-8 names too).
+    encoded() {
+      for h in $(printf '%s' "$1" | od -An -v -tx1); do
+        case $h in
+          2[1d-e]|27|28|29|2a|3[0-9]|4[1-9a-f]|5[0-9a]|5f|6[1-9a-f]|7[0-9a]|7e) printf "\\$(printf '%03o' "0x$h")" ;;
+          *) printf '%%%s' "$h" | tr 'a-f' 'A-F' ;;
+        esac
+      done
+    }
 
     # The time zone a bot's times are in ($1, its folder, ending in /): its timezone file's, from
     # the computer's own zone files, or from the copy of your Mac's beside it, on a machine that
@@ -762,6 +773,11 @@ public enum Wakes {
           s_out=$(s_ask "$bport" "$bpassword") || return 0
           s_code=$(printf '%s' "$s_out" | tail -n 1)
           [ "$s_code" = 200 ] && printf bridge >"${bot}via" && port=$bport password=$bpassword tools=1
+        # Or the engine's, which its folder took for the bridge's (neither answered as it was made).
+        elif [ "$s_code" = 404 ] && [ "$port" = "$bport" ] && [ -n "$eport" ] && [ -n "$epassword" ]; then
+          s_out=$(s_ask "$eport" "$epassword") || return 0
+          s_code=$(printf '%s' "$s_out" | tail -n 1)
+          [ "$s_code" = 200 ] && rm -f "${bot}via" && port=$eport password=$epassword tools=
         fi
         case "$s_code" in
           404) mkdir -p "${botsroot%/*}/trash" && mv "${bot%/}" "${botsroot%/*}/trash/wakes-$session-$now" 2>/dev/null; return 1 ;;
@@ -769,6 +785,12 @@ public enum Wakes {
           *) return 0 ;;
         esac
         s_body=$(printf '%s' "$s_out" | sed '$d')
+        # One held (`held`) is only let go once it's gone, or, held as archived, once it's back
+        # (its bringing back didn't reach this computer): its wake-ups go from the next minute.
+        if [ -n "$held" ]; then
+          [ "$(cat "${bot}paused" 2>/dev/null)" = archived ] && ! printf '%s' "$s_body" | grep -qE "$archived" && rm -f "${bot}paused"
+          return 1
+        fi
         # Archived, from any app (a Mac's, a phone's: they mark the session itself), wherever it
         # was done: its wake-ups wait, as when paused, until it's brought back.
         printf '%s' "$s_body" | grep -qE "$archived" && return 1
@@ -791,18 +813,26 @@ public enum Wakes {
       # Sends a wake-up's text to the bot's session; true once it's gone.
       deliver() {
         # The bot's folder's tools (its browser, integrations) first: the engine connects them
-        # after it opens the folder, and a wake-up sent sooner goes without them. Twenty seconds
-        # at most, as an integration's server can take a while the first time.
+        # after it opens the folder, and a wake-up sent sooner goes without them. A folder it has
+        # only just opened lists none for a moment before they're pending. Twenty seconds at most,
+        # as an integration's server can take a while the first time.
         if [ -f "${bot}directory" ] && command -v curl >/dev/null 2>&1 && [ -z "$tools" ]; then
-          tools=1; waited=; tries=0
-          folder=$(sed -e 's/%/%25/g' -e 's/ /%20/g' "${bot}directory")
-          while [ "$tries" -lt 80 ]; do
-            tries=$((tries + 1))
-            printf 'user = "opencode:%s"\n' "$password" | curl -q -sf -m 5 --noproxy '*' -K - -H "x-opencode-directory: $folder" "http://127.0.0.1:$port/api/mcp" | grep -q '"pending"' || break
-            waited=1; sleep 0.25
+          tools=1; pended=; began=$(date +%s)
+          folder=$(encoded "$(cat "${bot}directory")")
+          while listed=$(printf 'user = "opencode:%s"\n' "$password" | curl -q -sf -m 5 --noproxy '*' -K - -H "x-opencode-directory: $folder" "http://127.0.0.1:$port/api/mcp"); do
+            [ -z "$stopping" ] || return 1
+            waited=$(($(date +%s) - began))
+            [ "$waited" -ge 20 ] && break
+            case "$listed" in
+              *'"pending"'*) pended=1 ;;
+              *'"status"'*) break ;;
+              *) [ "$waited" -ge 3 ] && break ;;
+            esac
+            sleep 0.25
           done
-          [ -n "$waited" ] && sleep 1.5
+          [ -n "$pended" ] && sleep 1.5
         fi
+        [ -z "$stopping" ] || return 1
         ms=$(date +%s%3N 2>/dev/null); case "$ms" in *[!0-9]*|'') ms=$((now * 1000));; esac
         id=msg_$(printf '%012x' $(((ms * 4096 + 1) & 0xFFFFFFFFFFFF)))$(random 14)
         body="{\"id\":\"$id\",\"text\":\"$(json "[Wake-up] $1")\",\"delivery\":\"queue\"}"
@@ -833,14 +863,28 @@ public enum Wakes {
       for bots in "$2" "${2%/*}/wakes"; do
       [ -d "$bots" ] || continue
       # One at a time: two at once (a watchdog left from before the engine started over, say)
-      # would send a wake-up twice. A lock left by one that was killed goes after ten minutes.
+      # would send a wake-up twice. One stopped lets go of it once the wake-up it's sending is
+      # done with (dash runs no EXIT trap for a signal): stopped as soon as the signal comes, one
+      # the engine took would be sent again. One left by one killed outright goes after ten minutes.
       lock="$bots/.firing"
       [ -z "$(find "$lock" -maxdepth 0 -mmin +10 2>/dev/null)" ] || rmdir "$lock" 2>/dev/null
       mkdir "$lock" 2>/dev/null || continue
+      stopping=
       trap 'rmdir "$lock" 2>/dev/null' EXIT
+      trap 'stopping=1' INT TERM HUP
+      stop() { [ -z "$stopping" ] || { rmdir "$lock" 2>/dev/null; exit 143; }; }
+      held=
       for bot in "$bots"/*/; do
+        stop
         # Paused by you (a session's, while it's archived: see `settle` too): its wake-ups wait.
-        [ -e "${bot}paused" ] && continue
+        # Though one whose session is gone (deleted while it was held) goes to the trash, as
+        # `settle` has one go; not one on its way to another computer.
+        if [ -e "${bot}paused" ]; then
+          if [ "$(cat "${bot}paused" 2>/dev/null)" != moving ] && session=$(cat "$bot/session" 2>/dev/null) && [ -n "$session" ] && reach; then
+            held=1; settle; held=
+          fi
+          continue
+        fi
         # One whose last wake-up couldn't go waits before it's tried again (`.retry`: when, and how
         # long it waited): a minute, then twice as long each time, up to half an hour.
         r_at=; r_wait=
@@ -857,6 +901,7 @@ public enum Wakes {
         settle || continue
         failed=
         for wake in "$bot"wakes/*; do
+          stop
           [ -f "$wake" ] || continue
           file=${wake##*/}; rest=${file#*-}; due=${file%%-*}
           case "$rest" in *-*) every=${rest#*-};; *) every=;; esac
@@ -882,6 +927,7 @@ public enum Wakes {
             failed=1
           fi
         done
+        stop
         if [ -n "$failed" ]; then
           case "$r_wait" in ''|*[!0-9]*) r_wait=30;; esac
           r_wait=$((r_wait * 2)); [ "$r_wait" -le 1800 ] || r_wait=1800
@@ -890,7 +936,7 @@ public enum Wakes {
           rm -f "${bot}.retry"
         fi
       done
-      rmdir "$lock" 2>/dev/null; trap - EXIT
+      rmdir "$lock" 2>/dev/null; trap - EXIT INT TERM HUP
       # Then their watches, apart (a slow check, up to a minute each, never holds up a wake-up, nor
       # the next round's): what changed wakes the bot, with what its check prints now; one that
       # can't go is tried again at the next check. One round of them at a time.
@@ -899,6 +945,7 @@ public enum Wakes {
       mkdir "$watching" 2>/dev/null || continue
       (
       trap 'rmdir "$watching" 2>/dev/null' EXIT
+      trap 'rmdir "$watching" 2>/dev/null; exit 143' INT TERM HUP
       for bot in "$bots"/*/; do
         [ -e "${bot}paused" ] && continue
         [ -d "${bot}watches" ] || continue
