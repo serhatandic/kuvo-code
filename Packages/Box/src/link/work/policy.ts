@@ -270,7 +270,7 @@ function checkSpec(spec: Spec, words: string[], place: Place): string | null {
 export function commandRefusal(line: string, folders: readonly string[]): string | null {
   // What a shell would split on, or take apart, beyond a space: never.
   if (!/^[\x20-\x7E]*$/.test(line)) return `${CANT} (a character it can't read plainly)`;
-  const read = readLine(line, true);
+  const read = readLine(line);
   if ("unreadable" in read) return `${CANT} (${read.unreadable})`;
   if (!read.parts.length || !folders.length) return CANT;
   const place: Place = { cwd: realOf(folders[0]), folders };
