@@ -4,7 +4,7 @@
 import { spawn } from "node:child_process"
 import { accessSync, constants } from "node:fs"
 import { delimiter, join } from "node:path"
-import { onMachine, ownEnvironment } from "./machine"
+import { loginPath } from "../shared/platform"
 
 /** The program's path on PATH (or the extra places given), if it's there. */
 export function which(name: string, extra: string[] = []): string | undefined {
@@ -97,8 +97,7 @@ let reading: Promise<void> | undefined
  * Homebrew, an installer that adds a folder to your profile) is found. Asked when you refresh,
  * at most every few seconds (`now`: again, after an install), one read at a time. On a machine
  * too, with its own folders: a command over SSH gets less than its terminal does (`~/.local/bin`
- * comes from the profile); there a login shell that isn't interactive, as a terminal's commands
- * over SSH would have it, so nothing it starts for you stays running.
+ * comes from the profile, nvm's node from .bashrc), read as the engine's start reads it there.
  */
 export async function refreshLoginPath(now = false): Promise<void> {
   if (reading) {
@@ -114,18 +113,9 @@ export async function refreshLoginPath(now = false): Promise<void> {
 }
 
 async function readLoginPath() {
-  const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh")
-  for (const flags of onMachine ? ["-lc"] : ["-ilc", "-lc"]) {
-    try {
-      const ran = await run(shell, [flags, 'printf "__KUVO_PATH__%s__KUVO_END__" "$PATH"'], { timeout: 8_000, env: { ...ownEnvironment(), PATH: startPath, DISABLE_AUTO_UPDATE: "true" } })
-      const found = ran.stdout.match(/__KUVO_PATH__([\s\S]*?)__KUVO_END__/)?.[1]
-      if (found?.trim()) {
-        // Kuvo Code's own commands (kuvo-wake) first, as the app gave them; each folder once.
-        process.env.PATH = [...new Set([process.env.KUVO_BIN, ...found.trim().split(":")].filter(Boolean))].join(":")
-        return
-      }
-    } catch {}
-  }
+  const found = await loginPath({ env: { ...process.env, PATH: startPath } })
+  // Kuvo Code's own commands (kuvo-wake) first, as the app gave them; each folder once.
+  if (found) process.env.PATH = [...new Set([process.env.KUVO_BIN, ...found.split(":")].filter(Boolean))].join(":")
 }
 
 /** Finds the first web address in some text (a sign-in page a program printed). */

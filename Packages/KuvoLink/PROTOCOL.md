@@ -2355,6 +2355,14 @@ Mac's app runs it as it starts its engine, and a machine's start scripts do, so 
 after a restart with no Mac there gets it too; a box too old to know it starts its engine as
 before. A Mac sends none.
 
+A machine's engine, its coding agents and its link find programs on the PATH your login shell sets
+up there (`~/.local/bin` from your profile, nvm's node from `.bashrc`), not the bare one a start over
+SSH or from cron gets: `kuvo-link.js login-path` (bridge 0.9.116) prints it, read from an interactive
+login shell, then a login shell only (`$SHELL`; on Linux your account's when that's cron's `/bin/sh`),
+or nothing when neither answers in time. A machine's start scripts run it before starting the engine;
+the coding agents' bridge and the link read it themselves. This Mac's app reads its own shell's for
+its engine.
+
 ### Personalities
 
 The personalities you make are one library on every computer: each keeps its copy (a Mac in

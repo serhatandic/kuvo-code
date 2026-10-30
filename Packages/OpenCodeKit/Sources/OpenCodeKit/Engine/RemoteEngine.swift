@@ -1012,6 +1012,12 @@ public final class RemoteServer: @unchecked Sendable {
         \(boot ? "" : Wakes.installScript)
         \(boot ? "" : Launcher.installScript)
         \(boot ? "" : CommandEnvironment.installScript)
+        # The PATH your login shell sets up there (`~/.local/bin`, nvm's node), which a start over
+        # SSH or from cron doesn't get, for the engine and what it starts, as the box reads it (its
+        # link's `login-path`). Without it (a box too old to know it), the PATH it has.
+        if [ -f "$K/bin/kuvo-link.js" ]; then
+          p=$(cd "$K" && KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$K/engine/$V/opencode" "$K/bin/kuvo-link.js" login-path 2>/dev/null </dev/null) && case "$p" in /*) PATH=$p ;; esac
+        fi
         export PATH="$K/bin:$PATH"
         # Bots' and sessions' folders under this root, for `kuvo-wake` (its default is the app's own root).
         export KUVO_BOTS="$K/bots" KUVO_WAKES="$K/wakes"

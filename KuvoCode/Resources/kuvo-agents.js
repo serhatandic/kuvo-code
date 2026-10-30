@@ -457,9 +457,70 @@ import { existsSync, statfsSync } from "fs";
 import { basename as basename2, dirname, relative, sep as sep2 } from "path";
 
 // Packages/Box/src/agents/proc.ts
-import { spawn } from "child_process";
+import { spawn as spawn2 } from "child_process";
 import { accessSync, constants } from "fs";
 import { delimiter, join as join3 } from "path";
+
+// Packages/Box/src/shared/platform.ts
+import { execFileSync, spawn } from "child_process";
+import path from "path";
+function loginShell(env = process.env, platform = process.platform) {
+  const given = env.SHELL && path.isAbsolute(env.SHELL) ? env.SHELL : undefined;
+  if (platform === "darwin")
+    return given ?? "/bin/zsh";
+  if (given && given !== "/bin/sh")
+    return given;
+  try {
+    const entry = execFileSync("getent", ["passwd", String(process.getuid?.() ?? "")], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+    const shell = entry.trim().split(":")[6];
+    if (shell && path.isAbsolute(shell))
+      return shell;
+  } catch {}
+  return given ?? "/bin/sh";
+}
+var LOGIN_PATH_MARKERS = ["__KUVO_PATH__", "__KUVO_END__"];
+async function loginPath(options = {}) {
+  const env = options.env ?? process.env;
+  const shell = loginShell(env, options.platform);
+  if (shell.endsWith("/nu"))
+    return;
+  const kept = Object.entries(env).filter(([name, value]) => value !== undefined && /^(HOME|USER|LOGNAME|LANG|LC_[A-Z_]+|TERM|TMPDIR|PATH)$/.test(name));
+  const login = { ...Object.fromEntries(kept), SHELL: shell, DISABLE_AUTO_UPDATE: "true" };
+  for (const [flags, timeout] of [["-ilc", options.interactive ?? 15000], ["-lc", options.login ?? 5000]]) {
+    const found = await new Promise((resolve) => {
+      let output = "";
+      let child;
+      try {
+        child = spawn(shell, [flags, `printf '%s%s%s' ${LOGIN_PATH_MARKERS[0]} "$PATH" ${LOGIN_PATH_MARKERS[1]}`], { cwd: login.HOME, env: login, detached: true, stdio: ["ignore", "pipe", "ignore"] });
+      } catch {
+        return resolve(undefined);
+      }
+      const done = (value) => {
+        clearTimeout(timer);
+        try {
+          if (child.pid)
+            process.kill(-child.pid, "SIGKILL");
+        } catch {}
+        resolve(value);
+      };
+      const timer = setTimeout(() => done(undefined), timeout);
+      child.stdout?.on("data", (chunk) => {
+        output += chunk;
+        const at = output.indexOf(LOGIN_PATH_MARKERS[0]);
+        const end = at < 0 ? -1 : output.indexOf(LOGIN_PATH_MARKERS[1], at);
+        if (end >= 0)
+          done([...new Set(output.slice(at + LOGIN_PATH_MARKERS[0].length, end).trim().split(":").filter(Boolean))].join(":") || undefined);
+      });
+      child.on("error", () => done(undefined));
+      child.on("close", () => done(undefined));
+    });
+    if (found)
+      return found;
+  }
+  return;
+}
+
+// Packages/Box/src/agents/proc.ts
 function which(name, extra = []) {
   const folders = [...(process.env.PATH ?? "").split(delimiter), ...extra].filter(Boolean);
   for (const folder of folders) {
@@ -507,7 +568,7 @@ function runGroup(command, args, options = {}) {
     if (env[name] === undefined)
       delete env[name];
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd: options.cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn2(command, args, { cwd: options.cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout?.on("data", (chunk) => stdout += chunk);
@@ -552,17 +613,9 @@ async function refreshLoginPath(now = false) {
   await reading;
 }
 async function readLoginPath() {
-  const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
-  for (const flags of onMachine ? ["-lc"] : ["-ilc", "-lc"]) {
-    try {
-      const ran = await run(shell, [flags, 'printf "__KUVO_PATH__%s__KUVO_END__" "$PATH"'], { timeout: 8000, env: { ...ownEnvironment(), PATH: startPath, DISABLE_AUTO_UPDATE: "true" } });
-      const found = ran.stdout.match(/__KUVO_PATH__([\s\S]*?)__KUVO_END__/)?.[1];
-      if (found?.trim()) {
-        process.env.PATH = [...new Set([process.env.KUVO_BIN, ...found.trim().split(":")].filter(Boolean))].join(":");
-        return;
-      }
-    } catch {}
-  }
+  const found = await loginPath({ env: { ...process.env, PATH: startPath } });
+  if (found)
+    process.env.PATH = [...new Set([process.env.KUVO_BIN, ...found.split(":")].filter(Boolean))].join(":");
 }
 function firstURL(text) {
   return text.match(/https?:\/\/[^\s"'<>]+/)?.[0];
@@ -5544,7 +5597,7 @@ async function voiceRoutes(voice, method, parts) {
 }
 
 // Packages/Box/src/agents/kuvotools.ts
-import { spawn as spawn2 } from "child_process";
+import { spawn as spawn3 } from "child_process";
 var server;
 var program;
 function setToolServer(value) {
@@ -5603,7 +5656,7 @@ async function listOverHTTP(tools) {
 }
 function listFromProgram(tools) {
   return new Promise((resolve, reject) => {
-    const child = spawn2(tools.command, tools.args, { env: { ...process.env, ...tools.env }, stdio: ["pipe", "pipe", "ignore"] });
+    const child = spawn3(tools.command, tools.args, { env: { ...process.env, ...tools.env }, stdio: ["pipe", "pipe", "ignore"] });
     const timer = setTimeout(() => finish(new Error("Kuvo Code's tools didn't answer.")), 15000);
     let buffered = "";
     let done = false;
@@ -20609,4 +20662,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents b20517f47541ebe2b054df5956097219780434ef3200ae5e51fa37b2843c0ffd
+// Built from Packages/Box/src/agents 187aaa7770f696f20eda3839629ae2210b92c80f63270af83511ed3c64fbce12

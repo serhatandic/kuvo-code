@@ -22,6 +22,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sleep } from "../shared/wait";
+import { loginPath } from "../shared/platform";
 import { watchAsks } from "./areas/asks";
 import { watchWorkAsks } from "./work/asks";
 import { refreshBotsKeys } from "./areas/bot-keys";
@@ -211,6 +212,9 @@ async function run(): Promise<void> {
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
   fs.writeFileSync(PID_FILE, String(process.pid), { mode: 0o600 });
   fs.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 0o600 });
+  // The programs it looks for (an MCP server's `npx`) found where the engine finds them: on the
+  // PATH your login shell sets up, which the keeper's start doesn't get.
+  void loginPath().then(found => { if (found) process.env.PATH = [...new Set([path.join(K, "bin"), ...found.split(":")])].join(":"); });
   // COMPAT(beta.1 connected): `run/connected` (beta.1) and `run/present` (0.7 with the phone link on), cleared. Goes when 0.8.0 ships.
   // The notes an earlier Kuvo Code on a Mac left that it was connected (it did some of the box's
   // work then): nothing reads them now.
@@ -758,6 +762,10 @@ if (main) {
   // A machine's start scripts' (`kuvo-launch`): what its engine starts with, its OPENCODE_CONFIG_CONTENT
   // with what some providers need on top, as this box last learned it (PROTOCOL.md, "Settings per box").
   else if (mode === "engine-config") process.stdout.write(engineConfigContent(process.env.OPENCODE_CONFIG_CONTENT));
+  // A machine's start scripts' too: the PATH your login shell sets up there (`~/.local/bin`, nvm's
+  // node), for the engine and what it starts, which a start over SSH or from cron doesn't get.
+  // Nothing when the shell doesn't give it, for the start to keep the PATH it has.
+  else if (mode === "login-path") process.stdout.write((await loginPath()) ?? "");
   else if (mode === "update") {
     // `update [--now]`, and for a test's folder only, `--url <boxes.json> --key <public key>`. Once
     // it's updated, the running bridge goes, for the keeper to start the new one.
@@ -779,7 +787,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | update [--now] | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | login-path | update [--now] | selftest");
     process.exit(2);
   }
 }
