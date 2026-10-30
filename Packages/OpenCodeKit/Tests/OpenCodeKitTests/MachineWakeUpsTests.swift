@@ -44,6 +44,8 @@ import Testing
             done
             rest=${url#http://127.0.0.1:}; port=${rest%%/*}; path=${rest#*/}
             printf '%s %s %s %s\n' "$port" "$method" "$path" "$body" >>"$K/requests"
+            # The watchdog stopping it as it asks (its machine shutting down, say).
+            if [ -f "$K/stop-on-ask" ]; then rm "$K/stop-on-ask"; kill -TERM "$(cat "$K/fire.pid")"; exit 22; fi
             key=$(printf '%s %s %s' "$port" "$method" "$path" | tr '/ ?' '___')
             # A prompt is taken, unless an answer says otherwise; the rest isn't there.
             code=404; out=
@@ -226,6 +228,20 @@ import Testing
         // Its folder named as the engine reads it (encodeURIComponent).
         let folders = (try? String(contentsOf: k.appending(path: "folders"), encoding: .utf8)) ?? ""
         #expect(folders.split(separator: "\n").first.map(String.init) == "/home/me/Çalışma notes".addingPercentEncoding(withAllowedCharacters: .init(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*'()")))
+    }
+
+    @Test(arguments: WakesTests.shells)
+    func oneStoppedAsItSendsLetsGoOfItsTurnSoTheNextMinuteSendsWhatsDue(_ shell: String) throws {
+        defer { cleanUp() }
+        let bot = try folder("bot_a", session: "ses_a", wake: "Morning report")
+        try write(k.appending(path: "stop-on-ask"), "")
+        let stopped = try sh(#"echo $$ >"$K/fire.pid"; exec \#(shell) "$K/bin/kuvo-wake" fire "$K/bots" "$K/run/engine.json""#)
+        #expect(stopped.status != 0)
+        #expect(!FileManager.default.fileExists(atPath: bots.appending(path: ".firing").path), "\(shell)")
+        #expect(wakes(of: bot).count == 1, "not sent yet")
+        try fire(shell: shell)
+        #expect(prompts().last == "\(Self.enginePort) ses_a [Wake-up] Morning report", "\(shell)")
+        #expect(wakes(of: bot).isEmpty, "sent, and done")
     }
 
     @Test func aPausedBotsWakeUpsWait() throws {

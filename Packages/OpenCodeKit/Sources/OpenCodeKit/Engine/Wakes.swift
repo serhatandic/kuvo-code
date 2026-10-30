@@ -750,11 +750,13 @@ public enum Wakes {
       for bots in "$2" "${2%/*}/wakes"; do
       [ -d "$bots" ] || continue
       # One at a time: two at once (a watchdog left from before the engine started over, say)
-      # would send a wake-up twice. A lock left by one that was killed goes after ten minutes.
+      # would send a wake-up twice. One stopped lets go of it (dash runs no EXIT trap for a
+      # signal), and one left by one that was killed outright goes after ten minutes.
       lock="$bots/.firing"
       [ -z "$(find "$lock" -maxdepth 0 -mmin +10 2>/dev/null)" ] || rmdir "$lock" 2>/dev/null
       mkdir "$lock" 2>/dev/null || continue
       trap 'rmdir "$lock" 2>/dev/null' EXIT
+      trap 'rmdir "$lock" 2>/dev/null; exit 143' INT TERM HUP
       for bot in "$bots"/*/; do
         # Paused by you (a session's, while it's archived: see `settle` too): its wake-ups wait.
         [ -e "${bot}paused" ] && continue
@@ -804,7 +806,7 @@ public enum Wakes {
           rm -f "${bot}.retry"
         fi
       done
-      rmdir "$lock" 2>/dev/null; trap - EXIT
+      rmdir "$lock" 2>/dev/null; trap - EXIT INT TERM HUP
       # Then their watches, apart (a slow check, up to a minute each, never holds up a wake-up, nor
       # the next round's): what changed wakes the bot, with what its check prints now; one that
       # can't go is tried again at the next check. One round of them at a time.
@@ -813,6 +815,7 @@ public enum Wakes {
       mkdir "$watching" 2>/dev/null || continue
       (
       trap 'rmdir "$watching" 2>/dev/null' EXIT
+      trap 'rmdir "$watching" 2>/dev/null; exit 143' INT TERM HUP
       for bot in "$bots"/*/; do
         [ -e "${bot}paused" ] && continue
         [ -d "${bot}watches" ] || continue
