@@ -2795,7 +2795,8 @@ folder its commands now write in); on Don't Allow,
 `The user said no: …`, and nothing runs. An ask nobody answers in 15 minutes runs nothing either, and
 the text starts `Nobody answered in time` (a client shows it as no answer, not as your no). The agent
 never lets a command out itself, and no tool answers an ask (a bot neither): only a client. A bot's
-seat in a group chat is asked once only, never with Always.
+seat in a group chat runs no commands, so it has nothing to ask: its rules deny the tool, and the box
+refuses one from a seat, asking nobody.
 
 The tool is the box's, so an agent has it on every box (`sandbox.asks`): this Mac's tool server and a
 machine's (`kuvo-browser.js mcp`, through `box route`) list what `GET kuvo/sandbox/tools` gives (only

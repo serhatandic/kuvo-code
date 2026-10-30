@@ -731,8 +731,9 @@ export interface Rule {
 
 /**
  * A seat's rules (BotGroups.seatRules): it talks and looks things up; it doesn't change anything,
- * and never waits for answers. No shell, subagents or messages to other agents either. With Ask
- * First on, no fetching pages; what Settings › Permissions denies (`denies`), it can't do either.
+ * and never waits for answers. No shell (nor a command outside the sandbox), subagents or messages
+ * to other agents either. With Ask First on, no fetching pages; what Settings › Permissions denies
+ * (`denies`), it can't do either.
  */
 export function seatRules(folder: string, askFirst: boolean, denies: Rule[]): Rule[] {
   const rules: Rule[] = [
@@ -751,6 +752,8 @@ export function seatRules(folder: string, askFirst: boolean, denies: Rule[]): Ru
     "kuvo-browser_watch_for_change",
     // A bot keeps its job in its own conversation, never from a chat.
     "kuvo-browser_set_job",
+    // Nor runs a command outside the sandbox: it runs none in it.
+    "kuvo-browser_sandbox_ask",
   ].map((action) => ({ action, resource: "*", effect: "deny" as const }))
   if (askFirst) rules.push({ action: "webfetch", resource: "*", effect: "deny" })
   rules.push({ action: "external_directory", resource: folder.replace(/\/+$/, "") + "/*", effect: "allow" })
