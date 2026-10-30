@@ -5,26 +5,31 @@ import SwiftUI
 /// right with a lamp beside it. While it's on its way, dashes flow along the wire toward the
 /// machine, on one clock with every other one on screen, and the lamp is grey. When it answers,
 /// the wire draws in solid and the lamp lights green with a small settle, seen only where the view
-/// stays on screen after. With Reduce Motion the wire stands still. Its words go under it, and
+/// stays on screen after. Given how far something is on its way to the machine (its engine being
+/// copied there), the wire fills solid in the accent from this Mac's end, the dashes flowing on
+/// over what's left. With Reduce Motion the wire stands still. Its words go under it, and
 /// VoiceOver hears one element: those words.
 public struct ConnectingLink: View {
     let words: String?
     let isConnected: Bool
+    let progress: Double?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
 
     /// `words` is what the place says is happening ("Opening Gmail on lokum…"), in the
     /// surrounding font; with none (a heading says it), the scene stands alone.
-    public init(_ words: String? = nil, isConnected: Bool = false) {
+    /// `progress`, 0 to 1: how far what's on its way has gone (nil: nothing that can say).
+    public init(_ words: String? = nil, isConnected: Bool = false, progress: Double? = nil) {
         self.words = words
         self.isConnected = isConnected
+        self.progress = progress.map { min(1, max(0, $0)) }
     }
 
     public var body: some View {
         VStack(spacing: 10) {
             SceneHost<ConnectingLinkLayer>(scene: .init(connected: isConnected, still: reduceMotion,
-                                                        ink: SceneInk(scheme: scheme, accent: accent)))
+                                                        ink: SceneInk(scheme: scheme, accent: accent), progress: isConnected ? nil : progress))
                 .frame(width: ConnectingLinkLayer.size.width, height: ConnectingLinkLayer.size.height)
             if let words {
                 Text(words)
@@ -44,6 +49,8 @@ final class ConnectingLinkLayer: CALayer, SceneLayer {
         var connected: Bool
         var still: Bool
         var ink: SceneInk
+        /// How far along the wire it's filled, 0 to 1 (nil: dashes all the way).
+        var progress: Double? = nil
     }
 
     static let size = CGSize(width: 128, height: 24)
@@ -63,11 +70,13 @@ final class ConnectingLinkLayer: CALayer, SceneLayer {
         guard scene != shown else { return }
         // Answering on screen plays its arrival; one first drawn connected doesn't.
         let answers = (shown.map { !$0.connected } ?? false) && scene.connected && !scene.still
+        let filled = shown?.progress
         shown = scene
-        build(scene, answers: answers)
+        build(scene, answers: answers, from: filled)
     }
 
-    private func build(_ scene: Scene, answers: Bool) {
+    /// `from`: how far it was filled before, to ease on from.
+    private func build(_ scene: Scene, answers: Bool, from filled: Double? = nil) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
@@ -114,6 +123,17 @@ final class ConnectingLinkLayer: CALayer, SceneLayer {
             // Toward the machine: the pattern's phase running down moves it along the wire.
             if !scene.still {
                 dashes.addLoop("lineDashPhase", values: [Self.dash.reduce(0, +), 0], period: Self.period, timing: .linear)
+            }
+            // How far it's come: solid from this Mac's end, the dashes on over the rest.
+            if let progress = scene.progress {
+                let reach = CGFloat(progress)
+                dashes.strokeStart = reach
+                let solid = add(wire, stroke: ink.accent)
+                solid.strokeEnd = reach
+                if let filled, filled < progress, !scene.still {
+                    solid.addOnce("strokeEnd", values: [filled, progress], duration: 0.25)
+                    dashes.addOnce("strokeStart", values: [filled, progress], duration: 0.25)
+                }
             }
             return
         }

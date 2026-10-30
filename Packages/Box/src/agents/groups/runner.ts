@@ -36,8 +36,8 @@ import {
   type Meeting,
 } from "./rules"
 import type { MemoryGiven, PeerDirectory, WorkGiven } from "./peer"
-import { Cancelled, Seats, type ChatContext, type SeatHome, type SeatResult, type SeatState } from "./seat"
-import type { GroupStore, Kept, MachineBot, Status } from "./store"
+import { Cancelled, SeatGone, Seats, type ChatContext, type SeatHome, type SeatResult, type SeatState } from "./seat"
+import type { GroupStore, Kept, MachineBot, Status, Turning } from "./store"
 import { keepsTimeOfDay, keepsWeekday, minutesOf, next as nextTime, parseRepeat } from "./time"
 
 export { seatKey } from "./seat"
@@ -106,8 +106,12 @@ interface Live {
   paused: boolean
   /** Goes up with each message of yours, so a discussion under way starts its count again. */
   asked: number
+  /** Your first message since the discussion last looked for what's new (one that came during the wrap-up): where its next pass begins. */
+  since?: string
   /** The meeting being talked over, by its message: how it went is told when it ends. */
   meeting?: string
+  /** Carried on with Keep Going: the talk before the pause counts toward its wrap-up. */
+  resumed?: boolean
   /** Stops the lead's list of who does what: a message of yours is newer than the go-ahead it reads. */
   splitStop?: () => void
 }
@@ -150,6 +154,8 @@ export class GroupRunner {
   private runs = 0
   /** Parts being handed to their bots or followed, so none is followed twice. */
   private following = new Set<string>()
+  /** Bots' answers under way as the runner last stopped, read from their seats still, by chat. */
+  private answering = new Map<string, { abort: AbortController; done: Promise<void> }>()
   /** This computer's bots' seats. */
   readonly seats: Seats
 
@@ -173,9 +179,11 @@ export class GroupRunner {
     this.seats = new Seats(context)
     this.chats = context.store.load()
     for (const [id, kept] of this.chats) {
-      // Talking when it last stopped (the engine started over): it waits for Keep Going.
-      if (kept.talking) {
+      // Talking when it last stopped (the engine started over), or paused at its limit: it waits
+      // for Keep Going.
+      if (kept.talking || kept.paused) {
         kept.talking = false
+        kept.paused = true
         this.state(id).paused = true
         context.store.saveGroup(kept)
       }
@@ -190,6 +198,7 @@ export class GroupRunner {
   /** Parts under way when it last stopped are followed again, and meetings are held. */
   start() {
     this.resumeWork()
+    this.followTurns()
     this.scheduleMeetings(10_000)
     void this.dropLeftScratch()
   }
@@ -316,7 +325,7 @@ export class GroupRunner {
     const kept = this.chats.get(id)
     if (!kept) return
     const working = kept.messages.some((message) => message.tasks?.some((task) => task.state === "working" || task.state === "waiting"))
-    this.context.store.setAwake(id, kept.status === "active" && (kept.group.meeting !== undefined || this.state(id).abort !== undefined || working))
+    this.context.store.setAwake(id, kept.status === "active" && (kept.group.meeting !== undefined || this.state(id).abort !== undefined || this.answering.has(id) || working))
   }
 
   // MARK: Making, changing, deleting
@@ -334,6 +343,8 @@ export class GroupRunner {
     this.chats.set(group.id, kept)
     this.context.store.saveMessages(kept)
     this.changed(group.id)
+    // Replaced: what's said there is new to those following it.
+    if (existing) emit("kuvo.group.reset", { id: group.id })
     if (status === "active") this.began(group.id)
     return true
   }
@@ -443,8 +454,11 @@ export class GroupRunner {
     this.append(message, id)
     const live = this.state(id)
     live.asked++
+    live.since ??= message.id
     live.splitStop?.()
-    live.paused = false
+    // Written to at the pause, as Keep Going: the talk before it gets its wrap-up at the end.
+    if (live.paused) live.resumed = true
+    this.setPaused(id, false)
     if (live.speaking) void this.steer(live.speaking, id, message)
     if (!live.abort) this.begin(id)
     this.told(id)
@@ -457,8 +471,9 @@ export class GroupRunner {
     const message = this.append({ id: groupMessageID(), text: topic, time: stamp(), kind: "meeting" }, id)
     const live = this.state(id)
     live.asked++
+    live.since ??= message.id
     live.splitStop?.()
-    live.paused = false
+    this.setPaused(id, false)
     live.meeting = message.id
     if (live.speaking) void this.steer(live.speaking, id, message)
     if (!live.abort) this.begin(id)
@@ -513,7 +528,9 @@ export class GroupRunner {
     live.abort?.abort()
     live.abort = undefined
     live.run = undefined
-    live.paused = false
+    live.since = undefined
+    this.answering.get(id)?.abort.abort()
+    this.setPaused(id, false)
     live.speaking = undefined
     live.activity = undefined
     live.splitting = undefined
@@ -525,10 +542,20 @@ export class GroupRunner {
   keepGoing(id: string) {
     const live = this.state(id)
     if (live.abort || !this.chat(id)) return
-    live.paused = false
+    this.setPaused(id, false)
     live.asked++
+    live.resumed = true
     this.begin(id)
     this.told(id)
+  }
+
+  /** Paused at its limit (kept, so it waits for Keep Going after a restart too), or not. */
+  private setPaused(id: string, paused: boolean) {
+    this.state(id).paused = paused
+    const kept = this.chats.get(id)
+    if (!kept || (kept.paused ?? false) === paused) return
+    kept.paused = paused
+    this.context.store.saveGroup(kept)
   }
 
   private setTalking(id: string, talking: boolean) {
@@ -539,6 +566,74 @@ export class GroupRunner {
     this.keepAwake(id)
   }
 
+  /** A bot's answer under way in a seat here, kept with the chat (see `Turning`), or none. */
+  private setTurning(id: string, turning: Turning | undefined) {
+    const kept = this.chats.get(id)
+    if (!kept) return
+    if (turning) kept.turning = turning
+    else delete kept.turning
+    this.context.store.saveGroup(kept)
+  }
+
+  /**
+   * A bot that was answering here as the runner last stopped: its answer is read from its seat
+   * once it's done, and goes to the chat (which waits for Keep Going meanwhile). Its message is
+   * never sent again; one gone from its seat, or a seat gone, leaves nothing to say.
+   */
+  private followTurns() {
+    for (const id of this.chats.keys()) void this.followTurn(id)
+  }
+
+  /**
+   * One chat's (`followTurns`): it's the bot talking meanwhile, so a message of yours goes to its
+   * seat, and a discussion starts only once its answer is in. Done when it is, or when there's none.
+   */
+  private followTurn(id: string): Promise<void> {
+    const under = this.answering.get(id)
+    if (under) return under.done
+    const kept = this.chats.get(id)
+    const turning = kept?.turning
+    if (!kept || !turning) return Promise.resolve()
+    const bot = this.member(turning.bot)
+    if (!bot || bot.box || kept.status !== "active" || !kept.group.members.includes(turning.bot)) {
+      this.setTurning(id, undefined)
+      return Promise.resolve()
+    }
+    const abort = new AbortController()
+    const live = this.state(id)
+    live.speaking = turning.bot
+    const { seat, agents, prompt, sent } = turning
+    const done = this.seats
+      .turn(
+          { id: turnID(), chat: this.context_(kept.group), bot: turning.bot, seat, agentsSeat: agents, kind: turning.wrapUp ? "wrapUp" : "turn", text: "" },
+          () => {},
+          abort.signal,
+          { resume: { seat, agents, prompt, sent }, followOnly: true },
+        )
+        .then((result) => {
+          if (abort.signal.aborted || !this.chat(id)?.group.members.includes(turning.bot)) return
+          if (result.ok) this.answered(id, turning.bot, result, turning.wrapUp ?? false)
+          else this.note(`${bot.name} couldn’t answer: ${result.why}`, id)
+        })
+        .catch((error) => {
+          if (!(error instanceof Cancelled) && !(error instanceof SeatGone)) console.error(`${turning.bot}'s answer in ${id} couldn't be read:`, reason(error))
+        })
+        .finally(() => {
+          if (this.answering.get(id)?.abort === abort) this.answering.delete(id)
+          if (this.chats.get(id)?.turning?.prompt === prompt) this.setTurning(id, undefined)
+          if (live.speaking === turning.bot) {
+            live.speaking = undefined
+            live.activity = undefined
+          }
+          this.keepAwake(id)
+          this.told(id)
+        })
+    this.answering.set(id, { abort, done })
+    this.keepAwake(id)
+    this.told(id)
+    return done
+  }
+
   private begin(id: string) {
     const live = this.state(id)
     const run = ++this.runs
@@ -547,6 +642,8 @@ export class GroupRunner {
     live.abort = abort
     this.setTalking(id, true)
     void (async () => {
+      // A bot's answer still being read from its seat (the runner started over as it talked) is in first.
+      await this.followTurn(id)
       // A message of yours that came as it was ending (during the wrap-up) starts another.
       let epoch: number
       do {
@@ -571,12 +668,21 @@ export class GroupRunner {
     let quiet = new Set<string>()
     let absent = new Set<string>()
     let saidCount = 0
+    // Carried on after a pause at the limit: the talk before it went back and forth, and gets its wrap-up at the end.
+    let resumed = live.resumed ?? false
+    live.resumed = undefined
+    let paused = false
     // Guests that answered (or tried), each by the message that named it and its id.
     const guested = new Set<string>()
     // Where the discussion began: from that message on, each one's guests are asked, even one that
-    // came while a bot was talking and isn't the latest any more.
-    const begun = Math.max(0, (this.chat(id)?.messages ?? []).findLastIndex((message) => message.kind !== "note"))
+    // came while a bot was talking and isn't the latest any more; one that came as the last pass
+    // was wrapped up, with the wrap-up after it.
+    const all = this.chat(id)?.messages ?? []
+    const since = live.since ? all.findIndex((message) => message.id === live.since) : -1
+    const begun = since >= 0 ? since : Math.max(0, all.findLastIndex((message) => message.kind !== "note"))
     while (!signal.aborted) {
+      // (What's come so far, it looks at now.)
+      live.since = undefined
       const kept = this.chat(id)
       if (!kept) return epoch
       if (live.asked !== epoch) {
@@ -585,6 +691,7 @@ export class GroupRunner {
         quiet = new Set()
         absent = new Set()
         saidCount = 0
+        resumed = false
       }
       const names = new Map<string, string>()
       for (const member of kept.group.members) {
@@ -605,7 +712,8 @@ export class GroupRunner {
         const { message, guest } = named
         guested.add(message.id + "/" + guest)
         if (turns >= limit(kept.group.members.length)) {
-          live.paused = true
+          this.setPaused(id, true)
+          paused = true
           break
         }
         const outcome = await this.turn(guest, id, signal, false, message)
@@ -621,7 +729,8 @@ export class GroupRunner {
       const speaker = nextSpeaker(kept.group, kept.messages, members, quiet, names)
       if (!speaker) break
       if (turns >= limit(kept.group.members.length)) {
-        live.paused = true
+        this.setPaused(id, true)
+        paused = true
         break
       }
       const outcome = await this.turn(speaker, id, signal)
@@ -637,11 +746,12 @@ export class GroupRunner {
       }
     }
     // The lead sums up a discussion that went back and forth, or a meeting where more than one spoke, unless you've written since
-    // or the lead couldn't take part (its note is in the chat already).
+    // or the lead couldn't take part (its note is in the chat already). Paused at the limit, it waits for the end: one wrap-up, after
+    // Keep Going or your message; but a meeting (held while you may be away) is summed up there.
     const kept = this.chat(id)
     const lead = kept?.group.members[0]
-    if (signal.aborted || saidCount === 0 || live.asked !== epoch || !kept || !lead || !this.member(lead) || absent.has(lead)) return epoch
-    if (saidCount >= (live.meeting !== undefined ? 2 : 3) && kept.group.members.length >= 2) {
+    if ((paused && live.meeting === undefined) || signal.aborted || (saidCount === 0 && !resumed) || live.asked !== epoch || !kept || !lead || !this.member(lead) || absent.has(lead)) return epoch
+    if ((resumed || saidCount >= (live.meeting !== undefined ? 2 : 3)) && kept.group.members.length >= 2) {
       const before = kept.messages.at(-1)?.id
       await this.turn(lead, id, signal, true)
       const wrapUp = this.chat(id)?.messages.at(-1)
@@ -675,6 +785,8 @@ export class GroupRunner {
     // Its turn alone, stopped when the discussion is, or when it's taken out as its seat is made.
     const own = new AbortController()
     const stopped = either(signal, own.signal)
+    // Its message to a seat here, kept with the chat while it answers.
+    let turning: string | undefined
     try {
       const kept = this.chat(id)
       if (!kept) return "absent"
@@ -724,8 +836,15 @@ export class GroupRunner {
         },
         (state) => this.heardOf(state, { id, botID, box: bot.box, guest, run, last: last?.id, retracted, own }),
         stopped.signal,
-        // Too big to send to its computer: what it hasn't heard, its latest within what a chat gives a bot.
-        { shorter: seat ? () => turnText(botID, kept.group, unheard, wrapUp, name, named(unheard), chatBudget) : undefined },
+        {
+          // Too big to send to its computer: what it hasn't heard, its latest within what a chat gives a bot.
+          shorter: seat ? () => turnText(botID, kept.group, unheard, wrapUp, name, named(unheard), chatBudget) : undefined,
+          progress: (now) => {
+            if (guest || bot.box || now.prompt === undefined || now.sent === undefined || stopped.signal.aborted) return
+            turning = now.prompt
+            this.setTurning(id, { bot: botID, seat: now.seat, agents: now.agents, prompt: now.prompt, sent: now.sent, ...(wrapUp ? { wrapUp: true } : {}) })
+          },
+        },
       )
       if (left()) return "absent"
       if (!result.ok) {
@@ -739,31 +858,7 @@ export class GroupRunner {
         )
         return "absent"
       }
-      // Grown well past the chat it's in: its seat went, and its next turn starts anew.
-      if (result.outgrown) {
-        const now = this.chat(id)
-        const went = now?.group.seats[botID]
-        if (now && went) {
-          delete now.group.seats[botID]
-          delete now.group.heard[botID]
-          if (now.group.agentSeats?.includes(went)) now.group.agentSeats = now.group.agentSeats.filter((each) => each !== went)
-          this.changed(id)
-        }
-      }
-      if (!result.text) return "passed"
-      if (!wrapUp && isPass(result.text)) return "passed"
-      this.append(
-        {
-          id: groupMessageID(),
-          author: botID,
-          text: ampersands(result.text, this.everyone().map((each) => each.name)),
-          time: stamp(),
-          kind: wrapUp ? "wrapUp" : "message",
-          ...(result.steps.length ? { steps: result.steps.map(trimmed) } : {}),
-        },
-        id,
-      )
-      return "said"
+      return this.answered(id, botID, result, wrapUp)
     } catch (error) {
       if (signal.aborted || own.signal.aborted || error instanceof Cancelled || left()) return "absent"
       console.error(`${botID}'s turn in ${id} failed:`, reason(error))
@@ -771,12 +866,42 @@ export class GroupRunner {
       return "absent"
     } finally {
       stopped.done()
+      if (turning && this.chats.get(id)?.turning?.prompt === turning) this.setTurning(id, undefined)
       if (live.speaking === botID && live.run === run) {
         live.speaking = undefined
         live.activity = undefined
       }
       this.told(id)
     }
+  }
+
+  /** What a bot said in its turn, to the chat: nothing when it passed. */
+  private answered(id: string, botID: string, result: Extract<SeatResult, { ok: true }>, wrapUp: boolean): Outcome {
+    // Grown well past the chat it's in: its seat went, and its next turn starts anew.
+    if (result.outgrown) {
+      const now = this.chat(id)
+      const went = now?.group.seats[botID]
+      if (now && went) {
+        delete now.group.seats[botID]
+        delete now.group.heard[botID]
+        if (now.group.agentSeats?.includes(went)) now.group.agentSeats = now.group.agentSeats.filter((each) => each !== went)
+        this.changed(id)
+      }
+    }
+    if (!result.text) return "passed"
+    if (!wrapUp && isPass(result.text)) return "passed"
+    this.append(
+      {
+        id: groupMessageID(),
+        author: botID,
+        text: ampersands(result.text, this.everyone().map((each) => each.name)),
+        time: stamp(),
+        kind: wrapUp ? "wrapUp" : "message",
+        ...(result.steps.length ? { steps: result.steps.map(trimmed) } : {}),
+      },
+      id,
+    )
+    return "said"
   }
 
   /** The chat as a bot's seat needs it: who's there, the lead first. */
@@ -813,6 +938,13 @@ export class GroupRunner {
       const now = this.chat(id)
       if (!now || !now.group.members.includes(botID)) {
         void this.home(turn.box).drop(state.seat, state.agents, { bot: botID, chat: id })
+        turn.own.abort()
+        return
+      }
+      // One made for a run that's been stopped: unless it's the seat the bot has, it goes, so the seat
+      // a later run makes (or made already) stays the bot's.
+      if (live.run !== turn.run) {
+        if (now.group.seats[botID] !== state.seat) void this.home(turn.box).drop(state.seat, state.agents, { bot: botID, chat: id })
         turn.own.abort()
         return
       }
@@ -1381,7 +1513,7 @@ export class GroupRunner {
     return head + (from > 0 ? left : "") + entries.slice(from).join("")
   }
 
-  /** After a chat moves on, its bots remember it, once it's been quiet for a moment. */
+  /** After a chat moves on, its bots remember it, once its talk is over and it's been quiet for a moment. */
   private rememberSoon(id: string) {
     const pending = this.syncs.get(id)
     if (pending) clearTimeout(pending)
@@ -1389,6 +1521,9 @@ export class GroupRunner {
       this.syncs.delete(id)
       const kept = this.chat(id)
       if (!kept) return
+      // Still talking (a turn takes longer than this): once it's over, not at every message, which
+      // to a bot on another computer is a letter each time.
+      if (this.state(id).abort) return this.rememberSoon(id)
       void (async () => {
         for (const bot of kept.group.members) await this.remember(bot, { changed: id })
       })().catch(() => {})

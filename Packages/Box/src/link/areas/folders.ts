@@ -9,19 +9,41 @@ import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
 import { homeFolder } from "../home";
 
 /** One of this box's folders, as `kuvo/folders` lists it: its path, the home folder, the one it's
- * in (null for the top), and the folders in it. */
+ * in (null for the top), the folders in it, and, asked for, its files. */
 export interface FolderList {
   path: string;
   home: string;
   parent: string | null;
   folders: { name: string; repository?: boolean }[];
+  files?: string[];
+}
+
+/** Names as Finder orders them: file3 before file29. */
+const byName = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+
+/** Why a folder can't be listed: what's said, and the computer's own reason, as `ls` would put it. */
+export interface FolderRefused {
+  message: string;
+  reason: string;
+}
+
+/** A folder that couldn't be read, by why: 404 for one that isn't there (or isn't a folder), 403
+ * for one this box isn't let into, 500 for anything else, each with the reason the system gives. */
+export function refusal(at: string, error: unknown): JSONAnswer<FolderRefused> {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  if (code === "ENOENT") return { status: 404, value: { message: `There's no folder ${at} here.`, reason: "No such folder" } };
+  if (code === "ENOTDIR") return { status: 404, value: { message: `${at} isn't a folder.`, reason: "Not a folder" } };
+  if (code === "EACCES" || code === "EPERM") return { status: 403, value: { message: `${at} can't be read here.`, reason: "Permission denied" } };
+  const said = (error as Error)?.message?.replace(/^[A-Z]+: /, "").split(",")[0]?.trim();
+  return { status: 500, value: { message: `${at} can't be read here.`, reason: said ? said[0]!.toUpperCase() + said.slice(1) : "It couldn't be read" } };
 }
 
 /** `kuvo/folders?path=`: the folders in one of this box's folders (none: the home folder; `~/`
  * starts there), as a client shows them to choose one: `{path, home, parent, folders: [{name,
  * repository?}]}`, ordered as Finder orders names, hidden ones (starting with ".") only with
- * `hidden=1`. `repository`: a git repository's own checkout. */
-export function listFolders(requestPath: string): JSONAnswer<FolderList | { message: string }> {
+ * `hidden=1`. `repository`: a git repository's own checkout. With `files=1`, its files too
+ * (`files`, names in the same order, `.DS_Store` left out), as a Files panel lists a folder. */
+export function listFolders(requestPath: string): JSONAnswer<FolderList | FolderRefused | { message: string }> {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
   const home = homeFolder();
   const given = (query.get("path") ?? "").trim();
@@ -32,8 +54,7 @@ export function listFolders(requestPath: string): JSONAnswer<FolderList | { mess
   try {
     entries = fs.readdirSync(at, { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT" || (error as NodeJS.ErrnoException)?.code === "ENOTDIR") return { status: 404, value: { message: `There's no folder ${at} here.` } };
-    return { status: 403, value: { message: `${at} can't be read here.` } };
+    return refusal(at, error);
   }
   const hidden = query.get("hidden") === "1";
   // Platform: on a Mac, looking into these from the home folder would have macOS ask you for them.
@@ -42,8 +63,11 @@ export function listFolders(requestPath: string): JSONAnswer<FolderList | { mess
   const folders = entries
     .filter(entry => (hidden || !entry.name.startsWith(".")) && isFolder(entry))
     .map(entry => (!asks.has(entry.name) && fs.existsSync(path.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }))
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
-  return { status: 200, value: { path: at, home, parent: at === path.dirname(at) ? null : path.dirname(at), folders } };
+    .sort((a, b) => byName(a.name, b.name));
+  const files = query.get("files") === "1"
+    ? entries.filter(entry => (hidden || !entry.name.startsWith(".")) && entry.name !== ".DS_Store" && !isFolder(entry)).map(entry => entry.name).sort(byName)
+    : undefined;
+  return { status: 200, value: { path: at, home, parent: at === path.dirname(at) ? null : path.dirname(at), folders, ...(files ? { files } : {}) } };
 }
 
 /** `POST kuvo/folders {"path"}`: a new folder, in one that's there, as a folder panel's New Folder

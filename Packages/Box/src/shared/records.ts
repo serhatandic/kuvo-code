@@ -21,6 +21,12 @@ export interface BridgeRecord {
   password: string;
 }
 
+/** `run/tools.json`: the port of this Mac's app's own server for Kuvo Code's tools, as the app last
+ * told the agents bridge (the box's sandbox refuses it, as Kuvo Code's other servers). */
+export interface ToolsRecord {
+  port: number;
+}
+
 /** Where a box's program answers, with its password: the engine, or the agents bridge. */
 export type Target = Pick<EngineRecord, "port" | "password">;
 

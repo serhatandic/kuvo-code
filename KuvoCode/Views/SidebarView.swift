@@ -1470,11 +1470,11 @@ private struct MachineLabel: View {
                 .font(.system(size: 9, weight: .semibold))
             Text(engine.machine.name)
                 .lineLimit(1)
-            MachineIndicator(connection: engine.connection, size: 6, quiet: true)
+            MachineIndicator(connection: engine.connection, size: 6, quiet: true, progress: engine.installProgress)
         }
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(.secondary)
-        .help(engine.statusText)
+        .help(engine.statusDetail)
     }
 }
 

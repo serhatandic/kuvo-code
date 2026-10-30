@@ -43,6 +43,8 @@ setInterval(() => { if (!fs.existsSync(root)) process.exit(0); }, 300);
 `);
 process.env.FAKE_ENGINE = fakeEngine;
 const engineBinary = version => `#!/bin/sh
+[ "$1" = --config=/dev/null ] && shift
+[ "$1" = --no-env-file ] && shift
 case "$1" in --version) echo ${version}; exit 0 ;; *.js) exec node "$@" ;; esac
 exec node "$FAKE_ENGINE" ${version} "$KUVO_HOME"
 `;

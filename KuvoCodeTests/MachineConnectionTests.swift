@@ -365,6 +365,29 @@ import Testing
         #expect(link.machineHosts[id] == nil, "named to your phones and other computers again")
     }
 
+    /// On its way there (connecting the first time, its engine copied over): its Settings pages say
+    /// how far, rather than read its settings before there's anything there to read them with
+    /// (which failed, in the shell's own words); up, they're read.
+    @Test func connectingItsSettingsPagesWaitForItRatherThanFail() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        let held = Gate()
+        MachineEngine.standIn = { [reachable] machine in
+            while !held.isOpen { await Task.yield() }
+            return reachable.apis[machine.id]
+        }
+        let connecting = app.connect(engine)
+        try await until { engine.connection.isUnderWay }
+        #expect(SettingsUnread.shown(engine) == .onItsWay)
+        held.open()
+        await connecting.value
+        #expect(engine.isReady)
+        #expect(SettingsUnread.shown(engine) == .unread, "up: read now")
+        app.disconnect(engine)
+        #expect(SettingsUnread.shown(engine) == .unread, "away and never read: why, with Connect")
+    }
+
     /// Disconnected, it stays so when this Mac's engine starts again (after a restart, or a
     /// change to your accounts), until you connect it.
     @Test func disconnectedItStaysSoWhenThisMacsEngineStartsAgain() async throws {
@@ -381,6 +404,29 @@ import Testing
 
         await app.connect(engine).value
         #expect(engine.isReady, "Connect connects it")
+    }
+
+    /// Disconnected, its Accounts page shows its accounts as last seen, saying when (I3): they're
+    /// kept, with when they were read; one never read has none to show, and waits for it.
+    @Test func disconnectedItsAccountsAreKeptAsLastSeen() async throws {
+        defer { done() }
+        machine.on("GET", "/api/integration", json: ["location": ["directory": "/"], "data": [
+            ["id": "anthropic", "name": "Anthropic", "methods": [["type": "key"]], "connections": [["type": "credential", "label": "Key"]]],
+        ]])
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        #expect(engine.catalog.integrationsRead == nil, "never read: nothing to show as last seen")
+        await app.connect(engine).value
+        // Read as a real connection reads it once it's up (the stand-in connects without it).
+        await engine.catalog.refresh()
+        let read = try #require(engine.catalog.integrationsRead)
+
+        app.disconnect(engine)
+        #expect(!engine.isReady)
+        #expect(engine.catalog.providers.map(\.id) == ["anthropic"], "its accounts as last seen")
+        #expect(engine.catalog.integrationsRead == read)
+        #expect(ProvidersView.asLastSeen(read, now: read.addingTimeInterval(2 * 3600), locale: Locale(identifier: "en_US")) == "These are its accounts as last seen, 2 hours ago. They can’t change until it’s back.")
+        #expect(ProvidersView.asLastSeen(read, now: read.addingTimeInterval(5), locale: Locale(identifier: "en_US")) == "These are its accounts as last seen, a moment ago. They can’t change until it’s back.")
     }
 
     /// Unreachable when it's first connected (the app opened before the network was up): it's

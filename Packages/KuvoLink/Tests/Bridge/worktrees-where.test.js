@@ -148,6 +148,33 @@ test("a client goes through this box's folders to choose one: repositories marke
   assert.equal(link.listFolders("kuvo/folders?path=code").status, 400);
 });
 
+test("a Files panel lists a folder's files too, and one this box can't read says why instead of looking empty", { skip: process.getuid?.() === 0 && "root reads every folder" }, () => {
+  const files = path.join(code, "files");
+  fs.mkdirSync(path.join(files, "src"), { recursive: true });
+  fs.mkdirSync(path.join(files, "empty"));
+  for (const name of ["b10.txt", "b9.txt", ".env", ".DS_Store"]) fs.writeFileSync(path.join(files, name), "");
+  const listed = link.listFolders(`kuvo/folders?path=${encodeURIComponent(files)}&hidden=1&files=1`);
+  assert.deepEqual(listed.value.folders.map(each => each.name), ["empty", "src"]);
+  assert.deepEqual(listed.value.files, [".env", "b9.txt", "b10.txt"]);
+  // An empty folder is empty, not a failure.
+  assert.deepEqual(link.listFolders(`kuvo/folders?path=${encodeURIComponent(path.join(files, "empty"))}&files=1`).value, { path: path.join(files, "empty"), home, parent: files, folders: [], files: [] });
+  // Without files=1, as a folder picker asks: no files.
+  assert.equal(link.listFolders(`kuvo/folders?path=${encodeURIComponent(files)}`).value.files, undefined);
+
+  const secrets = path.join(files, "secrets");
+  fs.mkdirSync(secrets);
+  fs.writeFileSync(path.join(secrets, "key.pem"), "");
+  fs.chmodSync(secrets, 0o000);
+  try {
+    assert.deepEqual(link.listFolders(`kuvo/folders?path=${encodeURIComponent(secrets)}&files=1`), { status: 403, value: { message: `${secrets} can't be read here.`, reason: "Permission denied" } });
+  } finally {
+    fs.chmodSync(secrets, 0o755);
+  }
+  assert.equal(link.listFolders(`kuvo/folders?path=${encodeURIComponent(path.join(files, "gone"))}&files=1`).value.reason, "No such folder");
+  assert.equal(link.listFolders(`kuvo/folders?path=${encodeURIComponent(path.join(files, "b9.txt"))}&files=1`).value.reason, "Not a folder");
+  fs.rmSync(files, { recursive: true });
+});
+
 test("a client makes a new folder to choose, as a folder panel's New Folder does", () => {
   const made = link.makeFolder({ path: path.join(code, "Trees") });
   assert.deepEqual(made, { status: 200, value: { path: path.join(code, "Trees") } });

@@ -135,6 +135,31 @@ describe("a computer's group chats, as a client reads them", () => {
     expect(got.some((line) => line.discussing && !("messages" in line))).toBe(true)
   })
 
+  test("followed: what's said there comes with its messages, after lines where only the talk changed", async () => {
+    let sent = false
+    const got = await lines(`${group.id}/events`, (each) => each.some((line) => line.messages?.some((message: any) => message.text === "Again?")), (each) => {
+      if (each.length === 1) runner.keepGoing(group.id)
+      if (!sent && each.some((line) => line.discussing && !("messages" in line))) {
+        sent = true
+        runner.send(group.id, "Again?")
+      }
+    })
+    expect(got[0].messages.length).toBe(4)
+    expect(got.some((line) => line.discussing && !("messages" in line))).toBe(true)
+  })
+
+  test("followed as a move brings it here again, replacing it: its new messages come", async () => {
+    let moved = false
+    const got = await lines(`${group.id}/events`, (each) => each.some((line) => line.messages?.some((message: any) => message.text === "Moved in.")), (each) => {
+      if (each.length === 1 && !moved) {
+        moved = true
+        const kept = runner.get(group.id)!
+        runner.put(kept.group, [...kept.messages, { id: "gm_9", text: "Moved in.", time: "2026-10-22T08:04:00Z", kind: "message" }], kept.status, true)
+      }
+    })
+    expect(got.at(-1).messages.at(-1).id).toBe("gm_9")
+  })
+
   test("the list followed: a line as the chats change, as the runner says (no polling)", async () => {
     const got = await lines("events", (each) => each.length >= 2, (each) => {
       if (each.length === 1) void ask("PATCH", group.id, { name: "Daily" })

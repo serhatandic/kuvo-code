@@ -590,10 +590,10 @@ private struct BoxPage: View {
         Group {
             if let machine = box.machine {
                 if let engine = app.machines.engine(machine) {
-                    if engine.config.isLoaded {
-                        content
-                    } else {
-                        SettingsUnread(engine: engine)
+                    switch SettingsUnread.shown(engine) {
+                    case .page: content
+                    case .onItsWay: MachineWaitingView(engine: engine, note: "Its settings show here once it’s connected.")
+                    case .unread: SettingsUnread(engine: engine)
                     }
                 } else {
                     ContentUnavailableView("This Machine Was Removed", systemImage: "server.rack")
@@ -626,6 +626,17 @@ private struct BoxPage: View {
 /// them and starts with its engine.
 struct SettingsUnread: View {
     let engine: MachineEngine?
+
+    /// What a machine's page shows: the page, read; the machine on its way there (connecting, its
+    /// engine copied), how far, rather than a read that can't work until it's up; or its settings
+    /// not read yet.
+    enum Shown: Equatable { case page, onItsWay, unread }
+
+    static func shown(_ engine: MachineEngine) -> Shown {
+        if engine.config.isLoaded { return .page }
+        if !engine.isReady, engine.connection.isUnderWay { return .onItsWay }
+        return .unread
+    }
     var asGroup = false
     @Environment(AppModel.self) private var app
 

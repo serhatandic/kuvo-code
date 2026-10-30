@@ -47,6 +47,9 @@ public struct VaultState: Codable, Equatable, Sendable {
     /// Whether agents may use it on this computer: only where their commands are fenced. (Absent
     /// from a box older than the fence: yes.)
     public var agents: Bool?
+    /// Its sandbox is on, and agents started before it came on still run: agents may use it once
+    /// they're done.
+    public var agentsWaiting: Bool?
     /// Its files were changed outside Kuvo Code, so it uses none of them.
     public var tampered: Bool?
     /// Each signed file's generation (`items`, `grants`, `paused`), for a client to remember and
@@ -62,6 +65,25 @@ public struct VaultState: Codable, Equatable, Sendable {
         self.keptDays = keptDays
         self.agents = agents
         self.tampered = tampered
+    }
+
+    /// What its Vault page says while agents can't use its keys, files and notes; nil while they
+    /// can.
+    public func agentsNote(computer: String) -> String? {
+        guard agents == false else { return nil }
+        if agentsWaiting == true {
+            return "Agents can use keys, files and notes from \(computer)’s vault once the ones that started before its sandbox came on have finished. Sign-ins you let them use on their own still fill."
+        }
+        return "Agents can’t use keys, files and notes from \(computer)’s vault yet. Sign-ins you let them use on their own still fill."
+    }
+
+    /// What a bot's own vault list says meanwhile; nil while agents can use it.
+    public var botAgentsNote: String? {
+        guard agents == false else { return nil }
+        if agentsWaiting == true {
+            return "For now it only fills sign-ins set to On Its Own. It can use keys, files and notes once the agents that started before the sandbox came on have finished."
+        }
+        return "For now it only fills sign-ins set to On Its Own. It can’t use keys, files or notes yet."
     }
 }
 

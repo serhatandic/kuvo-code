@@ -118,9 +118,9 @@ struct VaultSettings: View {
                     .foregroundStyle(.secondary)
             }
         }
-        if state.agents == false {
+        if let note = state.agentsNote(computer: computer) {
             Section {
-                Label("Agents can’t use keys, files and notes from \(computer)’s vault yet. Sign-ins you let them use on their own still fill.", systemImage: "lock")
+                Label(note, systemImage: "lock")
                     .foregroundStyle(.secondary)
             }
         }

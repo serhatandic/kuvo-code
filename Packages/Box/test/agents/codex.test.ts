@@ -3,19 +3,28 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
+import { pathToFileURL } from "node:url"
+import { existsSync, mkdirSync, readdirSync, realpathSync, symlinkSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { createServer } from "node:net"
 import { CodexAgent } from "../../src/agents/agents/codex"
 import { Auto } from "../../src/agents/auto"
+import { canFence, realFence } from "./support/fence"
+import { fencePolicy } from "../../src/link/fence/policy"
 import type { Roster } from "../../src/agents/roster"
 import { Sessions } from "../../src/agents/sessions"
 import { Store } from "../../src/agents/store"
 import type { Message, PermissionRule } from "../../src/agents/wire"
 
-const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-codex-test-"))
+// By its real place (`/var` is `/private/var` on a Mac): the fake Codex knows the session's own by its folder.
+const base = realpathSync(mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-codex-test-")))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
 
 /** In a turn's events: Codex works on until you press Stop. */
 const untilStopped: [string, any] = ["(works until stopped)", {}]
+/** In a turn's events: Codex (and so what it runs) writes or reads each place (`name: ["write" | "read", path]`), and says which it could. */
+const tries = "(tries)"
 
 /**
  * A Codex whose turn sends `events` (each `[method, params]`, with the thread's id filled in): an
@@ -34,13 +43,44 @@ let asked = 0
 let turns = 0
 const answered = new Map()
 let stopped
+let input = []
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n")
-const inTurn = (params) => ({ threadId: "t1", turnId: "u1", ...params })
+// Its thread: "t1", but for a Codex of a session elsewhere (one of its own).
+const thread = process.cwd() === ${JSON.stringify(folder)} ? "t1" : "t-" + process.pid
+const inTurn = (params) => ({ threadId: thread, turnId: "u1", ...params })
 async function turn() {
   const events = turns++ && later ? later : first
-  send({ method: "turn/started", params: { threadId: "t1", turn: { id: "u1" } } })
+  send({ method: "turn/started", params: { threadId: thread, turn: { id: "u1" } } })
   for (const [method, params] of events) {
     if (method === ${JSON.stringify(untilStopped[0])}) return new Promise((resolve) => (stopped = resolve))
+    if (method === ${JSON.stringify(tries)}) {
+      const done = []
+      for (const [name, [how, named]] of Object.entries(params)) {
+        // "(attached)": the picture the turn was given.
+        const place = named === "(attached)" ? input.find((item) => item.type === "localImage")?.path : named
+        if (how === "connect") {
+          // (By a short name, from its folder: a socket's whole path can be too long.)
+          const here = process.cwd()
+          process.chdir(require("node:path").dirname(place))
+          const socket = require("node:net").createConnection(require("node:path").basename(place))
+          process.chdir(here)
+          done.push(name + "=" + (await new Promise((resolve) => {
+            socket.on("connect", () => (socket.destroy(), resolve("yes")))
+            socket.on("error", () => resolve("no"))
+          })))
+          continue
+        }
+        done.push((() => { try {
+          if (how === "write") require("node:fs").writeFileSync(place, "x")
+          else require("node:fs").readFileSync(place)
+          return name + "=yes"
+        } catch {
+          return name + "=no"
+        } })())
+      }
+      send({ method: "item/completed", params: inTurn({ item: { type: "agentMessage", id: "m1", text: done.join(" ") } }) })
+      continue
+    }
     if (!/requestApproval$|elicitation\\/request$/.test(method)) {
       send({ method, params: inTurn(params) })
       continue
@@ -49,7 +89,7 @@ async function turn() {
     send({ id, method, params: inTurn(params) })
     await new Promise((resolve) => answered.set(id, resolve))
   }
-  send({ method: "turn/completed", params: { threadId: "t1", turn: { id: "u1", status: "completed" } } })
+  send({ method: "turn/completed", params: { threadId: thread, turn: { id: "u1", status: "completed" } } })
 }
 process.stdin.on("data", (chunk) => {
   buffer += chunk
@@ -58,11 +98,13 @@ process.stdin.on("data", (chunk) => {
     const line = buffer.slice(0, at)
     buffer = buffer.slice(at + 1)
     if (!line.trim()) continue
-    appendFileSync(${JSON.stringify(join(folder, "sent.jsonl"))}, line + "\\n")
+    // (Where it runs: its session's folder, in the box's sandbox.)
+    appendFileSync(require("node:path").join(process.cwd(), "sent.jsonl"), line + "\\n")
     const message = JSON.parse(line)
     if (message.method === undefined) answered.get(message.id)?.()
-    else if (message.method === "thread/start") send({ id: message.id, result: { thread: { id: "t1" } } })
+    else if (message.method === "thread/start") send({ id: message.id, result: { thread: { id: thread } } })
     else if (message.method === "turn/start") {
+      input = message.params.input ?? []
       send({ id: message.id, result: { turn: { id: "u1", status: "inProgress" } } })
       void turn()
     } else if (message.method === "turn/interrupt") {
@@ -99,8 +141,14 @@ class TestCodex extends CodexAgent {
   constructor(
     readonly launcher: string,
     home: string,
+    account?: { id: string; home: string },
+    /** Your own Codex's folder, which an added account's links to. */
+    readonly yours?: string,
   ) {
-    super({ home, temporary: home, deps: {} as any })
+    super({ home, temporary: home, deps: {} as any }, account)
+  }
+  override get yourCodex() {
+    return this.yours ?? super.yourCodex
   }
   override executable() {
     return this.launcher
@@ -187,6 +235,40 @@ process.stdin.on("data", (chunk) => {
       }
     }
     await until(() => !pids.some(running))
+  })
+
+  test("one still starting outside the sandbox counts as outside it (agents keep off the vault) from its start until it stops", async () => {
+    const go = join(root, "go")
+    const script = join(root, "slow.js")
+    writeFileSync(script, `const fs = require("node:fs")
+fs.writeFileSync(${JSON.stringify(join(root, "started"))}, "")
+process.stdin.on("data", (chunk) => {
+  for (const line of String(chunk).split("\\n").filter(Boolean)) {
+    const message = JSON.parse(line)
+    // It answers being started only once it's told to.
+    if (message.method === "initialize") {
+      const answer = setInterval(() => {
+        if (!fs.existsSync(${JSON.stringify(go)})) return
+        clearInterval(answer)
+        process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n")
+      }, 10)
+    }
+  }
+})
+`)
+    const launcher = join(root, "codex")
+    writeFileSync(launcher, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`)
+    chmodSync(launcher, 0o755)
+    delete process.env.KUVO_FENCE
+    const agent = (codex = new TestCodex(launcher, root))
+    const starting = agent.rpc()
+    await until(() => existsSync(join(root, "started")))
+    expect(agent.outside()).toBe(true)
+    writeFileSync(go, "")
+    await starting
+    expect(agent.outside()).toBe(true)
+    agent.shutdown()
+    await until(() => !agent.outside())
   })
 })
 
@@ -559,6 +641,240 @@ describe("Codex in the session's modes", () => {
     expect(turnStart()).toMatchObject({ approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly" }, collaborationMode: { mode: "plan" } })
     expect(answers()).toEqual([{ decision: "decline" }])
     expect(tools(id)[0].state.status).toBe("error")
+  })
+})
+
+describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
+  const reply: [string, any][] = [["item/completed", { item: { type: "agentMessage", id: "m1", text: "Done." } }]]
+  /** Kuvo Code's folder, Codex's own home, and a folder elsewhere. */
+  let kuvo: string, home: string, elsewhere: string
+  beforeEach(() => {
+    kuvo = realpathSync(mkdtempSync(join(base, "kuvo-")))
+    home = realpathSync(mkdtempSync(join(base, "codex-home-")))
+    elsewhere = realpathSync(mkdtempSync(join(base, "elsewhere-")))
+    writeFileSync(join(kuvo, "secret"), "s")
+    writeFileSync(join(home, "config.toml"), "")
+    process.env.CODEX_HOME = home
+    // (Its home's `ipc`, as your own Codex's: the ChatGPT app's.)
+    process.env.KUVO_FENCE = realFence(kuvo, [join(home, "ipc")])
+  })
+  afterEach(() => {
+    delete process.env.KUVO_FENCE
+    delete process.env.CODEX_HOME
+  })
+
+  /** What Codex said it could do (`tries`). */
+  const said = (id: string) => steps(id).flatMap((step) => step.content.filter((content: any) => content.type === "text").map((content: any) => content.text)).join("")
+
+  test("Codex runs whole in it: what it runs, even a command you allowed, writes only the session's folder and Codex's own state (on a Mac, never its settings, plugins or skills, which run outside the sandbox when you use Codex), never elsewhere, and can't read Kuvo Code's folder", async () => {
+    mkdirSync(join(home, "sessions"))
+    mkdirSync(join(home, "plugins"))
+    mkdirSync(join(home, "shell_snapshots"))
+    const id = await run([[tries, {
+      project: ["write", join(root, "made.txt")],
+      own: ["write", join(home, "state_5.sqlite-wal")],
+      signin: ["write", join(home, "auth.json")],
+      state: ["write", join(home, "sessions", "rollout.jsonl")],
+      settings: ["write", join(home, "config.toml")],
+      // A file it never writes.
+      other: ["write", join(home, "notes.txt")],
+      // Settings put in its state.
+      kept: ["write", join(home, "sessions", "config.toml")],
+      plugin: ["write", join(home, "plugins", "plugin.js")],
+      // What Codex runs or tells its model later, outside a turn: a shell it sources, what each model is told.
+      snapshot: ["write", join(home, "shell_snapshots", "s.sh")],
+      models: ["write", join(home, "models_cache.json")],
+      elsewhere: ["write", join(elsewhere, "e.txt")],
+      kuvo: ["read", join(kuvo, "secret")],
+    }]], { permissions: askFirst })
+    // (Linux grants its home whole: there, a machine's, it's Kuvo Code's own copy of Codex's.)
+    const mac = process.platform === "darwin" ? "no" : "yes"
+    expect(said(id)).toBe(`project=yes own=yes signin=yes state=yes settings=${mac} other=${mac} kept=${mac} plugin=${mac} snapshot=${mac} models=${mac} elsewhere=no kuvo=no`)
+  })
+
+  test("what it runs can't ask the ChatGPT app to run something outside it (its socket in Codex's folder), and still reaches other sockets", async () => {
+    const listen = async (folder: string) => {
+      mkdirSync(folder, { recursive: true })
+      const here = process.cwd()
+      process.chdir(folder)
+      const server = createServer((socket) => socket.end())
+      await new Promise<void>((resolve) => server.listen("s.sock", resolve))
+      process.chdir(here)
+      return server
+    }
+    const app = await listen(join(home, "ipc"))
+    const other = await listen(elsewhere)
+    try {
+      const id = await run([[tries, { app: ["connect", join(home, "ipc", "s.sock")], other: ["connect", join(elsewhere, "s.sock")] }]], { permissions: askFirst })
+      // (Linux can't refuse a socket: a machine has no ChatGPT app.)
+      expect(said(id)).toBe(`app=${process.platform === "darwin" ? "no" : "yes"} other=yes`)
+      // The box's own rules name your Codex's socket so (and Grok's shared leader's).
+      if (process.platform === "darwin") expect(fencePolicy().sockets?.filter((folder) => folder.endsWith("/.codex/ipc") || folder.endsWith("/.grok"))).toHaveLength(2)
+    } finally {
+      app.close()
+      other.close()
+    }
+  })
+
+  test("a one-off answer from your account's Codex (a title) runs in it too: what it runs can't change Codex's plugins or skills", async () => {
+    mkdirSync(join(home, "plugins"))
+    mkdirSync(join(home, "skills"))
+    codex = new TestCodex(fakeCodex(root, [[tries, {
+      plugin: ["write", join(home, "plugins", "plugin.js")],
+      skill: ["write", join(home, "skills", "SKILL.md")],
+      elsewhere: ["write", join(elsewhere, "e.txt")],
+    }]]), root)
+    const mac = process.platform === "darwin" ? "no" : "yes"
+    expect(await codex.generate("A title for this.")).toBe(`plugin=${mac} skill=${mac} elsewhere=no`)
+  })
+
+  test("an added account's Codex works in it: it keeps its conversations in your Codex's folder, which its own links to, and still can't change what runs outside", async () => {
+    const yours = realpathSync(mkdtempSync(join(base, "your-codex-")))
+    mkdirSync(join(yours, "sessions"))
+    mkdirSync(join(yours, "skills"))
+    writeFileSync(join(yours, "config.toml"), "")
+    const added = join(kuvo, "agents", "codex-work")
+    codex = new TestCodex(fakeCodex(root, [[tries, {
+      signin: ["write", join(added, "auth.json")],
+      state: ["write", join(added, "sessions", "rollout.jsonl")],
+      settings: ["write", join(added, "config.toml")],
+      skill: ["write", join(yours, "skills", "SKILL.md")],
+    }]]), root, { id: "work", home: added }, yours)
+    const agent = codex
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
+    const id = sessions.create({ title: "Codex", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    expect(existsSync(join(yours, "sessions", "rollout.jsonl"))).toBe(true)
+    const mac = process.platform === "darwin" ? "no" : "yes"
+    expect(said(id)).toBe(`signin=yes state=yes settings=${mac} skill=${mac}`)
+  })
+
+  test("turned off while your account's Codex is busy signing in: a session's turn runs in its own folder, outside the sandbox, not in that Codex", async () => {
+    codex = new TestCodex(fakeCodex(root, reply), root)
+    const agent = codex
+    await agent.signIn()
+    delete process.env.KUVO_FENCE
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
+    const id = sessions.create({ title: "Codex", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: root }, permissions: askFirst }).id
+    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    expect(said(id)).toBe("Done.")
+    expect(turnStart().sandboxPolicy.type).toBe("workspaceWrite")
+  })
+
+  test("a session's own Codex stops when the session closes", async () => {
+    const other = realpathSync(mkdtempSync(join(base, "other-project-")))
+    codex = new TestCodex(fakeCodex(root, reply), root)
+    const agent = codex
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
+    const id = sessions.create({ title: "Codex", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: other } }).id
+    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    // (The fake names its thread by its process.)
+    const there = readFileSync(join(other, "sent.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line))
+    const pid = Number(there.find((message) => message.method === "turn/start").params.threadId.slice(2))
+    const running = () => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    expect(running()).toBe(true)
+    sessions.closeAll()
+    await until(() => !running())
+  })
+
+  test("you let the project's commands write another folder while an agent Codex spawned still works: it goes on, in the same Codex, and the session's next turn too", async () => {
+    codex = new TestCodex(messagedCodex(root, true, false), root)
+    const agent = codex
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
+    const id = sessions.create({ title: "Spawn", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    const child = tools(id)[0].state.metadata.sessionID as string
+    // Also Allowed, as the box writes it for this project.
+    const allowed = join(kuvo, "run", "fence", "allowed", createHash("sha256").update(realpathSync(root)).digest("hex").slice(0, 32))
+    mkdirSync(dirname(allowed), { recursive: true })
+    writeFileSync(allowed, elsewhere + "\n")
+    sessions.prompt(id, { id: "msg_codex_test_002", text: "more", files: [], delivery: "steer" })
+    await until(() => sent().filter((message) => message.method === "turn/start").length === 2 && sessions.messages(id).filter((message) => message.type === "idle").length === 2)
+    expect(sent().filter((message) => message.method === "initialize")).toHaveLength(1)
+    expect(sessions.messages(child).some((message: any) => message.type === "idle" && message.outcome === "interrupted")).toBe(false)
+  })
+
+  test("Ask First asks before its commands as Codex does, and Approve All only what Codex's own rules ask about, with Codex's own sandbox off (one can't run inside another)", async () => {
+    await run(reply, { permissions: askFirst })
+    expect(turnStart()).toMatchObject({ approvalPolicy: "untrusted", sandboxPolicy: { type: "dangerFullAccess" } })
+    sessions.closeAll()
+    codex!.shutdown()
+    rmSync(join(root, "sent.jsonl"))
+    await run(reply)
+    expect(turnStart()).toMatchObject({ approvalPolicy: "on-request", sandboxPolicy: { type: "dangerFullAccess" } })
+  })
+
+  test("each session has a Codex of its own, in its own folder", async () => {
+    const first = await run(reply)
+    const other = realpathSync(mkdtempSync(join(base, "other-project-")))
+    const second = sessions.create({ title: "Codex", model: { providerID: codex!.providerID, id: "gpt-test" }, location: { directory: other } }).id
+    sessions.prompt(second, { id: "msg_codex_test_101", text: "go", files: [], delivery: "steer" })
+    await until(() => ended(second))
+    expect(said(first)).toBe("Done.")
+    // The second's Codex started in its folder, and it's the only one there.
+    const there = readFileSync(join(other, "sent.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line))
+    expect(there.filter((message) => message.method === "initialize")).toHaveLength(1)
+    expect(sent().filter((message) => message.method === "initialize")).toHaveLength(1)
+  })
+
+  test("turned on while Codex is still at work, that turn goes on; the session's next turn runs in the sandbox", async () => {
+    delete process.env.KUVO_FENCE
+    const id = start([untilStopped], {}, reply)
+    await until(() => existsSync(join(root, "sent.jsonl")) && sent().some((message) => message.method === "turn/start"))
+    expect(turnStart().sandboxPolicy).toEqual({ type: "dangerFullAccess" })
+    process.env.KUVO_FENCE = join(kuvo, "run", "fence")
+    await sessions.interrupt(id)
+    await until(() => ended(id))
+    sessions.prompt(id, { id: "msg_codex_test_102", text: "again", files: [], delivery: "steer" })
+    await until(() => sent().filter((message) => message.method === "turn/start").length === 2)
+    // A Codex of its own, in the sandbox, where its thread is loaded again.
+    expect(sent().filter((message) => message.method === "initialize")).toHaveLength(2)
+    expect(sent().filter((message) => message.method === "thread/resume")).toHaveLength(1)
+    expect(sent().filter((message) => message.method === "turn/start").at(-1).params.approvalPolicy).toBe("on-request")
+  })
+
+  test("a picture you attached is one Codex can see: Kuvo Code's folder, where it's kept, is hidden", async () => {
+    const attached = join(kuvo, "Attachments", "shot.png")
+    mkdirSync(dirname(attached))
+    writeFileSync(attached, "png")
+    codex = new TestCodex(fakeCodex(root, reply), root)
+    const agent = codex
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
+    const id = sessions.create({ title: "Codex", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [{ uri: pathToFileURL(attached).href, name: "shot.png" }], delivery: "steer" })
+    await until(() => ended(id))
+    const picture = turnStart().input.find((item: any) => item.type === "localImage")
+    expect(picture.path).not.toBe(attached)
+    expect(readFileSync(picture.path, "utf8")).toBe("png")
+  })
+
+  test("a picture you attach goes only where Codex reads it, wherever a command before put a link", async () => {
+    const attached = join(kuvo, "Attachments", "shot.png")
+    mkdirSync(dirname(attached))
+    writeFileSync(attached, "png")
+    // A command earlier made the conversation's temporary folder a link to elsewhere.
+    const temporary = join(kuvo, "run", "fence", "tmp", createHash("sha256").update(realpathSync(root)).digest("hex").slice(0, 32))
+    mkdirSync(dirname(temporary), { recursive: true })
+    symlinkSync(elsewhere, temporary)
+    codex = new TestCodex(fakeCodex(root, [[tries, { picture: ["read", "(attached)"], change: ["write", "(attached)"] }]]), root)
+    const agent = codex
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
+    const id = sessions.create({ title: "Codex", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [{ uri: pathToFileURL(attached).href, name: "shot.png" }], delivery: "steer" })
+    await until(() => ended(id))
+    expect(said(id)).toBe("picture=yes change=no")
+    expect(readdirSync(elsewhere)).toEqual([])
   })
 })
 

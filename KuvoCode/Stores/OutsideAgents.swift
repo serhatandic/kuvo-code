@@ -201,7 +201,8 @@ final class OutsideAgents {
             try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
             let server = try await ServerProcess.start(
                 executable: engine,
-                arguments: ["run", script.path],
+                // (No `.env` from its folder, which an agent's command can write.)
+                arguments: ["run", "--config=/dev/null", "--no-env-file", script.path],
                 environment: env,
                 directory: home,
                 onExit: { [weak self] status in Task { @MainActor in self?.exited(status: status) } }
