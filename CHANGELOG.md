@@ -192,6 +192,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A machine Kuvo Code finds at two addresses no longer shows a group chat as talking there while it's away, and a chat that starts talking just as it's read again keeps showing so.
 - Each new session you're writing, and each terminal tab of the window, has a side panel of its own: a terminal opened while writing one no longer shows beside another, or goes to whichever session is sent first.
 - Run again after a new session is sent, or after a conversation moves to the coding agents, restarts the command in the same terminal instead of starting a second copy beside the first.
+- Archiving a session ends its terminals in the side panel, from your phone too, and removing a machine ends the terminals on it, rather than leaving them running out of sight (a dev server holding its port).
 - A file a bot shows you in a group chat opens in the side panel, instead of "No Project".
 - Reload in the Files tab while you're filtering reads the files again, instead of leaving the filter loading.
 - Add to Message in a terminal tab of the window starts a new session in its folder with what you selected, instead of doing nothing.
