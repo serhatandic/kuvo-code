@@ -140,6 +140,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - The servers behind Outlook and Microsoft 365, Todoist, CalDAV calendars, Apple Calendar and Reminders, and Chrome DevTools are updated to their latest versions, with their makers' fixes.
 - Kuvo Code runs opencode 2.2.0: long conversations load and compact better, a busy provider is tried again instead of being reported as a full conversation, and HEIC, AVIF and QuickTime attachments are recognized.
 - Diagrams in replies and in a Markdown file's preview have a new look, with tidier layouts, square-cornered lines and soft shadows (Mermaid 12).
+- Showing or hiding the side panel or the sidebar no longer catches at the start of its slide when you have many sessions: the sidebar isn't drawn again for it.
 
 ## 0.7.2
 
