@@ -67,6 +67,15 @@ test("what changed: an edit as git's diff with the whole file around it, and a n
   assert.equal(json.uncommitted, true);
 });
 
+test("every new file comes with its hash, however many there are, so a client never reads one again unchanged", async () => {
+  // A project with many files git doesn't ignore yet (a build's output, say).
+  for (let n = 0; n < 1200; n++) write(`out/file-${n}.txt`, `${n}\n`);
+  const { json } = await changes();
+  assert.equal(json.untracked.length, 1200);
+  assert.equal(Object.keys(json.hashes).length, 1200);
+  assert.equal(json.hashes["out/file-1199.txt"], git("hash-object", "out/file-1199.txt").trim());
+});
+
 test("an unchanged blank line keeps its place in what changed, whatever your git settings say", async () => {
   // Git told to write unchanged blank lines as nothing at all, which reads as no line.
   git("config", "diff.suppressBlankEmpty", "true");

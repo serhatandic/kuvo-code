@@ -15,8 +15,8 @@ import { FILE_LIMIT } from "./file";
 
 // git's empty tree: what a repository with no commits yet is compared with.
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-// The most new files hashed, so a client reads only those that changed.
-const HASHED = 500;
+// New files hashed at a time (a command line holds only so many names).
+const HASHED_AT_ONCE = 500;
 // git's settings a client may send along with a commit, which mean the same here: its author.
 const AUTHOR = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"];
 
@@ -120,14 +120,18 @@ export async function changesIn(directory: string, scope: Scope, base?: string):
   if (scope !== "staged") {
     untracked = ((await text(root, ["-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard", "-z", "--", limit])) ?? "").split("\0").filter(Boolean);
     // git's hash of each new file (as it is, no filters run), so a client reads one again only when
-    // it changed. One git can't hash (a broken link) fails the call: then each on its own. A
-    // repository inside this one ("web/") is no file.
-    const files = untracked.filter(name => !name.endsWith("/")).slice(0, HASHED);
-    const all = files.length ? (await text(root, ["hash-object", "--no-filters", "--", ...files]))?.trim().split("\n") : [];
-    if (all && all.length === files.length) files.forEach((name, at) => (hashes[name] = all[at]));
-    else for (const name of files) {
-      const one = (await text(root, ["hash-object", "--no-filters", "--", name]))?.trim();
-      if (one) hashes[name] = one;
+    // it changed: every one, or a client reads those left out on every look. One git can't hash
+    // (a broken link) fails its call: then each on its own. A repository inside this one ("web/")
+    // is no file.
+    const files = untracked.filter(name => !name.endsWith("/"));
+    for (let start = 0; start < files.length; start += HASHED_AT_ONCE) {
+      const some = files.slice(start, start + HASHED_AT_ONCE);
+      const all = (await text(root, ["hash-object", "--no-filters", "--", ...some]))?.trim().split("\n");
+      if (all && all.length === some.length) some.forEach((name, at) => (hashes[name] = all[at]));
+      else for (const name of some) {
+        const one = (await text(root, ["hash-object", "--no-filters", "--", name]))?.trim();
+        if (one) hashes[name] = one;
+      }
     }
   }
   // Something not committed yet, new files included whatever git's settings say; as if there were

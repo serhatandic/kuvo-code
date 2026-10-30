@@ -14009,7 +14009,7 @@ async function* fileAt(requestPath, json) {
 
 // Packages/Box/src/link/areas/changes.ts
 var EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-var HASHED = 500;
+var HASHED_AT_ONCE = 500;
 var AUTHOR = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"];
 var SCOPES = ["uncommitted", "unstaged", "staged", "branch"];
 var STATUSES = ["added", "deleted", "modified", "renamed"];
@@ -14085,17 +14085,20 @@ async function changesIn(directory, scope, base) {
   const hashes = {};
   if (scope !== "staged") {
     untracked = (await text(root, ["-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard", "-z", "--", limit]) ?? "").split("\x00").filter(Boolean);
-    const files = untracked.filter((name) => !name.endsWith("/")).slice(0, HASHED);
-    const all = files.length ? (await text(root, ["hash-object", "--no-filters", "--", ...files]))?.trim().split(`
-`) : [];
-    if (all && all.length === files.length)
-      files.forEach((name, at) => hashes[name] = all[at]);
-    else
-      for (const name of files) {
-        const one = (await text(root, ["hash-object", "--no-filters", "--", name]))?.trim();
-        if (one)
-          hashes[name] = one;
-      }
+    const files = untracked.filter((name) => !name.endsWith("/"));
+    for (let start = 0;start < files.length; start += HASHED_AT_ONCE) {
+      const some = files.slice(start, start + HASHED_AT_ONCE);
+      const all = (await text(root, ["hash-object", "--no-filters", "--", ...some]))?.trim().split(`
+`);
+      if (all && all.length === some.length)
+        some.forEach((name, at) => hashes[name] = all[at]);
+      else
+        for (const name of some) {
+          const one = (await text(root, ["hash-object", "--no-filters", "--", name]))?.trim();
+          if (one)
+            hashes[name] = one;
+        }
+    }
   }
   const status = scope === "branch" ? await text(root, ["status", "--porcelain", "--untracked-files=normal"]) : "x";
   return { repository: true, root, against, patch, untracked, hashes, uncommitted: status === null || status.length > 0 };
