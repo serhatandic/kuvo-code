@@ -6338,8 +6338,15 @@ function allowedFolders(directory) {
   const where = folder();
   if (!where)
     return [];
+  const work = real(directory);
+  const git = repositoryOf2(work);
+  let project = work;
   try {
-    return readFileSync13(join14(where, "allowed", sum(real(directory))), "utf8").split(`
+    if (statSync5(join14(work, ".git")).isFile() && git.endsWith("/.git"))
+      project = dirname6(git);
+  } catch {}
+  try {
+    return readFileSync13(join14(where, "allowed", sum(project)), "utf8").split(`
 `).filter((line) => line.startsWith("/") && real(line) === line).slice(0, 8);
   } catch {
     return [];
@@ -6393,6 +6400,20 @@ function repositoryOf2(folder) {
   }
   return "";
 }
+function temporaryFolder(where, work) {
+  const [root, key] = (() => {
+    try {
+      return readFileSync13(join14(where, "temporary"), "utf8").split(`
+`);
+    } catch {
+      return [];
+    }
+  })();
+  if (!root?.startsWith("/") || !/^[0-9a-f]{64}$/.test(key ?? ""))
+    return join14(where, "tmp", sum(work));
+  return join14(root, createHash3("sha256").update(`${key}
+${work}`).digest("hex").slice(0, 8));
+}
 function fenceShell(directory) {
   const where = folder();
   if (!where || !fenceRules())
@@ -6402,7 +6423,7 @@ function fenceShell(directory) {
   if (!shell)
     return;
   const work = real(directory);
-  const temporary = join14(where, "tmp", sum(work));
+  const temporary = temporaryFolder(where, work);
   mkdirSync8(temporary, { recursive: true, mode: 448 });
   return { shell, work, git: repositoryOf2(work), temporary };
 }
@@ -21867,4 +21888,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 0a3b75688ed47f3222cbaa3f3cdede779638bd6ffc8156e76024550b88ac3809
+// Built from Packages/Box/src/agents cac6e39483d9e1ef785cea3a3c1cec8c759335498eda836d3329268cd903f885

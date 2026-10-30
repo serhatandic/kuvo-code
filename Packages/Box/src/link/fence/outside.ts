@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { isObject } from "../../shared/json";
 import type { SandboxAsk, SandboxStop } from "../../shared/routes/sandbox";
 import { cut, oneLine } from "../../shared/text";
@@ -107,13 +108,21 @@ export async function stopsFor(session: string, command: string, minutes = 3): P
   return stops.slice(-MOST_STOPS);
 }
 
-/** What Always would allow for a command: the one folder (or file) it was stopped writing in, when
- * the log says so and it may be given; else nothing, and it can only be allowed once. */
-function alwaysFor(stops: SandboxStop[]): SandboxAsk["always"] {
+/** What Always would allow for a command: the one folder it was stopped writing in (the log names
+ * the file, which the next run may name differently), or where that can't be given, the file
+ * itself; when the log says so and it may be given. Else nothing, and it can only be allowed once:
+ * also for what's in its own project, which its commands write already but for what's kept from
+ * them there (the settings agents start with), which no rule gives. */
+function alwaysFor(stops: SandboxStop[], project: string): SandboxAsk["always"] {
   const writes = [...new Set(stops.filter(stop => stop.kind === "write" && stop.path).map(stop => stop.path!))];
   if (writes.length !== 1 || !stops.every(stop => stop.kind === "write")) return undefined;
-  const where = writeRuleWouldBe(writes[0]);
-  return where ? { kind: "write", path: where } : undefined;
+  const real = (where: string) => { try { return fs.realpathSync(where); } catch { return path.resolve(where); } };
+  const own = real(project);
+  const where = real(path.dirname(writes[0]));
+  if (where === own || where.startsWith(own + "/")) return undefined;
+  const isFolder = (() => { try { return fs.statSync(writes[0]).isDirectory(); } catch { return false; } })();
+  const given = (isFolder ? null : writeRuleWouldBe(path.dirname(writes[0]))) ?? writeRuleWouldBe(writes[0]);
+  return given ? { kind: "write", path: given } : undefined;
 }
 
 /** The notification for an ask, as the Mac words it. */
@@ -150,7 +159,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   // (By the command as it ran, whitespace and all.)
   const stopped = caller.session ? await stopsFor(caller.session, String(args.command)) : [];
   // (A group chat's seat: once, or not at all.)
-  const always = caller.seat ? undefined : alwaysFor(stopped);
+  const always = caller.seat ? undefined : alwaysFor(stopped, project);
   const answered = await book.ask({
     ...(caller.root ? { session: caller.root, ...(caller.sessionName ? { sessionName: caller.sessionName } : {}) } : {}),
     ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}),

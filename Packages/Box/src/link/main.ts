@@ -66,7 +66,7 @@ import { setVaultTell } from "./vault/use";
 import { HELD_FILE, NoticeHold } from "./notices/hold";
 import { noticeJSON, pushTo } from "./notices/notice";
 import { announce, forgetMacsAgents, refreshOwn } from "./peers/agents";
-import { forgetOldMacs, KEY, leaveMac, macsOf, peersOf, takeLegacyPeers } from "./peers/known";
+import { countAway, forgetOldMacs, KEY, leaveMac, macsOf, peersOf, takeLegacyPeers } from "./peers/known";
 import { peerMail, receiveMail } from "./peers/mail";
 import { watchSeats } from "./peers/seats";
 import { changePersonalities, mergePersonalities, readPersonalities } from "./personalities/library";
@@ -345,6 +345,8 @@ async function run(): Promise<void> {
   setInterval(() => {
     if (current?.welcomed) announce(current, readEngineFile).catch(() => {});
     else refreshOwn(readEngineFile).catch(() => {});
+    // Online: its Macs' 30 days go on (`countAway`); time without the relay doesn't count.
+    if (current?.welcomed) try { updateLink(link => (link && macsOf(link).length ? (countAway(link), link) : null)); } catch {}
   }, 60_000);
   setInterval(() => {
     if (current?.welcomed && docsNoted()) try { docsChanged(current, { tell: true }); } catch {}

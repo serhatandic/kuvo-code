@@ -647,6 +647,67 @@ test("each conversation's temporary files are its own", async () => {
   }
 });
 
+test("a commit runs pre-commit's hooks, which set themselves up as they first run, and your own pre-commit's are left as they are", async () => {
+  const box = boxAt("pre-commit");
+  const project = path.join(root, "hooked");
+  fs.mkdirSync(project);
+  assert.equal(spawnSync("git", ["init", "-q", project]).status, 0);
+  // As `pre-commit install` leaves it, outside the sandbox: a hook that sets up its tools in
+  // pre-commit's own folder (as pre-commit finds it) the first time, then runs them.
+  fs.writeFileSync(path.join(project, ".git", "hooks", "pre-commit"), [
+    "#!/bin/sh",
+    'store=${PRE_COMMIT_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/pre-commit}',
+    'mkdir -p "$store/repo-lint" && echo set up > "$store/repo-lint/env" && echo linted',
+  ].join("\n") + "\n", { mode: 0o755 });
+  // Your own pre-commit's folder, which commands only read (what's in it runs outside the sandbox):
+  // as the sandbox keeps yours, since this test's home isn't the one its rules name.
+  const yours = path.join(root, ".cache", "pre-commit");
+  fs.mkdirSync(yours, { recursive: true });
+  fs.chmodSync(yours, 0o555);
+  const running = await start(box);
+  try {
+    const ran = await engineRuns(box, project, "echo ok > made.txt && git add made.txt && git -c user.name=t -c user.email=t@t commit -qm made");
+    assert.equal(ran.status, 0, ran.out);
+    assert.match(ran.out, /linted/);
+    assert.deepEqual(fs.readdirSync(yours), [], "your own pre-commit's tools, which run outside it, aren't what it set up");
+  } finally {
+    await running.stop();
+    fs.chmodSync(yours, 0o755);
+  }
+});
+
+test("a command's own socket in its temporary folder works, as a server's tests or Python's multiprocessing make one", { skip: linux && "this Mac's box only (a machine's is in its own short ~/.kuvo-code, where this test's folder is deeper)" }, async () => {
+  // This Mac's box as the app starts it, its temporary files in the app's temporary folder (named
+  // as long as the app's own), its folder as deep as `~/Library/Application Support/<bundle>`.
+  const bundle = "kuvo.sock.tst";
+  const box = boxAt(path.join("Library", "Application Support", bundle), true);
+  const temporary = path.join(os.tmpdir(), bundle);
+  fs.rmSync(temporary, { recursive: true, force: true });
+  box.env.TMPDIR = path.join(temporary, "box") + "/";
+  const project = path.join(root, "sockets");
+  fs.mkdirSync(project);
+  const python = [
+    "import os, socket",
+    "from multiprocessing.managers import BaseManager",
+    "if __name__ == '__main__':",
+    "    where = os.path.join(os.environ['TMPDIR'], 'server.sock')",
+    "    server = socket.socket(socket.AF_UNIX); server.bind(where); server.listen(1)",
+    "    client = socket.socket(socket.AF_UNIX); client.connect(where); print('connected')",
+    "    manager = BaseManager(authkey=b'k'); manager.start(); manager.shutdown(); print('managed')",
+  ].join("\n");
+  fs.writeFileSync(path.join(project, "sockets.py"), python + "\n");
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const ran = await engineRuns(box, project, "python3 sockets.py");
+    assert.equal(ran.status, 0, ran.out);
+    assert.match(ran.out, /connected\nmanaged/);
+  } finally {
+    await running.stop();
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
 test("turned off and on again, it isn't on until the engine has loaded it again", async () => {
   const box = boxAt("again");
   const project = path.join(root, "again-project");

@@ -25,8 +25,23 @@ export const MOST_FOLDERS = 8;
 /** A refusal a client is told (400). */
 export class RuleRefusal extends Error {}
 
+/** A project's folder by its real path; a worktree of a repository (a session's branch) is its
+ * repository's own folder, so it has the project's folders and Always there keeps them for it.
+ * (Only one the repository names back, as the sandbox's plugin finds it.) */
 const realProject = (project: string) => {
-  try { return fs.realpathSync(project); } catch { return path.resolve(project); }
+  let real: string;
+  try { real = fs.realpathSync(project); } catch { return path.resolve(project); }
+  try {
+    const named = fs.readFileSync(path.join(real, ".git"), "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
+    if (!named) return real;
+    const own = fs.realpathSync(path.resolve(real, named));
+    if (path.basename(path.dirname(own)) !== "worktrees") return real;
+    if (fs.realpathSync(fs.readFileSync(path.join(own, "gitdir"), "utf8").trim()) !== path.join(real, ".git")) return real;
+    const common = fs.realpathSync(path.resolve(own, fs.readFileSync(path.join(own, "commondir"), "utf8").trim()));
+    return path.basename(common) === ".git" && common === path.dirname(path.dirname(own)) ? path.dirname(common) : real;
+  } catch {
+    return real;
+  }
 };
 
 /** The launcher's name for a project's folder (its real path), as `sha256sum | cut -c 1-32` makes it. */
