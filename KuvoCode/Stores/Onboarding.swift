@@ -35,6 +35,8 @@ final class Onboarding {
     private(set) var installFailures: [String: InstallFailure] = [:]
     /// The one to say next.
     var installFailure: InstallFailure? { installFailures.values.min { $0.name < $1.name } }
+    /// Where they were taken from, to give back unseen when the step goes.
+    @ObservationIgnored private weak var installingAgents: OutsideAgents?
 
     struct InstallFailure: Equatable {
         var integrationID: String
@@ -90,6 +92,7 @@ final class Onboarding {
     func finish() { move(to: .done) }
 
     private func move(to next: Step) {
+        if step == .subscriptions, next != .subscriptions { giveBackInstallFailures() }
         step = next
         defaults.set(next.rawValue, forKey: Self.stepKey)
         Analytics.shared.onboardingStep(next == .screenAccess ? "screen_access" : next.rawValue)
@@ -150,16 +153,23 @@ final class Onboarding {
     }
 
     /// Runs an agent's installer from this step (`OutsideAgents.install`). Why one didn't work is
-    /// this step's to say, on its row, rather than Settings › Accounts' the next time it opens.
+    /// this step's to say while it shows, rather than Settings › Accounts' the next time it opens;
+    /// one that fails after you've gone on, or that you haven't seen yet, is Settings' to say.
     func install(_ row: Offers.Row, with agents: OutsideAgents, then refresh: @escaping (Bool) async -> Void) {
         guard case .install(let id) = row.action else { return }
         installFailures[id] = nil
+        installingAgents = agents
         agents.install(id) { [weak self] installed in
-            if let message = agents.installFailures.removeValue(forKey: id) {
-                self?.installFailures[id] = InstallFailure(integrationID: id, name: row.name, message: message)
+            if let self, step == .subscriptions, let message = agents.installFailures.removeValue(forKey: id) {
+                installFailures[id] = InstallFailure(integrationID: id, name: row.name, message: message)
             }
             await refresh(installed)
         }
+    }
+
+    private func giveBackInstallFailures() {
+        for failure in installFailures.values { installingAgents?.installFailures[failure.integrationID] = failure.message }
+        installFailures = [:]
     }
 
     func seenInstallFailure(_ integrationID: String) { installFailures[integrationID] = nil }

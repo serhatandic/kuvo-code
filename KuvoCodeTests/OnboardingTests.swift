@@ -258,9 +258,12 @@ import UsageKit
         StubWeb.start(hosts: ["127.0.0.1"])
         agents.connect(ServerEndpoint(url: URL(string: bridge)!, password: "test"), folderPrefix: "")
         onboarding = Onboarding(defaults: UserDefaults(suiteName: suite)!, launchedBefore: false, screen: ScreenAccess(source: OnboardingTests.Permissions().source))
+        // On "Bring your subscriptions", once the engine's ready.
+        onboarding.engineReady()
     }
 
     private func done() {
+        onboarding.finish()
         agents.disconnect()
         StubWeb.stop()
         UserDefaults().removePersistentDomain(forName: suite)
@@ -327,5 +330,34 @@ import UsageKit
         #expect(onboarding.installFailure?.message == "curl: (6) Could not resolve host: chatgpt.com")
         onboarding.seenInstallFailure("codex-cli")
         #expect(onboarding.installFailure == nil)
+    }
+
+    /// Install, then Continue while it runs: when it fails, it's Settings › Accounts' to say, as
+    /// the step is gone.
+    @Test func anInstallThatFailsAfterYouWentOnIsSaidInSettings() async throws {
+        defer { done() }
+        failing("claude-code", "curl: (6) Could not resolve host: claude.ai")
+        let claude = try await rows().claude
+        #expect(onboarding.step == .subscriptions)
+        let installed = await withCheckedContinuation { finished in
+            onboarding.install(claude, with: agents) { finished.resume(returning: $0) }
+            onboarding.advance()
+        }
+        #expect(!installed)
+        #expect(onboarding.step != .subscriptions)
+        #expect(onboarding.installFailure == nil)
+        #expect(agents.installFailures["claude-code"] == "curl: (6) Could not resolve host: claude.ai")
+    }
+
+    /// One the step had but you hadn't seen yet, when you go on: Settings › Accounts says it.
+    @Test func anUnseenFailureGoesToSettingsWithTheStep() async throws {
+        defer { done() }
+        failing("claude-code", "curl: (6) Could not resolve host: claude.ai")
+        let claude = try await rows().claude
+        #expect(await !install(claude))
+        #expect(onboarding.installFailure != nil)
+        onboarding.advance()
+        #expect(onboarding.installFailure == nil)
+        #expect(agents.installFailures["claude-code"] == "curl: (6) Could not resolve host: claude.ai")
     }
 }
