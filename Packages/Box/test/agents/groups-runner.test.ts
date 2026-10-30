@@ -306,6 +306,20 @@ describe("a group chat on a machine", () => {
     await until(() => said() > 6 && !groups.talk("grp_team000001").discussing, 8000)
   }, 20_000)
 
+  test("a debate paused at its limit isn't wrapped up yet: the lead sums it up once, at its real end", async () => {
+    const { groups } = runner()
+    engine.lines = { Ada: ["Ada 0", "Ada 1", "Ada 2", "Ada 3"], Ben: ["Ben 0", "Ben 1", "Ben 2"] }
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Debate it.")
+    await until(() => groups.talk("grp_team000001").paused && !groups.talk("grp_team000001").discussing, 8000)
+    const wrapUps = () => groups.get("grp_team000001")!.messages.filter((message) => message.kind === "wrapUp").length
+    expect(wrapUps()).toBe(0)
+    groups.keepGoing("grp_team000001")
+    await until(() => !groups.talk("grp_team000001").paused && !groups.talk("grp_team000001").discussing && wrapUps() > 0, 8000)
+    expect(groups.get("grp_team000001")!.messages.some((message) => message.text === "Ada 3")).toBe(true)
+    expect(wrapUps()).toBe(1)
+  }, 20_000)
+
   test("undo from your message", async () => {
     const { groups } = runner()
     engine.lines = { Ada: ["First thought."], Ben: [] }

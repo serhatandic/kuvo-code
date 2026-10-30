@@ -18269,6 +18269,7 @@ class GroupRunner {
       return;
     this.setPaused(id, false);
     live.asked++;
+    live.resumed = true;
     this.begin(id);
     this.told(id);
   }
@@ -18361,6 +18362,9 @@ class GroupRunner {
     let quiet = new Set;
     let absent = new Set;
     let saidCount = 0;
+    let resumed = live.resumed ?? false;
+    live.resumed = undefined;
+    let paused = false;
     const guested = new Set;
     const all = this.chat(id)?.messages ?? [];
     const since = live.since ? all.findIndex((message) => message.id === live.since) : -1;
@@ -18376,6 +18380,7 @@ class GroupRunner {
         quiet = new Set;
         absent = new Set;
         saidCount = 0;
+        resumed = false;
       }
       const names = new Map;
       for (const member of kept.group.members) {
@@ -18399,6 +18404,7 @@ class GroupRunner {
         guested.add(message.id + "/" + guest);
         if (turns >= limit(kept.group.members.length)) {
           this.setPaused(id, true);
+          paused = true;
           break;
         }
         const outcome = await this.turn(guest, id, signal, false, message);
@@ -18416,6 +18422,7 @@ class GroupRunner {
         break;
       if (turns >= limit(kept.group.members.length)) {
         this.setPaused(id, true);
+        paused = true;
         break;
       }
       const outcome = await this.turn(speaker, id, signal);
@@ -18433,9 +18440,9 @@ class GroupRunner {
     }
     const kept = this.chat(id);
     const lead = kept?.group.members[0];
-    if (signal.aborted || saidCount === 0 || live.asked !== epoch || !kept || !lead || !this.member(lead) || absent.has(lead))
+    if (paused || signal.aborted || saidCount === 0 && !resumed || live.asked !== epoch || !kept || !lead || !this.member(lead) || absent.has(lead))
       return epoch;
-    if (saidCount >= (live.meeting !== undefined ? 2 : 3) && kept.group.members.length >= 2) {
+    if ((resumed || saidCount >= (live.meeting !== undefined ? 2 : 3)) && kept.group.members.length >= 2) {
       const before = kept.messages.at(-1)?.id;
       await this.turn(lead, id, signal, true);
       const wrapUp = this.chat(id)?.messages.at(-1);
@@ -20743,4 +20750,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 94cd99104f343726a64578d195651f0ddd731abba7801389d370522669fb6117
+// Built from Packages/Box/src/agents 263445f524f35fa6adee185fe780eb17fbfaf0646e9f1c4e8212733e6902ab5e

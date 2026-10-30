@@ -110,6 +110,8 @@ interface Live {
   since?: string
   /** The meeting being talked over, by its message: how it went is told when it ends. */
   meeting?: string
+  /** Carried on with Keep Going: the talk before the pause counts toward its wrap-up. */
+  resumed?: boolean
   /** Stops the lead's list of who does what: a message of yours is newer than the go-ahead it reads. */
   splitStop?: () => void
 }
@@ -538,6 +540,7 @@ export class GroupRunner {
     if (live.abort || !this.chat(id)) return
     this.setPaused(id, false)
     live.asked++
+    live.resumed = true
     this.begin(id)
     this.told(id)
   }
@@ -641,6 +644,10 @@ export class GroupRunner {
     let quiet = new Set<string>()
     let absent = new Set<string>()
     let saidCount = 0
+    // Carried on after a pause at the limit: the talk before it went back and forth, and gets its wrap-up at the end.
+    let resumed = live.resumed ?? false
+    live.resumed = undefined
+    let paused = false
     // Guests that answered (or tried), each by the message that named it and its id.
     const guested = new Set<string>()
     // Where the discussion began: from that message on, each one's guests are asked, even one that
@@ -660,6 +667,7 @@ export class GroupRunner {
         quiet = new Set()
         absent = new Set()
         saidCount = 0
+        resumed = false
       }
       const names = new Map<string, string>()
       for (const member of kept.group.members) {
@@ -681,6 +689,7 @@ export class GroupRunner {
         guested.add(message.id + "/" + guest)
         if (turns >= limit(kept.group.members.length)) {
           this.setPaused(id, true)
+          paused = true
           break
         }
         const outcome = await this.turn(guest, id, signal, false, message)
@@ -697,6 +706,7 @@ export class GroupRunner {
       if (!speaker) break
       if (turns >= limit(kept.group.members.length)) {
         this.setPaused(id, true)
+        paused = true
         break
       }
       const outcome = await this.turn(speaker, id, signal)
@@ -712,11 +722,11 @@ export class GroupRunner {
       }
     }
     // The lead sums up a discussion that went back and forth, or a meeting where more than one spoke, unless you've written since
-    // or the lead couldn't take part (its note is in the chat already).
+    // or the lead couldn't take part (its note is in the chat already). Paused at the limit, it waits for the end: one wrap-up, after Keep Going.
     const kept = this.chat(id)
     const lead = kept?.group.members[0]
-    if (signal.aborted || saidCount === 0 || live.asked !== epoch || !kept || !lead || !this.member(lead) || absent.has(lead)) return epoch
-    if (saidCount >= (live.meeting !== undefined ? 2 : 3) && kept.group.members.length >= 2) {
+    if (paused || signal.aborted || (saidCount === 0 && !resumed) || live.asked !== epoch || !kept || !lead || !this.member(lead) || absent.has(lead)) return epoch
+    if ((resumed || saidCount >= (live.meeting !== undefined ? 2 : 3)) && kept.group.members.length >= 2) {
       const before = kept.messages.at(-1)?.id
       await this.turn(lead, id, signal, true)
       const wrapUp = this.chat(id)?.messages.at(-1)
