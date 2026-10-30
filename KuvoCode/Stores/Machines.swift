@@ -313,18 +313,17 @@ final class MachineEngine {
         }
     }
 
-    /// How far its engine has come to it, while it's being installed there and can say: what
-    /// its ring fills to.
-    var installProgress: Double? { connection == .installing ? step?.fraction : nil }
+    /// How far its engine's copy to it has come, while it's being copied there: what its ring
+    /// fills to (one bar, the copy's; a download to this Mac first only turns).
+    var installProgress: Double? { connection == .installing && step?.isCopying == true ? step?.fraction : nil }
 
     /// Its status in a row, with how far where there's a number to tell ("Copying the engine · 41
     /// of 98 MB").
     var statusDetail: String {
-        switch step {
-        case .copying(let sent, let total)? where connection == .installing && total > 0:
-            "Copying the engine · " + ProgressLine.Words.amount(done: sent, of: total)
-        case .downloading(let fraction)? where connection == .installing && fraction > 0:
-            "Downloading the engine · " + ProgressLine.Words.percent(fraction)
+        guard connection == .installing, let step else { return statusText }
+        return switch step {
+        case .copying(let sent, let total): MachineWords.installing(step: step.name, sent: sent, total: total) ?? statusText
+        case .downloading(let fraction): MachineWords.installing(step: step.name, fraction: fraction) ?? statusText
         default: statusText
         }
     }

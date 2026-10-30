@@ -119,6 +119,9 @@ final class FileTree {
     private(set) var failures: [URL: FolderFailure] = [:]
     /// A machine's folders being read now.
     private(set) var loading: Set<URL> = []
+    /// Each read of a machine's folder, counted: one overtaken by a later read (Reload, Try
+    /// Again) lands nowhere.
+    @ObservationIgnored private var reads: [URL: Int] = [:]
     /// Every file, for filtering; read on first use.
     private(set) var allFiles: [ProjectFiles.File]?
     /// Why filtering found nothing, when a folder couldn't be read.
@@ -188,10 +191,14 @@ final class FileTree {
             // On a machine: read in the background, shown when it's in.
             children[directory] = []
             loading.insert(directory)
+            let read = (reads[directory] ?? 0) + 1
+            reads[directory] = read
             Task {
                 let listed = await Task.detached { RemoteShell.list(directory) }.value
+                guard reads[directory] == read else { return }
                 switch listed {
                 case .success(let listed):
+                    failures[directory] = nil
                     children[directory] = listed
                         .map { Entry(url: directory.appending(path: $0.name, directoryHint: $0.isDirectory ? .isDirectory : .notDirectory), isDirectory: $0.isDirectory) }
                         .sorted(by: Entry.inFinderOrder)
@@ -222,6 +229,7 @@ final class FileTree {
     func retry(_ directory: URL) {
         failures[directory] = nil
         children[directory] = nil
+        loading.remove(directory)
     }
 
     /// Opens the tree down to `target` (and it too, a folder), reading it afresh: an agent just
@@ -251,6 +259,7 @@ final class FileTree {
     func reload() {
         children = [:]
         failures = [:]
+        loading = []
         allFiles = nil
         allFilesFailure = nil
     }
@@ -372,25 +381,35 @@ private struct NoteRow<Content: View>: View {
 }
 
 /// An open folder that couldn't be read, in its files' place: why, as the computer said it, and
-/// Try Again, so it never looks empty.
+/// Try Again, so it never looks empty. Two lines, so the reason stays whole in a narrow tree.
 private struct UnreadableRow: View {
     let failure: FolderFailure
     let depth: Int
     let retry: () -> Void
 
     var body: some View {
-        NoteRow(depth: depth) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: failure == .denied ? "lock" : "exclamationmark.triangle")
                 .foregroundStyle(.secondary)
-            Text("Couldn’t read this folder")
-                .foregroundStyle(.secondary)
-                .layoutPriority(1)
-            Text("· \(failure.reason)")
-                .truncationMode(.tail)
-            Button("Try Again", action: retry)
-                .buttonStyle(TextButtonStyle())
-                .accessibilityLabel("Try reading this folder again")
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Couldn’t read this folder")
+                    .foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(failure.reason)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Try Again", action: retry)
+                        .buttonStyle(TextButtonStyle())
+                        .accessibilityLabel("Try reading this folder again")
+                }
+            }
+            Spacer(minLength: 0)
         }
+        .font(.system(size: 12))
+        .padding(.leading, 6 + CGFloat(depth) * 14)
+        .padding(.trailing, 6)
+        .padding(.vertical, 4)
         .help("Couldn’t read this folder: \(failure.reason)")
         .accessibilityElement(children: .contain)
     }

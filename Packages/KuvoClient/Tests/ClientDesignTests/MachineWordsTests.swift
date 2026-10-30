@@ -29,9 +29,24 @@ struct MachineWordsTests {
         #expect(words.message == "Studio runs lokum, so it can be uninstalled only from there. Remove takes it off this Mac; it keeps running, with its sessions, bots, sign-ins and keys.")
     }
 
-    @Test func noOneElseKnownItSaysWhatEachDoes() {
-        let words = MachineWords.removal(of: "lokum", home: nil, otherMacs: nil, phones: 0, phonesKeepIt: true, device: "this Mac")
+    @Test func noOneElseItSaysWhatEachDoes() {
+        let words = MachineWords.removal(of: "lokum", home: nil, otherMacs: [], phones: 0, phonesKeepIt: true, device: "this Mac")
         #expect(words.uninstall == "Uninstall from lokum")
         #expect(words.message == "Remove takes it off this Mac; it keeps running, with its sessions, bots, sign-ins and keys, and your phones keep it. Uninstall also stops it there and deletes its sign-ins and keys.")
+    }
+
+    /// Who else uses it not read yet (it hasn't connected since the app opened): Uninstall never
+    /// sounds as if it's this Mac's alone.
+    @Test func notKnownWhoElseUsesItUninstallSaysItsForAnyone() {
+        let words = MachineWords.removal(of: "lokum", home: nil, otherMacs: nil, phones: 0, phonesKeepIt: true, device: "this Mac")
+        #expect(words.uninstall == "Uninstall from lokum")
+        #expect(words.message.contains("for any other Mac or phone that uses it"))
+    }
+
+    @Test func aRowWhileTheEngineComesSaysHowFar() {
+        #expect(MachineWords.installing(step: "copying", sent: 41_000_000, total: 98_000_000) == "Copying the engine · 41 of 98 MB")
+        #expect(MachineWords.installing(step: "downloading", fraction: 0.34) == "Downloading the engine · 34%")
+        #expect(MachineWords.installing(step: "copying") == "Copying the engine…")
+        #expect(MachineWords.installing(step: "starting") == nil)
     }
 }

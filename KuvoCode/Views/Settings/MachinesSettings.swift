@@ -115,6 +115,11 @@ struct MachinesSettings: View {
         } message: { machine in
             Text(Self.removal(of: machine.name, engine: app.machines.engine(machine.id), phones: PhoneLink.isEnabled).message)
         }
+        // Who else uses it, read afresh as the dialog opens (one that isn't connected keeps what
+        // was read last, or says Uninstall would stop it for anyone).
+        .task(id: removing?.id) {
+            if let id = removing?.id, let engine = app.machines.engine(id), engine.isReady { await app.readAlsoUsedBy(engine) }
+        }
     }
 
     /// What Remove's dialog says, and Uninstall's button (nil: not offered). Uninstall stops it

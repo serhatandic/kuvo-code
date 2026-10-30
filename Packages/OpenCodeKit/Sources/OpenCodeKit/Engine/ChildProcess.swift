@@ -232,8 +232,11 @@ public enum ChildProcess {
                 timer.schedule(deadline: .now(), repeating: .milliseconds(250))
                 timer.setEventHandler { [weak self] in
                     guard let self else { return }
-                    let offset = lock.withLock { done ? -1 : lseek(file.fileDescriptor, 0, SEEK_CUR) }
-                    if offset >= 0 { read(Int64(offset)) }
+                    // Said under the lock, so none comes after the last, which `letGo` says.
+                    lock.withLock {
+                        let offset = done ? -1 : lseek(file.fileDescriptor, 0, SEEK_CUR)
+                        if offset >= 0 { read(Int64(offset)) }
+                    }
                 }
                 timer.resume()
                 inputRead = (timer, file, read)

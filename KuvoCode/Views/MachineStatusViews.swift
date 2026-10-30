@@ -115,11 +115,14 @@ struct MachineWaitingView: View {
             ConnectingLink(progress: engine.step?.isCopying == true ? engine.step?.fraction : nil)
                 .accessibilityHidden(true)
             if let step = engine.step {
-                Text(step.line(engine.machine.name))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .contentTransition(.opacity)
-                    .animation(.ui, value: step.name)
+                // Its words under the title, where no bar says how far (the title names the copy).
+                if !step.isInstalling {
+                    Text(step.line(engine.machine.name))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .contentTransition(.opacity)
+                        .animation(.ui, value: step.name)
+                }
                 switch step {
                 case .copying(let sent, let total) where total > 0:
                     ProgressLine("Copying the engine", bytes: sent, of: total)

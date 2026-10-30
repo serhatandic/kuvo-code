@@ -114,8 +114,11 @@ struct ProvidersView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 if let away {
-                    MachineOfflineBar(engine: away, kept: Self.asLastSeen(catalog.integrationsRead))
-                        .background(SettingsMetrics.groupFill(scheme), in: .rect(cornerRadius: SettingsMetrics.groupRadius))
+                    // "2 hours ago" kept true while the page stays open.
+                    TimelineView(.everyMinute) { context in
+                        MachineOfflineBar(engine: away, kept: Self.asLastSeen(catalog.integrationsRead, now: context.date))
+                    }
+                    .background(SettingsMetrics.groupFill(scheme), in: .rect(cornerRadius: SettingsMetrics.groupRadius))
                 }
 
                 SearchField(text: $search, prompt: "Search \(catalog.providers.count) providers")

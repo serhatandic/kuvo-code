@@ -4459,6 +4459,12 @@
       "message": "string",
       "reason?": "string"
      }
+    },
+    "500": {
+     "object": {
+      "message": "string",
+      "reason?": "string"
+     }
     }
    }
   },

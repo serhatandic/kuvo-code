@@ -87,6 +87,10 @@ import Testing
         let locked = FileTree(roots: [root])
         try await until { locked.rootFailure != nil }
         #expect(locked.rootFailure?.detail(on: "lokum") == "lokum said: Permission denied.")
+        // One inside it: not let in to look, never said not to be there.
+        let inside = FileTree(roots: [root.appending(path: "secrets")])
+        try await until { inside.rootFailure != nil }
+        #expect(inside.rootFailure == .denied)
         await locked.loadAllFiles()
         #expect(locked.allFilesFailure == .denied)
 
