@@ -22,9 +22,12 @@ import Testing
 
         func list() -> StubWeb.Answer { lock.withLock { StubWeb.json(["data": listed]) } }
 
-        /// Archived elsewhere (from a phone), as the engine then lists it.
-        func archive(_ id: String) {
-            lock.withLock { if let index = listed.firstIndex(where: { $0["id"] as? String == id }) { listed[index]["metadata"] = ["kuvo.archived": true] } }
+        /// Archived elsewhere (from a phone), as the engine then lists it; `carriedTo`, by a box
+        /// that moved it to the coding agents.
+        func archive(_ id: String, carriedTo: String? = nil) {
+            var metadata: [String: Any] = ["kuvo.archived": true]
+            if let carriedTo { metadata["kuvo.carriedTo"] = carriedTo }
+            lock.withLock { if let index = listed.firstIndex(where: { $0["id"] as? String == id }) { listed[index]["metadata"] = metadata } }
         }
 
         func change(_ request: URLRequest, _ body: Data) -> StubWeb.Answer {
@@ -77,25 +80,54 @@ import Testing
 
     private let shell = ["SHELL": "/bin/sh"]
 
-    private func expectOnlySesATerminalsGone() {
+    /// `ses_a`'s terminals, Run's among them.
+    private var sesATerminals: [TerminalSession] {
+        app.utilities.tabs.filter { $0.owner == "ses_a" }.compactMap { app.utilities.terminals[$0.id] }
+    }
+
+    private func expectOnlySesATerminalsGone(_ stopped: [TerminalSession]) {
         let tabs = app.utilities.tabs
-        #expect(tabs.filter { $0.owner == "ses_a" }.map(\.kind) == [.changes], "its terminals stopped, its other tabs kept")
+        #expect(tabs.filter { $0.owner == "ses_a" }.map(\.kind) == [.changes], "its terminals' tabs closed, its other tabs kept")
+        #expect(stopped.count == 2 && stopped.allSatisfy { !$0.isRunning }, "its shells ended, Run's dev server with it")
         #expect(tabs.filter { $0.owner == "ses_b" && $0.kind == .terminal }.count == 1, "another session's goes on")
     }
 
     @Test func archivingASessionStopsItsTerminalsAndKeepsItsOtherTabs() async throws {
         defer { done() }
         openPanels()
+        let terminals = sesATerminals
         #expect(await app.workspace.setArchived("ses_a", true))
-        expectOnlySesATerminalsGone()
+        expectOnlySesATerminalsGone(terminals)
+    }
+
+    /// Brought back from the archive: nothing of its panel is closed then.
+    @Test func bringingASessionBackClosesNothing() async throws {
+        defer { done() }
+        #expect(await app.workspace.setArchived("ses_a", true))
+        openPanels()
+        #expect(await app.workspace.setArchived("ses_a", false))
+        #expect(sesATerminals.count == 2 && sesATerminals.allSatisfy { $0.isRunning })
+    }
+
+    /// Moved to the coding agents by its box (from a phone, say): archived, it carries on in the
+    /// new session, and so do its terminals, Run's dev server still running.
+    @Test func aConversationCarriedOnElsewhereKeepsItsTerminals() async throws {
+        defer { done() }
+        openPanels()
+        let terminals = sesATerminals
+        sessions.archive("ses_a", carriedTo: "ses_c")
+        await app.workspace.refresh()
+        #expect(app.utilities.tabs.filter { $0.owner == "ses_c" && $0.kind == .terminal }.count == 2)
+        #expect(terminals.allSatisfy { $0.isRunning })
     }
 
     @Test func aSessionArchivedFromAPhoneStopsItsTerminalsHere() async throws {
         defer { done() }
         openPanels()
+        let terminals = sesATerminals
         sessions.archive("ses_a")
         await app.workspace.refresh()
         #expect(app.workspace.session("ses_a").map(Workspace.isArchived) == true)
-        expectOnlySesATerminalsGone()
+        expectOnlySesATerminalsGone(terminals)
     }
 }

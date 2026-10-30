@@ -370,6 +370,12 @@ final class Workspace {
 
     private static let archivedKey = "kuvo.archived"
 
+    /// The session an archived one carries on in, when a box moved it to the coding agents (from a
+    /// phone, or on a machine): its box notes it.
+    static func carriedTo(_ session: Session) -> String? {
+        session.metadata?["kuvo.carriedTo"]?.string
+    }
+
     /// Kept at the top of the sidebar, a note in the session's metadata.
     static func isPinned(_ session: Session) -> Bool {
         session.metadata?[pinnedKey]?.bool == true
