@@ -454,6 +454,22 @@ describe("a group chat on a machine", () => {
     expect(groups.talk("grp_team000001")).toEqual({ speaking: undefined, discussing: false, paused: true })
   })
 
+  test("a debate paused at its limit still waits for Keep Going after the engine started over", async () => {
+    const { groups } = runner()
+    engine.lines = { Ada: Array.from({ length: 8 }, (_, index) => `Ada ${index}`), Ben: Array.from({ length: 8 }, (_, index) => `Ben ${index}`) }
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Debate it.")
+    await until(() => groups.talk("grp_team000001").paused && !groups.talk("grp_team000001").discussing, 8000)
+    const { groups: again } = runner()
+    expect(again.talk("grp_team000001").paused).toBe(true)
+    const said = () => again.get("grp_team000001")!.messages.filter((message) => message.author && message.kind === "message").length
+    again.keepGoing("grp_team000001")
+    await until(() => said() > 6 && !again.talk("grp_team000001").discussing, 8000)
+    // Stopped: not paused at the next start.
+    again.stop("grp_team000001")
+    expect(runner().groups.talk("grp_team000001").paused).toBe(false)
+  }, 20_000)
+
   test("let go of (moved away), its seats stay; deleted, they go", async () => {
     const { groups } = runner()
     const seated = { ...group(), seats: { bot_ada: "ses_seatA" } }

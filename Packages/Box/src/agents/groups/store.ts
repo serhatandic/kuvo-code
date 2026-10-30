@@ -23,6 +23,8 @@ export interface Kept {
   status: Status
   /** Talking when the runner last stopped: it says so, and waits for Keep Going. */
   talking?: boolean
+  /** Paused at its limit of turns: it waits for Keep Going, however often the runner starts over. */
+  paused?: boolean
   messages: GroupMessage[]
 }
 
@@ -208,12 +210,12 @@ export class GroupStore {
     const messages = read(join(this.folder(id), "messages.json")) ?? []
     // One whose messages won't read is left as it is, for a newer version or a person to look at.
     if (!isMessages(messages)) return undefined
-    return { group: record.group, status: record.status === "held" ? "held" : "active", talking: record.talking === true, messages }
+    return { group: record.group, status: record.status === "held" ? "held" : "active", talking: record.talking === true, paused: record.paused === true, messages }
   }
 
   saveGroup(kept: Kept) {
     mkdirSync(this.folder(kept.group.id), { recursive: true, mode: 0o700 })
-    write(join(this.folder(kept.group.id), "group.json"), { kuvo: version, status: kept.status, ...(kept.talking ? { talking: true } : {}), group: kept.group })
+    write(join(this.folder(kept.group.id), "group.json"), { kuvo: version, status: kept.status, ...(kept.talking ? { talking: true } : {}), ...(kept.paused ? { paused: true } : {}), group: kept.group })
   }
 
   saveMessages(kept: Kept) {

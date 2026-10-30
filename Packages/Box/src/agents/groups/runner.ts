@@ -173,9 +173,11 @@ export class GroupRunner {
     this.seats = new Seats(context)
     this.chats = context.store.load()
     for (const [id, kept] of this.chats) {
-      // Talking when it last stopped (the engine started over): it waits for Keep Going.
-      if (kept.talking) {
+      // Talking when it last stopped (the engine started over), or paused at its limit: it waits
+      // for Keep Going.
+      if (kept.talking || kept.paused) {
         kept.talking = false
+        kept.paused = true
         this.state(id).paused = true
         context.store.saveGroup(kept)
       }
@@ -444,7 +446,7 @@ export class GroupRunner {
     const live = this.state(id)
     live.asked++
     live.splitStop?.()
-    live.paused = false
+    this.setPaused(id, false)
     if (live.speaking) void this.steer(live.speaking, id, message)
     if (!live.abort) this.begin(id)
     this.told(id)
@@ -458,7 +460,7 @@ export class GroupRunner {
     const live = this.state(id)
     live.asked++
     live.splitStop?.()
-    live.paused = false
+    this.setPaused(id, false)
     live.meeting = message.id
     if (live.speaking) void this.steer(live.speaking, id, message)
     if (!live.abort) this.begin(id)
@@ -513,7 +515,7 @@ export class GroupRunner {
     live.abort?.abort()
     live.abort = undefined
     live.run = undefined
-    live.paused = false
+    this.setPaused(id, false)
     live.speaking = undefined
     live.activity = undefined
     live.splitting = undefined
@@ -525,10 +527,19 @@ export class GroupRunner {
   keepGoing(id: string) {
     const live = this.state(id)
     if (live.abort || !this.chat(id)) return
-    live.paused = false
+    this.setPaused(id, false)
     live.asked++
     this.begin(id)
     this.told(id)
+  }
+
+  /** Paused at its limit (kept, so it waits for Keep Going after a restart too), or not. */
+  private setPaused(id: string, paused: boolean) {
+    this.state(id).paused = paused
+    const kept = this.chats.get(id)
+    if (!kept || (kept.paused ?? false) === paused) return
+    kept.paused = paused
+    this.context.store.saveGroup(kept)
   }
 
   private setTalking(id: string, talking: boolean) {
@@ -605,7 +616,7 @@ export class GroupRunner {
         const { message, guest } = named
         guested.add(message.id + "/" + guest)
         if (turns >= limit(kept.group.members.length)) {
-          live.paused = true
+          this.setPaused(id, true)
           break
         }
         const outcome = await this.turn(guest, id, signal, false, message)
@@ -621,7 +632,7 @@ export class GroupRunner {
       const speaker = nextSpeaker(kept.group, kept.messages, members, quiet, names)
       if (!speaker) break
       if (turns >= limit(kept.group.members.length)) {
-        live.paused = true
+        this.setPaused(id, true)
         break
       }
       const outcome = await this.turn(speaker, id, signal)
