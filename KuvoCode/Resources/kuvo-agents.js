@@ -16373,11 +16373,11 @@ class GroupStore {
     const messages = read(join23(this.folder(id), "messages.json")) ?? [];
     if (!isMessages(messages))
       return;
-    return { group: record.group, status: record.status === "held" ? "held" : "active", talking: record.talking === true, messages };
+    return { group: record.group, status: record.status === "held" ? "held" : "active", talking: record.talking === true, paused: record.paused === true, messages };
   }
   saveGroup(kept) {
     mkdirSync15(this.folder(kept.group.id), { recursive: true, mode: 448 });
-    write(join23(this.folder(kept.group.id), "group.json"), { kuvo: version2, status: kept.status, ...kept.talking ? { talking: true } : {}, group: kept.group });
+    write(join23(this.folder(kept.group.id), "group.json"), { kuvo: version2, status: kept.status, ...kept.talking ? { talking: true } : {}, ...kept.paused ? { paused: true } : {}, group: kept.group });
   }
   saveMessages(kept) {
     mkdirSync15(this.folder(kept.group.id), { recursive: true, mode: 448 });
@@ -17895,8 +17895,9 @@ class GroupRunner {
     this.seats = new Seats(context);
     this.chats = context.store.load();
     for (const [id, kept] of this.chats) {
-      if (kept.talking) {
+      if (kept.talking || kept.paused) {
         kept.talking = false;
+        kept.paused = true;
         this.state(id).paused = true;
         context.store.saveGroup(kept);
       }
@@ -18137,7 +18138,7 @@ class GroupRunner {
     const live = this.state(id);
     live.asked++;
     live.splitStop?.();
-    live.paused = false;
+    this.setPaused(id, false);
     if (live.speaking)
       this.steer(live.speaking, id, message);
     if (!live.abort)
@@ -18152,7 +18153,7 @@ class GroupRunner {
     const live = this.state(id);
     live.asked++;
     live.splitStop?.();
-    live.paused = false;
+    this.setPaused(id, false);
     live.meeting = message.id;
     if (live.speaking)
       this.steer(live.speaking, id, message);
@@ -18209,7 +18210,7 @@ class GroupRunner {
     live.abort?.abort();
     live.abort = undefined;
     live.run = undefined;
-    live.paused = false;
+    this.setPaused(id, false);
     live.speaking = undefined;
     live.activity = undefined;
     live.splitting = undefined;
@@ -18220,10 +18221,18 @@ class GroupRunner {
     const live = this.state(id);
     if (live.abort || !this.chat(id))
       return;
-    live.paused = false;
+    this.setPaused(id, false);
     live.asked++;
     this.begin(id);
     this.told(id);
+  }
+  setPaused(id, paused) {
+    this.state(id).paused = paused;
+    const kept = this.chats.get(id);
+    if (!kept || (kept.paused ?? false) === paused)
+      return;
+    kept.paused = paused;
+    this.context.store.saveGroup(kept);
   }
   setTalking(id, talking) {
     const kept = this.chats.get(id);
@@ -18297,7 +18306,7 @@ class GroupRunner {
         const { message, guest } = named;
         guested.add(message.id + "/" + guest);
         if (turns >= limit(kept.group.members.length)) {
-          live.paused = true;
+          this.setPaused(id, true);
           break;
         }
         const outcome = await this.turn(guest, id, signal, false, message);
@@ -18314,7 +18323,7 @@ class GroupRunner {
       if (!speaker)
         break;
       if (turns >= limit(kept.group.members.length)) {
-        live.paused = true;
+        this.setPaused(id, true);
         break;
       }
       const outcome = await this.turn(speaker, id, signal);
@@ -18481,6 +18490,12 @@ class GroupRunner {
       const now = this.chat(id);
       if (!now || !now.group.members.includes(botID)) {
         this.home(turn.box).drop(state.seat, state.agents, { bot: botID, chat: id });
+        turn.own.abort();
+        return;
+      }
+      if (live.run !== turn.run) {
+        if (now.group.seats[botID] !== state.seat)
+          this.home(turn.box).drop(state.seat, state.agents, { bot: botID, chat: id });
         turn.own.abort();
         return;
       }
@@ -19137,6 +19152,7 @@ function fitTurn(turn, shorter) {
 var fitReport = (result) => result.ok ? { ...result, text: cut(result.text, reportBytes), steps: [] } : { ...result, why: cut(result.why, 2000) };
 var askAgainAfter = 15000;
 var awayAfter = 45000;
+var awayKept = 5 * 60000;
 var longestTurn = turnLimit2 + 60000;
 var realClock = { setTimeout: (work, ms) => setTimeout(work, ms), clearTimeout: (timer) => clearTimeout(timer), now: () => Date.now() };
 
@@ -19146,6 +19162,7 @@ class RemoteHome {
   place;
   clock;
   pending = new Map;
+  awaySince;
   constructor(box, transport, place, clock = realClock) {
     this.box = box;
     this.transport = transport;
@@ -19159,6 +19176,8 @@ class RemoteHome {
       const turn = fitTurn(asked, options.shorter);
       if (!turn)
         return resolve({ ok: false, why: `the chat is too big to send to ${this.place()}.` });
+      if (this.awaySince !== undefined && this.now() - this.awaySince < awayKept)
+        return resolve({ ok: false, away: true, why: `${this.place()} can\u2019t be reached now.` });
       const pending = { turn, report, done: resolve, seat: turn.seat, started: false, told: new Set };
       const end = () => {
         for (const timer of [pending.asking, pending.silent, pending.limit])
@@ -19183,6 +19202,9 @@ class RemoteHome {
       pending.limit = this.clock.setTimeout(() => this.away(pending), longestTurn);
     });
   }
+  now() {
+    return this.clock.now?.() ?? Date.now();
+  }
   listen(pending) {
     if (pending.asking !== undefined)
       this.clock.clearTimeout(pending.asking);
@@ -19199,11 +19221,15 @@ class RemoteHome {
     pending.silent = this.clock.setTimeout(() => this.away(pending), awayAfter);
   }
   away(pending) {
+    this.awaySince = this.now();
     this.transport.send(this.box, { kind: "stop", id: pending.turn.id }, false);
     pending.done({ ok: false, away: true, why: `${this.place()} can\u2019t be reached now.` });
   }
   take(from, mail) {
-    if (from !== this.box || mail.kind !== "state" && mail.kind !== "result")
+    if (from !== this.box)
+      return;
+    this.awaySince = undefined;
+    if (mail.kind !== "state" && mail.kind !== "result")
       return;
     const pending = this.pending.get(mail.id);
     if (!pending)
@@ -20609,4 +20635,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 7e0f6edb53cbf1292916a290c9c39924f44bf5e1776ae926e07af1c4776b2f8d
+// Built from Packages/Box/src/agents e84e6f4aa3f82f1158774a00d447e65a44a9dbcb91c2a4dda1536a3b55a5a6dd
