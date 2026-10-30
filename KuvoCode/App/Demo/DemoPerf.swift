@@ -44,6 +44,7 @@ enum DemoPerf {
         // KUVO_PERF_SWITCH_BY=<steps>: tabs to go by, in turn ("1,1,-1,-1": back and forth
         // among three), rather than always the next.
         let by = environment["KUVO_PERF_SWITCH_BY"].map { $0.split(separator: ",").compactMap { Int($0) } } ?? [1]
+        let sidebar = (ScrollFrameMonitor.sidebarBodies, ScrollFrameMonitor.sidebarRowBodies)
         for step in 0..<count {
             app.tabs.cycle(by: by[step % by.count])
             await DemoWait.pause(.step(.milliseconds(1500)))
@@ -57,7 +58,8 @@ enum DemoPerf {
                 wrong.append("step \(step): no field editor")
             }
         }
-        let line = "switch x\(count) among \(app.tabs.keys.count) tabs: " + meter.stop() + (check ? "; check: " + (wrong.isEmpty ? "all right" : wrong.prefix(6).joined(separator: "; ")) : "") + "\n"
+        let redrawn = "; sidebar worked out \(ScrollFrameMonitor.sidebarBodies - sidebar.0) times, its rows \(ScrollFrameMonitor.sidebarRowBodies - sidebar.1)"
+        let line = "switch x\(count) among \(app.tabs.keys.count) tabs: " + meter.stop() + redrawn + (check ? "; check: " + (wrong.isEmpty ? "all right" : wrong.prefix(6).joined(separator: "; ")) : "") + "\n"
         if let file = environment["KUVO_PERF_STALLS"] { try? meter.stallReport().write(toFile: file, atomically: true, encoding: .utf8) }
         log(line, environment)
     }

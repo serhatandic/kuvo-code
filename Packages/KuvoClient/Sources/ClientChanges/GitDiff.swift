@@ -166,13 +166,50 @@ public enum DiffParser {
             file.lines.append(parsed)
         }
         finish()
-        // A file too big to read through (a huge or minified one): named, not shown.
-        for index in files.indices where files[index].lines.count > maxLines || files[index].lines.contains(where: { $0.text.utf8.count > maxLineLength }) {
-            files[index].lines = []
-            files[index].isTooBig = true
+        // A big file with a few changes (a lock file, a page with a picture in it): its changes with
+        // some lines around them. One too big to read through even so (a huge or minified one, a
+        // new one of a few megabytes): named, not shown.
+        for index in files.indices where isTooBig(files[index].lines) {
+            let trimmed = aroundChanges(files[index].lines)
+            if isTooBig(trimmed) {
+                files[index].lines = []
+                files[index].isTooBig = true
+            } else {
+                files[index].lines = trimmed
+            }
         }
         return files
     }
+
+    private static func isTooBig(_ lines: [DiffLine]) -> Bool {
+        lines.count > maxLines || lines.contains { $0.text.utf8.count > maxLineLength }
+    }
+
+    /// The changed lines with up to `aroundChange` unchanged ones each side, without unchanged lines
+    /// too long to show; what's left out shows as a gap.
+    private static func aroundChanges(_ lines: [DiffLine]) -> [DiffLine] {
+        let changed = lines.indices.filter { lines[$0].kind != .context }
+        var keep = Set<Int>()
+        for index in changed {
+            keep.formUnion(max(0, index - aroundChange)...min(lines.count - 1, index + aroundChange))
+        }
+        var kept: [DiffLine] = []
+        var skipped = false
+        for index in lines.indices {
+            var line = lines[index]
+            guard keep.contains(index), line.kind != .context || line.text.utf8.count <= maxLineLength else {
+                skipped = true
+                continue
+            }
+            if skipped { line.gapBefore = true }
+            skipped = false
+            kept.append(line)
+        }
+        return kept
+    }
+
+    /// How many unchanged lines show each side of a change in a file too big to show whole.
+    static let aroundChange = 20
 
     public static let maxLines = 20_000
     public static let maxLineLength = 20_000

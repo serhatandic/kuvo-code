@@ -33,19 +33,21 @@ struct ChangesReviewTests {
         let line = try #require(changes.files.first?.lines.first { $0.kind == .added })
         let comment = ReviewComment(file: "app.js", line: line.number, side: .new, snippet: line.text, text: "Why 3?")
 
+        let before = try #require(changes.files.first?.lines)
+
         try repo.write("app.js", "import x from 'x'\n\nlet a = 1\nlet b = 3\n")
         await changes.refresh()
         let lines = try #require(changes.files.first?.lines)
-        let at = try #require(CommentPlace.index(side: comment.side, number: comment.line, text: comment.snippet, in: lines))
-        #expect(lines[at].text == "let b = 3")
-        #expect(lines[at].number == 4)
+        let now = try #require(ReviewComment.line(side: comment.side, number: comment.line, from: before, to: lines))
+        #expect(now.text == "let b = 3")
+        #expect(now.number == 4)
         // And the agent is told where it is now.
-        let followed = CommentPlace.follow([comment], prefix: "", in: changes.files)
+        let followed = ReviewComment.following([comment], from: ["app.js": before], to: ["app.js": lines])
         #expect(ReviewComments.text("Have a look", adding: followed).contains("[app.js:4]"))
     }
 
-    /// A comment on a line that reads like others ("}") moves with it only when it can't be
-    /// mistaken: never onto another line that reads the same.
+    /// A comment on a line that reads like others ("}") moves with its own line, never onto
+    /// another line that reads the same.
     @Test func aCommentNeverSlidesOntoAnotherLineThatReadsTheSame() async throws {
         let repo = try TestRepository()
         try repo.write("app.js", "if (a) {\n  go()\n}\n")
@@ -55,10 +57,14 @@ struct ChangesReviewTests {
         await changes.refresh()
         let brace = try #require(changes.files.first?.lines.last { $0.text == "}" })
         let comment = ReviewComment(file: "app.js", line: brace.number, side: .new, snippet: "}", text: "Return here?")
-        #expect(CommentPlace.index(side: .new, number: comment.line, text: comment.snippet, in: changes.files.first?.lines ?? []) != nil)
+        let before = try #require(changes.files.first?.lines)
 
         try repo.write("app.js", "// Moves\nif (a) {\n  go()\n}\nif (b) {\n  stop()\n}\n")
         await changes.refresh()
-        #expect(CommentPlace.index(side: .new, number: comment.line, text: comment.snippet, in: changes.files.first?.lines ?? []) == nil)
+        let lines = try #require(changes.files.first?.lines)
+        let followed = try #require(ReviewComment.following([comment], from: ["app.js": before], to: ["app.js": lines]).first)
+        // Its own brace, the last one, now a line further down; not the first, nor where it was.
+        #expect(followed.line == brace.number + 1)
+        #expect(lines.last { $0.text == "}" }?.number == followed.line)
     }
 }

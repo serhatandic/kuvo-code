@@ -29,6 +29,8 @@ import Testing
         let client = box.client
         try repo.write("README.md", "Hello\nWorld\n")
         try repo.write("notes/todo.txt", "one\ntwo\n")
+        // Written a while ago, so it has a stamp (one changed in the last few seconds is read each look).
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -3600)], ofItemAtPath: repo.url.appending(path: "notes/todo.txt").path(percentEncoded: false))
 
         guard case .listed(let files, let uncommitted) = await Git.found(in: root, scope: .uncommitted, base: nil, box: { _ in client }) else {
             Issue.record("the box should list the changes")
@@ -97,6 +99,54 @@ import Testing
         #expect(again.first { $0.path == "notes/done.txt" }?.lines.map(\.text) == ["shipped"])
     }
 
+    /// An install in a project with no .gitignore: hundreds of new files. Each is read from the
+    /// box once, and the next look (every few seconds while the panel shows) asks it for none of
+    /// them, only for one the agent changes.
+    @Test func aMachinesManyNewFilesAreReadOnce() async throws {
+        let box = try await MachineTestBox()
+        defer { box.stop() }
+        let client = box.client
+        // Written a while ago: one changed in the last few seconds has no stamp yet, and is read each look.
+        let earlier = Date(timeIntervalSinceNow: -3600)
+        for index in 0..<600 {
+            try repo.write("node_modules/pkg\(index)/index.js", "module.exports = \(index)\n")
+            try FileManager.default.setAttributes([.modificationDate: earlier], ofItemAtPath: repo.url.appending(path: "node_modules/pkg\(index)/index.js").path(percentEncoded: false))
+        }
+        let asked = Asked()
+        func look(known: [String: ChangedFile]) async throws -> [ChangedFile] {
+            guard case .listed(let files, _) = await Git.found(in: root, scope: .uncommitted, base: nil, box: { _ in client }) else {
+                Issue.record("the box should list the changes")
+                return []
+            }
+            return await Git.readNew(files, known: known) { _ in asked.add(); return client }
+        }
+        let first = try await look(known: [:])
+        #expect(first.count == 600 && asked.count == 600)
+        #expect(first.first { $0.path == "node_modules/pkg42/index.js" }?.lines.map(\.text) == ["module.exports = 42"])
+
+        let again = try await look(known: Git.kept(first))
+        #expect(asked.count == 600, "nothing read again: \(asked.count - 600) files")
+        #expect(again == first)
+
+        try repo.write("node_modules/pkg7/index.js", "module.exports = 'seven'\n")
+        let edited = try await look(known: Git.kept(again))
+        #expect(asked.count == 601, "only the edited file read again")
+        #expect(edited.first { $0.path == "node_modules/pkg7/index.js" }?.lines.map(\.text) == ["module.exports = 'seven'"])
+    }
+
+    /// Whether the machine is back.
+    nonisolated private final class Back: @unchecked Sendable {
+        var isBack = false
+    }
+
+    /// How many files a look read from the box.
+    nonisolated private final class Asked: @unchecked Sendable {
+        private let lock = NSLock()
+        private var asked = 0
+        var count: Int { lock.withLock { asked } }
+        func add() { lock.withLock { asked += 1 } }
+    }
+
     /// Unstage and Discard on a machine's file, from the Mac: done there, in its repository.
     @Test func aMachinesFileUnstagesAndDiscardsThere() async throws {
         let box = try await MachineTestBox()
@@ -132,19 +182,6 @@ import Testing
         return await Git.readNew(files, known: known) { _ in client }
     }
 
-    /// A machine out of reach when its Changes tab first opens (asleep, offline) isn't taken for a
-    /// folder with no git: the tab keeps its scopes, still to be read, rather than saying "Not a git
-    /// repository".
-    @Test func aMachineOutOfReachAtFirstIsntTakenForAFolderWithNoGit() async {
-        let away = BoxClient(box: "lab", transport: LocalBox { _ in AsyncThrowingStream { $0.finish(throwing: URLError(.networkConnectionLost)) } })
-        let changes = ProjectChanges(directory: root)
-        changes.box = { _ in away }
-        await changes.refresh()
-        #expect(changes.isRepository)
-        #expect(!changes.isLoaded)
-        #expect(changes.files.isEmpty)
-    }
-
     /// A machine whose box can't be reached for a moment isn't taken for a folder with no git: the
     /// list that showed stays.
     @Test func aMachineOutOfReachKeepsItsList() async throws {
@@ -153,5 +190,27 @@ import Testing
             Issue.record("a box out of reach should say so")
             return
         }
+    }
+
+    /// A machine out of reach when Changes first opens is said to be, not taken for a folder
+    /// without git (which hides Stage and Discard); its changes show once it's back.
+    @Test func aMachineOutOfReachFromTheStartSaysSo() async throws {
+        let box = try await MachineTestBox()
+        defer { box.stop() }
+        let client = box.client
+        let away = BoxClient(box: "lab", transport: LocalBox { _ in AsyncThrowingStream { $0.finish(throwing: URLError(.networkConnectionLost)) } })
+        let back = Back()
+        let changes = ProjectChanges(directory: root) { _ in back.isBack ? client : away }
+        try repo.write("README.md", "Hello\nWorld\n")
+
+        await changes.refresh()
+        #expect(changes.isLoaded && changes.isUnreachable)
+        #expect(changes.isRepository, "not a folder without git")
+        #expect(changes.files.isEmpty)
+
+        back.isBack = true
+        await changes.refresh()
+        #expect(!changes.isUnreachable)
+        #expect(changes.files.map(\.path) == ["README.md"])
     }
 }
