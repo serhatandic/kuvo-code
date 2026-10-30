@@ -758,7 +758,7 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
     const id = await run(trying({ elsewhere: ["write", join(elsewhere, "e.txt")] }))
     expect(words(id)).toBe("elsewhere=yes")
     // The sandbox comes on, with Grok's process from before still running (it's kept for the next message).
-    writeFileSync(join(fence, "on"), "")
+    writeFileSync(join(fence, "on"), "set up again")
     noteAgentsInside(!sessions.outside())
     expect(existsSync(join(fence, "agents"))).toBe(false)
     // Done (its process closed): now every agent's process runs in it.

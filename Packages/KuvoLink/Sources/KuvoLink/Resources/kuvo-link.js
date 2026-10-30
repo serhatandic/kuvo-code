@@ -73,6 +73,13 @@ function processRuns(pid, name, proc = "/proc") {
 function promptedFolders(platform = process.platform) {
   return platform === "darwin" ? new Set(["Desktop", "Documents", "Downloads", "Library", "Movies", "Music", "Pictures"]) : new Set;
 }
+function sandboxGeneration(on) {
+  try {
+    return fs.readFileSync(on, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
 
 // Packages/Box/src/link/engine/client.ts
 import fs3 from "node:fs";
@@ -10166,6 +10173,7 @@ var VAULT_STATE = object({
   store: words("keychain", "encrypted"),
   keptDays: number,
   "agents?": bool,
+  "agentsWaiting?": bool,
   "tampered?": bool,
   "generations?": map(number)
 });
@@ -10982,8 +10990,8 @@ function agentsAllInside() {
     return true;
   try {
     const said = JSON.parse(fs50.readFileSync(path50.join(FOLDER, "agents"), "utf8"));
-    const on = fs50.statSync(ON);
-    return said.pid === bridge.pid && said.on === `${Math.floor(on.mtimeMs)}:${on.ino}`;
+    const on = sandboxGeneration(ON);
+    return Boolean(on) && said.pid === bridge.pid && said.on === on;
   } catch {
     return false;
   }
@@ -11172,8 +11180,8 @@ function setUpFence() {
       fs50.rmSync(NOTE, { force: true });
       writePrivate(PLUGIN, plugin);
     }
-    if (!fs50.existsSync(ON))
-      writePrivate(ON, "");
+    if (!textOf(ON)?.trim())
+      writePrivate(ON, crypto21.randomUUID());
   } catch (error) {
     withdraw();
     checked = { able: true, passed: false, why: `It couldn't be set up: ${error.message}`, reason: "checkFailed", check: "setup" };
@@ -11252,6 +11260,12 @@ var agentsUseVault = () => {
     return true;
   const sandbox = fenceState();
   return sandbox.on && sandbox.agents;
+};
+var agentsWaitForOlder = () => {
+  if (process.env.KUVO_VAULT_AGENTS === "1" && !REAL_BOX)
+    return false;
+  const sandbox = fenceState();
+  return sandbox.on && !sandbox.agents;
 };
 var AGENTS_LATER = "The user's vault isn't open to agents on this computer yet: its items, keys, files and notes can't be used here. To sign in, call browser_sign_in without an item: a sign-in the user lets you use on this site fills on its own, or else they sign in. For anything else, ask the user in the chat.";
 
@@ -11735,6 +11749,7 @@ function vaultState() {
     store: onHost() ? "keychain" : "encrypted",
     keptDays: KEPT_DAYS,
     agents: agentsUseVault(),
+    ...agentsWaitForOlder() ? { agentsWaiting: true } : {},
     ...tampered.size ? { tampered: true } : {},
     generations: generations()
   };

@@ -6070,6 +6070,18 @@ class RPC {
 import { createHash as createHash3, randomBytes as randomBytes3 } from "crypto";
 import { constants as constants2, copyFileSync, existsSync as existsSync7, lstatSync as lstatSync3, mkdirSync as mkdirSync8, readdirSync as readdirSync9, readFileSync as readFileSync13, realpathSync as realpathSync3, renameSync as renameSync7, rmSync as rmSync6, statSync as statSync5, unlinkSync, writeFileSync as writeFileSync10 } from "fs";
 import { basename as basename5, dirname as dirname6, join as join14, resolve as resolve3 } from "path";
+
+// Packages/Box/src/shared/platform.ts
+import fs from "fs";
+function sandboxGeneration(on) {
+  try {
+    return fs.readFileSync(on, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+// Packages/Box/src/agents/fence.ts
 var folder = () => process.env.KUVO_FENCE ?? (machineHome ? join14(machineHome, "run", "fence") : undefined);
 function noteToolServer(url) {
   const where = folder();
@@ -6091,20 +6103,12 @@ function fenceOn() {
   const where = folder();
   return Boolean(where) && process.env.KUVO_SANDBOX !== "off" && existsSync7(join14(where, "on"));
 }
-function fenceGeneration(where) {
-  try {
-    const on = statSync5(join14(where, "on"));
-    return `${Math.floor(on.mtimeMs)}:${on.ino}`;
-  } catch {
-    return "";
-  }
-}
 var noted = "";
 function noteAgentsInside(inside) {
   const where = folder();
   if (!where)
     return;
-  const on = process.env.KUVO_SANDBOX === "off" ? "" : fenceGeneration(where);
+  const on = process.env.KUVO_SANDBOX === "off" ? "" : sandboxGeneration(join14(where, "on"));
   const note = inside && on ? JSON.stringify({ pid: process.pid, on }) : "";
   if (note === noted)
     return;
@@ -10474,6 +10478,7 @@ class CodexAgent {
   install = "curl -fsSL https://chatgpt.com/codex/install.sh | sh";
   slots = new Map;
   fencedServers = new WeakSet;
+  unfencedServers = new Set;
   threads = new Map;
   oneOffs = new Map;
   logins = new Map;
@@ -10516,7 +10521,7 @@ class CodexAgent {
     return slot;
   }
   outside() {
-    return [...this.slots.values()].some((slot) => [slot.server, slot.outdated].some((server) => server && !server.isClosed && !this.isFenced(server)));
+    return [...this.unfencedServers].some((server) => !server.isClosed);
   }
   isFenced(rpc) {
     return this.fencedServers.has(rpc);
@@ -10625,10 +10630,13 @@ class CodexAgent {
     slot.fence = fenceNow;
     if (fence)
       this.fencedServers.add(rpc);
+    else
+      this.unfencedServers.add(rpc);
     rpc.onNotification = (method, params) => this.notification(method, params, rpc);
     rpc.onRequest = (method, params, id) => this.request(rpc, method, params, id);
     rpc.onExit = () => {
       fence?.ended();
+      this.unfencedServers.delete(rpc);
       for (const oneOff of this.oneOffs.values())
         if (oneOff.rpc === rpc)
           oneOff.fail(new Error("Codex stopped."));
@@ -21480,4 +21488,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 57d6cf01e4d242818edc9e2def84b4f7a8986d47cd94c11d4696315fe691be88
+// Built from Packages/Box/src/agents 8440035bd842d7bf143530fbc1fc35130f30054e84832509ef60a7b264cf9e8b

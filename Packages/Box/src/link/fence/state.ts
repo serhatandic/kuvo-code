@@ -14,7 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { listOf, textOf, writePrivate } from "../files";
-import { processRuns } from "../../shared/platform";
+import { processRuns, sandboxGeneration } from "../../shared/platform";
 import { BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SANDBOX_NOTE, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
 import { tellLauncher } from "./allowed";
 import { agentShellScript, agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
@@ -141,8 +141,8 @@ export function agentsAllInside(): boolean {
   if (!bridge?.pid || !processRuns(bridge.pid, "kuvo-agents")) return true;
   try {
     const said = JSON.parse(fs.readFileSync(path.join(FOLDER, "agents"), "utf8"));
-    const on = fs.statSync(ON);
-    return said.pid === bridge.pid && said.on === `${Math.floor(on.mtimeMs)}:${on.ino}`;
+    const on = sandboxGeneration(ON);
+    return Boolean(on) && said.pid === bridge.pid && said.on === on;
   } catch {
     return false;
   }
@@ -329,7 +329,8 @@ export function setUpFence(): FenceState {
       fs.rmSync(NOTE, { force: true });
       writePrivate(PLUGIN, plugin);
     }
-    if (!fs.existsSync(ON)) writePrivate(ON, "");
+    // Which setup this is, for the agents bridge's note (and an empty one, an older box's, given one).
+    if (!textOf(ON)?.trim()) writePrivate(ON, crypto.randomUUID());
   } catch (error) {
     withdraw();
     checked = { able: true, passed: false, why: `It couldn't be set up: ${(error as Error).message}`, reason: "checkFailed", check: "setup" };

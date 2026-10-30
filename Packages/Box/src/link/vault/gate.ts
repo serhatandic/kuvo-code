@@ -18,4 +18,11 @@ export const agentsUseVault = (): boolean => {
   return sandbox.on && sandbox.agents;
 };
 
+/** Whether the sandbox is on here and agents wait only for those started before it to finish. */
+export const agentsWaitForOlder = (): boolean => {
+  if (process.env.KUVO_VAULT_AGENTS === "1" && !REAL_BOX) return false;
+  const sandbox = fenceState();
+  return sandbox.on && !sandbox.agents;
+};
+
 export const AGENTS_LATER = "The user's vault isn't open to agents on this computer yet: its items, keys, files and notes can't be used here. To sign in, call browser_sign_in without an item: a sign-in the user lets you use on this site fills on its own, or else they sign in. For anything else, ask the user in the chat.";

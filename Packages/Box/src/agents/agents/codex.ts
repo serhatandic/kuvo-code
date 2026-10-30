@@ -87,6 +87,8 @@ export class CodexAgent implements Agent {
   private slots = new Map<string, Slot>()
   /** The app-servers run whole in the box's sandbox. */
   private fencedServers = new WeakSet<RPC>()
+  /** Its app-servers started outside the box's sandbox, from their start until they stop. */
+  private unfencedServers = new Set<RPC>()
   private threads = new Map<string, CodexThread>()
   /** One-off answers under way (`generate`), by their thread: what each is told. */
   private oneOffs = new Map<string, { rpc: RPC; notify: (method: string, params: any) => void; fail: (error: Error) => void }>()
@@ -143,10 +145,12 @@ export class CodexAgent implements Agent {
     return slot
   }
 
-  /** Whether `rpc` runs whole in the box's sandbox. */
+  /** Whether one of its app-servers runs outside the box's sandbox (one still starting too). */
   outside(): boolean {
-    return [...this.slots.values()].some((slot) => [slot.server, slot.outdated].some((server) => server && !server.isClosed && !this.isFenced(server)))
+    return [...this.unfencedServers].some((server) => !server.isClosed)
   }
+
+  /** Whether `rpc` runs whole in the box's sandbox. */
 
   isFenced(rpc: RPC): boolean {
     return this.fencedServers.has(rpc)
@@ -277,10 +281,12 @@ export class CodexAgent implements Agent {
     const rpc = new RPC(fence ? [fence.command, ...args] : [executable, ...args], { cwd: fence ? directory : this.context.temporary, env })
     slot.fence = fenceNow
     if (fence) this.fencedServers.add(rpc)
+    else this.unfencedServers.add(rpc)
     rpc.onNotification = (method, params) => this.notification(method, params, rpc)
     rpc.onRequest = (method, params, id) => this.request(rpc, method, params, id)
     rpc.onExit = () => {
       fence?.ended()
+      this.unfencedServers.delete(rpc)
       // A title or commit text it was writing won't come.
       for (const oneOff of this.oneOffs.values()) if (oneOff.rpc === rpc) oneOff.fail(new Error("Codex stopped."))
       // Stopped on purpose: the threads were told then (they may be on a newer one by now).

@@ -614,7 +614,7 @@ test("a coding agent's session that runs in the sandbox lets a bot allow its com
   // The coding agents' bridge runs (a stand-in, its record naming a process that runs as it), and
   // the box's sandbox is set up and checked.
   write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
-  write(path.join(home, "run", "fence", "on"), "");
+  write(path.join(home, "run", "fence", "on"), "set up");
   t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
   t.after(() => fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true }));
   // Pixel's session, its conversation now with a coding agent on the bridge.
@@ -639,16 +639,19 @@ test("a coding agent's session that runs in the sandbox lets a bot allow its com
   assert.deepEqual(replied.map(each => each.permission), ["install"]);
   // Agents use the vault only once the bridge says none of its agents runs outside the sandbox
   // as it is now (one started before it was on may still be at work).
-  write(path.join(home, "run", "fence", "on"), "");
+  // (Each setup of the sandbox writes a token of its own in `on`.)
+  write(path.join(home, "run", "fence", "on"), "first");
   assert.equal((await route("GET", "kuvo/sandbox")).body.agents, false, "the bridge hasn't said so");
   const bridgePID = JSON.parse(fs.readFileSync(path.join(home, "run", "bridge.json"), "utf8")).pid;
-  const said = on => write(path.join(home, "run", "fence", "agents"), JSON.stringify({ pid: bridgePID, on: `${Math.floor(on.mtimeMs)}:${on.ino}` }));
-  said(fs.statSync(path.join(home, "run", "fence", "on")));
+  write(path.join(home, "run", "fence", "agents"), JSON.stringify({ pid: bridgePID, on: "first" }));
   assert.equal((await route("GET", "kuvo/sandbox")).body.agents, true);
-  // Set up again (its check failed and passed): what the bridge said was of the one before.
+  // Set up again at once (its check failed and passed): what the bridge said was of the one before.
   fs.rmSync(path.join(home, "run", "fence", "on"));
-  write(path.join(home, "run", "fence", "on"), "again");
-  fs.utimesSync(path.join(home, "run", "fence", "on"), new Date(), new Date(Date.now() + 5_000));
+  write(path.join(home, "run", "fence", "on"), "second");
+  assert.equal((await route("GET", "kuvo/sandbox")).body.agents, false);
+  // An empty `on` (an older box's) is no setup the bridge could have said so of.
+  write(path.join(home, "run", "fence", "on"), "");
+  write(path.join(home, "run", "fence", "agents"), JSON.stringify({ pid: bridgePID, on: "" }));
   assert.equal((await route("GET", "kuvo/sandbox")).body.agents, false);
 });
 

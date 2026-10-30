@@ -32,7 +32,7 @@ export function realFence(kuvo: string, sockets: string[] = []) {
     write(places.runner, LANDLOCK_RUNNER, 0o700)
     write(join(folder, "runtime"), process.execPath)
   }
-  write(join(folder, "on"), "")
+  write(join(folder, "on"), "set up")
   return folder
 }
 

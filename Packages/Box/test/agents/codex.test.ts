@@ -236,6 +236,40 @@ process.stdin.on("data", (chunk) => {
     }
     await until(() => !pids.some(running))
   })
+
+  test("one still starting outside the sandbox counts as outside it (agents keep off the vault) from its start until it stops", async () => {
+    const go = join(root, "go")
+    const script = join(root, "slow.js")
+    writeFileSync(script, `const fs = require("node:fs")
+fs.writeFileSync(${JSON.stringify(join(root, "started"))}, "")
+process.stdin.on("data", (chunk) => {
+  for (const line of String(chunk).split("\\n").filter(Boolean)) {
+    const message = JSON.parse(line)
+    // It answers being started only once it's told to.
+    if (message.method === "initialize") {
+      const answer = setInterval(() => {
+        if (!fs.existsSync(${JSON.stringify(go)})) return
+        clearInterval(answer)
+        process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n")
+      }, 10)
+    }
+  }
+})
+`)
+    const launcher = join(root, "codex")
+    writeFileSync(launcher, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`)
+    chmodSync(launcher, 0o755)
+    delete process.env.KUVO_FENCE
+    const agent = (codex = new TestCodex(launcher, root))
+    const starting = agent.rpc()
+    await until(() => existsSync(join(root, "started")))
+    expect(agent.outside()).toBe(true)
+    writeFileSync(go, "")
+    await starting
+    expect(agent.outside()).toBe(true)
+    agent.shutdown()
+    await until(() => !agent.outside())
+  })
 })
 
 describe("Codex, nothing dropped", () => {

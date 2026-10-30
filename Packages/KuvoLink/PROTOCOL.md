@@ -2508,8 +2508,9 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
   one without making it.
 - `GET kuvo/vault` → `{state, items, grants}`. `state` is `{made, locked, paused, pausedBots:
   {<bot, or a conversation that isn't a bot's>: why}, store: "keychain" | "encrypted", keptDays,
-  agents, tampered?, generations: {items, grants, paused}}` (`agents`: whether agents may use it
-  on this box, below); an item is `{id, kind: "login" |
+  agents, agentsWaiting?, tampered?, generations: {items, grants, paused}}` (`agents`: whether agents may use it
+  on this box, below; `agentsWaiting`: its sandbox is on, and they may once the coding agents
+  started before it came on have finished); an item is `{id, kind: "login" |
   "key" | "file" | "note", name, sites, username?, fields, fileName?, readable?, signInOnly?,
   created, changed, used?}` (`sites`: hosts, a site's own and those under it; `fields`: the names of the values it
   holds, a sign-in's `password`, a file's `file` (base64), a note's `text`, a key's own); a grant
@@ -2690,8 +2691,11 @@ it's empty.
   running.`, `Waiting for the engine to load it.`. `agents`: the coding agents' own
   programs (Claude Code, Codex, Cursor, Grok and Antigravity, whose commands don't go through the
   engine) run in it too: each starts its next turn in it once it's set up and checked here, and
-  `agents` is true once none started before still runs (the agents bridge notes it, for the
-  sandbox as it is, in `run/fence/agents`; with no bridge running, nothing runs outside). How each does: Claude Code runs its commands through the
+  `agents` is true once no agent process the bridge started before it was on still runs (the
+  agents bridge notes it, `{pid, on}`, in `run/fence/agents`, for the sandbox as it is: `on` is the
+  token each setup writes in `run/fence/on`; with no bridge running, it's true). It counts the
+  agents' own processes, from their start: a command one of them started outside the sandbox that
+  outlives it isn't followed, as with the engine's. How each does: Claude Code runs its commands through the
   box's shell for it (`run/fence/shell/zsh` or `bash`); Codex runs whole in the sandbox
   (`run/fence/shell/run`), an app-server for each session in that session's folder (and your
   account's in its `sessions` folder), its own sandbox off, asking as it does, and Kuvo Code's tools

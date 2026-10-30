@@ -6,6 +6,7 @@
 import { createHash, randomBytes } from "node:crypto"
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, type Dirent } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
+import { sandboxGeneration } from "../shared/platform"
 import { machineHome } from "./machine"
 
 /** What commands may do: everything read but `hidden`; written only in the session's folder and
@@ -46,16 +47,6 @@ export function fenceOn(): boolean {
   return Boolean(where) && process.env.KUVO_SANDBOX !== "off" && existsSync(join(where!, "on"))
 }
 
-/** The sandbox as it is now, by its `on` (made again as it's set up again): what a note is for. */
-export function fenceGeneration(where: string): string {
-  try {
-    const on = statSync(join(where, "on"))
-    return `${Math.floor(on.mtimeMs)}:${on.ino}`
-  } catch {
-    return ""
-  }
-}
-
 /**
  * Tells the box's link whether every agent's process here runs in the sandbox (`run/fence/agents`:
  * this bridge, for the sandbox as it is now), which opens the vault to agents; gone while one
@@ -65,7 +56,7 @@ let noted = ""
 export function noteAgentsInside(inside: boolean) {
   const where = folder()
   if (!where) return
-  const on = process.env.KUVO_SANDBOX === "off" ? "" : fenceGeneration(where)
+  const on = process.env.KUVO_SANDBOX === "off" ? "" : sandboxGeneration(join(where, "on"))
   const note = inside && on ? JSON.stringify({ pid: process.pid, on }) : ""
   if (note === noted) return
   const record = join(where, "agents")
