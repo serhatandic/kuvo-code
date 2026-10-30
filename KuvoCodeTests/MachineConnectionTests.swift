@@ -441,10 +441,11 @@ import Testing
         }
         app.removeMachine(id, uninstall: true)
         await app.machines.waitForRemoval(of: id)
-        // Its tidy-up, then the first try of what waits for it.
-        try await until { ssh.scripts(to: id).filter { $0.hasPrefix(Machines.removalMark) }.count >= 2 }
-        let waiting = try #require(ssh.scripts(to: id).last { $0.hasPrefix(Machines.removalMark) })
-        #expect(waiting.contains(RemoteServer.stopCommand), "what waits for it stops its engine")
+        // How it starts again isn't tidied away before it's stopped: what's tried there first, and
+        // waits for it, stops it.
+        try await until { ssh.scripts(to: id).contains { $0.hasPrefix(removal) } }
+        let tried = ssh.scripts(to: id).filter { $0.hasPrefix(removal) }
+        #expect(tried.first?.contains(RemoteServer.stopCommand) == true, "what waits for it stops its engine first")
     }
 
     /// A new session in a machine's project that has other folders works in them there from its

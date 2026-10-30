@@ -1137,9 +1137,10 @@ final class Machines {
                         let forgotten = await engine.forgetAccounts()
                         let stopped = await engine.shutDown()
                         // What it kept to work on its own goes too: its keys, how it starts after
-                        // a restart, and the crontab line that does it.
+                        // a restart, and the crontab line that does it. Not before it's stopped:
+                        // its stop goes by how it starts.
                         let leftovers = Self.leftoversScript
-                        let tidied = await Task.detached { RemoteShell.run(leftovers, on: id) }.value != nil
+                        let tidied = stopped ? await Task.detached { RemoteShell.run(leftovers, on: id) }.value != nil : false
                         self?.removing.remove(id)
                         // What didn't go, the next time it answers. One still running is stopped
                         // then too: without how it starts, nothing else ever would.
