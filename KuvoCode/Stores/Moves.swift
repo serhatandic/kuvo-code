@@ -37,8 +37,10 @@ final class Moves {
     }
     /// When each thing's places were last read: they're kept for its menu a while.
     @ObservationIgnored private var placesRead: [String: Date] = [:]
-    /// Each thing's reads of its places, numbered: an answer older than one taken already isn't taken.
+    /// Each thing's reads of its places, numbered.
     @ObservationIgnored private var placeReads: [String: Int] = [:]
+    /// The read of each thing's places kept last (or begun last as it moved): older ones aren't.
+    @ObservationIgnored private var placesKept: [String: Int] = [:]
     @ObservationIgnored private var prefetching: Task<Void, Never>?
 
     /// A move of something, as its row shows it: the computer it's going to, by name, and how far.
@@ -152,7 +154,8 @@ final class Moves {
     /// A box's answer, numbered among its thing's reads, to keep once it's heard.
     private struct Heard {
         var known: Known
-        var read: Int?
+        var read: Int
+        var at = Date.now
     }
 
     /// Where `id` can go, as kept still (a while), or as its box says now: then `heard`, to keep.
@@ -161,7 +164,7 @@ final class Moves {
         if !fresh, let known = places[id], known.box == box, let read = placesRead[id], Date.now.timeIntervalSince(read) < 30 { return (known.list, nil) }
         guard whyNotAsked(from: machine) == nil, let client = client(box) else { return nil }
         placeReads[id, default: 0] += 1
-        let read = placeReads[id]
+        let read = placeReads[id, default: 0]
         struct Answer: Decodable { var places: [Place] }
         let query = "kind=\(kind)&id=" + (id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)
         guard let answer = try? await client.value(Answer.self, "GET", "kuvo/moves/places?" + query) else { return nil }
@@ -172,8 +175,9 @@ final class Moves {
     /// every row's menu reads it; an answer older than one kept already isn't.
     private func keep(_ heard: [String: Heard]) {
         var next = places
-        for (id, said) in heard where placeReads[id] == said.read {
-            placesRead[id] = .now
+        for (id, said) in heard where said.read > placesKept[id, default: 0] {
+            placesKept[id] = said.read
+            placesRead[id] = said.at
             next[id] = said.known
         }
         if next != places { places = next }
@@ -181,8 +185,8 @@ final class Moves {
 
     /// The bots', chats' and group chats' places, read ahead so their menus open with them (a menu
     /// that's open isn't drawn again): as Kuvo Code starts or a machine connects, and as moves change.
-    /// Kept once all are read, so the sidebar is drawn again once at most, and not at all when
-    /// nothing changed.
+    /// Kept once each box's are read (or as far as they got, when read ahead again), so the sidebar
+    /// is drawn again once a box at most, and not at all when nothing changed.
     private func readPlacesAhead() {
         prefetching?.cancel()
         prefetching = Task { [weak self] in
@@ -190,12 +194,16 @@ final class Moves {
             let chats = app.workspace.sessions.filter { $0.parentID == nil && Workspace.isChat($0.location.directory) && !Workspace.isArchived($0) }
             let things = app.bots.list.map { ("bot", $0.id, $0.machine) } + app.chats.list.map { ("group", $0.id, app.chats.machine(of: $0.id)) }
                 + chats.map { ("chat", $0.id, RemoteFolder.machine(of: $0.location.directory)) }
+            let byBox = things.sorted { ($0.2 ?? "") < ($1.2 ?? "") }
             var heard: [String: Heard] = [:]
-            for (kind, id, machine) in things {
-                guard !Task.isCancelled, let self else { return }
+            for (index, (kind, id, machine)) in byBox.enumerated() {
+                guard !Task.isCancelled, let self else { break }
                 heard[id] = await self.readPlaces(kind, id, from: machine, fresh: false)?.heard
+                if index == byBox.count - 1 || byBox[index + 1].2 != machine {
+                    self.keep(heard)
+                    heard = [:]
+                }
             }
-            guard !Task.isCancelled else { return }
             self?.keep(heard)
         }
     }
@@ -375,6 +383,8 @@ final class Moves {
         // and the things that moved shown as they are once their boxes say (they may live elsewhere).
         placesRead = [:]
         let moved = Set(((said?.moves ?? []) + (before?.moves ?? [])).flatMap { [$0.thing] + $0.sessions })
+        // Reads begun before aren't kept: they'd say where those could go from where they were.
+        for id in moved { placesKept[id] = placeReads[id, default: 0] }
         if places.keys.contains(where: moved.contains) { places = places.filter { !moved.contains($0.key) } }
         readPlacesAhead()
         Task {

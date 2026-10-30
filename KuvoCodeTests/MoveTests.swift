@@ -133,6 +133,7 @@ import Testing
         #expect(now.first?.why == "It’s moving to another computer. Try again once it’s there.")
         #expect(now.first?.note == "Moving already", "short, beside lab's name")
         #expect(changed.changed, "places that did change are drawn")
+        #expect(app.moves.places(of: "ses_trip", from: nil) == now, "and kept for its menu")
         // Asked to move again meanwhile, it says why rather than nothing.
         let again = Moves.Place(key: Self.lab, name: "lab", kind: "machine", ok: true)
         await #expect(throws: Moves.Failure.self) { try await app.moves.move("chat", "ses_trip", from: nil, to: again) }
