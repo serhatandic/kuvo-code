@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { processRuns, promptedFolders } from "../src/shared/platform"
+import { loginPath, processRuns, promptedFolders } from "../src/shared/platform"
 
 // Where macOS and Linux differ, each side tested on whichever system runs this: a box tells its own
 // programs from whatever took their process's number after a crash (Linux by /proc, a stand-in
@@ -135,4 +135,74 @@ test("on both: reading it doesn't start another SSH agent where you have one", (
   writeFileSync(join(folder, ".bashrc"), readFileSync(join(folder, ".bashrc"), "utf8") + `[ -n "$SSH_AUTH_SOCK" ] || echo started >>"$HOME/agents"\n`)
   expect(ran(["src/link/main.ts", "login-path"], folder, { SSH_AUTH_SOCK: join(folder, "agent.sock") }).split(":")).toContain(nvm)
   expect(existsSync(join(folder, "agents"))).toBe(false)
+})
+
+test("on a machine: the engine's start reads it once, and the agents' bridge and link go by that, reading again only after an install", () => {
+  const { folder, nvm } = home()
+  // No SSH agent there: the usual .bashrc lines start one with each read (here, they note it).
+  writeFileSync(join(folder, ".bashrc"), readFileSync(join(folder, ".bashrc"), "utf8") + `[ -n "$SSH_AUTH_SOCK" ] || echo started >>"$HOME/agents"\n`)
+  const agents = () => (existsSync(join(folder, "agents")) ? readFileSync(join(folder, "agents"), "utf8").trim().split("\n").length : 0)
+  ran(["src/link/main.ts", "login-path"], folder)
+  expect(agents()).toBe(1)
+  // The bridge starts, and Settings › Accounts refreshes, twice.
+  const bridge = 'import { refreshLoginPath, useSavedLoginPath, which } from "./src/agents/proc"; useSavedLoginPath(); await refreshLoginPath(); await refreshLoginPath(); process.stdout.write(which("node") ?? "none")'
+  expect(ran(["-e", bridge], folder, { KUVO_AGENTS_REMOTE: "1" })).toBe(join(nvm, "node"))
+  expect(agents()).toBe(1)
+  // An install reads it again.
+  ran(["-e", 'import { refreshLoginPath } from "./src/agents/proc"; await refreshLoginPath(true)'], folder, { KUVO_AGENTS_REMOTE: "1" })
+  expect(agents()).toBe(2)
+})
+
+test("on both: the folders the start had stay on it, after your login shell's, when a profile sets PATH outright", () => {
+  const { folder, nvm, local } = home()
+  // As Debian's /etc/profile does.
+  writeFileSync(join(folder, ".profile"), 'PATH="/usr/bin:/bin"\n' + readFileSync(join(folder, ".profile"), "utf8"))
+  const found = ran(["src/link/main.ts", "login-path"], folder, { PATH: "/opt/kuvo-start/bin:/usr/bin:/bin" }).split(":")
+  expect(found.slice(0, 2).sort()).toEqual([nvm, local].sort())
+  expect(found.at(-1)).toBe("/opt/kuvo-start/bin")
+  expect(found.filter(folder => folder === "/usr/bin")).toHaveLength(1)
+})
+
+test("on both: a .bashrc that exits as it starts something in the background gives way to the profile's PATH at once", async () => {
+  const { folder, nvm, local } = home()
+  writeFileSync(join(folder, ".bashrc"), readFileSync(join(folder, ".bashrc"), "utf8") +
+    `perl -MPOSIX -e 'POSIX::setsid(); open(F, ">", "$ENV{HOME}/daemon.pid.new"); print F $$; close F; rename("$ENV{HOME}/daemon.pid.new", "$ENV{HOME}/daemon.pid"); sleep 30' &\n` +
+    `until [ -f "$HOME/daemon.pid" ]; do :; done\nexit 0\n`)
+  try {
+    const found = (await loginPath({ HOME: folder, SHELL: "/bin/bash", PATH: "/usr/bin:/bin" }))?.split(":")
+    expect(found).toContain(local)
+    expect(found).not.toContain(nvm)
+  } finally {
+    try { process.kill(Number(readFileSync(join(folder, "daemon.pid"), "utf8"))) } catch {}
+  }
+})
+
+test("on both: a .bashrc that never finishes gives way to the profile's PATH; with a profile that never finishes either, there's none, and the start keeps its own", async () => {
+  const { folder, nvm, local } = home()
+  writeFileSync(join(folder, ".bashrc"), readFileSync(join(folder, ".bashrc"), "utf8") + "while :; do :; done\n")
+  const env = { HOME: folder, SHELL: "/bin/bash", PATH: "/usr/bin:/bin" }
+  const found = (await loginPath(env, { interactive: 300, login: 2_000 }))?.split(":")
+  expect(found).toContain(local)
+  expect(found).not.toContain(nvm)
+  writeFileSync(join(folder, ".profile"), "while :; do :; done\n")
+  expect(await loginPath(env, { interactive: 300, login: 300 })).toBeUndefined()
+})
+
+const zsh = ["/bin/zsh", "/usr/bin/zsh"].find(existsSync)
+test.skipIf(!zsh)("zsh: nvm's node from .zshrc and ~/.local/bin from .zprofile", () => {
+  const { folder, nvm, local } = home()
+  writeFileSync(join(folder, ".zprofile"), 'path=("$HOME/.local/bin" $path)\n')
+  writeFileSync(join(folder, ".zshrc"), 'export NVM_DIR="$HOME/.nvm"\nPATH="$NVM_DIR/versions/node/v22.11.0/bin:$PATH"\n')
+  const found = ran(["src/link/main.ts", "login-path"], folder, { SHELL: zsh! }).split(":")
+  expect(found).toContain(nvm)
+  expect(found).toContain(local)
+})
+
+// Your account's shell, as /etc/passwd names it on Linux.
+const account = process.platform === "linux"
+  ? readFileSync("/etc/passwd", "utf8").split("\n").map(line => line.split(":")).find(fields => fields[2] === String(process.getuid?.()))?.[6]
+  : undefined
+test.skipIf(!account?.endsWith("/bash"))("Linux: a start from cron, whose shell is plain sh, reads your account's shell's PATH", () => {
+  const { folder, nvm } = home()
+  expect(ran(["src/link/main.ts", "login-path"], folder, { SHELL: "/bin/sh" }).split(":")).toContain(nvm)
 })

@@ -462,8 +462,8 @@ import { accessSync, constants } from "fs";
 import { delimiter, join as join3 } from "path";
 
 // Packages/Box/src/shared/platform.ts
-import { spawn } from "child_process";
-import os from "os";
+import { execFileSync, spawn } from "child_process";
+import fs from "fs";
 import path from "path";
 function loginShell(env = process.env, platform = process.platform) {
   const given = env.SHELL && path.isAbsolute(env.SHELL) ? env.SHELL : undefined;
@@ -471,20 +471,35 @@ function loginShell(env = process.env, platform = process.platform) {
     return given ?? "/bin/zsh";
   if (given && given !== "/bin/sh")
     return given;
-  let own;
+  const own = accountShell();
+  return own ?? given ?? "/bin/sh";
+}
+function accountShell() {
+  const uid = String(process.getuid?.() ?? "");
+  const shellOf = (entries) => entries.split(`
+`).map((line) => line.split(":")).find((fields) => fields[2] === uid)?.[6]?.trim();
+  let shell;
   try {
-    own = os.userInfo().shell ?? undefined;
+    shell = shellOf(fs.readFileSync("/etc/passwd", "utf8"));
   } catch {}
-  return own && path.isAbsolute(own) ? own : given ?? "/bin/sh";
+  if (!shell) {
+    try {
+      shell = shellOf(execFileSync("getent", ["passwd", uid], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] }));
+    } catch {}
+  }
+  return shell && path.isAbsolute(shell) ? shell : undefined;
 }
 var LOGIN_PATH_MARKERS = ["__KUVO_PATH__", "__KUVO_END__"];
-async function loginPath(env = process.env) {
+function joinPath(...folders) {
+  return [...new Set(folders.flatMap((list) => (list ?? "").split(":")).filter(Boolean))].join(":");
+}
+async function loginPath(env = process.env, wait = { interactive: 6000, login: 2000 }) {
   const shell = loginShell(env);
-  if (shell.endsWith("/nu"))
+  if (/\/(nu|csh|tcsh)$/.test(shell))
     return;
   const kept = Object.entries(env).filter(([name, value]) => value !== undefined && /^(HOME|USER|LOGNAME|LANG|LC_[A-Z_]+|TERM|TMPDIR|PATH|SSH_AUTH_SOCK)$/.test(name));
   const login = { ...Object.fromEntries(kept), SHELL: shell, DISABLE_AUTO_UPDATE: "true" };
-  for (const [flags, timeout] of [["-ilc", 15000], ["-lc", 5000]]) {
+  for (const [flags, timeout] of [["-ilc", wait.interactive], ["-lc", wait.login]]) {
     const found = await new Promise((resolve) => {
       let output = "";
       let child;
@@ -513,15 +528,33 @@ async function loginPath(env = process.env) {
         const at = output.indexOf(LOGIN_PATH_MARKERS[0]);
         const end = at < 0 ? -1 : output.indexOf(LOGIN_PATH_MARKERS[1], at);
         if (end >= 0)
-          done([...new Set(output.slice(at + LOGIN_PATH_MARKERS[0].length, end).trim().split(":").filter(Boolean))].join(":") || undefined);
+          done(joinPath(output.slice(at + LOGIN_PATH_MARKERS[0].length, end).trim()) || undefined);
       });
       child.on("error", () => done(undefined));
       child.on("close", () => done(undefined));
+      child.on("exit", () => setTimeout(() => done(undefined), 300));
     });
     if (found)
-      return found;
+      return joinPath(found, env.PATH);
   }
   return;
+}
+var savedPathFile = (home) => path.join(home, "run", "login-path");
+function savedLoginPath(home) {
+  try {
+    const saved = fs.readFileSync(savedPathFile(home), "utf8").trim();
+    return saved.startsWith("/") ? saved : undefined;
+  } catch {
+    return;
+  }
+}
+function saveLoginPath(home, value) {
+  try {
+    fs.mkdirSync(path.dirname(savedPathFile(home)), { recursive: true, mode: 448 });
+    fs.writeFileSync(savedPathFile(home) + ".new", value + `
+`, { mode: 384 });
+    fs.renameSync(savedPathFile(home) + ".new", savedPathFile(home));
+  } catch {}
 }
 
 // Packages/Box/src/agents/proc.ts
@@ -602,7 +635,14 @@ function runGroup(command, args, options = {}) {
 var startPath = process.env.PATH ?? "";
 var pathRead = 0;
 var reading;
+function useSavedLoginPath() {
+  const saved = machineHome ? savedLoginPath(machineHome) : undefined;
+  if (saved)
+    process.env.PATH = joinPath(process.env.KUVO_BIN, join3(machineHome, "bin"), saved);
+}
 async function refreshLoginPath(now = false) {
+  if (onMachine && !now)
+    return;
   if (reading) {
     await reading;
     if (!now)
@@ -618,8 +658,11 @@ async function refreshLoginPath(now = false) {
 }
 async function readLoginPath() {
   const found = await loginPath({ ...process.env, PATH: startPath });
-  if (found)
-    process.env.PATH = [...new Set([process.env.KUVO_BIN, ...found.split(":")].filter(Boolean))].join(":");
+  if (!found)
+    return;
+  process.env.PATH = joinPath(process.env.KUVO_BIN, found);
+  if (onMachine && machineHome)
+    saveLoginPath(machineHome, found);
 }
 function firstURL(text) {
   return text.match(/https?:\/\/[^\s"'<>]+/)?.[0];
@@ -20475,7 +20518,7 @@ process.on("uncaughtException", (error) => {
 var deps = new Deps(join25(home2, "runtime"), join25(home2, "cache"));
 if (onMachine) {
   dropOwnPrograms(join25(home2, "runtime"));
-  refreshLoginPath();
+  useSavedLoginPath();
 }
 rmSync13(join25(home2, "cache", "install"), { recursive: true, force: true });
 var context = { home: home2, temporary, deps };
@@ -20666,4 +20709,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 3ddc067fc446e1f4a368b4d731e7c8e2aae1cea6c2418fcb226a6e659e0de32e
+// Built from Packages/Box/src/agents c21018f9bcd7727775dc2f4279bce1ad8dae38ee0b87097f359baf737e72bb1b

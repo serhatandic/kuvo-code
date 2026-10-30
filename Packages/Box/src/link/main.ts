@@ -22,7 +22,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sleep } from "../shared/wait";
-import { loginPath } from "../shared/platform";
+import { joinPath, loginPath, saveLoginPath, savedLoginPath } from "../shared/platform";
 import { watchAsks } from "./areas/asks";
 import { watchWorkAsks } from "./work/asks";
 import { refreshBotsKeys } from "./areas/bot-keys";
@@ -213,8 +213,9 @@ async function run(): Promise<void> {
   fs.writeFileSync(PID_FILE, String(process.pid), { mode: 0o600 });
   fs.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 0o600 });
   // The programs it looks for (an MCP server's `npx`) found where the engine finds them: on the
-  // PATH your login shell sets up, which the keeper's start doesn't get.
-  void loginPath().then(found => { if (found) process.env.PATH = [...new Set([path.join(K, "bin"), ...found.split(":")])].join(":"); });
+  // PATH your login shell sets up, as the engine's start read it, which the keeper's start doesn't get.
+  const saved = savedLoginPath(K);
+  if (saved) process.env.PATH = joinPath(path.join(K, "bin"), saved);
   // COMPAT(beta.1 connected): `run/connected` (beta.1) and `run/present` (0.7 with the phone link on), cleared. Goes when 0.8.0 ships.
   // The notes an earlier Kuvo Code on a Mac left that it was connected (it did some of the box's
   // work then): nothing reads them now.
@@ -763,9 +764,15 @@ if (main) {
   // with what some providers need on top, as this box last learned it (PROTOCOL.md, "Settings per box").
   else if (mode === "engine-config") process.stdout.write(engineConfigContent(process.env.OPENCODE_CONFIG_CONTENT));
   // A machine's start scripts' too: the PATH your login shell sets up there (`~/.local/bin`, nvm's
-  // node), for the engine and what it starts, which a start over SSH or from cron doesn't get.
-  // Nothing when the shell doesn't give it, for the start to keep the PATH it has.
-  else if (mode === "login-path") process.stdout.write((await loginPath()) ?? "");
+  // node), then the folders of the one it was run with, for the engine and what it starts, which a
+  // start over SSH or from cron doesn't get. Nothing when the shell doesn't give it, for the start
+  // to keep the PATH it has.
+  // Kept for the link and the agents' bridge (each read can leave a program a .bashrc starts running).
+  else if (mode === "login-path") {
+    const found = await loginPath();
+    if (found) saveLoginPath(K, found);
+    process.stdout.write(found ?? "");
+  }
   else if (mode === "update") {
     // `update [--now]`, and for a test's folder only, `--url <boxes.json> --key <public key>`. Once
     // it's updated, the running bridge goes, for the keeper to start the new one.

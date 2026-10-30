@@ -2358,10 +2358,12 @@ before. A Mac sends none.
 A machine's engine, its coding agents and its link find programs on the PATH your login shell sets
 up there (`~/.local/bin` from your profile, nvm's node from `.bashrc`), not the bare one a start over
 SSH or from cron gets: `kuvo-link.js login-path` (bridge 0.9.116) prints it, read from an interactive
-login shell, then a login shell only (`$SHELL`; on Linux your account's when that's cron's `/bin/sh`),
-or nothing when neither answers in time. A machine's start scripts run it before starting the engine;
-the coding agents' bridge and the link read it themselves. This Mac's app reads its own shell's for
-its engine.
+login shell, then a login shell only (`$SHELL`; on Linux your account's when that's cron's `/bin/sh`;
+none for nushell or csh), followed by the folders of the PATH it was run with; or nothing when neither
+answers in time. A machine's start scripts run it once before starting the engine, and it keeps what
+it read in `run/login-path`, which the link and the coding agents' bridge go by; the bridge reads it
+again only after it installs or updates an agent (a .bashrc that starts an `ssh-agent` when there's
+none would leave one running with each read). This Mac's app reads its own shell's for its engine.
 
 ### Personalities
 

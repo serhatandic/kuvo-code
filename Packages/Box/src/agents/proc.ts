@@ -4,7 +4,8 @@
 import { spawn } from "node:child_process"
 import { accessSync, constants } from "node:fs"
 import { delimiter, join } from "node:path"
-import { loginPath } from "../shared/platform"
+import { joinPath, loginPath, saveLoginPath, savedLoginPath } from "../shared/platform"
+import { machineHome, onMachine } from "./machine"
 
 /** The program's path on PATH (or the extra places given), if it's there. */
 export function which(name: string, extra: string[] = []): string | undefined {
@@ -92,14 +93,23 @@ const startPath = process.env.PATH ?? ""
 let pathRead = 0
 let reading: Promise<void> | undefined
 
+/** On a machine, the PATH its engine's start read (`run/login-path`), after Kuvo Code's own commands: what the bridge goes by until an install reads it again. */
+export function useSavedLoginPath() {
+  const saved = machineHome ? savedLoginPath(machineHome) : undefined
+  if (saved) process.env.PATH = joinPath(process.env.KUVO_BIN, join(machineHome!, "bin"), saved)
+}
+
 /**
  * Your login shell's PATH again, so a tool installed since the bridge started (`npm install -g`,
- * Homebrew, an installer that adds a folder to your profile) is found. Asked when you refresh,
- * at most every few seconds (`now`: again, after an install), one read at a time. On a machine
- * too, with its own folders: a command over SSH gets less than its terminal does (`~/.local/bin`
- * comes from the profile, nvm's node from .bashrc), read as the engine's start reads it there.
+ * Homebrew, an installer that adds a folder to your profile) is found. On this Mac, asked when you
+ * refresh, at most every few seconds (`now`: again, after an install), one read at a time. On a
+ * machine, where a command over SSH gets less than its terminal does (`~/.local/bin` comes from the
+ * profile, nvm's node from .bashrc), its engine's start read it once (`useSavedLoginPath`), and
+ * only an install reads it again: there's no SSH agent there, and a .bashrc that starts one when
+ * there's none would leave one more running with each read.
  */
 export async function refreshLoginPath(now = false): Promise<void> {
+  if (onMachine && !now) return
   if (reading) {
     await reading
     if (!now) return
@@ -114,8 +124,10 @@ export async function refreshLoginPath(now = false): Promise<void> {
 
 async function readLoginPath() {
   const found = await loginPath({ ...process.env, PATH: startPath })
-  // Kuvo Code's own commands (kuvo-wake) first, as the app gave them; each folder once.
-  if (found) process.env.PATH = [...new Set([process.env.KUVO_BIN, ...found.split(":")].filter(Boolean))].join(":")
+  if (!found) return
+  // Kuvo Code's own commands (kuvo-wake) first, as the app gave them.
+  process.env.PATH = joinPath(process.env.KUVO_BIN, found)
+  if (onMachine && machineHome) saveLoginPath(machineHome, found)
 }
 
 /** Finds the first web address in some text (a sign-in page a program printed). */
