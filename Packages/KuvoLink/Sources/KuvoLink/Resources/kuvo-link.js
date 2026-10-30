@@ -8479,6 +8479,7 @@ ${reply ? cut(reply, 1200) : "(It ended without a reply.)"}`;
 var wakeText = (lines) => lines.join(`
 
 `);
+var ARCHIVED_FOR = 7 * 86400000;
 var readTold = (file) => {
   try {
     const kept = JSON.parse(fs44.readFileSync(file, "utf8"));
@@ -8532,8 +8533,11 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     try {
       if (!place)
         throw new Error("Not reached.");
-      if (isPutAway(place.data))
+      if (isPutAway(place.data)) {
+        if (Date.now() - waiting.since > ARCHIVED_FOR)
+          return;
         throw new Error("Archived.");
+      }
       await asked(place.target, "POST", `api/session/${encodeURIComponent(starter)}/prompt`, { id: messageID(), text: wakeText(waiting.lines), delivery: waiting.asks ? "steer" : "queue" });
       failures.delete(starter);
     } catch {

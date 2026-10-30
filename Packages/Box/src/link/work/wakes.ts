@@ -107,6 +107,9 @@ export async function wakeLine(event: WorkEvent, session: Partial<EngineSession>
 /** What goes to a conversation, from the lines gathered for it. */
 export const wakeText = (lines: string[]) => lines.join("\n\n");
 
+// How long what a conversation would hear waits while it's archived.
+const ARCHIVED_FOR = 7 * 86_400_000;
+
 /** What a starter was told of each of its sessions, and when the box last heard of any. */
 interface Told {
   since: number;
@@ -179,8 +182,11 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     try {
       if (!place) throw new Error("Not reached.");
       // Archived (from any app): kept until it's brought back, as its own wake-ups and goal wait,
-      // rather than running a turn no one sees.
-      if (isPutAway(place.data as PutAwayable)) throw new Error("Archived.");
+      // rather than running a turn no one sees; a week at most.
+      if (isPutAway(place.data as PutAwayable)) {
+        if (Date.now() - waiting.since > ARCHIVED_FOR) return;
+        throw new Error("Archived.");
+      }
       await asked(place.target, "POST", `api/session/${encodeURIComponent(starter)}/prompt`, { id: messageID(), text: wakeText(waiting.lines), delivery: waiting.asks ? "steer" : "queue" });
       failures.delete(starter);
     } catch {

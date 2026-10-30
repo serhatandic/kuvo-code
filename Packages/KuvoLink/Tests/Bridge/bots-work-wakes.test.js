@@ -176,6 +176,20 @@ test("what a conversation hears of its sessions waits while it's archived, as it
   assert.match(prompts[0].text, /^\[Session finished\] "Sign-in"/);
 });
 
+test("what a conversation archived for over a week would have heard of its sessions goes, rather than waiting for ever", async t => {
+  sessions.ses_pixel.metadata = { "kuvo.archived": true };
+  t.after(() => { delete sessions.ses_pixel.metadata; });
+  fs.mkdirSync(path.dirname(wakesFile), { recursive: true });
+  fs.writeFileSync(wakesFile, JSON.stringify({ ses_pixel: { lines: ["[Session finished] \"Sign-in\": done."], asks: false, since: Date.now() - 8 * 86_400_000 } }));
+  const { schedule, runAll } = clock();
+  link.workWatcher(source, () => [source], { schedule });
+  await runAll();
+  assert.deepEqual(JSON.parse(fs.readFileSync(wakesFile, "utf8")), {});
+  delete sessions.ses_pixel.metadata;
+  await runAll();
+  assert.deepEqual(prompts, []);
+});
+
 test("what happened while the box was down reaches the bot as it starts again, once", async () => {
   const toldFile = path.join(home, "run", "work", "told.json");
   // It last heard of anything a while ago; since, Sign-in finished and Haptics asked something.

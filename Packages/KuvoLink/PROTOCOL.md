@@ -578,7 +578,7 @@ client shows it from the same routes.
   message (an ask to be read at its next step), kept in `run/work/wakes.json` until it's sent (for a
   conversation the engine doesn't know while the coding agents' bridge isn't running, a day at most,
   since it may be the bridge's; and so is an answer given late, below; for an archived one, until
-  it's brought back, as its own wake-ups wait). Clients mark rows by `kuvo.by`.
+  it's brought back, as its own wake-ups wait, a week at most). Clients mark rows by `kuvo.by`.
   Its task ends with the session's half of the playbook: review your work with reviewer subagents,
   fix what they find, and end with a short report.
 - **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
