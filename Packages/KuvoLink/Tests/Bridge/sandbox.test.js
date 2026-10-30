@@ -654,14 +654,20 @@ test("a commit runs pre-commit's hooks, which set themselves up as they first ru
     'store=${PRE_COMMIT_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/pre-commit}',
     'mkdir -p "$store/repo-lint" && echo set up > "$store/repo-lint/env" && echo linted',
   ].join("\n") + "\n", { mode: 0o755 });
+  // Your own pre-commit's folder, which commands only read (what's in it runs outside the sandbox):
+  // as the sandbox keeps yours, since this test's home isn't the one its rules name.
+  const yours = path.join(root, ".cache", "pre-commit");
+  fs.mkdirSync(yours, { recursive: true });
+  fs.chmodSync(yours, 0o555);
   const running = await start(box);
   try {
     const ran = await engineRuns(box, project, "echo ok > made.txt && git add made.txt && git -c user.name=t -c user.email=t@t commit -qm made");
     assert.equal(ran.status, 0, ran.out);
     assert.match(ran.out, /linted/);
-    assert.equal(fs.existsSync(path.join(root, ".cache", "pre-commit")), false, "your own pre-commit's tools, which run outside it, aren't what it set up");
+    assert.deepEqual(fs.readdirSync(yours), [], "your own pre-commit's tools, which run outside it, aren't what it set up");
   } finally {
     await running.stop();
+    fs.chmodSync(yours, 0o755);
   }
 });
 
