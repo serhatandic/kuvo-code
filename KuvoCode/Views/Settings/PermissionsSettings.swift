@@ -197,6 +197,10 @@ struct ActionChoices: View {
                     Text("Allow").tag(Optional(PermissionRule.Effect.allow))
                     Text("Ask First").tag(Optional(PermissionRule.Effect.ask))
                     Text("Don't Allow").tag(Optional(PermissionRule.Effect.deny))
+                    // One a newer engine set, shown as it is (and kept, unless you pick another).
+                    if case .unknown? = effect(for: action.id).wrappedValue {
+                        Text(PermissionRule.Effect.newerTitle).tag(effect(for: action.id).wrappedValue)
+                    }
                 }
                 .labelsHidden()
                 .fixedSize()
@@ -236,8 +240,12 @@ extension PermissionRule.Effect {
         case .allow: "Allow"
         case .ask: "Ask First"
         case .deny: "Don't Allow"
+        case .unknown: Self.newerTitle
         }
     }
+
+    /// One a newer engine set that this app doesn't know.
+    static let newerTitle = "Set by a Newer Engine"
 }
 
 extension PermissionRule {
@@ -528,6 +536,7 @@ private struct RuleRow: View {
                 }
                 Picker("Effect", selection: Binding(get: { rule.effect }, set: { change(PermissionRule(action: rule.action, resource: pattern, effect: $0)) })) {
                     ForEach(effects, id: \.self) { Text(Self.title(of: $0)).tag($0) }
+                    if !effects.contains(rule.effect) { Text(Self.title(of: rule.effect)).tag(rule.effect) }
                 }
                 .labelsHidden()
                 .frame(width: 120)
@@ -601,11 +610,7 @@ private struct RuleRow: View {
     }
 
     static func title(of effect: PermissionRule.Effect) -> String {
-        switch effect {
-        case .allow: "Allow"
-        case .ask: "Ask First"
-        case .deny: "Don't Allow"
-        }
+        effect.title
     }
 }
 

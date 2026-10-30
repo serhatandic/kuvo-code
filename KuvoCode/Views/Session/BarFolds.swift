@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The bars in the card over the composer, in the order they show.
 enum ComposerBar: Hashable {
-    case goal, handoff, review, sideQuestion, subagents, background, wakes
+    case goal, handoff, review, sideQuestion, subagents, work, background, wakes
 }
 
 /// A row of the card over the composer: a line under it, between it and the next.

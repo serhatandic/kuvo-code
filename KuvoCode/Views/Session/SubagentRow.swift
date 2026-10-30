@@ -126,17 +126,19 @@ struct SubagentRow: View {
         if let failure, !failure.isInterruption {
             Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
         } else {
-            // One view working and done, so its ring closes as it finishes.
-            StepActivity(symbol: "person.2", running: isWorking, size: Self.iconWidth)
+            // One view working and done, so its ring closes as it finishes; open, its steps show
+            // the work, and its arc holds still.
+            StepActivity(symbol: "person.2", running: isWorking, size: Self.iconWidth, holds: isExpanded)
         }
     }
 
-    /// While it works, the step it's on; once done, what it used (under its steps, while it's
-    /// open), or how it ended.
+    /// While it works, what it's doing now (its ring says it's at work, so the words stay still);
+    /// once done, what it used (under its steps, while it's open), or how it ended.
     @ViewBuilder private var status: some View {
         if isWorking {
-            ShimmerText(text: currentStep)
+            Text(currentStep)
                 .font(.caption)
+                .foregroundStyle(.secondary)
         } else if let failure {
             Text(failure.isInterruption ? "Stopped" : "Failed")
                 .font(.caption)

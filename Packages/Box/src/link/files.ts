@@ -29,24 +29,40 @@ export function writePrivate(file: string, text: string | Uint8Array) {
   fs.renameSync(temporary, file);
 }
 
-// `work` done holding `lock` (a folder, made while it's held): one process at a time. A lock left by
-// one that was cut off goes after `stale` ms (ten seconds); one not had in `wait` ms (three) goes
-// ahead all the same.
-export function locked<T>(lock: string, work: () => T, { stale = 10_000, wait = 3_000 } = {}): T {
+// Holds `lock` (a folder, made while it's held) for one process at a time: whether it was had. A
+// lock left by one that was cut off goes after `stale` ms; one not had in `wait` ms goes ahead all
+// the same.
+function hold(lock: string, stale: number, wait: number): boolean {
   fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
   const nap = new Int32Array(new SharedArrayBuffer(4));
-  let held = false;
-  for (let i = 0; i < wait / 10 && !held; i++) {
+  for (let i = 0; i < wait / 10; i++) {
     try {
       fs.mkdirSync(lock);
-      held = true;
+      return true;
     } catch {
       try { if (Date.now() - fs.statSync(lock).mtimeMs > stale) fs.rmdirSync(lock); } catch {}
       Atomics.wait(nap, 0, 0, 10);
     }
   }
+  return false;
+}
+
+// `work` done holding `lock`: one process at a time. A lock left by one that was cut off goes
+// after `stale` ms (ten seconds); one not had in `wait` ms (three) goes ahead all the same.
+export function locked<T>(lock: string, work: () => T, { stale = 10_000, wait = 3_000 } = {}): T {
+  const held = hold(lock, stale, wait);
   try {
     return work();
+  } finally {
+    if (held) try { fs.rmdirSync(lock); } catch {}
+  }
+}
+
+// The same for work that awaits: held until it's done.
+export async function lockedWhile<T>(lock: string, work: () => Promise<T>, { stale = 10_000, wait = 3_000 } = {}): Promise<T> {
+  const held = hold(lock, stale, wait);
+  try {
+    return await work();
   } finally {
     if (held) try { fs.rmdirSync(lock); } catch {}
   }

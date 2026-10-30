@@ -145,3 +145,51 @@ import Testing
         #expect(mac.stored("mcp_linear").contains { $0.active && $0.secret == "rt_renewed" })
     }
 }
+
+/// Signing out of an account (Disconnect, Remove Account, an agent's Sign Out) on a computer whose
+/// engine can't be reached now says so, rather than doing nothing: this Mac's engine not running,
+/// a machine not connected, this Mac's coding agents not started.
+@MainActor
+@Suite struct UnreachableSignOutTests {
+    @Test func signingOutWhereNothingAnswersSaysWhy() async {
+        TestEnvironment.prepare()
+        let app = AppModel()
+        let mac = await #expect(throws: AppModel.Unreachable.self) { try await app.forgetSignIn("github-copilot") }
+        #expect(mac?.localizedDescription == "This Mac’s engine isn’t running. Try again in a moment.")
+        let machine = await #expect(throws: AppModel.Unreachable.self) { try await app.forgetSignIn("github-copilot", on: .machine("lokum")) }
+        #expect(machine?.localizedDescription == "lokum isn’t connected. Try again once it is.")
+        let agent = await #expect(throws: OutsideAgents.Failure.self) { try await OutsideAgents().signOut("cursor") }
+        #expect(agent?.localizedDescription == "The coding agents are still starting. Try again in a moment.")
+    }
+
+    /// Signing out of a provider with two keys, where the engine refuses to remove the first: the
+    /// other goes all the same, and it says one wouldn't. Another provider's key stays.
+    @Test func aRefusedKeyDoesntKeepTheOthers() async throws {
+        TestEnvironment.prepare()
+        StubWeb.start(hosts: ["127.0.0.1"])
+        defer { StubWeb.stop() }
+        let engine = FakeEngine(port: 47978, accounts: ["deepseek", "openai"])
+        let first = engine.store("deepseek", label: "Work", value: ["type": "key", "key": "sk-work"])
+        engine.store("deepseek", label: "Personal", value: ["type": "key", "key": "sk-personal"])
+        engine.store("openai", value: ["type": "key", "key": "sk-openai"])
+        engine.refuseRemoving(first)
+
+        await #expect(throws: (any Error).self) { try await AppModel.forgetSignIn("deepseek", in: engine.api) }
+        #expect(engine.stored("deepseek").map(\.secret) == ["sk-work"], "the one it refused stays; the other went")
+        #expect(engine.stored("openai").map(\.secret) == ["sk-openai"])
+    }
+}
+
+/// Signing in where it can't now says what isn't there: a machine that isn't connected, or, for a
+/// coding agent on a machine that is, its coding agents.
+@MainActor
+@Suite struct ConnectWordsTests {
+    @Test func itSaysWhatIsntThere() {
+        #expect(ConnectView.unreachable(agent: false, machine: "lokum", engineUp: false, agentsFailure: nil) == "lokum isn’t connected. Try again once it is.")
+        #expect(ConnectView.unreachable(agent: true, machine: "lokum", engineUp: false, agentsFailure: nil) == "lokum isn’t connected. Try again once it is.")
+        #expect(ConnectView.unreachable(agent: true, machine: "lokum", engineUp: true, agentsFailure: nil) == "lokum’s coding agents aren’t running. Try again in a moment.")
+        #expect(ConnectView.unreachable(agent: true, machine: "lokum", engineUp: true, agentsFailure: "Bun crashed") == "lokum’s coding agents couldn’t start: Bun crashed")
+        #expect(ConnectView.unreachable(agent: true, machine: nil, engineUp: true, agentsFailure: nil) == "The coding agents are still starting. Try again in a moment.")
+        #expect(ConnectView.unreachable(agent: false, machine: nil, engineUp: false, agentsFailure: nil) == "This Mac’s engine isn’t running. Try again in a moment.")
+    }
+}

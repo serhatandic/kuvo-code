@@ -12,6 +12,10 @@ export function matches(pattern: string, value: string): boolean {
   return new RegExp(expression, "s").test(value)
 }
 
+/** An effect that holds back what it matches: "deny", or one a newer engine has that this bridge
+ * doesn't know (never let through, as the app takes it too). */
+export const holdsBack = (effect: string): boolean => effect !== "allow" && effect !== "ask"
+
 export function evaluate(rules: PermissionRule[] | undefined, action: string, resources: string[]): "allow" | "deny" | "ask" {
   return ruled(rules, action, resources) ?? "allow"
 }
@@ -22,7 +26,7 @@ export function ruled(rules: PermissionRule[] | undefined, action: string, resou
   for (const rule of rules ?? []) {
     if (!matches(rule.action, action)) continue
     const targets = resources.length ? resources : ["*"]
-    if (targets.every((resource) => matches(rule.resource, resource))) effect = rule.effect
+    if (targets.every((resource) => matches(rule.resource, resource))) effect = holdsBack(rule.effect) ? "deny" : (rule.effect as "allow" | "ask")
   }
   return effect
 }

@@ -68,15 +68,36 @@ export type BridgeAsk = (method: string, route: string, body?: unknown, signal?:
 const SEAT_WHOLE = 48_000;
 const seatParts = new Map<string, PendingParts>();
 
+/** How long the bridge has to answer an ask without a signal of its own (a test's clock instead). */
+export const bridgeClock = {
+  answerIn: (): AbortSignal => AbortSignal.timeout(10_000),
+  /** `work` in `ms`, unless what it gives back calls it off first. */
+  after: (ms: number, work: () => void): (() => void) => {
+    const timer = setTimeout(work, ms);
+    return () => clearTimeout(timer);
+  },
+};
+
+// Without a signal, the bridge has a while to answer, not to finish: what it sends as it goes (its
+// mail, `GET /mail`, followed for as long as it runs) isn't cut off once that while is up.
 export const bridgeAsk: BridgeAsk = async (method, route, body, signal) => {
   const target = readBridgeFile();
   if (!target?.port || !target?.password) throw new Error("The coding agents' bridge isn't running.");
-  const response = await fetch(`http://127.0.0.1:${target.port}/api/kuvo/peers${route}`, {
-    method,
-    headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`, ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-    signal: signal ?? AbortSignal.timeout(10_000),
-  });
+  const waiting = signal ? null : new AbortController();
+  const deadline = signal ? null : bridgeClock.answerIn();
+  const late = () => waiting?.abort(deadline?.reason);
+  deadline?.addEventListener("abort", late, { once: true });
+  let response: Response;
+  try {
+    response = await fetch(`http://127.0.0.1:${target.port}/api/kuvo/peers${route}`, {
+      method,
+      headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`, ...(body ? { "content-type": "application/json" } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: signal ?? waiting!.signal,
+    });
+  } finally {
+    deadline?.removeEventListener("abort", late);
+  }
   if (!response.ok) throw Object.assign(new Error(`The coding agents' bridge answered ${response.status}.`), { status: response.status });
   return response;
 };
@@ -150,7 +171,7 @@ export async function takeSeat(sender: MailSender, payload: Record<string, unkno
 
 // Who can be in this box's group chats from your other computers: each peer (taking a chat's turns
 // when its `features` say `groups.seats`), and the bots it told of, by their id.
-export function seatPeers(link: LinkState | null = readLink(), told: Record<string, ToldAgents> = readPeerAgents(undefined, undefined, link)): SeatPeers {
+export function seatPeers(link: LinkState | null = readLink(), told: Record<string, ToldAgents> = readPeerAgents()): SeatPeers {
   const peers = peersOf(link);
   return {
     boxes: peers.map(peer => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
@@ -230,19 +251,37 @@ export function giveUpSeat(id: string, letter: SeatLetter, ask: BridgeAsk = brid
     .finally(() => tellingGaveUp.delete(id));
 }
 
+// The bridge says it's still there every 20 seconds while nothing goes (MAIL_HEARTBEAT, an empty
+// line); this long without a word, it's stuck, and it's followed anew.
+export const MAIL_QUIET = 60_000;
+
 // Follows what the bridge sends, while it runs (`carrySeat`), saying what mustn't be lost is taken
 // once it's left as a letter. Each time it follows anew, it tells the bridge who your computers are.
 export async function watchSeats(host: () => SeatHost | null | undefined, signal?: AbortSignal): Promise<void> {
   let attempt = 0;
   while (!signal?.aborted) {
+    const connection = new AbortController();
+    const end = () => connection.abort();
+    signal?.addEventListener("abort", end, { once: true });
+    let quiet = false;
+    let hush = () => {};
+    const heard = () => {
+      hush();
+      hush = bridgeClock.after(MAIL_QUIET, () => {
+        quiet = true;
+        connection.abort();
+      });
+    };
     try {
-      const response = await bridgeAsk("GET", "/mail", undefined, signal);
+      heard();
+      const response = await bridgeAsk("GET", "/mail", undefined, connection.signal);
       attempt = 0;
       await tellSeatPeers(readLink(), true).catch(() => {});
       let buffer = "";
       const decoder = new TextDecoder();
       // (An answer that follows has a body.)
       for await (const chunk of response.body!) {
+        heard();
         buffer += decoder.decode(chunk, { stream: true });
         let end;
         while ((end = buffer.indexOf("\n")) >= 0) {
@@ -253,7 +292,13 @@ export async function watchSeats(host: () => SeatHost | null | undefined, signal
           if (carrySeat(host(), given) && given.durable === true) bridgeAsk("POST", "/sent", { ids: [given.id] }).catch(() => {});
         }
       }
-    } catch {}
+    } catch {
+    } finally {
+      hush();
+      signal?.removeEventListener("abort", end);
+    }
+    // Gone quiet: followed anew at once.
+    if (quiet) continue;
     attempt += 1;
     await pause(Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5)), signal);
   }

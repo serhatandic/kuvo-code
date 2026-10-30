@@ -2,6 +2,7 @@ import Foundation
 import KuvoLink
 import OpenCodeKit
 import os
+import Security
 
 private let log = Logger(subsystem: "run.kuvo.code", category: "box")
 
@@ -27,6 +28,8 @@ final class BoxProcess {
     private(set) var failure: String?
 
     @ObservationIgnored private var server: ServerProcess?
+    /// Its process, while it runs.
+    var processID: Int32? { server?.processID }
     /// What it was started with, to start it again the same way.
     @ObservationIgnored private var runtime: (executable: URL, environment: [String: String], arguments: (URL) -> [String])?
 
@@ -48,8 +51,53 @@ final class BoxProcess {
         return Bridge.scriptURL
     }
 
-    /// Starts it with the engine's Bun, once: it goes on through the engine's restarts.
-    func start(engine: URL, environment: [String: String]) async {
+    /// `content` (what the engine starts with in `OPENCODE_CONFIG_CONTENT`) with what some providers
+    /// need from the engine on top, as this Mac's box last learned it from its engine, or Kuvo Code
+    /// knows them before it has (`kuvo-link.js engine-config`, as a machine's start adds it); as it
+    /// is when that can't be run, or doesn't answer within `timeout` seconds (the engine's start never
+    /// waits on it longer).
+    static func engineConfig(engine: URL, content: String?, environment: [String: String], timeout: TimeInterval = 10) async -> String? {
+        guard let script else { return content }
+        var env = environment
+        // As the box starts (`launch`): nothing from your shell that runs before its code.
+        for name in env.keys where name.hasPrefix("DYLD_") || name.hasPrefix("BUN_") || name == "NODE_OPTIONS" { env[name] = nil }
+        env["BUN_BE_BUN"] = "1"
+        env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
+        env["KUVO_HOME"] = home.path
+        env["OPENCODE_CONFIG_CONTENT"] = content
+        let given = env
+        return await Task.detached {
+            let process = Process()
+            process.executableURL = engine
+            process.arguments = ["run", "--config=/dev/null", script.path, "engine-config"]
+            process.environment = given
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            process.standardInput = FileHandle.nullDevice
+            do { try process.run() } catch { return content }
+            let late = DispatchWorkItem { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: late)
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            late.cancel()
+            guard process.terminationStatus == 0, let text = String(data: data, encoding: .utf8), text.hasPrefix("{"), text.hasSuffix("}") else { return content }
+            return text
+        }.value
+    }
+
+    /// Whether what it runs with is checked for opencode's signature before each start (the
+    /// engine's Bun; a test's Node isn't).
+    private var checksRuntime = false
+    /// Whether it runs with the engine's Bun (a test's runs with Node).
+    private var runsEngine = false
+
+    /// Starts it with the engine's Bun, once: it goes on through the engine's restarts. `checked`:
+    /// the engine is checked for opencode's signature before each start (not one you named with
+    /// `KUVO_OPENCODE_BINARY`, a build of your own).
+    func start(engine: URL, environment: [String: String], checked: Bool = true) async {
+        checksRuntime = checked
+        runsEngine = true
         var env = environment
         // GitHub's stand-in, and a box kept from your other computers, are for the tests' box only
         // (`TestBox`), never the app's.
@@ -58,7 +106,9 @@ final class BoxProcess {
         env["BUN_BE_BUN"] = "1"
         // Bun would otherwise keep a copy of the script, compiled, in ~/Library/Caches/bun.
         env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
-        await launch(engine, environment: env) { ["run", $0.path, "serve"] }
+        // Bun's settings only from nowhere: a `bunfig.toml` in its folder (which an agent's command
+        // can write) could load a script of its own first, before the box reads its secrets.
+        await launch(engine, environment: env) { ["run", "--config=/dev/null", $0.path, "serve"] }
     }
 
     #if DEBUG
@@ -78,6 +128,26 @@ final class BoxProcess {
             return
         }
         var env = environment
+        // Nothing from your shell's environment that changes what runs before the box's own code:
+        // libraries loaded into it, Bun's or Node's options (an agent's command can write your
+        // shell's profile). The engine's Bun gets its two from `start` again.
+        for name in env.keys where name.hasPrefix("DYLD_") || name.hasPrefix("BUN_") || name == "NODE_OPTIONS" { env[name] = nil }
+        if runsEngine {
+            env["BUN_BE_BUN"] = "1"
+            env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
+        }
+        if checksRuntime {
+            // And what it runs is what it was: the engine's Bun the pinned build (opencode's
+            // signature and the binary's own hash), and the box's script the app's own, sealed with it.
+            // Checked again each time, as a file replaced in the app's folder or its bundle (both
+            // yours to write, so an agent's command's too) would run as the box. (Off the main
+            // thread: reading them takes a second or so.)
+            let engine = runtime
+            if let trouble = await Task.detached(operation: { BoxIntegrity.trouble(engine: engine) }).value {
+                failure = trouble
+                return
+            }
+        }
         env["KUVO_HOME"] = Self.home.path
         // A Mac's box: its bots are this Mac's own, made with the kit the app gives it.
         env["KUVO_BOX"] = "mac"
@@ -107,11 +177,18 @@ final class BoxProcess {
         do {
             try FileManager.default.createDirectory(at: Self.run, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+            // Its password and the vault's secrets on its stdin, never in its environment, which
+            // any of your processes can read (`ps -E`): agents' commands among them.
+            var secrets: [String: String] = [:]
+            for (variable, name) in [("KUVO_HOST_VAULT_SECRET", "hostVaultSecret"), ("KUVO_VAULT_FILE_KEY", "vaultFileKey")] {
+                if let value = env.removeValue(forKey: variable) { secrets[name] = value }
+            }
             let server = try await ServerProcess.start(
                 executable: runtime,
                 arguments: arguments(script),
                 environment: env,
                 directory: Self.home,
+                secrets: secrets,
                 // Up in well under a second: the engine's start waits for it (its settings first),
                 // so one that's held up (macOS asking about a folder its script is in) doesn't
                 // hold the engine up for long. It's tried again once the engine is up.
@@ -232,3 +309,44 @@ final class BoxProcess {
         }
     }
 }
+
+/// What this Mac's box runs, checked before each start: its engine's Bun is the pinned build
+/// (opencode's signature, and the binary's own hash, which an older build of opencode's put in its
+/// place wouldn't have), and the app's bundle, with the box's script in it, is the one this app was
+/// signed as. (Checked, then run: something that swaps a file in between gets in; fenced agents won't
+/// reach them.)
+nonisolated enum BoxIntegrity {
+    static func trouble(engine: URL) -> String? {
+        guard EngineInstaller.isPinnedBuild(engine) else {
+            return "Kuvo Code’s engine on this Mac isn’t the one it downloaded any more, so it didn’t start. Quit Kuvo Code and open it again to download it."
+        }
+        guard appIsSealed() else {
+            return "Kuvo Code on this Mac was changed since it was installed, so its background service didn’t start. Install Kuvo Code again."
+        }
+        return nil
+    }
+
+    /// Whether the app's bundle on disk, its code and every resource (the box's script), is the very
+    /// one this app was launched from: its code directory's hash, which seals every resource too, as
+    /// the kernel has it for the running app (not as the bundle on disk says, which a swapped and
+    /// signed-again copy would say of itself). An app rebuilt while it runs fails until it's opened again.
+    static func appIsSealed() -> Bool {
+        guard let requirement = launchRequirement else { return false }
+        var bundle: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(Bundle.main.bundleURL as CFURL, [], &bundle) == errSecSuccess, let bundle else { return false }
+        return SecStaticCodeCheckValidity(bundle, [], requirement) == errSecSuccess
+    }
+
+    /// `cdhash H"<the running app's>"`, from the kernel (`csops`), made once.
+    nonisolated(unsafe) static let launchRequirement: SecRequirement? = {
+        var hash = [UInt8](repeating: 0, count: 20)
+        guard csops(getpid(), 5 /* CS_OPS_CDHASH */, &hash, hash.count) == 0, hash.contains(where: { $0 != 0 }) else { return nil }
+        var requirement: SecRequirement?
+        let text = "cdhash H\"" + hash.map { String(format: "%02x", $0) }.joined() + "\""
+        return SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess ? requirement : nil
+    }()
+}
+
+/// The kernel's code-signing calls for a process (`<sys/codesign.h>`): here, its code directory's hash.
+@_silgen_name("csops")
+nonisolated private func csops(_ pid: pid_t, _ ops: UInt32, _ address: UnsafeMutableRawPointer?, _ size: Int) -> Int32

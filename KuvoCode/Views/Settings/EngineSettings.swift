@@ -228,7 +228,7 @@ struct EngineSettings: View {
         guard let api = app.api(for: box) else { return }
         Task {
             for id in ids { try? await api.removeCredential(id) }
-            app.forgetSignIn(integration, on: box)
+            try? await app.forgetSignIn(integration, on: box)
             await catalog.refresh()
         }
     }

@@ -242,21 +242,27 @@ final class WindowTabs {
             group: groupID.map { TabKey.group($0).text },
             worksBeside: workedBesideID,
             place: focusedDirectory.flatMap(RemoteFolder.machine(of:)),
-            bots: Set(botsInView.filter { $0.machine == nil }.map(\.id))
+            bots: Set(botsInView.filter { $0.machine == nil }.map(\.id)),
+            draft: sessionID == nil && groupID == nil ? selection?.text : nil
         )
     }
 
     // MARK: Opening and closing
 
-    /// Shows a tab, opening it next to the current one if needed (the session beside a tab: that
-    /// tab, with it beside, and you in it while it shows), out of Settings and any editor. A
-    /// conversation whose subagent is open in its tab comes back in that tab.
+    /// Shows a tab, opening it next to the current one if needed, out of Settings and any editor.
+    /// The session beside a tab is the one you get, by itself: it comes out of that pair into a tab
+    /// of its own next to it (side by side is only for when you ask), unless the pair is in view,
+    /// where you work in it. A conversation whose subagent is open in its tab comes back in that tab.
     func open(_ key: TabKey) {
-        if !keys.contains(key), let id = key.sessionID, workspace.session(id) != nil,
+        var pair = pairs.first { $0.value == key.sessionID && keys.contains($0.key) }?.key
+        if let tab = pair, !(tab == selection && showsBeside) {
+            closeBeside(tab)
+            pair = nil
+        }
+        if pair == nil, !keys.contains(key), let id = key.sessionID, workspace.session(id) != nil,
            let subagent = keys.first(where: { $0.sessionID.map { workspace.session($0) == nil && workspace.root(of: $0) == id } ?? false }) {
             return swap(subagent, for: key)
         }
-        let pair = pairs.first { $0.value == key.sessionID && keys.contains($0.key) }?.key
         let key = pair ?? key
         if !keys.contains(key) {
             let index = selection.flatMap { keys.firstIndex(of: $0) }.map { $0 + 1 } ?? keys.count
@@ -319,6 +325,8 @@ final class WindowTabs {
         }
         if remember && !key.isTerminal { rememberClosed([ClosedTab(key: key, index: index, beside: beside)]) }
         terminals.close(key.text)
+        // A terminal's tab doesn't come back: its panel goes with it.
+        if key.isTerminal { app.utilities.closeTabs(of: key.text) }
         withAnimation(.ui) {
             self.keys = keys
             if selection == key {
@@ -334,6 +342,7 @@ final class WindowTabs {
         for closed in keys where closed != key {
             Analytics.shared.sessionEnded(closed.text)
             terminals.close(closed.text)
+            if closed.isTerminal { app.utilities.closeTabs(of: closed.text) }
             if let beside = pairs[closed] { Analytics.shared.sessionEnded(beside) }
         }
         withAnimation(.ui) {
@@ -500,21 +509,11 @@ final class WindowTabs {
     /// view; more attempts open at the end.
     func draftSent(_ draft: TabKey, as id: String) {
         if let index = keys.firstIndex(of: draft) {
-            app.utilities.adoptDraft(as: id)
+            app.utilities.adoptDraft(draft.text, as: id)
             keys[index] = .session(id)
             selection = .session(id)
         } else if !keys.contains(.session(id)) {
             keys.append(.session(id))
-        }
-    }
-
-    /// A session an agent started: beside the conversation that started it, if that's the one in
-    /// view; otherwise (or asked to) in a tab of its own, for you to find.
-    func agentStarted(_ id: String, by starter: String, beside: Bool) {
-        if beside, starter == sessionID {
-            openBeside(id)
-        } else {
-            add(.session(id))
         }
     }
 
@@ -654,7 +653,10 @@ final class WindowTabs {
         // A project's folder, not a bot's own or the chats' (their agents work there).
         let directory = directory ?? Self.project(activeDirectory) ?? NSHomeDirectory()
         Analytics.shared.track("terminal_tab_opened", ["kind": command == nil ? "shell" : "project"])
-        open(TabKey(terminals.open(in: directory, command: command, environment: app.shellEnvironment)))
+        let key = terminals.open(in: directory, command: command, environment: app.shellEnvironment)
+        // Add to Message in its right-click menu: a new session in its folder, with what's selected.
+        terminals.entry(key)?.session.addToMessage = { [weak self] in self?.addToMessage($0) }
+        open(TabKey(key))
     }
 
     // MARK: Adding to a message
@@ -680,6 +682,12 @@ final class WindowTabs {
         guard let key = messageTarget?.text else { return }
         Drafts.shared[key].files += files.filter { !Drafts.shared[key].files.contains($0) }
         focusComposer(key)
+    }
+
+    /// Puts the cursor in the composer of the conversation you work in (the session beside, if
+    /// you work there).
+    func focusComposer() {
+        if let key = messageTarget?.text { focusComposer(key) }
     }
 
     private func focusComposer(_ key: String) {

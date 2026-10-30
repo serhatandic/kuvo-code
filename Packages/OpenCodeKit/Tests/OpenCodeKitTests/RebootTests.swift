@@ -33,11 +33,17 @@ import Testing
             esac
             """)
         // The engine: says it's listening, notes how it was started, and runs until stopped. Run
-        // with the phone link's script, it's the phone link: it notes its process, as that does.
+        // with the phone link's script, it's the phone link: it notes its process, as that does;
+        // asked for the engine's settings layer (`engine-config`), it gives one, around what it was
+        // given.
         let engine = root.appending(path: "engine/\(OpenCodeEngine.version)/opencode")
         try FileManager.default.createDirectory(at: engine.deletingLastPathComponent(), withIntermediateDirectories: true)
         try write(engine, """
             #!/bin/sh
+            case "$1 ${2-}" in *"kuvo-link.js engine-config")
+              [ -f "$KUVO_HOME/bin/.old-link" ] && { echo "Usage: kuvo-link.js run | serve" >&2; exit 2; }
+              printf '{"learned":"%s","given":%s}' "$KUVO_HOME" "${OPENCODE_CONFIG_CONTENT:-null}"; exit 0 ;;
+            esac
             case "$1" in *kuvo-link.js) env | sort >"$HOME/link.env"; echo $$ >"$KUVO_HOME/run/link.pid"; while :; do /bin/sleep 1; done ;; esac
             env | sort >"$HOME/engine-$$.env"
             echo "server listening on http://127.0.0.1:$3"
@@ -565,6 +571,26 @@ import Testing
         _ = try #require(running())
         #expect(try started().allSatisfy { $0.contains("OPENCODE_CONFIG=\(box.path)/opencode.json") })
         #expect(try String(contentsOf: global, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) == "{}")
+    }
+
+    /// What some providers need from the engine (its box learns it, `engine-config`) goes on top
+    /// of what the Mac started it with, after a restart with no Mac there too; a box too old to
+    /// know it starts as before.
+    @Test func itStartsWithWhatItsBoxLearnedForItsProviders() throws {
+        defer { cleanUp() }
+        try write(run.appending(path: "launch.env"), "PATH=\(tools.path):/usr/bin:/bin\nOPENCODE_CONFIG_CONTENT={\"mcp\":{}}\n")
+        try write(root.appending(path: "bin/kuvo-link.js"), "")
+        try write(root.appending(path: "bin/.old-link"), "")
+        #expect(try start() == 0)
+        until { running() != nil }
+        #expect(try started().first?.contains(#"OPENCODE_CONFIG_CONTENT={"mcp":{}}"#) == true, "a link too old to say: as the Mac started it")
+        try start("stop")
+
+        try FileManager.default.removeItem(at: root.appending(path: "bin/.old-link"))
+        #expect(try start("start") == 0)
+        until { (try? started().count) == 2 }
+        let environment = try #require(try started().first { $0.contains("learned") })
+        #expect(environment.contains(#"OPENCODE_CONFIG_CONTENT={"learned":"\#(root.path)","given":{"mcp":{}}}"#))
     }
 
     @Test func aStartFromTheMacKeepsAStoppedEngineStoppedUnlessItsStart() throws {

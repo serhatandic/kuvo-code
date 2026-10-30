@@ -1,8 +1,9 @@
 // A bot that lives here: what its folder has, whether it's moving, its model, and who follows its
 // changes.
 
+import fs from "node:fs";
 import path from "node:path";
-import { textOf } from "../files";
+import { locked, textOf } from "../files";
 import type { Fields } from "../../shared/json";
 import type { BotLook, BotModel } from "../../shared/routes/bots";
 import { BOTS } from "../home";
@@ -57,6 +58,9 @@ export function botHere(id: unknown): BotHere | null {
 // reaches it or changes here until it's there, as on the Mac.
 export const isMoving = (folder: string): boolean => (textOf(path.join(folder, "paused")) ?? "").trim() === "moving";
 export const MOVING = "It’s moving to another computer. Try again once it’s there.";
+// How long a step of making or deleting a bot waits on the engine, once it's under way: it goes on
+// without the phone's request, which may end first.
+export const BOT_STEP = 30_000;
 
 /** A model as `isModel` checks it: its id and its account's are text; its variant, and anything
  * else that came with it, aren't checked (`botModel` keeps a variant only when it's text). */
@@ -73,3 +77,16 @@ export const sameModel = (a: Partial<BotModel> | null | undefined, b: Partial<Bo
 // made beside it, by kuvo-wake or a move, they see as their folders change).
 export const botFollowers = new Set<() => void>();
 export const noteBotsChanged = () => { for (const tell of botFollowers) tell(); };
+/** A bot's description (`bot.json`) written as `change` makes it from what's there now, one process
+ * at a time: an Edit Bot save and an "Always" answered at once both land. */
+export function changeDescription(folder: string, change: (now: BotDescription | null) => BotDescription): BotDescription {
+  return locked(path.join(folder, ".bot.lock"), () => {
+    let now: BotDescription | null = null;
+    try { now = JSON.parse(textOf(path.join(folder, "bot.json")) ?? ""); } catch {}
+    const next = change(now);
+    const file = path.join(folder, "bot.json");
+    fs.writeFileSync(`${file}.new`, JSON.stringify(next, null, 2));
+    fs.renameSync(`${file}.new`, file);
+    return next;
+  });
+}

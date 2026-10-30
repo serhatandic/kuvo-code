@@ -42,6 +42,9 @@ final class BrowserAsks {
         /// The session whose agent asks, when it's a subagent of `session`'s: the run whose end
         /// takes the card away.
         var asking: String?
+        /// The site asked for a passkey, which these browsers can't use yet: you're told to sign in
+        /// another way.
+        var passkey = false
     }
 
     /// Waiting for you, the oldest first.
@@ -152,13 +155,9 @@ final class BrowserAsks {
         // A subagent's goes to the conversation it works for, which shows it and waits on you.
         ask.session = ask.asking.map(conversation)
         ask.asker = ask.session.flatMap(askerName) ?? noted
-        // A site you let agents sign in to on their own: its saved password, without asking.
-        if case .signIn = ask.kind, let login = Passwords.agentLogin(for: ask.host), let password = Passwords.password(for: login) {
-            remember(key(ask), username: login.account.isEmpty ? nil : login.account, password: password, session: ask.session)
-            respond(.signIn(username: login.account.isEmpty ? nil : login.account, password: password))
-            Notifier.shared.notify(session: tab(ask) ?? "", title: "Signed in to \(ask.host)", subtitle: ask.asker, body: "With your saved password, as you allowed for this site.")
-            return
-        }
+        // (A sign-in agents may use on their own is filled from the vault before an ask is made, under
+        // its grants, Pause and activity, by the browser's own: BrowserAgent here, kuvo-browser.js on
+        // a machine, from that machine's vault.)
         // The rest of a sign-in you just gave the same conversation (its password, on the page
         // after the username's).
         if case .signIn(let needsUsername, let needsPassword) = ask.kind, let saved = remembered[key(ask)], saved.session == ask.session,
@@ -167,6 +166,7 @@ final class BrowserAsks {
             return
         }
         responders[ask.id] = respond
+        if askedPasskeyLately(ask) { ask.passkey = true }
         withAnimation(.ui) { asks.append(ask) }
         changed()
         Notifier.shared.notify(session: tab(ask) ?? "", title: title(ask), subtitle: ask.asker, body: body(ask), push: .init(.ask, ask: ask.id, machine: ask.machine))
@@ -205,6 +205,24 @@ final class BrowserAsks {
     }
 
     private func key(_ ask: Ask) -> String { (ask.machine ?? "") + "|" + ask.host }
+
+    /// Sites that asked for a passkey lately, by machine and site, and when.
+    @ObservationIgnored private var passkeySites: [String: Date] = [:]
+    private static let passkeyLately: TimeInterval = 600
+
+    /// A page on `host` asked for a passkey, in this Mac's browser or `machine`'s: its asks, now
+    /// and for a while, say so.
+    func passkeyAsked(host: String, machine: String?) {
+        passkeySites = passkeySites.filter { Date.now.timeIntervalSince($0.value) < Self.passkeyLately }
+        passkeySites[(machine ?? "") + "|" + host] = .now
+        withAnimation(.ui) {
+            for index in asks.indices where asks[index].machine == machine && asks[index].host == host { asks[index].passkey = true }
+        }
+    }
+
+    private func askedPasskeyLately(_ ask: Ask) -> Bool {
+        passkeySites[key(ask)].map { Date.now.timeIntervalSince($0) < Self.passkeyLately } ?? false
+    }
 
     func title(_ ask: Ask) -> String {
         switch ask.kind {

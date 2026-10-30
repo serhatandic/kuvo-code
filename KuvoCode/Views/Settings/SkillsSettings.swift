@@ -282,15 +282,15 @@ struct SkillsSettings: View {
         }
     }
 
-    /// Off is a rule that denies the skill; turning it on takes that rule out, and leaves any
-    /// other rule for it alone.
+    /// Off is a rule that denies the skill (or one a newer engine set that holds it back); turning
+    /// it on takes that rule out, and leaves any other rule for it alone.
     private func isOn(_ id: String) -> Binding<Bool> {
         Binding {
-            !config.items(["permissions"]).compactMap(\.rule).contains { $0.action == "skill" && $0.resource == id && $0.effect == .deny }
+            !config.items(["permissions"]).compactMap(\.rule).contains { $0.action == "skill" && $0.resource == id && $0.effect.holdsBack }
         } set: { on in
             var items = config.items(["permissions"]).filter { item in
                 guard let rule = item.rule else { return true }
-                return !(rule.action == "skill" && rule.resource == id && rule.effect == .deny)
+                return !(rule.action == "skill" && rule.resource == id && rule.effect.holdsBack)
             }
             if !on { items.append(PermissionRule(action: "skill", resource: id, effect: .deny).json) }
             config.setItems(items, at: ["permissions"])

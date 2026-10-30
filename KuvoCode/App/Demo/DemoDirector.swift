@@ -51,6 +51,7 @@ enum DemoDirector {
         }
         if environment["KUVO_DEMO_CHANGES"] != nil { app.tabs.showPanel() }
         DemoLoaders.showIfAsked(environment)
+        DemoMoves.showIfAsked(environment, app: app)
         // KUVO_DEMO_PALETTE=<text>: the command palette, with that typed in it (`DemoPalette`).
         if workspace.isLoaded, environment["KUVO_DEMO_PALETTE"] != nil { window.showPalette() }
         // KUVO_DEMO_RENAME=header: the session in view, renamed in its card's header.
@@ -170,6 +171,16 @@ enum DemoDirector {
                 }
             }
         }
+        // KUVO_DEMO_PASSKEY=<site>: the agent of the session in view asks for a step on that site,
+        // which asked for a passkey (the card's line about it).
+        if let site = environment["KUVO_DEMO_PASSKEY"] {
+            Task {
+                await DemoWait.pause(.asked(2))
+                guard let id = app.tabs.sessionID else { return }
+                app.browserAsks.passkeyAsked(host: site, machine: nil)
+                app.browserAsks.add(BrowserAsks.Ask(id: "demo-passkey", kind: .action(instruction: "Sign in to \(site), then press Done."), host: site, machine: nil, session: id)) { _ in }
+            }
+        }
         // KUVO_DEMO_CYCLE_TABS=<seconds>: goes to the next session tab every so often, a few times.
         if let wait = environment["KUVO_DEMO_CYCLE_TABS"].flatMap(Double.init) {
             Task {
@@ -231,7 +242,13 @@ enum DemoDirector {
             let parts = item.split(separator: "=", maxSplits: 1).map(String.init)
             switch parts.first {
             case "terminal": utilities.newTerminal(in: app.tabs.focusedDirectory, environment: app.shellEnvironment)
-            case "browser": utilities.newBrowser(parts.count > 1 ? parts[1] : nil)
+            case "browser":
+                // Once the conversation is in view, so the tab is its panel's.
+                Task {
+                    await DemoWait.pause(.conversationShows)
+                    utilities.newBrowser(parts.count > 1 ? parts[1] : nil)
+                    app.tabs.showPanel()
+                }
             case "machine" where parts.count > 1:
                 let rest = parts[1].split(separator: "=", maxSplits: 1).map(String.init)
                 // Once a session there is in view, so the tab shows.
@@ -409,12 +426,13 @@ enum DemoDirector {
         if let id = environment["KUVO_DEMO_SESSION"] {
             app.tabs.open(TabKey(id))
             // KUVO_DEMO_VOICE=composer|field: voice input listening for it, with sample words, in
-            // the composer or the voice field (without the microphone, which would ask).
-            if let style = environment["KUVO_DEMO_VOICE"].flatMap(VoiceStyle.init(rawValue:)) {
+            // the composer or the voice field (without the microphone, which would ask); `tip`:
+            // the tip about more accurate voice input, from its mic.
+            if let voice = environment["KUVO_DEMO_VOICE"], voice == "tip" || VoiceStyle(rawValue: voice) != nil {
                 Task {
                     guard await DemoWait.until("\(id) to load (KUVO_DEMO_VOICE)", limit: .seconds(30), { workspace.model(for: id)?.isLoaded == true }) else { return }
                     await DemoWait.pause(.beat)
-                    app.dictation.showSample(for: id, style: style)
+                    if let style = VoiceStyle(rawValue: voice) { app.dictation.showSample(for: id, style: style) } else { app.dictation.tipFor = id }
                 }
             }
             // KUVO_DEMO_FIND=<words>: Find in it, looking for those (once it's read, on a machine).
@@ -437,6 +455,8 @@ enum DemoDirector {
                     })
                 }
             }
+            // KUVO_DEMO_DRAFT=<text>: typed, not sent, in its composer.
+            if let draft = environment["KUVO_DEMO_DRAFT"] { Drafts.shared[id].text = draft }
             // KUVO_DEMO_QUOTES=<n>: that many quotes to answer in its composer.
             if let count = Int(environment["KUVO_DEMO_QUOTES"] ?? "") {
                 Drafts.shared[id].quotes = []
@@ -544,11 +564,34 @@ enum DemoDirector {
                 model.draftText = draft
             }
         }
-        // KUVO_DEMO_REVIEW: `running`, `done` or `stopped`, a sample security review of the whole
-        // project in parts over the composer, once the first turn ended (no model reads it).
+        // KUVO_DEMO_GOAL: `met` or `working`, a sample goal over the composer, once the first turn
+        // ended (no model checks it).
+        if let kind = environment["KUVO_DEMO_GOAL"], let model = workspace.model(for: session.id) {
+            await DemoWait.until("its turn to end (KUVO_DEMO_GOAL)", limit: .seconds(180)) { !model.isRunning }
+            let now = Date.now.timeIntervalSince1970 * 1000
+            var goal: [String: Any] = ["session": session.id, "condition": "The README says how to run the tests", "state": kind == "met" ? "met" : "working",
+                                       "started": now - 60_000, "turns": 1, "checking": false]
+            if kind == "met" {
+                goal["ended"] = now
+                goal["last"] = ["verdict": "met", "reason": "The README has a Tests section with the command.", "at": now]
+            }
+            if let goal = (try? JSONSerialization.data(withJSONObject: goal)).flatMap({ try? JSONDecoder().decode(Goal.self, from: $0) }) { model.goalBridge()?.took(goal) }
+        }
+        // KUVO_DEMO_REVIEW: `starting` (nothing found yet), `running`, `done` or `stopped`, a sample
+        // security review of the whole project in parts over the composer, once the first turn
+        // ended (no model reads it).
         if let kind = environment["KUVO_DEMO_REVIEW"], let model = workspace.model(for: session.id) {
             await DemoWait.until("its turn to end (KUVO_DEMO_REVIEW)", limit: .seconds(180)) { !model.isRunning }
             if let review = Self.sampleReview(kind, session: session.id, model: session.model) { model.goalBridge()?.took(review) }
+        }
+        // KUVO_DEMO_OPEN_PART: the first part of a review the prompt asked for ("/review …"), opened in
+        // the conversation's place once it reads in a session of its own.
+        if environment["KUVO_DEMO_OPEN_PART"] != nil, let model = workspace.model(for: session.id) {
+            await DemoWait.until("a review's part (KUVO_DEMO_OPEN_PART)", limit: .seconds(120)) { model.review?.parts?.first?.session != nil }
+            if let part = model.review?.parts?.first?.session {
+                workspace.rememberReviewPart(part, of: session.id)
+                app.tabs.openInPlace(part)
+            }
         }
         // KUVO_DEMO_SIDE_THREAD: a sample side thread over the composer (three questions, the last
         // `answering` when it says so) and another thread before it, once the first turn ended.
@@ -572,18 +615,37 @@ extension DemoDirector {
     static func sampleReview(_ kind: String, session: String, model: ModelRef?) -> Review? {
         let found: [[String: Any]] = [
             ["id": "fnd_s1", "title": "The session token is written to the log", "explanation": "Anyone who can read the logs can sign in as the user. Log that a session started, not its token.", "severity": "bug", "locations": [["file": "src/auth/login.ts", "line": 6]]],
-            ["id": "fnd_s2", "title": "The redirect URL isn't checked", "explanation": "A link can send people to any site after they sign in. Allow only this app's own paths.", "severity": "bug", "locations": [["file": "src/auth/callback.ts", "line": 2]]],
+            ["id": "fnd_s2", "title": "The redirect URL isn't checked", "explanation": "A link can send people to any site after they sign in. Allow only this app's own paths.", "severity": "bug", "locations": [["file": "src/auth/callback.ts", "line": 2], ["file": "src/auth/redirect.ts", "line": 9, "endLine": 12]]],
             ["id": "fnd_s3", "title": "The user's name goes into the query as it is", "explanation": "", "severity": "risk", "locations": [["file": "src/auth/login.ts", "line": 3]]],
             ["id": "fnd_s4", "title": "Passwords are compared with ===", "explanation": "", "severity": "risk", "locations": [["file": "src/auth/login.ts", "line": 4]]],
             ["id": "fnd_s5", "title": "Errors print the stack", "explanation": "", "severity": "nit", "locations": [["file": "src/server/log.ts", "line": 1]]],
         ]
         var review: [String: Any] = ["id": "rev_demo_\(kind)", "session": session, "scope": ["kind": "project"], "focus": "security", "started": Date.now.timeIntervalSince1970 * 1000 - 240_000]
         if let model { review["model"] = ["providerID": model.providerID, "id": model.id] }
+        // Its parts, by the folders each reads (no session behind them: they show, they don't open,
+        // unless KUVO_DEMO_REVIEW_PART names one that's there).
+        let folders = ["src/auth", "src/billing", "src/server", "src/ui"]
+        let partSession = ProcessInfo.processInfo.environment["KUVO_DEMO_REVIEW_PART"]
+        func parts(read: Int, of: Int, reading: Bool) -> [[String: Any]] {
+            (1...of).map { n in
+                var part: [String: Any] = ["n": n, "of": of, "files": (1...(8 + n * 3)).map { "\(folders[(n - 1) % folders.count])/file\($0).ts" },
+                                           "state": n <= read ? "done" : n == read + 1 && reading ? "reading" : "waiting", "found": n <= read ? [2, 0, 1, 1][(n - 1) % 4] : 0]
+                if n <= read || (n == read + 1 && reading) { part["session"] = n == read + 1 ? partSession ?? "ses_demo_part_\(n)" : "ses_demo_part_\(n)" }
+                if n == read + 1 && reading { part["now"] = "Reading \(folders[(n - 1) % folders.count])/charge.ts" }
+                return part
+            }
+        }
         switch kind {
+        case "starting":
+            review["state"] = "reviewing"
+            review["progress"] = ["read": 0, "of": 4]
+            review["findings"] = [Any]()
+            review["parts"] = parts(read: 0, of: 4, reading: true)
         case "running":
             review["state"] = "reviewing"
             review["progress"] = ["read": 3, "of": 9]
             review["findings"] = Array(found.prefix(3))
+            review["parts"] = parts(read: 3, of: 9, reading: true)
         case "stopped":
             review["state"] = "done"
             review["stopped"] = ["read": 3, "of": 9]
@@ -591,9 +653,14 @@ extension DemoDirector {
             review["summary"] = "Stopped after 3 of 9 parts. It found 3 things to fix."
             review["fix"] = "Fix these."
         default:
+            // More than the list shows at once, so it scrolls.
             review["state"] = "done"
-            review["findings"] = found
-            review["summary"] = "It read 312 files. It found 5 things to fix."
+            review["findings"] = found + [
+                ["id": "fnd_s6", "title": "The reset link never expires", "explanation": "", "severity": "risk", "locations": [["file": "src/auth/reset.ts", "line": 14, "endLine": 18]]],
+                ["id": "fnd_s7", "title": "Session cookies aren't marked Secure", "explanation": "", "severity": "risk", "locations": [["file": "src/server/session.ts", "line": 31]]],
+            ]
+            review["summary"] = "It read 312 files. It found 7 things to fix."
+            review["parts"] = parts(read: 4, of: 4, reading: false)
             review["fix"] = "Fix these."
         }
         return (try? JSONSerialization.data(withJSONObject: review)).flatMap { try? JSONDecoder().decode(Review.self, from: $0) }

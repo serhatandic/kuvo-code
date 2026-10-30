@@ -56,9 +56,26 @@ const TAB_IDLE = Number(process.env.KUVO_BROWSER_TAB_IDLE || 3600) * 1000;
 
 // Goes up with every change to the keeper (host mode): a newer one replaces one that's running
 // (its pages close, its sign-ins stay), and an older one never replaces a newer.
-const KEEPER = 36;
+const KEEPER = 39;
 // Passkeys: none yet, as in the panel's browser on the Mac (Passkeys.swift, the same script).
-const NO_PASSKEYS = "(() => {\n  try {\n    const none = () => Promise.reject(new DOMException(\"Passkeys can't be used in this browser.\", \"NotAllowedError\"));\n    const Container = window.CredentialsContainer;\n    if (Container && Container.prototype) {\n      const prototype = Container.prototype, get = prototype.get, create = prototype.create;\n      if (get) prototype.get = function (options) { return options && options.publicKey ? none() : get.call(this, options); };\n      if (create) prototype.create = function (options) { return options && options.publicKey ? none() : create.call(this, options); };\n    }\n    const Credential = window.PublicKeyCredential;\n    if (Credential) {\n      Credential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);\n      if (Credential.isConditionalMediationAvailable) Credential.isConditionalMediationAvailable = () => Promise.resolve(false);\n    }\n  } catch {}\n})();";
+const NO_PASSKEYS = "(() => {\n  try {\n    // Says a passkey was asked for with an event only this launch's listener, in a world of its\n    // own, knows the name of: nothing of it is left in the page's world. (Taken before the page\n    // can change them.)\n    const dispatch = EventTarget.prototype.dispatchEvent, Made = Event;\n    const tell = () => {\n      try {\n        dispatch.call(window, new Made(\"KUVO_PASSKEY_EVENT\"));\n      } catch {}\n    };\n    const none = (options) => {\n      // Asked of you, not looked for quietly as the page loads.\n      if (options.mediation !== \"conditional\") tell();\n      return Promise.reject(new DOMException(\"Passkeys can't be used in this browser.\", \"NotAllowedError\"));\n    };\n    const Container = window.CredentialsContainer;\n    if (Container && Container.prototype) {\n      const prototype = Container.prototype, get = prototype.get, create = prototype.create;\n      if (get) prototype.get = function (options) { return options && options.publicKey ? none(options) : get.call(this, options); };\n      if (create) prototype.create = function (options) { return options && options.publicKey ? none(options) : create.call(this, options); };\n    }\n    const Credential = window.PublicKeyCredential;\n    if (Credential) {\n      Credential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);\n      if (Credential.isConditionalMediationAvailable) Credential.isConditionalMediationAvailable = () => Promise.resolve(false);\n    }\n  } catch {}\n})();";
+// The event it fires when a passkey is asked for (a name of this keeper's, which only the
+// listener knows), the world of the keeper's own the listener runs in, and the binding it tells
+// the keeper through there: nothing of them is in the page's world.
+const PASSKEY_EVENT = "kuvo-" + crypto.randomUUID();
+const PASSKEY_WORLD = "kuvo-passkeys";
+const PASSKEY_BINDING = "kuvoPasskeyAsked";
+// (The binding comes back a moment after a new page does, so it's looked for a while.)
+const PASSKEY_LISTENER = `window.addEventListener(${JSON.stringify(PASSKEY_EVENT)}, () => {
+  const tell = (tries) => {
+    const binding = globalThis.${PASSKEY_BINDING};
+    if (typeof binding === "function") binding("");
+    else if (tries > 0) setTimeout(() => tell(tries - 1), 100);
+  };
+  tell(20);
+});`;
+// What the agent's look at a page says when its site asked for one (as BrowserAgent.swift's).
+const PASSKEY_NOTE = "This site asked for a passkey, which this browser can't use. Don't choose its passkey option again: sign in another way (a password, a code or an email link), or ask the user.";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -488,6 +505,19 @@ async function host() {
   // its own: held as it starts, as a page is.
   const ownFrames = new Set();
   const isOwn = (sessionId) => ownFrames.has(sessionId) || [...own.values()].includes(sessionId);
+  // Each frame's target, and the page it's in, by its session.
+  const frameTargets = new Map();
+  const pageOf = (sessionId) => frameTargets.get(sessionId)?.page ?? [...own].find(([, each]) => each === sessionId)?.[0];
+  // Sites that asked for a passkey lately (which this browser can't use), by host: an ask for
+  // one says so, to tell you to choose another way to sign in.
+  const passkeySites = new Map();
+  const askedPasskeyLately = (host) => Date.now() - (passkeySites.get(host) ?? 0) < 10 * 60_000;
+  // And the site of each page that asked, for a client that connects later (the agent's tools).
+  const passkeyPages = new Map();
+  // A page that's left that site, or closed: clients stop saying it.
+  const passkeyCleared = (targetId) => {
+    if (passkeyPages.delete(targetId)) broadcast({ method: "Kuvo.passkeyCleared", params: { targetId } });
+  };
   // Downloads under way: their temporary names, and the names their sites gave them.
   const downloads = new Map();
   const browserIdentity = identity();
@@ -655,7 +685,34 @@ async function host() {
       send(request.client, message);
       return;
     }
+    // Chrome gives a new document a binding only with its Runtime domain on (which sites notice):
+    // each of the keeper's pages and frames gets it again as it navigates.
+    if (message.method === "Page.frameNavigated" && message.sessionId && isOwn(message.sessionId)) {
+      toChrome({ id: next++, method: "Runtime.addBinding", params: { name: PASSKEY_BINDING, executionContextName: PASSKEY_WORLD }, sessionId: message.sessionId });
+    }
+    // A page (or a frame of another site in it) asked for a passkey: its site as Chrome has it.
+    if (message.method === "Runtime.bindingCalled" && message.params?.name === PASSKEY_BINDING) {
+      if (!message.sessionId || !isOwn(message.sessionId)) return;
+      // The page's site, as Chrome last said its address, which an ask names, even when a frame
+      // of another site in it asked.
+      const page = pageOf(message.sessionId);
+      const host = page && hostOf(addresses.get(page) ?? "");
+      // Asked again by the same page: said already.
+      if (!host || passkeyPages.get(page) === host) return;
+      for (const site of passkeySites.keys()) if (!askedPasskeyLately(site)) passkeySites.delete(site);
+      passkeySites.set(host, Date.now());
+      let changed = false;
+      for (const ask of asks.values()) {
+        if (ask.params.host !== host || ask.params.passkey) continue;
+        ask.params.passkey = true;
+        changed = true;
+      }
+      if (changed) noteAsks();
+      passkeyPages.set(page, host);
+      return broadcast({ method: "Kuvo.passkeyAsked", params: { host, targetId: page } });
+    }
     if (message.method === "Target.detachedFromTarget") {
+      frameTargets.delete(message.params.sessionId);
       const owner = owners.get(message.params.sessionId);
       owner?.sessions.delete(message.params.sessionId);
       owners.delete(message.params.sessionId);
@@ -665,14 +722,20 @@ async function host() {
     const frame = message.method === "Target.attachedToTarget" && message.sessionId && isOwn(message.sessionId);
     if (message.method === "Target.attachedToTarget" && (frame || (!message.sessionId && !own.has(message.params.targetInfo.targetId)))) {
       const { sessionId, targetInfo, waitingForDebugger } = message.params;
-      if (frame) ownFrames.add(sessionId);
-      else own.set(targetInfo.targetId, sessionId);
+      if (frame) {
+        ownFrames.add(sessionId);
+        frameTargets.set(sessionId, { targetId: targetInfo.targetId, page: pageOf(message.sessionId) });
+      } else own.set(targetInfo.targetId, sessionId);
       toChrome({ id: next++, method: "Network.setUserAgentOverride", params: browserIdentity, sessionId });
       // No passkeys here yet: a page asking for one hears so at once, instead of Chrome's passkey
       // dialog, which no one sees in the live view, holding the page still (Passkeys.swift). The
       // page domain first: without it Chrome takes the script and never runs it.
       toChrome({ id: next++, method: "Page.enable", params: {}, sessionId });
-      toChrome({ id: next++, method: "Page.addScriptToEvaluateOnNewDocument", params: { source: NO_PASSKEYS, runImmediately: true }, sessionId });
+      // How the script says a passkey was asked for: its listener in a world of the keeper's, and
+      // the binding there (no Runtime domain needed, which sites notice).
+      toChrome({ id: next++, method: "Runtime.addBinding", params: { name: PASSKEY_BINDING, executionContextName: PASSKEY_WORLD }, sessionId });
+      toChrome({ id: next++, method: "Page.addScriptToEvaluateOnNewDocument", params: { source: PASSKEY_LISTENER, worldName: PASSKEY_WORLD, runImmediately: true }, sessionId });
+      toChrome({ id: next++, method: "Page.addScriptToEvaluateOnNewDocument", params: { source: NO_PASSKEYS.replace("KUVO_PASSKEY_EVENT", PASSKEY_EVENT), runImmediately: true }, sessionId });
       // Its frames of other sites run on their own: the same for them (a sign-in button from
       // another site, say).
       toChrome({ id: next++, method: "Target.setAutoAttach", params: { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId });
@@ -708,10 +771,14 @@ async function host() {
     if ((message.method === "Target.targetCreated" || message.method === "Target.targetInfoChanged") && message.params.targetInfo.type === "page") {
       addresses.set(message.params.targetInfo.targetId, message.params.targetInfo.url);
       firstPage ??= message.params.targetInfo.targetId;
+      // A page that's left the site that asked for a passkey: nothing's said of it any more.
+      const asked = passkeyPages.get(message.params.targetInfo.targetId);
+      if (asked && hostOf(message.params.targetInfo.url) !== asked) passkeyCleared(message.params.targetInfo.targetId);
     }
     if (message.method === "Target.targetDestroyed") {
       targets.delete(message.params.targetId);
       addresses.delete(message.params.targetId);
+      passkeyCleared(message.params.targetId);
       own.delete(message.params.targetId);
       claims.delete(message.params.targetId);
       seen.delete(message.params.targetId);
@@ -758,7 +825,7 @@ async function host() {
       if (client.viewer) broadcast({ method: "Kuvo.viewers", params: { count: viewers() } });
       if (!clients.size) idleSoon();
     });
-    send(client, { method: "Kuvo.hello", params: { targetId: active, status, version: CONFIG.version, keeper: KEEPER, asks: [...asks.values()].map((ask) => ask.params), viewers: viewers(), held: [...held.keys()], holdMacs: Object.fromEntries(holdMacs) } });
+    send(client, { method: "Kuvo.hello", params: { targetId: active, status, version: CONFIG.version, keeper: KEEPER, asks: [...asks.values()].map((ask) => ask.params), viewers: viewers(), held: [...held.keys()], holdMacs: Object.fromEntries(holdMacs), passkeys: Object.fromEntries(passkeyPages) } });
     lines(socket, (text) => {
       let message;
       try {
@@ -799,6 +866,7 @@ async function host() {
           const params = message.params ?? {};
           // One already asked keeps its asker: its answer goes to it.
           if (!params.id || asks.has(params.id)) return;
+          if (params.host && askedPasskeyLately(params.host)) params.passkey = true;
           asks.set(params.id, { client, params });
           noteAsks();
           return broadcast({ method: "Kuvo.asked", params });
@@ -1046,6 +1114,9 @@ let viewerCount = 1;
 const choosers = new Map();
 // Pages you took over in Kuvo Code: a tool for one waits until you hand it back.
 let held = new Set();
+// The site of each page whose site asked for a passkey (which this browser can't use), by page,
+// for the agent's look at the page to say so.
+const passkeyPages = new Map();
 const heldWaiters = new Set();
 // One tool call at a time in the browser, as they share its pages: the one whose turn it is, and
 // the line after it. A call waiting for you (to hand its page back, or to answer) waits out of
@@ -1121,6 +1192,7 @@ async function openLink() {
     switch (message.method) {
       case "Kuvo.hello":
         active = message.params.targetId;
+        for (const [target, host] of Object.entries(message.params.passkeys ?? {})) passkeyPages.set(target, host);
         viewerCount = message.params.viewers ?? 1;
         held = new Set(message.params.held ?? []);
         break;
@@ -1134,6 +1206,12 @@ async function openLink() {
         break;
       case "Kuvo.activeChanged":
         active = message.params.targetId;
+        break;
+      case "Kuvo.passkeyAsked":
+        if (message.params?.targetId) passkeyPages.set(message.params.targetId, message.params.host);
+        break;
+      case "Kuvo.passkeyCleared":
+        passkeyPages.delete(message.params?.targetId);
         break;
       case "Target.detachedFromTarget":
         for (const [target, session] of sessions) if (session === message.params.sessionId) sessions.delete(target);
@@ -1354,11 +1432,15 @@ async function snapshot(p) {
   if (!result) return `Couldn't read the page at ${await address(p)}.`;
   const text = result.text || "";
   const body = text.length > 18_000 ? text.slice(0, 18_000) + "\n… (cut; scroll or use browser_text for more)" : text;
+  // (Its site asked: told while it's on that site.)
+  const passkey = passkeyPages.has(p.target) && passkeyPages.get(p.target) === hostOf(result.url || "");
+  if (passkeyPages.has(p.target) && !passkey) passkeyPages.delete(p.target);
   return [
     `Page: ${result.title || ""}`,
     `URL: ${result.url || ""}`,
     // Much more below: reading it all beats scrolling through it a screen at a time.
     `Scroll: ${result.above || 0} px above, ${result.below || 0} px below` + ((result.below || 0) > 1200 ? " (browser_text reads all of it at once)" : ""),
+    ...(passkey ? [PASSKEY_NOTE] : []),
     "Interactive elements are numbered like [3]; use the number with browser_click, browser_type and browser_select.",
     "",
     body || "(no visible content)",
@@ -1531,17 +1613,17 @@ function phoneCanAnswer() {
   }
 }
 
-/// Back in the page a call waited for you in, as the page in use: nil if it can go on there (it's
-/// open, not taken over, on `host`, and its `fields` are still the kinds they were), else what
-/// changed meanwhile.
-async function backTo(p, host, fields = []) {
-  if (!(await pages()).some((info) => info.targetId === p.target)) return "The page was closed while the user answered.";
+/// Back in the page a call waited for you in (or for the vault, `meanwhile` says), as the page in
+/// use: nil if it can go on there (it's open, not taken over, on `host`, and its `fields` are still
+/// the kinds they were), else what changed meanwhile.
+async function backTo(p, host, fields = [], meanwhile = "while the user answered") {
+  if (!(await pages()).some((info) => info.targetId === p.target)) return `The page was closed ${meanwhile}.`;
   if (held.has(p.target)) return "The user took the page over and still has it.";
   Object.assign(p, await use(p.target));
-  if (host && hostOf(await address(p)) !== host) return `The page left ${host} while the user answered.`;
+  if (host && hostOf(await address(p)) !== host) return `The page left ${host} ${meanwhile}.`;
   for (const [index, wanted] of fields) {
     const problem = index === null ? null : await checkField(p, index, wanted);
-    if (problem) return "The page changed while the user answered: " + problem;
+    if (problem) return `The page changed ${meanwhile}: ` + problem;
   }
   return null;
 }
@@ -1752,11 +1834,21 @@ const noAnswer = (answer, what) =>
 
 const text = (value, isError = false) => ({ content: [{ type: "text", text: value }], isError });
 
-// Agents writing to each other (AgentMail in Kuvo Code): the list of everyone Kuvo Code leaves in
-// run/agents.json, messages to agents on this machine straight to its engine, and to agents
-// elsewhere left in run/outbox for the Mac to take on; the conversations of those on this machine
-// read from its engine. The same words as on the Mac.
-const mailSent = new Map();
+// The tools answered by this machine's box: agents writing to each other and running their sessions.
+const MAIL_TOOLS = new Set(["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models", "make_project", "list_projects"]);
+// Agents writing to each other (list_agents, send_message, read_conversation, start_session):
+// this machine's box answers them, as every box does (`POST kuvo/agent-tools`), so they're the same
+// on all your computers. A call that waits for an answer holds up to eleven minutes; stopped, the
+// box stops waiting, and an answer that comes later reaches the conversation as a message.
+async function mail(name, args, from, cancelled = () => false) {
+  const answer = await boxRoute({ method: "POST", path: "kuvo/agent-tools", body: { name, arguments: args, session: from } }, { timeout: 720_000, cancelled });
+  let said = null;
+  try {
+    said = JSON.parse(answer?.body || "null");
+  } catch {}
+  if (answer?.status === 200 && typeof said?.text === "string") return text(said.text, said.isError === true);
+  return text(said?.message || "Kuvo Code on this machine didn't answer. Try again in a moment.", true);
+}
 
 function readJSON(file) {
   try {
@@ -1764,18 +1856,6 @@ function readJSON(file) {
   } catch {
     return null;
   }
-}
-
-/// Like the engine's message IDs: time-ordered, so a reply comes after what it answers.
-let lastID = { ms: 0, counter: 0 };
-function messageID() {
-  const ms = Date.now();
-  lastID = lastID.ms === ms ? { ms, counter: lastID.counter + 1 } : { ms, counter: 1 };
-  const value = (BigInt(ms) * 4096n + BigInt(lastID.counter)) & 0xffffffffffffn;
-  const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-  let random = "";
-  for (let i = 0; i < 14; i++) random += alphabet[Math.floor(Math.random() * alphabet.length)];
-  return "msg_" + value.toString(16).padStart(12, "0") + random;
 }
 
 /// The machine's engine, or (`place` "bridge") the agents bridge beside it, whose sessions are
@@ -1805,285 +1885,6 @@ async function findSession(id) {
     return { place, data };
   }
   return null;
-}
-
-/// Where a session runs, as far as is known (the engine, when neither says).
-async function placeOf(id) {
-  return (await findSession(id))?.place ?? "engine";
-}
-
-/// What an agent is, for one on this machine to read: "bot, on the Mac", "session, here, in api".
-function whatAgent(agent, here) {
-  const place = (agent.machine ?? null) === here ? "here" : agent.machine ? `on ${agent.machine}` : "on the Mac";
-  return `${agent.kind}, ${place}${agent.project ? `, in ${agent.project}` : ""}`;
-}
-
-function describeAgents(agents, from, here) {
-  const others = agents.filter((agent) => agent.session !== from);
-  if (!others.length) return "No other agents yet.";
-  const lines = others.map((agent) => `- ${agent.name} (${whatAgent(agent, here)}) address: ${agent.session}${agent.about ? `: ${agent.about}` : ""}`);
-  return "Agents you can write to with send_message, or whose conversation you can read with read_conversation (by name or address):\n" + lines.join("\n");
-}
-
-/// The agent `wanted` names (an address, or a name with or without its "&"), or what to say back.
-function findAgent(wanted, agents, from, here) {
-  if (wanted.startsWith("&") && !agents.some((agent) => agent.name === wanted)) wanted = wanted.slice(1);
-  let matches = agents.filter((agent) => agent.session === wanted);
-  if (!matches.length) matches = agents.filter((agent) => agent.name.localeCompare(wanted, undefined, { sensitivity: "base" }) === 0);
-  // A session here not in the list (it started since): by its address.
-  if (!matches.length && wanted.startsWith("ses_")) matches = [{ session: wanted, name: "a session", kind: "session", machine: here }];
-  if (!matches.length) {
-    // Part of a name ("Release" for "Release notes"): those it could be.
-    const close = agents.filter((agent) => agent.name.toLowerCase().includes(wanted.toLowerCase())).slice(0, 8);
-    const hint = close.length ? "Did you mean one of these?\n" + describeAgents(close, from, here) : "Use list_agents to see who there is.";
-    return { error: text(`There's no agent called ${wanted}. ` + hint, true) };
-  }
-  if (matches.length > 1) return { error: text(`More than one agent is called ${wanted}: use one's address.\n` + describeAgents(matches, from, here), true) };
-  return { agent: matches[0] };
-}
-
-function composeMail(name, session, words, waits) {
-  const answer = waits ? "They're waiting for your reply: just answer, in your words." : session === "unknown" ? "It can't be answered: who sent it isn't known." : `To answer, use send_message to ${session}.`;
-  return `[Message from ${name} · ${session}] (${answer})\n\n${words}`;
-}
-
-async function mail(name, args, from, cancelled = () => false) {
-  // A subagent writes, reads and starts sessions as its conversation, as on the Mac.
-  from = await rootSession(from);
-  const directory = readJSON(path.join(K, "run", "agents.json")) ?? { machine: null, agents: [] };
-  const agents = directory.agents ?? [];
-  const here = directory.machine ?? null;
-  if (name === "start_session") return startSession(args, from, agents, here);
-  if (name === "read_conversation") return readConversation(args, from, agents, here);
-  if (name === "list_agents") {
-    if (!agents.length) return text("Kuvo Code on the Mac hasn't shared the list of agents with this machine yet. Write to a session here by its address (ses_…).");
-    return text(describeAgents(agents, from, here));
-  }
-  const to = typeof args.to === "string" ? args.to.trim() : "";
-  const words = typeof args.text === "string" ? args.text : "";
-  if (!to) return text("Say who to write to (to).", true);
-  if (!words.trim()) return text("Say what to write (text).", true);
-  const waits = args.wait === true;
-  const found = findAgent(to, agents, from, here);
-  if (found.error) return found.error;
-  const target = found.agent;
-  if (target.session === from) return text("That's you.", true);
-  const key = from ?? "outside";
-  const lately = (mailSent.get(key) ?? []).filter((at) => Date.now() - at < 600_000);
-  if (lately.length >= 20) return text("You've sent a lot of messages in the last few minutes. Wait a while, or ask the user how to go on.", true);
-  mailSent.set(key, [...lately, Date.now()]);
-  const sender = agents.find((agent) => agent.session === from)?.name ?? (here ? `an agent on ${here}` : "an agent on a machine");
-  if ((target.machine ?? null) !== here) {
-    // Elsewhere: this machine's link sends it to the computer its agent is on, when it knows
-    // that one (one of your other computers told it so); otherwise the Mac takes it on. Whose it
-    // is to send is decided once, here, by where it's left: the link's in `outbox/sending`, which
-    // no Mac collects, the Mac's in `outbox`.
-    const told = readJSON(path.join(K, "run", "peer-agents.json")) ?? {};
-    const byLink = Object.values(told).some((peer) => (peer?.list ?? []).some((agent) => agent.session === target.session));
-    const outbox = path.join(K, "run", "outbox", ...(byLink ? ["sending"] : []));
-    fs.mkdirSync(outbox, { recursive: true, mode: 0o700 });
-    const id = byLink ? "ltr_" + crypto.randomBytes(16).toString("base64url") : messageID();
-    const file = path.join(outbox, id + ".json");
-    fs.writeFileSync(file + ".new", JSON.stringify({ from, name: sender, to: target.session, text: words, wait: waits && byLink, at: Date.now(), ...(byLink ? { via: "link" } : {}) }), { mode: 0o600 });
-    fs.renameSync(file + ".new", file);
-    if (!byLink) return text(`Left for ${target.name}: it goes on as soon as Kuvo Code on the user's Mac is connected (at once, if it is)${waits ? "; across machines there's no waiting for the answer, which comes to you as a message" : ""}.`);
-    if (!waits) return text(`On its way to ${target.name}. Its answer, if it writes one, comes to you as a message.`);
-    const answer = await letterAnswer(id, cancelled);
-    if (answer?.failed) return text(`It didn't reach ${target.name}: ${answer.failed}`, true);
-    if (answer?.note) return text(answer.note);
-    return text(answer?.text ? `${target.name} answered:\n\n` + answer.text : `${target.name} hasn't answered yet. It may still write back with send_message.`);
-  }
-  const id = messageID();
-  const place = await placeOf(target.session);
-  await engine("POST", `api/session/${encodeURIComponent(target.session)}/prompt`, { id, text: composeMail(sender, from ?? "unknown", words, waits), delivery: "steer" }, place);
-  if (!waits) return text(`Sent to ${target.name}. Its answer, if it writes one, comes to you as a message.`);
-  const answer = await replyTo(target.session, id, place);
-  return text(answer ? `${target.name} answered:\n\n` + answer : `${target.name} hasn't answered yet. It may still write back with send_message.`);
-}
-
-/// The conversation a session works for: itself, a subagent's, the one that started it, and a
-/// coding agent's engine run (Auto's), the conversation it runs for (`kuvo.engineFor`), as on the Mac.
-async function rootSession(session) {
-  let id = session;
-  for (let step = 0; id && step < 6; step++) {
-    const found = (await findSession(id))?.data ?? null;
-    const above = found?.parentID ?? (typeof found?.metadata?.kuvo?.engineFor === "string" ? found.metadata.kuvo.engineFor : null);
-    if (!above) break;
-    id = above;
-  }
-  return id ?? session;
-}
-
-/// How a letter to another computer went, as this machine's link writes it (`run/replies/<id>.json`):
-/// its answer, why it didn't get there, or why no answer will come; null when nothing came in
-/// eleven minutes. Given up on, the letter goes on without waiting, and an answer that comes later
-/// reaches this conversation as a message (`<id>.gaveup`, for the link).
-async function letterAnswer(id, cancelled = () => false) {
-  const replies = path.join(K, "run", "replies");
-  const file = path.join(replies, id + ".json");
-  // Still waiting, as the link sees it: an answer that comes once this isn't (its turn stopped,
-  // this ended) comes as a message instead.
-  const alive = path.join(replies, id + ".alive");
-  const began = Date.now();
-  try {
-    fs.mkdirSync(replies, { recursive: true, mode: 0o700 });
-    while (Date.now() - began < 660_000 && !cancelled()) {
-      fs.writeFileSync(alive, "", { mode: 0o600 });
-      await sleep(2000);
-      // Stopped meanwhile: an answer there now is the link's to deliver as a message.
-      if (cancelled()) break;
-      const answer = readJSON(file);
-      if (!answer) continue;
-      fs.rmSync(file, { force: true });
-      return answer;
-    }
-    fs.writeFileSync(path.join(replies, id + ".gaveup"), "", { mode: 0o600 });
-  } catch {
-  } finally {
-    fs.rmSync(alive, { force: true });
-  }
-  return null;
-}
-
-/// Another agent's conversation, as read_conversation on the Mac gives it: one on this machine, from
-/// its engine; one elsewhere can't be read from here.
-async function readConversation(args, from, agents, here) {
-  const of = typeof args.of === "string" ? args.of.trim() : "";
-  if (!of) return text("Say whose conversation to read (of).", true);
-  const query = typeof args.query === "string" && args.query.trim() ? args.query.trim() : null;
-  const found = findAgent(of, agents, from, here);
-  if (found.error) return found.error;
-  const target = found.agent;
-  if (target.session === from) return text("That's this conversation: you have it already.", true);
-  if ((target.machine ?? null) !== here) {
-    return text(`${target.name} runs ${target.machine ? `on ${target.machine}` : "on the user's Mac"}, and from here only the conversations on this machine can be read. Ask it what you need with send_message.`, true);
-  }
-  const address = encodeURIComponent(target.session);
-  const located = await findSession(target.session);
-  const session = located?.data;
-  if (!session) return text(`Couldn't read ${target.name}'s conversation: there's no such session here.`, true);
-  // The whole of it, oldest first, as the Mac's export reads it.
-  let page = await engine("GET", `api/session/${address}/message?limit=200&order=desc`, undefined, located.place);
-  let messages = [...(page?.data ?? [])].reverse();
-  for (let count = 0; count < 100 && page?.data?.length; count++) {
-    const cursor = page.cursor?.next ?? page.cursor?.previous;
-    if (!cursor) break;
-    const older = await engine("GET", `api/session/${address}/message?limit=200&cursor=${encodeURIComponent(cursor)}`, undefined, located.place);
-    const data = [...(older?.data ?? [])].reverse();
-    if (!data.length || messages.some((message) => message.id === data[data.length - 1].id)) break;
-    messages = [...data, ...messages];
-    page = older;
-  }
-  const revert = session.revert?.messageID;
-  const cut = revert ? messages.findIndex((message) => message.id === revert) : -1;
-  if (cut >= 0) messages = messages.slice(0, cut);
-  const intro = `${target.name}'s conversation (${whatAgent(target, here)}, address ${target.session}), oldest first. What's under **User** is the user's; under **${target.name}**, its agent's.\n\n`;
-  return text(intro + excerpt(conversationMarkdown(target.name, messages, target.name), query, 24_000));
-}
-
-/// A message without the blocks Kuvo Code adds to its end (named agents, comments, attached files).
-function messageWords(written) {
-  let words = written.trim();
-  for (;;) {
-    const block = [["<attached-files>", "</attached-files>"], ["<review-comments>", "</review-comments>"], ["<named-agents>", "</named-agents>"]]
-      .find(([, end]) => words.endsWith("\n" + end));
-    const open = block ? words.lastIndexOf(block[0] + "\n") : -1;
-    if (open < 0 || (open > 0 && words[open - 1] !== "\n")) return words;
-    words = words.slice(0, open).trim();
-  }
-}
-
-/// A conversation as Markdown, as Kuvo Code's export words it, a step as its tool and what it
-/// worked on.
-function conversationMarkdown(title, messages, agent) {
-  const blocks = ["# " + title];
-  let speaker = null;
-  let steps = [];
-  const say = (who, words) => {
-    if (steps.length) {
-      const list = steps.map((step) => "- " + step).join("\n");
-      steps = [];
-      say(agent, list);
-    }
-    if (speaker !== who) blocks.push(`**${who}**`);
-    speaker = who;
-    blocks.push(words);
-  };
-  for (const message of messages) {
-    if (message.type === "user") {
-      const written = String(message.text ?? "");
-      const mail = /^\[Message from (.*) · (ses_\S+|unknown)\] \([^\n]*\)\n\n([\s\S]*)$/.exec(written);
-      const work = /^\[Work from (.*) · [^\]\n]+\]\n\n([\s\S]*?)(\n\n---\n[\s\S]*)?$/.exec(written);
-      if (mail) say(`Message from ${mail[1]}`, mail[3]);
-      else if (written.startsWith("[Wake-up] ")) say("Wake-up", written.slice("[Wake-up] ".length));
-      else if (work) say(`Work from ${work[1]}`, work[2].trim());
-      else {
-        const words = messageWords(written);
-        const files = (message.files ?? []).map((file) => file.name).filter(Boolean);
-        if (words || files.length) say("User", [words, files.length ? "Attached: " + files.join(", ") : ""].filter(Boolean).join("\n\n"));
-      }
-    } else if (message.type === "assistant") {
-      for (const part of message.content ?? []) {
-        if (part.type === "text" && part.text?.trim()) say(agent, part.text.trim());
-        else if (part.type === "tool") {
-          const input = part.state?.input ?? {};
-          const what = input.description ?? input.filePath ?? input.path ?? input.command ?? input.url ?? input.pattern ?? input.query ?? input.to ?? input.of;
-          steps.push(part.name.replace(/^kuvo-browser_/, "") + (typeof what === "string" && what ? `: ${what.split("\n")[0].slice(0, 120)}` : ""));
-        }
-      }
-    } else if (message.type === "shell") {
-      const output = String(message.output?.output ?? "").trim();
-      say("User", "Ran `" + message.command + "`" + (output ? "\n\n```\n" + output + "\n```" : ""));
-    } else if (message.type === "compaction") {
-      say(agent, "_Summarized the conversation so far._");
-    }
-  }
-  if (steps.length) say(agent, "");
-  return blocks.filter(Boolean).join("\n\n") + "\n";
-}
-
-/// As much of `markdown` as `limit` allows, as on the Mac: all of it; with `query`, the paragraphs
-/// around each mention of it; else how it began and its latest part.
-function excerpt(markdown, query, limit) {
-  const paragraphs = markdown.split("\n\n");
-  const fold = (value) => value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
-  if (query) {
-    const wanted = fold(query);
-    const hits = paragraphs.flatMap((paragraph, index) => (fold(paragraph).includes(wanted) ? [index] : []));
-    if (!hits.length) return `Nothing in it mentions "${query}". Read it without query for its latest part.`;
-    const shown = new Set();
-    let used = 0;
-    for (const hit of [...hits].reverse()) {
-      const around = [hit - 1, hit, hit + 1].filter((index) => index >= 0 && index < paragraphs.length && !shown.has(index));
-      const size = around.reduce((sum, index) => sum + paragraphs[index].length + 2, 0);
-      if (used + size > limit && shown.size) break;
-      around.forEach((index) => shown.add(index));
-      used += size;
-    }
-    const parts = [];
-    let last = null;
-    for (const index of [...shown].sort((a, b) => a - b)) {
-      if (last !== null && index > last + 1) parts.push("[…]");
-      parts.push(paragraphs[index].slice(0, limit));
-      last = index;
-    }
-    const where = hits.length === 1 ? "1 place mentions" : `${hits.length} places mention`;
-    return `${where} "${query}"` + (shown.size < paragraphs.length ? " (the rest left out as […])" : "") + ":\n\n" + parts.join("\n\n");
-  }
-  if (markdown.length <= limit) return markdown;
-  let head = paragraphs.slice(0, 3).join("\n\n");
-  if (head.length > limit / 4) head = head.slice(0, limit / 4) + "…";
-  const tail = [];
-  let used = head.length;
-  for (const paragraph of paragraphs.slice(3).reverse()) {
-    if (used + paragraph.length + 2 > limit) {
-      if (!tail.length) tail.push("…" + paragraph.slice(paragraph.length - (limit - used)));
-      break;
-    }
-    tail.unshift(paragraph);
-    used += paragraph.length + 2;
-  }
-  return head + "\n\n[… the middle is left out; read it with query, to find a part …]\n\n" + tail.join("\n\n");
 }
 
 // A conversation's wake-ups (WakeUps.call on the Mac): through this machine's kuvo-wake, for the
@@ -2194,8 +1995,8 @@ async function setJob(args, from) {
 }
 
 /// A route of this machine's box, answered once: `{status, body}`, or null when its script didn't
-/// answer (in time).
-function boxRoute(request) {
+/// answer (in `timeout` ms). Its call `cancelled`, it's told to stop (and answers at once).
+function boxRoute(request, { timeout = 30_000, cancelled = () => false } = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [path.join(K, "bin", "kuvo-link.js"), "box", "route"], {
       cwd: K,
@@ -2204,13 +2005,18 @@ function boxRoute(request) {
     });
     let output = "";
     child.stdout.on("data", (chunk) => (output += chunk));
-    const stop = setTimeout(() => child.kill("SIGTERM"), 30_000);
+    const stop = setTimeout(() => child.kill("SIGTERM"), timeout);
+    const watch = setInterval(() => {
+      if (cancelled()) child.kill("SIGTERM");
+    }, 500);
     child.on("error", () => {
       clearTimeout(stop);
+      clearInterval(watch);
       resolve(null);
     });
     child.on("close", () => {
       clearTimeout(stop);
+      clearInterval(watch);
       try {
         const answer = JSON.parse(output.trim().split("\n").pop() || "null");
         resolve(answer && typeof answer.status === "number" ? answer : null);
@@ -2222,74 +2028,78 @@ function boxRoute(request) {
   });
 }
 
-const startedSessions = new Map();
-
-/// A new session on this machine, from the conversation `from`: an agent of its own, in the caller's
-/// folder (or the one given), with the caller's model and rules, given the task as a message from
-/// the caller. Its metadata says who started it, for Kuvo Code to show it beside them. The same as
-/// start_session on the Mac.
-async function startSession(args, from, agents, here) {
-  const task = typeof args.task === "string" ? args.task.trim() : "";
-  if (!task) return text("Say what it's to do (task).", true);
-  const parent = from ? (await findSession(from))?.data : null;
-  let folder = parent?.location?.directory ?? null;
-  if (typeof args.folder === "string" && args.folder.trim()) {
-    const given = args.folder.trim().replace(/^~(?=$|\/)/, os.homedir());
-    let isFolder = false;
-    try {
-      isFolder = fs.statSync(given).isDirectory();
-    } catch {}
-    if (!given.startsWith("/") || !isFolder) return text(`${args.folder} isn't a folder on this machine. Give a full path to one.`, true);
-    folder = given;
-  }
-  if (!folder) return text("Give the folder it works in (folder), as a full path.", true);
-  const key = from ?? "outside";
-  const lately = (startedSessions.get(key) ?? []).filter((at) => Date.now() - at < 600_000);
-  if (lately.length >= 6) return text("You've started several sessions in the last few minutes. Write to those (send_message), or ask the user before starting more.", true);
-  startedSessions.set(key, [...lately, Date.now()]);
-  const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : undefined;
-  const beside = args.beside !== false;
-  const created = await engine("POST", "api/session", {
-    location: { directory: folder },
-    ...(title ? { title } : {}),
-    ...(parent?.model ? { model: parent.model } : {}),
-    ...(parent?.permissions ? { permissions: parent.permissions } : {}),
+/// One of the vault's routes on this machine's box (PROTOCOL.md, "Vault"): `{status, value}`, or
+/// null when its script didn't answer. Its process stops with the tool call, and waits as long as
+/// the box may (one that asks you waits for you).
+function vaultRoute(request, call, timeout = 60_000) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [path.join(K, "bin", "kuvo-link.js"), "box", "route"], {
+      cwd: K,
+      env: { ...process.env, KUVO_HOME: K, BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    let output = "";
+    const stopNow = () => child.kill("SIGTERM");
+    call?.stops.add(stopNow);
+    child.stdout.on("data", (chunk) => (output += chunk));
+    const stop = setTimeout(stopNow, timeout);
+    const done = (answer) => {
+      clearTimeout(stop);
+      call?.stops.delete(stopNow);
+      resolve(answer);
+    };
+    child.on("error", () => done(null));
+    child.on("close", () => {
+      try {
+        const answer = JSON.parse(output.trim().split("\n").pop() || "null");
+        if (!answer || typeof answer.status !== "number") return done(null);
+        let value = {};
+        try { value = JSON.parse(answer.body || "{}"); } catch {}
+        done({ status: answer.status, value });
+      } catch {
+        done(null);
+      }
+    });
+    child.stdin.end(JSON.stringify(request));
   });
-  const session = created?.data?.id;
-  if (!session) return text("Couldn't start a session here.", true);
-  await engine("PATCH", `api/session/${encodeURIComponent(session)}`, { metadata: { kuvo: { startedBy: from ?? "", beside } } }).catch(() => {});
-  const waits = args.wait === true;
-  const sender = agents.find((agent) => agent.session === from)?.name ?? (here ? `an agent on ${here}` : "an agent on a machine");
-  const id = messageID();
-  await engine("POST", `api/session/${encodeURIComponent(session)}/prompt`, { id, text: composeMail(sender, from ?? "unknown", task, waits), delivery: "steer" });
-  const name = title ? `"${title}"` : "a new session";
-  if (!waits) return text(`Started ${name} on this machine${beside ? ", beside this conversation" : ", in a tab"} (address ${session}). It's on it now. Write to it with send_message; it can write back to you the same way.`);
-  const answer = await replyTo(session, id);
-  return text(`Started ${name} (address ${session}). ` + (answer ? `It answered:\n\n${answer}` : "It hasn't answered yet; it may still write back with send_message."));
 }
 
-/// The words in `session` after the message `id`, once its agent is done with it: ten minutes at most.
-async function replyTo(session, id, place = "engine") {
-  const began = Date.now();
-  let started = false;
-  while (Date.now() - began < 600_000) {
-    await sleep(2000);
-    const active = (await engine("GET", "api/session/active", undefined, place).catch(() => null))?.data ?? {};
-    if (Array.isArray(active) ? active.includes(session) : active[session]) {
-      started = true;
-      continue;
+/// The vault's tools, as this machine's box lists them: kept once it's said.
+let vaultToolList = null;
+/// The browser's tools while this machine's vault isn't open to agents: no browser_fill, and no
+/// vault item to name in browser_sign_in.
+function closedVaultTools(tools) {
+  return tools.filter((tool) => tool.name !== "browser_fill").map((tool) => {
+    if (tool.name !== "browser_sign_in") return tool;
+    const { item, ...properties } = tool.inputSchema?.properties ?? {};
+    return { ...tool, inputSchema: { ...tool.inputSchema, properties } };
+  });
+}
+
+async function vaultTools() {
+  if (vaultToolList) return vaultToolList;
+  const answer = await vaultRoute({ method: "GET", path: "kuvo/vault/tools" }, null, 15_000);
+  if (answer?.status === 200 && Array.isArray(answer.value?.tools)) vaultToolList = answer.value.tools;
+  return vaultToolList ?? [];
+}
+
+/// What the vault fills on the page `p` (at `origin`) for this conversation: `{status, value}` (200
+/// with `values`; 403 refused, 404 nothing yours, 423 locked), or null without a vault to ask. The
+/// box may ask you first (an item its grant says to ask about), so this waits out of the line, as
+/// an ask does, with `p` staying this conversation's meanwhile: back in line, the page may have
+/// changed (`backTo`).
+function vaultFill(p, body) {
+  if (current.cancelled) throw new Cancelled();
+  const session = caller;
+  const request = { method: "POST", path: "kuvo/vault/fill", body: { session, ...body } };
+  return outOfLine(async (call) => {
+    const keep = session ? setInterval(() => link?.notify("Kuvo.claim", { targetId: p.target, session }), 5_000) : null;
+    try {
+      return await vaultRoute(request, call, 16 * 60_000);
+    } finally {
+      clearInterval(keep);
     }
-    if (!started && Date.now() - began < 6000) continue;
-    const page = await engine("GET", `api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`, undefined, place).catch(() => null);
-    const replies = (page?.data ?? [])
-      .filter((message) => message.type === "assistant" && message.id > id)
-      .reverse()
-      .map((message) => (message.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join("\n"))
-      .filter(Boolean);
-    if (replies.length) return replies.join("\n\n").slice(0, 8000);
-    if (started) break;
-  }
-  return null;
+  });
 }
 
 /// While you have the page a conversation works in, its tool call waits, up to ten minutes,
@@ -2654,14 +2464,36 @@ async function tool(name, args) {
     case "browser_sign_in": {
       const username = integer("username");
       const password = integer("password");
+      const item = string("item");
       if (username === null && password === null) return text("Name the username field, the password field, or both, by number.", true);
-      const host = hostOf(await address(p));
-      if (!host || isEmpty(await address(p))) return text(note() + "Open the sign-in page first.");
+      const url = await address(p);
+      const host = hostOf(url);
+      if (!host || isEmpty(url)) return text(note() + "Open the sign-in page first.");
       for (const [index, wanted] of [[password, "password"], [username, "text"]]) {
         if (index === null) continue;
         const problem = await checkField(p, index, wanted);
         if (problem) return text(note() + problem);
       }
+      // From the vault, when this conversation may use one of its sign-ins here (or the one named):
+      // only on that sign-in's own site. Without one, you're asked, as always.
+      const vault = await vaultFill(p, { origin: url, purpose: "sign-in", ...(item ? { item } : {}) });
+      if (vault?.status === 200) {
+        const fields = [[username, vault.value.username, "the username", "text"], [password, vault.value.values?.password, "the password", "password"]].filter(([index, value]) => index !== null && value);
+        if (!fields.length) return text(note() + `“${vault.value.item.name}” has nothing for those fields.`);
+        // Other calls went on while the vault answered (it may have asked you): a sign-in only
+        // goes into the fields it was asked for, on the site the vault was told.
+        const changed = await backTo(p, host, fields.map(([index, , , wanted]) => [index, wanted]), "meanwhile");
+        if (changed) return text(note() + changed + " Nothing was filled: take a fresh browser_snapshot, and try again if it's still needed.");
+        const filled = [];
+        for (const [index, value, what, wanted] of fields) {
+          const outcome = await run(p, scripts.find + scripts.fill, { index, value, wanted, site: siteOf(host) });
+          if (outcome !== "ok") return text(note() + outcome);
+          filled.push(what);
+        }
+        await sleep(300);
+        return withNote(snapshot(p).then((page) => `Filled ${filled.join(" and ")} for ${host} from the vault's “${vault.value.item.name}” (you can't see them). Submit the form to sign in.\n\n` + page));
+      }
+      if (vault && (vault.status === 403 || (item && vault.status !== 423))) return text(note() + (vault.value?.message || "The vault didn't fill that."), vault.status !== 403);
       const answer = await askUser({ kind: "signIn", host, targetId: p.target, username: username !== null, password: password !== null });
       if (answer.type !== "signIn") return text(note() + noAnswer(answer, "sign in"));
       const fields = [[username, answer.username, "the username", "text"], [password, answer.password, "the password", "password"]].filter(([index, value]) => index !== null && value);
@@ -2678,6 +2510,32 @@ async function tool(name, args) {
       }
       await sleep(300);
       return withNote(snapshot(p).then((page) => `Filled ${filled.join(" and ")} for ${host} (you can't see them). Submit the form to sign in.\n\n` + page));
+    }
+    case "browser_fill": {
+      const index = integer("index");
+      const item = string("item");
+      if (index === null || !item) return text("Name the field by its number and the vault item to fill it from.", true);
+      const url = await address(p);
+      const host = hostOf(url);
+      if (!host || isEmpty(url)) return text(note() + "Open the page first.");
+      const kind = await run(p, scripts.find + scripts.fieldKind, { index });
+      if (kind === "missing") return text(note() + `There's no element [${index}] on the page now. Take a fresh browser_snapshot.`);
+      if (kind !== "text" && kind !== "password") return text(note() + `[${index}] isn't a field to fill.`);
+      const vault = await vaultFill(p, { origin: url, purpose: "field", item, ...(string("field") ? { field: string("field") } : {}), ...(string("why") ? { why: string("why") } : {}) });
+      if (!vault) return text(note() + "This machine's vault can't be reached now. Try again in a moment.", true);
+      if (vault.status !== 200) return text(note() + (vault.value?.message || `The vault didn't fill that (${vault.status}).`), vault.status !== 403);
+      const [field, value] = Object.entries(vault.value.values ?? {})[0] ?? [];
+      if (value === undefined) return text(note() + `“${vault.value.item.name}” has nothing to fill there.`);
+      // A password only into a password field; anything else into either.
+      const wanted = field === "password" ? "password" : "code";
+      // Other calls went on while the vault answered (it may have asked you): only into the same
+      // field, on the site the vault was told.
+      const changed = await backTo(p, host, [[index, wanted]], "meanwhile");
+      if (changed) return text(note() + changed + " Nothing was filled: take a fresh browser_snapshot, and try again if it's still needed.");
+      const outcome = await run(p, scripts.find + scripts.fill, { index, value, wanted, site: siteOf(host) });
+      if (outcome !== "ok") return text(note() + outcome);
+      await sleep(300);
+      return withNote(snapshot(p).then((page) => `Filled [${index}] with “${vault.value.item.name}”'s ${field} (you can't see it).\n\n` + page));
     }
     case "browser_ask_code": {
       const index = integer("index");
@@ -2769,17 +2627,21 @@ async function mcp() {
     switch (message.method) {
       case "initialize": {
         const supported = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
-        return reply({
+        // What the vault's tools are for, only where this machine's box lets agents use it.
+        return vaultTools().then((more) => reply({
           protocolVersion: supported.includes(params.protocolVersion) ? params.protocolVersion : "2025-06-18",
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: "kuvo-browser", title: "Kuvo Code browser", version: CONFIG.version },
-          instructions: CONFIG.instructions,
-        });
+          instructions: CONFIG.instructions + (more.length ? CONFIG.vaultInstructions ?? "" : ""),
+        }));
       }
       case "ping":
         return reply({});
       case "tools/list":
-        return reply({ tools: CONFIG.tools });
+        // With the vault's, in this machine's box's own words (none from a box without one).
+        // (browser_fill, and browser_sign_in's vault item, only with them: none while the vault
+        // isn't open to agents here, when a sign-in fills only one you let agents make on their own.)
+        return vaultTools().then((more) => reply({ tools: [...(more.length ? CONFIG.tools : closedVaultTools(CONFIG.tools)), ...more] }));
       case "tools/call": {
         // The session it's for: the engine says so with each call; an agent of the agents bridge
         // starts this for one session, named in KUVO_SESSION.
@@ -2791,11 +2653,17 @@ async function mcp() {
           wake(params.name, params.arguments || {}, params._meta?.["ai.opencode/sessionID"] ?? null).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
           return;
         }
+        if (typeof params.name === "string" && params.name.startsWith("vault_")) {
+          const asked = call;
+          vaultRoute({ method: "POST", path: "kuvo/vault/tools", body: { name: params.name, arguments: params.arguments || {}, session: asked.session } }, asked, 16 * 60_000)
+            .then((answer) => reply(answer?.status === 200 && typeof answer.value?.text === "string" ? text(answer.value.text, answer.value.isError === true) : text(answer?.value?.message || "This machine's vault can't be reached now. Try again in a moment.", true)));
+          return;
+        }
         if (params.name === "set_job") {
           setJob(params.arguments || {}, call.session).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
           return;
         }
-        if (params.name === "list_agents" || params.name === "send_message" || params.name === "read_conversation" || params.name === "start_session") {
+        if (MAIL_TOOLS.has(params.name)) {
           mail(params.name, params.arguments || {}, call.session, () => call.cancelled).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
           return;
         }

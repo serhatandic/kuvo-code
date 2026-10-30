@@ -5,6 +5,7 @@
 
 import { processRuns as runs } from "../../shared/platform";
 import { accountsRoute, credentialsRoute } from "../areas/accounts";
+import { agentToolsRoute, startRoute } from "../areas/agent-tools";
 import { foundRoute } from "../areas/found";
 import { searchRoute } from "../areas/search";
 import { changesRoute } from "../areas/changes";
@@ -23,18 +24,22 @@ import { integrationsRoute } from "../areas/integrations";
 import { namedRoute } from "../areas/named";
 import { personalitiesDocumentRoute, personalityEventsRoute, personalityRoute } from "../areas/personalities";
 import { pairingRoute, phonesRemoveRoute, phonesRoute } from "../areas/phones";
+import { QUEUE_ROUTE, queueRoute } from "../areas/queue";
 import { pluginSearchRoute } from "../areas/plugins";
 import { programsRoute } from "../areas/programs";
 import { providerModelsRoute } from "../areas/providers";
 import { answerProjects } from "../areas/projects";
 import { settingsRoute } from "../areas/settings";
 import { skillsRoute } from "../areas/skills";
+import { moveEventsRoute, movePlacesRoute, movesRoute } from "../areas/moves";
 import { sessionWakesRoute, wakeEventsRoute, wakesRoute } from "../areas/wakes";
 import { worktreeEventsRoute, worktreesRoute } from "../areas/worktrees";
+import { newProjectRoute, WORK_ASKS_ROUTE, WORK_ROUTE, workAsksRoute, workRoute } from "../areas/work";
 import { phoneHere } from "../compat/leave-running";
 import { readBridgeFile, readEngineFile } from "../engine/client";
 import { linkRoute } from "../mac/routes";
 import { updateRoute } from "../updates/update";
+import { vaultRoute } from "../areas/vault";
 import { AGENTS, agentsRoute, engineRoute } from "./forward";
 import type { BridgeRecord, EngineRecord } from "../../shared/records";
 import type { NoticeHold } from "../notices/hold";
@@ -54,6 +59,7 @@ export interface Route<Match = true> {
 // its own ("events" isn't an id), as personalities', asks' and wake-ups' do.
 const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/info", answer: infoRoute },
+  { when: route => route === "kuvo/vault" || route.startsWith("kuvo/vault/"), answer: vaultRoute },
   { when: route => route === "kuvo/file", answer: ({ request, json }: RouteContext) => fileAt(request.path, json) },
   { when: route => route === "kuvo/update", answer: updateRoute },
   { when: (route, request) => /^kuvo\/integrations(\/|\?|$)/.test(request.path), answer: integrationsRoute },
@@ -70,6 +76,9 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/attention/notice" || route === "kuvo/attention/answered", answer: appNoticeRoute },
   { when: route => route === "kuvo/attention", answer: attentionRoute },
   { when: route => route === "kuvo/named", answer: namedRoute },
+  { when: route => route === "kuvo/agent-tools", answer: agentToolsRoute },
+  { when: route => route === "kuvo/sessions", answer: startRoute },
+  { when: route => route.match(QUEUE_ROUTE), answer: queueRoute },
   { when: route => route === "kuvo/search", answer: searchRoute },
   { when: route => route.startsWith("kuvo/git/"), answer: changesRoute },
   { when: route => route === "kuvo/asks" || route === "kuvo/asks/events", answer: asksRoute },
@@ -87,9 +96,13 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   // (A new bot; reading them is `botsRoute`, further on.)
   { when: (route, request) => request.method.toUpperCase() === "POST" && route === "kuvo/bots", answer: newBotRoute },
   // The box's projects, as the sidebar and Edit Project change them (PROTOCOL.md, "Projects").
+  { when: route => route === "kuvo/projects/new", answer: newProjectRoute },
   { when: route => route === "kuvo/projects" || route === "kuvo/projects/events", answer: ({ request, readEngine, readBridge, signal }: RouteContext) => answerProjects(request, readEngine, readBridge, signal) },
   { when: route => route === "kuvo/worktrees/events", answer: worktreeEventsRoute },
   { when: route => /^kuvo\/worktrees(\/(remove|record|where))?$/.test(route), answer: worktreesRoute },
+  // A bot's work (PROTOCOL.md, "Work"), its stop-all before a bot's own route.
+  { when: route => route.match(WORK_ROUTE), answer: workRoute },
+  { when: route => route.match(WORK_ASKS_ROUTE), answer: workAsksRoute },
   // (Before the bot keys' route, which would take "keys" for a bot.)
   { when: route => route === "kuvo/bots/keys/refresh", answer: botKeysRefreshRoute },
   { when: route => /^kuvo\/bots\/[^/]+\/keys(\/[^/]+)?$/.test(route), answer: botKeysRoute },
@@ -101,6 +114,9 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/bots/retell", answer: retellRoute },
   { when: route => route === "kuvo/bots/events", answer: botEventsRoute },
   { when: route => route === "kuvo/bots", answer: botsRoute },
+  { when: route => route === "kuvo/moves", answer: movesRoute },
+  { when: route => route === "kuvo/moves/events", answer: moveEventsRoute },
+  { when: route => route === "kuvo/moves/places", answer: movePlacesRoute },
   { when: route => route === "kuvo/wakes", answer: wakesRoute },
   { when: route => route === "kuvo/wakes/events", answer: wakeEventsRoute },
   { when: route => route.match(/^kuvo\/wakes\/([^/]+)(?:\/(cancel|now|pause|watch))?$/), answer: sessionWakesRoute },

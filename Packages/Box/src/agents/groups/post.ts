@@ -21,12 +21,20 @@ const sameMemory = (one: SeatMail, other: SeatMail) => one.kind === "memory" && 
 
 type Line = SeatLine<SeatMail>
 
+/** How often what goes says it's still there while nothing goes: an empty line, so the link, which
+ * follows it, can tell a bridge that's alive from one that's stuck (it follows anew after a minute
+ * without a word, `watchSeats`). */
+export const MAIL_HEARTBEAT = 20_000
+
 /** What goes, as the link takes it. What mustn't be lost is kept (in `file`) until the link says it has it. */
 export class PeerPost implements PeerTransport {
   private followers = new Set<(line: Line) => void>()
   private kept: Line[]
 
-  constructor(private readonly file?: string) {
+  constructor(
+    private readonly file?: string,
+    private readonly clock: Clock = realClock,
+  ) {
     let kept: Line[] = []
     try {
       if (file && existsSync(file)) kept = JSON.parse(readFileSync(file, "utf8"))
@@ -73,13 +81,31 @@ export class PeerPost implements PeerTransport {
             stop()
           }
         }
+        let beat: unknown
+        let following = true
+        const beating = () => {
+          beat = this.clock.setTimeout(() => {
+            if (!following) return
+            try {
+              controller.enqueue(encoder.encode("\n"))
+            } catch {
+              return stop()
+            }
+            beating()
+          }, MAIL_HEARTBEAT)
+          // (It never keeps the bridge up on its own.)
+          ;(beat as { unref?: () => void } | undefined)?.unref?.()
+        }
         stop = () => {
+          following = false
+          this.clock.clearTimeout(beat)
           this.followers.delete(write)
           signal?.removeEventListener("abort", stop)
         }
         signal?.addEventListener("abort", stop, { once: true })
         for (const line of this.kept) write(line)
         this.followers.add(write)
+        beating()
       },
       cancel: () => stop(),
     })

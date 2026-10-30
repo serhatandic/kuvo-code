@@ -40,6 +40,25 @@ import Testing
          "model": ["id": "glm", "providerID": "opencode"], "content": [["type": "text", "text": text]]]
     }
 
+    /// A coding agent's subagent open on its own keeps following its work when the agents'
+    /// bridge comes back after dropping (the Mac waking up): its view isn't left on a model that
+    /// no longer hears anything.
+    @Test func aSubagentOpenKeepsFollowingAfterTheBridgeComesBack() async throws {
+        defer { done() }
+        let metadata: [String: Any] = ["metadata": ["kuvoAgent": "claude"]]
+        let parent = StubEngine.session("ses_agent", title: "Settings", directory: folder, extra: metadata)
+        let child = StubEngine.session("ses_helper", title: "Explore", directory: folder, extra: metadata.merging(["parentID": "ses_agent"]) { $1 })
+        bridge.list([parent, child])
+        bridge.on("GET", "/api/session/ses_helper", json: ["data": child])
+        engine.list([])
+        await workspace.refresh()
+        await workspace.refreshAgents()
+        let open = try #require(await workspace.subagentModel(for: "ses_helper", in: folder))
+        // The bridge back after dropping.
+        await workspace.refreshAgents()
+        #expect(await workspace.subagentModel(for: "ses_helper", in: folder) === open, "the open view's model still gets its events")
+    }
+
     @Test func theConversationCarriesOnWithTheAgents() async throws {
         defer { done() }
         let conversation = [

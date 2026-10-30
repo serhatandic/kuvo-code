@@ -704,40 +704,35 @@ final class SidewaysScrollView: NSScrollView {
 class ReplyChipButton: NSButton {
     private var isHovering = false { didSet { needsDisplay = true } }
     private var tracking: NSTrackingArea?
-    /// What it says now and its icon, and the longest it ever says (it's as wide as that, so what's
-    /// beside it stays put).
-    private(set) var current: (title: String, symbol: String)
+    /// What it says now (words alone: an icon would only repeat them), and the longest it ever
+    /// says (it's as wide as that, so what's beside it stays put).
+    private(set) var current: String
     private let widest: String
 
-    init(title: String, symbol: String, widest: String? = nil) {
-        current = (title, symbol)
+    init(title: String, widest: String? = nil) {
+        current = title
         self.widest = widest ?? title
         super.init(frame: .zero)
         isBordered = false
         setButtonType(.momentaryChange)
         font = .systemFont(ofSize: 11, weight: .medium)
-        imagePosition = .imageLeading
-        imageHugsTitle = true
-        show(title: title, symbol: symbol)
+        show(title: title)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func show(title: String, symbol: String) {
-        current = (title, symbol)
+    func show(title: String) {
+        current = title
         let ink = isHovering ? NSColor.labelColor : NSColor.secondaryLabelColor
         self.title = title
-        image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
-        contentTintColor = ink
         attributedTitle = NSAttributedString(string: title, attributes: [.font: font!, .foregroundColor: ink])
         invalidateIntrinsicContentSize()
     }
 
     override var intrinsicContentSize: NSSize {
         let size = super.intrinsicContentSize
-        let widestWidth = NSAttributedString(string: widest, attributes: [.font: font!]).size().width + 10 + 4
+        let widestWidth = NSAttributedString(string: widest, attributes: [.font: font!]).size().width
         return NSSize(width: max(size.width, widestWidth) + 12, height: size.height + 6)
     }
 
@@ -753,12 +748,12 @@ class ReplyChipButton: NSButton {
 
     override func mouseEntered(with event: NSEvent) {
         isHovering = true
-        show(title: current.title, symbol: current.symbol)
+        show(title: current)
     }
 
     override func mouseExited(with event: NSEvent) {
         isHovering = false
-        show(title: current.title, symbol: current.symbol)
+        show(title: current)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -775,7 +770,7 @@ final class ReplyCopyButton: ReplyChipButton {
     private var reset: Task<Void, Never>?
 
     init() {
-        super.init(title: "Copy", symbol: "doc.on.doc", widest: "Copied")
+        super.init(title: "Copy", widest: "Copied")
         toolTip = "Copy Code"
     }
 
@@ -783,12 +778,12 @@ final class ReplyCopyButton: ReplyChipButton {
     required init?(coder: NSCoder) { fatalError() }
 
     func showCopied() {
-        show(title: "Copied", symbol: "checkmark")
+        show(title: "Copied")
         reset?.cancel()
         reset = Task { [weak self] in
             try? await Task.sleep(for: .seconds(1.5))
             guard !Task.isCancelled else { return }
-            self?.show(title: "Copy", symbol: "doc.on.doc")
+            self?.show(title: "Copy")
         }
     }
 }

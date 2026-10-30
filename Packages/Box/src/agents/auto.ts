@@ -181,9 +181,15 @@ export class Auto {
   }
 
   private save() {
-    mkdirSync(this.root, { recursive: true })
-    writeFileSync(this.file + ".new", JSON.stringify({ lists: this.lists, limits: this.held }, null, 2))
-    renameSync(this.file + ".new", this.file)
+    // (Not kept now, a full disk say: held all the same, and kept with the next change. A hold's
+    // end and a limit hit mid-turn save from a timer or a turn, which mustn't stop the bridge.)
+    try {
+      mkdirSync(this.root, { recursive: true })
+      writeFileSync(this.file + ".new", JSON.stringify({ lists: this.lists, limits: this.held }, null, 2))
+      renameSync(this.file + ".new", this.file)
+    } catch (error) {
+      console.error("Custom Auto not kept:", error)
+    }
   }
 }
 

@@ -4,8 +4,10 @@ import OpenCodeKit
 import os
 
 extension AppModel {
-    /// Connects every machine you've added, each in the background on its own.
-    func startMachines() {
+    /// Connects every machine you've added, each in the background on its own, but one you
+    /// disconnected. The connections it began, which a test waits for.
+    @discardableResult
+    func startMachines() -> [Task<Void, Never>] {
         #if DEBUG
         // KUVO_DEMO_MACHINE_ROOT: a folder of its own on machines (like .kuvo-code-demo), so a demo
         // copy's engine and browser there never touch the ones your own copy of the app runs.
@@ -43,13 +45,13 @@ extension AppModel {
             return ToolApproval(rules: found.permissions) == .approveAll
         }
         BrowserTools.isInView = { [weak self] session in self?.utilities.isInView(session) ?? false }
-        // Agents writing to each other, here and on machines (and with machines this Mac isn't
-        // connected to, through this Mac's box: `wirePhoneLink`).
+        // Agents writing to each other: this Mac's box answers its conversations' tools, as every
+        // box does, and says who there is, for "&".
         if mailTick == nil {
             mailTick = Task {
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(60))
                     await AgentMail.shared.tick()
+                    try? await Task.sleep(for: .seconds(60))
                 }
             }
         }
@@ -68,13 +70,10 @@ extension AppModel {
         BrowserTools.job = { [weak self] arguments, caller in
             await self?.bots.setJob(arguments, caller: caller) ?? ("Kuvo Code isn't ready yet.", true)
         }
+        // The vault's tools and fills, through this Mac's box.
+        wireVault()
         // The browser sends agents from the sites of integrations you added to their tools.
         BrowserTools.integrationSites = { [weak self] in self.map { Integrations.sites(Integrations.added(in: $0.engineConfig)) } ?? [] }
-        // An agent on a machine left a message for one elsewhere: on its way at once.
-        workspace.onAgentMessage = { [weak self] machine in
-            guard let engine = self?.machines.engine(machine) else { return }
-            Task { await AgentMail.shared.collect(from: engine) }
-        }
         // An agent showing you a file or folder: in the panel, beside its conversation.
         workspace.onShowInPanel = { [weak self] session, machine, path, isFolder in
             let url = machine.map { RemoteFolder.url(RemoteFolder.folder(path, on: $0)) } ?? URL(filePath: path, directoryHint: isFolder ? .isDirectory : .notDirectory)
@@ -84,6 +83,8 @@ extension AppModel {
         // connection that brings the ask here.
         browserAsks.onChange = { [weak self] sessions in self?.workspace.askingInBrowser = sessions }
         browserAsks.conversation = { [weak self] session in self?.workspace.root(of: session) ?? session }
+        // A page in this Mac's browser asked for a passkey: an agent's ask for its site says so.
+        PasskeyAsks.shared.onAsked = { [weak self] site in self?.browserAsks.passkeyAsked(host: site, machine: nil) }
         workspace.botName = { [weak self] session in self?.bots.bot(forSession: session)?.name }
         workspace.botMachine = { [weak self] session in self?.bots.bot(forSession: session)?.machine }
         // One machine at two addresses: the one added later is one of the other's addresses, and
@@ -155,12 +156,16 @@ extension AppModel {
                 MainActor.assumeIsolated { self?.wakeMachines() }
             }
         }
-        for engine in machines.engines.values { connect(engine) }
+        return machines.engines.values.filter { !$0.isDisconnected }.map { connect($0) }
     }
 
-    private func wakeMachines() {
+    /// What waking does: each machine that couldn't connect is tried again, a failure that won't
+    /// pass by itself too, once (a key in an agent, refused while it was locked, may work now).
+    func wakeMachines() {
         for engine in machines.engines.values where !engine.isRetrying {
-            if case .failed = engine.state { Task { await reconnect(engine) } }
+            guard case .failed = engine.state else { continue }
+            engine.isRetrying = true
+            Task { await reconnect(engine) }
         }
     }
 
@@ -219,7 +224,7 @@ extension AppModel {
         default: break
         }
         engine.disconnect()
-        workspace.forget(engine.machine.id)
+        connectionClosed(engine.machine.id)
         // COMPAT(0.7 engine-stop): Connect Now starts an engine an older Mac stopped. Goes 3 months after 0.8.0.
         if engine.isStopped { engine.startWanted = true }
         return connect(engine)
@@ -284,7 +289,7 @@ extension AppModel {
     /// Starts a machine's engine stopped on purpose (Start), and connects to it.
     func startEngine(_ engine: MachineEngine) {
         engine.disconnect()
-        workspace.forget(engine.machine.id)
+        connectionClosed(engine.machine.id)
         engine.startWanted = true
         connect(engine)
     }
@@ -293,7 +298,7 @@ extension AppModel {
     @discardableResult
     func restartEngine(_ engine: MachineEngine) -> Task<Void, Never> {
         engine.disconnect()
-        workspace.forget(engine.machine.id)
+        connectionClosed(engine.machine.id)
         return Task {
             _ = try? await RemoteServer.restartEngine(on: engine.machine.connection)
             await connect(engine).value
@@ -326,7 +331,7 @@ extension AppModel {
         engine.movingHomeFrom = engine.otherMac ?? .init()
         defer { engine.movingHomeFrom = nil }
         engine.disconnect()
-        workspace.forget(engine.machine.id)
+        connectionClosed(engine.machine.id)
         engine.takingHome = true
         await connect(engine).value
         engine.takingHome = false
@@ -340,6 +345,7 @@ extension AppModel {
     @discardableResult
     func connect(_ engine: MachineEngine) -> Task<Void, Never> {
         let machine = engine.machine.id
+        engine.isDisconnected = false
         // Its pages are the panel's browser tabs while a session there is in view.
         engine.browser.onPages = { [weak self] pages in self?.utilities.syncMachinePages(machine, pages) }
         engine.browser.onActive = { [weak self] page, byAgent, session in self?.utilities.machinePageActive(machine, page: page, byAgent: byAgent, session: session) }
@@ -349,6 +355,10 @@ extension AppModel {
             self?.browserAsks.add(ask) { answer in browser?.answer(ask.id, answer) }
         }
         engine.browser.onAskClosed = { [weak self] id in self?.browserAsks.closed(id) }
+        engine.browser.onPasskeyAsked = { [weak self, weak browser = engine.browser] host in
+            guard let browser else { return }
+            self?.browserAsks.passkeyAsked(host: host, machine: browser.machine.id)
+        }
         engine.onEvent = { [weak self] event in
             self?.workspace.handle(event, machine: machine)
             // It signed in again, or a sign-in ran out and was renewed there: here too.
@@ -383,8 +393,8 @@ extension AppModel {
                 // COMPAT(0.7 mac-group-chats): seats the app's own group chats made before `GroupMigration`. Goes 3 months after 0.8.0.
                 // Seats an older version made there for its bots, which its group chats don't use.
                 if let api = engine.api { await GroupMigration.dropOrphanSeats(on: machine, api: api) }
-                // A move of a group chat to or from it cut short, now it's there to finish.
-                await self.moves.recover()
+                // What it says is moving to or from it.
+                await self.moves.reload(machine)
             }
         }
         // (Its watch ends with Disconnect and Remove.)
@@ -393,14 +403,20 @@ extension AppModel {
             self.connect(engine)
         }
         engine.onExit = { [weak self] in
-            self?.workspace.forget(machine)
-            self?.boxGroups.disconnected(machine)
+            self?.connectionClosed(machine)
             // One way back at a time: a connection lost while one is tried is that one's to retry.
             guard !engine.isRetrying else { return }
             engine.isRetrying = true
             Task { await self?.reconnect(engine) }
         }
-        return Task { await start(engine) }
+        return Task {
+            await start(engine)
+            // Not reached the first time (the app opened before the network was up): tried again
+            // as a dropped connection is, while what waited for this goes on.
+            guard case .failed = engine.state, engine.failureMayPass, !engine.isRetrying else { return }
+            engine.isRetrying = true
+            Task { await reconnect(engine) }
+        }
     }
 
     /// After a dropped connection (the Mac slept, the machine restarted): tries further apart
@@ -412,7 +428,8 @@ extension AppModel {
             // Connected again some other way (Try Again), or removed (which disconnects it).
             guard case .failed = engine.state else { return true }
             await start(engine)
-            return engine.isReady
+            // Done, or failed in a way trying again won't change: that's said now, with Try Again.
+            return engine.isReady || !engine.failureMayPass
         }
     }
 
@@ -457,31 +474,29 @@ extension AppModel {
             { await self.bots.writeKit(on: machine) },
             // Its bots as its box keeps them, with what you changed of them while it was away.
             { await self.bots.refresh(machine) },
-            // A move to or from it cut short (the app quit, it went away) is finished or taken back.
-            { await self.moves.recover() },
+            // What it says is moving to or from it.
+            { await self.moves.reload(machine) },
             // What you signed in to here works there too, kept in step while it's connected.
             { await self.syncSignIns(with: engine) },
             { await self.syncSignInFiles(with: engine) },
-            { await AgentMail.shared.share(with: engine) },
-            { await AgentMail.shared.collect(from: engine) },
-            { await AgentMail.shared.deliverWaiting(to: engine) },
             { await self.wakeUps.share(with: engine) },
+            // Its vault, read as it connects: an older copy of its files put back while it was
+            // away is caught now, not only when its page is opened.
+            { await Vaults.shared.refresh(machine) },
             { await Utilities.shareTabTidying(on: machine) },
+            // What its bots ask you (making a project), then followed while it's connected.
+            { await self.botAsks.read(machine) },
         ]) else { return }
         connection.every(600, "sign-ins", [
             { await self.syncSignIns(with: engine) },
             { await self.syncSignInFiles(with: engine) },
         ])
-        connection.every(60, "agents", [
-            { await AgentMail.shared.share(with: engine) },
-            { await AgentMail.shared.collect(from: engine) },
-            // What waited for it and couldn't go as it connected (its coding agents' bridge was
-            // still starting): now, not at its next connection.
-            { await AgentMail.shared.deliverWaiting(to: engine) },
+        connection.every(60, "wake-ups", [
             { await self.wakeUps.share(with: engine) },
         ])
         // Settings changed here while it connected, after it took the ones it has.
         connection.run("settings") { [weak self] in await self?.keepSettingsCurrent(engine) }
+        connection.run("bot-asks") { [weak self] in await self?.botAsks.follow(machine) }
     }
 
     /// Closes this Mac's connection to a machine. It runs on, as a box of its own: its sessions,
@@ -489,12 +504,20 @@ extension AppModel {
     /// test copy's stops, unless a session there is working.)
     func disconnect(_ engine: MachineEngine) {
         engine.startWanted = false
+        engine.isDisconnected = true
         engine.browser.reset()
         utilities.closeMachineBrowser(engine.machine.id)
         // What runs for its connection ends now, a test copy's too, whose engine stops after.
         engine.endConnection()
         if leavesMachinesRunning || workspace.isRunning(on: engine.machine.id) { engine.disconnect() } else { Task { await engine.shutDown() } }
-        workspace.forget(engine.machine.id)
+        connectionClosed(engine.machine.id)
+    }
+
+    /// Its connection closed here, lost or on purpose: its sessions' live state goes, and its group
+    /// chats show as last seen, nothing talking, until it's back.
+    private func connectionClosed(_ machine: String) {
+        workspace.forget(machine)
+        boxGroups.disconnected(machine)
     }
 
     /// Stops a machine's engine and forgets the machine, and its sessions' tabs with it. Its
@@ -510,17 +533,12 @@ extension AppModel {
         // Settings' tabs of the name that went.
         settingsTabs.closeTabs(notOn: Set(machines.list.map(\.id)), machines: machines)
         bots.fold(address, into: machine)
-        AgentMail.shared.fold(address, into: machine)
-        moves.fold(address, into: machine)
         boxGroups.fold(address, into: machine)
         // Its sessions listed again, now under one name; not connected (its own address doesn't
         // answer): now, at whichever does.
         if let engine = machines.engine(machine) {
             if engine.isReady {
-                Task {
-                    _ = await workspace.refresh(engine)
-                    await AgentMail.shared.deliverWaiting(to: engine)
-                }
+                Task { _ = await workspace.refresh(engine) }
             } else {
                 reconnectNow(engine)
             }
@@ -538,16 +556,16 @@ extension AppModel {
         utilities.closeMachineBrowser(id)
         machines.remove(id, uninstall: uninstall)
         if uninstall { phoneLink.forget(machine: id) } else { phoneLink.machineRemoved(id) }
-        AgentMail.shared.machineRemoved(id)
         workspace.machines = Set(machines.list.map(\.id))
         workspace.forget(id, forGood: true)
         boxGroups.forget(machine: id)
+        Vaults.shared.forget(id)
         // Its pages in Settings.
         settingsTabs.closeTabs(notOn: Set(machines.list.map(\.id)), machines: machines)
         // Your others hear of it: one uninstalled stops being their peer (one only removed stays,
         // as your phones keep it); the last gone, no relay for it.
         phoneLink.machinesChanged()
-        Task { await moves.machineRemoved(id) }
+        moves.forget(id)
     }
 
     /// When the app quits: each machine runs on, as a box of its own. (A demo or test copy's
@@ -585,15 +603,12 @@ extension AppModel {
         environment["KUVO_TZ"] = TimeZone.current.identifier
         // Its name as you know it, for what its agents bridge says ("not signed in on …").
         environment["KUVO_MACHINE_NAME"] = engine.machine.name
-        // What some providers need until opencode handles it, as on this Mac.
-        let compatibility = ProviderCompatibility.config
-        if !compatibility.isEmpty { environment["OPENCODE_CONFIG_CONTENT"] = AppModel.merged(compatibility, into: nil) }
-        let base = environment["OPENCODE_CONFIG_CONTENT"]
+        // (What some providers need from its engine, it adds itself: its box learns it.)
         var launch = MachineEngine.Launch(environment: environment, helper: MachineBrowserInstaller.helper, agents: MachineEngine.agentsBridge)
         launch.seed = { [weak self] in try await self?.machineSeed() ?? .init(settings: [:], keys: [:]) }
         launch.fromBox = { settings in
             let sites = Integrations.sites(Integrations.added(inSettings: settings).filter { !Integrations.macOnly.contains($0) })
-            return ["OPENCODE_CONFIG_CONTENT": AppModel.merged(MachineBrowserInstaller.engineConfig(sites: sites), into: base)]
+            return ["OPENCODE_CONFIG_CONTENT": AppModel.merged(MachineBrowserInstaller.engineConfig(sites: sites), into: nil)]
         }
         return launch
     }

@@ -20,11 +20,9 @@ final class Workspace {
             for model in models.values where !RemoteFolder.isRemote(model.session.location.directory) && !OutsideAgents.isAgentSession(model.session) { model.reconnect(api) }
         }
     }
-    /// The main window's tabs, where a fork, a move to the coding agents and an agent's new session
-    /// open (the app sets it; none in a test of the workspace alone).
+    /// The main window's tabs, where a fork and a move to the coding agents open (the app sets it;
+    /// none in a test of the workspace alone).
     @ObservationIgnored weak var tabs: WindowTabs?
-    /// Sessions agents started that have been shown (see `noteBeside`).
-    @ObservationIgnored private var askedBeside: Set<String> = []
 
     /// The agents bridge: sessions with Claude Code, Codex, Cursor, Grok and Antigravity go to it,
     /// whatever their folder (on this Mac).
@@ -180,11 +178,13 @@ final class Workspace {
     @ObservationIgnored private(set) var sharedForms: [String: String] = [:]
     /// Sessions whose agent asks you for something in its browser (a sign-in, a code, a step).
     var askingInBrowser: Set<String> = []
+    /// Conversations asking you before they do something (a bot making a project).
+    var askingForWork: Set<String> = []
 
     /// Sessions that finished while you were elsewhere, or wait for your answer: the
     /// number on the Dock icon. A subagent's ask is its session's.
     var waitingCount: Int {
-        let askers = Set(asking.values.map(root(of:))).union(askingInBrowser.map(root(of:))).subtracting(seats)
+        let askers = Set(asking.values.map(root(of:))).union(askingInBrowser.map(root(of:))).union(askingForWork).subtracting(seats)
         return Set(sessions.filter { $0.isUnread && !Self.isArchived($0) }.map(\.id)).union(askers).count
     }
 
@@ -317,12 +317,13 @@ final class Workspace {
         if Moves.isFrozen(id) { throw Moves.Failure.moving }
         guard let api = api(forFolder: directory) else { return }
         try await api.moveSession(id, to: directory)
-        let extra = settings[directory]?.folders ?? []
+        // As its engine knows them: a machine's folders are plain paths there.
+        let extra = (settings[directory]?.folders ?? []).map(api.enginePath)
         try? await api.setPermissions(session: id, rules: ProjectFolders.permissions(session.permissions ?? [], folders: extra))
         if extra.isEmpty {
             try? await api.removeInstruction(session: id, key: ProjectFolders.instructionKey)
         } else {
-            try? await api.setInstruction(session: id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: directory, folders: extra))
+            try? await api.setInstruction(session: id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: api.enginePath(directory), folders: extra))
         }
         // Its open conversation stays as it is, now in its new place.
         await reload(id)
@@ -461,6 +462,7 @@ final class Workspace {
         if let model = models[id] { return model }
         let model = SessionModel(session: session, api: api)
         model.isReachable = reachable(folder)
+        model.box = { [weak self] in self?.boxes?(RemoteFolder.machine(of: session.location.directory) ?? BoxClient.mac) }
         followGoals(of: model)
         models[id] = model
         return model
@@ -568,6 +570,7 @@ final class Workspace {
             return self.extraFolders(self.session(id)?.location.directory ?? directory)
         }
         model.isReachable = reachable(directory)
+        model.box = { [weak self] in self?.boxes?(RemoteFolder.machine(of: directory) ?? BoxClient.mac) }
         followGoals(of: model)
         models[id] = model
         // This Mac's conversation as last seen, in its first frame, while the engine's is read
@@ -666,7 +669,7 @@ final class Workspace {
     /// Waiting on you: a permission, a question or a sign-in, in a conversation you have open or
     /// not (a bot's work in a session of its own, say).
     func needsAttention(_ id: String) -> Bool {
-        if askingInBrowser.contains(id) || asking.values.contains(where: { $0 == id || root(of: $0) == id }) { return true }
+        if askingInBrowser.contains(id) || askingForWork.contains(id) || asking.values.contains(where: { $0 == id || root(of: $0) == id }) { return true }
         guard let model = models[id] else { return false }
         return !model.permissions.isEmpty || !model.forms.isEmpty
     }
@@ -805,7 +808,8 @@ final class Workspace {
         guard let api = isAgents ? bridge?.api : api(forFolder: directory) else { throw CancellationError() }
         let directory = addFolder(directory)
         let folder = worktree ? try await makeWorktree(of: directory) : directory
-        let extra = settings[directory]?.folders ?? []
+        // As its engine knows them: a machine's folders are plain paths there.
+        let extra = (settings[directory]?.folders ?? []).map(api.enginePath)
         let rules = ProjectFolders.permissions(approval.rules(settings: EngineConfig.rules(on: RemoteFolder.machine(of: directory))), folders: extra)
         let session: Session
         do {
@@ -816,7 +820,7 @@ final class Workspace {
             throw error
         }
         if !extra.isEmpty {
-            try? await api.setInstruction(session: session.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: folder, folders: extra))
+            try? await api.setInstruction(session: session.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: api.enginePath(folder), folders: extra))
         }
         if let tree = worktrees[folder] {
             toldWorktree.insert(session.id)
@@ -1044,6 +1048,28 @@ final class Workspace {
         }
     }
 
+    /// This Mac's sessions' queues as its box carries them, from now on (one it paused as its engine
+    /// started, after a session here was read, shows Paused). A machine's session reads its own.
+    func followQueues() async {
+        struct Queue: Decodable { var paused: Bool; var held: [String] }
+        struct Listed: Decodable { var queues: [String: Queue] }
+        while !Task.isCancelled {
+            if let client = boxes?(BoxClient.mac) {
+                do {
+                    for try await line in client.follow("kuvo/sessions/queues/events") {
+                        guard let listed = try? JSONDecoder().decode(Listed.self, from: line) else { continue }
+                        for (id, model) in models where RemoteFolder.machine(of: model.session.location.directory) == nil {
+                            let queue = listed.queues[id]
+                            model.takeQueue(paused: queue?.paused ?? false, held: queue?.held ?? [])
+                        }
+                    }
+                } catch {}
+            }
+            // The box restarted, or isn't up yet: followed again in a moment.
+            try? await Task.sleep(for: .seconds(2))
+        }
+    }
+
     /// A worktree as a machine keeps it (its bridge's `kuvo/worktrees`), in its own paths; as it
     /// lists them for its Worktrees page, its root is `path` and `size` the room it takes.
     struct BoxWorktree: Decodable {
@@ -1101,7 +1127,31 @@ final class Workspace {
         var run: String?
         var terminal: String?
         var removed: Bool?
+        /// The bot that made it, for one a bot made.
+        var madeBy: MadeBy?
     }
+
+    /// The bot that made a project (`make_project`): its id and name.
+    struct MadeBy: Codable, Equatable {
+        var bot: String
+        var name: String
+    }
+
+    /// The bot that made each project a bot made, by its folder as it's named here.
+    var madeBy: [String: MadeBy] {
+        #if DEBUG
+        return boxMadeBy.merging(demoMadeBy) { _, demo in demo }
+        #else
+        return boxMadeBy
+        #endif
+    }
+    private var boxMadeBy: [String: MadeBy] = [:]
+
+    #if DEBUG
+    /// Projects marked as a bot's, for a look at them (KUVO_DEMO_MADE_BY).
+    private var demoMadeBy: [String: MadeBy] = [:]
+    func noteMadeBy(_ folder: String, _ maker: MadeBy) { demoMadeBy[folder] = maker }
+    #endif
 
     private struct BoxProjects: Decodable { var projects: [BoxProject] }
 
@@ -1173,13 +1223,18 @@ final class Workspace {
         for folder in unsentProjects.filter({ Self.box(of: $0) == box }).sorted() {
             let body = Self.boxBody(settings[folder] ?? ProjectSettings(), removed: !folders.contains(folder))
             guard let (status, _) = try? await client.send("PUT", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(folder)), body: body) else { continue }
-            if (200..<300).contains(status) || status == 400 { unsentProjects.remove(folder) }
+            // Changed again while it went: still to send, as it is now (its own turn does).
+            let now = Self.boxBody(settings[folder] ?? ProjectSettings(), removed: !folders.contains(folder))
+            if (200..<300).contains(status) || status == 400, now == body { unsentProjects.remove(folder) }
         }
     }
 
     /// `listed` as `box`'s, here, in place of what was known of them; what's changed here and not
     /// sent yet stays as it is here.
     private func take(_ listed: [BoxProject], from box: String) {
+        var makers = boxMadeBy.filter { Self.box(of: $0.key) != box }
+        for project in listed where project.removed != true { if let maker = project.madeBy { makers[Self.here(project.directory, on: box)] = maker } }
+        if makers != boxMadeBy { boxMadeBy = makers }
         let unsent = unsentProjects.filter { Self.box(of: $0) == box }
         let theirs = listed.filter { $0.removed != true }.map { Self.here($0.directory, on: box) }.filter { !unsent.contains($0) }
         // New ones first, as one added here is; the rest where they were.
@@ -1200,10 +1255,15 @@ final class Workspace {
     }
 
     /// What a box is given for a project's settings: all of them, so it ends up as it is here.
+    /// Its keys always in one order, so the same settings are the same body: `send` tells by it
+    /// whether they changed while they went (without, one sent was sometimes kept to send again,
+    /// and undid what a phone changed next).
     private static func boxBody(_ project: ProjectSettings, removed: Bool) -> Data? {
         struct Body: Encodable { var name: String; var folders: [String]; var run: String; var terminal: String; var removed: Bool }
         let body = Body(name: project.name ?? "", folders: project.folders.map(onBox), run: project.run ?? "", terminal: project.terminal ?? "", removed: removed)
-        return try? JSONEncoder().encode(body)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return try? encoder.encode(body)
     }
 
     /// The project at `directory`, changed here, on its way to its box (when it answers, if it's
@@ -1389,9 +1449,10 @@ final class Workspace {
                                                    permissions: current.permissions, messages: messages, waiting: carried)
         moving = false
         for item in waiting { try? await engine.cancelInbox(session: id, item: item.id) }
-        let extra = extraFolders(session.location.directory)
+        // As its bridge knows them: a machine's folders are plain paths there.
+        let extra = extraFolders(session.location.directory).map(bridge.enginePath)
         if !extra.isEmpty {
-            try? await bridge.setInstruction(session: moved.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: session.location.directory, folders: extra))
+            try? await bridge.setInstruction(session: moved.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: bridge.enginePath(session.location.directory), folders: extra))
         }
         if let tree = worktrees[session.location.directory] {
             try? await bridge.setInstruction(session: moved.id, key: Self.worktreeInstructionKey, text: Self.instructions(for: tree))
@@ -1516,7 +1577,8 @@ final class Workspace {
                 Task { try? await api.markViewed(id, idle: idle) }
             }
             for (id, model) in models where isMacs(model.session) {
-                guard let session = listed.first(where: { $0.id == id }) else {
+                // A subagent's isn't one of the conversations listed: among all of the bridge's.
+                guard let session = (model.isSubagent ? everything : listed).first(where: { $0.id == id }) else {
                     models[id] = nil
                     continue
                 }
@@ -1948,8 +2010,12 @@ final class Workspace {
                 asking[request] = session
                 continue
             }
-            // On a machine not connected now: read again when it is.
-            guard sessionMachines[session].map(connectedMachines.contains) ?? true else { continue }
+            // On a machine not connected now: as it was, read again when it is (and not told
+            // again then as news).
+            guard sessionMachines[session].map(connectedMachines.contains) ?? true else {
+                asking[request] = session
+                continue
+            }
             // A closed session's: still asked (or not known), it stays; its notification goes otherwise.
             if sharedForms[request] == nil, let api = api(forSession: session) {
                 guard let asked = await Self.stillAsked(in: session, api: api), !asked.contains(request) else {
@@ -1967,10 +2033,6 @@ final class Workspace {
     /// An agent showed you a file or folder (its show_in_panel tool), at a path on its machine
     /// (nil: this Mac): the window opens it in the panel.
     @ObservationIgnored var onShowInPanel: ((_ session: String, _ machine: String?, _ path: String, _ isFolder: Bool) -> Void)?
-    /// An agent on `machine` wrote to one elsewhere (see `AgentMail`): its message waits there.
-    @ObservationIgnored var onAgentMessage: ((_ machine: String) -> Void)?
-    /// send_message's calls under way on machines, by ID.
-    @ObservationIgnored private var mailCalls: Set<String> = []
     /// Those calls under way, by ID, with their paths once they're known.
     @ObservationIgnored private var panelCalls: [String: String] = [:]
 
@@ -1983,17 +2045,11 @@ final class Workspace {
             if let started = try? event.payload(as: EventPayload.ToolInputStarted.self), started.name == "kuvo-browser_" + BrowserTools.showInPanel {
                 panelCalls[started.id] = ""
             }
-            if machine != nil, let started = try? event.payload(as: EventPayload.ToolInputStarted.self), started.name == "kuvo-browser_send_message" {
-                mailCalls.insert(started.id)
-            }
         case "session.tool.called":
             if let called = try? event.payload(as: EventPayload.ToolCalled.self), panelCalls[called.id] != nil {
                 panelCalls[called.id] = called.input["path"]?.string ?? ""
             }
         case "session.tool.success":
-            if let machine, let done = try? event.payload(as: EventPayload.ToolSucceeded.self), mailCalls.remove(done.id) != nil {
-                onAgentMessage?(machine)
-            }
             guard let done = try? event.payload(as: EventPayload.ToolSucceeded.self), let path = panelCalls.removeValue(forKey: done.id), !path.isEmpty else { return }
             let said = done.content.compactMap { if case .text(let text) = $0 { text } else { nil } }.joined()
             guard let isFolder = BrowserTools.shownFolder(in: said) else { return }
@@ -2001,7 +2057,6 @@ final class Workspace {
         case "session.tool.failed":
             if let failed = try? event.payload(as: EventPayload.ToolFailed.self) {
                 panelCalls[failed.id] = nil
-                mailCalls.remove(failed.id)
             }
         default:
             break
@@ -2532,6 +2587,7 @@ final class Workspace {
         guard let session = try? await api(forSession: id)?.session(id) else { return }
         // Only root sessions get a row; subagent sessions show inside their parent, and under it.
         if let parent = session.parentID {
+            if isHidden(session) { hiddenRuns.insert(session.id) }
             parents[session.id] = parent
             if !isHidden(session) { keepSubSession(session, of: parent) }
             // A subagent's subagent: whose that one is, up to the session with a row.
@@ -2590,7 +2646,23 @@ final class Workspace {
         // The latest ones are enough: tabs come and go.
         if openedSubSessions.count > 200 { openedSubSessions = Dictionary(uniqueKeysWithValues: openedSubSessions.shuffled().prefix(150).map { ($0.key, $0.value) }) }
         UserDefaults.standard.set(openedSubSessions, forKey: "openedSubSessions")
+        if reviewParts.contains(where: { openedSubSessions[$0] == nil }) { reviewParts = reviewParts.filter { openedSubSessions[$0] != nil } }
+        UserDefaults.standard.set(Array(reviewParts), forKey: "openedReviewParts")
     }
+
+    /// A review's part, opened from its card: it opens as a sub-session of `parent` (the
+    /// conversation reviewed), whose list leaves it out as it does the box's other runs.
+    func rememberReviewPart(_ id: String, of parent: String) {
+        parents[id] = parent
+        reviewParts.insert(id)
+        rememberOpened(id)
+        UserDefaults.standard.set(Array(reviewParts), forKey: "openedReviewParts")
+    }
+
+    /// A review's part, opened: once its review is put away, it's gone, not a subagent missing
+    /// (kept, as its tab is, as Kuvo Code opens again).
+    func isReviewPart(_ id: String) -> Bool { reviewParts.contains(id) }
+    @ObservationIgnored private var reviewParts = Set(UserDefaults.standard.stringArray(forKey: "openedReviewParts") ?? [])
 
     /// Learns whose sub-session `id` is, when it has no row and that isn't known yet.
     func findParent(of id: String) async {
@@ -2635,8 +2707,22 @@ final class Workspace {
     /// Subagents a session handed work to that are at it now (through subagents of subagents),
     /// such as those it sent off in the background, which go on after its own turn ends.
     func helpersAtWork(in id: String) -> Int {
-        running.count { $0 != id && root(of: $0) == id }
+        running.count { $0 != id && !hiddenRuns.contains($0) && !reviewParts.contains($0) && root(of: $0) == id }
     }
+
+    /// The sessions a bot runs (`kuvo.by`) that are at it now: working, or waiting on you. What
+    /// its row says it's doing ("At work in Tidepool: 3 sessions").
+    func work(of bot: String) -> [Session] {
+        #if DEBUG
+        // KUVO_DEMO_BOT_WORK: every session marked as a bot's counts as at work, for a look.
+        if ProcessInfo.processInfo.environment["KUVO_DEMO_BOT_WORK"] != nil { return sessions.filter { WorksFor($0)?.bot == bot && !Self.isArchived($0) } }
+        #endif
+        return sessions.filter { WorksFor($0)?.bot == bot && !Self.isArchived($0) && (isWorking($0.id) || needsAttention($0.id)) }
+    }
+
+    /// Sessions under another that are kept out of sight (a review's parts, which their review
+    /// shows): never counted as its subagents at work.
+    private var hiddenRuns: Set<String> = []
 
     /// The session works, itself, through subagents still at it, or with a command it left
     /// running in the background: what its row, tab and bot show.
@@ -2784,23 +2870,12 @@ final class Workspace {
         }
     }
 
-    /// A session an agent started (its start_session tool) shows beside the conversation that
-    /// started it or in a tab of its own, as its metadata says (`kuvo.startedBy`, `kuvo.beside`):
-    /// once, the first time it's seen, while it's new, wherever it runs.
-    private func noteBeside(_ session: Session) {
-        guard let kuvo = session.metadata?["kuvo"], let starter = kuvo["startedBy"]?.string,
-              Date.now.timeIntervalSince1970 * 1000 - session.time.created < 120_000,
-              askedBeside.insert(session.id).inserted else { return }
-        tabs?.agentStarted(session.id, by: starter, beside: kuvo["beside"]?.bool != false)
-    }
-
     private func upsert(_ session: Session) {
         guard !isHidden(session) else {
             sessions.removeAll { $0.id == session.id }
             return
         }
         nameBranch(of: session)
-        defer { noteBeside(session) }
         var session = session
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
             let wasArchived = Self.isArchived(sessions[index])

@@ -1,5 +1,7 @@
+import ClientAccounts
 import Foundation
 import KuvoLink
+import OpenCodeKit
 import Testing
 import UsageKit
 @testable import KuvoCode
@@ -239,5 +241,123 @@ import UsageKit
         #expect(!updated.isActive)
         // And it stays that way.
         #expect(!Onboarding(defaults: defaults, launchedBefore: false, screen: ScreenAccess(source: Permissions().source)).isActive)
+    }
+}
+
+/// An agent installed from the first launch that doesn't get installed: the step says why, and
+/// Settings › Accounts doesn't raise it again the next time it opens. The agents' bridge is stubbed.
+@MainActor
+@Suite(.serialized) struct OnboardingInstallTests {
+    let bridge = "http://127.0.0.1:47976"
+    let suite = "onboarding-install-\(UUID().uuidString)"
+    let agents = OutsideAgents()
+    let onboarding: Onboarding
+
+    init() {
+        TestEnvironment.prepare()
+        StubWeb.start(hosts: ["127.0.0.1"])
+        agents.connect(ServerEndpoint(url: URL(string: bridge)!, password: "test"), folderPrefix: "")
+        onboarding = Onboarding(defaults: UserDefaults(suiteName: suite)!, launchedBefore: false, screen: ScreenAccess(source: OnboardingTests.Permissions().source))
+        // On "Bring your subscriptions", once the engine's ready.
+        onboarding.engineReady()
+    }
+
+    private func done() {
+        onboarding.finish()
+        agents.disconnect()
+        StubWeb.stop()
+        UserDefaults().removePersistentDomain(forName: suite)
+    }
+
+    /// Why `agent`'s installer didn't install it, as the bridge answers.
+    private func failing(_ agent: String, _ why: String) {
+        StubWeb.handle(bridge + "/api/integration/\(agent)/install") { _, _ in
+            StubWeb.json(["data": ["installed": false, "message": why]])
+        }
+    }
+
+    /// The step's rows, on a Mac with neither Claude Code nor Codex.
+    private func rows() async throws -> (claude: Offers.Row, codex: Offers.Row) {
+        let box = BoxClient(box: BoxClient.mac, transport: LocalBox { _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data(#"{"agents":[{"id":"claude-code","name":"Claude Code","installed":false,"signedIn":false},{"id":"codex-cli","name":"Codex","installed":false,"signedIn":false}],"opencode":[],"shell":[],"connected":[]}"#.utf8)))
+                continuation.finish()
+            }
+        })
+        await onboarding.look(in: box, agentsUp: true)
+        let claude = try #require(onboarding.offers.plans.first { $0.id == "claude-code" })
+        let codex = try #require(onboarding.offers.plans.first { $0.id == "codex-cli" })
+        #expect(claude.action == .install(integrationID: "claude-code"))
+        return (claude, codex)
+    }
+
+    /// Install, as its row's button does: whether it's there after.
+    private func install(_ row: Offers.Row) async -> Bool {
+        await withCheckedContinuation { done in
+            onboarding.install(row, with: agents) { done.resume(returning: $0) }
+        }
+    }
+
+    @Test func aFailedInstallSaysWhyThereAndNotLaterInSettings() async throws {
+        defer { done() }
+        let why = "Claude Code isn't installed after `curl -fsSL https://claude.ai/install.sh | bash`.\n\ncurl: (6) Could not resolve host: claude.ai"
+        failing("claude-code", why)
+        let claude = try await rows().claude
+
+        #expect(await !install(claude))
+        #expect(onboarding.installFailure == Onboarding.InstallFailure(integrationID: "claude-code", name: "Claude Code", message: why),
+                "the step says why, in the installer's words")
+        #expect(agents.installFailures["claude-code"] == nil, "nothing left for Settings › Accounts to raise later")
+
+        onboarding.seenInstallFailure("claude-code")
+        #expect(onboarding.installFailure == nil)
+    }
+
+    /// Two installs that don't work, one soon after the other: each is said, in turn.
+    @Test func twoFailedInstallsAreEachSaid() async throws {
+        defer { done() }
+        failing("claude-code", "curl: (6) Could not resolve host: claude.ai")
+        failing("codex-cli", "curl: (6) Could not resolve host: chatgpt.com")
+        let (claude, codex) = try await rows()
+        async let first = install(claude)
+        async let second = install(codex)
+        _ = await (first, second)
+
+        #expect(onboarding.installFailure?.name == "Claude Code")
+        onboarding.seenInstallFailure("claude-code")
+        #expect(onboarding.installFailure?.name == "Codex", "the other is said next, not lost")
+        #expect(onboarding.installFailure?.message == "curl: (6) Could not resolve host: chatgpt.com")
+        onboarding.seenInstallFailure("codex-cli")
+        #expect(onboarding.installFailure == nil)
+    }
+
+    /// Install, then Continue while it runs: when it fails, it's Settings › Accounts' to say, as
+    /// the step is gone.
+    @Test func anInstallThatFailsAfterYouWentOnIsSaidInSettings() async throws {
+        defer { done() }
+        failing("claude-code", "curl: (6) Could not resolve host: claude.ai")
+        let claude = try await rows().claude
+        #expect(onboarding.step == .subscriptions)
+        let installed = await withCheckedContinuation { finished in
+            onboarding.install(claude, with: agents) { finished.resume(returning: $0) }
+            onboarding.advance()
+        }
+        #expect(!installed)
+        #expect(onboarding.step != .subscriptions)
+        #expect(onboarding.installFailure == nil)
+        #expect(agents.installFailures["claude-code"] == "curl: (6) Could not resolve host: claude.ai")
+    }
+
+    /// One the step had but you hadn't seen yet, when you go on: Settings › Accounts says it.
+    @Test func anUnseenFailureGoesToSettingsWithTheStep() async throws {
+        defer { done() }
+        failing("claude-code", "curl: (6) Could not resolve host: claude.ai")
+        let claude = try await rows().claude
+        #expect(await !install(claude))
+        #expect(onboarding.installFailure != nil)
+        onboarding.advance()
+        #expect(onboarding.installFailure == nil)
+        #expect(agents.installFailures["claude-code"] == "curl: (6) Could not resolve host: claude.ai")
     }
 }

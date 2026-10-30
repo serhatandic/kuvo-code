@@ -16,6 +16,22 @@ extension AppModel {
         return machines.engine(machine)?.api
     }
 
+    /// Its engine, or why it can't be reached now, for what a click on its page does.
+    func reachableAPI(for box: SidebarBox) throws -> OpenCodeAPI {
+        guard let api = api(for: box) else { throw Unreachable(computer: box.machine.map { _ in name(of: box) }) }
+        return api
+    }
+
+    /// A computer's engine can't be reached now: this Mac's isn't running, or a machine isn't connected.
+    struct Unreachable: LocalizedError {
+        /// The machine's name (nil: this Mac).
+        var computer: String?
+
+        var errorDescription: String? {
+            computer.map { "\($0) isn’t connected. Try again once it is." } ?? "This Mac’s engine isn’t running. Try again in a moment."
+        }
+    }
+
     /// Its engine is running and answering: what pages read from it, read again once it is.
     func isReady(_ box: SidebarBox) -> Bool {
         guard let machine = box.machine else { return engine == .ready }

@@ -15,6 +15,8 @@ import { canonicalPath, signInReturn, socketAllowed } from "../server/paths";
 import { IS_MAC, K, RUN } from "../home";
 import { phoneHere } from "../compat/leave-running";
 import { readEngineFile } from "../engine/client";
+import { isUpdating, updateState } from "../updates/update";
+import type { UpdateStep } from "../../shared/routes/box";
 import type { SessionPhone, SocketEvents, SocketHandle } from "../relay/host";
 import type { AnswerPiece, LinkRequest, RouteContext } from "../server/context";
 
@@ -42,6 +44,9 @@ export interface EngineControlOutcome {
   message?: string;
 }
 
+// An update's steps before it stops the engine.
+const ENGINE_UP_WHILE: UpdateStep[] = ["checking", "downloading", "downloading the engine", "checking it"];
+
 // COMPAT(0.7 engine-stop): `start`, for an engine an older Mac's Stop left down (`restart` stays). Goes 3 months after 0.8.0.
 // The engine here started, or started over, by the box's own tool (`bin/kuvo-start`, as the Mac
 // has it do): `start` for one an older Mac's Stop left down (until it's started, from anywhere),
@@ -53,6 +58,11 @@ export async function engineControl(command: "start" | "restart"): Promise<Engin
   // Started from a Mac once, which keeps how (`run/launch.env`) and what starts it (`bin/kuvo-launch`).
   if (![path.join(K, "bin", "kuvo-launch"), path.join(RUN, "launch.env")].every(file => fs.existsSync(file))) {
     return { status: 409, message: "Start it once from Kuvo Code on your Mac." };
+  }
+  // An update stops the engine on purpose while it swaps its files, and starts it once that's done.
+  // (While it checks for one or downloads it, the engine runs as ever.)
+  if (isUpdating() && !ENGINE_UP_WHILE.includes(updateState().running as UpdateStep)) {
+    return { status: 409, message: "This machine is updating. Its engine starts again once that's done." };
   }
   // Not with what runs this bridge (the engine's runtime as Bun), which would make `opencode
   // serve` a script to look for.

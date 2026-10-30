@@ -61,7 +61,10 @@ final class MachineBrowser {
     private(set) var setup = Setup.unknown
     private(set) var state = State.idle
     /// The browser's pages, in the order they opened.
-    private(set) var pages: [Page] = []
+    private(set) var pages: [Page] = [] {
+        // A page that's left the site that asked for a passkey, or closed: its note goes.
+        didSet { passkeyPages = passkeyPages.filter { id, site in pages.first { $0.id == id }.flatMap { Self.site(of: $0.url) } == site } }
+    }
     /// The page in use: the one the agent or you last used.
     private(set) var activeID: String?
     /// The page the panel shows.
@@ -190,6 +193,26 @@ final class MachineBrowser {
     /// and when that ask ends without you (it stopped waiting, or another Mac answered).
     @ObservationIgnored var onAsk: (BrowserAsks.Ask) -> Void = { _ in }
     @ObservationIgnored var onAskClosed: (String) -> Void = { _ in }
+    /// Told of each site whose page asked for a passkey, which this browser can't use yet.
+    @ObservationIgnored var onPasskeyAsked: (String) -> Void = { _ in }
+    /// The site of each page (by target) that asked for a passkey, for its note in the live view,
+    /// until you close it (or the page is on another site).
+    private(set) var passkeyPages: [String: String] = [:]
+
+    /// Notes you closed, by page and site: the keeper's hello after a reconnect (a sleep) doesn't
+    /// bring them back.
+    @ObservationIgnored private var closedPasskeyNotes: Set<String> = []
+
+    /// You closed a page's note about a passkey.
+    func closePasskeyNote(_ page: String) {
+        guard let site = passkeyPages.removeValue(forKey: page) else { return }
+        closedPasskeyNotes.insert(page + "|" + site)
+    }
+
+    /// A page's site as the keeper names it (and asks do): its host, "http://host" over http.
+    static func site(of address: String) -> String? {
+        BrowserAgent.site(of: URL(string: address)).map { $0 == "a file on this Mac" ? "a file on this machine" : $0 }
+    }
     /// The asks open on the machine.
     @ObservationIgnored private var openAsks: Set<String> = []
     @ObservationIgnored private var expecting = false
@@ -482,6 +505,8 @@ final class MachineBrowser {
             myHolds = myHolds.filter { heldPages.contains($0) && (holders[$0] ?? MachineEngine.macID) == MachineEngine.macID }
             for page in myHolds { link?.fire("Kuvo.hold", ["targetId": page, "on": true, "mac": MachineEngine.macID]) }
             for ask in params["asks"] as? [[String: Any]] ?? [] { asked(ask) }
+            // Pages whose site asked for a passkey before this connection.
+            for (page, site) in params["passkeys"] as? [String: String] ?? [:] where !closedPasskeyNotes.contains(page + "|" + site) { passkeyPages[page] = site }
             Task { await begin() }
         case "Kuvo.asked":
             asked(params)
@@ -502,6 +527,16 @@ final class MachineBrowser {
                 }
             }
             #endif
+        case "Kuvo.passkeyAsked":
+            guard let host = params["host"] as? String else { return }
+            // (Asked anew: the page left the site and came back, so a note you closed shows again.)
+            if let page = params["targetId"] as? String {
+                closedPasskeyNotes.remove(page + "|" + host)
+                passkeyPages[page] = host
+            }
+            onPasskeyAsked(host)
+        case "Kuvo.passkeyCleared":
+            if let page = params["targetId"] as? String { passkeyPages[page] = nil }
         case "Kuvo.askClosed":
             if let id = params["id"] as? String, openAsks.remove(id) != nil { onAskClosed(id) }
         case "Kuvo.error":
@@ -577,7 +612,9 @@ final class MachineBrowser {
         default: return
         }
         openAsks.insert(id)
-        onAsk(BrowserAsks.Ask(id: id, kind: kind, host: host, machine: machine.id, session: params["session"] as? String, page: params["targetId"] as? String))
+        var ask = BrowserAsks.Ask(id: id, kind: kind, host: host, machine: machine.id, session: params["session"] as? String, page: params["targetId"] as? String)
+        ask.passkey = params["passkey"] as? Bool ?? false
+        onAsk(ask)
     }
 
     /// Your answer to an ask, back to the machine's browser, which fills it in.

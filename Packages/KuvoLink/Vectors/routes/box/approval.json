@@ -449,6 +449,135 @@
   {
     "current" : [
       {
+        "action" : "edit",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "write",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "patch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "webfetch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_save_pdf",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_upload",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_watch_for_change",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "name" : "asks first; a newer engine's rule, and asks before a push",
+    "refreshed" : [
+      {
+        "action" : "edit",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "write",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "patch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "webfetch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_save_pdf",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_upload",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_watch_for_change",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "shell",
+        "effect" : "deny-forever",
+        "resource" : "rm *"
+      },
+      {
+        "action" : "edit",
+        "effect" : "deny",
+        "resource" : "secrets/*"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "settings" : [
+      {
+        "action" : "shell",
+        "effect" : "deny-forever",
+        "resource" : "rm *"
+      },
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "edit",
+        "effect" : "deny",
+        "resource" : "secrets/*"
+      }
+    ]
+  },
+  {
+    "current" : [
+      {
         "action" : "external_directory",
         "effect" : "allow",
         "resource" : "/Users/me/notes/*"
@@ -565,6 +694,55 @@
         "action" : "webfetch",
         "effect" : "ask",
         "resource" : "*"
+      }
+    ]
+  },
+  {
+    "current" : [
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "name" : "approves all; a newer engine's rule, and asks before a push",
+    "refreshed" : [
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "shell",
+        "effect" : "deny-forever",
+        "resource" : "rm *"
+      },
+      {
+        "action" : "edit",
+        "effect" : "deny",
+        "resource" : "secrets/*"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "settings" : [
+      {
+        "action" : "shell",
+        "effect" : "deny-forever",
+        "resource" : "rm *"
+      },
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "edit",
+        "effect" : "deny",
+        "resource" : "secrets/*"
       }
     ]
   },
@@ -727,6 +905,65 @@
         "action" : "webfetch",
         "effect" : "ask",
         "resource" : "*"
+      }
+    ]
+  },
+  {
+    "current" : [
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "kuvo-wake bot_scout00001 list"
+      },
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "name" : "approves all, with an earlier version's rules; a newer engine's rule, and asks before a push",
+    "refreshed" : [
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "shell",
+        "effect" : "deny-forever",
+        "resource" : "rm *"
+      },
+      {
+        "action" : "edit",
+        "effect" : "deny",
+        "resource" : "secrets/*"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "settings" : [
+      {
+        "action" : "shell",
+        "effect" : "deny-forever",
+        "resource" : "rm *"
+      },
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "edit",
+        "effect" : "deny",
+        "resource" : "secrets/*"
       }
     ]
   }

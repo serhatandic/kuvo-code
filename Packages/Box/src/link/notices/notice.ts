@@ -20,6 +20,8 @@ export interface NoticeData {
   /** "0": its notification mustn't answer it from buttons. */
   answerable?: "0";
   ask?: string;
+  /** What an agent asks of the vault (`kuvo/vault/asks`). */
+  vaultAsk?: string;
 }
 
 /** A notice for your phones, as the box words it, before it's masked and cut. */

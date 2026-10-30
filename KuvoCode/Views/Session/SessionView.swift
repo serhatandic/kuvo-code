@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientSessions
 import ClientText
 import OpenCodeKit
 import SwiftUI
@@ -60,6 +61,8 @@ struct SessionView: View {
         // machine is read once the machine is back.
         .task(id: model.id) { if !model.isLoaded, !model.waitsForEngine { await model.load() } }
         .task(id: model.session.location.directory) { await catalog.loadCommands(in: model.session.location.directory) }
+        // What its agent asks of its computer's vault, followed while it's open (VaultAskCards).
+        .task(id: Workspace.box(of: model.session.location.directory)) { await Vaults.shared.follow(Workspace.box(of: model.session.location.directory)) }
         // Its wake-ups and watches, read again as each run ends (its agent may have set one,
         // or one went); a bot's are its row's to read.
         .task(id: "\(model.id) \(model.isRunning)") {
@@ -120,6 +123,9 @@ struct FailureBar: View {
 extension EnvironmentValues {
     /// The conversation's machine is out of reach: what needs its engine (undo, try again) waits.
     @Entry var isOffline = false
+    /// The conversation shown takes no messages (a review's part, watched, not steered): nothing
+    /// offers to send one, Try Again included.
+    @Entry var takesNoMessages = false
 }
 
 /// What's over the conversation's end: questions and permission requests as solid cards, then
@@ -191,6 +197,8 @@ private struct BottomStack: View {
                 return BarStripItem(bar: bar, symbol: answering ? nil : Keyword.btw.symbol, words: answering ? "Answering…" : (model.shownSideThread?.questions.count ?? 1) > 1 ? "Side thread" : "Side question")
             case .subagents:
                 return BarStripItem(bar: bar, symbol: nil, words: subagentsAtWork.count == 1 ? "A subagent" : "\(subagentsAtWork.count) subagents")
+            case .work:
+                return BarStripItem(bar: bar, symbol: workReport?.atWork.isEmpty == false ? nil : "checkmark.circle", words: BotWorkBar.title(workReport))
             case .background:
                 return BarStripItem(bar: bar, symbol: nil, words: "\(backgroundJobs.count) running")
             case .wakes:
@@ -218,6 +226,7 @@ private struct BottomStack: View {
         if model.review != nil { bars.append(.review) }
         if let id = model.shownSideQuestion, model.sideQuestions.contains(where: { $0.id == id }) { bars.append(.sideQuestion) }
         if !subagentsAtWork.isEmpty { bars.append(.subagents) }
+        if BotWorkBar.shows(workReport) { bars.append(.work) }
         if !backgroundJobs.isEmpty { bars.append(.background) }
         if wakeOwner != nil { bars.append(.wakes) }
         return bars
@@ -225,7 +234,7 @@ private struct BottomStack: View {
 
     /// A card over the composer asks you something: it's what needs you, and the bars fold.
     private var isAsking: Bool {
-        !model.permissions.isEmpty || !forms.isEmpty || !app.browserAsks.asks(for: model.session.id).isEmpty
+        !model.permissions.isEmpty || !forms.isEmpty || !app.browserAsks.asks(for: model.session.id).isEmpty || !app.botAsks.asks(for: model.session.id).isEmpty
     }
 
     /// Whether a bar is folded: its own way with fewer than three, the card's with more.
@@ -256,10 +265,26 @@ private struct BottomStack: View {
         case .review: $model.hidesReview
         case .sideQuestion: $model.hidesSideQuestion
         case .subagents: $model.hidesSubagents
+        case .work: $model.hidesWork
         case .background: $model.hidesBackgroundJobs
         case .wakes: $model.hidesWakes
         case .handoff: .constant(true)
         }
+    }
+
+    /// The bot this conversation is, whose sessions show in a bar over its composer.
+    private var workBot: Bot? { app.bots.bot(forSession: model.id) }
+
+    /// Its sessions as its box last told them.
+    private var workReport: BotWorkReport? { workBot.flatMap { app.botWork.reports[$0.id] } }
+
+    /// What its work is read again on: a session of it started, at work or asking, or done, and the
+    /// bot hearing of one (each wake comes to its conversation). Not each step a session takes.
+    private var workChanges: String? {
+        guard let bot = workBot else { return nil }
+        let changes = workspace.sessions.lazy.filter { WorksFor($0)?.bot == bot.id }
+            .map { "\($0.id)\(workspace.isWorking($0.id) ? "w" : "")\(workspace.needsAttention($0.id) ? "a" : "")" }
+        return bot.id + "\(workspace.session(bot.sessionID)?.time.updated ?? 0)" + changes.joined(separator: ",")
     }
 
     /// Commands its agent left running, which the conversation doesn't show as they run: once
@@ -314,6 +339,14 @@ private struct BottomStack: View {
                     BrowserAskCard(ask: ask)
                         .modifier(ComposerSurface())
                 }
+                // What its agent asks of its computer's vault.
+                VaultAskCards(session: model.session.id, box: Workspace.box(of: model.session.location.directory))
+                ForEach(Array(app.botAsks.asks(for: model.session.id).enumerated()), id: \.element.ask.id) { index, item in
+                    WorkAskCard(ask: item.ask, box: item.box) { model.failure = $0 }
+                        // Return and Escape answer the first card only.
+                        .environment(\.takesCardKeys, takesCardKeys && index == 0 && model.permissions.isEmpty && forms.isEmpty)
+                        .modifier(ComposerSurface())
+                }
                 // What went wrong, over the composer rather than in an alert you must click away.
                 if let failure = model.failure, offlineMachine == nil {
                     FailureBar(text: failure) { model.failure = nil }
@@ -332,7 +365,8 @@ private struct BottomStack: View {
                         Spacer()
                         HideBarsTab { model.tuck.hide() }
                     }
-                    .padding(.trailing, 18)
+                    // Its end over the bars' ✕ itself (narrower than its button).
+                    .padding(.trailing, BarEnd.trailing + 8)
                     .padding(.bottom, -8)
                     .transition(.opacity)
                 }
@@ -367,6 +401,11 @@ private struct BottomStack: View {
                         KeywordBars(model: model, hidden: hidden)
                         if !subagentsAtWork.isEmpty {
                             SubagentsBar(subagents: subagentsAtWork, folder: model.session.location.directory, isHidden: hidden(.subagents, $model.hidesSubagents))
+                                .modifier(CardRow())
+                                .transition(.fold)
+                        }
+                        if let bot = workBot, let report = workReport, BotWorkBar.shows(report) {
+                            BotWorkBar(bot: bot, report: report, isHidden: hidden(.work, $model.hidesWork))
                                 .modifier(CardRow())
                                 .transition(.fold)
                         }
@@ -443,6 +482,12 @@ private struct BottomStack: View {
             .animation(.ui, value: folds)
             .animation(.ui, value: isAsking)
             .animation(.ui, value: tucked)
+            // A bot's work read from its box as it changes (a session of it started, at work,
+            // asking, done), wherever the bot lives.
+            .task(id: workChanges) {
+                guard let bot = workBot else { return }
+                await app.botWork.read(bot)
+            }
             #if DEBUG
             // KUVO_DEMO_TUCKED: the bars tucked into their line once the sample ones are in (`new`:
             // the side question marked).
@@ -645,7 +690,7 @@ struct DraftSessionView: View {
             .readableColumn()
 
             if isCreating, isRepository, worktree {
-                Label(attempts > 1 ? "Setting up \(attempts) worktrees…" : "Setting up a worktree…", systemImage: "arrow.triangle.branch")
+                Text(attempts > 1 ? "Setting up \(attempts) worktrees…" : "Setting up a worktree…")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.top, 12)

@@ -9,6 +9,7 @@ import { join } from "node:path"
 import { emit } from "../events"
 import type { ModelRef } from "../wire"
 import type { SeatResult } from "./seat"
+import { holdsBack } from "../rules"
 import { type Group, type GroupMessage, type Rule, type SeatBot } from "./rules"
 
 /** Goes up only when what's kept changes in a way an older runner can't follow. */
@@ -246,7 +247,7 @@ export class GroupStore {
       personalities: value.personalities && typeof value.personalities === "object" ? value.personalities : {},
       identityNote: typeof value.identityNote === "string" ? value.identityNote : "",
       askFirst: value.askFirst === true,
-      denies: Array.isArray(value.denies) ? value.denies.filter((rule: any) => rule?.effect === "deny" && typeof rule.action === "string") : [],
+      denies: Array.isArray(value.denies) ? value.denies.filter((rule: any) => typeof rule?.effect === "string" && holdsBack(rule.effect) && typeof rule.action === "string") : [],
       timeZone: typeof value.timeZone === "string" ? value.timeZone : undefined,
       locale: typeof value.locale === "string" ? value.locale : undefined,
     }

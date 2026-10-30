@@ -92,16 +92,26 @@ export class Store {
   private write(id: string) {
     const record = this.records.get(id)
     if (!record) return
-    const folder = join(this.root, id)
-    mkdirSync(folder, { recursive: true })
-    for (const [name, value] of [
-      ["session.json", record.session],
-      ["messages.json", record.messages],
-      ["agent.json", record.agent],
-    ] as const) {
-      const file = join(folder, name)
-      writeFileSync(file + ".new", JSON.stringify(value))
-      renameSync(file + ".new", file)
+    try {
+      const folder = join(this.root, id)
+      mkdirSync(folder, { recursive: true })
+      for (const [name, value] of [
+        ["session.json", record.session],
+        ["messages.json", record.messages],
+        ["agent.json", record.agent],
+      ] as const) {
+        const file = join(folder, name)
+        writeFileSync(file + ".new", JSON.stringify(value))
+        renameSync(file + ".new", file)
+      }
+    } catch (error) {
+      // Not written now (a full disk, say): the session goes on as it is, and it's tried again in a
+      // while, or as everything waiting is written.
+      console.error(`session ${id} not written:`, error)
+      if (!this.pending.has(id)) this.pending.set(id, setTimeout(() => {
+        this.pending.delete(id)
+        this.write(id)
+      }, 5_000))
     }
   }
 }

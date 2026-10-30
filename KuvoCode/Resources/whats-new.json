@@ -5,7 +5,7 @@
       "highlights": [
         {
           "title": "Voice input",
-          "line": "Click the microphone in the composer, or hold ⇧⌘Space, to talk instead of typing; Whisper writes your words on your Mac, your project's names as they're written, and nothing is sent until you send it.",
+          "line": "Click the microphone in the composer, or hold ⇧⌘Space, to talk instead of typing; your words are written on your Mac, and nothing is sent until you send it.",
           "symbol": "mic"
         },
         {
@@ -31,6 +31,7 @@
         }
       ],
       "marks": [
+        "settings/vault",
         "keyword/loop",
         "keyword/plan",
         "keyword/review",

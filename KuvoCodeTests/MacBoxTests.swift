@@ -18,6 +18,20 @@ import Testing
         return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
+    /// The engine's start asks this Mac's box what to add to its settings: one that never answers
+    /// leaves them as they were, and the engine starts anyway.
+    @Test(.timeLimit(.minutes(1))) func anEngineConfigThatNeverAnswersDoesntHoldTheEngineUp() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "kuvo-engine-config-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let engine = folder.appending(path: "opencode")
+        try "#!/bin/sh\nexec /bin/sleep 600\n".write(to: engine, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: engine.path)
+        let content = #"{"model":"mine"}"#
+        let given = await BoxProcess.engineConfig(engine: engine, content: content, environment: [:], timeout: 0.5)
+        #expect(given == content)
+    }
+
     @Test func theBoxFindsTheEngineTheAppStarted() async throws {
         let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
         let box = BoxProcess()

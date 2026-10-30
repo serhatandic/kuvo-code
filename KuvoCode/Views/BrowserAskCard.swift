@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientText
 import SwiftUI
 
 /// Asks Kuvo Code can't show in a conversation: from a bot in a group chat, or from an agent it
@@ -36,6 +37,7 @@ struct BrowserAskCard: View {
     var waiting = 0
     @Environment(AppModel.self) private var app
     @Environment(\.takesCardKeys) private var takesKeys
+    @Environment(\.colorScheme) private var scheme
     @State private var username = ""
     @State private var password = ""
     @State private var code = ""
@@ -71,6 +73,7 @@ struct BrowserAskCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
+            if ask.passkey { passkeyNote }
             footer
         }
         .padding(16)
@@ -88,6 +91,23 @@ struct BrowserAskCard: View {
             case .action: break
             }
         }
+    }
+
+    /// The site asked for a passkey, which the browser can't use yet: what to do instead.
+    private var passkeyNote: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "info.circle")
+                .foregroundStyle(.secondary)
+            Text(PasskeyWords.onCard(host: ask.host))
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .background(Surface.well(scheme), in: .rect(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
+        .transition(.opacity)
     }
 
     private var header: some View {
@@ -164,11 +184,11 @@ struct BrowserAskCard: View {
                 // Saved and filled over https only (a page over http, or a file, gets neither).
                 if Self.isSecure(ask.host) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Toggle("Save in Passwords", isOn: $saves)
+                        Toggle("Save in the Vault", isOn: $saves)
                             .disabled(!saved.isEmpty && saved.contains { $0.account == username })
                         if saves || saved.contains(where: { $0.account == username }) {
                             Toggle("Let agents sign in here on their own", isOn: $allowsAgents)
-                                .help("Next time, with its saved password, without asking you; it still goes straight into the page. Settings › Passwords lists these sites.")
+                                .help("Next time, with its saved password, without asking you; it still goes straight into the page. Settings › Vault shows who may use it.")
                         }
                     }
                     .toggleStyle(.checkbox)
@@ -246,20 +266,24 @@ struct BrowserAskCard: View {
             guard !username.isEmpty || !password.isEmpty else { return }
             let savedPassword = saved.first { $0.account == username }.flatMap(Passwords.password(for:))
             let handling = Self.handling(password: password, saving: saves, secure: Self.isSecure(ask.host), savedPassword: savedPassword)
-            if handling.saves { _ = Passwords.save(host: ask.host, account: username, password: password) }
-            let typed = handling.typedNow
+            let typed = handling.typedNow, saving = handling.saves
             let answer = BrowserAsks.Answer.signIn(username: username.isEmpty ? nil : username, password: password.isEmpty ? nil : password)
-            guard allowsAgents, Self.isSecure(ask.host), !password.isEmpty else {
-                app.browserAsks.answer(ask.id, answer)
-                return
-            }
-            // A password you typed now is yours to allow; one filled in from Passwords asks you
-            // first, as showing it in Settings does.
-            let host = ask.host, id = ask.id, asks = app.browserAsks, answerUsername = username
+            let wantsAgents = allowsAgents && Self.isSecure(ask.host) && !password.isEmpty
+            // A password you typed now is yours to allow; one filled in from the vault asks you
+            // first, as showing it in Settings does. Saved once the page has it.
+            let host = ask.host, id = ask.id, asks = app.browserAsks, answerUsername = username, answerPassword = password
+            let conversation = ask.session.flatMap { app.workspace.model(for: $0) }
             Task {
-                let allowed = typed ? true : await Passwords.authenticate(reason: "let agents sign in to \(host) with its saved password")
-                if allowed { Passwords.setAgentSignIn(host, true, account: answerUsername) }
+                let allowed = wantsAgents ? (typed ? true : await Passwords.authenticate(reason: "let agents sign in to \(host) with its saved password")) : false
                 asks.answer(id, answer)
+                if saving {
+                    // Said over its conversation's composer, where the card was.
+                    if await Passwords.save(host: host, account: answerUsername, password: answerPassword, allowAgents: allowed) == nil {
+                        conversation?.failure = "The password for \(host) wasn’t saved: this Mac’s vault didn’t answer. Sign in again to save it."
+                    }
+                } else if allowed {
+                    await Passwords.setAgentSignIn(host, true, account: answerUsername)
+                }
             }
         case .code:
             guard !code.isEmpty else { return }

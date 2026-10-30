@@ -7,7 +7,8 @@ import { bool, type Infer, list, NOTHING, object, type RouteShape, string, words
  * a Mac's own), the conversation it's for and its name (`asker`), when known. A sign-in says
  * whether it wants a username and a password, the accounts saved for the site (a Mac's Passwords;
  * none on a machine, never their passwords), and whether what's typed is kept unless you say
- * otherwise; a code has its prompt, a step what to do. */
+ * otherwise; a code has its prompt, a step what to do. `passkey` when the site asked for a passkey,
+ * which the browser can't use yet (so you sign in another way). */
 export const ASK = object({
   id: string,
   kind: words("signIn", "code", "action"),
@@ -21,6 +22,7 @@ export const ASK = object({
   "offersToSave?": bool,
   "prompt?": string,
   "instruction?": string,
+  "passkey?": bool,
 });
 /** What's asked now. */
 export const ASKS = object({ asks: list(ASK) });

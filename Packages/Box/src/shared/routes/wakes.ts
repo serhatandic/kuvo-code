@@ -10,8 +10,12 @@ export const WAKE = object({ id: string, due: number, note: string, "every?": st
 export const WATCH = object({ letters: string, every: string, check: string, note: string });
 /** A conversation's wake-ups (soonest first), its watches, and whether you paused them. */
 export const WAKES = object({ wakes: list(WAKE), watches: list(WATCH), paused: bool });
-/** Each conversation here with some: its soonest wake-up, and whether it watches. */
-export const WAKE_LIST = object({ sessions: list(object({ session: string, "next?": number, watching: bool })) });
+/** Each conversation here with some: its soonest wake-up, and whether it watches; and, from a
+ * newer box, its wake-ups, watches and pause as `kuvo/wakes/:session` says them, so a client
+ * reads them all at once (an older box leaves them out). */
+export const WAKE_LIST = object({
+  sessions: list(object({ session: string, "next?": number, watching: bool, "wakes?": list(WAKE), "watches?": list(WATCH), "paused?": bool })),
+});
 
 export type Wake = Infer<typeof WAKE>;
 export type Watch = Infer<typeof WATCH>;

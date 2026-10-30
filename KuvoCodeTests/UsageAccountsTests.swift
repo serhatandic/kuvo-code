@@ -12,7 +12,7 @@ import Testing
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct UsageAccountsTests {
     let engine = StubEngine(port: 47984)
-    let catalog = Catalog(isMac: true)
+    let catalog = Catalog()
     let location = ["directory": "/"]
 
     init() {

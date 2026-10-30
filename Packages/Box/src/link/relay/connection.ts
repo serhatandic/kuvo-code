@@ -14,6 +14,15 @@ export function fromRelay(host: Pick<LinkHost, "receive" | "forget">, message: R
   if (message.kind === "unreachable" || message.kind === "gone") host.forget(message.address);
 }
 
+// After a relay connection, how many tries in a row haven't held, and how long to wait before the
+// next. Well only once one held a minute: one dropped right after its welcome (another copy on the
+// same address, the relay saying far too much too fast) backs off as one that never came up does,
+// rather than coming back each second.
+export function nextTry(attempt: number, welcomed: boolean, heldFor: number): { attempt: number; wait: number } {
+  const next = welcomed && heldFor >= 60_000 ? 0 : attempt + 1;
+  return { attempt: next, wait: Math.min(60_000, 1000 * 2 ** Math.min(next, 6)) };
+}
+
 // Connects once, serves until the connection ends (or `host.disconnect()`). Resolves whether it got
 // as far as welcome. `onWelcome(host)`: what's done then (a machine's `run` says, `machineWelcomed`).
 export function connectOnce(relay: string, secret: Buffer, host: LinkHost, onWelcome: (host: LinkHost) => void = () => {}): Promise<boolean> {

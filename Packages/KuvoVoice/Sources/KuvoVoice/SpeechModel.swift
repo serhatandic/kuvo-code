@@ -3,10 +3,10 @@ import Foundation
 import Network
 import Observation
 
-/// Whisper, the speech model voice input uses once it's on this device: it downloads the first
-/// time you talk (or when you choose it in Settings), and until it's in, voice input goes on with
-/// Apple's dictation. Kept in a folder of the app's own; Remove takes it all away, and it doesn't
-/// come back by itself after that.
+/// Whisper, the more accurate speech model voice input can listen with: Apple's dictation listens
+/// until you turn Whisper on in Settings, then while it downloads and is made ready, and Whisper
+/// from the next time you talk once it's ready. A device that can't run it (an older iPhone)
+/// keeps Apple's dictation. Kept in a folder of the app's own; Remove takes it all away.
 @MainActor
 @Observable
 public final class SpeechModel {
@@ -40,16 +40,27 @@ public final class SpeechModel {
     public private(set) var state: State = .absent
     /// How much of it is here.
     public private(set) var received: Int64 = 0
-    /// It came while the app was open, for a word once that voice input is on it now.
-    public private(set) var isNewlyReady = false
 
     public var fraction: Double { Double(received) / Double(size) }
     /// Its whole size.
     public var size: Int64 { files.reduce(0) { $0 + $1.size } }
     public var isReady: Bool { state == .ready }
+    /// Turned on in Settings (more accurate voice input): it comes, and voice input uses it once
+    /// it's ready. Off, it isn't downloaded, and what's here stays until Remove.
+    public var isOn: Bool {
+        get { access(keyPath: \.isOn); return defaults.bool(forKey: Self.onKey) }
+        set {
+            let wasUnderway = isUnderway
+            withMutation(keyPath: \.isOn) { defaults.set(newValue, forKey: Self.onKey) }
+            if newValue { download() } else if wasUnderway { pause() }
+        }
+    }
+    /// Voice input listens with Whisper now (Apple's dictation otherwise).
+    public var listensWithWhisper: Bool { isOn && state == .ready }
     /// It's coming (or was, and will go on): the ring on the mic shows it.
     public var isUnderway: Bool {
-        switch state {
+        guard isOn else { return false }
+        return switch state {
         case .downloading, .waiting, .preparing, .askingCellular: true
         // Paused by you, it stays off the mic; stopped by quitting, it's still coming.
         case .paused: !isPausedByYou
@@ -82,19 +93,42 @@ public final class SpeechModel {
     @ObservationIgnored let freeSpace: (URL) -> Int64?
     @ObservationIgnored let prepare: @Sendable (URL) async throws -> Void
     @ObservationIgnored private let supported: Bool
+    /// Where Core ML keeps the copy it makes ready for this device's chip.
+    @ObservationIgnored private let compiled: [URL]
     @ObservationIgnored let files: [File]
 
     private static let cellularKey = "voice.whisper.cellular"
-    private static let removedKey = "voice.whisper.removed"
     /// You paused it: it waits for you, rather than going on the next time you talk.
     private static let pausedKey = "voice.whisper.paused"
+    /// Turned on in Settings.
+    private static let onKey = "voice.whisper.on"
     static let name = "whisper-large-v3-turbo"
-    /// In the model's folder once it's been made ready.
+    /// In the model's folder once it's been made ready: for which system build, and how large
+    /// Core ML's copy for this device's chip was then (0: kept where this can't see).
     static let preparedMark = ".prepared"
+    /// Room for the copy Core ML makes ready for this device's chip, about 3.1 GB for this model
+    /// on a Mac. Without it Core ML can't keep that copy, and every load makes it again, which
+    /// takes minutes.
+    static let preparedRoom: Int64 = 3_200_000_000
+    /// Less than this after making it ready, Core ML didn't keep its copy (no room for it).
+    static let keptAtLeast: Int64 = 50_000_000
+    /// Kept over what it needs, so the disk isn't left full.
+    static let margin: Int64 = 50_000_000
+    /// This system's build ("26A434"): Core ML keeps its copy for one build, so a system update
+    /// needs the model made ready again.
+    nonisolated static var system: String {
+        var length = 0
+        sysctlbyname("kern.osversion", nil, &length, nil, 0)
+        var build = [CChar](repeating: 0, count: max(length, 1))
+        sysctlbyname("kern.osversion", &build, &length, nil, 0)
+        return String(cString: build)
+    }
 
     init(files: [File] = SpeechModel.whisper, defaults: UserDefaults = .standard, session: URLSessionConfiguration = .default, supported: Bool = WhisperRuntime.isSupported,
-         freeSpace: @escaping (URL) -> Int64? = SpeechModel.volumeFree, prepare: @escaping @Sendable (URL) async throws -> Void = { try await WhisperRuntime.shared.prepare($0) }) {
+         freeSpace: @escaping (URL) -> Int64? = SpeechModel.volumeFree, prepare: @escaping @Sendable (URL) async throws -> Void = { try await WhisperRuntime.shared.prepare($0) },
+         compiled: [URL] = SpeechModel.compiledCopies) {
         self.files = files
+        self.compiled = compiled
         self.defaults = defaults
         self.session = session
         self.supported = supported
@@ -121,35 +155,31 @@ public final class SpeechModel {
         try? excluded.setResourceValues(values)
         #endif
         guard supported else { return state = .unsupported }
+        // Downloaded before it was a setting: it stays on.
+        if defaults.object(forKey: Self.onKey) == nil { defaults.set(presentBytes > 0, forKey: Self.onKey) }
         if isComplete {
             received = size
-            if FileManager.default.fileExists(atPath: folder.appending(path: Self.name).appending(path: Self.preparedMark).path) {
+            if isPrepared {
                 state = .ready
-            } else {
-                // Downloaded, but the app closed before it was made ready.
+            } else if isOn {
+                // Downloaded, but not made ready for this system, or Core ML's copy is gone (the
+                // app closed first, the system was updated, or the system cleared caches): it's
+                // made ready now, in the background, while Apple's dictation listens.
                 makeReady()
+            } else {
+                state = .paused
             }
         } else {
             received = presentBytes
             state = received > 0 || defaults.bool(forKey: Self.pausedKey) ? .paused : .absent
-        }
-    }
-
-    /// Voice input started: it comes now, unless it's here, on its way, or was removed.
-    public func voiceStarted() {
-        switch state {
-        case .absent where !defaults.bool(forKey: Self.removedKey): download()
-        // Stopped by quitting, not by you: it goes on.
-        case .paused where !defaults.bool(forKey: Self.pausedKey): download()
-        case .failed, .lowSpace: download()
-        default: break
+            // On, and stopped by quitting rather than by you: it goes on.
+            if isOn, received > 0, !defaults.bool(forKey: Self.pausedKey) { download() }
         }
     }
 
     /// Download it, or go on with it from where it stopped.
     public func download() {
         guard let folder, supported else { return }
-        defaults.set(false, forKey: Self.removedKey)
         defaults.set(false, forKey: Self.pausedKey)
         guard state != .ready, state != .preparing else { return }
         cancelFetch()
@@ -159,8 +189,8 @@ public final class SpeechModel {
         #endif
         let have = presentBytes
         received = have
-        // Room for what's still to come, and a little over.
-        if let free = freeSpace(folder.deletingLastPathComponent()), free < size - have + 50_000_000 {
+        // Room for what's still to come and the copy made ready from it, and a little over.
+        if let free = freeSpace(folder.deletingLastPathComponent()), free < spaceNeeded {
             return state = .lowSpace(free: free)
         }
         state = .downloading
@@ -182,32 +212,33 @@ public final class SpeechModel {
         defaults.set(true, forKey: Self.pausedKey)
     }
 
-    /// Takes it off this device. Voice input goes back to Apple's dictation, and it doesn't come
-    /// back unless you download it again.
+    /// Takes it off this device, and turns it off: Apple's dictation listens.
     public func remove() {
         cancelFetch()
         if let folder {
             try? FileManager.default.removeItem(at: folder.appending(path: Self.name))
             try? FileManager.default.removeItem(at: folder.appending(path: "partial"))
         }
-        Task { await WhisperRuntime.shared.unload() }
-        defaults.set(true, forKey: Self.removedKey)
+        // And the copy made ready for this device's chip, which is larger than the model: once
+        // Whisper is let go, so a load under way doesn't write it back.
+        let compiled = compiled
+        Task {
+            await WhisperRuntime.shared.unload()
+            compiled.forEach { try? FileManager.default.removeItem(at: $0) }
+        }
         defaults.set(false, forKey: Self.pausedKey)
+        isOn = false
         received = 0
-        isNewlyReady = false
         state = supported ? .absent : .unsupported
     }
-
-    /// Its word that it's ready was shown.
-    public func sawReady() { isNewlyReady = false }
 
     #if DEBUG
     /// As if it were `named` ("downloading", "paused", "waiting", "failed", "space", "preparing",
     /// "ready"), without the network: for a demo copy's screenshots.
     public func showSample(_ named: String) {
         cancelFetch()
-        received = named == "ready" || named == "preparing" ? size : size * 42 / 100
-        isNewlyReady = named == "ready"
+        withMutation(keyPath: \.isOn) { defaults.set(named != "absent", forKey: Self.onKey) }
+        received = named == "ready" || named == "preparing" ? size : named == "absent" ? 0 : size * 42 / 100
         state = switch named {
         case "downloading": .downloading
         case "paused": .paused
@@ -271,18 +302,27 @@ public final class SpeechModel {
         }
     }
 
-    /// Made ready for this device's chip, the first time: then voice input uses it.
+    /// Made ready for this device's chip, the first time: then voice input opens.
     private func makeReady() {
         guard let done = modelFolder else { return }
+        if let free = freeSpace(done.deletingLastPathComponent().deletingLastPathComponent()), free < spaceNeeded {
+            return state = .lowSpace(free: free)
+        }
+        wasPrepared = mark != nil
         state = .preparing
         let prepare = prepare
         work = Task { [weak self] in
             do {
                 try await prepare(done)
                 guard let self, self.state == .preparing else { return }
-                FileManager.default.createFile(atPath: done.appending(path: Self.preparedMark).path, contents: nil)
+                let kept = self.keptCopy
+                // Core ML couldn't keep its copy (it runs out of room before the disk is full):
+                // each load would take minutes, so it says what it needs instead.
+                if let kept, kept < Self.keptAtLeast, let free = self.freeSpace(done.deletingLastPathComponent().deletingLastPathComponent()) {
+                    return self.state = .lowSpace(free: free)
+                }
+                FileManager.default.createFile(atPath: done.appending(path: Self.preparedMark).path, contents: Data("\(Self.system)\n\(kept ?? 0)".utf8))
                 self.state = .ready
-                self.isNewlyReady = true
             } catch {
                 guard let self, self.state == .preparing else { return }
                 self.state = .failed("Whisper couldn’t start on this device: \(error.localizedDescription)")
@@ -300,6 +340,60 @@ public final class SpeechModel {
     private func pathChanged(satisfied: Bool, expensive: Bool) {
         lastPath = (satisfied, expensive)
         if case .waiting = state { state = .waiting(satisfied && expensive ? .wifi : .network) }
+    }
+
+    /// What it still needs on this device: what hasn't come yet, room for the copy made ready
+    /// from it (less what's kept of that copy for this system), and a little over.
+    var spaceNeeded: Int64 {
+        let mark = mark
+        let reusable = mark == nil || mark?.system == Self.system || mark?.system == "" ? keptCopy ?? 0 : 0
+        return size - received + max(0, Self.preparedRoom - reusable) + Self.margin
+    }
+
+    /// It was made ready before, so making it ready again isn't the first time.
+    public private(set) var wasPrepared = false
+
+    /// Made ready for this system, and Core ML still keeps its copy (or keeps it where this
+    /// can't see): then it loads within seconds.
+    private var isPrepared: Bool {
+        guard let mark, mark.system == Self.system else { return false }
+        return mark.kept == 0 || (keptCopy ?? 0) >= mark.kept * 9 / 10
+    }
+
+    /// What the mark says: the system it was made ready for, and how large Core ML's copy was
+    /// (a mark from before says neither).
+    private var mark: (system: String, kept: Int64)? {
+        guard let done = modelFolder, let data = FileManager.default.contents(atPath: done.appending(path: Self.preparedMark).path) else { return nil }
+        let lines = String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
+        return (lines.first.map(String.init) ?? "", lines.count > 1 ? Int64(lines[1]) ?? 0 : 0)
+    }
+
+    /// How large Core ML's copy for this device's chip is now (nil: none of its folders is here).
+    var keptCopy: Int64? {
+        let folders = compiled.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !folders.isEmpty else { return nil }
+        var total: Int64 = 0
+        for folder in folders {
+            guard let files = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.fileSizeKey]) else { continue }
+            for case let file as URL in files {
+                total += Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            }
+        }
+        return total
+    }
+
+    /// Where Core ML keeps what it makes ready for this device's chip: in the app's own caches.
+    /// On the Mac that's the folder with the app's name in `~/Library/Caches` (the one without
+    /// is every unnamed program's); on the iPhone, the app's own.
+    nonisolated static var compiledCopies: [URL] {
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return [] }
+        let name = "com.apple.e5rt.e5bundlecache"
+        let named = Bundle.main.bundleIdentifier.map { [caches.appending(path: $0).appending(path: name)] } ?? []
+        #if os(iOS)
+        return [caches.appending(path: name)] + named
+        #else
+        return named
+        #endif
     }
 
     private var isComplete: Bool {
@@ -546,16 +640,17 @@ final class Fetch: NSObject, URLSessionDataDelegate, @unchecked Sendable {
 // MARK: What each app says about it
 
 extension SpeechModel {
-    /// A few words beside the trace while you talk (nil: nothing to say): it's on its way, so
-    /// Apple's dictation is listening meanwhile, or it's what's listening now, the first time.
-    /// `device` is "Mac" or "iPhone".
-    public func note(usesWhisper: Bool, device: String) -> String? {
-        if usesWhisper { return isNewlyReady ? "Whisper, on this \(device)" : nil }
+    /// While it comes, what the ring on the mic says (its help, and VoiceOver): Apple's
+    /// dictation listens meanwhile.
+    public var progressWords: String? {
+        guard isUnderway else { return nil }
+        let percent = "\(Int(fraction * 100))%"
         switch state {
-        case .downloading: return "Whisper · \(Int(fraction * 100))%"
-        case .waiting(.wifi), .askingCellular: return "Whisper · waiting for Wi-Fi"
-        case .waiting(.network): return "Whisper · waiting for the network"
-        case .preparing: return "Whisper · getting ready"
+        case .downloading: return "More accurate voice input: downloading, \(percent)"
+        case .waiting(.wifi), .askingCellular: return "More accurate voice input: waiting for Wi-Fi, \(percent)"
+        case .waiting(.network): return "More accurate voice input: waiting for the network, \(percent)"
+        case .paused: return "More accurate voice input: \(percent)"
+        case .preparing: return "More accurate voice input: getting ready"
         default: return nil
         }
     }
@@ -563,19 +658,28 @@ extension SpeechModel {
     /// Its line in Settings › Voice Input; without how much has come (`amount` false) where a bar under it says so.
     public func status(device: String, amount: Bool = true) -> String {
         let of = amount ? " · \(Self.megabytes(received)) of \(Self.megabytes(size)) MB" : ""
+        if state == .unsupported { return "Needs a newer \(device). Apple’s dictation writes what you say." }
+        // Off: what it would do, or what's kept of it.
+        guard isOn else {
+            if received > 0 { return "Off · \(Self.amount(received + (keptCopy ?? 0))) kept on this \(device)" }
+            return "Whisper writes what you say on this \(device), and your project’s names as they’re written. \(Self.megabytes(size)) MB to download, about \(Self.amount(size + Self.preparedRoom)) once it’s ready."
+        }
         switch state {
-        case .absent: return "Writes what you say more accurately, and the project’s names as they’re written. \(Self.megabytes(size)) MB, kept on this \(device)."
+        case .absent: return "Starting…"
         case .downloading: return "Downloading\(of)"
         case .waiting(.wifi), .askingCellular: return "Waiting for Wi-Fi\(of)"
         case .waiting(.network): return "Waiting for the network\(of)"
         case .paused: return "Paused\(of)"
-        case .lowSpace(let free): return "Needs \(Self.megabytes(size - received)) MB · \(Self.megabytes(free)) MB free"
+        case .lowSpace(let free): return "Needs \(Self.amount(spaceNeeded)) · \(Self.amount(free)) free"
         case .failed(let words): return words
-        case .preparing: return "Getting ready for this \(device)… This takes a few minutes, once."
-        case .ready: return "Downloaded · \(Self.megabytes(size)) MB · in use"
+        case .preparing: return wasPrepared ? "Getting ready… This takes a few minutes." : "Getting ready… This takes a few minutes, once."
+        case .ready: return "In use · about \(Self.amount(size + (keptCopy ?? Self.preparedRoom))) on this \(device)"
         case .unsupported: return "Needs a newer \(device). Apple’s dictation writes what you say."
         }
     }
 
     public static func megabytes(_ bytes: Int64) -> Int { Int((Double(bytes) / 1_000_000).rounded()) }
+
+    /// `bytes` in MB or GB, as Finder says them.
+    public static func amount(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
 }

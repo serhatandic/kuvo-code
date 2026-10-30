@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 
@@ -38,6 +39,8 @@ struct BotEditor: View {
     @State private var failure: String?
     /// Making it: waiting for its machine to connect first, if it's on its way.
     @State private var creating: Task<Void, Never>?
+    /// This New Bot, sent as one however often Create is clicked.
+    @State private var request = Bots.NewBotRequest()
     @State private var waitsForMachine = false
     @State private var confirmsDelete = false
     @State private var isDeleting = false
@@ -302,6 +305,9 @@ struct BotEditor: View {
                             }
                         }
                     }
+                    section("Work", note: "Limits on the sessions \(bot.name) runs for you. It sizes its work to the job, with none until you set one; past one, it asks you. Each changes as you pick it.") {
+                        BotWorkLimits(bot: bot)
+                    }
                     section("Wake-Ups", note: "The bot schedules these itself: wake-ups to carry on later, and watches, which check something without its model and wake it when that changes. Add a wake-up of your own, and at its time what it says to do arrives in its conversation.") {
                         WakeList(owner: bot.wakeOwner, name: bot.name)
                     }
@@ -313,6 +319,9 @@ struct BotEditor: View {
                         section("Keys", note: "It works in a project, beside your sessions there, so it uses the keys they do, from Settings › Integrations. A bot with a folder of its own can have its own.") {
                             EmptyView()
                         }
+                    }
+                    section("Vault", note: "What it signs in, builds and works with from \(bot.machine.map { app.machines.engine($0)?.machine.name ?? $0 } ?? "this Mac")’s vault. It never sees a value: Kuvo Code fills it in, only on the item’s own sites.") {
+                        BotVaultSection(bot: bot)
                     }
                     section("Memory") {
                         WellGroup {
@@ -569,8 +578,8 @@ struct BotEditor: View {
                 try await waitForMachine()
                 // From a template or a shared bot, its job is typed in its conversation for you;
                 // otherwise the bot writes first.
-                let made = try await bots.make(name: trimmedName, look: look, personality: personality, model: model, machine: machine, project: project,
-                                               template: template, shared: recipe.map { ($0.job, $0.instructions) })
+                let made = try await request.make(with: bots, name: trimmedName, look: look, personality: personality, model: model, machine: machine, project: project,
+                                                  template: template, shared: recipe.map { ($0.job, $0.instructions) })
                 if let first = made.firstMessage, !first.isEmpty { Drafts.shared[made.bot.sessionID].text = first }
                 created(made.bot)
             } catch is CancellationError {
@@ -1069,5 +1078,116 @@ struct ScheduleRow: View {
             .fixedSize()
         }
         .padding(.vertical, 6)
+    }
+}
+
+/// The limits you set on the sessions a bot runs (Edit Bot › Work), kept on its box: none until you
+/// set one, as it sizes its work to the job. Each changes as you pick it, from what its box says
+/// now (`kuvo/bots`), so a pick never undoes another.
+struct BotWorkLimits: View {
+    let bot: Bot
+    @Environment(AppModel.self) private var app
+    @State private var failure: String?
+    @State private var isSaving = false
+
+    private var limits: WorkLimits { app.bots.bot(bot.id)?.limits ?? WorkLimits() }
+    private var allowed: [WorkAction] { app.bots.bot(bot.id)?.allowed?.actions ?? [] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if app.botWork.runsWork(bot) {
+                WellGroup {
+                    row("Sessions at once", symbol: "square.stack", value: limits.atOnce, choices: [1, 2, 3, 5, 8], words: { "\($0)" }) { $0.atOnce = $1 }
+                    WellDivider()
+                    row("New sessions a day", symbol: "calendar", value: limits.perDay, choices: [3, 5, 10, 20, 50], words: { "\($0)" }) { $0.perDay = $1 }
+                    WellDivider()
+                    row("Sessions they start", symbol: "arrow.turn.down.right", value: limits.depth, choices: [1, 2, 3], words: WorkWords.depth) { $0.depth = $1 }
+                    WellDivider()
+                    row("Tokens a day", symbol: "gauge.with.dots.needle.33percent", value: limits.tokensPerDay, choices: [250_000, 1_000_000, 5_000_000, 20_000_000], words: { WorkWords.tokens($0) }) { $0.tokensPerDay = $1 }
+                }
+                .disabled(isSaving)
+                // What you let it do without asking (Always on its card), each taken back here.
+                if !allowed.isEmpty {
+                    WellGroup {
+                        ForEach(Array(allowed.enumerated()), id: \.element) { index, action in
+                            if index > 0 { WellDivider() }
+                            WellRow {
+                                Image(systemName: action == .cloneProject ? "square.and.arrow.down.on.square" : "folder.badge.plus")
+                            } content: {
+                                HStack(spacing: 8) {
+                                    Text(WorkWords.allowed(action))
+                                    Spacer(minLength: 8)
+                                    Text("Without asking")
+                                        .foregroundStyle(.secondary)
+                                    Button("Ask First") { takeBack(action) }
+                                        .buttonStyle(TextButtonStyle())
+                                        .help("\(bot.name) asks you again before it does this.")
+                                }
+                            }
+                        }
+                    }
+                    .disabled(isSaving)
+                }
+            } else {
+                Text("\(bot.machine.map { app.machines.engine($0)?.machine.name ?? $0 } ?? "This Mac") needs a newer Kuvo Code for \(bot.name) to run sessions.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            if let failure {
+                Text(failure)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        // Whether its box runs its work (one from before doesn't).
+        .task { await app.botWork.read(bot) }
+    }
+
+    private func row(_ title: String, symbol: String, value: Int?, choices: [Int], words: @escaping (Int) -> String, set: @escaping (inout WorkLimits, Int?) -> Void) -> some View {
+        NativeMenuButton(opensBelow: true) {
+            let menu = NSMenu()
+            menu.addItem(ActionItem("No Limit", checked: value == nil) { change { set(&$0, nil) } })
+            menu.addItem(.separator())
+            for choice in choices {
+                menu.addItem(ActionItem(words(choice), checked: value == choice) { change { set(&$0, choice) } })
+            }
+            return menu
+        } label: {
+            WellRow {
+                Image(systemName: symbol)
+            } content: {
+                HStack(spacing: 8) {
+                    Text(title)
+                    Spacer(minLength: 8)
+                    Text(value.map(words) ?? "No limit")
+                        .foregroundStyle(.secondary)
+                    MenuChevron()
+                }
+            }
+            .contentShape(.rect)
+        }
+        .accessibilityLabel(title)
+        .accessibilityValue(value.map(words) ?? "No limit")
+    }
+
+    private func takeBack(_ action: WorkAction) {
+        isSaving = true
+        failure = nil
+        Task {
+            do { try await app.botWork.setAllowed(allowed.filter { $0 != action }, for: bot) } catch { failure = error.localizedDescription }
+            isSaving = false
+        }
+    }
+
+    private func change(_ edit: (inout WorkLimits) -> Void) {
+        var changed = limits
+        edit(&changed)
+        isSaving = true
+        failure = nil
+        Task {
+            do { try await app.botWork.setLimits(changed, for: bot) } catch { failure = error.localizedDescription }
+            isSaving = false
+        }
     }
 }

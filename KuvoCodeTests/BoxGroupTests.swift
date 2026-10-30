@@ -182,6 +182,202 @@ import Testing
         #expect(app.chats.list.map(\.id) == ["grp_mac0000001"])
     }
 
+    /// A machine running a newer Kuvo Code says a kind of message this copy doesn't know: its chats
+    /// still show, with that message left out rather than shown as something else.
+    @Test func aMessageOfANewerKindLeavesTheChatsShowing() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_pal", "Pal", "box")])
+        let newer: [String: Any] = ["id": "gm_2", "author": "bot_pal", "text": "{\"chart\": 1}", "time": "2026-10-22T08:01:00Z", "kind": "chart"]
+        there.add(Self.group("grp_box0000001", members: ["bot_pal"]), messages: [Self.said, newer])
+        let app = app()
+
+        await app.boxGroups.connected("box")
+
+        #expect(app.chats.list.map(\.id) == ["grp_box0000001"])
+        #expect(app.chats.messages(in: "grp_box0000001").map(\.text) == ["Morning."])
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.message", ["id": "grp_box0000001", "message":
+            ["id": "gm_3", "author": "bot_pal", "text": "{}", "time": "2026-10-22T08:02:00Z", "kind": "chart"]]), machine: "box")
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.message", ["id": "grp_box0000001", "message":
+            ["id": "gm_4", "author": "bot_pal", "text": "Done.", "time": "2026-10-22T08:03:00Z", "kind": "message"]]), machine: "box")
+        #expect(app.chats.messages(in: "grp_box0000001").map(\.text) == ["Morning.", "Done."])
+    }
+
+    /// A message of a kind a newer Kuvo Code says is kept as it said it, so this copy, once
+    /// updated, shows it from what it kept (it reads a chat again only once a newer message comes).
+    @Test func aMessageOfANewerKindIsKeptAsItCame() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_pal", "Pal", "box")])
+        let newer: [String: Any] = ["id": "gm_2", "author": "bot_pal", "text": "{\"chart\": 1}", "time": "2026-10-22T08:01:00Z", "kind": "chart"]
+        there.add(Self.group("grp_box0000001", members: ["bot_pal"]), messages: [Self.said, newer])
+        let app = app()
+
+        await app.boxGroups.connected("box")
+        app.boxGroups.flush()
+
+        let kept = try JSONSerialization.jsonObject(with: Data(contentsOf: BoxGroups.folder.appending(path: "grp_box0000001.json"))) as? [[String: Any]]
+        #expect(kept?.compactMap { $0["kind"] as? String } == ["message", "chart"])
+    }
+
+    /// A meeting whose last word is of a kind a newer Kuvo Code says: its notification says the
+    /// meeting came, not that message's raw text.
+    @Test func aMeetingEndingInANewerKindSaysItCame() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let last = try decoder.decode(GroupMessage.self, from: JSONSerialization.data(withJSONObject:
+            ["id": "gm_9", "author": "bot_pal", "text": "{\"chart\": 1}", "time": "2026-10-22T08:01:00Z", "kind": "chart"]))
+        let said = try decoder.decode(GroupMessage.self, from: JSONSerialization.data(withJSONObject:
+            ["id": "gm_8", "author": "bot_pal", "text": "All green.", "time": "2026-10-22T08:00:00Z", "kind": "wrapUp"]))
+        #expect(BoxGroups.metLine(last) == "The meeting came.")
+        #expect(BoxGroups.metLine(said) == "All green.")
+    }
+
+    /// A chat read again (its computer back, an edit) while its computer says something of it: what
+    /// it said, after the read began, stays. Its talk ended stays ended; gone stays gone.
+    @Test func whatAChatSaysWhileItsReadAgainStays() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_pal", "Pal", "box")])
+        let group = Self.group("grp_box0000001", members: ["bot_pal"])
+        there.add(group, messages: [Self.said])
+        let app = app()
+        await app.boxGroups.connected("box")
+        // Read from while it talked.
+        let talking = StubWeb.json(["data": ["group": group, "status": "active", "state": ["speaking": "bot_pal", "discussing": true, "paused": false], "messages": [Self.said]]])
+        func readHeld(while said: () throws -> Void) async throws {
+            let reading = Gate(), release = Gate()
+            machineBridge.on("GET", "/api/kuvo/groups/grp_box0000001") { _ in
+                reading.open()
+                release.wait()
+                return talking
+            }
+            let read = Task { await app.boxGroups.reload("grp_box0000001") }
+            try await until { reading.isOpen }
+            try said()
+            release.open()
+            await read.value
+        }
+
+        try await readHeld {
+            app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+                                                                                     "state": ["discussing": false, "paused": false]]), machine: "box")
+        }
+        #expect(app.chats.speaking["grp_box0000001"] == nil)
+        #expect(!app.chats.discussing.contains("grp_box0000001"))
+
+        try await readHeld {
+            app.boxGroups.handle(try machineBridge.event("kuvo.group.deleted", ["id": "grp_box0000001"]), machine: "box")
+        }
+        #expect(app.chats.list.isEmpty)
+    }
+
+    /// A wrap-up's part in a state a newer Kuvo Code says: that computer's chats still show, with
+    /// the wrap-up in them.
+    @Test func aPartInANewerStateLeavesTheChatsShowing() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_pal", "Pal", "box")])
+        let wrapUp: [String: Any] = ["id": "gm_2", "author": "bot_pal", "text": "Here's the plan.", "time": "2026-10-22T08:01:00Z", "kind": "wrapUp",
+                                     "tasks": [["id": "task_1", "bot": "bot_pal", "task": "Fix the build", "state": "canceled"]]]
+        there.add(Self.group("grp_box0000001", members: ["bot_pal"]), messages: [Self.said, wrapUp])
+        let app = app()
+
+        await app.boxGroups.connected("box")
+
+        #expect(app.chats.list.map(\.id) == ["grp_box0000001"])
+        #expect(app.chats.messages(in: "grp_box0000001").map(\.text) == ["Morning.", "Here's the plan."])
+        // Not under way: no spinner forever, and Move to Computer isn't held back by it.
+        let states = app.chats.messages(in: "grp_box0000001").flatMap { $0.tasks ?? [] }.map(\.state)
+        #expect(states.count == 1 && !states.contains(.working) && !states.contains(.waiting))
+        // Kept as it came, so a newer Kuvo Code reading the cache sees it.
+        app.boxGroups.flush()
+        let kept = try JSONSerialization.jsonObject(with: Data(contentsOf: BoxGroups.folder.appending(path: "grp_box0000001.json"))) as? [[String: Any]]
+        #expect(kept?.compactMap { ($0["tasks"] as? [[String: Any]])?.first?["state"] as? String } == ["canceled"])
+    }
+
+    /// One machine added twice, at two addresses, found to be one: its chats are kept once, as
+    /// the address it's kept under says, not twice with one copy talking on.
+    @Test func aMachineAtTwoAddressesKeepsItsChatsOnce() throws {
+        defer { Self.clean(); mac.stop() }
+        let app = app()
+        let group = Self.group("grp_box0000001", members: ["bot_pal"])
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+                                                                                 "state": ["speaking": "bot_pal", "discussing": true, "paused": false]]), machine: "box-old")
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+                                                                                 "state": ["discussing": false, "paused": false]]), machine: "box")
+        app.boxGroups.fold("box-old", into: "box")
+        #expect(app.boxGroups.chats.filter { $0.group.id == "grp_box0000001" }.map(\.machine) == ["box"])
+        #expect(!app.boxGroups.isTalking(on: "box"))
+    }
+
+    /// A chat read where it's going while the computer it's leaving lets it go (a move): the read
+    /// there isn't taken for that computer's, and the chat shows where it went.
+    @Test func aChatReadWhereItGoesWhileItLeavesShowsThere() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_pal", "Pal", "box")])
+        let group = Self.group("grp_box0000001", members: ["bot_pal"])
+        let app = app()
+        await app.boxGroups.connected("box")
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+                                                                                 "state": ["discussing": false, "paused": false]]), machine: nil)
+        let reading = Gate(), release = Gate()
+        machineBridge.on("GET", "/api/kuvo/groups/grp_box0000001") { _ in
+            reading.open()
+            release.wait()
+            return StubWeb.json(["data": ["group": group, "status": "active", "state": ["discussing": false, "paused": false], "messages": [Self.said]]])
+        }
+        let read = Task { await app.boxGroups.reload("grp_box0000001", on: "box") }
+        try await until { reading.isOpen }
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.deleted", ["id": "grp_box0000001"]), machine: nil)
+        release.open()
+        await read.value
+
+        #expect(app.boxGroups.machine(of: "grp_box0000001") == "box")
+        #expect(app.chats.messages(in: "grp_box0000001").map(\.text) == ["Morning."])
+    }
+
+    /// One machine at two addresses, the name kept with a chat talking when last seen, not
+    /// connected now: nothing shows talking there, so its settings aren't held back for it.
+    @Test func aMachineAtTwoAddressesKeptAwayShowsNothingTalking() throws {
+        defer { Self.clean(); mac.stop() }
+        let app = app()
+        let group = Self.group("grp_box0000001", members: ["bot_pal"])
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+                                                                                 "state": ["discussing": false, "paused": false]]), machine: "box-old")
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+                                                                                 "state": ["speaking": "bot_pal", "discussing": true, "paused": false]]), machine: "box")
+        app.boxGroups.fold("box-old", into: "box")
+        #expect(!app.boxGroups.isTalking(on: "box"))
+        #expect(app.chats.speaking["grp_box0000001"] == nil)
+    }
+
+    /// The same, while the name kept is being read: a chat whose messages are here already, said to
+    /// be talking meanwhile, still shows talking once the read is done, rather than cleared as if
+    /// the machine were away (nothing else reads it again).
+    @Test func aMachineAtTwoAddressesBeingReadKeepsWhatItSaidMeanwhile() async throws {
+        defer { Self.clean(); mac.stop() }
+        let app = app()
+        let old = Self.group("grp_box0000001", members: ["bot_pal"]), talking = Self.group("grp_box0000002", members: ["bot_pal"])
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": old, "status": "active",
+                                                                                 "state": ["discussing": false, "paused": false]]), machine: "box-old")
+        there.add(talking, messages: [Self.said])
+        await app.boxGroups.reload("grp_box0000002", on: "box")
+        #expect(app.chats.messages(in: "grp_box0000002").map(\.text) == ["Morning."])
+        let reading = Gate(), release = Gate()
+        machineBridge.on("GET", "/api/kuvo/groups") { request in
+            reading.open()
+            release.wait()
+            return there.answer(request)
+        }
+        let read = Task { await app.boxGroups.connected("box") }
+        try await until { reading.isOpen }
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000002", "group": talking, "status": "active",
+                                                                                 "state": ["speaking": "bot_pal", "discussing": true, "paused": false]]), machine: "box")
+        app.boxGroups.fold("box-old", into: "box")
+        release.open()
+        await read.value
+
+        #expect(app.boxGroups.isTalking(on: "box"))
+        #expect(app.chats.speaking["grp_box0000002"] == "bot_pal")
+    }
+
     /// This Mac's bridge starting, then stopped: its chats show as last seen, and what you write
     /// waits in the composer; once it's up, it goes.
     @Test func thisMacsChatsWaitForItsBridge() async throws {
@@ -303,144 +499,6 @@ import Testing
         #expect(!app.chats.isUnread(app.chats.group("grp_box0000001")!))
         try await until { shown.threads == ["ses_other"] }
         #expect(shown.threads == ["ses_other"], "its notification gone from Notification Center, the other's kept")
-    }
-
-    @Test func aChatWhoseBotsLiveOnAMachineMovesThereAndBack() async throws {
-        defer { Self.clean(); mac.stop() }
-        try saveBots([("bot_pal", "Pal", "box"), ("bot_lb", "Lokum Builder", "box")])
-        let id = "grp_k000000001"
-        here.add(Self.group(id, members: ["bot_pal", "bot_lb"]), messages: [Self.said])
-        let app = app()
-        await app.boxGroups.connected(nil)
-        await app.boxGroups.connected("box")
-
-        try await app.moves.move(group: id, to: "box")
-
-        // Held here, brought there and started; let go here (its bridge puts it in the trash).
-        #expect(here.actions.filter { $0.hasPrefix("POST grp") } == ["POST \(id)/hold", "POST \(id)/release"])
-        #expect(there.actions.filter { $0.hasPrefix("PUT grp") || $0.hasPrefix("POST grp") } == ["PUT \(id)", "POST \(id)/activate"])
-        #expect(there.status(id) == "active" && !here.has(id))
-        #expect(app.chats.machine(of: id) == "box" && app.chats.list.filter { $0.id == id }.count == 1)
-        #expect(app.chats.messages(in: id).map(\.text) == ["Morning."])
-        #expect(UserDefaults.standard.data(forKey: "movesUnderWay") == nil)
-
-        // A bot in it stays with it.
-        do {
-            try await app.moves.move(bot: "bot_pal", to: nil)
-            Issue.record("it moved")
-        } catch {
-            #expect(error.localizedDescription.contains("Move the chat to this Mac first"), "\(error.localizedDescription)")
-        }
-
-        // And back.
-        try await app.moves.move(group: id, to: nil)
-        #expect(there.actions.filter { $0.hasPrefix("POST") }.suffix(2) == ["POST \(id)/hold", "POST \(id)/release"])
-        #expect(!there.has(id) && here.status(id) == "active")
-        #expect(app.chats.machine(of: id) == nil && app.chats.messages(in: id).map(\.text) == ["Morning."])
-    }
-
-    /// While it moves, what you write waits: it's held where it is.
-    @Test func whatYouWriteWaitsWhileItMoves() async throws {
-        defer { Self.clean(); mac.stop() }
-        try saveBots([("bot_pal", "Pal", "box"), ("bot_lb", "Lokum Builder", "box")])
-        let id = "grp_k000000002"
-        here.add(Self.group(id, members: ["bot_pal", "bot_lb"]))
-        let app = app()
-        await app.boxGroups.connected(nil)
-        await app.boxGroups.connected("box")
-        let waypoint = Waypoint()
-        machineBridge.on("PUT", "/api/kuvo/groups/\(id)") { _ in
-            waypoint.block()
-            return StubWeb.json(["message": "Disk full"], status: 500)
-        }
-        let move = Task { try await app.moves.move(group: id, to: "box") }
-        await waypoint.arrived()
-        #expect(!app.chats.send("Wait for it", to: id), "it waits in the composer")
-        waypoint.open()
-        await #expect(throws: (any Error).self) { try await move.value }
-        // Taken back: it carries on here.
-        #expect(here.status(id) == "active" && app.chats.send("Now", to: id))
-        try await until { here.actions.contains("POST \(id)/send") }
-    }
-
-    /// What a box keeps of a chat goes to the other whole, what the window doesn't read too: which
-    /// computer each seat is on, who a message named, what's become of a part.
-    @Test func whatABoxKeepsOfAChatGoesWhole() async throws {
-        defer { Self.clean(); mac.stop() }
-        try saveBots([("bot_pal", "Pal", "box"), ("bot_lb", "Lokum Builder", "box")])
-        let id = "grp_k000000005"
-        var group = Self.group(id, members: ["bot_pal", "bot_lb"], seats: ["bot_pal": "ses_seatP"])
-        group["seatBoxes"] = ["bot_pal": "key_box"]
-        let said: [String: Any] = ["id": "gm_1", "text": "&Scout?", "time": "2026-10-22T08:00:00Z", "kind": "message", "named": "<named-agents>\nx\n</named-agents>",
-                                   "tasks": [["id": "gt_1", "bot": "bot_pal", "task": "Tag", "state": "failed", "lost": true]]]
-        here.add(group, messages: [said])
-        let app = app()
-        await app.boxGroups.connected(nil)
-        await app.boxGroups.connected("box")
-
-        try await app.moves.move(group: id, to: "box")
-
-        #expect(there.group(id)?["seatBoxes"] as? [String: String] == ["bot_pal": "key_box"])
-        #expect(there.messages(id).first?["named"] as? String == "<named-agents>\nx\n</named-agents>")
-        #expect((there.messages(id).first?["tasks"] as? [[String: Any]])?.first?["lost"] as? Bool == true)
-    }
-
-    /// A move cut short after the chat was let go where it was, before it started where it went
-    /// (the app quit, or an older version's move): it starts there, rather than staying held.
-    @Test func aMoveCutShortAfterItWasLetGoStartsWhereItWent() async throws {
-        defer { Self.clean(); mac.stop() }
-        try saveBots([("bot_pal", "Pal", "box"), ("bot_lb", "Lokum Builder", "box")])
-        let id = "grp_k000000006"
-        there.add(Self.group(id, members: ["bot_pal", "bot_lb"]), status: "held")
-        let record: [String: Any] = ["kind": "group", "id": id, "sessions": [String](), "to": "box", "wasPaused": true, "stage": "switched"]
-        UserDefaults.standard.set(try JSONSerialization.data(withJSONObject: [record]), forKey: "movesUnderWay")
-        let app = app()
-        await app.boxGroups.connected(nil)
-        await app.boxGroups.connected("box")
-
-        await app.moves.recover()
-
-        #expect(there.status(id) == "active")
-        #expect(UserDefaults.standard.data(forKey: "movesUnderWay") == nil)
-        #expect(app.chats.machine(of: id) == "box" && app.chats.group(id) != nil)
-    }
-
-    @Test func aChatWhoseBotsLiveOnDifferentComputersStaysWhereItIs() async throws {
-        defer { Self.clean(); mac.stop() }
-        try saveBots([("bot_pal", "Pal", "box"), ("bot_scout", "Scout", nil)])
-        here.add(Self.group("grp_mix0000001", members: ["bot_pal", "bot_scout"]))
-        let app = app()
-        await app.boxGroups.connected(nil)
-        await app.boxGroups.connected("box")
-        do {
-            try await app.moves.move(group: "grp_mix0000001", to: "box")
-            Issue.record("it moved")
-        } catch {
-            #expect(error.localizedDescription.contains("live on different computers"), "\(error.localizedDescription)")
-        }
-        #expect(here.status("grp_mix0000001") == "active" && there.actions.allSatisfy { !$0.hasPrefix("PUT grp") })
-    }
-
-    /// The app quit as a chat went to the machine, before it was let go here: taken back, so it
-    /// carries on here, and what got there goes.
-    @Test func aChatsMoveCutShortIsTakenBack() async throws {
-        defer { Self.clean(); mac.stop() }
-        try saveBots([("bot_pal", "Pal", "box"), ("bot_lb", "Lokum Builder", "box")])
-        let id = "grp_k000000003"
-        here.add(Self.group(id, members: ["bot_pal", "bot_lb"]), status: "held")
-        there.add(Self.group(id, members: ["bot_pal", "bot_lb"]), status: "held")
-        let record: [String: Any] = ["kind": "group", "id": id, "sessions": [String](), "to": "box", "wasPaused": true, "stage": "copying"]
-        UserDefaults.standard.set(try JSONSerialization.data(withJSONObject: [record]), forKey: "movesUnderWay")
-        let app = app()
-        await app.boxGroups.connected(nil)
-
-        await app.moves.recover()
-
-        #expect(!there.has(id))
-        #expect(here.status(id) == "active")
-        #expect(UserDefaults.standard.data(forKey: "movesUnderWay") == nil)
-        #expect(app.chats.list.filter { $0.id == id }.count == 1 && app.chats.machine(of: id) == nil)
-        #expect(!app.chats.discussing.contains(id))
     }
 
     /// A move taken back that couldn't let go of its copy there: the one started here is the chat

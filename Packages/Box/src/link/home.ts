@@ -61,6 +61,9 @@ export const CONFIG_LOCK = path.join(RUN, ".config.lock");
 // A Mac's box finds them where its app keeps them, as the engine does (KUVO_BOTS, KUVO_WAKES, and the
 // app's own kuvo-wake); a machine's, in its folder.
 export const BOTS = process.env.KUVO_BOTS || path.join(K, "bots");
+// Its chats (conversations of no project): where a Mac's app keeps them (KUVO_CHATS), a machine's in
+// its folder.
+export const CHATS = process.env.KUVO_CHATS || path.join(K, "chats");
 
 // This Mac's box (BoxProcess says so as it starts it, `KUVO_BOX=mac`): its bots are the Mac's own,
 // made with the kit its app gives it and told they run on this Mac; it names no machine, keeps no
@@ -86,6 +89,21 @@ export const LAUNCH_HOST = process.env.KUVO_HOST_URL && process.env.KUVO_HOST_PA
 // keys can't be reached, rather than kept in files of its own instead of your Keychain.
 export const KEYS_ON_HOST = process.env.KUVO_KEYS_ON_HOST === "1" || Boolean(process.env.KUVO_HOST_URL);
 delete process.env.KUVO_HOST_PASSWORD;
+// This Mac's vault's two secrets from its app, which no file holds (the host interface's password
+// is in `run/host.json`, which an agent's command can read): the host's vault secret, without
+// which the app gives no value from the Keychain, and the key that signs the vault's files
+// (vault/store.ts). The app sends them on `serve`'s stdin (main.ts), never in its environment,
+// which any of your processes can read; `KUVO_HOST_VAULT_SECRET` and `KUVO_VAULT_FILE_KEY` are for
+// a test's box alone.
+export let HOST_VAULT_SECRET: string | null = process.env.KUVO_HOST_VAULT_SECRET || null;
+export let MAC_VAULT_FILE_KEY: Buffer | null = process.env.KUVO_VAULT_FILE_KEY ? Buffer.from(process.env.KUVO_VAULT_FILE_KEY, "base64url") : null;
+delete process.env.KUVO_HOST_VAULT_SECRET;
+delete process.env.KUVO_VAULT_FILE_KEY;
+/** The vault's secrets, as the app sent them on stdin. */
+export function takeVaultSecrets(given: { hostVaultSecret?: unknown; vaultFileKey?: unknown }) {
+  if (typeof given.hostVaultSecret === "string" && given.hostVaultSecret) HOST_VAULT_SECRET = given.hostVaultSecret;
+  if (typeof given.vaultFileKey === "string" && given.vaultFileKey) MAC_VAULT_FILE_KEY = Buffer.from(given.vaultFileKey, "base64url");
+}
 
 // The box's own script (kuvo-link.js, or its source in a debug run), for what it runs again as a
 // command of its own (`box reconnect`, `update`): said once as it starts, by main.ts.
