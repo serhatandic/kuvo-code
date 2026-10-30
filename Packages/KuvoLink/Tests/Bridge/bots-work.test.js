@@ -49,6 +49,10 @@ let sessions, prompts, made, asked, replied, interrupted, active, busy;
 // looked at `holdMaking` times, so starts asked for at once all look before any is made.
 let staysAtWork, holdMaking, activeLooks, held;
 const noTokens = () => ({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } });
+// When a session's made: after the next midnight, so it's "today" to the box however late the run,
+// even one that goes past midnight (the box takes the day from its own clock). Later ones later.
+const dayAfter = new Date().setHours(24, 0, 0, 0);
+const madeAt = () => dayAfter + made.length;
 function resetEngine() {
   sessions = new Map([
     ["ses_pixel", { id: "ses_pixel", title: "Pixel", location: { directory: path.join(pixelFolder, "workspace") }, model: { providerID: "anthropic", id: "claude-opus-5-5" }, permissions: [], time: { created: 1, updated: 5 }, cost: 0, tokens: noTokens() }],
@@ -101,7 +105,7 @@ const engine = http.createServer((request, response) => {
         const given = JSON.parse(body);
         const id = `ses_new${made.length + 1}`;
         made.push({ id, ...given });
-        sessions.set(id, { id, title: given.title, agent: given.agent, model: given.model, permissions: given.permissions, location: given.location, time: { created: Date.now(), updated: Date.now() }, cost: 0, tokens: noTokens() });
+        sessions.set(id, { id, title: given.title, agent: given.agent, model: given.model, permissions: given.permissions, location: given.location, time: { created: madeAt(), updated: madeAt() }, cost: 0, tokens: noTokens() });
         reply({ data: { id } });
       };
       if (activeLooks < holdMaking) held.push(make);
