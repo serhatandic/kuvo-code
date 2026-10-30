@@ -38,8 +38,6 @@ struct MainView: View {
     @AppStorage("sessionsWidth") private var sessionsWidth = 280.0
     @AppStorage("changesWidth") private var changesWidth = 420.0
     @AppStorage(Notifier.badgeKey) private var showsBadge = true
-    /// New Project or Edit Project, in a popup while it's open.
-    @State private var projectEditor: ProjectEditorRequest?
     /// Open Quickly's palette is showing.
     @State private var showsOpenQuickly = false
     /// The command palette (⌘K) is showing.
@@ -367,7 +365,9 @@ struct MainView: View {
         .onChange(of: tabs.inView, initial: true) { _, inView in utilities.inView = inView }
         .onChange(of: room, initial: true) { _, room in tabs.room = room }
         // New Project and Edit Project: a popup over whatever's in the window.
-        .sheet(item: $projectEditor) { projectSheet($0) }
+        .sheet(item: Binding { tabs.projectEditor } set: { tabs.projectEditor = $0 }) { projectSheet($0) }
+        // The window's store outlives it: a window closed with the popup up doesn't bring it back.
+        .onDisappear { tabs.projectEditor = nil }
         // Help › Report a Problem…: a new issue on GitHub, filled in.
         .sheet(isPresented: Binding { app.showsProblemReport } set: { app.showsProblemReport = $0 }) {
             ReportProblemSheet { app.showsProblemReport = false }
@@ -393,7 +393,7 @@ struct MainView: View {
             let primary = workspace.saveProject(primary, settings: settings)
             if request.project == nil { tabs.newSession(in: primary) }
         } close: {
-            projectEditor = nil
+            tabs.projectEditor = nil
         }
     }
 
@@ -481,7 +481,7 @@ struct MainView: View {
             .padding(.trailing, identityWidth == nil ? 16 : 0)
             if !tabItems.isEmpty {
                 TabStrip(tabs: tabItems, selection: tabSelection, close: { tabs.close(TabKey($0)) }, closeAll: { tabs.closeAll(except: $0.map(TabKey.init)) },
-                         openBeside: besideOpener, closeBeside: { tabs.closeBeside(TabKey($0)) }, closeBesideTab: { tabs.closeBesideTab(TabKey($0)) },
+                         openBeside: tabs.besideOpener, closeBeside: { tabs.closeBeside(TabKey($0)) }, closeBesideTab: { tabs.closeBesideTab(TabKey($0)) },
                          swapBeside: { tabs.swapBeside(TabKey($0)) }) { id in
                     guard let session = workspace.session(id) else { return }
                     // Renamed in its card's header: its tab comes forward for it.
@@ -604,21 +604,8 @@ struct MainView: View {
         Card(title: "Sessions", isFocused: focus == .sessions, showsHeader: false, showsSurface: false) {
             EmptyView()
         } content: {
-            SidebarView(
-                selection: Binding(get: { selection?.text }, set: { id in if let id { tabs.open(TabKey(id)) } }),
-                newSession: { tabs.newSession(in: $0) },
-                newProject: { openProjectEditor(ProjectEditorRequest(project: nil)) },
-                editProject: { openProjectEditor(ProjectEditorRequest(project: $0)) },
-                showProviders: { app.openSettings(.accounts) },
-                newBot: { tabs.openBotEditor(bot: nil) },
-                editBot: { tabs.openBotEditor(bot: $0) },
-                newGroup: { tabs.openGroupEditor(group: nil) },
-                editGroup: { tabs.openGroupEditor(group: $0) },
-                newConversation: { tabs.open(.draft($0)) },
-                closeTerminal: { tabs.close(TabKey($0)) },
-                stagedBots: stagedBots,
-                openBeside: besideOpener
-            )
+            SidebarView(stagedBots: stagedBots)
+                .equatable()
             // Room for the window's buttons above the first row, when they sit here.
             .padding(.top, showsTabBar ? 0 : Metrics.windowControlsHeight)
         }
@@ -669,13 +656,6 @@ struct MainView: View {
         .environment(catalog(for: directory))
         .id("split-" + id)
         .onCardClick(isOn: !overlayShown, keyboard: { keyboardReturn.remember($0, in: .split) }) { tabs.focus = .split }
-    }
-
-    /// Open Beside, while a session can open beside the tab in view: it's a session's (not a
-    /// draft or a group chat).
-    private var besideOpener: ((String) -> Void)? {
-        guard let sessionID, workspace.session(sessionID) != nil else { return nil }
-        return { tabs.openBeside($0) }
     }
 
     @ViewBuilder private var conversationCard: some View {
@@ -912,14 +892,6 @@ struct MainView: View {
         }
     }
 
-    /// Makes a project, or changes one, in a popup over what's in the window. One open already
-    /// stays, with what's typed in it: a shortcut or a session opened from a notification
-    /// doesn't take its place.
-    private func openProjectEditor(_ request: ProjectEditorRequest) {
-        guard projectEditor == nil else { return }
-        projectEditor = request
-    }
-
     /// Under a group chat's name: who's in it.
     private func groupDetail(_ group: BotGroup) -> String? {
         let names = group.members.compactMap { bots.bot($0)?.name }
@@ -1019,7 +991,7 @@ struct MainView: View {
             newSession: { tabs.newSession(in: nil) },
             newTerminalTab: { tabs.openTerminalTab(command: nil) },
             openFolder: openFolder,
-            newProject: { openProjectEditor(ProjectEditorRequest(project: nil)) },
+            newProject: { tabs.openProjectEditor(ProjectEditorRequest(project: nil)) },
             newBot: { tabs.openBotEditor(bot: nil) },
             importBot: { if let recipe = BotRecipe.pick() { tabs.openBotEditor(bot: nil, recipe: recipe) } },
             newGroup: { tabs.openGroupEditor(group: nil) },
@@ -1098,7 +1070,7 @@ struct MainView: View {
         if let directory = focusedProject {
             let primary = workspace.projectDirectory(directory)
             add("Edit Project…", "slider.horizontal.3", detail: workspace.projectName(primary)) {
-                openProjectEditor(ProjectEditorRequest(project: workspace.projects.first { $0.directory == primary } ?? Workspace.Project(directory: primary, sessions: [], settings: workspace.settings[primary] ?? .init())))
+                tabs.openProjectEditor(ProjectEditorRequest(project: workspace.projects.first { $0.directory == primary } ?? Workspace.Project(directory: primary, sessions: [], settings: workspace.settings[primary] ?? .init())))
             }
         }
         if let model = focusedModel {
@@ -1138,7 +1110,7 @@ struct MainView: View {
         guard let command = runCommand(of: directory) else {
             let primary = workspace.projectDirectory(directory)
             let project = workspace.projects.first { $0.directory == primary } ?? Workspace.Project(directory: primary, sessions: [], settings: workspace.settings[primary] ?? .init())
-            openProjectEditor(ProjectEditorRequest(project: project, focusesRun: true))
+            tabs.openProjectEditor(ProjectEditorRequest(project: project, focusesRun: true))
             return
         }
         showInPanel { utilities.run(command, in: directory, environment: app.shellEnvironment) }
@@ -1165,7 +1137,7 @@ struct MainView: View {
             showPalette: { showsPalette = true },
             renameInView: { if let session = activeModel?.session { renaming = session } },
             runProject: { runProject() },
-            newProject: { openProjectEditor(ProjectEditorRequest(project: nil, folders: $0)) }
+            newProject: { tabs.openProjectEditor(ProjectEditorRequest(project: nil, folders: $0)) }
         )
     }
     #endif

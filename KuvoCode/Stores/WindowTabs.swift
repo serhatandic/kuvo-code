@@ -141,6 +141,8 @@ final class WindowTabs {
     /// Making or changing a bot, or a group chat, in the main card while it's open.
     var botEditor: BotEditorRequest?
     var groupEditor: GroupEditorRequest?
+    /// New Project or Edit Project, in a popup over the window while it's open.
+    var projectEditor: ProjectEditorRequest?
     /// Goes up to put the cursor in a new session's composer.
     private(set) var draftFocus = 0
     /// The window put back what its scene kept, once this launch.
@@ -162,6 +164,13 @@ final class WindowTabs {
     var groupID: String? { selection?.groupID }
     /// The folder of the new session in view.
     var draftDirectory: String? { selection?.draftFolder }
+
+    /// Open Beside, while a session can open beside the tab in view: it's a session's (not a
+    /// draft or a group chat), and there.
+    var besideOpener: ((String) -> Void)? {
+        guard let sessionID, workspace.session(sessionID) != nil else { return nil }
+        return { [weak self] in self?.openBeside($0) }
+    }
 
     /// The session in split view, while it's another than the one in view (and there).
     var splitModel: SessionModel? {
@@ -597,6 +606,14 @@ final class WindowTabs {
     func keep(_ pane: PaneLayout.Pane) {
         givesWay.removeAll { $0 == pane }
         givesWay.append(pane)
+    }
+
+    /// Makes a project, or changes one, in a popup over what's in the window. One open already
+    /// stays, with what's typed in it: a shortcut or a session opened from a notification
+    /// doesn't take its place.
+    func openProjectEditor(_ request: ProjectEditorRequest) {
+        guard projectEditor == nil else { return }
+        projectEditor = request
     }
 
     /// Makes a bot (from a shared one's `recipe`, if given), or changes `bot`, in the main card.
