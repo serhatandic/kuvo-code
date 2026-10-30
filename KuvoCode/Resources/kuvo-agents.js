@@ -17331,6 +17331,8 @@ class Seats {
   seatBase = new Map;
   declined = new Set;
   steered = new Map;
+  sending = new Set;
+  resent = new Set;
   seatsChecked = new Set;
   seatTexts = new Map;
   constructor(context) {
@@ -17604,6 +17606,8 @@ class Seats {
       }
       const reply = await this.reply(seat, promptID, sent, api);
       going();
+      if (options.followOnly && reply.cutShort)
+        return { ok: false, why: "its answer was cut off as Kuvo Code started over" };
       let outgrown = false;
       if (!ownConversation && reply.size !== undefined) {
         const base = this.seatBase.get(seat) ?? reply.size;
@@ -17758,13 +17762,19 @@ class Seats {
     const id = newID("msg");
     const sent = this.steered.get(seat) ?? new Map;
     this.steered.set(seat, sent.set(id, text));
+    this.sending.add(id);
     try {
       await api.prompt(seat, id, text, "steer");
     } catch {
       sent.delete(id);
+      this.resent.delete(id);
       return false;
+    } finally {
+      this.sending.delete(id);
     }
     if (this.steered.get(seat) !== sent) {
+      if (this.resent.delete(id))
+        return true;
       await api.cancelInbox(seat, id).catch(() => {});
       return false;
     }
@@ -17781,6 +17791,8 @@ class Seats {
       if (text === undefined)
         continue;
       await api.cancelInbox(seat, item.id).catch(() => {});
+      if (this.sending.has(item.id))
+        this.resent.add(item.id);
       late.push(text);
     }
     return late;
@@ -17883,7 +17895,9 @@ class Seats {
     const since = sent - 2000;
     const tokens = [...data].reverse().find((message) => message?.type === "assistant" && message.tokens)?.tokens;
     const size = tokens ? (tokens.input ?? 0) + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0) : undefined;
-    return { ...said2(start >= 0 ? data.slice(start + 1) : data.filter((message) => (message?.time?.created ?? 0) >= since)), size };
+    const after = start >= 0 ? data.slice(start + 1) : data.filter((message) => (message?.time?.created ?? 0) >= since);
+    const cutShort = after.findLast((message) => message?.type === "idle")?.outcome === "interrupted";
+    return { ...said2(after), size, cutShort };
   }
 }
 
@@ -18067,6 +18081,8 @@ class GroupRunner {
     this.chats.set(group.id, kept);
     this.context.store.saveMessages(kept);
     this.changed(group.id);
+    if (existing)
+      emit("kuvo.group.reset", { id: group.id });
     if (status === "active")
       this.began(group.id);
     return true;
@@ -18181,6 +18197,8 @@ class GroupRunner {
     live.asked++;
     live.since ??= message.id;
     live.splitStop?.();
+    if (live.paused)
+      live.resumed = true;
     this.setPaused(id, false);
     if (live.speaking)
       this.steer(live.speaking, id, message);
@@ -18255,7 +18273,7 @@ class GroupRunner {
     live.abort = undefined;
     live.run = undefined;
     live.since = undefined;
-    this.answering.get(id)?.abort();
+    this.answering.get(id)?.abort.abort();
     this.setPaused(id, false);
     live.speaking = undefined;
     live.activity = undefined;
@@ -18300,37 +18318,52 @@ class GroupRunner {
     this.context.store.saveGroup(kept);
   }
   followTurns() {
-    for (const [id, kept] of this.chats) {
-      const turning = kept.turning;
-      if (!turning)
-        continue;
-      const bot = this.member(turning.bot);
-      if (!bot || bot.box || kept.status !== "active" || !kept.group.members.includes(turning.bot)) {
-        this.setTurning(id, undefined);
-        continue;
-      }
-      const abort = new AbortController;
-      this.answering.set(id, abort);
-      this.keepAwake(id);
-      const { seat, agents, prompt, sent } = turning;
-      this.seats.turn({ id: turnID(), chat: this.context_(kept.group), bot: turning.bot, seat, agentsSeat: agents, kind: turning.wrapUp ? "wrapUp" : "turn", text: "" }, () => {}, abort.signal, { resume: { seat, agents, prompt, sent }, followOnly: true }).then((result) => {
-        if (abort.signal.aborted || !this.chat(id)?.group.members.includes(turning.bot))
-          return;
-        if (result.ok)
-          this.answered(id, turning.bot, result, turning.wrapUp ?? false);
-        else
-          this.note(`${bot.name} couldn\u2019t answer: ${result.why}`, id);
-      }).catch((error) => {
-        if (!(error instanceof Cancelled) && !(error instanceof SeatGone))
-          console.error(`${turning.bot}'s answer in ${id} couldn't be read:`, reason3(error));
-      }).finally(() => {
-        if (this.answering.get(id) === abort)
-          this.answering.delete(id);
-        if (this.chats.get(id)?.turning?.prompt === prompt)
-          this.setTurning(id, undefined);
-        this.keepAwake(id);
-      });
+    for (const id of this.chats.keys())
+      this.followTurn(id);
+  }
+  followTurn(id) {
+    const under = this.answering.get(id);
+    if (under)
+      return under.done;
+    const kept = this.chats.get(id);
+    const turning = kept?.turning;
+    if (!kept || !turning)
+      return Promise.resolve();
+    const bot = this.member(turning.bot);
+    if (!bot || bot.box || kept.status !== "active" || !kept.group.members.includes(turning.bot)) {
+      this.setTurning(id, undefined);
+      return Promise.resolve();
     }
+    const abort = new AbortController;
+    const live = this.state(id);
+    live.speaking = turning.bot;
+    const { seat, agents, prompt, sent } = turning;
+    const done = this.seats.turn({ id: turnID(), chat: this.context_(kept.group), bot: turning.bot, seat, agentsSeat: agents, kind: turning.wrapUp ? "wrapUp" : "turn", text: "" }, () => {}, abort.signal, { resume: { seat, agents, prompt, sent }, followOnly: true }).then((result) => {
+      if (abort.signal.aborted || !this.chat(id)?.group.members.includes(turning.bot))
+        return;
+      if (result.ok)
+        this.answered(id, turning.bot, result, turning.wrapUp ?? false);
+      else
+        this.note(`${bot.name} couldn\u2019t answer: ${result.why}`, id);
+    }).catch((error) => {
+      if (!(error instanceof Cancelled) && !(error instanceof SeatGone))
+        console.error(`${turning.bot}'s answer in ${id} couldn't be read:`, reason3(error));
+    }).finally(() => {
+      if (this.answering.get(id)?.abort === abort)
+        this.answering.delete(id);
+      if (this.chats.get(id)?.turning?.prompt === prompt)
+        this.setTurning(id, undefined);
+      if (live.speaking === turning.bot) {
+        live.speaking = undefined;
+        live.activity = undefined;
+      }
+      this.keepAwake(id);
+      this.told(id);
+    });
+    this.answering.set(id, { abort, done });
+    this.keepAwake(id);
+    this.told(id);
+    return done;
   }
   begin(id) {
     const live = this.state(id);
@@ -18340,6 +18373,7 @@ class GroupRunner {
     live.abort = abort;
     this.setTalking(id, true);
     (async () => {
+      await this.followTurn(id);
       let epoch;
       do {
         epoch = await this.discuss(id, abort.signal);
@@ -18440,7 +18474,7 @@ class GroupRunner {
     }
     const kept = this.chat(id);
     const lead = kept?.group.members[0];
-    if (paused || signal.aborted || saidCount === 0 && !resumed || live.asked !== epoch || !kept || !lead || !this.member(lead) || absent.has(lead))
+    if (paused && live.meeting === undefined || signal.aborted || saidCount === 0 && !resumed || live.asked !== epoch || !kept || !lead || !this.member(lead) || absent.has(lead))
       return epoch;
     if ((resumed || saidCount >= (live.meeting !== undefined ? 2 : 3)) && kept.group.members.length >= 2) {
       const before = kept.messages.at(-1)?.id;
@@ -19340,10 +19374,14 @@ class RemoteHome {
     this.transport.send(this.box, { kind: "stop", id: pending.turn.id }, false);
     pending.done({ ok: false, away: true, why: `${this.place()} can\u2019t be reached now.` });
   }
+  heardFrom(from) {
+    if (from === this.box)
+      this.awaySince = undefined;
+  }
   take(from, mail) {
     if (from !== this.box)
       return;
-    this.awaySince = undefined;
+    this.heardFrom(from);
     if (mail.kind !== "state" && mail.kind !== "result")
       return;
     const pending = this.pending.get(mail.id);
@@ -19812,6 +19850,7 @@ class PeerPost {
   }
 }
 function receive(parts, from, mail) {
+  parts.directory.existing(from)?.heardFrom(from);
   if (mail.kind === "state" || mail.kind === "result")
     parts.directory.existing(from)?.take(from, mail);
   else if (mail.kind === "report")
@@ -20750,4 +20789,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 263445f524f35fa6adee185fe780eb17fbfaf0646e9f1c4e8212733e6902ab5e
+// Built from Packages/Box/src/agents 45d2e1facc6ffb95dd56fb3b0d3ac783a20f3d4ed7b198664b847e542e6de363
