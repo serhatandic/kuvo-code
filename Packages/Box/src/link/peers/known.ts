@@ -97,7 +97,7 @@ export function leaveMac(link: LinkState, mac: string): void {
     else delete link.mac;
   }
   // COMPAT(beta.1 peers-list): `legacy`, a beta.1 Mac's list. Goes when 0.8.0 ships.
-  for (const field of ["macSeen", "macSigns", "legacy"] as const) if (link[field]) delete link[field][mac];
+  for (const field of ["macSeen", "macSigns", "macNames", "legacy"] as const) if (link[field]) delete link[field][mac];
   link.phones = (link.phones ?? []).filter(phone => !(phone.from === "mac" && phone.mac === mac));
 }
 

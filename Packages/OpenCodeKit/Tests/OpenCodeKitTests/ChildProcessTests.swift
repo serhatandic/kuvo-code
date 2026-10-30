@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import OpenCodeKit
 
@@ -225,4 +226,18 @@ import Testing
         #expect(result.succeeded)
         #expect(try Data(contentsOf: target) == Data(repeating: 7, count: 300_000))
     }
+
+    /// A file sent to a program (the engine's package to a machine, over SSH) says how far into it
+    /// the program has read, onward only, all of it by the end.
+    @Test func aFileSentToAProgramSaysHowFarItsBeenRead() async throws {
+        let file = root.appending(path: "package")
+        try Data(repeating: 7, count: 3_000_000).write(to: file)
+        let heard = OSAllocatedUnfairLock(initialState: [Int64]())
+        let result = try await ChildProcess.run("/bin/sh", ["-c", "cat >/dev/null"], input: .reported(file, read: { read in heard.withLock { $0.append(read) } }))
+        #expect(result.succeeded)
+        let reads = heard.withLock { $0 }
+        #expect(reads.last == 3_000_000)
+        #expect(reads == reads.sorted())
+    }
+
 }

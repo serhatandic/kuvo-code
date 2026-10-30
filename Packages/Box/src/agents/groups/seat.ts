@@ -87,6 +87,8 @@ export interface SeatTurnOptions {
   checkSeat?: boolean
   /** How far it got before (the bridge restarted): it goes on from there, its message never sent twice. */
   resume?: SeatProgress
+  /** Only its message there followed (`resume`): one that isn't there any more, or its seat gone, ends it (`SeatGone`), and nothing is sent. */
+  followOnly?: boolean
   /** Told how far it gets, before each step that mustn't be taken twice (a seat made, its message sent), to keep. */
   progress?: (progress: SeatProgress) => void
   /** For a turn to another computer: what the bot hasn't heard, cut to its latest, for when the turn is too big for mail. */
@@ -176,6 +178,11 @@ export class Seats implements SeatHome {
   private seatBase = new Map<string, number>()
   /** Requests from seats already turned down. */
   private declined = new Set<string>()
+  /** Messages of yours steered into each seat's run under way: what each says, by its id there. */
+  private steered = new Map<string, Map<string, string>>()
+  /** Of those, the ones still on their way (by their ids), and the ones of these its turn took back and sent again as it ended: it answered them. */
+  private sending = new Set<string>()
+  private resent = new Set<string>()
   /** Seats whose rules were brought up to date since this started, and what each was last told. */
   private seatsChecked = new Set<string>()
   private seatTexts = new Map<string, string>()
@@ -361,7 +368,7 @@ export class Seats implements SeatHome {
         // chat. Asked without it (the chat's computer had heard its words were with its seat),
         // it's asked again with it.
         if (!(await this.seatThere(resume.seat, resumed))) {
-          if (!ownConversation && turn.seat && turn.fresh === undefined) throw new SeatGone()
+          if (options.followOnly || (!ownConversation && turn.seat && turn.fresh === undefined)) throw new SeatGone()
           resume = undefined
         }
         going()
@@ -442,24 +449,40 @@ export class Seats implements SeatHome {
         const there = promptID ? await this.sentAlready(seat, promptID, sent, api) : false
         going()
         if (!promptID || !there) {
+          if (options.followOnly) throw new SeatGone()
           promptID ??= newID("msg")
           sent = Date.now()
           progress?.({ seat, agents, prompt: promptID, sent })
           await api.prompt(seat, promptID, text, "queue")
         }
         report({ phase: "started" })
-        const asked = promptID as string
-        await this.waitForRun(seat, asked, sent, api, signal, bot.directory, nudge, ownConversation ? undefined : (messages) => {
-          const now = activityOf(messages, asked, sent)
-          if (now.length === 0 || JSON.stringify(now) === JSON.stringify(shown) || Date.now() - streamedAt < 3000) return
-          shown = now
-          report({ phase: "activity", activity: now })
-        })
+        const watch = (asked: string, at: number) =>
+          ownConversation
+            ? undefined
+            : (messages: any[]) => {
+                const now = activityOf(messages, asked, at)
+                if (now.length === 0 || JSON.stringify(now) === JSON.stringify(shown) || Date.now() - streamedAt < 3000) return
+                shown = now
+                report({ phase: "activity", activity: now })
+              }
+        await this.waitForRun(seat, promptID as string, sent, api, signal, bot.directory, nudge, watch(promptID as string, sent))
+        // What you wrote that reached it too late for its run: it'd wait there for a run nobody
+        // reads, so it goes again now, and the turn goes on until it's answered that too.
+        for (let late = ownConversation ? [] : await this.unsteered(seat, api); late.length > 0; late = await this.unsteered(seat, api)) {
+          going()
+          const again = newID("msg")
+          const at = Date.now()
+          await api.prompt(seat, again, late.join("\n\n"), "queue")
+          await this.waitForRun(seat, again, at, api, signal, bot.directory, nudge, watch(again, at))
+        }
       } finally {
         unlisten?.()
       }
       const reply = await this.reply(seat, promptID, sent, api)
       going()
+      // Followed after the runner started over, and its run was lost with it (the coding agents'
+      // bridge marks it so): what it had half said isn't its answer.
+      if (options.followOnly && reply.cutShort) return { ok: false, why: "its answer was cut off as Kuvo Code started over" }
       // Grown well past the chat it's in (pages it read, drafts, long answers): it starts over at
       // its next turn, in a new seat given the whole chat, and this one goes. Grown from its first
       // turn here, so what every turn carries (its instructions and tools) doesn't count.
@@ -605,12 +628,47 @@ export class Seats implements SeatHome {
   async steer(seat: string, agents: boolean, text: string, _message?: string): Promise<boolean> {
     const api = this.apiFor(agents)
     if (!api || !(await api.active().catch(() => new Set<string>())).has(seat)) return false
+    const id = newID("msg")
+    const sent = this.steered.get(seat) ?? new Map<string, string>()
+    this.steered.set(seat, sent.set(id, text))
+    this.sending.add(id)
     try {
-      await api.prompt(seat, newID("msg"), text, "steer")
-      return true
+      await api.prompt(seat, id, text, "steer")
     } catch {
+      sent.delete(id)
+      this.resent.delete(id)
+      return false
+    } finally {
+      this.sending.delete(id)
+    }
+    // Its turn ended as it went: sent again by the turn, which answered it; or it'd wait there for
+    // a run nobody reads, so it's taken back, unheard.
+    if (this.steered.get(seat) !== sent) {
+      if (this.resent.delete(id)) return true
+      await api.cancelInbox(seat, id).catch(() => {})
       return false
     }
+    return true
+  }
+
+  /**
+   * What was steered into a seat's run too late for it (still waiting there once the run ended,
+   * where a run nobody reads would take it): taken back, and what it said.
+   */
+  private async unsteered(seat: string, api: SeatAPI): Promise<string[]> {
+    const sent = this.steered.get(seat)
+    this.steered.delete(seat)
+    if (!sent?.size) return []
+    const late: string[] = []
+    for (const item of await api.inbox(seat).catch(() => [])) {
+      const text = sent.get(item.id)
+      if (text === undefined) continue
+      await api.cancelInbox(seat, item.id).catch(() => {})
+      // Its sending may not be answered yet: then `steer` hears it was sent again.
+      if (this.sending.has(item.id)) this.resent.add(item.id)
+      late.push(text)
+    }
+    return late
   }
 
   /**
@@ -712,6 +770,8 @@ export class Seats implements SeatHome {
     const since = sent - 2000
     const tokens = [...data].reverse().find((message) => message?.type === "assistant" && message.tokens)?.tokens
     const size = tokens ? (tokens.input ?? 0) + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0) : undefined
-    return { ...said(start >= 0 ? data.slice(start + 1) : data.filter((message) => (message?.time?.created ?? 0) >= since)), size: size as number | undefined }
+    const after = start >= 0 ? data.slice(start + 1) : data.filter((message) => (message?.time?.created ?? 0) >= since)
+    const cutShort = after.findLast((message) => message?.type === "idle")?.outcome === "interrupted"
+    return { ...said(after), size: size as number | undefined, cutShort }
   }
 }

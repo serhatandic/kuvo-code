@@ -61,6 +61,15 @@ struct DiffView: View {
             .padding(.vertical, 4)
             .textSelection(.enabled)
 
+            // Nothing line by line: said, rather than an empty well.
+            if file.lines.isEmpty, file.isTooBig || file.isBinary {
+                Text(file.isTooBig ? "Too big to show" : "Binary")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+            }
+
             if file.lines.count > maxLines {
                 Text("\(file.lines.count - maxLines) more lines")
                     .font(.caption)

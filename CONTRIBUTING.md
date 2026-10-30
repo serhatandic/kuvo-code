@@ -314,7 +314,7 @@ when you're there to answer.
 | `KUVO_DEMO_PROVIDERS` | Open Accounts (on a provider's sign-in if it names one) |
 | `KUVO_DEMO_APPEARANCE` | `light` or `dark` |
 | `KUVO_DEMO_CHANGES` | Show the side panel |
-| `KUVO_DEMO_PANEL` | Open tools in the panel, comma-separated: `terminal`, `browser=<address>`, `machine=<machine>` (its browser), `files`, `file=<path>`, `changes`, `run`, `expand`, `toggle=<seconds>` (expands and collapses it a few times) |
+| `KUVO_DEMO_PANEL` | Open tools in the panel, comma-separated: `terminal`, `browser=<address>`, `machine=<machine>` (its browser), `files`, `file=<path>`, `folder=<path>` (Files, open down to it), `changes`, `run`, `expand`, `toggle=<seconds>` (expands and collapses it a few times) |
 | `KUVO_DEMO_WINDOW` | Window size, as `WIDTHxHEIGHT`, moved onto the screen if it was past its edge |
 | `KUVO_DEMO_OFFSCREEN` | With `KUVO_DEMO_WINDOW`: the window past the screen's right edge, so the pointer can't hover over what you capture (`screencapture -l` still gets all of it) |
 | `KUVO_DEMO_BOX` | The sidebar's box in view, `mac` or a machine's name, a few seconds after launch |
@@ -344,8 +344,9 @@ when you're there to answer.
 | `KUVO_DEMO_VAULT_ITEM` | With `KUVO_DEMO_SETTINGS=vault`: the sheet of the item with this name, open |
 | `KUVO_DEMO_SETTINGS_TABS` | With `KUVO_DEMO_SETTINGS` and the tab bar on: these pages too, comma-separated, each in a tab of its own (`page@<machine>` for a machine's) |
 | `KUVO_DEMO_DISCONNECT` | Don't connect to this machine, as after Disconnect, so this copy reaches it only through the relay (set it up in an earlier launch) |
+| `KUVO_DEMO_AWAY` | Disconnect this machine a few seconds after it connects, as Disconnect does, so its pages show it away, with what was last seen |
 | `KUVO_DEMO_ADD_MACHINE` | The Add Machine sheet, open, with `KUVO_DEMO_SETTINGS=machines` or over `KUVO_DEMO_NEW_PROJECT` |
-| `KUVO_DEMO_REMOVE_MACHINE` | With `KUVO_DEMO_SETTINGS=machines`: that machine's Remove dialog, open (nothing's removed unless you click) |
+| `KUVO_DEMO_REMOVE_MACHINE` | With `KUVO_DEMO_SETTINGS=machines`: that machine's Remove dialog, open once it's connected (nothing's removed unless you click) |
 | `KUVO_DEMO_ALSO_APPLY` | With `KUVO_DEMO_SETTINGS` and machines: the page's Also Apply to… bar, for a change noted but not made; `missing` applies one to an agent the machines don't have, `own` one to the shell (with Snapshots), once they're connected or couldn't be, for what the bar says stayed (nothing's written there) |
 | `KUVO_DEMO_MCP_SERVER` | With `KUVO_DEMO_SETTINGS=mcp`: that server's editor, open (added, off, if it isn't there); `<name>\|web` switches it to On the web |
 | `KUVO_DEMO_SETTINGS_SCROLL` | `bottom`: with `KUVO_DEMO_SETTINGS`, each page scrolled to its end a few seconds after it opens |

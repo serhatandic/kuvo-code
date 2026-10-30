@@ -80,7 +80,7 @@ struct FilesView: View {
 
 @Observable
 final class FileTree {
-    struct Entry: Identifiable, Hashable {
+    nonisolated struct Entry: Identifiable, Hashable, Sendable {
         let url: URL
         let isDirectory: Bool
         var id: URL { url }
@@ -93,13 +93,39 @@ final class FileTree {
         }
     }
 
+    /// A line of the tree: a file or folder, or, in an open folder, why nothing's under it.
+    enum Row: Identifiable {
+        case entry(Entry, depth: Int)
+        /// An open folder that couldn't be read, and why.
+        case unreadable(URL, FolderFailure, depth: Int)
+        /// An open folder that was read, with nothing in it.
+        case empty(URL, depth: Int)
+
+        var id: String {
+            switch self {
+            case .entry(let entry, _): entry.url.absoluteString
+            case .unreadable(let folder, _, _): "unreadable:" + folder.absoluteString
+            case .empty(let folder, _): "empty:" + folder.absoluteString
+            }
+        }
+    }
+
     /// The project's folders, the primary one first.
     let roots: [URL]
     var expanded: Set<URL> = []
     var filter = ""
     private var children: [URL: [Entry]] = [:]
+    /// Folders that couldn't be read, and why: never shown as empty.
+    private(set) var failures: [URL: FolderFailure] = [:]
+    /// A machine's folders being read now.
+    private(set) var loading: Set<URL> = []
+    /// Each read of a machine's folder, counted: one overtaken by a later read (Reload, Try
+    /// Again) lands nowhere.
+    @ObservationIgnored private var reads: [URL: Int] = [:]
     /// Every file, for filtering; read on first use.
     private(set) var allFiles: [ProjectFiles.File]?
+    /// Why filtering found nothing, when a folder couldn't be read.
+    private(set) var allFilesFailure: FolderFailure?
 
     init(roots: [URL]) {
         self.roots = roots
@@ -108,12 +134,18 @@ final class FileTree {
     }
 
     /// The tree as rows, with each row's depth: one folder's contents, or each folder with
-    /// its contents under it.
-    var rows: [(entry: Entry, depth: Int)] {
-        var rows: [(Entry, Int)] = []
+    /// its contents under it; an open folder that couldn't be read, or has nothing, says so.
+    var rows: [Row] {
+        var rows: [Row] = []
         func walk(_ directory: URL, depth: Int) {
-            for entry in entries(in: directory) {
-                rows.append((entry, depth))
+            let entries = entries(in: directory)
+            if let failure = failures[directory] {
+                rows.append(.unreadable(directory, failure, depth: depth))
+            } else if entries.isEmpty, !loading.contains(directory) {
+                rows.append(.empty(directory, depth: depth))
+            }
+            for entry in entries {
+                rows.append(.entry(entry, depth: depth))
                 if entry.isDirectory, expanded.contains(entry.url) { walk(entry.url, depth: depth + 1) }
             }
         }
@@ -121,11 +153,25 @@ final class FileTree {
             walk(root, depth: 0)
         } else {
             for root in roots {
-                rows.append((Entry(url: root, isDirectory: true), 0))
+                rows.append(.entry(Entry(url: root, isDirectory: true), depth: 0))
                 if expanded.contains(root) { walk(root, depth: 1) }
             }
         }
         return rows
+    }
+
+    /// The one folder shown, when it couldn't be read: the tree's whole room says so.
+    var rootFailure: FolderFailure? {
+        guard roots.count == 1, let root = roots.first else { return nil }
+        _ = entries(in: root)
+        return failures[root]
+    }
+
+    /// The one folder shown, while a machine reads it.
+    var isLoadingRoot: Bool {
+        guard roots.count == 1, let root = roots.first else { return false }
+        _ = entries(in: root)
+        return loading.contains(root)
     }
 
     /// Files whose path contains the filter, up to a few hundred.
@@ -144,21 +190,92 @@ final class FileTree {
         if !directory.isFileURL {
             // On a machine: read in the background, shown when it's in.
             children[directory] = []
+            loading.insert(directory)
+            let read = (reads[directory] ?? 0) + 1
+            reads[directory] = read
             Task {
-                let listed = await Task.detached { RemoteShell.list(directory) ?? [] }.value
-                children[directory] = listed
-                    .map { Entry(url: directory.appending(path: $0.name, directoryHint: $0.isDirectory ? .isDirectory : .notDirectory), isDirectory: $0.isDirectory) }
-                    .sorted(by: Entry.inFinderOrder)
+                let listed = await Task.detached(operation: { Self.list(directory) }).value
+                guard reads[directory] == read else { return }
+                switch listed {
+                case .success(let listed):
+                    failures[directory] = nil
+                    children[directory] = listed
+                case .failure(let failure):
+                    failures[directory] = failure
+                }
+                loading.remove(directory)
             }
             return []
         }
-        let urls = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
-        let entries = urls
-            .filter { $0.lastPathComponent != ".DS_Store" }
-            .map { Entry(url: $0, isDirectory: (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true) }
-            .sorted(by: Entry.inFinderOrder)
-        children[directory] = entries
-        return entries
+        switch Self.list(directory) {
+        case .success(let entries):
+            children[directory] = entries
+            return entries
+        case .failure(let failure):
+            children[directory] = []
+            failures[directory] = failure
+            return []
+        }
+    }
+
+    /// Reads a folder that couldn't be read again.
+    func retry(_ directory: URL) {
+        reads[directory, default: 0] += 1
+        failures[directory] = nil
+        children[directory] = nil
+        loading.remove(directory)
+    }
+
+    /// A folder's entries, folders first, or why it can't be read. A link to a folder is a
+    /// folder, as on a machine (a package manager's linked packages).
+    nonisolated static func list(_ directory: URL) -> Result<[Entry], FolderFailure> {
+        if !directory.isFileURL {
+            return RemoteShell.list(directory).map { listed in
+                listed
+                    .map { Entry(url: directory.appending(path: $0.name, directoryHint: $0.isDirectory ? .isDirectory : .notDirectory), isDirectory: $0.isDirectory) }
+                    .sorted(by: Entry.inFinderOrder)
+            }
+        }
+        // A linked folder's contents, read where it leads, named under the link.
+        let names: [String]
+        do {
+            names = try FileManager.default.contentsOfDirectory(atPath: directory.resolvingSymlinksInPath().path(percentEncoded: false))
+        } catch {
+            return .failure(FolderFailure(error))
+        }
+        return .success(names
+            .filter { $0 != ".DS_Store" }
+            .map { directory.appending(path: $0) }
+            .map { url in
+                let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                let isFolder = values?.isSymbolicLink == true
+                    ? (try? url.resolvingSymlinksInPath().resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+                    : values?.isDirectory == true
+                return Entry(url: url, isDirectory: isFolder)
+            }
+            .sorted(by: Entry.inFinderOrder))
+    }
+
+    /// Reads again what's been read, keeping what's open, so files the agent made, removed or
+    /// renamed since show; a folder that can't be read now keeps what it showed. A look
+    /// overtaken by Reload or Try Again lands nowhere.
+    func refresh() async {
+        for directory in children.keys where failures[directory] == nil && !loading.contains(directory) {
+            let read = reads[directory]
+            guard case .success(let listed) = await Task.detached(operation: { Self.list(directory) }).value,
+                  reads[directory] == read, children[directory] != nil else { continue }
+            if children[directory] != listed { children[directory] = listed }
+        }
+        // The list a filter searches: read again while one's typed, otherwise when one is.
+        if filter.isEmpty {
+            allFiles = nil
+            allFilesFailure = nil
+        } else if allFiles != nil {
+            let roots = roots
+            let listing = await Task.detached { ProjectFiles.listing(roots) }.value
+            if listing.files != allFiles { allFiles = listing.files }
+            if listing.failure != allFilesFailure { allFilesFailure = listing.failure }
+        }
     }
 
     /// Opens the tree down to `target` (and it too, a folder), reading it afresh: an agent just
@@ -173,7 +290,7 @@ final class FileTree {
         var directory = root
         for part in target.path.dropFirst(root.path.count).split(separator: "/").map(String.init) {
             var entry = entries(in: directory).first { $0.name == part }
-            for _ in 0..<50 where entry == nil && !directory.isFileURL {
+            for _ in 0..<50 where entry == nil && !directory.isFileURL && failures[directory] == nil {
                 try? await Task.sleep(for: .milliseconds(150))
                 entry = entries(in: directory).first { $0.name == part }
             }
@@ -186,14 +303,26 @@ final class FileTree {
 
     /// Forgets what's been read, so the tree shows files created since.
     func reload() {
+        reads = reads.mapValues { $0 + 1 }
         children = [:]
+        failures = [:]
+        loading = []
         allFiles = nil
+        allFilesFailure = nil
     }
 
     func loadAllFiles() async {
         guard allFiles == nil else { return }
         let roots = roots
-        allFiles = await Task.detached { ProjectFiles.list(roots) }.value
+        let listing = await Task.detached { ProjectFiles.listing(roots) }.value
+        allFiles = listing.files
+        allFilesFailure = listing.failure
+    }
+
+    /// Filters again, reading the files afresh.
+    func retryAllFiles() {
+        allFiles = nil
+        allFilesFailure = nil
     }
 }
 
@@ -221,38 +350,145 @@ private struct FileTreeView: View {
             .padding(10)
             // Filtering, the files are read (again, after Reload).
             .task(id: !tree.filter.isEmpty && tree.allFiles == nil) { if !tree.filter.isEmpty { await tree.loadAllFiles() } }
-
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 1) {
-                    if tree.filter.isEmpty {
-                        ForEach(tree.rows, id: \.entry.id) { row in
-                            TreeRow(entry: row.entry, depth: row.depth, isRoot: tree.roots.count > 1 && row.depth == 0, isOpen: tree.expanded.contains(row.entry.url), isSelected: row.entry.url == selected) {
-                                if row.entry.isDirectory { tree.toggle(row.entry.url) } else { open(row.entry.url) }
-                            }
-                        }
-                    } else {
-                        ForEach(tree.matches) { match in
-                            MatchRow(path: match.path, isSelected: match.url == selected) { open(match.url) }
-                        }
-                        if tree.allFiles == nil {
-                            Placeholder(.rows(count: 3), label: "Loading files", fadesOut: false)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 6)
-                        } else if tree.matches.isEmpty {
-                            Text("No matching files")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                                .padding(10)
-                        }
-                    }
+            // What the agent changes shows while the tree does: looked at again every few seconds,
+            // a machine's less often (each look is a round trip).
+            .task {
+                let pause: Duration = tree.roots.allSatisfy(\.isFileURL) ? .seconds(3) : .seconds(10)
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: pause)
+                    if !Task.isCancelled { await tree.refresh() }
                 }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 10)
+            }
+
+            if tree.filter.isEmpty, let failure = tree.rootFailure, let root = tree.roots.first {
+                UnreadableFolderPage(failure: failure, computer: RemoteFolder.parse(root)?.machine) { tree.retry(root) }
+            } else if tree.filter.isEmpty, tree.isLoadingRoot {
+                Placeholder(.rows(count: 6), label: "Loading files")
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                rows
             }
         }
         .contextMenu {
             Button("Reload") { tree.reload() }
         }
+    }
+
+    private var rows: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 1) {
+                if tree.filter.isEmpty {
+                    ForEach(tree.rows) { row in
+                        switch row {
+                        case .entry(let entry, let depth):
+                            TreeRow(entry: entry, depth: depth, isRoot: tree.roots.count > 1 && depth == 0, isOpen: tree.expanded.contains(entry.url), isSelected: entry.url == selected) {
+                                if entry.isDirectory { tree.toggle(entry.url) } else { open(entry.url) }
+                            }
+                        case .unreadable(let folder, let failure, let depth):
+                            UnreadableRow(failure: failure, depth: depth) { tree.retry(folder) }
+                        case .empty(_, let depth):
+                            NoteRow(depth: depth) { Text("Empty") }
+                        }
+                    }
+                } else {
+                    ForEach(tree.matches) { match in
+                        MatchRow(path: match.path, isSelected: match.url == selected) { open(match.url) }
+                    }
+                    if tree.allFiles == nil {
+                        Placeholder(.rows(count: 3), label: "Loading files", fadesOut: false)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                    } else if let failure = tree.allFilesFailure, tree.matches.isEmpty {
+                        UnreadableRow(failure: failure, depth: 0) { tree.retryAllFiles() }
+                    } else if tree.matches.isEmpty {
+                        Text("No matching files")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .padding(10)
+                    }
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.bottom, 10)
+        }
+    }
+}
+
+/// An open folder's line, in its files' place, as a row of the tree is laid out.
+private struct NoteRow<Content: View>: View {
+    let depth: Int
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Color.clear.frame(width: 16)
+            content
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(.tertiary)
+        .padding(.leading, 6 + CGFloat(depth) * 14)
+        .padding(.trailing, 6)
+        .frame(height: 24)
+    }
+}
+
+/// An open folder that couldn't be read, in its files' place: why, as the computer said it, and
+/// Try Again, so it never looks empty. Two lines, so the reason stays whole in a narrow tree.
+private struct UnreadableRow: View {
+    let failure: FolderFailure
+    let depth: Int
+    let retry: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: failure == .denied ? "lock" : "exclamationmark.triangle")
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Couldn’t read this folder")
+                    .foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(failure.reason)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Try Again", action: retry)
+                        .buttonStyle(TextButtonStyle())
+                        .accessibilityLabel("Try reading this folder again")
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 12))
+        .padding(.leading, 6 + CGFloat(depth) * 14)
+        .padding(.trailing, 6)
+        .padding(.vertical, 4)
+        .help("Couldn’t read this folder: \(failure.reason)")
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// A project's folder that couldn't be read, in the whole tree's place, as the panel's pages
+/// say what's missing.
+struct UnreadableFolderPage: View {
+    let failure: FolderFailure
+    /// The machine it's on (nil: this Mac).
+    let computer: String?
+    let retry: () -> Void
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("Couldn’t Read This Folder", systemImage: failure == .denied ? "lock.folder" : "folder.badge.questionmark")
+        } description: {
+            Text(failure.detail(on: computer))
+                .textSelection(.enabled)
+        } actions: {
+            Button("Try Again", action: retry)
+        }
+        .frame(maxHeight: .infinity)
     }
 }
 
@@ -349,7 +585,7 @@ private func copyPath(_ url: URL) {
 
 /// One file: Markdown rendered (or its source), code highlighted with line numbers,
 /// pictures shown, anything else in Quick Look.
-private struct FileViewer: View {
+struct FileViewer: View {
     let url: URL
     let root: String
     let mention: String
@@ -362,7 +598,7 @@ private struct FileViewer: View {
         case text(String)
         case image(NSImage)
         case preview
-        /// What a machine's box said of it: gone, too big to show, can't be read.
+        /// Why it can't be shown: gone, or what a machine's box said (too big, can't be read).
         case unavailable(String)
     }
 
@@ -383,10 +619,10 @@ private struct FileViewer: View {
                                 // pictures, beside it; none from the web (a README's badges and tracking
                                 // pixels would reach their hosts as you open it).
                                 ReplyView(markdown: text, parser: MathMarkdownParser(), images: url.deletingLastPathComponent(), diagrams: true) { link in
-                                    // Another file of the project's, here; web links in the browser.
-                                    let file = link.isFileURL ? link : link.scheme == nil && !link.path.isEmpty
-                                        ? URL(filePath: link.path(percentEncoded: false), relativeTo: url.deletingLastPathComponent()).standardizedFileURL : nil
-                                    guard let file else { return false }
+                                    // Another file of the project's, here; web links in the browser. A
+                                    // link to a heading in the file opens nothing else.
+                                    if link.scheme == nil, link.path.isEmpty { return true }
+                                    guard let file = Self.linked(link, from: url, root: root) else { return false }
                                     app.utilities.show(file)
                                     return true
                                 }
@@ -439,6 +675,20 @@ private struct FileViewer: View {
                 }
             }
         }
+    }
+
+    /// The file a Markdown file's link names (`link`, in `file`, in the project folder `root`):
+    /// relative to it, or to the project's folder for "/docs/setup.md", as GitHub reads them; on
+    /// the machine the file is on. nil for a web link.
+    static func linked(_ link: URL, from file: URL, root: String) -> URL? {
+        if link.isFileURL { return link.standardizedFileURL }
+        guard link.scheme == nil, !link.path.isEmpty else { return nil }
+        let path = link.path(percentEncoded: false)
+        if path.hasPrefix("/") { return RemoteFolder.fileURL(String(path.dropFirst()), in: root).standardized }
+        // Its folder without the "/" a machine's URL ends it with.
+        var folder = RemoteFolder.folder(of: file.deletingLastPathComponent())
+        while folder.count > 1, folder.hasSuffix("/") { folder.removeLast() }
+        return RemoteFolder.fileURL(path, in: folder).standardized
     }
 
     /// Read from the disk each time (a URL keeps the values it was asked for).
@@ -515,6 +765,8 @@ private struct FileViewer: View {
                 if data.count <= 2_000_000, !data.contains(0), let text = String(data: data, encoding: .utf8) { return .text(text) }
                 return .preview
             }
+            // Removed since it was listed (by the agent, say), as a machine's box says it.
+            guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else { return .unavailable("That file isn’t there anymore.") }
             if type?.conforms(to: .image) == true, let image = NSImage(contentsOf: url) { return .image(image) }
             if type?.conforms(to: .pdf) == true { return .preview }
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0

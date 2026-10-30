@@ -100,6 +100,28 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: AppInfo.testTrash.path))
     }
 
+    /// One whose SKILL.md names it otherwise than its folder is matched by its folder (where it
+    /// came from, what Remove takes away); and one removed, which the engine lists a moment
+    /// longer, is gone from the page at once rather than shown as one you wrote, whose Edit…
+    /// would find nothing.
+    @Test func aSkillIsItsFolderAndOneRemovedGoesAtOnce() async throws {
+        defer { done() }
+        try write("---\nname: pdf\n---\nPDFs.\n", to: "pdf-tools", from: ["repository": "acme/skills", "path": "skills/pdf"])
+        try write("---\nname: notes\n---\nNotes.\n", to: "notes")
+        let engineLists = try listed([
+            ["id": "pdf", "name": "pdf", "path": folder.appending(path: "pdf-tools/SKILL.md").path],
+            ["id": "notes", "name": "notes", "path": folder.appending(path: "notes/SKILL.md").path],
+        ])
+        var shown = SkillsShown(try await routes.folder())
+        #expect(shown.source(of: engineLists[0]) == "acme/skills")
+        #expect(!shown.isYours(engineLists[0]), "from GitHub: added back, not edited")
+        #expect(shown.folder(of: engineLists[0]) == "pdf-tools", "what Remove takes away")
+
+        try await routes.remove("pdf-tools")
+        shown = SkillsShown(try await routes.folder())
+        #expect(shown.current(engineLists).map(\.id) == ["notes"])
+    }
+
     @Test func gitHubsCollectionsBrowsedAndAddedFromThroughTheBox() async throws {
         defer { done() }
         try StubWeb.answer(Self.github + "/repos/acme/skills", json: ["default_branch": "main", "description": "Acme's skills"])

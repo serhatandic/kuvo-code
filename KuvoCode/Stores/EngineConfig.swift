@@ -4,8 +4,10 @@ import OpenCodeKit
 /// A box's settings, read and changed key by key, where the box keeps them.
 protocol RemoteSettings {
     func read() async throws -> [String: JSONValue]
-    /// The settings after the changes, with what changed elsewhere meanwhile.
-    func change(_ changes: [(path: [String], value: JSONValue?)]) async throws -> [String: JSONValue]
+    /// The settings after the changes, with what changed elsewhere meanwhile. `was`, for each
+    /// change, what its value must still be there (`.null`: none), or nil to change it whatever
+    /// it is; refused when one isn't.
+    func change(_ changes: [(path: [String], value: JSONValue?)], was: [JSONValue?]) async throws -> [String: JSONValue]
 }
 
 /// Any box's settings through its routes (PROTOCOL.md, `kuvo/config`): this Mac's, through its box
@@ -17,10 +19,11 @@ struct BoxSettings: RemoteSettings {
         try await client.value([String: JSONValue].self, "GET", "kuvo/config")
     }
 
-    func change(_ changes: [(path: [String], value: JSONValue?)]) async throws -> [String: JSONValue] {
-        struct Change: Encodable { var path: [String]; var value: JSONValue }
+    func change(_ changes: [(path: [String], value: JSONValue?)], was: [JSONValue?]) async throws -> [String: JSONValue] {
+        struct Change: Encodable { var path: [String]; var value: JSONValue; var was: JSONValue? }
         struct Changes: Encodable { var changes: [Change] }
-        return try await client.value([String: JSONValue].self, "PATCH", "kuvo/config", body: Changes(changes: changes.map { Change(path: $0.path, value: $0.value ?? .null) }))
+        let sent = changes.enumerated().map { Change(path: $1.path, value: $1.value ?? .null, was: was.indices.contains($0) ? was[$0] : nil) }
+        return try await client.value([String: JSONValue].self, "PATCH", "kuvo/config", body: Changes(changes: sent))
     }
 }
 
@@ -149,6 +152,9 @@ final class EngineConfig {
         [("engine.botMemoryRuleAdded", "bot-memory"), ("engine.defaultsAdded", "websearch"), ("engine.searchMovedToExa", "search-exa")]
             .filter { defaults.bool(forKey: $0.0) }.map(\.1)
     }
+
+    /// What a box answers a change to a list someone changed since it was read (`was`).
+    static let changedMeanwhile = "It changed since you read it."
 
     /// Settings › Permissions' rules, in their order: what every session and mode is held to.
     var permissionRules: [PermissionRule] {
@@ -300,8 +306,17 @@ final class EngineConfig {
                 sent = pending
                 pending.removeAll()
                 let asked = reads
+                // A list (Settings › Permissions' rules, skills switched off) goes whole: sent with
+                // what it was here, so one a phone changed meanwhile is refused, and said, rather
+                // than its change written over.
+                let was: [JSONValue?] = sent.map { change in
+                    let before = Self.value(at: change.path, in: confirmed)
+                    // A list's last item taken away goes too: the list then goes.
+                    guard case .array? = change.value ?? before else { return nil }
+                    return before ?? .null
+                }
                 do {
-                    let after = try await remote.change(sent)
+                    let after = try await remote.change(sent, was: was)
                     let before = confirmed
                     // Read since (a phone's change to another key, say): that stays, with what
                     // this change made of its own keys.
@@ -313,7 +328,9 @@ final class EngineConfig {
                     noteRules()
                     if before != confirmed { onChanged() }
                 } catch {
-                    notSaved = "It couldn't be saved there: \(error.localizedDescription)"
+                    notSaved = (error as? BoxRefusal).map { $0.status == 409 && $0.message == Self.changedMeanwhile } == true
+                        ? "It was changed elsewhere meanwhile (from your phone, say), so yours wasn't saved. Here it is as it is now: make your change again."
+                        : "It couldn't be saved there: \(error.localizedDescription)"
                     sent.removeAll()
                     // As it is there, rather than as it would have been, and read again.
                     settings = Self.applying(pending, to: confirmed)

@@ -8,7 +8,9 @@ import { MAC_FEATURES } from "./mac";
 /** What the box is and runs (`kuvo/info`): a Mac's names its app's version and its integrations, a
  * machine's its bridge's version and whether its engine runs or is stopped on purpose. `started`:
  * when the engine running now came up, in seconds since 1970 (null while none runs). A machine's
- * `home`: the Mac that started its engine (its id, and its name where it noted one). */
+ * `home`: the Mac that started its engine (its id, and its name where it noted one). `macs`: the
+ * Macs that set it up (each one's key, its name where it said one, when it was last heard from, ms),
+ * and `phones`, how many phones reach it: who an uninstall would stop it for. */
 export const INFO = oneOf(
   object({
     kind: literal("mac"),
@@ -33,6 +35,8 @@ export const INFO = oneOf(
     running: bool,
     stopped: bool,
     "home?": object({ mac: string, "name?": string }),
+    "macs?": list(object({ key: string, "name?": string, seen: number })),
+    "phones?": number,
   }),
 );
 

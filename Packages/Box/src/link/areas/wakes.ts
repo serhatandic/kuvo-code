@@ -372,9 +372,10 @@ export async function* answerWakes(session: string, action: WakeAction | undefin
   if (!folder) return yield* json(action === "pause" ? 200 : 404, action === "pause" ? listed() : {});
   if (isMoving(folder)) return yield* json(409, { message: MOVING });
   if (action === "pause") {
-    // A hold of your own, until you take it away (archiving's and a move's are theirs).
+    // A hold of your own, until you take it away (archiving's and a move's are theirs: one
+    // resumed while it's archived waits until it's back).
     if (given.paused) fs.writeFileSync(path.join(folder, "paused"), "paused");
-    else fs.rmSync(path.join(folder, "paused"), { force: true });
+    else if (textOf(path.join(folder, "paused")) !== "archived") fs.rmSync(path.join(folder, "paused"), { force: true });
     return yield* changed(200, listed());
   }
   const { wakes, watches } = readWakes(folder);

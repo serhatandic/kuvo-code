@@ -544,7 +544,7 @@ struct SidebarView: View {
                     botRow(bot, snippet: result.snippet, action: show)
                 case .session(let session):
                     ConversationResultRow(title: session.title ?? "New Session", snippet: result.snippet, isSelected: selection == session.id, action: show)
-                        .contextMenu { menu(for: session) }
+                        .contextMenu { menu(for: session, opensBeside: canOpenBeside && session.id != selection) }
                 }
             }
             ForEach(unsearched, id: \.key) { computer, why in
@@ -931,7 +931,42 @@ struct SidebarView: View {
     /// `branches`: how many are under it.
     /// `folded`: what's out of view under it, whose news and asks show on it.
     private func sessionOnlyRow(_ session: Session, in place: Place, branches: Int, folded: [Session] = [], branchInset: CGFloat? = nil) -> some View {
-        SidebarRow(isSelected: isHighlighted(session, in: place), indented: place == .project, branchInset: branchInset, isEditing: renaming == RenameTarget(id: session.id, place: place), action: {
+        let look = SessionRowLook(session: session, place: place, isHighlighted: isHighlighted(session, in: place),
+                                  isEditing: renaming == RenameTarget(id: session.id, place: place), opensBeside: canOpenBeside && session.id != selection,
+                                  branches: branches, folded: folded, branchInset: branchInset, isUnfolded: isUnfolded(session.id), isSearching: !search.isEmpty,
+                                  isUnread: session.isUnread || workspace.hasNewSubSessions(session.id),
+                                  origin: branchInset == nil ? "" : Self.origin(of: session, in: workspace))
+        return StillRow(look: look) { sessionRowContent(look) }.equatable()
+    }
+
+    /// What a session's row shows and does, all worked out by the sidebar: nothing in the row reads
+    /// the window's selection itself, so switching tabs works out again only the rows it changes.
+    /// Anything the row reads from the sidebar's own state has to be in here, or the row misses
+    /// its changes (the stores it reads itself still update it).
+    private struct SessionRowLook: Equatable {
+        let session: Session
+        let place: Place
+        let isHighlighted: Bool
+        let isEditing: Bool
+        let opensBeside: Bool
+        let branches: Int
+        let folded: [Session]
+        let branchInset: CGFloat?
+        let isUnfolded: Bool
+        let isSearching: Bool
+        /// Finished and not seen, it or a sub-session: worked out here, as it reads the whole list
+        /// of sessions, which opening any session changes.
+        let isUnread: Bool
+        /// Where a branch came from, for VoiceOver (from the list too).
+        let origin: String
+    }
+
+    /// Open Beside, on another session's menu: while a session's tab is in view.
+    private var canOpenBeside: Bool { tabs.besideOpener != nil }
+
+    private func sessionRowContent(_ look: SessionRowLook) -> some View {
+        let session = look.session, place = look.place, branches = look.branches, folded = look.folded
+        return SidebarRow(isSelected: look.isHighlighted, indented: place == .project, branchInset: look.branchInset, isEditing: look.isEditing, action: {
             pickedIn[session.id] = place
             selection = session.id
             // Its mark was one under it: shown, so that one's row has it.
@@ -941,7 +976,7 @@ struct SidebarView: View {
         }) {
             EmptyView()
         } title: {
-            if renaming == RenameTarget(id: session.id, place: place) {
+            if look.isEditing {
                 // Each ends only its own rename: one started on another row meanwhile stays.
                 let target = RenameTarget(id: session.id, place: place)
                 InlineTitleField(original: session.title ?? "") { title in
@@ -972,7 +1007,7 @@ struct SidebarView: View {
                     .foregroundStyle(.tertiary)
             } else {
                 HStack(spacing: 6) {
-                    if !search.isEmpty, Workspace.isChat(session.location.directory), let machine = RemoteFolder.machine(of: session.location.directory) {
+                    if look.isSearching, Workspace.isChat(session.location.directory), let machine = RemoteFolder.machine(of: session.location.directory) {
                         Image(systemName: "server.rack")
                             .font(.system(size: 10))
                             .foregroundStyle(.tertiary)
@@ -985,17 +1020,17 @@ struct SidebarView: View {
                             .help("Works in a worktree, on \(tree.branch)")
                     }
                     if branches > 0 {
-                        BranchesToggle(count: branches, isUnfolded: isUnfolded(session.id)) { toggleBranches(of: session.id) }
+                        BranchesToggle(count: branches, isUnfolded: look.isUnfolded) { toggleBranches(of: session.id) }
                     }
                     // A subagent that finished since you were here shows on it: what it found is
                     // in its conversation.
-                    SessionStatus(session: session, isUnread: session.isUnread || workspace.hasNewSubSessions(session.id), folded: folded)
+                    SessionStatus(session: session, isUnread: look.isUnread, folded: folded)
                 }
             }
         }
-        .contextMenu { menu(for: session, in: place) }
-        .modifier(BranchesAction(count: branches, isUnfolded: isUnfolded(session.id)) { toggleBranches(of: session.id) })
-        .accessibilityHint(branchInset == nil ? "" : Self.origin(of: session, in: workspace))
+        .contextMenu { menu(for: session, in: place, opensBeside: look.opensBeside) }
+        .modifier(BranchesAction(count: branches, isUnfolded: look.isUnfolded) { toggleBranches(of: session.id) })
+        .accessibilityHint(look.origin)
     }
 
     /// A conversation's side threads ("/btw"), each opening it with the thread over the composer.
@@ -1041,7 +1076,7 @@ struct SidebarView: View {
 
     /// `place`: where the row is, for renaming it there; nil for a row that can't show it (a
     /// conversation search result).
-    @ViewBuilder private func menu(for session: Session, in place: Place? = nil) -> some View {
+    @ViewBuilder private func menu(for session: Session, in place: Place? = nil, opensBeside: Bool) -> some View {
         // A bot's own conversation (found by a search): the bot's menu. Deleting, archiving or
         // renaming it as a session would leave the bot without its conversation.
         if let bot = bots.list.first(where: { $0.sessionID == session.id }) {
@@ -1056,11 +1091,11 @@ struct SidebarView: View {
             default: Button(engine.isStopped ? "Start" : "Connect Now") { app.reconnectNow(engine) }
             }
         } else {
-            liveMenu(for: session, in: place)
+            liveMenu(for: session, in: place, opensBeside: opensBeside)
         }
     }
 
-    @ViewBuilder private func liveMenu(for session: Session, in place: Place?) -> some View {
+    @ViewBuilder private func liveMenu(for session: Session, in place: Place?, opensBeside: Bool) -> some View {
         if !Workspace.isArchived(session) {
             if Workspace.isPinned(session) {
                 Button("Unpin") { Task { await workspace.setPinned(session.id, false) } }
@@ -1068,8 +1103,8 @@ struct SidebarView: View {
                 Button("Pin") { Task { await workspace.setPinned(session.id, true) } }
             }
         }
-        if let openBeside = tabs.besideOpener, session.id != selection {
-            Button("Open Beside") { openBeside(session.id) }
+        if opensBeside {
+            Button("Open Beside") { tabs.openBeside(session.id) }
         }
         sideQuestionsMenu(for: session, in: place)
         // Moving to another computer: what would change it waits until it's there.
@@ -1435,11 +1470,11 @@ private struct MachineLabel: View {
                 .font(.system(size: 9, weight: .semibold))
             Text(engine.machine.name)
                 .lineLimit(1)
-            MachineIndicator(connection: engine.connection, size: 6, quiet: true)
+            MachineIndicator(connection: engine.connection, size: 6, quiet: true, progress: engine.installProgress)
         }
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(.secondary)
-        .help(engine.statusText)
+        .help(engine.statusDetail)
     }
 }
 
@@ -2239,4 +2274,15 @@ extension SidebarView: Equatable {
     static func == (lhs: SidebarView, rhs: SidebarView) -> Bool {
         lhs.stagedBots == rhs.stagedBots
     }
+}
+
+/// A row that's worked out again only when what it shows changes (`look`), not each time the
+/// sidebar is: its content is handed in as a closure, which SwiftUI can't compare.
+private struct StillRow<Look: Equatable, Content: View>: View, Equatable {
+    let look: Look
+    @ViewBuilder let content: () -> Content
+
+    var body: some View { content() }
+
+    static func == (lhs: StillRow, rhs: StillRow) -> Bool { lhs.look == rhs.look }
 }

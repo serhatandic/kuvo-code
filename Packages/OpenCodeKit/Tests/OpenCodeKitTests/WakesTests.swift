@@ -627,6 +627,12 @@ struct WakesTests {
                 #expect(try sh("\"\(wake)\" \"\(bot.path)\" add +1h --every \(bad) 'x'", in: k, shell: shell).status != 0, "\(shell) \(bad)")
             }
             #expect(try sh("\"\(wake)\" \"\(bot.path)\" add +99999999h 'too far'", in: k, shell: shell).status != 0)
+            // A leading zero isn't read as octal: 010 isn't eight.
+            for bad in ["+08h", "+010m"] {
+                let added = try sh("\"\(wake)\" \"\(bot.path)\" add \(bad) 'x'", in: k, shell: shell)
+                #expect(added.status != 0 && added.output.hasPrefix("Couldn't read the time"), "\(shell) \(bad): \(added.output)")
+            }
+            #expect(try sh("\"\(wake)\" \"\(bot.path)\" watch 010m 'cat x' 'x'", in: k, shell: shell).status != 0, "\(shell)")
             // The same moment, written in UTC and in another zone, is one time.
             try? FileManager.default.removeItem(at: bot.appending(path: "wakes"))
             #expect(try sh("TZ=America/New_York \"\(wake)\" \"\(bot.path)\" add 2099-01-05T06:00:00Z 'utc'", in: k, shell: shell).status == 0)

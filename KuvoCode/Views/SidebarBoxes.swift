@@ -93,7 +93,7 @@ struct BoxNameStrip: View {
         let engine = app.machines.engine(box.machine)
         let isAway = engine.map { !$0.isReady } ?? false
         return NameTrack.Name(box: box, title: app.name(of: box), isOn: box == selected, isAway: isAway, isStopped: engine?.isStopped == true,
-                              connection: isAway ? engine?.connection : nil, news: marksNews ? app.news(on: box) : nil)
+                              connection: isAway ? engine?.connection : nil, progress: engine?.installProgress, news: marksNews ? app.news(on: box) : nil)
     }
 }
 
@@ -107,6 +107,8 @@ private struct NameTrack: View {
         var isAway: Bool
         var isStopped: Bool
         var connection: MachineEngine.Connection?
+        /// How far its engine has come to it, while it's being installed there.
+        var progress: Double?
         var news: BoxNews?
     }
 
@@ -168,7 +170,7 @@ private struct NameTrack: View {
                     .truncationMode(.middle)
                     .frame(maxWidth: 150, alignment: .leading)
                 if let connection = name.connection {
-                    MachineIndicator(connection: connection, size: 5, quiet: true)
+                    MachineIndicator(connection: connection, size: 5, quiet: true, progress: name.progress)
                 } else if let news = name.news {
                     Circle()
                         .fill(news == .needsYou ? AnyShapeStyle(.orange) : AnyShapeStyle(.tint))
@@ -187,7 +189,7 @@ private struct NameTrack: View {
         .clickablePointer()
         .help(name.title)
         .accessibilityLabel(name.title)
-        .accessibilityValue(name.isAway ? (name.isStopped ? "Stopped" : "Not connected") : name.news?.said ?? "")
+        .accessibilityValue(name.isAway ? (name.isStopped ? "Stopped" : name.progress.map { "Installing, \(Int(($0 * 100).rounded())) percent" } ?? "Not connected") : name.news?.said ?? "")
         .accessibilityAddTraits(name.isOn ? .isSelected : [])
     }
 }

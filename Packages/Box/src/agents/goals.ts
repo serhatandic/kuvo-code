@@ -116,14 +116,15 @@ export class Goals {
     } catch {}
   }
 
-  /** Follows the goals kept from before, and looks at those still working: their last turn may have ended meanwhile. */
+  /** Follows the goals kept from before, and looks at those still working: their last turn may have
+   * ended meanwhile. The others go if their conversation was deleted meanwhile. */
   start() {
     for (const goal of this.goals.values()) {
-      if (goal.state === "working" || goal.state === "paused") this.follow(goal.session)
+      this.follow(goal.session)
       if (goal.state === "working") {
         this.firstLooks.add(goal.session)
         this.look(goal.session)
-      }
+      } else void this.forgetIfGone(goal.session)
     }
   }
 
@@ -218,6 +219,14 @@ export class Goals {
     if (this.goals.has(session)) this.clear(session)
   }
 
+  /** A conversation deleted while the box was stopped, or its feed away: its goal goes (a working
+   * one's look finds that itself). */
+  private async forgetIfGone(session: string) {
+    await this.place(session).api.request("GET", at(session)).catch((error: any) => {
+      if (error?.status === 404 && !this.stopped) this.forget(session)
+    })
+  }
+
   /** The bridge is stopping: nothing more is followed, checked or kept. */
   stopAll() {
     this.stopped = true
@@ -231,6 +240,7 @@ export class Goals {
 
   // MARK: Following a session
 
+  /** Followed while it has a goal, over or not, so its goal goes with it. */
   private follow(session: string) {
     if (this.stops.has(session)) return
     this.stops.set(
@@ -240,9 +250,10 @@ export class Goals {
           // A subagent's events come to its parent's listener too: only the session's own turns count.
           if (data?.sessionID !== session) return
           if (type === "session.deleted") return this.forget(session)
-          if (type === "session.execution.succeeded" || type === "session.execution.failed" || type === "session.execution.interrupted") this.look(session)
+          // (Its metadata: brought back from Archived, a turn waiting there is checked.)
+          if (type === "session.execution.succeeded" || type === "session.execution.failed" || type === "session.execution.interrupted" || type === "session.metadata.updated") this.look(session)
         },
-        reconnected: () => this.look(session),
+        reconnected: () => (this.goals.get(session)?.state === "working" ? this.look(session) : void this.forgetIfGone(session)),
       }),
     )
   }
@@ -323,11 +334,19 @@ export class Goals {
       return this.pause(goal, "error", idle.error?.message ? `The turn failed: ${sentence(String(idle.error.message))}` : "The turn failed.")
     }
     const worked = turn.some((message) => message.type === "assistant" && (message.content ?? []).some((part: any) => part?.type === "tool"))
+    const info = await sessionInfo(place.api, session).catch((): SessionInfo => ({ id: session }))
+    if (!current()) return
+    // Archived (from any app), as its wake-ups wait: this turn is checked once it's brought back,
+    // as it would have been now (one cut short as the box stopped still isn't taken as yours).
+    if (info.archived) {
+      if (afterStart) this.firstLooks.add(session)
+      return
+    }
     goal.checking = true
     this.changed(goal)
     let verdict: { verdict: Verdict; reason: string }
     try {
-      verdict = await this.check(session, place, goal.condition, messages, goal.started)
+      verdict = await this.check(info, place, goal.condition, messages, goal.started)
     } catch (error: any) {
       goal.checking = false
       if (!current()) return void this.changed(goal)
@@ -344,8 +363,6 @@ export class Goals {
       goal.state = verdict.verdict === "met" ? "met" : "unmet"
       goal.ended = this.now()
       if (verdict.verdict === "impossible") goal.note = verdict.reason
-      this.stops.get(session)?.()
-      this.stops.delete(session)
       return void this.changed(goal)
     }
     goal.quiet = worked ? 0 : goal.quiet + 1
@@ -377,8 +394,7 @@ export class Goals {
   }
 
   /** The check's verdict on a turn: the session's model, apart from the agent (oneoff.ts). */
-  private async check(session: string, place: GoalPlace, condition: string, messages: any[], since: number) {
-    const info = await sessionInfo(place.api, session).catch((): SessionInfo => ({ id: session }))
+  private async check(info: SessionInfo, place: GoalPlace, condition: string, messages: any[], since: number) {
     return parseVerdict(await freshAnswer(place.api, place === this.places.engine, info, checkPrompt(condition, transcript(messages, since))))
   }
 

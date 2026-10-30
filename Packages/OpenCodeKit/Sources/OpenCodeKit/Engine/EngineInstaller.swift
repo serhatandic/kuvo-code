@@ -129,15 +129,11 @@ public struct EngineInstaller: Sendable {
         return (try? sha256(of: binary)) == expected
     }
 
-    /// The file's SHA-256, in hex, read a megabyte at a time.
-    public static func sha256(of file: URL) throws -> String {
+    /// The file's SHA-256, in hex.
+    static func sha256(of file: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
-        var hasher = SHA256()
-        // Each chunk read is autoreleased: without a pool of its own, all 200 MB of the binary
-        // stay in memory until the task that checks it ends.
-        while let chunk = try autoreleasepool(invoking: { try handle.read(upToCount: 1 << 20) }), !chunk.isEmpty { hasher.update(data: chunk) }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return try handle.digest(SHA256.self).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Downloads, verifies and unpacks the pinned release. `progress` gets the fraction downloaded.
@@ -208,13 +204,9 @@ public struct EngineInstaller: Sendable {
     static func verifyIntegrity(of file: URL, against release: EngineRelease) throws {
         guard release.integrity.hasPrefix("sha512-") else { throw EngineInstallError.integrityMismatch }
         let expected = Data(base64Encoded: String(release.integrity.dropFirst("sha512-".count)))
-        var hasher = SHA512()
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
-        while let chunk = try autoreleasepool(invoking: { try handle.read(upToCount: 1 << 20) }), !chunk.isEmpty {
-            hasher.update(data: chunk)
-        }
-        guard Data(hasher.finalize()) == expected else { throw EngineInstallError.integrityMismatch }
+        guard Data(try handle.digest(SHA512.self)) == expected else { throw EngineInstallError.integrityMismatch }
     }
 
     /// Checks the binary is intact and signed with a Developer ID from opencode's team.
@@ -272,3 +264,14 @@ private final class DownloadProgress: NSObject, URLSessionTaskDelegate, Sendable
 }
 
 #endif
+
+extension FileHandle {
+    /// The rest of the file's `H` hash, read a megabyte at a time. Each chunk read is autoreleased:
+    /// without a pool of its own, the whole file (the 200 MB engine, at each start) stays in memory
+    /// until the task that reads it ends.
+    public func digest<H: HashFunction>(_: H.Type) throws -> H.Digest {
+        var hasher = H()
+        while let chunk = try autoreleasepool(invoking: { try read(upToCount: 1 << 20) }), !chunk.isEmpty { hasher.update(data: chunk) }
+        return hasher.finalize()
+    }
+}

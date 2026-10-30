@@ -246,6 +246,8 @@ connection.
     `retry` isn't counted, so one tried again and again leaves room for the rest), and only
     to a conversation an agent could be. A subagent's, a group chat's seat or one put away doesn't
     take letters. One it can't look up now (its engine starting) is answered `retry`, and so is one
+    for a conversation the engine doesn't have while the coding agents' bridge isn't running (it may
+    be a Claude Code or Codex one; bridge 0.9.118, before which it was refused), and one
     for a conversation moving to or from another computer now, or that lives on another one now
     (`moved`): it reaches it where it lives once the move is over (bridge 0.9.63). A box knows by
     its own moves (`kuvo/moves`; bridge 0.9.108, before which this Mac's box asked its app).
@@ -703,6 +705,8 @@ app's version, written by a Mac after it sets the box up, or by the box when it 
 - **Setup** also sends the Mac's ID (`macID`, as its engine launches name it). The bridge keeps
   `tolerantIDs[macID]`, set again at each setup, and notes in `run/launchers.json` which Mac
   started the engine (from `run/engine.json`'s `notes.mac`).
+- **Setup** also sends the Mac's name (`macName`), which the bridge keeps by the Mac's key
+  (`macNames`), dropped with that Mac, for `kuvo/info`'s `macs`.
 
 A Mac with Kuvo Code 0.7 or before still connects, and puts its own files there as it always
 did: the box keeps working as itself ("For released Macs").
@@ -973,7 +977,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   one there through the engine, as for a project). A machine's bridge also says whether its engine
   is `running`, and whether it's `stopped` on purpose (it stays down until it's started, from a Mac
   or a phone), and `home`, the Mac that started its engine (`{"mac", "name"?}`, its name where
-  its start noted one); a Mac also names `integrations`, each integration's name by its MCP
+  its start noted one). It also says who uses it, for an uninstall to name whom it would stop it
+  for: `macs`, the Macs that set it up (`[{key, name?, seen}]`: each one's key, its name where its
+  setup gave one, `macName`, and when it was last heard from, in ms), and `phones`, how many phones
+  reach it. A Mac also names `integrations`, each integration's name by its MCP
   server's (`{"microsoft-365": "Outlook and Microsoft 365", …}`), for a card when one asks something.
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
   Antigravity), through the agents bridge beside the host's engine, which answers the same paths
@@ -1208,12 +1215,13 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     set aside in Accounts (Settings says Sign In Again, not Sign In). `problem`: the settings
     file can't be changed.
   - `POST kuvo/integrations/<id>` with `{"keys"?: {"<name>": "<value>"}}` adds it, as Connect
-    (or Add Key…) does: with the keys given, or those the computer has; one added already is
-    written again (the engine reads its keys again), and with new keys its server connects again a
+    (or Add Key…) does: with the keys given, and those not given as the computer has them (Change
+    Key may send only the one you changed); one added already is written again as it is then,
+    with what another client changed meanwhile (the engine reads its keys again), and with new keys its server connects again a
     moment later, in the engine's own copy and in every folder it has open (`api/debug/location`;
     over `box route`, in a process of its own, `kuvo-link.js box reconnect <id>`). `200 {"integration"}`, as listed; `400 {"message"}` without the keys it needs;
-    `404` for none; `409 {"message"}` for one used on its site, or a settings file that can't be
-    changed; `503 {"message"}` when its keys can't be kept (this Mac's Keychain, through its app).
+    `404` for none; `409 {"message"}` for one used on its site, a settings file that can't be
+    changed, or one removed while its keys were saved; `503 {"message"}` when its keys can't be kept (this Mac's Keychain, through its app).
   - `DELETE kuvo/integrations/<id>` removes it, as Remove… does: bots' own keys for it there first
     (each computer keeps its bots' keys itself: "Bots' own keys"), then it, its sign-in, what its
     server kept and its keys. `200 {}`; for one not added, `200 {}` when keys of it were left (a
@@ -1324,6 +1332,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     sessions, bots, sign-ins and keys, and still in `kuvo/hosts`: `200 {}`. `POST
     kuvo/machines/<id>/uninstall` does as Uninstall from <machine> does: also stops its engine
     there and deletes the sign-ins and keys it keeps, and it leaves `kuvo/hosts`: `200 {}`.
+  - A machine connecting has `step` (`{name, sent?, total?, fraction?}`): `name` is `checking`,
+    `downloading` (the engine's package to the Mac, `fraction` of it), `copying` (it, to the
+    machine over SSH: `sent` bytes of `total`), `starting` or `reading` (its sessions), for a
+    client to show how far. One whose box said who else uses it has `alsoUsedBy` (`{macs: [name],
+    phones}`, this Mac left out), for Remove's dialog to name whom Uninstall would stop it for.
   - A machine another Mac runs has `home` (`{"name"?}`, that Mac's name where its start noted
     one, as `kuvo/info`'s `home` says it); one this Mac runs has none. `POST kuvo/machines/<id>/home` makes this Mac its home, as Make This Mac Its Home does:
     the engine starts again there as this Mac's, with this Mac's accounts; its sessions, bots and
@@ -1387,8 +1400,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     branch left `base` for `branch`, or git's empty tree before the first commit); `patch` git's
     diff of the folder's files with each whole file as context (`a/` and `b/` prefixes, paths not
     quoted, renames found); `untracked` the new files git doesn't know (not for `staged`; a
-    repository inside this one ends in `/`), and `hashes` git's hash of each, by path, so a client
-    reads one again (`kuvo/file`) only when it changed; `uncommitted`, anything not committed yet
+    repository inside this one ends in `/`), and `hashes` a stamp of each (its size and when it
+    last changed, opaque to a client), by path, so a client reads one again (`kuvo/file`) only when
+    it changed; `uncommitted`, anything not committed yet
     (always true but for `branch`). `500 {"message"}` when git couldn't say.
   - `POST kuvo/git/stage`, `…/unstage` or `…/discard` with `{"root", "path", "oldPath"?, "status":
     "added|deleted|modified|renamed", "scope"?}` → `200 {}`, or `422 {"message"}` with what went
@@ -1411,7 +1425,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   "home", "parent", "folders": [{name, repository?}]}`, ordered as Finder orders names, without
   hidden ones unless `hidden=1`. No `path`, or `~`: the home folder; `~/` starts there. `parent` is
   null at `/`; `repository`, a git repository's own checkout. `404 {"message"}` for no folder there,
-  `403` for one it can't read, `400` for a path that isn't a full one.
+  `403` for one it can't read, `400` for a path that isn't a full one; each refusal with `reason`,
+  why as the computer says it (`Permission denied`, `No such folder`, `Not a folder`), so a client
+  never shows a folder it couldn't read as empty. With `files=1` (`folders.files`), its files too,
+  as a Files panel lists a folder: `files`, their names in the same order (with `hidden=1`, hidden
+  ones too; `.DS_Store` left out).
   `POST kuvo/folders {"path"}` makes a new folder in one that's there, as a folder panel's New
   Folder does → `{"path"}`; `409 {"message"}` for something there already, `404` when the folder
   it's in isn't there, `403` when one can't be made there, `400` for a path that isn't a full one.
@@ -1643,7 +1661,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `every` 30m, 2h, 1d, 1w or weekdays, at least 5m), with the computer's own clock and weekends;
   `400 {"message"}` for what can't be one, `409` with 50 waiting. `POST
   kuvo/wakes/<session>/pause` with `{"paused": true}` holds them (a pause of your own), `false`
-  lets them go; with `{"archived": true}` they're held as archiving holds them (a client that
+  lets them go (not archiving's hold: they still wait until it's back, bridge 0.9.121); with `{"archived": true}` they're held as archiving holds them (a client that
   archived it on the engine directly says so), `false` lets go of only that hold. Both answer the
   list as it is then. `POST
   kuvo/wakes/<session>/cancel` with `{"wake": "<id>"}` or `{"watch": "<letters>"}` cancels one;
@@ -1764,11 +1782,14 @@ Grok). With none to answer, the goal pauses and says so. A client reaches them a
   "not_met" | "impossible", reason, at}`, its reason what's left or what shows it's met. Times in
   ms since 1970.
 - The bridge's events (`kuvo/agents/api/event`) carry `kuvo.goal.updated` `{sessionID, goal}` for
-  each change, `goal` null once it's put away (or its conversation deleted).
+  each change, `goal` null once it's put away (or its conversation deleted, over or not, also while
+  the box was stopped).
 - In the conversation, the goal's messages to the agent are notes (`synthetic`) whose text starts
   with `[Goal] `: show their `description` ("Goal: …", "Not met yet: …") as the goal's. A turn
   you stop pauses it ("The turn was stopped."); so does one that fails. A turn cut short as the box
-  stopped is checked once it's back, as any turn, and one is never checked twice.
+  stopped is checked once it's back, as any turn, and one is never checked twice. While its
+  conversation is archived (`kuvo.archived` in its metadata, or the engine's own), the goal waits,
+  still `working`: its last turn is checked once the conversation is brought back (bridge 0.9.121).
 - "/goal" in a composer: `/goal <condition>` sets it, `/goal` alone shows it, and `/goal pause`,
   `/goal resume` and `/goal clear` (or `stop`, `off`, `reset`, `none`, `cancel`) do what they say
   (OpenCodeKit's `GoalCommand`, for every client alike).
@@ -1952,6 +1973,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `engine.restart` | `POST kuvo/engine/restart` |
 | `file` | `kuvo/file` |
 | `folders` | `kuvo/folders` |
+| `folders.files` | `kuvo/folders?files=1`: a folder's files too, and `reason` on a refusal |
 | `git` | `kuvo/git/…`: Changes (bridge 0.9.94) |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
@@ -1987,9 +2009,9 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `sign-in.return` | `POST kuvo/sign-in/return` |
 | `skills` | `kuvo/skills…` and `kuvo/skill-library…` |
 | `skills.trash` | `kuvo/skill-trash…`: Recently Deleted, and restoring from it |
-| `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.113) |
+| `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.118) |
 | `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
-| `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.114) |
+| `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.118) |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
@@ -2034,7 +2056,7 @@ On a machine the bridge keeps its state in `~/.kuvo-code/run/link.json` (mode 60
 
 ```json
 {"relay": "wss://…", "secret": "…", "key": "<static private key>", "sign": "<signing key's seed>", "mac": "<the last Mac's static key>",
- "macs": ["<each Mac that set it up>"], "macSigns": {"<Mac>": "<its signing key>"}, "macSeen": {"<Mac>": <when it came, here>},
+ "macs": ["<each Mac that set it up>"], "macSigns": {"<Mac>": "<its signing key>"}, "macSeen": {"<Mac>": <when it came, here>}, "macNames": {"<Mac>": "<its name>"},
  "docs": {"<origin> <kind>": {"d": "…", "s": "…"}}, "own": {"<kind>": {"n", "h", "b"}}, "views": {"<origin>": {"n", "h"}},
  "phones": [{"key": "…", "name": "…", "added": 1760000000, "from": "mac", "mac": "<the Mac that listed it>", "address": "…", "pairing": "…"}],
  "removed": [{"key": "…", "pairing": "…"}]}
@@ -2382,6 +2404,16 @@ Mac's app runs it as it starts its engine, and a machine's start scripts do, so 
 after a restart with no Mac there gets it too; a box too old to know it starts its engine as
 before. A Mac sends none.
 
+A machine's engine, its coding agents and its link find programs on the PATH your login shell sets
+up there (`~/.local/bin` from your profile, nvm's node from `.bashrc`), not the bare one a start over
+SSH or from cron gets: `kuvo-link.js login-path` (bridge 0.9.117) prints it, read from an interactive
+login shell, then a login shell only (`$SHELL`; on Linux your account's when that's cron's `/bin/sh`;
+none for nushell or csh), followed by the folders of the PATH it was run with; or nothing when neither
+answers in time. A machine's start scripts run it once before starting the engine, and it keeps what
+it read in `run/login-path`, which the link and the coding agents' bridge go by; the bridge reads it
+again only after it installs or updates an agent (a .bashrc that starts an `ssh-agent` when there's
+none would leave one running with each read). This Mac's app reads its own shell's for its engine.
+
 ### Personalities
 
 The personalities you make are one library on every computer: each keeps its copy (a Mac in
@@ -2583,7 +2615,7 @@ and as a box starts.
 
 ### Sandbox
 
-Each box runs its agents' commands in a sandbox (`sandbox` in `features`, bridge 0.9.113; its asks, `sandbox.asks`, 0.9.114) wherever
+Each box runs its agents' commands in a sandbox (`sandbox` in `features` and its asks, `sandbox.asks`, bridge 0.9.118) wherever
 it can, with no switch: the way out is per command (the card that asks you about one it refused).
 On, each command the engine runs (an agent's shell tool, and yours with `!`)
 writes only in its conversation's folder, that folder's git repository (a real one: a `.git` that's

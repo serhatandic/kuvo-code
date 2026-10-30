@@ -19,22 +19,34 @@ const catalog = { integrations: [
   { id: "todoist", title: "Todoist", summary: "Tasks", kind: "Code and Work", symbol: "checklist", site: "https://todoist.com", how: "Open source · your key", way: "package",
     keys: [{ name: "API_KEY", label: "API token", prompt: "From Todoist" }], variables: { API_KEY: shared },
     settings: { type: "local", command: ["kuvo-npx", "@doist/todoist-mcp@1.0.0"], environment: { API_KEY: `{file:~/.kuvo-code/box/keys/${shared}}` }, codemode: false } },
+  { id: "caldav", title: "CalDAV", summary: "Calendars", kind: "Mail and Calendar", symbol: "calendar", site: "https://caldav.example", how: "Open source · your key", way: "package",
+    keys: [{ name: "CALDAV_USERNAME", label: "user name", prompt: "Yours" }, { name: "CALDAV_PASSWORD", label: "password", prompt: "An app password" }],
+    variables: { CALDAV_USERNAME: "KUVO_KEY_CALDAV_CALDAV_USERNAME", CALDAV_PASSWORD: "KUVO_KEY_CALDAV_CALDAV_PASSWORD" },
+    settings: { type: "local", command: ["kuvo-npx", "caldav-mcp@1.0.0"], environment: { CALDAV_USERNAME: "{file:~/.kuvo-code/box/keys/KUVO_KEY_CALDAV_CALDAV_USERNAME}", CALDAV_PASSWORD: "{file:~/.kuvo-code/box/keys/KUVO_KEY_CALDAV_CALDAV_PASSWORD}" }, codemode: false } },
   { id: "notion", title: "Notion", summary: "Pages", kind: "Code and Work", symbol: "doc.text", site: "https://notion.so", how: "Official", way: "official",
     settings: { type: "remote", url: "https://mcp.notion.com/mcp", codemode: false } },
   { id: "linkedin", title: "LinkedIn", summary: "Posts", kind: "Social", symbol: "person", site: "https://linkedin.com", how: "In the browser", way: "browser" },
 ] };
 
-/** An engine that lists its MCP servers as `servers()` says and its sign-ins as `credentials()`,
- * with `folders` open, and notes what it's asked (and for which folder). */
+/** An engine that lists its MCP servers as `servers()` says and its sign-ins as `credentials()`
+ * (one that throws: it can't say), with `folders` open, and notes what it's asked (and for which
+ * folder). */
 export async function standInEngine(servers, folders = [], credentials = () => []) {
   const asked = [];
   const server = http.createServer((request, response) => {
     const folder = request.headers["x-opencode-directory"];
     asked.push(`${request.method} ${request.url}${folder ? ` in ${decodeURIComponent(folder)}` : ""}`);
     asked.onAsked?.();
+    // A list it can't give (one that throws): answered as an engine too busy to say.
+    let data;
+    try {
+      data = request.url === "/api/debug/location" ? folders.map(directory => ({ directory })) : { data: request.url === "/api/mcp" ? servers() : request.url === "/api/credential" ? credentials() : [] };
+    } catch (error) {
+      response.writeHead(503, { "content-type": "application/json" });
+      return response.end(JSON.stringify({ message: error.message }));
+    }
     response.writeHead(200, { "content-type": "application/json" });
-    if (request.url === "/api/debug/location") return response.end(JSON.stringify(folders.map(directory => ({ directory }))));
-    response.end(JSON.stringify({ data: request.url === "/api/mcp" ? servers() : request.url === "/api/credential" ? credentials() : [] }));
+    response.end(JSON.stringify(data));
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   after(() => { server.closeAllConnections(); server.close(); });
@@ -72,7 +84,7 @@ export function integrationScenarios({ link, home, mac, store }) {
 
   test("listed from the catalog, added with its keys or the ones it has, never one used on its site", async () => {
     const all = await listed();
-    const expected = [...(mac ? [["apple-calendar", false, undefined]] : []), ["microsoft-365", false, undefined], ["todoist", false, false], ["notion", false, undefined], ["linkedin", false, undefined]];
+    const expected = [...(mac ? [["apple-calendar", false, undefined]] : []), ["microsoft-365", false, undefined], ["todoist", false, false], ["caldav", false, false], ["notion", false, undefined], ["linkedin", false, undefined]];
     assert.deepEqual(all.map(each => [each.id, each.added, each.keysSaved]), expected, mac ? "with those that use this Mac's own apps" : "without those that use a Mac's own apps");
     assert.ok(all.every(each => each.settings === undefined && each.variables === undefined && each.signInFile === undefined), "what it runs stays the box's");
 
@@ -153,6 +165,35 @@ export function integrationScenarios({ link, home, mac, store }) {
     // Signed in again: nothing ended.
     credentials = [{ ...credentials[0], active: true }];
     assert.deepEqual(await shown().then(each => [each.health, each.signInEnded]), ["connected", undefined]);
+  });
+
+  // One whose sign-in list the engine didn't give (busy, or it timed out) isn't called signed out:
+  // nothing is known of its sign-in, so it's as the engine says.
+  test("its engine not saying who's signed in never turns a connected one into Sign In", async t => {
+    let credentials = () => [{ id: "cred_1", integrationID: "mcp_notion", label: "you@example.com", active: true, value: { type: "oauth" } }];
+    const { engine } = await standInEngine(() => [{ name: "notion", status: { status: "connected" }, integrationID: "mcp_notion" }], [], () => credentials());
+    assert.equal((await ask("POST", "kuvo/integrations/notion", {})).status, 200);
+    t.after(async () => { await ask("DELETE", "kuvo/integrations/notion"); });
+    const shown = async () => (await listed(engine)).find(each => each.id === "notion");
+    assert.equal((await shown()).health, "connected");
+    credentials = () => { throw new Error("busy"); };
+    assert.deepEqual(await shown().then(each => [each.health, each.signInEnded]), ["connected", undefined]);
+  });
+
+  // Change Key for one of its keys (the phone sends what you changed): saved, and the others kept.
+  test("one of several keys changed alone is saved, the others kept; a first one without them all isn't added", async t => {
+    const user = "KUVO_KEY_CALDAV_CALDAV_USERNAME", password = "KUVO_KEY_CALDAV_CALDAV_PASSWORD";
+    t.after(async () => { await ask("DELETE", "kuvo/integrations/caldav"); });
+    const half = await ask("POST", "kuvo/integrations/caldav", { keys: { CALDAV_PASSWORD: "pw_1" } });
+    assert.equal(half.status, 400, "not added with half its keys");
+    assert.match(half.value.message, /user name and password/);
+    assert.equal(settings().mcp.servers.caldav, undefined);
+    assert.equal(store.kept(password), null, "nor that half kept");
+    assert.equal((await ask("POST", "kuvo/integrations/caldav", { keys: { CALDAV_USERNAME: "me", CALDAV_PASSWORD: "pw_1" } })).status, 200);
+    const changed = await ask("POST", "kuvo/integrations/caldav", { keys: { CALDAV_PASSWORD: " pw_2 " } });
+    assert.equal(changed.status, 200);
+    assert.equal(store.kept(password), "pw_2", "the new one saved");
+    assert.equal(store.kept(user), "me", "the other kept");
   });
 
   test("its keys through kuvo/keys: listed, read, set and removed, never a bot's own", async () => {
