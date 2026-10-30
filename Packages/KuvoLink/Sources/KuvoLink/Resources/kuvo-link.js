@@ -16122,7 +16122,7 @@ function runCommand(command, folder, env, timeout, signal, name = String(Math.ra
 }
 
 // Packages/Box/src/link/fence/outside.ts
-var book = askBook("sq_", { answer: "no" });
+var book = askBook("sq_", { answer: "no", unanswered: true });
 var listSandboxAsks = book.list;
 var onSandboxAsksChanged = book.onChanged;
 var answerSandboxAsk = book.answer;
@@ -16250,6 +16250,8 @@ async function askToRun(caller, args, signal) {
     ...always ? { always } : {},
     ...IS_MAC ? {} : { machine: os8.hostname() }
   }, signal);
+  if (answered.unanswered)
+    return { text: "Nobody answered in time, so it didn't run. Don't get around the sandbox another way: go on without it, or ask the user when they're back.", isError: false };
   if (answered.answer === "no")
     return { text: "The user said no: don't run it, nor get around the sandbox another way. Find another way to do the task, or ask them why.", isError: false };
   let how = "once";

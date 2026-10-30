@@ -2737,7 +2737,8 @@ engine's record of it, never the command's), with the box's environment but with
 and secrets of Kuvo Code's own processes, and hands back what it printed (the last 64 KB) and how it ended. The
 agent's text starts `Ran outside the sandbox · Allowed once` or `· Always for this: …` (with the
 folder its commands now write in); on Don't Allow,
-`The user said no: …`, and nothing runs. An ask nobody answers in 15 minutes counts as no. The agent
+`The user said no: …`, and nothing runs. An ask nobody answers in 15 minutes runs nothing either, and
+the text starts `Nobody answered in time` (a client shows it as no answer, not as your no). The agent
 never lets a command out itself, and no tool answers an ask (a bot neither): only a client. A bot's
 seat in a group chat is asked once only, never with Always.
 

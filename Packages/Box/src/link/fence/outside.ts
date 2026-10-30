@@ -25,9 +25,11 @@ import { addRule, writeRuleWouldBe } from "./allowed";
 export interface SandboxAnswer {
   answer: "once" | "always" | "no";
   client?: string;
+  /** Nobody answered in time (or the agent stopped waiting): not your no. */
+  unanswered?: boolean;
 }
 
-const book = askBook<SandboxAsk, SandboxAnswer>("sq_", { answer: "no" });
+const book = askBook<SandboxAsk, SandboxAnswer>("sq_", { answer: "no", unanswered: true });
 export const listSandboxAsks = book.list;
 export const onSandboxAsksChanged = book.onChanged;
 export const answerSandboxAsk = book.answer;
@@ -160,6 +162,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
     ...(always ? { always } : {}),
     ...(IS_MAC ? {} : { machine: os.hostname() }),
   }, signal);
+  if (answered.unanswered) return { text: "Nobody answered in time, so it didn't run. Don't get around the sandbox another way: go on without it, or ask the user when they're back.", isError: false };
   if (answered.answer === "no") return { text: "The user said no: don't run it, nor get around the sandbox another way. Find another way to do the task, or ask them why.", isError: false };
   let how: "once" | "always" = "once";
   if (answered.answer === "always" && always) {
