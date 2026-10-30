@@ -19128,7 +19128,9 @@ var MAC_BOX_ROUTES = [
   "kuvo/moves",
   "kuvo/work",
   "kuvo/vault",
-  "kuvo/sandbox"
+  "kuvo/sandbox",
+  "kuvo/search",
+  "kuvo/git"
 ];
 var macAnswersAlso = (route) => /^kuvo\/accounts\/[^/]+\/forget$/.test(route) || /^kuvo\/shell\/[^/]+\/stop$/.test(route) || route === "kuvo/sessions" || QUEUE_ROUTE.test(route);
 var macAnswers = (route) => MAC_BOX_ROUTES.some((area) => route === area || route.startsWith(`${area}/`)) || macAnswersAlso(route);
