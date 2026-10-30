@@ -155,7 +155,7 @@ export class GroupRunner {
   /** Parts being handed to their bots or followed, so none is followed twice. */
   private following = new Set<string>()
   /** Bots' answers under way as the runner last stopped, read from their seats still, by chat. */
-  private answering = new Map<string, AbortController>()
+  private answering = new Map<string, { abort: AbortController; done: Promise<void> }>()
   /** This computer's bots' seats. */
   readonly seats: Seats
 
@@ -525,7 +525,7 @@ export class GroupRunner {
     live.abort = undefined
     live.run = undefined
     live.since = undefined
-    this.answering.get(id)?.abort()
+    this.answering.get(id)?.abort.abort()
     this.setPaused(id, false)
     live.speaking = undefined
     live.activity = undefined
@@ -577,20 +577,30 @@ export class GroupRunner {
    * never sent again; one gone from its seat, or a seat gone, leaves nothing to say.
    */
   private followTurns() {
-    for (const [id, kept] of this.chats) {
-      const turning = kept.turning
-      if (!turning) continue
-      const bot = this.member(turning.bot)
-      if (!bot || bot.box || kept.status !== "active" || !kept.group.members.includes(turning.bot)) {
-        this.setTurning(id, undefined)
-        continue
-      }
-      const abort = new AbortController()
-      this.answering.set(id, abort)
-      this.keepAwake(id)
-      const { seat, agents, prompt, sent } = turning
-      void this.seats
-        .turn(
+    for (const id of this.chats.keys()) void this.followTurn(id)
+  }
+
+  /**
+   * One chat's (`followTurns`): it's the bot talking meanwhile, so a message of yours goes to its
+   * seat, and a discussion starts only once its answer is in. Done when it is, or when there's none.
+   */
+  private followTurn(id: string): Promise<void> {
+    const under = this.answering.get(id)
+    if (under) return under.done
+    const kept = this.chats.get(id)
+    const turning = kept?.turning
+    if (!kept || !turning) return Promise.resolve()
+    const bot = this.member(turning.bot)
+    if (!bot || bot.box || kept.status !== "active" || !kept.group.members.includes(turning.bot)) {
+      this.setTurning(id, undefined)
+      return Promise.resolve()
+    }
+    const abort = new AbortController()
+    const live = this.state(id)
+    live.speaking = turning.bot
+    const { seat, agents, prompt, sent } = turning
+    const done = this.seats
+      .turn(
           { id: turnID(), chat: this.context_(kept.group), bot: turning.bot, seat, agentsSeat: agents, kind: turning.wrapUp ? "wrapUp" : "turn", text: "" },
           () => {},
           abort.signal,
@@ -605,11 +615,19 @@ export class GroupRunner {
           if (!(error instanceof Cancelled) && !(error instanceof SeatGone)) console.error(`${turning.bot}'s answer in ${id} couldn't be read:`, reason(error))
         })
         .finally(() => {
-          if (this.answering.get(id) === abort) this.answering.delete(id)
+          if (this.answering.get(id)?.abort === abort) this.answering.delete(id)
           if (this.chats.get(id)?.turning?.prompt === prompt) this.setTurning(id, undefined)
+          if (live.speaking === turning.bot) {
+            live.speaking = undefined
+            live.activity = undefined
+          }
           this.keepAwake(id)
+          this.told(id)
         })
-    }
+    this.answering.set(id, { abort, done })
+    this.keepAwake(id)
+    this.told(id)
+    return done
   }
 
   private begin(id: string) {
@@ -620,6 +638,8 @@ export class GroupRunner {
     live.abort = abort
     this.setTalking(id, true)
     void (async () => {
+      // A bot's answer still being read from its seat (the runner started over as it talked) is in first.
+      await this.followTurn(id)
       // A message of yours that came as it was ending (during the wrap-up) starts another.
       let epoch: number
       do {

@@ -562,6 +562,32 @@ describe("a group chat on a machine", () => {
     expect(again.talk("grp_team000001").paused).toBe(true)
   })
 
+  test("Keep Going while a bot's answer from before the bridge started over is still coming: it isn't asked again, and its answer is in the chat once", async () => {
+    let gone = false
+    const engineOf = server(engine.url, "x")
+    const { groups } = runner({ engine: { request: (...args: Parameters<typeof engineOf.request>) => (gone ? new Promise<never>(() => {}) : engineOf.request(...args)) } })
+    engine.lines = { Ada: ["Here it is.", "Second."], Ben: [] }
+    engine.held.add("Ada")
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Go")
+    await until(() => engine.prompts().length === 1)
+    const seat = engine.prompts()[0].path
+    gone = true
+    const { groups: again } = runner()
+    again.start()
+    again.keepGoing("grp_team000001")
+    // Ada is the one talking still.
+    expect(again.talk("grp_team000001").speaking).toBe("bot_ada")
+    engine.release("Ada")
+    const ada = () => again.get("grp_team000001")!.messages.filter((message) => message.author === "bot_ada").map((message) => message.text)
+    await until(() => !again.talk("grp_team000001").discussing && ada().length > 0)
+    expect(ada().filter((text) => text.includes("Here it is."))).toEqual(["Here it is."])
+    // Its seat was given "Go" once, and asked next only after it answered.
+    const asked = engine.prompts().filter((prompt) => prompt.path === seat)
+    expect(String(asked[0].body.text)).toContain("Go")
+    expect(asked.slice(1).every((prompt) => !String(prompt.body.text).includes("User: Go"))).toBe(true)
+  })
+
   test("let go of (moved away), its seats stay; deleted, they go", async () => {
     const { groups } = runner()
     const seated = { ...group(), seats: { bot_ada: "ses_seatA" } }
