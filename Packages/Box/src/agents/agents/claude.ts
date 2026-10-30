@@ -830,6 +830,10 @@ class ClaudeThread implements Thread {
   get sandboxed() {
     return Boolean(this.query) && this.fenceShellMissing === false
   }
+  // (Started while the sandbox was off: its commands run with your own shell.)
+  get outside() {
+    return Boolean(this.query) && this.fenceShellMissing === undefined
+  }
 
   private async read(query: any) {
     let ended: unknown

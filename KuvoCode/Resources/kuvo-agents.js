@@ -6091,6 +6091,33 @@ function fenceOn() {
   const where = folder();
   return Boolean(where) && process.env.KUVO_SANDBOX !== "off" && existsSync7(join14(where, "on"));
 }
+function fenceGeneration(where) {
+  try {
+    const on = statSync5(join14(where, "on"));
+    return `${Math.floor(on.mtimeMs)}:${on.ino}`;
+  } catch {
+    return "";
+  }
+}
+var noted = "";
+function noteAgentsInside(inside) {
+  const where = folder();
+  if (!where)
+    return;
+  const on = process.env.KUVO_SANDBOX === "off" ? "" : fenceGeneration(where);
+  const note = inside && on ? JSON.stringify({ pid: process.pid, on }) : "";
+  if (note === noted)
+    return;
+  const record = join14(where, "agents");
+  try {
+    if (note) {
+      writeFileSync10(record + ".new", note, { mode: 384 });
+      renameSync7(record + ".new", record);
+    } else
+      rmSync6(record, { force: true });
+    noted = note;
+  } catch {}
+}
 function fenceRules() {
   const where = folder();
   if (!where || process.env.KUVO_SANDBOX === "off" || !existsSync7(join14(where, "on")))
@@ -6204,7 +6231,7 @@ function fenceAgent(program, directory, mine) {
       KUVO_FENCE_WORK: work,
       KUVO_FENCE_GIT: repositoryOf2(work),
       KUVO_FENCE_OWN: places(mine.homes),
-      KUVO_FENCE_READ: places(mine.read),
+      KUVO_FENCE_READ: places(mine.read.filter((place) => !mine.homes.some((home) => real(place) === real(home) || real(place).startsWith(real(home) + "/")))),
       KUVO_FENCE_STATE: names(mine.state),
       KUVO_FENCE_KEPT: names(mine.kept),
       KUVO_FENCE_PORT: String(mine.port ?? 0)
@@ -6505,6 +6532,9 @@ class AcpThread {
   }
   get sandboxed() {
     return this.fenced;
+  }
+  get outside() {
+    return Boolean(this.rpc && !this.rpc.isClosed && !this.fenced);
   }
   startedOver = false;
   onOwnTurn;
@@ -8293,7 +8323,7 @@ class AntigravityAgent {
         } catch {}
       }, 300);
       try {
-        await rpc.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false }, clientInfo: { name: "kuvo-code", version: "1" } }, 120000);
+        await rpc.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: !whole, writeTextFile: !whole }, terminal: false }, clientInfo: { name: "kuvo-code", version: "1" } }, 120000);
         await rpc.request("authenticate", { methodId: "oauth-personal" }, 600000);
         const setup = await rpc.request("session/new", { cwd, mcpServers: [] }, 120000);
         this.saveModels(setup);
@@ -9376,6 +9406,9 @@ class ClaudeThread {
   fenceShellMissing;
   get sandboxed() {
     return Boolean(this.query) && this.fenceShellMissing === false;
+  }
+  get outside() {
+    return Boolean(this.query) && this.fenceShellMissing === undefined;
   }
   async read(query) {
     let ended;
@@ -10482,6 +10515,9 @@ class CodexAgent {
       this.slots.set(key, slot = { lastUse: 0 });
     return slot;
   }
+  outside() {
+    return [...this.slots.values()].some((slot) => [slot.server, slot.outdated].some((server) => server && !server.isClosed && !this.isFenced(server)));
+  }
   isFenced(rpc) {
     return this.fencedServers.has(rpc);
   }
@@ -10590,7 +10626,7 @@ class CodexAgent {
     if (fence)
       this.fencedServers.add(rpc);
     rpc.onNotification = (method, params) => this.notification(method, params, rpc);
-    rpc.onRequest = (method, params, id) => this.request(method, params, id);
+    rpc.onRequest = (method, params, id) => this.request(rpc, method, params, id);
     rpc.onExit = () => {
       fence?.ended();
       for (const oneOff of this.oneOffs.values())
@@ -10687,7 +10723,7 @@ class CodexAgent {
     this.early.set(threadID, kept);
   }
   asked = new Map;
-  async request(method, params, id) {
+  async request(rpc, method, params, id) {
     const thread = params?.threadId ? this.threadFor(params.threadId) : params?.conversationId ? this.threadFor(params.conversationId) : undefined;
     if (method === "item/tool/call")
       return { success: false, contentItems: [{ type: "inputText", text: "Kuvo Code has no such tool." }] };
@@ -10700,7 +10736,7 @@ class CodexAgent {
     const key = String(id ?? newID("call"));
     this.asked.set(key, controller);
     try {
-      return await thread.request(method, params, controller.signal);
+      return await thread.request(method, params, controller.signal, this.isFenced(rpc));
     } finally {
       this.asked.delete(key);
     }
@@ -11878,7 +11914,7 @@ From memory: ${cited.join("; ")}`);
         }
     }
   }
-  async request(method, params, signal) {
+  async request(method, params, signal, fenced = false) {
     const active = this.active;
     const lane = params?.threadId && params.threadId !== this.nativeID ? active?.subagents.get(params.threadId) ?? this.backgroundLanes.get(params.threadId) : undefined;
     if (!active && !lane) {
@@ -11889,7 +11925,7 @@ From memory: ${cited.join("; ")}`);
       return method.endsWith("Approval") || method.endsWith("/requestApproval") ? method.startsWith("item/") ? { decision: "decline" } : { decision: "denied" } : {};
     }
     const hooks = {
-      permission: (ask) => lane ? lane.run.permission({ ...ask, signal }) : active.hooks.permission({ ...ask, signal }),
+      permission: (ask) => lane ? lane.run.permission({ ...ask, signal, sandboxed: fenced }) : active.hooks.permission({ ...ask, signal, sandboxed: fenced }),
       question: (ask) => active ? active.hooks.question({ ...ask, signal }) : Promise.resolve(null)
     };
     switch (method) {
@@ -12590,6 +12626,9 @@ class CursorThread {
   worker;
   get sandboxed() {
     return Boolean(this.agent && this.startedFence && this.worker && !this.worker.isClosed);
+  }
+  get outside() {
+    return Boolean(this.agent && !this.startedFence);
   }
   idle;
   active;
@@ -16042,7 +16081,7 @@ ${live.agentPrompt}` : ""
         return "reject";
       const own = strictest(rules, ask.action, parts) ?? "allow";
       if (outside === "ask" && own !== "deny" && (own === "allow" || this.allowedBefore(live, ask)) && !this.allowedBefore(live, outsideAsk(ask, away))) {
-        return this.askPermission(id, live, turn, { ...outsideAsk(ask, away), metadata: ask.metadata, message: ask.message }, plan);
+        return this.askPermission(id, live, turn, { ...outsideAsk(ask, away), metadata: ask.metadata, message: ask.message, sandboxed: ask.sandboxed }, plan);
       }
     }
     const matched = ask.weighed ? strictest(session.permissions ?? [], ask.action, parts) : strictest([...live.agentRules ?? engineDefaults, ...session.permissions ?? []], ask.action, parts);
@@ -16063,10 +16102,9 @@ ${live.agentPrompt}` : ""
       metadata: ask.metadata,
       message: ask.message
     };
-    if (live.doing.kind === "running" || live.doing.kind === "stopping") {
-      if (live.doing.run.agent?.thread.sandboxed)
-        request.sandboxed = true;
-    }
+    const running = live.doing.kind === "running" || live.doing.kind === "stopping" ? live.doing.run.agent?.thread : undefined;
+    if (ask.sandboxed ?? running?.sandboxed)
+      request.sandboxed = true;
     const step = ask.toolCallID ? turn.toolStep(ask.toolCallID) : undefined;
     if (ask.toolCallID && step)
       request.source = { type: "tool", messageID: step, id: ask.toolCallID };
@@ -16088,6 +16126,9 @@ ${live.agentPrompt}` : ""
         emit("permission.replied", { sessionID: id, requestID: request.id }, session.location.directory);
       });
     });
+  }
+  outside() {
+    return [...this.live.values()].some((live) => [...live.threads.values()].some((thread) => thread.outside));
   }
   permissions(id) {
     this.record(id);
@@ -21266,6 +21307,9 @@ function engineAgent(providerID) {
   return agent;
 }
 var sessions = new Sessions(store, roster, auto, engineAgent, (directory) => link2.policies(directory), (name, directory) => link2.agent(name, directory), new Snapshots(join27(home2, "snapshots")), (directory) => link2.titleModel(directory));
+var noteInside = () => noteAgentsInside(!sessions.outside() && !roster.all().some((agent) => agent.outside?.()));
+noteInside();
+setInterval(noteInside, 5000).unref?.();
 var self;
 var partGiven;
 var groups;
@@ -21329,7 +21373,7 @@ var handoffs = new Handoffs(places4);
 var reviews = new Reviews(join27(home2, "reviews.json"), places4);
 var voice = new VoiceWords(places4);
 var artifacts;
-var noted;
+var noted2;
 if (artifactsFolder) {
   try {
     artifacts = new ArtifactStore(artifactsFolder, { bots: botsFolder, shown: sessions.cited });
@@ -21361,7 +21405,7 @@ if (artifactsFolder) {
       }
     };
     partGiven = (prompt, chat) => recorder.given(prompt, chat);
-    noted = (session, path, via) => recorder.noted([engineSource, bridgeSource], session, path, via);
+    noted2 = (session, path, via) => recorder.noted([engineSource, bridgeSource], session, path, via);
     link2.watch((event) => void recorder.heard(engineSource, event));
     subscribe((event) => void recorder.heard(bridgeSource, event));
   } catch (error) {
@@ -21374,7 +21418,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link: link2, password, version: version3, groups, goals, sideQuestions, handoffs, places: places4, reviews, voice, artifacts, noted })
+    fetch: handler({ roster, sessions, auto, link: link2, password, version: version3, groups, goals, sideQuestions, handoffs, places: places4, reviews, voice, artifacts, noted: noted2 })
   });
 } catch (error) {
   console.error("couldn't listen:", error?.message ?? error);
@@ -21436,4 +21480,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents ea9e53d6ad315908d7cacef56c4f0e68615101f8663670853fda4e8445b0a85c
+// Built from Packages/Box/src/agents a69972f8496b17d04dde7a075bf4f101deb377205f93dc015bb02da592c9242d

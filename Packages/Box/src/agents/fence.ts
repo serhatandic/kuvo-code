@@ -46,6 +46,38 @@ export function fenceOn(): boolean {
   return Boolean(where) && process.env.KUVO_SANDBOX !== "off" && existsSync(join(where!, "on"))
 }
 
+/** The sandbox as it is now, by its `on` (made again as it's set up again): what a note is for. */
+export function fenceGeneration(where: string): string {
+  try {
+    const on = statSync(join(where, "on"))
+    return `${Math.floor(on.mtimeMs)}:${on.ino}`
+  } catch {
+    return ""
+  }
+}
+
+/**
+ * Tells the box's link whether every agent's process here runs in the sandbox (`run/fence/agents`:
+ * this bridge, for the sandbox as it is now), which opens the vault to agents; gone while one
+ * started before it was on still runs, or it's off.
+ */
+let noted = ""
+export function noteAgentsInside(inside: boolean) {
+  const where = folder()
+  if (!where) return
+  const on = process.env.KUVO_SANDBOX === "off" ? "" : fenceGeneration(where)
+  const note = inside && on ? JSON.stringify({ pid: process.pid, on }) : ""
+  if (note === noted) return
+  const record = join(where, "agents")
+  try {
+    if (note) {
+      writeFileSync(record + ".new", note, { mode: 0o600 })
+      renameSync(record + ".new", record)
+    } else rmSync(record, { force: true })
+    noted = note
+  } catch {}
+}
+
 /** The box's rules, while its sandbox is on here; undefined when it's off, or can't be read. */
 export function fenceRules(): FenceRules | undefined {
   const where = folder()
@@ -199,7 +231,8 @@ export function fenceAgent(program: string, directory: string, mine: AgentPlaces
       KUVO_FENCE_WORK: work,
       KUVO_FENCE_GIT: repositoryOf(work),
       KUVO_FENCE_OWN: places(mine.homes),
-      KUVO_FENCE_READ: places(mine.read),
+      // (Not one in a home of its own, which it reads already: each place counts.)
+      KUVO_FENCE_READ: places(mine.read.filter((place) => !mine.homes.some((home) => real(place) === real(home) || real(place).startsWith(real(home) + "/")))),
       KUVO_FENCE_STATE: names(mine.state),
       KUVO_FENCE_KEPT: names(mine.kept),
       KUVO_FENCE_PORT: String(mine.port ?? 0),

@@ -570,7 +570,7 @@ export class AntigravityAgent implements Agent {
         } catch {}
       }, 300)
       try {
-        await rpc.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false }, clientInfo: { name: "kuvo-code", version: "1" } }, 120_000)
+        await rpc.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: !whole, writeTextFile: !whole }, terminal: false }, clientInfo: { name: "kuvo-code", version: "1" } }, 120_000)
         await rpc.request("authenticate", { methodId: "oauth-personal" }, 600_000)
         // Signed in: a session to check it works, and to learn your models; then it goes.
         const setup: any = await rpc.request("session/new", { cwd, mcpServers: [] }, 120_000)

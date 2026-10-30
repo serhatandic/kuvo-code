@@ -2,7 +2,7 @@
 // it asks is answered as the session's rules and modes say; Stop stops it; what it costs is counted.
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -17,6 +17,7 @@ import { Sessions } from "../../src/agents/sessions"
 import { Store } from "../../src/agents/store"
 import { setToolServer } from "../../src/agents/kuvotools"
 import { canFence, realFence } from "./support/fence"
+import { noteAgentsInside } from "../../src/agents/fence"
 import type { PermissionRule } from "../../src/agents/wire"
 
 const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-acp-test-"))
@@ -749,6 +750,21 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
     // (The folder stays, its link gone.)
     expect(words(id)).toBe("moved=yes there=yesmoved=no there=no")
     expect(() => lstatSync(join(moved, "prompt_history.jsonl"))).toThrow()
+  })
+
+  test("one started before the sandbox came on keeps agents from the vault until it's done", async () => {
+    const fence = process.env.KUVO_FENCE!
+    rmSync(join(fence, "on"))
+    const id = await run(trying({ elsewhere: ["write", join(elsewhere, "e.txt")] }))
+    expect(words(id)).toBe("elsewhere=yes")
+    // The sandbox comes on, with Grok's process from before still running (it's kept for the next message).
+    writeFileSync(join(fence, "on"), "")
+    noteAgentsInside(!sessions.outside())
+    expect(existsSync(join(fence, "agents"))).toBe(false)
+    // Done (its process closed): now every agent's process runs in it.
+    sessions.closeAll()
+    noteAgentsInside(!sessions.outside())
+    expect(JSON.parse(readFileSync(join(fence, "agents"), "utf8")).pid).toBe(process.pid)
   })
 
   test("with the sandbox off, it runs as before: its own program, its own sandbox as you set it", async () => {

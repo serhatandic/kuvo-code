@@ -144,6 +144,10 @@ export class CodexAgent implements Agent {
   }
 
   /** Whether `rpc` runs whole in the box's sandbox. */
+  outside(): boolean {
+    return [...this.slots.values()].some((slot) => [slot.server, slot.outdated].some((server) => server && !server.isClosed && !this.isFenced(server)))
+  }
+
   isFenced(rpc: RPC): boolean {
     return this.fencedServers.has(rpc)
   }
@@ -274,7 +278,7 @@ export class CodexAgent implements Agent {
     slot.fence = fenceNow
     if (fence) this.fencedServers.add(rpc)
     rpc.onNotification = (method, params) => this.notification(method, params, rpc)
-    rpc.onRequest = (method, params, id) => this.request(method, params, id)
+    rpc.onRequest = (method, params, id) => this.request(rpc, method, params, id)
     rpc.onExit = () => {
       fence?.ended()
       // A title or commit text it was writing won't come.
@@ -374,7 +378,7 @@ export class CodexAgent implements Agent {
   /** Asks under way, by Codex's request: one it settles itself (`serverRequest/resolved`) is taken back. */
   private asked = new Map<string, AbortController>()
 
-  private async request(method: string, params: any, id?: number | string): Promise<unknown> {
+  private async request(rpc: RPC, method: string, params: any, id?: number | string): Promise<unknown> {
     const thread = params?.threadId ? this.threadFor(params.threadId) : params?.conversationId ? this.threadFor(params.conversationId) : undefined
     // A tool of the app's: it gives Codex none.
     if (method === "item/tool/call") return { success: false, contentItems: [{ type: "inputText", text: "Kuvo Code has no such tool." }] }
@@ -386,7 +390,7 @@ export class CodexAgent implements Agent {
     const key = String(id ?? newID("call"))
     this.asked.set(key, controller)
     try {
-      return await thread.request(method, params, controller.signal)
+      return await thread.request(method, params, controller.signal, this.isFenced(rpc))
     } finally {
       this.asked.delete(key)
     }
@@ -1697,7 +1701,8 @@ class CodexThread implements Thread {
     }
   }
 
-  async request(method: string, params: any, signal?: AbortSignal): Promise<unknown> {
+  /** What Codex asks (`fenced`: the app-server asking runs in the box's sandbox). */
+  async request(method: string, params: any, signal?: AbortSignal, fenced = false): Promise<unknown> {
     const active = this.active
     // An agent it spawned asks as its own: its asks go on with it, after the turn that spawned it too.
     const lane = params?.threadId && params.threadId !== this.nativeID ? (active?.subagents.get(params.threadId) ?? this.backgroundLanes.get(params.threadId)) : undefined
@@ -1707,7 +1712,7 @@ class CodexThread implements Thread {
       return method.endsWith("Approval") || method.endsWith("/requestApproval") ? (method.startsWith("item/") ? { decision: "decline" } : { decision: "denied" }) : {}
     }
     const hooks = {
-      permission: (ask: Parameters<TurnHooks["permission"]>[0]) => (lane ? lane.run.permission({ ...ask, signal }) : active!.hooks.permission({ ...ask, signal })),
+      permission: (ask: Parameters<TurnHooks["permission"]>[0]) => (lane ? lane.run.permission({ ...ask, signal, sandboxed: fenced }) : active!.hooks.permission({ ...ask, signal, sandboxed: fenced })),
       question: (ask: Parameters<TurnHooks["question"]>[0]) => (active ? active.hooks.question({ ...ask, signal }) : Promise.resolve(null)),
     }
     // Always is kept here (the session asks the bridge again, which answers from it), never as

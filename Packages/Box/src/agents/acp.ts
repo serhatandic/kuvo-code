@@ -191,6 +191,9 @@ export class AcpThread implements Thread {
   get sandboxed() {
     return this.fenced
   }
+  get outside() {
+    return Boolean(this.rpc && !this.rpc.isClosed && !this.fenced)
+  }
   /** The conversation it had couldn't be picked up again: a new one took its place. */
   private startedOver = false
   onOwnTurn?: (note: OwnTurn) => boolean

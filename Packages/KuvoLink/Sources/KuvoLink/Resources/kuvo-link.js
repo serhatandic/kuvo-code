@@ -10906,7 +10906,7 @@ var checked = { able: false, passed: false, why: "It hasn't been checked yet.", 
 var failures = 0;
 var lastProfiles = "";
 function fenceState() {
-  const base = { able: checked.able, agents: agentsCommandsInSandbox() };
+  const base = { able: checked.able, agents: agentsAllInside() };
   if (!fenceWanted())
     return { ...base, on: false, why: "Kuvo Code has it turned off on this computer for now." };
   if (!checked.passed)
@@ -10938,6 +10938,23 @@ function engineCommandsInSandbox() {
   return fenceWanted() && fs50.existsSync(ON) && loaded().on;
 }
 var agentsCommandsInSandbox = () => fenceWanted() && fs50.existsSync(ON);
+function agentsAllInside() {
+  if (!agentsCommandsInSandbox())
+    return false;
+  let bridge = null;
+  try {
+    bridge = JSON.parse(fs50.readFileSync(BRIDGE_FILE, "utf8"));
+  } catch {}
+  if (!bridge?.pid || !processRuns(bridge.pid, "kuvo-agents"))
+    return true;
+  try {
+    const said = JSON.parse(fs50.readFileSync(path50.join(FOLDER, "agents"), "utf8"));
+    const on = fs50.statSync(ON);
+    return said.pid === bridge.pid && said.on === `${Math.floor(on.mtimeMs)}:${on.ino}`;
+  } catch {
+    return false;
+  }
+}
 function cannot(why) {
   const said = why.why ? { why: why.why } : {};
   switch (why.reason) {

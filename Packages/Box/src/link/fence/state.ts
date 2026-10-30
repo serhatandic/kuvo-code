@@ -14,6 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { listOf, textOf, writePrivate } from "../files";
+import { processRuns } from "../../shared/platform";
 import { BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SANDBOX_NOTE, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
 import { tellLauncher } from "./allowed";
 import { agentShellScript, agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
@@ -28,7 +29,7 @@ export interface FenceState {
   why?: string;
   /** This computer can sandbox commands at all. */
   able: boolean;
-  /** The coding agents' own programs run in it too, as they start (each run whole in it). */
+  /** Every coding agent's process here runs in it too: none started before it was on still runs. */
   agents: boolean;
   /** Why not, for a client to map without reading `why`, and what you can do about it. */
   reason?: FenceReason;
@@ -92,7 +93,7 @@ let lastProfiles = "";
 
 /** Whether the sandbox is on here: read each time from what the box knows, without waiting. */
 export function fenceState(): FenceState {
-  const base = { able: checked.able, agents: agentsCommandsInSandbox() };
+  const base = { able: checked.able, agents: agentsAllInside() };
   // Kuvo Code's own kill switch: no reason a client shows, as there's nothing you can do.
   if (!fenceWanted()) return { ...base, on: false, why: "Kuvo Code has it turned off on this computer for now." };
   if (!checked.passed) return { ...base, on: false, ...cannot(checked) };
@@ -129,6 +130,23 @@ export function engineCommandsInSandbox(): boolean {
  * it, while it's set up and checked (`run/fence/on`, which the bridge reads too). One begun before
  * finishes its turn as it started; the next starts it again in it. */
 export const agentsCommandsInSandbox = (): boolean => fenceWanted() && fs.existsSync(ON);
+
+/** Whether every coding agent's process here runs in it now: the agents bridge says so for the
+ * sandbox as it is (`run/fence/agents`; none it started before it was on still runs), or none runs.
+ * What opens the vault to agents. */
+export function agentsAllInside(): boolean {
+  if (!agentsCommandsInSandbox()) return false;
+  let bridge: { pid?: number } | null = null;
+  try { bridge = JSON.parse(fs.readFileSync(BRIDGE_FILE, "utf8")); } catch {}
+  if (!bridge?.pid || !processRuns(bridge.pid, "kuvo-agents")) return true;
+  try {
+    const said = JSON.parse(fs.readFileSync(path.join(FOLDER, "agents"), "utf8"));
+    const on = fs.statSync(ON);
+    return said.pid === bridge.pid && said.on === `${Math.floor(on.mtimeMs)}:${on.ino}`;
+  } catch {
+    return false;
+  }
+}
 
 // Why a box doesn't have it on, and what you can do.
 function cannot(why: Checked): Partial<FenceState> {

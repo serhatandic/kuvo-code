@@ -271,6 +271,10 @@ class CursorThread implements Thread {
   get sandboxed() {
     return Boolean(this.agent && this.startedFence && this.worker && !this.worker.isClosed)
   }
+  // (Its SDK in the bridge's own process, which runs its tools.)
+  get outside() {
+    return Boolean(this.agent && !this.startedFence)
+  }
   /** Stops the worker once it's been done a while. */
   private idle?: ReturnType<typeof setTimeout>
   private active?: Active

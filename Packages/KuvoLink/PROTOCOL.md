@@ -2677,8 +2677,9 @@ it's empty.
   yet), a failed check, `Its plugin for the engine was changed or removed.`, `The engine isn't
   running.`, `Waiting for the engine to load it.`. `agents`: the coding agents' own
   programs (Claude Code, Codex, Cursor, Grok and Antigravity, whose commands don't go through the
-  engine) run in it too: true once it's set up and checked here, as each starts its next turn in
-  it (one begun before finishes as it started). How each does: Claude Code runs its commands through the
+  engine) run in it too: each starts its next turn in it once it's set up and checked here, and
+  `agents` is true once none started before still runs (the agents bridge notes it, for the
+  sandbox as it is, in `run/fence/agents`; with no bridge running, nothing runs outside). How each does: Claude Code runs its commands through the
   box's shell for it (`run/fence/shell/zsh` or `bash`); Codex runs whole in the sandbox
   (`run/fence/shell/run`), an app-server for each session in that session's folder (and your
   account's in its `sessions` folder), its own sandbox off, asking as it does, and Kuvo Code's tools
