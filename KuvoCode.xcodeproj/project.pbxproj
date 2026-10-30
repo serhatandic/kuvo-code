@@ -127,6 +127,7 @@
 				4B0A00000000000000000007 /* Sources */,
 				4B0A00000000000000000003 /* Frameworks */,
 				4B0A00000000000000000008 /* Resources */,
+				4B0A00000000000000000100 /* Background Work Launch Agent */,
 			);
 			buildRules = (
 			);
@@ -251,6 +252,30 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		4B0A00000000000000000100 /* Background Work Launch Agent */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 0;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Background Work Launch Agent";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchAgents/$(PRODUCT_BUNDLE_IDENTIFIER).box.plist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# This Mac's keeper (`--box`), as launchd starts it: its launch agent, named by this copy's bundle ID\n# so a demo or test copy never shares one with the app (Keeper.swift, BackgroundWork.swift).\nplist=\"${SCRIPT_OUTPUT_FILE_0}\"\nmkdir -p \"$(dirname \"$plist\")\"\ncat > \"$plist\" <<PLIST\n<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>${PRODUCT_BUNDLE_IDENTIFIER}.box</string>\n\t<key>BundleProgram</key>\n\t<string>Contents/MacOS/${EXECUTABLE_NAME}</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>${EXECUTABLE_NAME}</string>\n\t\t<string>--box</string>\n\t</array>\n\t<key>AssociatedBundleIdentifiers</key>\n\t<array>\n\t\t<string>${PRODUCT_BUNDLE_IDENTIFIER}</string>\n\t</array>\n\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n\t<key>ProcessType</key>\n\t<string>Standard</string>\n\t<key>LimitLoadToSessionType</key>\n\t<string>Aqua</string>\n</dict>\n</plist>\nPLIST\nplutil -lint \"$plist\" >/dev/null\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		4B0A00000000000000000007 /* Sources */ = {

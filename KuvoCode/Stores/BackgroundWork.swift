@@ -1,0 +1,116 @@
+import Foundation
+import OSLog
+import ServiceManagement
+
+/// Background work (Settings › General): this Mac's keeper (`Keeper`), registered with macOS as
+/// the app's launch agent the first time Kuvo Code opens, so your bots, goals, wake-ups and sessions
+/// go on when you quit it. macOS tells you once that Kuvo Code added a background item, and keeps the
+/// switch for it in System Settings › General › Login Items & Extensions; Stop Background Work stops
+/// it until you open Kuvo Code or log in again.
+@MainActor @Observable
+final class BackgroundWork {
+    static let shared = BackgroundWork()
+
+    enum State: Equatable {
+        /// Registered and allowed: launchd runs the keeper.
+        case on
+        /// Registered, but switched off in Login Items & Extensions (or never allowed): until it
+        /// is, the app runs this Mac's box itself, and it stops when you quit.
+        case needsApproval
+        /// Not registered (yet, or it couldn't be).
+        case off
+    }
+
+    private(set) var state: State = .off
+    /// Why it couldn't be registered or started, when macOS said no.
+    private(set) var failure: String?
+
+    /// The launch agent in the app (`Contents/Library/LaunchAgents`), which a build phase names
+    /// after this copy's bundle ID.
+    nonisolated static var plistName: String { "\(AppInfo.bundleID).box.plist" }
+    nonisolated static var label: String { "\(AppInfo.bundleID).box" }
+    private var service: SMAppService { .agent(plistName: Self.plistName) }
+
+    init() {
+        refresh()
+    }
+
+    /// As macOS has it now (changed in System Settings, say).
+    func refresh() {
+        state = switch service.status {
+        case .enabled: .on
+        case .requiresApproval: .needsApproval
+        default: .off
+        }
+    }
+
+    /// Registered with macOS, once (the first time Kuvo Code opens, and again if it went): launchd
+    /// starts the keeper now, and at each login. Whether it's on.
+    @discardableResult
+    func register() -> Bool {
+        refresh()
+        guard state == .off else { return state == .on }
+        guard !AppInfo.isHostingTests, Self.mayRegister(ProcessInfo.processInfo.environment) else {
+            failure = "This copy runs its work itself (a demo, test or measurement): KUVO_KEEPER=on registers it."
+            return false
+        }
+        guard AppInfo.mayPrompt("Background work (macOS adds a background item and tells you)") else {
+            failure = "This copy never asks macOS (KUVO_DEMO_NO_PROMPTS)."
+            return false
+        }
+        do {
+            try service.register()
+            failure = nil
+        } catch {
+            Logger(subsystem: "run.kuvo.code", category: "keeper").error("Background work wasn't registered: \(error.localizedDescription, privacy: .public)")
+            failure = "macOS didn’t allow it. Check System Settings › General › Login Items & Extensions."
+        }
+        refresh()
+        return state == .on
+    }
+
+    /// Whether this copy registers its keeper: a copy launched for a demo, a test or a measurement
+    /// (any `KUVO_DEMO_*`, `KUVO_PERF_*` or `KUVO_E2E`) never does unless `KUVO_KEEPER=on` asks,
+    /// since launchd would go on running its box after it quits, without what it was launched with.
+    nonisolated static func mayRegister(_ environment: [String: String]) -> Bool {
+        if environment["KUVO_KEEPER"] == "on" { return true }
+        return !environment.keys.contains { $0.hasPrefix("KUVO_DEMO_") || $0.hasPrefix("KUVO_PERF_") || $0 == "KUVO_E2E" }
+    }
+
+    /// Started again after Stop Background Work (opening the app, or Start in Settings): launchd
+    /// runs it now, as it would at the next login.
+    /// `over`: one running (but not answering) is stopped and started again.
+    func start(over: Bool = false) {
+        guard register() else { return }
+        let launchctl = Process()
+        launchctl.executableURL = URL(filePath: "/bin/launchctl")
+        launchctl.arguments = ["kickstart"] + (over ? ["-k"] : []) + ["gui/\(getuid())/\(Self.label)"]
+        launchctl.standardOutput = FileHandle.nullDevice
+        launchctl.standardError = FileHandle.nullDevice
+        try? launchctl.run()
+    }
+
+    /// Stop Background Work: the keeper stops what runs, and itself, until it's started again.
+    func stop() async throws {
+        guard let keeper = KeeperRecord.read() else { return }
+        do {
+            try await KeeperControl.send(.stop, to: keeper)
+        } catch {
+            // Gone as it answered, or going (it waits for what it ran to stop first): stopped.
+            for _ in 0..<40 where keeper.isAlive { try? await Task.sleep(for: .milliseconds(250)) }
+            guard keeper.isAlive else { return }
+            throw error
+        }
+    }
+
+    /// Whether anything is under way in the background now (a session running on the engine or with
+    /// the coding agents): Stop Background Work asks first only then.
+    func isBusy() async -> Bool {
+        (try? await KeeperControl.send(.status))?["busy"] as? Bool ?? false
+    }
+
+    /// System Settings at Login Items & Extensions, where its switch is.
+    func openLoginItems() {
+        SMAppService.openSystemSettingsLoginItems()
+    }
+}

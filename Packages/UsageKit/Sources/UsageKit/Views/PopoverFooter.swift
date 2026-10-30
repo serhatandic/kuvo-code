@@ -15,10 +15,16 @@ struct PopoverFooter: View {
             if screen == .customize {
                 EmptyView()
             } else {
-                HStack(alignment: .center, spacing: 8) {
-                    footerIdentity
-                    Spacer(minLength: 8)
-                    HeaderView(screen: screen)
+                VStack(spacing: 10) {
+                    // Fork addition: the host's card (`HostCard`), on the dashboard only.
+                    if screen == .dashboard, let card = HostCard.shared.content {
+                        card
+                    }
+                    HStack(alignment: .center, spacing: 8) {
+                        footerIdentity
+                        Spacer(minLength: 8)
+                        HeaderView(screen: screen)
+                    }
                 }
             }
         }

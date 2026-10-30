@@ -21,6 +21,8 @@ export class StandIn {
   /** Sessions made through it (`POST /api/session`), with what they were made with. */
   readonly made: any[] = []
   verdicts: string[] = []
+  /** A goal's check fails with these words (a model's limit, say), rather than answering. */
+  verdictError?: string
   turns: Turn[] = []
   /** Turns that wait for `finish` rather than ending at once. */
   holding = false
@@ -335,6 +337,7 @@ export class StandIn {
     this.checks.push({ kind, prompt, ...(model ? { model } : {}), ...(session ? { session } : {}) })
     this.beat()
     if (this.holdingChecks) await new Promise<void>((resolve) => this.heldChecks.push(resolve))
+    if (this.verdictError && prompt.includes("<goal>")) return Response.json({ message: this.verdictError }, { status: 429 })
     // Met, once the script runs out.
     if (!prompt.includes("<goal>") && this.answers.length) return Response.json({ data: { text: this.answers.shift() } })
     return Response.json({ data: { text: this.verdicts.shift() ?? `{"verdict": "met", "reason": "Done."}` } })

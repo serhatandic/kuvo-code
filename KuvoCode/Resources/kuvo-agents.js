@@ -2358,6 +2358,41 @@ function feed() {
   });
 }
 
+// Packages/Box/src/shared/limits.ts
+function resetsIn(text, now = Date.now()) {
+  const found = text?.match(/(?:resets?|try again|available again)\s+in\s+((?:\d+(?:\.\d+)?\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])[\s,]*(?:and\s+)?)+)/i);
+  if (!found)
+    return;
+  const units = { d: 86400000, h: 3600000, m: 60000, s: 1000 };
+  let total = 0;
+  for (const part of found[1].matchAll(/(\d+(?:\.\d+)?)\s*([dhms])/gi))
+    total += Number(part[1]) * (units[part[2].toLowerCase()] ?? 0);
+  return total > 0 ? now + Math.min(total, 31 * 86400000) : undefined;
+}
+function zone() {
+  const name = process.env.KUVO_TZ;
+  if (!name)
+    return;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: name });
+    return name;
+  } catch {
+    return;
+  }
+}
+function resetTime(at) {
+  const timeZone = zone();
+  const day = (date) => date.toLocaleDateString("en-US", { timeZone });
+  const date = new Date(at);
+  const time = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone });
+  if (day(date) === day(new Date))
+    return time;
+  return `${date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone })}, ${time}`;
+}
+function isLimit(text) {
+  return Boolean(text && /\b429\b|rate.?limit|usage limit|limit (?:was |has been )?reached|reached (?:its|your|the) (?:usage )?limit|quota|too many requests|resets? in|try again in|overloaded|capacity/i.test(text));
+}
+
 // Packages/Box/src/agents/auto.ts
 var autoProvider = "auto";
 var firstList = "auto";
@@ -2475,36 +2510,6 @@ class Auto {
       console.error("Custom Auto not kept:", error);
     }
   }
-}
-function resetsIn(text, now = Date.now()) {
-  const found = text?.match(/(?:resets?|try again|available again)\s+in\s+((?:\d+(?:\.\d+)?\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])[\s,]*(?:and\s+)?)+)/i);
-  if (!found)
-    return;
-  const units = { d: 86400000, h: 3600000, m: 60000, s: 1000 };
-  let total = 0;
-  for (const part of found[1].matchAll(/(\d+(?:\.\d+)?)\s*([dhms])/gi))
-    total += Number(part[1]) * (units[part[2].toLowerCase()] ?? 0);
-  return total > 0 ? now + Math.min(total, 31 * 86400000) : undefined;
-}
-function zone() {
-  const name = process.env.KUVO_TZ;
-  if (!name)
-    return;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: name });
-    return name;
-  } catch {
-    return;
-  }
-}
-function resetTime(at) {
-  const timeZone = zone();
-  const day = (date) => date.toLocaleDateString("en-US", { timeZone });
-  const date = new Date(at);
-  const time = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone });
-  if (day(date) === day(new Date))
-    return time;
-  return `${date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone })}, ${time}`;
 }
 
 // Packages/Box/src/agents/deps.ts
@@ -3350,6 +3355,7 @@ function line(text, limit = 140) {
 }
 
 // Packages/Box/src/agents/goals.ts
+var unknownReset2 = 30 * 60000;
 var conditionLimit = 4000;
 var quietLimit = 3;
 var turnLimit = 100;
@@ -3374,6 +3380,7 @@ class Goals {
   onSettled;
   firstLooks = new Set;
   later = new Map;
+  resumes = new Map;
   constructor(file, places, now = Date.now) {
     this.file = file;
     this.places = places;
@@ -3387,6 +3394,8 @@ class Goals {
   }
   start() {
     for (const goal of this.goals.values()) {
+      if (goal.state === "paused" && goal.pausedBy === "limit" && goal.resumesAt)
+        this.resumeAt(goal.session, goal.resumesAt);
       this.follow(goal.session);
       if (goal.state === "working") {
         this.firstLooks.add(goal.session);
@@ -3402,7 +3411,7 @@ class Goals {
     const goal = this.goals.get(session);
     return goal && shown(goal);
   }
-  async set(session, condition) {
+  async set(session, condition, { long = false } = {}) {
     const text = condition.trim();
     if (!text)
       throw new GoalError(400, "Say what the goal is.");
@@ -3416,30 +3425,34 @@ class Goals {
     if (found?.data?.parentID)
       throw new GoalError(409, "A subagent's conversation can't have a goal of its own. Set it in the conversation it works for.");
     const messages = await this.messages(session, place).catch(unreachable);
-    const goal = { session, condition: text, state: "working", started: this.now(), turns: 0, checking: false, quiet: 0, limit: turnLimit, checkedIdle: lastIdle(messages)?.id, since: messages.at(-1)?.id, epoch: (this.goals.get(session)?.epoch ?? 0) + 1 };
+    this.cancelResume(session);
+    const goal = { session, condition: text, state: "working", started: this.now(), turns: 0, checking: false, quiet: 0, limit: turnLimit, checkedIdle: lastIdle(messages)?.id, since: messages.at(-1)?.id, epoch: (this.goals.get(session)?.epoch ?? 0) + 1, ...long ? { long: true } : {} };
     this.goals.set(session, goal);
     this.follow(session);
     this.changed(goal);
     if (!found?.data?.title)
       await place.api.request("PATCH", at2(session), { title: line2(text, 60) }).catch(() => {});
-    try {
-      await place.api.request("POST", at2(session) + "/synthetic", { text: brief(text), description: `Goal: ${line2(text)}` });
-    } catch (error) {
-      this.pause(goal, "error", `The goal couldn't be given to the agent: ${error?.message ?? error}`);
-    }
+    if (!long)
+      try {
+        await place.api.request("POST", at2(session) + "/synthetic", { text: brief(text), description: `Goal: ${line2(text)}` });
+      } catch (error) {
+        this.pause(goal, "error", `The goal couldn't be given to the agent: ${error?.message ?? error}`);
+      }
     return shown(goal);
   }
   pauseByYou(session) {
     const goal = this.found(session);
     if (goal.state === "met" || goal.state === "unmet")
       throw new GoalError(409, "That goal is over.");
-    if (goal.state === "working") {
+    if (goal.state === "working" || goal.state === "paused" && goal.pausedBy === "limit") {
       goal.epoch = (goal.epoch ?? 0) + 1;
+      this.cancelResume(session);
+      delete goal.resumesAt;
       this.pause(goal, "you", "You paused it.");
     }
     return shown(goal);
   }
-  async resume(session) {
+  async resume(session, { atLimit: onlyAtLimit = false } = {}) {
     const goal = this.found(session);
     if (goal.state === "met" || goal.state === "unmet")
       throw new GoalError(409, "That goal is over: set it again to carry on.");
@@ -3451,13 +3464,27 @@ class Goals {
         throw new GoalError(503, "The conversation can't be reached now.");
       if (this.goals.get(session) !== goal || goal.state !== "paused")
         return shown(goal);
+      if (onlyAtLimit && goal.pausedBy !== "limit")
+        return shown(goal);
+      const atLimit = goal.pausedBy === "limit" && goal.resumesAt !== undefined;
       goal.state = "working";
       goal.epoch = (goal.epoch ?? 0) + 1;
+      this.cancelResume(session);
       delete goal.note;
       delete goal.pausedBy;
+      delete goal.resumesAt;
       goal.quiet = 0;
       goal.limit = goal.turns + turnLimit;
       const idle = lastIdle(messages);
+      if (atLimit) {
+        if (idle)
+          goal.checkedIdle = idle.id;
+        this.follow(session);
+        this.changed(goal);
+        const words = goal.long ? "[Limit reset] The model's limit has reset. Carry on with the goal." : nudge(goal.condition, "The model's limit has reset: carry on where you stopped.");
+        await this.place(session).api.request("POST", at2(session) + "/synthetic", { text: words, description: "The limit has reset" }).catch(() => this.pauseUntil(goal, this.now() + unknownReset2, ""));
+        return shown(goal);
+      }
       if (idle && !atWork(messages, idle)) {
         goal.recheck = idle.id;
         delete goal.checkedIdle;
@@ -3471,6 +3498,7 @@ class Goals {
   clear(session) {
     this.found(session);
     this.goals.delete(session);
+    this.cancelResume(session);
     this.stops.get(session)?.();
     this.stops.delete(session);
     this.save();
@@ -3491,6 +3519,9 @@ class Goals {
     for (const timer of this.later.values())
       clearTimeout(timer);
     this.later.clear();
+    for (const timer of this.resumes.values())
+      clearTimeout(timer);
+    this.resumes.clear();
     for (const stop of this.stops.values())
       stop();
     this.stops.clear();
@@ -3549,7 +3580,7 @@ class Goals {
       messages = await this.messages(session, place);
     } catch (error) {
       if (error?.status === 404)
-        return this.forget(session);
+        return this.stopped ? undefined : this.forget(session);
       return this.lookLater(session);
     }
     if (!current())
@@ -3581,7 +3612,14 @@ class Goals {
     }
     if (!resumed && idle.outcome === "failed") {
       settle();
-      return this.pause(goal, "error", idle.error?.message ? `The turn failed: ${sentence(String(idle.error.message))}` : "The turn failed.");
+      const words = idle.error?.message ? String(idle.error.message) : "";
+      if (isLimit(words))
+        return this.pauseUntil(goal, resetsIn(words, Number(idle.time?.created) || this.now()) ?? this.now() + unknownReset2, words);
+      return this.pause(goal, "error", words ? `The turn failed: ${sentence(words)}` : "The turn failed.");
+    }
+    if (goal.long) {
+      settle();
+      return this.save();
     }
     const worked = turn.some((message) => message.type === "assistant" && (message.content ?? []).some((part) => part?.type === "tool"));
     const info = await sessionInfo(place.api, session).catch(() => ({ id: session }));
@@ -3602,7 +3640,10 @@ class Goals {
       if (!current())
         return void this.changed(goal);
       settle();
-      return this.pause(goal, "error", `The goal couldn't be checked: ${sentence(String(error?.message ?? error))}`);
+      const words = String(error?.message ?? error);
+      if (isLimit(words))
+        return this.pauseUntil(goal, resetsIn(words, this.now()) ?? this.now() + unknownReset2, words);
+      return this.pause(goal, "error", `The goal couldn't be checked: ${sentence(words)}`);
     }
     goal.checking = false;
     if (!current())
@@ -3659,6 +3700,43 @@ class Goals {
     goal.pausedBy = by;
     goal.note = note;
     this.changed(goal);
+  }
+  pauseUntil(goal, until, words) {
+    goal.resumesAt = until;
+    this.pause(goal, "limit", `Paused until ${resetTime(until)}: the model's limit${words ? ` (${line2(words, 120)})` : ""}. It carries on by itself then.`);
+    this.resumeAt(goal.session, until);
+  }
+  resumeAt(session, until) {
+    this.cancelResume(session);
+    if (this.stopped)
+      return;
+    const timer = setTimeout(() => {
+      this.resumes.delete(session);
+      const goal = this.goals.get(session);
+      if (!goal || goal.state !== "paused" || goal.pausedBy !== "limit")
+        return;
+      if (goal.resumesAt && goal.resumesAt > this.now())
+        return this.resumeAt(session, goal.resumesAt);
+      this.resume(session, { atLimit: true }).catch(() => {
+        const later = this.now() + unknownReset2;
+        goal.resumesAt = later;
+        this.changed(goal);
+        this.resumeAt(session, later);
+      });
+    }, Math.max(0, Math.min(until - this.now(), 2147000000)));
+    timer.unref?.();
+    this.resumes.set(session, timer);
+  }
+  cancelResume(session) {
+    const timer = this.resumes.get(session);
+    if (timer)
+      clearTimeout(timer);
+    this.resumes.delete(session);
+  }
+  resumeDue() {
+    for (const goal of this.goals.values())
+      if (goal.state === "paused" && goal.pausedBy === "limit" && goal.resumesAt && goal.resumesAt <= this.now())
+        this.resume(goal.session, { atLimit: true }).catch(() => {});
   }
   found(session) {
     const goal = this.goals.get(session);
@@ -3854,10 +3932,10 @@ async function goalRoutes(goals, method, parts, body) {
         return goal ? json({ data: goal }) : json({ message: "That conversation has no goal." }, 404);
       }
       if (method === "PUT") {
-        const { condition } = await body() ?? {};
+        const { condition, long } = await body() ?? {};
         if (typeof condition !== "string")
           return json({ message: "Say what the goal is." }, 400);
-        return json({ data: await goals.set(session, condition) });
+        return json({ data: await goals.set(session, condition, { long: long === true }) });
       }
       if (method === "DELETE") {
         goals.clear(session);
@@ -21677,6 +21755,7 @@ var places4 = {
   }
 };
 var goals = new Goals(join27(home2, "goals.json"), places4);
+setInterval(() => goals.resumeDue(), 60000).unref?.();
 var sideQuestions = new SideQuestions(join27(home2, "side-questions.json"), places4);
 var handoffs = new Handoffs(places4);
 var reviews = new Reviews(join27(home2, "reviews.json"), places4);
@@ -21789,4 +21868,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 4c974a22e516a6612012479a67067ca09640dc512d470c994d637b76574b1edd
+// Built from Packages/Box/src/agents bdba9623ffdaa7d7501044624f77be5690270e3a7b2bc4b65f3820b38f52bf39

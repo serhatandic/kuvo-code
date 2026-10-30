@@ -47,6 +47,7 @@ final class AppModel {
     let botWork = BotWork()
     /// What bots ask you before they do it (making a project), on every box.
     let botAsks = BotAsks()
+    let goalPlans = GoalPlans()
     /// Voice input, for whichever composer listens.
     let dictation = Dictation()
     // COMPAT(0.7 mac-group-chats): `GroupMigration.run` before the box's group chats start. Goes 3 months after 0.8.0.
@@ -247,10 +248,7 @@ final class AppModel {
         }
     }
 
-    private(set) var server: ServerProcess?
     private var eventTask: Task<Void, Never>?
-    /// When the engine was last started again on its own, after stopping while it ran.
-    private var automaticRestarts: [Date] = []
     /// The engine had been running when it failed (it stopped, rather than couldn't start).
     private(set) var engineStoppedWhileRunning = false
     /// This start of the engine, new with each start and each stop: an earlier engine's exit,
@@ -288,6 +286,13 @@ final class AppModel {
         botAsks.app = self
         botAsks.onChange = { [weak self] sessions in self?.workspace.askingForWork = sessions }
         Sandboxes.shared.onChange = { [weak self] sessions in self?.workspace.askingOutsideSandbox = sessions }
+        goalPlans.app = self
+        SessionModel.askBotForGoal = { [weak self] session, words in
+            guard let self, let bot = self.bots.bot(forSession: session) else { return false }
+            try await self.goalPlans.ask(words, of: session, on: bot.box)
+            return true
+        }
+        goalPlans.onChange = { [weak self] sessions in self?.workspace.goalCards = sessions }
         boxGroups.app = self
         moves.app = self
         // What this Mac's box says is moving, as it changes.
@@ -369,8 +374,9 @@ final class AppModel {
         EngineInstaller(root: AppInfo.supportDirectory.appending(path: "engine"))
     }
 
-    /// Downloads the engine if needed, starts it, and connects the stores. At launch, whether or
-    /// not the window opens (this Mac is a box of its own, at work in the background too).
+    /// Downloads the engine if needed, finds this Mac's box (the keeper's, or starts its own), and
+    /// connects the stores. At launch, whether or not the window opens (this Mac is a box of its
+    /// own, at work in the background too).
     func start() async {
         // Already on its way (restart stops it first).
         switch engine {
@@ -413,92 +419,27 @@ final class AppModel {
                 // Stopped, or started over, while it waited: the newer start carries on.
                 guard launch == self.launch else { return }
             }
-
-            // Neither the engine nor the box starts from an app changed since it was signed (the
-            // box's script is in it): the engine itself was checked as it was found or downloaded.
-            if Self.engineOverride == nil, await !Task.detached(operation: { BoxIntegrity.appIsSealed() }).value {
-                engine = .failed("Kuvo Code on this Mac was changed since it was installed, so its engine didn’t start. Install Kuvo Code again.")
-                return
-            }
             engineBinary = binary
             engine = .starting
             stage = "launch"
             var shell = await environment
             guard launch == self.launch else { return }
-            // A copy that never prompts leaves out the skills in ~/.claude/skills: one can be a link
-            // into your Desktop, and macOS would ask whether the copy may read it.
+            // As this Mac's box gives its engine (`MacBoxRunner`): the terminals you open get the same.
             if AppInfo.neverPrompts { shell["OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"] = "1" }
             shellEnvironment = shell
-            // The coding agents' bridge as soon as there's a Bun to run it: this Mac's group chats
-            // run there, and show (and meet) from now, while the engine starts.
-            startAgents(engine: binary)
-            // Bots' wake-up command, by name, and where their folders are; and the launcher
-            // integrations' servers run with.
-            try? Launcher.install(in: Bots.command.deletingLastPathComponent(), engine: binary)
-            shell["PATH"] = Bots.command.deletingLastPathComponent().path + ":" + (shell["PATH"] ?? "/usr/bin:/bin")
-            shell["KUVO_BOTS"] = Bots.root.path
-            shell["KUVO_WAKES"] = WakeUps.root.path
-            // Keys you brought for integrations, in the files their settings name with {file:…}
-            // (not the engine's environment, where the agent's commands would see them), and a
-            // folder for what their servers keep (a sign-in).
-            #if DEBUG
-            // KUVO_DEMO_INTEGRATION_KEY=<id>|<NAME>|<value>: saves that key as Add Key… does
-            // (no value removes it).
-            if let spec = ProcessInfo.processInfo.environment["KUVO_DEMO_INTEGRATION_KEY"] {
-                let parts = spec.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-                if parts.count == 3 { IntegrationKeys.set(parts[2], for: IntegrationKeys.variable(parts[0], parts[1])) }
-            }
-            #endif
-            // Read off the main thread: the keychain can wait on you (a prompt to allow it).
-            await Task.detached { IntegrationKeys.writeFiles() }.value
-            IntegrationKeys.keepFresh()
-            let integrations = BoxProcess.integrations
-            try? FileManager.default.createDirectory(at: integrations, withIntermediateDirectories: true)
-            shell["KUVO_INTEGRATIONS"] = integrations.path
-            // This Mac's box, before the engine: it keeps the engine's settings (and the other
-            // areas that have moved onto it), and goes on through the engine's restarts.
-            await box.start(engine: binary, environment: await boxEnvironment(shell), checked: Self.engineOverride == nil)
+            followAgents()
+            let endpoint = try await boxEngine()
             guard launch == self.launch else { return }
-            // The settings as they are now (they can change while the engine is down, and the box
-            // adds its defaults as it starts), brought up to date before the engine reads them;
-            // a box slow to answer holds the engine up a few seconds at most, and the engine takes
-            // them as they change after.
+            // The settings as they are now, brought up to date (integrations' and servers' upgrades,
+            // after an update); a box slow to answer holds this up a few seconds at most, and the
+            // engine takes them as they change.
             await Self.atMost(.seconds(10)) { [weak self] in await self?.prepareSettings() }
             guard launch == self.launch else { return }
-            // What some providers need until opencode handles it, on top, as this Mac's box learned
-            // it from its engine (as a machine's start adds it).
-            shell["OPENCODE_CONFIG_CONTENT"] = await box.engineConfig(engine: binary, content: shell["OPENCODE_CONFIG_CONTENT"], environment: shell)
             // COMPAT(0.7 provider-compatibility): what the app learned before its box did, gone. Goes 3 months after 0.8.0.
             UserDefaults.standard.removeObject(forKey: "copilotClaudeModels")
-            #if DEBUG
-            // KUVO_PERF_PROVIDER: the stand-in model a group chat's discussion is measured on (PerfGroups).
-            if let perf = PerfGroups.providerConfig { shell["OPENCODE_CONFIG_CONTENT"] = Self.merged(perf, into: shell["OPENCODE_CONFIG_CONTENT"]) }
-            #endif
-            // The browser tools, for the engine to connect to. Without them the agent
-            // still works, just without the browser.
-            do {
-                _ = try await browserTools.start()
-                if let config = browserTools.engineConfig { shell["OPENCODE_CONFIG_CONTENT"] = Self.merged(config, into: shell["OPENCODE_CONFIG_CONTENT"]) }
-                agents.toolServer = browserTools.agentsServer
-                browserTools.owner = { [weak self] id in await self?.workspace.engineRunOwner(id) }
-            } catch {
-                log.error("Browser tools didn't start: \(error.localizedDescription, privacy: .public)")
-            }
-            guard launch == self.launch else { return }
-            let server = try await ServerProcess.start(
-                executable: binary,
-                folders: engineFolders,
-                environment: shell,
-                onExit: { status in Task { @MainActor in self.engineExited(status: status, launch: launch) } }
-            )
-            guard launch == self.launch else {
-                server.stop()
-                return
-            }
-            self.server = server
             stage = "connect"
-            let api = OpenCodeAPI(endpoint: server.endpoint)
-            try await waitUntilReady(api)
+            let api = OpenCodeAPI(endpoint: endpoint)
+            try await MacBoxRunner.waitUntilReady(api)
             // It stopped (and said why), or was stopped, while it loaded.
             guard launch == self.launch else { return }
             self.api = api
@@ -522,17 +463,13 @@ final class AppModel {
             engineStarted = .now
             engine = .ready
             #if DEBUG
-            E2E.note(server.endpoint)
+            E2E.note(endpoint)
             #endif
             wirePhoneLink()
-            phoneLink.start(endpoint: server.endpoint)
-            // This Mac's box finds the engine as a machine's does (started above, once; tried again
-            // here if it didn't start then).
-            BoxProcess.engineChanged(server.endpoint, version: OpenCodeEngine.version, pid: server.processID)
-            let boxEnvironment = await boxEnvironment(shell)
-            guard launch == self.launch else { return }
+            phoneLink.start(endpoint: endpoint)
+            // What it makes and tells this Mac's bots with, as this version has it.
+            bots.writeMacKit()
             Task {
-                await box.start(engine: binary, environment: boxEnvironment, checked: Self.engineOverride == nil)
                 // Your personalities, as it keeps them, before they're followed.
                 await Personalities.shared.refresh()
                 // Its worktrees, projects and wake-ups, as this Mac's box keeps them, from now on
@@ -547,6 +484,7 @@ final class AppModel {
                         async let bots: Void = bots.follow()
                         async let asks: Void = botAsks.follow(BoxClient.mac)
                         async let sandboxAsks: Void = Sandboxes.shared.follow(BoxClient.mac)
+                        async let goalsFollowed: Void = goalPlans.follow(BoxClient.mac)
                         // COMPAT(0.7 mac-personalities): what an earlier Kuvo Code changed in its own copy, taken in. Goes 3 months after 0.8.0.
                         // What a 0.8.0 beta changed of your personalities where it kept them.
                         await Personalities.shared.takeFromOld()
@@ -558,12 +496,13 @@ final class AppModel {
                         await bots
                         await asks
                         await sandboxAsks
+                        await goalsFollowed
                     }
                 }
             }
             Analytics.shared.trackOnce("engine_ready", ["seconds": Int((SuspendingClock.now - began).components.seconds), "downloaded": downloaded])
             listen(to: api)
-            agents.engineEndpoint = server.endpoint
+            agents.engineEndpoint = endpoint
             Task { await usage.sync() }
             // In parallel: the catalog can wait on the engine's plugins (and they on a
             // macOS permission prompt); sessions shouldn't wait with it.
@@ -578,33 +517,189 @@ final class AppModel {
         } catch {
             // Stopped, or started over, meanwhile.
             guard launch == self.launch else { return }
-            // One that stopped while it loaded says so, with what it wrote, rather than that it
-            // can't be reached.
-            var reason = error.localizedDescription
-            if let server {
-                let output = String(server.recentOutput.trimmingCharacters(in: .whitespacesAndNewlines).suffix(600))
-                if let status = server.exitStatus {
-                    reason = ServerProcessError.exited(status: status, output: output).localizedDescription
-                } else if !output.isEmpty {
-                    reason += "\n\n" + output
-                }
-            }
+            let reason = error.localizedDescription
             log.error("Engine failed to start: \(reason, privacy: .public)")
             Analytics.shared.track("engine_failed", ["reason": stage, "kind": EngineInstallError.kind(of: error)])
-            // Nothing is left running (a server that never got ready is stopped). A start after an
-            // automatic restart failing means the engine stopped.
-            stop()
-            automaticRestarts.removeAll { $0 < .now.addingTimeInterval(-300) }
-            engineStoppedWhileRunning = !automaticRestarts.isEmpty
-            gaveUp(reason)
+            // Its box stopped the engine already, and said why (`run/engine-stopped`), which stopping
+            // it here again would take away.
+            disconnect()
+            engine = .failed(reason)
+            workspace.macEngineStopped()
         }
     }
 
-    /// The engine isn't started again until you say: why, here and for whoever asks this Mac's box.
-    private func gaveUp(_ reason: String) {
-        engine = .failed(reason)
-        BoxProcess.engineGaveUp(reason)
-        workspace.macEngineStopped()
+    // MARK: This Mac's box
+
+    /// This Mac's box when the app runs it itself: while macOS doesn't let the keeper run
+    /// (`BackgroundWork`), and in a copy that never asks macOS (tests, demos left on their own).
+    /// It stops when you quit.
+    @ObservationIgnored private(set) lazy var ownBox = MacBoxRunner(box: box, agents: agents, host: host)
+    /// This Mac's keeper's box, followed: nil while the app runs its own.
+    private(set) var keeperBox: KeeperFollower?
+
+    /// Whether quitting leaves this Mac's work going (the keeper runs it): Quit takes Kuvo Code to
+    /// the menu bar (`InBackground`), and Stop Background Work is there.
+    /// The keeper's turned on while the app ran its own box counts too: the app's goes on in the
+    /// menu bar until it quits for real, and the keeper takes over then.
+    /// Switched off in Login Items & Extensions, it's off at once, keeper followed or not.
+    var keepsWorkingAfterQuit: Bool {
+        #if DEBUG
+        // A test's keeper, followed without asking macOS.
+        if keeperBox != nil, ProcessInfo.processInfo.environment["KUVO_KEEPER"] == "follow" { return true }
+        #endif
+        return BackgroundWork.shared.state == .on
+    }
+    /// The own box was started this launch (restarting it is starting its engine over).
+    @ObservationIgnored private var ownBoxStarted = false
+
+    /// This Mac's engine once it's up: the keeper's (started, or made way for after an update, as
+    /// needed), or the app's own. What becomes of it later comes to `boxEngineChanged`.
+    private func boxEngine() async throws -> ServerEndpoint {
+        // The keeper's, unless macOS doesn't let it run; and the keeper's anyway when it runs the
+        // box already (one allowed while the app ran its own waits for the app to quit). Never one
+        // registered (a copy that never asks macOS), there's no keeper to share it with.
+        if keeperBox == nil, !ownBoxStarted, keeperRuns() || (BackgroundWork.shared.state != .off && !ownBox.claim()) {
+            let follower = KeeperFollower(box: box, agents: agents)
+            follower.onEngine = { [weak self] state in self?.boxEngineChanged(state) }
+            follower.onKeeper = { [weak self] in Task { await self?.tellKeeper() } }
+            follower.onGone = { [weak self] in self?.keeperGone() }
+            host.tellsBox = false
+            keeperBox = follower
+            await follower.start()
+        }
+        if let keeperBox { return try await keeperBox.ready() }
+        if !ownBoxStarted {
+            ownBoxStarted = true
+            // The browser tools, for the engine and the agents to connect to. Without them the
+            // agent still works, just without the browser.
+            do {
+                _ = try await browserTools.start()
+                if let config = browserTools.engineConfig, let agentsServer = browserTools.agentsServer {
+                    ownBox.tools = MacBoxRunner.Tools(engineConfig: config, agents: agentsServer)
+                }
+                browserTools.owner = { [weak self] id in await self?.workspace.engineRunOwner(id) }
+            } catch {
+                log.error("Browser tools didn't start: \(error.localizedDescription, privacy: .public)")
+            }
+            ownBox.onEngine = { [weak self] state in self?.boxEngineChanged(state) }
+            Task { await ownBox.start() }
+        }
+        return try await ownBox.ready()
+    }
+
+    /// The keeper isn't coming (background work switched off in Login Items & Extensions, or
+    /// macOS doesn't let it run): the app runs this Mac's box itself from now on, which stops when
+    /// you quit, and connects to it.
+    private func keeperGone() {
+        guard let keeperBox else { return }
+        log.notice("Background work is off: this Mac's box runs in the app")
+        keeperBox.stop()
+        self.keeperBox = nil
+        box.unfollow()
+        agents.unfollow()
+        host.tellsBox = true
+        // A start waiting on the keeper gives up (disconnected), and one starts with the app's own.
+        disconnect()
+        keeperBox.giveUp("Kuvo Code’s background work is off.")
+        engine = .preparing
+        Task { await start() }
+    }
+
+    /// The keeper told of the open app: where the panel's browser tools answer, for its engine's and
+    /// agents' browser calls, and the app's host interface, for what only the app answers its box.
+    private func tellKeeper() async {
+        do {
+            _ = try await browserTools.start()
+            browserTools.owner = { [weak self] id in await self?.workspace.engineRunOwner(id) }
+        } catch {
+            log.error("Browser tools didn't start: \(error.localizedDescription, privacy: .public)")
+        }
+        try? await host.start()
+        var app: [String: Any] = [:]
+        if let tools = browserTools.agentsServer { app["tools"] = ["url": tools.url, "token": tools.token] }
+        if let address = host.address { app["host"] = address }
+        do {
+            try await KeeperControl.send(.app, app)
+        } catch {
+            log.error("The keeper wasn't told of the app: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Whether this Mac's box is the keeper's: registered with macOS and allowed to run (the first
+    /// launch registers it, once the engine it runs is here). In a debug build, KUVO_KEEPER=off
+    /// keeps it the app's own, and KUVO_KEEPER=follow follows a keeper that runs already (a test's)
+    /// without asking macOS.
+    private func keeperRuns() -> Bool {
+        #if DEBUG
+        switch ProcessInfo.processInfo.environment["KUVO_KEEPER"] {
+        case "off": return false
+        case "follow": return true
+        default: break
+        }
+        #endif
+        return BackgroundWork.shared.register()
+    }
+
+    /// This Mac's engine, as its box says, after the app connected to it: started over (by its
+    /// box, after it stopped, or after an update), stopped, or given up on.
+    private func boxEngineChanged(_ state: MacBoxRunner.Engine) {
+        switch state {
+        case .ready(let endpoint):
+            // Up again, somewhere new: connected anew (a start under way, waiting for it, takes it).
+            if engine == .ready, api?.client.endpoint == endpoint { return }
+            guard starting == nil else { return }
+            if engine == .ready { disconnect() }
+            engine = .preparing
+            Task { await start() }
+        case .starting, .downloading:
+            // Stopped while it ran: the window says it's starting again, and connects once it has.
+            guard engine == .ready else { return }
+            engineStoppedWhileRunning = true
+            disconnect()
+            engine = .starting
+        case .failed(let reason):
+            // A start under way hears it itself.
+            guard starting == nil else { return }
+            if engine == .ready { engineStoppedWhileRunning = true }
+            disconnect()
+            engine = .failed(reason)
+            workspace.macEngineStopped()
+        }
+    }
+
+    /// The window's Try Again and Settings › Engine's Restart: this Mac's engine started over by
+    /// its box, and connected anew.
+    func restart() async {
+        disconnect()
+        engine = .preparing
+        engineStoppedWhileRunning = false
+        if let keeperBox {
+            try? await keeperBox.restartEngine()
+        } else if ownBoxStarted {
+            ownBox.restartEngine()
+        }
+        await start()
+    }
+
+    /// Stop Background Work: the keeper stops this Mac's box (a session under way pauses, and a
+    /// wake-up due meanwhile comes when it starts again), and the app quits with it. It all starts
+    /// again when you open Kuvo Code or log in.
+    func stopBackgroundWork() async throws {
+        // Not followed meanwhile, which would start it again.
+        keeperBox?.stop()
+        do {
+            try await BackgroundWork.shared.stop()
+        } catch {
+            await keeperBox?.start()
+            throw error
+        }
+        NSApplication.shared.terminate(nil)
+    }
+
+    /// The app quits: its own box stops with it; the keeper's goes on.
+    func stopBox() {
+        keeperBox?.stop()
+        if keeperBox == nil { ownBox.stop() }
     }
 
     /// This Mac's settings read from its box and brought up to date (integrations' and servers'
@@ -655,8 +750,9 @@ final class AppModel {
         }
     }
 
-    /// The agents bridge, with the engine's Bun, once: it goes on through the engine's restarts.
-    private func startAgents(engine binary: URL) {
+    /// The coding agents' bridge, as this Mac's box runs it (`MacBoxRunner`): what it says reaches the
+    /// window's stores. Wired once; the bridge stays up through the engine's restarts.
+    private func followAgents() {
         workspace.agents = agents
         catalog.outsideAgents = agents
         usage.follow(catalog)
@@ -681,35 +777,6 @@ final class AppModel {
                 await self?.workspace.refreshAgents()
             }
         }
-        var environment = shellEnvironment
-        // Bots' wake-up command by name, and where their folders are, for their sessions with the
-        // coding agents too, as the engine's commands have them.
-        let bin = Bots.command.deletingLastPathComponent().path
-        environment["PATH"] = bin + ":" + (environment["PATH"] ?? "/usr/bin:/bin")
-        environment["KUVO_BOTS"] = Bots.root.path
-        environment["KUVO_WAKES"] = WakeUps.root.path
-        environment["KUVO_BIN"] = bin
-        // The box's sandbox, which the coding agents run their commands in while it's on, as a
-        // machine's is in `~/.kuvo-code/run/fence`.
-        environment["KUVO_FENCE"] = BoxProcess.run.appending(path: "fence").path
-        // This Mac's group chats, in its own folder, as a machine's are in `~/.kuvo-code`: their
-        // bots are its bots, what they let go of goes to the box's trash (and on to the Finder's,
-        // `kuvo.group.trashed`), and a bot remembers them under the key it always has.
-        environment["KUVO_GROUPS"] = GroupMigration.root.path
-        environment["KUVO_TRASH"] = BoxGroups.macTrash.path
-        environment["KUVO_GROUPS_MEMORY_KEY"] = BotGroups.memoryKey
-        // Who can be named with & in a chat: this Mac's agents and its machines', as its box lists them.
-        environment["KUVO_AGENTS_FILE"] = AgentMail.boxDirectoryFile.path
-        // Its record of what agents made, in the box's own folder, as a machine's is in `~/.kuvo-code`.
-        environment["KUVO_ARTIFACTS"] = BoxProcess.home.appending(path: "artifacts").path
-        // What the app writes in your Library, which a session in your home folder walks over: never
-        // what an agent made (the support folder, which holds the box's, it knows already).
-        let library = URL.libraryDirectory, own = [
-            library.appending(path: "Caches/\(AppInfo.bundleID)"), StorageReport.appLogs, library.appending(path: "WebKit/\(AppInfo.bundleID)"),
-            library.appending(path: "HTTPStorages/\(AppInfo.bundleID)"), library.appending(path: "Preferences/\(AppInfo.bundleID).plist"),
-        ]
-        environment["KUVO_OWN_FOLDERS"] = String(decoding: (try? JSONEncoder().encode(own.map(\.path))) ?? Data("[]".utf8), as: UTF8.self)
-        Task { await agents.start(engine: binary, environment: environment) }
         // Your time zone or how you write dates changed: meetings go by the new ones.
         if clockObservers.isEmpty {
             for name in [Notification.Name.NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification] {
@@ -755,14 +822,14 @@ final class AppModel {
         return String(decoding: data, as: UTF8.self)
     }
 
-    func restart() async {
-        stop()
-        engine = .preparing
-        await start()
+    /// The app's own box's engine stopped too (the keeper's goes on), and the app disconnected.
+    func stop() {
+        disconnect()
+        if keeperBox == nil, ownBoxStarted { ownBox.stopEngine() }
     }
 
-    func stop() {
-        // A start still on its way gives up, and the stopped engine's exit is expected.
+    /// Disconnected from this Mac's engine (it goes on): a start still on its way gives up.
+    private func disconnect() {
         launch = UUID()
         starting = nil
         #if DEBUG
@@ -774,9 +841,6 @@ final class AppModel {
         // with it, and starts again with the next start.
         boxFollowed?.cancel()
         boxFollowed = nil
-        server?.stop()
-        server = nil
-        BoxProcess.engineChanged(nil, version: nil, pid: nil)
         api = nil
         isLive = false
         phoneLink.stop()
@@ -791,20 +855,6 @@ final class AppModel {
         wireStores()
     }
     #endif
-
-    /// The server answers 503 until it has loaded.
-    private func waitUntilReady(_ api: OpenCodeAPI) async throws {
-        let deadline = ContinuousClock.now + .seconds(60)
-        while true {
-            do {
-                _ = try await api.info()
-                return
-            } catch let error as ServerError where error.status == 503 {
-                if ContinuousClock.now > deadline { throw error }
-                try await Task.sleep(for: .milliseconds(150))
-            }
-        }
-    }
 
     private func listen(to api: OpenCodeAPI) {
         eventTask = Task { [weak self] in
@@ -832,27 +882,6 @@ final class AppModel {
                 }
             }
         }
-    }
-
-    private func engineExited(status: Int32, launch: UUID) {
-        // One stopped (for a restart, or as the app quits) exits a moment later, after the stop.
-        guard launch == self.launch else { return }
-        // One still starting fails `start` as it stops (its handshake or first call does), which
-        // says why with what it wrote.
-        guard engine == .ready else { return }
-        let output = server?.recentOutput.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        log.error("Engine exited with status \(status): \(output, privacy: .public)")
-        stop()
-        // It's started again, as it was, unless it has stopped like this a few times in the last
-        // minutes: then it's for you to see why.
-        automaticRestarts.removeAll { $0 < .now.addingTimeInterval(-300) }
-        if automaticRestarts.count < 3 {
-            automaticRestarts.append(.now)
-            Task { await restart() }
-            return
-        }
-        engineStoppedWhileRunning = true
-        gaveUp("It stopped unexpectedly (exit code \(status)), and again after starting over.\(output.isEmpty ? "" : "\n\n" + String(output.suffix(600)))")
     }
 }
 
