@@ -788,7 +788,6 @@ final class Utilities {
     /// it comes back.
     func closeTerminals(of owner: String) {
         for tab in tabs where tab.owner == owner && tab.kind == .terminal { close(tab.id) }
-        runs = runs.filter { !$0.key.hasPrefix(owner + "|") }
     }
 
     /// Ends the terminals on a machine, in every panel: it was removed.

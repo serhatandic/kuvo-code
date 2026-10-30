@@ -21,18 +21,7 @@ extension AppModel {
         // An agent on a machine browses with the machine's browser: the panel shows it, as it
         // shows its own browser for an agent here.
         workspace.onMachineBrowsing = { [weak self] machine, session in self?.utilities.revealMachineBrowser(machine, for: session) }
-        workspace.onDeleted = { [weak self] session in
-            self?.utilities.closeTabs(of: session)
-            // A machine's bot's conversation gone there (carried on with the coding agents from a
-            // phone, say): what it has now is read from its box.
-            if let self, let machine = bots.list.first(where: { $0.sessionID == session })?.machine {
-                Task { await self.bots.refresh(machine) }
-            }
-            // Its wake-ups and watches go with it.
-            if let found = self?.workspace.session(session) { self?.wakeUps.forget(found) } else { self?.wakeUps.forget(sessionID: session) }
-        }
-        // An archived session's wake-ups wait, and come back with it.
-        workspace.onArchived = { [weak self] session, _ in self?.archivedChanged(session) }
+        followSessions()
         // A subagent's calls go by the conversation that started it: its folder, its permissions.
         BrowserTools.sessionFolder = { [weak self] session in
             guard let self else { return nil }
@@ -274,6 +263,27 @@ extension AppModel {
         RemoteEngineInstaller.root == ".kuvo-code" || RemoteEngineInstaller.root == ".kuvo-code-demo" && PhoneLink.isEnabled
     }
 
+    /// A session gone (deleted) or put away (archived), here, from a phone or by another Mac:
+    /// what's here of it follows.
+    func followSessions() {
+        workspace.onDeleted = { [weak self] session in
+            self?.utilities.closeTabs(of: session)
+            // A machine's bot's conversation gone there (carried on with the coding agents from a
+            // phone, say): what it has now is read from its box.
+            if let self, let machine = bots.list.first(where: { $0.sessionID == session })?.machine {
+                Task { await self.bots.refresh(machine) }
+            }
+            // Its wake-ups and watches go with it.
+            if let found = self?.workspace.session(session) { self?.wakeUps.forget(found) } else { self?.wakeUps.forget(sessionID: session) }
+        }
+        workspace.onArchived = { [weak self] session, archived in
+            // Out of sight in the archive, nothing of it goes on running in the panel; its
+            // wake-ups wait, and come back with it.
+            if archived { self?.utilities.closeTerminals(of: session) }
+            self?.archivedChanged(session)
+        }
+    }
+
     /// A session was archived or brought back (here, from a phone, by another Mac): its wake-ups
     /// wait, or come back, as it is once this runs, so a list read again meanwhile that flipped it
     /// back and forth acts on where it ended up. (A test waits for it.)
@@ -281,8 +291,6 @@ extension AppModel {
     func archivedChanged(_ session: String) -> Task<Void, Never> {
         Task {
             guard let found = workspace.session(session) else { return }
-            // Out of sight in the archive, nothing of it goes on running in the panel.
-            if Workspace.isArchived(found) { utilities.closeTerminals(of: session) }
             await wakeUps.archived(found, Workspace.isArchived(found))
         }
     }
