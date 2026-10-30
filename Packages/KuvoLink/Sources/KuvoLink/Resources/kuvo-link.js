@@ -10907,6 +10907,8 @@ function letterWent(sender, { id, ok, why, retry, answer }) {
     reply(id, { note: words ?? "It got your message, but its answer can't come back to you here." });
 }
 function answered(sender, { answers: id, text, from }, now = Date.now()) {
+  if (LETTER_ID.test(id) && fs49.existsSync(path51.join(SENDING, `${id}.json`)))
+    letterWent(sender, { id, ok: true });
   if (IS_MAC) {
     const waiter = macWaiting.get(id);
     if (!waiter || waiter.sentTo !== sender.key || waiter.gone())

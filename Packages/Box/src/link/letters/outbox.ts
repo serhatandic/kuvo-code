@@ -194,6 +194,8 @@ export function letterWent(sender: Pick<Peer, "key">, { id, ok, why, retry, answ
 // else it comes as a message. One the tool doesn't take after all (it stopped as it came) comes as
 // a message too (`deliverLeftAnswers`): it's kept with who it's from and for.
 export function answered(sender: { key: string; name?: string }, { answers: id, text, from }: AnswerLetter, now = Date.now()): boolean {
+  // Its answer says it was delivered, should that word have been lost on the way.
+  if (LETTER_ID.test(id) && fs.existsSync(path.join(SENDING, `${id}.json`))) letterWent(sender, { id, ok: true });
   // On this Mac: the request still waiting for it, if it's still there.
   if (IS_MAC) {
     const waiter = macWaiting.get(id);

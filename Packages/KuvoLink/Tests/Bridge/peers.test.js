@@ -285,6 +285,22 @@ test("this box's letters go to the box their agent is on, again each minute unti
   assert.equal(fs.existsSync(path.join(run, "replies", "ltr_waits.wait")), false);
   assert.equal(said.at(-1).delivered.ok, true);
 
+  // Its answer, though the word that it was delivered never came (lost as the relay reconnected):
+  // to the tool waiting all the same, and not sent again.
+  write("ltr_unsaid", { to: "ses_target", text: "Hi", wait: true, sentTo: second.pub });
+  fs.writeFileSync(path.join(run, "replies", "ltr_unsaid.alive"), "");
+  await answer(second.peer, { answers: "ltr_unsaid", text: "Done too." });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(run, "replies", "ltr_unsaid.json"), "utf8")).text, "Done too.");
+  assert.equal(said.at(-1).delivered.ok, true);
+  assert.equal(fs.existsSync(path.join(sending, "ltr_unsaid.json")), false);
+  // From another box than the one it went to: not its answer.
+  write("ltr_unsaid2", { to: "ses_target", text: "Hi", wait: true, sentTo: second.pub });
+  fs.writeFileSync(path.join(run, "replies", "ltr_unsaid2.alive"), "");
+  await answer(stranger.peer, { answers: "ltr_unsaid2" });
+  assert.equal(fs.existsSync(path.join(run, "replies", "ltr_unsaid2.json")), false);
+  assert.ok(fs.existsSync(path.join(sending, "ltr_unsaid2.json")));
+  fs.rmSync(path.join(sending, "ltr_unsaid2.json"));
+
   // A tool that ended without saying so (its engine restarted): its answer isn't left for nobody,
   // it's delivered as a message (here, to try again: no engine in this test).
   write("ltr_orphan", { to: "ses_target", text: "Hi", wait: true, sentTo: second.pub });
