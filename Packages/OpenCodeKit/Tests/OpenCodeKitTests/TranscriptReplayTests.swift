@@ -153,6 +153,24 @@ struct TranscriptReplayTests {
         #expect(ended.backgroundEnd == "Background command finished: npm test")
     }
 
+    /// Stopped while it asks you something: the engine lets the ask go without a word, and its card
+    /// goes with the run. A subagent's ask stays while the subagent's own run goes on.
+    @Test func anAskGoesWithItsRun() throws {
+        func event(_ number: Int, _ type: String, _ data: String) throws -> ServerEvent {
+            try ServerEvent(json: Data(#"{"id":"evt_\#(number)","created":\#(number),"type":"\#(type)","data":{\#(data)}}"#.utf8))
+        }
+        var transcript = Transcript(sessionID: "ses_1")
+        transcript.helpers = ["ses_helper"]
+        transcript.asksEndWithRuns = true
+        transcript.apply(try event(1, "session.execution.started", #""sessionID":"ses_1","inputID":"in_1""#))
+        transcript.apply(try event(2, "permission.asked", #""id":"per_1","sessionID":"ses_1","action":"shell","resources":["npm test"]"#))
+        transcript.apply(try event(3, "permission.asked", #""id":"per_2","sessionID":"ses_helper","action":"shell","resources":["curl example.com"]"#))
+        transcript.apply(try event(4, "session.execution.interrupted", #""sessionID":"ses_1","reason":"user""#))
+        #expect(transcript.permissions.map(\.id) == ["per_2"])
+        transcript.apply(try event(5, "session.execution.failed", #""sessionID":"ses_helper","error":{"type":"aborted","message":"Aborted"}"#))
+        #expect(transcript.permissions.isEmpty)
+    }
+
     /// A reply cut off (its stream broke, or it ran out of room) that the engine carries on: the
     /// conversation says so in a few words, not with the engine's word to the model.
     @Test func aReplyCarriedOnSaysSoPlainly() throws {

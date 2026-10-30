@@ -496,6 +496,7 @@ final class SessionModel {
         self.api = api
         self.projectFolders = projectFolders
         storedTranscript = Transcript(sessionID: session.id)
+        storedTranscript.asksEndWithRuns = !OutsideAgents.isAgentSession(session)
     }
 
     var id: String { session.id }
@@ -2200,8 +2201,16 @@ final class SessionModel {
     func applyHelper(_ event: ServerEvent, from helper: String) {
         if !transcript.helpers.contains(helper) { transcript.helpers.insert(helper) }
         if live?.helpers.contains(helper) == false { live?.helpers.insert(helper) }
+        // Its run ending: only what it asked goes, not this session's own run.
+        if Self.runEnds.contains(event.type) {
+            transcript.apply(event)
+            live?.apply(event)
+            return
+        }
         apply(event)
     }
+
+    static let runEnds: Set<String> = ["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"]
 
     func answer(_ form: FormRequest, with answer: FormAnswer) {
         guard canReach else { return }

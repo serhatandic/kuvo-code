@@ -224,6 +224,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - "Retrying (attempt 2)…" goes once its step is over: when you stop the agent while it waits to retry, or it goes on in a new step, rather than staying under the reply until the conversation is read again.
 - "Project folders updated", and a background command finishing, show in the conversation when they happen, not only once it's opened again.
 - A reply cut off mid-stream that the agent carries on says "The reply was cut off, so it carried on", instead of showing the engine's instruction to the model.
+- Stopping the agent while it asks for permission takes its card away, with the session's "needs you" mark and the notification, rather than leaving a card no answer reaches.
 - A reply the agent is still writing keeps its words when its conversation is read again, after the network or a machine comes back: they no longer vanish until the paragraph ends, or show twice in a coding agent's reply.
 - A note the agent's engine adds by itself, like a background command finishing, shows even when it was waiting as you opened the conversation.
 - A conversation on a machine goes on updating after the machine reconnects, even when the machine is slow to answer at first; and when your Mac wakes, its own conversations no longer wait on a machine that's still reconnecting.

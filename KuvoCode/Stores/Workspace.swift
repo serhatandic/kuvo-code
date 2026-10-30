@@ -2165,7 +2165,8 @@ final class Workspace {
                     if parent != id, let model = models[parent] { for event in events { model.applyHelper(event, from: id) } }
                 }
             }
-        } else if Self.asksEvents.contains(event.type), let id = event.sessionID ?? Self.formSessionID(event), case let parent = root(of: id), parent != id, let model = models[parent] {
+        } else if Self.asksEvents.contains(event.type) || SessionModel.runEnds.contains(event.type), let id = event.sessionID ?? Self.formSessionID(event),
+                  case let parent = root(of: id), parent != id, let model = models[parent] {
             model.applyHelper(event, from: id)
         }
         noteQuestions(event)
@@ -2425,6 +2426,15 @@ final class Workspace {
             if let settled = try? event.payload(as: EventPayload.FormSettled.self) {
                 asking[settled.id] = nil
                 Notifier.shared.clear(request: settled.id)
+            }
+        case _ where SessionModel.runEnds.contains(event.type):
+            // The engine lets what a run asked go with it, without a word (the coding agents'
+            // bridge says itself). Its permissions are named `per_…`.
+            guard let ended = event.sessionID else { return }
+            if let owner = session(ended) ?? session(root(of: ended)), OutsideAgents.isAgentSession(owner) { return }
+            for (request, session) in asking where session == ended && request.hasPrefix("per_") {
+                asking[request] = nil
+                Notifier.shared.clear(request: request)
             }
         default:
             break

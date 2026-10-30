@@ -58,6 +58,10 @@ public struct Transcript: Sendable, Equatable {
     /// The sessions of subagents working for this one: what they ask (a permission, a question)
     /// shows here, as this conversation's, and is answered in their session.
     public var helpers: Set<String> = []
+    /// Whether what a run asks goes with it, unanswered: the engine's, which lets an ask go without
+    /// a word when its run is stopped. The coding agents' bridge says itself when one goes (a
+    /// subagent of theirs at work in the background still asks once the session's turn is over).
+    public var asksEndWithRuns = false
 
     public init(sessionID: String) {
         self.sessionID = sessionID
@@ -347,6 +351,9 @@ public struct Transcript: Sendable, Equatable {
             let settled = try event.payload(as: EventPayload.FormSettled.self)
             forms.removeAll { $0.id == settled.id }
             return
+        case "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted":
+            // What a run asked goes with it: this session's, or a subagent's when its own run ends.
+            if asksEndWithRuns, let ended = event.sessionID { permissions.removeAll { $0.sessionID == ended } }
         default:
             break
         }

@@ -43,6 +43,25 @@ import Testing
         #expect(model.permissionCommands["per_1"] == "npm test | tail -5")
     }
 
+    /// Stopped while it asks: the engine lets the ask go without a word, so its card and the
+    /// session's "needs you" go with the run, as do a subagent's when its own run ends.
+    @Test func anAskGoesWhenItsRunIsStopped() async throws {
+        defer { engine.stop() }
+        let helper = "ses_permission_helper"
+        engine.on("GET", "/api/session/\(helper)", json: ["data": StubEngine.session(helper, title: "Check", directory: "/tmp/kuvo-tests-permissions", extra: ["parentID": id])])
+        let model = try await open([["id": "msg_you", "type": "user", "time": ["created": 1], "text": "Run the tests"]])
+        workspace.handle(try engine.event("permission.asked", ask))
+        workspace.handle(try engine.event("permission.asked", ["id": "per_2", "sessionID": helper, "action": "shell", "resources": ["curl example.com"]]))
+        try await until { model.permissions.count == 2 }
+        #expect(workspace.needsAttention(id))
+
+        workspace.handle(try engine.event("session.execution.interrupted", session: id, ["reason": "user"]))
+        #expect(model.permissions.map(\.id) == ["per_2"], "the subagent's own run goes on")
+        workspace.handle(try engine.event("session.execution.interrupted", session: helper, ["reason": "user"]))
+        #expect(model.permissions.isEmpty)
+        #expect(!workspace.needsAttention(id))
+    }
+
     /// The ask can come before the step's own word of the command reaches the app (a step read
     /// again, events in another order): the card shows the whole line once it does.
     @Test func theLineShowsOnceTheStepHasIt() async throws {
