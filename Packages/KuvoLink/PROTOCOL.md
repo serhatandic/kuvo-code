@@ -614,8 +614,11 @@ client shows it from the same routes.
   sandbox ("Sandbox": the engine's, while it's `on`; a coding agent's, when the agents bridge marks
   its ask `sandboxed`, its program having started in it, and while it's still set up), which holds what they write and read, a bot may allow any of its commands, wherever it
   runs, within the engine's rules as above; but never one that acts beyond this computer with your
-  accounts, read as plainly as the line allows (any part, past `sudo`, `env`, `npx` and the like):
-  `git push`, any `push` or `upload` (`docker push`, `twine upload`), publishing (`npm publish`,
+  accounts, read as plainly as the line allows (any part, past `sudo`, `env`, `npx` and the like,
+  and the program a package runner runs, `npm exec`, `pnpm dlx`, `bun x`, or `find -exec` does):
+  `git push` and git's other ways out (`send-pack`, `send-email`, `subtree push`, `lfs push`, or an
+  alias given on the line, `-c alias.…`, `GIT_CONFIG_…`), any `push` or `upload` (`docker push`,
+  `twine upload`, `--push`), publishing (`npm publish`,
   `cargo publish`…), deploying or releasing (`vercel`, `netlify`, `firebase`, `fastlane`, `xcrun
   altool`, a program or script named for it, a package script so named: `npm run deploy`), sending
   with `curl` or `wget` anywhere but this computer, reaching another computer (`ssh`, `scp`,

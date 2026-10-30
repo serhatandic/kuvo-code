@@ -655,6 +655,26 @@ test("a coding agent's session that runs in the sandbox lets a bot allow its com
   assert.equal((await route("GET", "kuvo/sandbox")).body.agents, false);
 });
 
+test("in the sandbox, what pushes, deploys or sends however it's phrased still comes to you: through git's aliases and its other commands, a package runner, or find", async t => {
+  write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
+  write(path.join(home, "run", "fence", "on"), "set up");
+  t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
+  t.after(() => fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true }));
+  const session = startedAddress(await tool("start_session", { task: "Ship the docs.", title: "Docs", project: "Tidepool" }, "ses_pixel"));
+  sessions.get(session).bridge = true;
+  const yours = [
+    "git -c alias.p=push p origin main", "git -c alias.p='!git push' p", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p",
+    "git subtree push --prefix=dist origin gh-pages", "git lfs push origin main", "git send-pack origin main", "git send-email 0001.patch",
+    "npm exec vercel deploy", "npm exec -- gh pr create", "pnpm dlx vercel --prod", "pnpm exec netlify deploy", "yarn dlx netlify deploy", "bun x vercel", "bunx vercel",
+    "find . -name x -exec git push \\;", "find . -execdir gh release create v1 \\;", "docker buildx build --push -t me/app .",
+  ];
+  const fine = ["npm install", "git -c color.ui=always log --oneline", "git stash push -m wip", "pnpm exec tsc --noEmit", "find . -name '*.o' -exec rm '{}' +", "docker build -t me/app ."];
+  asked.set(session, [...yours, ...fine].map((line, at) => ({ id: `per_${at}`, sessionID: session, action: "shell", resources: [line], sandboxed: true })));
+  const answer = at => tool("answer_ask", { session, ask: `per_${at}`, decision: "allow", reason: "Part of the plan." }, "ses_pixel");
+  for (const [at, line] of yours.entries()) assert.equal((await answer(at)).isError, true, line);
+  for (const [at, line] of fine.entries()) { const got = await answer(yours.length + at); assert.equal(got.isError, false, line + " → " + got.text) }
+});
+
 test("a bot never lets a session change what the user's own tools run later, nor a folder named like a file", async () => {
   const session = startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_pixel"));
   fs.mkdirSync(path.join(tidepool, "docs", "x.md"), { recursive: true });
