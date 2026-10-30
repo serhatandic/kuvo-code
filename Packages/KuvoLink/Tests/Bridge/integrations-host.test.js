@@ -91,6 +91,28 @@ test("its app turned down once it's out of the settings: its key stays, and Remo
   assert.equal(listed.find(each => each.id === "todoist").keysSaved, false, "so Connect asks for a key again");
 });
 
+// Change Key on this Mac while the phone turns it off in MCP Servers: the Keychain may wait on a
+// prompt, and what changed meanwhile stays changed.
+test("new keys saved while another client turns it off leave it off", async () => {
+  const settingsFile = path.join(engineConfig, "opencode", "opencode.json");
+  const settings = () => JSON.parse(fs.readFileSync(settingsFile, "utf8"));
+  assert.equal((await link.answerIntegrations("POST", "kuvo/integrations/todoist", { keys: { API_KEY: "tok_a" } }, null, undefined, undefined, () => {})).status, 200);
+  host.onSet = () => {
+    host.onSet = null;
+    const written = settings();
+    written.mcp.servers.todoist.disabled = true;
+    fs.writeFileSync(settingsFile, JSON.stringify(written));
+  };
+  try {
+    assert.equal((await link.answerIntegrations("POST", "kuvo/integrations/todoist", { keys: { API_KEY: "tok_b" } }, null, undefined, undefined, () => {})).status, 200);
+  } finally {
+    host.onSet = null;
+  }
+  assert.equal(host.keys.get("KUVO_KEY_TODOIST_API_KEY"), "tok_b");
+  assert.equal(settings().mcp.servers.todoist.disabled, true, "still off");
+  assert.equal((await link.answerIntegrations("DELETE", "kuvo/integrations/todoist", undefined, null, undefined)).status, 200);
+});
+
 test("this Mac's box without its app refuses keys rather than keep them in files", async () => {
   const { served } = await import("./bot-keys-scenarios.js");
   const box = await served({ ...process.env, KUVO_HOST_PASSWORD: PASSWORD, KUVO_HOST_URL: "" });

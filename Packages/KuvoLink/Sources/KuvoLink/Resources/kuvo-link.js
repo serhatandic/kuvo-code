@@ -2178,7 +2178,7 @@ async function integrationsAnswer(method, requestPath, body, engine, signal, fil
         newKeys = true;
       }
     }
-    const value = added ? valueAt(settings, [...SERVERS, entry.id]) : entry.settings;
+    const value = valueAt(readSettings().settings ?? {}, [...SERVERS, entry.id]) ?? entry.settings;
     const changed = changeSettings([{ path: [...SERVERS, entry.id], value }]);
     if (changed.status !== 200)
       return { status: changed.status, value: { message: changed.message } };

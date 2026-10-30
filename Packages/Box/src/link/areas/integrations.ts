@@ -218,8 +218,9 @@ async function integrationsAnswer(method: string, requestPath: string, body: Bod
         newKeys = true;
       }
     }
-    // One there already is written again as it is (the engine reads its keys again).
-    const value = added ? valueAt(settings, [...SERVERS, entry.id]) : entry.settings;
+    // One there already is written again as it is now, with what another client changed while its
+    // keys were saved (the engine reads its keys again).
+    const value = valueAt(readSettings().settings ?? {}, [...SERVERS, entry.id]) ?? entry.settings;
     const changed = changeSettings([{ path: [...SERVERS, entry.id], value }]);
     if (changed.status !== 200) return { status: changed.status, value: { message: changed.message } };
     // The engine reads its keys as it reads its settings again: its server connects again a
