@@ -224,7 +224,7 @@ extension SandboxAsk {
 
     /// What Always for This does, in full, for VoiceOver and its help.
     public var alwaysMeaning: String? {
-        alwaysPath.map { "Run it now, and from now on let commands in \(projectName) write in \($0), still in the sandbox" }
+        alwaysPath.map { "Run it outside the sandbox now, and from now on let commands in \(projectName) write in \($0), in the sandbox" }
     }
 
     /// "Scout is waiting for you · 12 min", once it's waited a minute (`now` and `at` in

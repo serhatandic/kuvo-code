@@ -44,5 +44,10 @@ struct SandboxNoticeTests {
         #expect(newer.look == .needsYou)
         #expect(newer.detail == "Its new part isn't ready.")
         #expect(newer.buttons.map(\.action) == [.check])
+        // Its button does what the route it names does, or there's none.
+        let restarts = try state(#"{"on": false, "reason": "somethingNew", "route": "POST kuvo/engine/restart"}"#).notice
+        #expect(restarts.buttons.map(\.action) == [.restartEngine(asking: true)])
+        let unknown = try state(#"{"on": false, "reason": "somethingNew", "route": "POST kuvo/sandbox/somethingElse"}"#).notice
+        #expect(unknown.buttons.isEmpty)
     }
 }

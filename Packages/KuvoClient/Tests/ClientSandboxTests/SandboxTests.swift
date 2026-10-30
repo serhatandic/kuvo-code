@@ -69,7 +69,7 @@ import Testing
         #expect(ask.subtitle == "The sandbox stopped it from changing a file outside kuvo-ai.")
         #expect(ask.stopped?.map { "\($0.label) \($0.detail)" } == ["Write ~/.zshrc"])
         #expect(ask.alwaysPath == "~/.zshrc")
-        #expect(ask.alwaysMeaning == "Run it now, and from now on let commands in kuvo-ai write in ~/.zshrc, still in the sandbox")
+        #expect(ask.alwaysMeaning == "Run it outside the sandbox now, and from now on let commands in kuvo-ai write in ~/.zshrc, in the sandbox")
     }
 
     @Test func aMachinesErrorIsQuotedAndThereIsNoAlways() {

@@ -57,11 +57,11 @@ extension SandboxState {
         case .checkFailed:
             let again = (failures ?? 1) > 1
             return SandboxNotice(look: .needsYou, title: again ? "The sandbox’s check failed again" : "The sandbox’s check failed",
-                                 detail: "\(again ? "It" : "Its check") found that \(found), so commands run outside the sandbox for now. Try Again checks it again.",
+                                 detail: "\(again ? "It" : "Its check") found that \(found), so commands run outside the sandbox for now.",
                                  buttons: again ? [check, .init(title: "Report a Problem…", action: .report)] : [check])
         case .plugin:
             return SandboxNotice(look: .needsYou, title: "Kuvo Code’s part in the engine was changed",
-                                 detail: "It was changed or removed, so commands run outside the sandbox. Fix It puts it back.", buttons: [.init(title: "Fix It", action: .check)])
+                                 detail: "It’s missing or not as Kuvo Code left it, so commands run outside the sandbox.", buttons: [.init(title: "Fix It", action: .check)])
         case .waiting:
             return SandboxNotice(look: .needsYou, title: "The sandbox starts when the engine restarts", detail: "Until then, commands run outside it.",
                                  buttons: [.init(title: "Restart Engine…", action: .restartEngine(asking: true))])
@@ -79,8 +79,14 @@ extension SandboxState {
             return SandboxNotice(look: .needsYou, title: "This version of macOS can’t sandbox commands", detail: "Commands run outside the sandbox here.",
                                  buttons: [.init(title: "Software Update…", action: .softwareUpdate)])
         case nil:
-            // A newer box's reason: its own words.
-            return SandboxNotice(look: .needsYou, title: "Commands run outside the sandbox", detail: why ?? "The sandbox isn’t on.", buttons: route == nil ? [] : [check])
+            // A newer box's reason: its own words, and the button for the route it names, where a
+            // client knows it.
+            let button: SandboxNotice.Button? = switch route {
+            case let route? where route.hasSuffix(SandboxRoutes.check): check
+            case let route? where route.hasSuffix("kuvo/engine/restart"): .init(title: "Restart Engine…", action: .restartEngine(asking: true))
+            default: nil
+            }
+            return SandboxNotice(look: .needsYou, title: "Commands run outside the sandbox", detail: why ?? "The sandbox isn’t on.", buttons: button.map { [$0] } ?? [])
         }
     }
 
