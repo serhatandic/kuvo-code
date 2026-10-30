@@ -56,3 +56,38 @@ import Testing
         #expect(allowed.allowed.map(\.path) == ["/Users/me/.cache/thing"])
     }
 }
+
+/// The card's words, the same in both apps: what was stopped first, the error where the sandbox
+/// can't say (a machine's), and Always for This's place with its home folder as ~.
+@Suite struct SandboxCardWordsTests {
+    private let ask = SandboxAsk(id: "sa_1", at: 1_000_000, botName: "Scout", project: "/Users/me/kuvo-ai", command: "./scripts/install-hooks.sh",
+                                 why: "Installing the repo's hooks, as the README asks.",
+                                 stopped: [SandboxStop(kind: .write, path: "/Users/me/.zshrc")], always: .init(path: "/Users/me/.zshrc"))
+
+    @Test func aStoppedWriteNamesItsProjectAndAlwaysItsPlace() {
+        #expect(ask.title == "Scout wants to run a command outside the sandbox")
+        #expect(ask.subtitle == "The sandbox stopped it from changing a file outside kuvo-ai.")
+        #expect(ask.stopped?.map { "\($0.label) \($0.detail)" } == ["Write ~/.zshrc"])
+        #expect(ask.alwaysPath == "~/.zshrc")
+        #expect(ask.alwaysMeaning == "Always let commands in kuvo-ai write in ~/.zshrc, still in the sandbox")
+    }
+
+    @Test func aMachinesErrorIsQuotedAndThereIsNoAlways() {
+        let onLinux = SandboxAsk(id: "sa_2", project: "/home/me/kuvo-ai", command: "./scripts/install-hooks.sh", why: "Hooks.",
+                                 error: "/home/me/.zshrc: Permission denied", machine: "lokum")
+        #expect(onLinux.subtitle == "On lokum, the sandbox stopped it with this error.")
+        #expect(onLinux.asker == "An agent" && onLinux.alwaysPath == nil)
+        #expect(SandboxStop.short("/home/me/.zshrc") == "~/.zshrc" && SandboxStop.short("/root/.npm") == "~/.npm" && SandboxStop.short("/opt/x") == "/opt/x")
+    }
+
+    @Test func whatIsntAFileIsSaidInWords() {
+        let app = SandboxStop(kind: .app), job = SandboxStop(kind: .job)
+        #expect("\(app.label): \(app.detail)" == "App: Open or talk to an app")
+        #expect("\(job.label): \(job.detail)" == "Job: Start a background job")
+    }
+
+    @Test func itSaysHowLongItsBeenWaitingOnceItsAMinute() {
+        #expect(ask.waiting(now: 1_000_000 + 59_000) == nil)
+        #expect(ask.waiting(now: 1_000_000 + 12 * 60_000 + 5_000) == "Scout is waiting for you · 12 min")
+    }
+}

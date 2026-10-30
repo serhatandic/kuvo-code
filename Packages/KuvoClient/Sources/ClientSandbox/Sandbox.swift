@@ -187,3 +187,87 @@ public enum SandboxRoutes {
     }
     public static func rule(_ id: String) -> String { "kuvo/sandbox/allowed/\(id)" }
 }
+
+// MARK: The card's words
+
+/// How both apps word an ask's card (card A): who wants what, what the sandbox stopped, and what
+/// Always for This keeps.
+extension SandboxAsk {
+    /// "Scout wants to run a command outside the sandbox".
+    public var title: String { "\(asker) wants to run a command outside the sandbox" }
+
+    /// The project's folder by its name.
+    public var projectName: String {
+        let name = (project as NSString).lastPathComponent
+        return name.isEmpty ? project : name
+    }
+
+    /// What stopped it, in a sentence under the title: by the first thing the sandbox refused, or
+    /// the error the command got where it can't say (Linux).
+    public var subtitle: String {
+        if let first = stopped?.first {
+            switch first.kind {
+            case .write: return "The sandbox stopped it from changing a file outside \(projectName)."
+            case .read: return "The sandbox stopped it from reading a file it keeps private."
+            case .connect: return "The sandbox stopped it from making a connection."
+            case .job: return "The sandbox stopped it from starting a background job."
+            case .app: return "The sandbox stopped it from opening or talking to an app."
+            case .other: return "The sandbox stopped it."
+            }
+        }
+        if error != nil { return machine.map { "On \($0), the sandbox stopped it with this error." } ?? "The sandbox stopped it with this error." }
+        return "The sandbox stopped it."
+    }
+
+    /// The place Always for This keeps, short (`~` for a home folder).
+    public var alwaysPath: String? { always.map { SandboxStop.short($0.path) } }
+
+    /// What Always for This does, in full, for VoiceOver and its help.
+    public var alwaysMeaning: String? {
+        alwaysPath.map { "Always let commands in \(projectName) write in \($0), still in the sandbox" }
+    }
+
+    /// "Scout is waiting for you · 12 min", once it's waited a minute (`now` and `at` in
+    /// milliseconds).
+    public func waiting(now: Double) -> String? {
+        let minutes = Int((now - at) / 60_000)
+        return minutes >= 1 ? "\(asker) is waiting for you · \(minutes) min" : nil
+    }
+}
+
+extension SandboxStop {
+    /// Its tag in the card's well.
+    public var label: String {
+        switch kind {
+        case .write: "Write"
+        case .read: "Read"
+        case .connect: "Connect"
+        case .job: "Job"
+        case .app: "App"
+        case .other: "Other"
+        }
+    }
+
+    /// What it was stopped doing: its path, or in words where there's none.
+    public var detail: String {
+        if let path { return Self.short(path) }
+        switch kind {
+        case .job: return "Start a background job"
+        case .app: return "Open or talk to an app"
+        case .connect: return "Make a connection"
+        default: return "Something the sandbox keeps out"
+        }
+    }
+
+    /// A path with its home folder as `~`: a Mac's, a Linux machine's or root's.
+    public static func short(_ path: String) -> String {
+        for prefix in ["/Users/", "/home/"] where path.hasPrefix(prefix) {
+            let rest = path.dropFirst(prefix.count)
+            guard let slash = rest.firstIndex(of: "/") else { return "~" }
+            return "~" + rest[slash...]
+        }
+        if path == "/root" { return "~" }
+        if path.hasPrefix("/root/") { return "~" + path.dropFirst("/root".count) }
+        return path
+    }
+}
