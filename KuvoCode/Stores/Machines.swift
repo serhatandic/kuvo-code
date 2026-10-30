@@ -653,10 +653,11 @@ final class MachineEngine {
     }
 
     /// Closes the connection and stops everything Kuvo Code runs there, for good (the machine
-    /// removed, or a demo or test copy's, which leaves nothing running).
-    func shutDown() async {
+    /// removed, or a demo or test copy's, which leaves nothing running). Whether it stopped.
+    @discardableResult
+    func shutDown() async -> Bool {
         disconnect()
-        try? await RemoteServer.stop(on: machine.connection)
+        return (try? await RemoteServer.stop(on: machine.connection)) != nil
     }
 
     /// Signs out of every account the machine's engine has (copied from this Mac) and of its coding
@@ -1112,14 +1113,15 @@ final class Machines {
                     removing.insert(id)
                     Task { [weak self] in
                         let forgotten = await engine.forgetAccounts()
-                        await engine.shutDown()
+                        let stopped = await engine.shutDown()
                         // What it kept to work on its own goes too: its keys, how it starts after
                         // a restart, and the crontab line that does it.
                         let leftovers = Self.leftoversScript
                         let tidied = await Task.detached { RemoteShell.run(leftovers, on: id) }.value != nil
                         self?.removing.remove(id)
-                        // What didn't go, the next time it answers.
-                        if !forgotten { self?.runLater(Self.removalScript, on: id) } else if !tidied { self?.runLater(Self.leftoversScript, on: id) }
+                        // What didn't go, the next time it answers. One still running is stopped
+                        // then too: without how it starts, nothing else ever would.
+                        if !forgotten || !stopped { self?.runLater(Self.removalScript, on: id) } else if !tidied { self?.runLater(Self.leftoversScript, on: id) }
                     }
                 }
             } else {

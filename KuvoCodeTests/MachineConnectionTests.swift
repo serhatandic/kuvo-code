@@ -365,6 +365,30 @@ import Testing
         #expect(link.machineHosts[id] == nil, "named to your phones and other computers again")
     }
 
+    /// Uninstalled, its sign-outs went but its engine wouldn't stop (the connection dropped just
+    /// then): what's tried there next stops it, rather than only tidying away how it starts again,
+    /// which would leave it running with nothing to ever stop it.
+    @Test func uninstalledWhenItsEngineWouldntStopItsStoppedNextTime() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        #expect(engine.isReady)
+        // The sign-outs go; then it's away: the stop, and what's tried after, don't reach it.
+        let stop = String(RemoteServer.stopCommand.dropFirst(2).dropLast(2))
+        let removal = Machines.removalMark
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            return script == stop || script.hasPrefix(removal) ? nil : ""
+        }
+        app.removeMachine(id, uninstall: true)
+        await app.machines.waitForRemoval(of: id)
+        // Its tidy-up, then the first try of what waits for it.
+        try await until { ssh.scripts(to: id).filter { $0.hasPrefix(Machines.removalMark) }.count >= 2 }
+        let waiting = try #require(ssh.scripts(to: id).last { $0.hasPrefix(Machines.removalMark) })
+        #expect(waiting.contains(RemoteServer.stopCommand), "what waits for it stops its engine")
+    }
+
     /// A new session in a machine's project that has other folders works in them there from its
     /// start: its rules and what its agent is told name the machine's own paths.
     @Test func aNewSessionInAMachinesProjectWorksInItsOtherFoldersThere() async throws {
