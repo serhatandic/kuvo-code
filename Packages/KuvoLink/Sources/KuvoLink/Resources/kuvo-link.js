@@ -11589,6 +11589,7 @@ var LIMITS2 = {
 };
 var LIMITS_FILE = path54.join(RUN, "tool-limits.json");
 var LIMITS_LOCK = path54.join(RUN, ".tool-limits.lock");
+var STARTING_FOR = 120000;
 function changeCounts(now, change, file) {
   return locked(LIMITS_LOCK, () => {
     let counts = {};
@@ -11606,6 +11607,13 @@ function changeCounts(now, change, file) {
       }
       counts[kind] = byKey;
     }
+    const starting = {};
+    for (const [bot, starts] of Object.entries(isObject(counts.starting) ? counts.starting : {})) {
+      const lately = Object.entries(isObject(starts) ? starts : {}).filter(([, start]) => isObject(start) && typeof start.at === "number" && now - start.at < STARTING_FOR);
+      if (lately.length)
+        starting[bot] = Object.fromEntries(lately);
+    }
+    counts.starting = starting;
     const value = change(counts);
     try {
       writePrivate(file, JSON.stringify(counts));
@@ -11632,6 +11640,35 @@ function takeBack2(kind, key, at, file = LIMITS_FILE) {
       counts[kind][key] = lately;
     else
       delete counts[kind][key];
+  }, file);
+}
+function noteStarting(bot, now = Date.now(), file = LIMITS_FILE) {
+  const token = `${now}-${Math.random().toString(36).slice(2, 10)}`;
+  return changeCounts(now, (counts) => {
+    const starts = counts.starting[bot] ?? {};
+    counts.starting[bot] = { ...starts, [token]: { at: now } };
+    return { token, before: Object.keys(starts) };
+  }, file);
+}
+function startsBefore(bot, before, file = LIMITS_FILE) {
+  return changeCounts(Date.now(), (counts) => {
+    const starts = counts.starting[bot] ?? {};
+    return before.flatMap((token) => starts[token] ? [starts[token]] : []);
+  }, file);
+}
+function startedAs(bot, token, session, file = LIMITS_FILE) {
+  changeCounts(Date.now(), (counts) => {
+    const starts = counts.starting[bot] ?? {};
+    if (!starts[token])
+      return;
+    if (session)
+      starts[token] = { ...starts[token], session };
+    else
+      delete starts[token];
+    if (Object.keys(starts).length)
+      counts.starting[bot] = starts;
+    else
+      delete counts.starting[bot];
   }, file);
 }
 
@@ -12605,28 +12642,50 @@ async function startSession(given, by, place) {
     picked.push("Plan");
   if (!target)
     return no(503, `The engine on ${HERE} isn't running.`);
-  if (bot) {
-    const limits = botLimits(bot.bot);
-    if (limits) {
-      const targets = [engine, bridge].filter((each) => Boolean(each));
-      const work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
-      const working = await workingNow(targets, place.signal);
-      const midnight = new Date().setHours(0, 0, 0, 0);
-      const today = work.filter((each) => (each.data.time?.created ?? 0) >= midnight);
-      const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
-      const past = pastLimit(limits, { depth, working: work.filter((each) => working.has(each.data.id)).length, started: today.length, tokens });
-      if (past)
-        return no(429, past);
+  const limits = bot ? botLimits(bot.bot) : null;
+  const noted = bot && limits ? noteStarting(bot.bot) : null;
+  const went = (session) => {
+    if (bot && noted)
+      startedAs(bot.bot, noted.token, session);
+  };
+  if (bot && limits && noted) {
+    const targets = [engine, bridge].filter((each) => Boolean(each));
+    let work, working;
+    try {
+      work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
+      working = await workingNow(targets, place.signal);
+    } catch (error) {
+      went(null);
+      throw error;
+    }
+    const midnight = new Date().setHours(0, 0, 0, 0);
+    const today = work.filter((each) => (each.data.time?.created ?? 0) >= midnight);
+    const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
+    const workingIDs = new Set(work.filter((each) => working.has(each.data.id)).map((each) => each.data.id));
+    const todayIDs = new Set(today.map((each) => each.data.id));
+    const earlier = startsBefore(bot.bot, noted.before);
+    const past = pastLimit(limits, {
+      depth,
+      working: workingIDs.size + earlier.filter((each) => !each.session || !workingIDs.has(each.session)).length,
+      started: todayIDs.size + earlier.filter((each) => !each.session || !todayIDs.has(each.session)).length,
+      tokens
+    });
+    if (past) {
+      went(null);
+      return no(429, past);
     }
   }
   const kind = bot ? "botSessions" : "sessions";
   const key = by ? bot ? `bot:${bot.bot}` : by.place ? by.session : "outside" : null;
   const counted = key ? allowed2(kind, key) : null;
-  if (key && counted === null)
+  if (key && counted === null) {
+    went(null);
     return no(429, bot ? "You've started a great many sessions in the last few minutes, which looks like a loop. Stop, check on the ones you have (list_sessions), and tell the user." : "You've started several sessions in the last few minutes. Write to those (send_message), or ask the user before starting more.");
+  }
   const giveBack = () => {
     if (key && counted !== null)
       takeBack2(kind, key, counted);
+    went(null);
   };
   let madeTree = null;
   if (given.worktree === true) {
@@ -12658,6 +12717,7 @@ async function startSession(given, by, place) {
     if (!isObject(made) || typeof made.id !== "string" || !made.id)
       throw new Error("No session was made.");
     session = made.id;
+    went(session);
   } catch (error) {
     giveBack();
     if (madeTree)

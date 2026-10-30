@@ -45,6 +45,9 @@ function setBots({ pixelWork } = {}) {
 // The engine: the bots' conversations, a session of the user's own, the models there are accounts
 // for; the sessions made, what each was sent, what each asks, and how each ask was answered.
 let sessions, prompts, made, asked, replied, interrupted, active, busy;
+// Sessions given a task stay at work (`staysAtWork`); none is made until the sessions at work were
+// looked at `holdMaking` times, so starts asked for at once all look before any is made.
+let staysAtWork, holdMaking, activeLooks, held;
 const noTokens = () => ({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } });
 function resetEngine() {
   sessions = new Map([
@@ -59,6 +62,10 @@ function resetEngine() {
   interrupted = [];
   active = new Set();
   busy = new Map();
+  staysAtWork = false;
+  holdMaking = 0;
+  activeLooks = 0;
+  held = [];
 }
 resetEngine();
 // An ask names the tool call it's for, as the engine's do.
@@ -90,13 +97,20 @@ const engine = http.createServer((request, response) => {
       return reply({ data: listed });
     }
     if (url.pathname === "/api/session" && request.method === "POST") {
-      const given = JSON.parse(body);
-      const id = `ses_new${made.length + 1}`;
-      made.push({ id, ...given });
-      sessions.set(id, { id, title: given.title, agent: given.agent, model: given.model, permissions: given.permissions, location: given.location, time: { created: Date.now(), updated: Date.now() }, cost: 0, tokens: noTokens() });
-      return reply({ data: { id } });
+      const make = () => {
+        const given = JSON.parse(body);
+        const id = `ses_new${made.length + 1}`;
+        made.push({ id, ...given });
+        sessions.set(id, { id, title: given.title, agent: given.agent, model: given.model, permissions: given.permissions, location: given.location, time: { created: Date.now(), updated: Date.now() }, cost: 0, tokens: noTokens() });
+        reply({ data: { id } });
+      };
+      if (activeLooks < holdMaking) held.push(make);
+      else make();
+      return;
     }
     if (url.pathname === "/api/session/active") {
+      activeLooks += 1;
+      if (activeLooks >= holdMaking) for (const go of held.splice(0)) go();
       // A session given a task is at work for one look, then answers.
       const looking = [...busy.entries()].filter(([, looks]) => looks > 0).map(([id]) => id);
       for (const id of looking) busy.set(id, busy.get(id) - 1);
@@ -114,6 +128,7 @@ const engine = http.createServer((request, response) => {
     if (one?.[2] === "/prompt") {
       prompts.push({ to: id, ...JSON.parse(body) });
       busy.set(id, 1);
+      if (staysAtWork) active.add(id);
       return reply({});
     }
     if (one?.[2] === "/message") {
@@ -237,6 +252,24 @@ test("limits you set are kept: sessions at once and depth", async () => {
   assert.equal(deeper.isError, true);
   assert.match(deeper.text, /one level deep/);
   assert.equal(made.length, 2);
+});
+
+test("limits you set are kept when the bot starts several sessions at once", async () => {
+  staysAtWork = true;
+  setBots({ pixelWork: { limits: { atOnce: 2 } } });
+  holdMaking = 4;
+  const four = await Promise.all(["One.", "Two.", "Three.", "Four."].map(task => tool("start_session", { task, project: "Tidepool" }, "ses_pixel")));
+  assert.equal(four.filter(said => !said.isError).length, 2, four.map(said => said.text).join("\n"));
+  assert.equal(made.length, 2);
+  for (const refused of four.filter(said => said.isError)) assert.match(refused.text, /2 sessions at once/);
+
+  // A day's: two started today already, so one more of four.
+  active = new Set();
+  setBots({ pixelWork: { limits: { perDay: 3 } } });
+  activeLooks = 0;
+  const more = await Promise.all(["Five.", "Six.", "Seven.", "Eight."].map(task => tool("start_session", { task, project: "Tidepool" }, "ses_pixel")));
+  assert.equal(more.filter(said => !said.isError).length, 1, more.map(said => said.text).join("\n"));
+  assert.equal(made.length, 3);
 });
 
 test("list_sessions shows a bot's work and where each stands; stop_session stops only its own", async () => {
