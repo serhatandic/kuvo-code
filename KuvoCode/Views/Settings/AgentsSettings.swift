@@ -116,7 +116,9 @@ struct AgentsSettings: View {
                 }
             }
         }
-        .task { claudeAgents = await Task.detached { ClaudeAgents.load() }.value }
+        // Claude Code's agents are read from this Mac's folder: offered on this Mac's page only,
+        // not brought onto a machine as if they were its own. (No box lists a computer's yet.)
+        .task(id: box.machine) { claudeAgents = box.machine == nil ? await Task.detached { ClaudeAgents.load() }.value : [] }
         .settingsDetail(item: $editing, title: { $0.agentID ?? "New Agent" }, onDismiss: removePending) { edit in
             AgentEditor(id: edit.agentID, isBuiltIn: edit.isBuiltIn) { editing = nil } remove: { path in
                 removal = path
@@ -144,7 +146,29 @@ struct AgentsSettings: View {
         // Once the closing editor's fields have saved what you typed last, or they'd write it
         // back into a half-made entry.
         let config = app.config(for: box)
-        DispatchQueue.main.async { config.set(nil, at: removal) }
+        DispatchQueue.main.async {
+            if removal.count == 2, removal.first == "agents" { config.changeAgent(removal[1], nil, to: nil) } else { config.set(nil, at: removal) }
+        }
+    }
+}
+
+extension EngineConfig {
+    /// Changes agent `id`'s `key` (nil: the agent itself). One that can't start a session any
+    /// more (removed, turned off, made a subagent only) stops being the one new sessions start
+    /// in, in the same write, rather than leaving Settings naming one that isn't there.
+    func changeAgent(_ id: String, _ key: String?, to value: JSONValue?) {
+        let path = ["agents", id] + (key.map { [$0] } ?? [])
+        let ends = switch key {
+        case nil: value == nil
+        case "disabled": value == .bool(true)
+        case "mode": value == .string("subagent")
+        default: false
+        }
+        if ends, self.value(at: ["default_agent"]) == .string(id) {
+            set([(path, value), (["default_agent"], nil)])
+        } else {
+            set(value, at: path)
+        }
     }
 }
 
@@ -276,7 +300,9 @@ private struct AgentEditor: View {
         // A built-in agent's own description, shown until you write another.
         let builtInDescription = isBuiltIn ? id.flatMap { id in catalog.agents.first(where: { $0.id == id })?.description } : nil
         Section {
-            Picker("Use as", selection: Binding(get: { mode }, set: { config.set(.string($0), at: path + ["mode"]) })) {
+            Picker("Use as", selection: Binding(get: { mode }, set: { mode in
+                if let id { config.changeAgent(id, "mode", to: .string(mode)) } else { config.set(.string(mode), at: path + ["mode"]) }
+            })) {
                 ForEach(["primary", "subagent", "all"], id: \.self) { mode in
                     Text(AgentsSettings.modeTitle(mode)).tag(mode)
                 }
@@ -287,7 +313,7 @@ private struct AgentEditor: View {
             if id != nil {
                 Toggle("Use this agent", isOn: Binding(
                     get: { config.value(at: path + ["disabled"])?.bool != true },
-                    set: { config.set($0 ? nil : .bool(true), at: path + ["disabled"]) }
+                    set: { config.changeAgent(id!, "disabled", to: $0 ? nil : .bool(true)) }
                 ))
             }
         } footer: {

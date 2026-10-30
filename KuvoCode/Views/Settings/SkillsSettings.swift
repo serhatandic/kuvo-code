@@ -14,6 +14,8 @@ struct SkillsSettings: View {
     @State private var here = SkillsShown()
     /// Why its box couldn't say.
     @State private var boxFailure: String?
+    /// Why its engine couldn't list them.
+    @State private var listFailure: String?
     /// GitHub's well-known collections; nil until they're listed.
     @State private var collections: [SkillCollection]?
     @State private var collectionsFailure: String?
@@ -55,6 +57,10 @@ struct SkillsSettings: View {
                 if skills == nil {
                     Placeholder(.rows(count: 3), label: "Loading skills", fadesOut: false)
                         .padding(.vertical, 6)
+                } else if let listFailure {
+                    FailureLabel(title: "Couldn’t list the skills", detail: listFailure, retrying: "the skills") {
+                        Task { await refresh() }
+                    }
                 } else if skills?.isEmpty == true {
                     Text("None yet.")
                         .foregroundStyle(.secondary)
@@ -88,11 +94,11 @@ struct SkillsSettings: View {
                         HStack {
                             if here.isYours(skill) {
                                 // Deleting one you wrote is in its editor, behind a confirmation.
-                                Button("Edit…") { writing = SkillDraft(name: skill.id) }
+                                Button("Edit…") { writing = SkillDraft(name: here.folder(of: skill) ?? skill.id) }
                             }
-                            if here.github[skill.id] != nil {
+                            if here.gitHub(skill) != nil, let folder = here.folder(of: skill) {
                                 // From GitHub, so it can be added back.
-                                Button("Remove") { remove(skill.id) }
+                                Button("Remove") { remove(folder) }
                             }
                             Toggle("Use \(skill.name)", isOn: isOn(skill.id))
                                 .labelsHidden()
@@ -266,9 +272,26 @@ struct SkillsSettings: View {
         // can't list it, the page shows none: the failure above says why.
         if deleted?.routes.box.box != box.id { deleted = RecentlyDeletedSkills(routes: routes) }
         await deleted?.load()
-        // The engine notices a new folder within a moment.
-        try? await Task.sleep(for: .milliseconds(500))
-        skills = ((try? await app.api(for: box)?.skills()) ?? []).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        // Its engine not answering yet (a machine's, connecting): still loading, and read again
+        // once it does.
+        guard let api = app.api(for: box) else { return }
+        // The engine notices a folder added or taken away within a moment: asked again a few
+        // times while its list and the box's folders still differ.
+        var listed: [Skill] = []
+        for attempt in 0..<4 {
+            try? await Task.sleep(for: .milliseconds(attempt == 0 ? 500 : 1_000))
+            if Task.isCancelled { return }
+            do {
+                listed = try await api.skills()
+                listFailure = nil
+            } catch {
+                listFailure = error.localizedDescription
+                skills = []
+                return
+            }
+            if here.folder == nil || (here.current(listed).count == listed.count && here.unlisted(listed).isEmpty) { break }
+        }
+        skills = here.current(listed).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private func listCollections() async {
