@@ -28,6 +28,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A wake-up's line starts with what it will do, not with the project's folder.
 - An agent waiting for another's answer gets its answer only, not what the other then said to you or to another agent; and one on another computer still gets its answer if word that its message arrived is lost on the way. Messages that can't be delivered yet no longer hold up the rest from that computer.
 - A machine you disconnect stays disconnected while Kuvo Code is open, rather than connecting again when your Mac's engine restarts, and one that can't be reached when Kuvo Code opens (before the network is up, say) is tried again by itself. One whose key is refused or whose host key changed says why at once.
+- On a machine, agents find the programs you installed there as your terminal does, like nvm's `node` and the tools you installed with its npm, or what's in `~/.local/bin`.
 - A machine whose SSH settings run a command of their own, like `tmux`, or always ask for a terminal now connects, and one whose host key changed says so and how to clear the old key.
 - **Uninstall from** a machine stops its engine even when the connection drops partway, the next time it answers, rather than leaving it running.
 - In **Settings › Accounts**, signing in, **Disconnect**, **Remove Account**, **Use This Account** and an agent's **Sign Out** say why when they don't work, like a machine that isn't connected or this Mac's engine restarting, rather than doing nothing.

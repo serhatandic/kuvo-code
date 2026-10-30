@@ -4,7 +4,8 @@
 import { spawn } from "node:child_process"
 import { accessSync, constants } from "node:fs"
 import { delimiter, join } from "node:path"
-import { onMachine, ownEnvironment } from "./machine"
+import { joinPath, loginPath, saveLoginPath, savedLoginPath } from "../shared/platform"
+import { machineHome, onMachine } from "./machine"
 
 /** The program's path on PATH (or the extra places given), if it's there. */
 export function which(name: string, extra: string[] = []): string | undefined {
@@ -92,40 +93,48 @@ const startPath = process.env.PATH ?? ""
 let pathRead = 0
 let reading: Promise<void> | undefined
 
+/** On a machine, the PATH its engine's start read (`run/login-path`), after Kuvo Code's own commands: what the bridge goes by until an install reads it again. */
+export function useSavedLoginPath() {
+  const saved = machineHome ? savedLoginPath(machineHome) : undefined
+  if (saved) process.env.PATH = joinPath(process.env.KUVO_BIN, join(machineHome!, "bin"), saved)
+}
+
 /**
  * Your login shell's PATH again, so a tool installed since the bridge started (`npm install -g`,
- * Homebrew, an installer that adds a folder to your profile) is found. Asked when you refresh,
- * at most every few seconds (`now`: again, after an install), one read at a time. On a machine
- * too, with its own folders: a command over SSH gets less than its terminal does (`~/.local/bin`
- * comes from the profile); there a login shell that isn't interactive, as a terminal's commands
- * over SSH would have it, so nothing it starts for you stays running.
+ * Homebrew, an installer that adds a folder to your profile) is found. On this Mac, asked when you
+ * refresh, at most every few seconds, one read at a time, answering within a second while a slow
+ * one carries on (`now`: again, after an install, waiting for it). On a
+ * machine, where a command over SSH gets less than its terminal does (`~/.local/bin` comes from the
+ * profile, nvm's node from .bashrc), its engine's start read it once (`useSavedLoginPath`), and
+ * only an install reads it again: there's no SSH agent there, and a .bashrc that starts one when
+ * there's none would leave one more running with each read.
  */
 export async function refreshLoginPath(now = false): Promise<void> {
+  if (onMachine && !now) return
   if (reading) {
+    if (!now) return answerSoon(reading)
     await reading
-    if (!now) return
-  }
-  if (!now && Date.now() - pathRead < 5_000) return
-  reading = readLoginPath().finally(() => {
+  } else if (!now && Date.now() - pathRead < 5_000) return
+  const read = (reading = readLoginPath().finally(() => {
     pathRead = Date.now()
     reading = undefined
-  })
-  await reading
+  }))
+  await (now ? read : answerSoon(read))
+}
+
+/** A refresh answers within a second (Settings › Accounts waits on it): a slow .zshrc is read on in the background, for the next. */
+async function answerSoon(read: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([read, new Promise<void>((resolve) => (timer = setTimeout(resolve, 1_000)))])
+  clearTimeout(timer)
 }
 
 async function readLoginPath() {
-  const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh")
-  for (const flags of onMachine ? ["-lc"] : ["-ilc", "-lc"]) {
-    try {
-      const ran = await run(shell, [flags, 'printf "__KUVO_PATH__%s__KUVO_END__" "$PATH"'], { timeout: 8_000, env: { ...ownEnvironment(), PATH: startPath, DISABLE_AUTO_UPDATE: "true" } })
-      const found = ran.stdout.match(/__KUVO_PATH__([\s\S]*?)__KUVO_END__/)?.[1]
-      if (found?.trim()) {
-        // Kuvo Code's own commands (kuvo-wake) first, as the app gave them; each folder once.
-        process.env.PATH = [...new Set([process.env.KUVO_BIN, ...found.trim().split(":")].filter(Boolean))].join(":")
-        return
-      }
-    } catch {}
-  }
+  const found = await loginPath({ ...process.env, PATH: startPath })
+  if (!found) return
+  // Kuvo Code's own commands (kuvo-wake) first, as the app gave them.
+  process.env.PATH = joinPath(process.env.KUVO_BIN, found)
+  if (onMachine && machineHome) saveLoginPath(machineHome, found)
 }
 
 /** Finds the first web address in some text (a sign-in page a program printed). */
