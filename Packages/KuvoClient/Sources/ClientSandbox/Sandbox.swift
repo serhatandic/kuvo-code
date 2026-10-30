@@ -172,11 +172,6 @@ public struct SandboxAllowed: Codable, Equatable, Sendable {
     public init(allowed: [SandboxRule]) { self.allowed = allowed }
 }
 
-/// What a box's refusal says (`{message}`), shown as it is.
-public struct SandboxRefusal: Codable, Equatable, Sendable {
-    public var message: String
-}
-
 /// The sandbox's routes on a box (KuvoLink's PROTOCOL.md, "Sandbox").
 public enum SandboxRoutes {
     public static let state = "kuvo/sandbox"

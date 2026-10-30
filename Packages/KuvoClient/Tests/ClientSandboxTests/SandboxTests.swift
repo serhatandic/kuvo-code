@@ -22,9 +22,9 @@ import Testing
         """.utf8))
         #expect(state.why == "Something new." && state.agents)
         #expect(state.reason == nil && state.action == nil && state.check == nil)
-        // A box from before `sandbox.check` gives only these.
-        let older = try JSONDecoder().decode(SandboxState.self, from: Data(#"{"on":true}"#.utf8))
-        #expect(older.on && older.able && !older.agents)
+        // A box from before `sandbox.check` gives none of them.
+        let older = try JSONDecoder().decode(SandboxState.self, from: Data(#"{"on":true,"able":true,"agents":false}"#.utf8))
+        #expect(older.on && older.reason == nil && older.action == nil)
     }
 
     @Test func anAskSaysWhatWasStoppedAndWhatAlwaysWouldKeep() throws {
@@ -43,9 +43,15 @@ import Testing
     }
 
     @Test func aProjectsAlsoAllowedIsAskedForByItsFolder() throws {
-        #expect(SandboxRoutes.allowed(project: "/Users/me/My App & Co") == "kuvo/sandbox/allowed?project=/Users/me/My%20App%20%26%20Co")
+        // The box reads it back as the same folder, whatever is in its name.
+        for folder in ["/Users/me/My App & Co", "/home/me/c++/50%?=#done"] {
+            let route = SandboxRoutes.allowed(project: folder)
+            let read = URLComponents(string: "http://box/" + route)?.queryItems?.first { $0.name == "project" }?.value
+            #expect(read == folder)
+            #expect(!route.contains("+"), "a + reads as a space")
+        }
         let allowed = try JSONDecoder().decode(SandboxAllowed.self, from: Data("""
-        {"allowed":[{"id":"r_1","project":"/Users/me/app","kind":"write","path":"/Users/me/.cache/thing","at":1793200000000,"by":"Ship"}]}
+        {"allowed":[{"id":"r_1","project":"/Users/me/app","kind":"write","path":"/Users/me/.cache/thing","at":1793200000000,"by":"Studio Mac"}]}
         """.utf8))
         #expect(allowed.allowed.map(\.path) == ["/Users/me/.cache/thing"])
     }
