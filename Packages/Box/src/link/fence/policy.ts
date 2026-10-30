@@ -28,6 +28,11 @@ export interface FencePolicy {
   kuvoReadable: string[];
   /** Written besides WORK, GIT and TMP: the system's temporary folders, devices, tools' caches. */
   writable: string[];
+  /** On Linux, tools' caches (in `writable`) a command makes as its tool first runs, by the
+   * programs that make them: Landlock grants only a folder that's there, and the home folder
+   * around them isn't written. Made, missing, just before a command starts, where one is on its
+   * PATH, as the tool would. */
+  made?: { folder: string; programs: string[] }[];
   /** Inside those, what's only read: what runs later outside the sandbox (tools' own programs and
    * settings, scripts they run as they start). */
   readOnly: string[];
@@ -46,6 +51,13 @@ const CACHES = [".npm", ".bun", ".cache", ".cargo", ".rustup", ".swiftpm", ".gra
   ".yarn", ".node-gyp", ".local/state", ".deno", ".pub-cache", ".nuget/packages", ".dotnet"];
 const MAC_CACHES = ["Library/pnpm/store", "Library/Caches", "Library/Developer"];
 const LINUX_CACHES = [".local/share/pnpm/store"];
+// Which tools make each, as they first run (on Linux, the sandbox makes it for them: `made`).
+const MADE_BY: Record<string, string[]> = {
+  ".npm": ["npm", "npx"], ".bun": ["bun", "bunx"], ".cache": ["go", "pip", "pip3", "python3", "yarn", "node", "deno", "pre-commit"],
+  ".cargo": ["cargo", "rustup"], ".rustup": ["rustup"], ".swiftpm": ["swift"], ".gradle": ["gradle", "gradlew"], ".m2": ["mvn"],
+  "go/pkg": ["go"], ".pnpm-store": ["pnpm"], ".yarn": ["yarn"], ".node-gyp": ["node-gyp", "npm"], ".deno": ["deno"],
+  ".pub-cache": ["dart", "flutter"], ".nuget/packages": ["dotnet"], ".dotnet": ["dotnet"], ".local/share/pnpm/store": ["pnpm"],
+};
 // In them, what you run later, outside the sandbox: installed programs (on your PATH), tools'
 // settings that name programs, scripts they run as they start, packages npx runs as they are.
 const RUNS_LATER = [".cargo/bin", ".cargo/config", ".cargo/config.toml", ".bun/bin", ".bun/install/global", ".deno/bin",
@@ -148,6 +160,7 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
     home, kuvo, kuvoReadable, readOnly, ports,
     kuvoPatterns: [],
     writable: ["/tmp", "/var/tmp", "/dev", "/dev/shm", ...inHome([...CACHES, ...LINUX_CACHES])],
+    made: Object.entries(MADE_BY).map(([folder, programs]) => ({ folder: realish(path.join(home, folder)), programs })),
     secrets: [...inHome([...SECRETS, ...LINUX_SECRETS]), ...sshKeys(home), ...ghHosts(home)],
   };
 }

@@ -11,7 +11,7 @@ import type { FencePolicy } from "./policy";
 
 /** What the Linux script reads: the policy's parts it needs. */
 export function landlockPolicy(policy: FencePolicy): string {
-  return JSON.stringify({ hidden: [...policy.kuvo, ...policy.secrets], readable: policy.kuvoReadable, writable: policy.writable, readOnly: policy.readOnly }) + "\n";
+  return JSON.stringify({ hidden: [...policy.kuvo, ...policy.secrets], readable: policy.kuvoReadable, writable: policy.writable, readOnly: policy.readOnly, made: policy.made ?? [] }) + "\n";
 }
 
 /**
@@ -89,6 +89,12 @@ for (const where of policy.readable) grant(where, READS);
 let allowed = [];
 // (Each by the real path the box keeps: one that's become a link since, to anywhere, isn't given.)
 try { allowed = fs.readFileSync(allowedFile, "utf8").split("\n").filter((line) => line.startsWith("/") && real(line) === line); } catch {}
+// A tool's cache that isn't there yet, made as the tool would as it first runs (Landlock grants only
+// what's there, and the home folder around it isn't written): where the tool is on the PATH.
+const onPath = (program) => (process.env.PATH || "").split(":").some((folder) => folder.startsWith("/") && fs.existsSync(path.join(folder, program)));
+for (const { folder, programs } of policy.made || []) {
+  try { if (!fs.existsSync(folder) && programs.some(onPath)) fs.mkdirSync(folder, { recursive: true }); } catch {}
+}
 for (const where of [...policy.writable, work, git, ...allowed]) if (where) grantExcept(where, all, kept);
 // A coding agent run whole in it: its homes (its sign-in and state), whole, and the folders it only
 // reads (the skills it's given). What macOS keeps from it in its homes (its settings, its other

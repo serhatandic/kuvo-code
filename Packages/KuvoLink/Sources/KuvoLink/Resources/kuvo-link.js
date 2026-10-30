@@ -10363,6 +10363,25 @@ var CACHES = [
 ];
 var MAC_CACHES = ["Library/pnpm/store", "Library/Caches", "Library/Developer"];
 var LINUX_CACHES = [".local/share/pnpm/store"];
+var MADE_BY = {
+  ".npm": ["npm", "npx"],
+  ".bun": ["bun", "bunx"],
+  ".cache": ["go", "pip", "pip3", "python3", "yarn", "node", "deno", "pre-commit"],
+  ".cargo": ["cargo", "rustup"],
+  ".rustup": ["rustup"],
+  ".swiftpm": ["swift"],
+  ".gradle": ["gradle", "gradlew"],
+  ".m2": ["mvn"],
+  "go/pkg": ["go"],
+  ".pnpm-store": ["pnpm"],
+  ".yarn": ["yarn"],
+  ".node-gyp": ["node-gyp", "npm"],
+  ".deno": ["deno"],
+  ".pub-cache": ["dart", "flutter"],
+  ".nuget/packages": ["dotnet"],
+  ".dotnet": ["dotnet"],
+  ".local/share/pnpm/store": ["pnpm"]
+};
 var RUNS_LATER = [
   ".cargo/bin",
   ".cargo/config",
@@ -10499,6 +10518,7 @@ function fencePolicy(ports = []) {
     ports,
     kuvoPatterns: [],
     writable: ["/tmp", "/var/tmp", "/dev", "/dev/shm", ...inHome([...CACHES, ...LINUX_CACHES])],
+    made: Object.entries(MADE_BY).map(([folder, programs]) => ({ folder: realish(path49.join(home, folder)), programs })),
     secrets: [...inHome([...SECRETS, ...LINUX_SECRETS]), ...sshKeys(home), ...ghHosts(home)]
   };
 }
@@ -10949,7 +10969,7 @@ function agentsNote(platform) {
 
 // Packages/Box/src/link/fence/landlock.ts
 function landlockPolicy(policy) {
-  return JSON.stringify({ hidden: [...policy.kuvo, ...policy.secrets], readable: policy.kuvoReadable, writable: policy.writable, readOnly: policy.readOnly }) + `
+  return JSON.stringify({ hidden: [...policy.kuvo, ...policy.secrets], readable: policy.kuvoReadable, writable: policy.writable, readOnly: policy.readOnly, made: policy.made ?? [] }) + `
 `;
 }
 var LANDLOCK_RUNNER = String.raw`// Kuvo Code writes this each time its box starts: changes here don't last.
@@ -11022,6 +11042,12 @@ for (const where of policy.readable) grant(where, READS);
 let allowed = [];
 // (Each by the real path the box keeps: one that's become a link since, to anywhere, isn't given.)
 try { allowed = fs.readFileSync(allowedFile, "utf8").split("\n").filter((line) => line.startsWith("/") && real(line) === line); } catch {}
+// A tool's cache that isn't there yet, made as the tool would as it first runs (Landlock grants only
+// what's there, and the home folder around it isn't written): where the tool is on the PATH.
+const onPath = (program) => (process.env.PATH || "").split(":").some((folder) => folder.startsWith("/") && fs.existsSync(path.join(folder, program)));
+for (const { folder, programs } of policy.made || []) {
+  try { if (!fs.existsSync(folder) && programs.some(onPath)) fs.mkdirSync(folder, { recursive: true }); } catch {}
+}
 for (const where of [...policy.writable, work, git, ...allowed]) if (where) grantExcept(where, all, kept);
 // A coding agent run whole in it: its homes (its sign-in and state), whole, and the folders it only
 // reads (the skills it's given). What macOS keeps from it in its homes (its settings, its other

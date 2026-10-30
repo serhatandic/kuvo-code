@@ -11,14 +11,14 @@ import { seatbeltProfile } from "../../../src/link/fence/seatbelt"
  * The box's sandbox, on, as the box sets it up (link/fence/state.ts): its launcher and its rules in
  * this system's terms, in Kuvo Code's folder `kuvo`, which it hides.
  */
-export function realFence(kuvo: string, sockets: string[] = []) {
+export function realFence(kuvo: string, sockets: string[] = [], extra: Partial<FencePolicy> = {}) {
   const folder = join(kuvo, "run", "fence")
   const platform = process.platform === "darwin" ? "darwin" : "linux"
   const places: FencePlaces = {
     folder, launcher: join(kuvo, "bin", "kuvo-fence"), runner: join(kuvo, "bin", "kuvo-fence.js"), inside: [join(kuvo, "bots")], probe: join(folder, "probe"),
     bots: join(kuvo, "bots"), wakes: join(kuvo, "wakes"), key: join(kuvo, "run", "socket.key"), sshFor: join(kuvo, "run", "ssh-for"), sshAgents: join(kuvo, "run", "ssh"), platform,
   }
-  const policy: FencePolicy = { home: kuvo, kuvo: [kuvo], kuvoPatterns: [], kuvoReadable: [join(kuvo, "bin")], writable: ["/dev"], readOnly: [], secrets: [], ports: [], sockets }
+  const policy: FencePolicy = { home: kuvo, kuvo: [kuvo], kuvoPatterns: [], kuvoReadable: [join(kuvo, "bin")], writable: ["/dev"], readOnly: [], secrets: [], ports: [], sockets, ...extra }
   mkdirSync(join(folder, "shell"), { recursive: true })
   const write = (file: string, text: string, mode = 0o600) => {
     mkdirSync(dirname(file), { recursive: true })
