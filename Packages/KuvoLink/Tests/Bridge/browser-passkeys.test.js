@@ -6,6 +6,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -76,6 +77,11 @@ const pipePath = path.join(root, "chrome.sock");
 await new Promise((resolve) => pipe.listen(pipePath, resolve));
 const event = (method, params, sessionId) => toKeeper.write(JSON.stringify({ method, params, ...(sessionId ? { sessionId } : {}) }) + "\0");
 
+// The box's socket key, as the box makes it before it starts the keeper.
+const socketKey = crypto.randomBytes(32).toString("hex");
+fs.mkdirSync(path.join(home, "run"), { recursive: true, mode: 0o700 });
+fs.writeFileSync(path.join(home, "run", "socket.key"), socketKey + "\n", { mode: 0o600 });
+
 const host = spawn(process.execPath, [keeper, "host"], {
   env: { ...process.env, KUVO_HOME: home, KUVO_TEST_CHROME: pipePath },
   stdio: "ignore",
@@ -110,7 +116,10 @@ async function client() {
     }
   });
   after(() => socket.destroy());
-  return { heard, send: (message) => socket.write(JSON.stringify(message) + "\n") };
+  const send = (message) => socket.write(JSON.stringify(message) + "\n");
+  // Kuvo Code's own, which knows the box's socket key: it gives it first.
+  send({ method: "Kuvo.key", params: { key: socketKey } });
+  return { heard, send };
 }
 
 test("a page asking for a passkey is told once, by its site, to every client and to one that connects later, until it leaves the site", async () => {

@@ -28,6 +28,9 @@ export function setSkillSource(engine: EngineLink, folder: string) {
   home = folder
 }
 
+/** Where the sets of skills agents read go (`skillsFolder`), once the bridge knows its home. */
+export const skillsRoot = (): string | undefined => (home ? join(home, "skills") : undefined)
+
 const listed = new Map<string, { at: number; skills: Promise<Skill[]> }>()
 /** What the engine last said, by folder: the skills' own folders (an agent reading one isn't working outside the project). */
 const said = new Map<string, Skill[]>()

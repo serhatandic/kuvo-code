@@ -43,6 +43,13 @@ without their values, who may use which (`Vault.how`, a bot's own `items(of:)`),
 page's site, what agents ask for (`VaultAsk`, a card's title), the activity as one sentence each
 (`VaultActivity.sentence`), and the routes' paths. Rules and shapes only: no views, no app state.
 
+## ClientSandbox
+
+The sandbox a computer's agents' commands run in, as its box answers `kuvo/sandbox` (KuvoLink's
+PROTOCOL.md, "Sandbox"): whether it's on and why not (a word a newer box adds reads as none), what
+agents ask to run outside it (`SandboxAsk`, and what Always for This would keep), a project's Also
+Allowed (`SandboxRule`), and the routes' paths. Shapes only: no views, no app state.
+
 ## ClientChanges
 
 A project's changes as both apps' Changes show them, from git's diff (a box's `kuvo/git/changes`,

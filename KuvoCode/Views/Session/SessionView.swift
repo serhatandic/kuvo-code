@@ -341,10 +341,15 @@ private struct BottomStack: View {
                 }
                 // What its agent asks of its computer's vault.
                 VaultAskCards(session: model.session.id, box: Workspace.box(of: model.session.location.directory))
+                // What its agent asks to run outside its computer's sandbox.
+                SandboxAskCards(session: model.session.id, box: Workspace.box(of: model.session.location.directory))
+                    .environment(\.takesCardKeys, takesCardKeys && model.permissions.isEmpty && forms.isEmpty)
+                    .disabled(offlineMachine != nil)
                 ForEach(Array(app.botAsks.asks(for: model.session.id).enumerated()), id: \.element.ask.id) { index, item in
                     WorkAskCard(ask: item.ask, box: item.box) { model.failure = $0 }
                         // Return and Escape answer the first card only.
-                        .environment(\.takesCardKeys, takesCardKeys && index == 0 && model.permissions.isEmpty && forms.isEmpty)
+                        .environment(\.takesCardKeys, takesCardKeys && index == 0 && model.permissions.isEmpty && forms.isEmpty
+                                     && Sandboxes.shared.asks(for: model.session.id, on: Workspace.box(of: model.session.location.directory)).isEmpty)
                         .modifier(ComposerSurface())
                 }
                 // What went wrong, over the composer rather than in an alert you must click away.

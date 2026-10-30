@@ -497,6 +497,8 @@ extension AppModel {
         // Settings changed here while it connected, after it took the ones it has.
         connection.run("settings") { [weak self] in await self?.keepSettingsCurrent(engine) }
         connection.run("bot-asks") { [weak self] in await self?.botAsks.follow(machine) }
+        // What its agents ask to run outside its sandbox, followed while it's connected.
+        connection.run("sandbox-asks") { await Sandboxes.shared.follow(machine) }
     }
 
     /// Closes this Mac's connection to a machine. It runs on, as a box of its own: its sessions,
@@ -560,6 +562,7 @@ extension AppModel {
         workspace.forget(id, forGood: true)
         boxGroups.forget(machine: id)
         Vaults.shared.forget(id)
+        Sandboxes.shared.forget(id)
         // Its pages in Settings.
         settingsTabs.closeTabs(notOn: Set(machines.list.map(\.id)), machines: machines)
         // Your others hear of it: one uninstalled stops being their peer (one only removed stays,

@@ -1,8 +1,9 @@
 // Which process holds the vault: the box's long-running one (`run` on a machine, `serve`), which
 // keeps a machine's store key in memory and is the only one that touches the vault. A `box route`
 // (the Mac over SSH, kuvo-browser.js) passes `kuvo/vault…` to it over `run/vault.sock` (only you can
-// reach it), one request a connection: first each says hello (a nonce each way, and the holder's
-// proof that it holds the unlock key), then a line of JSON there, the answer's line back. The Mac's
+// reach it), one request a connection: first each says hello (a nonce each way, the client's with
+// the box's socket key, which a command in the sandbox can't read, and the holder's proof that it
+// holds the unlock key), then a line of JSON there, the answer's line back. The Mac's
 // unlock key never crosses the socket while the holder can prove it has it: the request carries a
 // proof of it for this connection instead, which nothing that reads the socket can use again.
 
@@ -10,8 +11,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import { RUN } from "../home";
+import { isSocketKey, RUN, socketKey } from "../home";
 import type { AnyPiece, LinkHandler, LinkRequest } from "../server/context";
+import { keepSshAgents } from "./ssh";
 import { LOCKED, provesUnlock, unlockProof } from "./store";
 
 export const VAULT_SOCKET = path.join(RUN, "vault.sock");
@@ -20,6 +22,11 @@ let holding = false;
 
 /** Whether this process holds the vault. */
 export const holdsVault = () => holding;
+
+/** Whether a route is one only the holding process answers: the vault's, and the sandbox's asks
+ * and its agents' tool (fence/outside.ts), whose asks wait in it, and Also Allowed, which an ask's
+ * Always adds to there (one process changes it). */
+export const heldHere = (route: string) => /^kuvo\/(vault|sandbox\/(asks|tools|allowed))(\/|\?|$)/.test(route);
 
 /** A request as it goes over the socket, and its answer back. */
 interface Sent {
@@ -50,12 +57,16 @@ export function holdVault(handle: LinkHandler): net.Server {
   // Copies a box that ended mid-command left (it was killed): gone.
   try { fs.rmSync(path.join(RUN, "vault-run"), { recursive: true, force: true }); } catch {}
   try { fs.rmSync(VAULT_SOCKET, { force: true }); } catch {}
+  // The key made now, before anyone asks (one that can't be made yet is made by the first who does).
+  try { socketKey(); } catch {}
   const server = net.createServer(socket => {
     let given = "";
     let hello: string | null = null;
     const mine = nonce();
     const stop = new AbortController();
-    socket.on("close", () => stop.abort());
+    // A few seconds to say hello in.
+    const unheard = setTimeout(() => { if (hello === null) socket.destroy(); }, 10_000);
+    socket.on("close", () => { clearTimeout(unheard); stop.abort(); });
     socket.on("error", () => stop.abort());
     socket.setEncoding("utf8");
     socket.on("data", async (chunk): Promise<void> => {
@@ -65,8 +76,10 @@ export function holdVault(handle: LinkHandler): net.Server {
       if (hello === null) {
         const end = given.indexOf("\n");
         if (end < 0) return;
-        let said: { hello?: unknown } | null = null;
+        let said: { hello?: unknown; key?: unknown } | null = null;
         try { said = JSON.parse(given.slice(0, end)); } catch {}
+        // Only from Kuvo Code's own processes: nothing at all for one without the key.
+        if (!isSocketKey(said?.key)) return void socket.destroy();
         given = given.slice(end + 1);
         hello = typeof said?.hello === "string" ? said.hello.slice(0, 100) : "";
         const proof = hello ? unlockProof("holder", hello) : null;
@@ -89,8 +102,9 @@ export function holdVault(handle: LinkHandler): net.Server {
         fromMac: true,
         ...(proved ? { vaultClient: true } : {}),
       };
-      // Only the vault's own routes answer here.
-      if (!/^kuvo\/vault(\/|\?|$)/.test(request.path)) return void socket.end(JSON.stringify({ status: 404, type: "application/json", body: Buffer.from("{}").toString("base64") }) + "\n");
+      // Only the routes of what this process alone keeps answer here: the vault's, and the sandbox's
+      // asks and its agents' tool, which wait in it.
+      if (!heldHere(request.path)) return void socket.end(JSON.stringify({ status: 404, type: "application/json", body: Buffer.from("{}").toString("base64") }) + "\n");
       let status = 502;
       let type = "";
       const chunks: Buffer[] = [];
@@ -126,6 +140,9 @@ export function holdVault(handle: LinkHandler): net.Server {
   // Without its socket, `box route` (the Mac over SSH, the browser here) can't reach the vault: said where it's seen.
   server.on("error", error => console.error(`The vault's socket (${VAULT_SOCKET}) couldn't listen: ${error.message}`));
   server.unref();
+  // Each conversation's SSH agent, from the vault's SSH keys, while its commands are in the sandbox.
+  const stopAgents = keepSshAgents();
+  server.on("close", stopAgents);
   return server;
 }
 
@@ -149,6 +166,9 @@ export const NOT_THE_HOLDER = "That isn't this vault's key, or what answers for 
 export function askHolder(request: LinkRequest, signal?: AbortSignal): Promise<Answered | null> {
   return new Promise(resolve => {
     if (!socketLooksHeld()) return resolve(null);
+    // Only Kuvo Code's own processes can read the key; without it nothing answers.
+    let key: string;
+    try { key = socketKey(); } catch { return resolve(null); }
     const socket = net.createConnection(VAULT_SOCKET);
     const ours = nonce();
     let theirs: { nonce?: unknown; proof?: unknown } | null = null;
@@ -162,7 +182,7 @@ export function askHolder(request: LinkRequest, signal?: AbortSignal): Promise<A
     };
     signal?.addEventListener("abort", () => finish(null), { once: true });
     socket.setEncoding("utf8");
-    socket.on("connect", () => socket.write(JSON.stringify({ hello: ours }) + "\n"));
+    socket.on("connect", () => socket.write(JSON.stringify({ hello: ours, key }) + "\n"));
     const body = Buffer.from(request.body ?? Buffer.alloc(0)).toString("base64");
     const send = () => {
       const headers: Record<string, string> = {};

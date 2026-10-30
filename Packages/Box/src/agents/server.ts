@@ -17,6 +17,7 @@ import { voiceRoutes, type VoiceWords } from "./voice"
 import { isOutdated, type Maintenance } from "./maintenance"
 import { refreshLoginPath } from "./proc"
 import { setToolServer } from "./kuvotools"
+import { noteToolServer } from "./fence"
 import { newID } from "./ids"
 import { BadRequest, NotFound, Sessions } from "./sessions"
 import { artifactRoutes, notedRoute } from "./artifacts/routes"
@@ -482,6 +483,7 @@ export function handler(context: Context) {
       if (area === "kuvo" && a === "tools" && method === "PUT") {
         const { url: address, token, timeout } = await body()
         setToolServer(typeof address === "string" && address && typeof token === "string" ? { url: address, token, timeout: Number(timeout) || 960_000 } : undefined)
+        noteToolServer(typeof address === "string" && typeof token === "string" ? address : undefined)
         return json({})
       }
 

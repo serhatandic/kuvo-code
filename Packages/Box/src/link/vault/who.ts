@@ -21,6 +21,8 @@ export interface Caller {
   folder?: string;
   bot?: string;
   botName?: string;
+  /** A bot's seat in a group chat, which nobody's there to answer for for good. */
+  seat?: boolean;
 }
 
 async function sessionAt(targets: Target[], id: string): Promise<EngineSession | null> {
@@ -54,6 +56,7 @@ export async function callerOf(session: unknown, readEngine: () => EngineRecord,
     ...(current?.title ? { sessionName: current.title } : {}),
     ...(folder ? { folder: path.resolve(folder) } : {}),
     ...(bot ? { bot: bot.id, botName: bot.name } : {}),
+    ...(current?.metadata?.kuvo?.seat ? { seat: true } : {}),
   };
 }
 

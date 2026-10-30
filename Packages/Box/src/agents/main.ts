@@ -31,6 +31,7 @@ import { Snapshots } from "./snapshots"
 import { Roster } from "./roster"
 import { cancelSignIns, handler } from "./server"
 import { Sessions } from "./sessions"
+import { noteAgentsInside } from "./fence"
 import { useSavedLoginPath } from "./proc"
 import { setSkillSource } from "./skills"
 import { Store } from "./store"
@@ -131,6 +132,11 @@ const sessions = new Sessions(
   new Snapshots(join(home, "snapshots")),
   (directory) => link.titleModel(directory),
 )
+// Tells the box's link, as it changes, whether every agent's process here runs in its sandbox
+// (none started before it came on still runs): only then do agents use the vault.
+const noteInside = () => noteAgentsInside(!sessions.outside() && !roster.all().some((agent) => agent.outside?.()))
+noteInside()
+setInterval(noteInside, 5_000).unref?.()
 
 // The group chats that live on this computer, run here: on a machine, in its Kuvo Code folder; on
 // the Mac, where the app says (KUVO_GROUPS, with its bots in KUVO_BOTS and its trash in

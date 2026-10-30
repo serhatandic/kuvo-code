@@ -67,12 +67,13 @@ struct PermissionCard: View {
             }
 
             HStack(spacing: 8) {
-                Button("Deny", role: .cancel) { reply(.reject) }
+                // The same words as the sandbox's card, so the two read as one family.
+                Button("Don’t Allow", role: .cancel) { reply(.reject) }
                     .keyboardShortcut(takesKeys ? .cancelAction : nil)
                 Spacer()
-                Button("Always Allow") { reply(.always) }
+                Button("Always for This") { reply(.always) }
                     .help(alwaysHelp)
-                Button("Allow") { reply(.once) }
+                Button("Allow Once") { reply(.once) }
                     .buttonStyle(.glassProminent)
                     .keyboardShortcut(takesKeys ? .defaultAction : nil)
             }
@@ -624,7 +625,7 @@ struct WindowReader: NSViewRepresentable {
 }
 
 /// What a permission allows, shown whole: as tall as it is, up to `maxHeight`, then it scrolls.
-private struct AllowedWell<Content: View>: View {
+struct AllowedWell<Content: View>: View {
     var maxHeight: CGFloat
     @ViewBuilder var content: Content
     @State private var height: CGFloat = 1

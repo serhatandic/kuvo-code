@@ -251,7 +251,7 @@ enum MachineBox {
         defer { try? FileManager.default.removeItem(at: file) }
         let output = try await connection.run(RemoteEngineInstaller.script("""
             [ -x "$E" ] || E=$(for d in "$K"/engine/*/; do [ -x "${d}opencode" ] && printf '%s\\n' "${d}opencode"; done | tail -n 1)
-            KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$E" "$K/bin/\(Bridge.fileName)" box \(arguments)
+            KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$E" --config=/dev/null --no-env-file "$K/bin/\(Bridge.fileName)" box \(arguments)
             """), input: file, cancellable: cancellable)
         return output.split(separator: "\n").last.map(String.init) ?? ""
     }

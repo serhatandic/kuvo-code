@@ -4,11 +4,12 @@
 // project made (asking you first, once for a bot if you say Always); list_projects, the projects
 // here. Every box answers them alike, through `POST kuvo/agent-tools`.
 
-import { call } from "../engine/client";
+import { call, readEngineFile } from "../engine/client";
+import { agentsCommandsInSandbox, engineCommandsInSandbox } from "../fence/state";
 import { stopSession } from "../engine/queue";
 import { holdArchived } from "../areas/wakes";
 import { noteWorkChanged } from "./changes";
-import { callOf, keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, rulesOf } from "./answers";
+import { callOf, keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, rulesOf, type PendingPermission } from "./answers";
 import { allowRefusal } from "./policy";
 import fs from "node:fs";
 import path from "node:path";
@@ -104,6 +105,15 @@ export async function stopSessionTool(caller: Caller, args: Record<string, unkno
   return said(`Stopped "${data.title || "New Session"}".`);
 }
 
+/** Whether the commands `permission` asks about run in the sandbox: the engine's, as it stands; a
+ * coding agent's, as the agents' bridge says of the one asking (its whole program in it, started
+ * while the sandbox was on), and while it's still on. */
+function commandsInSandbox(target: Target, permission: PendingPermission): boolean {
+  let engine = false;
+  try { engine = readEngineFile().port === target.port; } catch {}
+  return engine ? engineCommandsInSandbox() : permission.sandboxed === true && agentsCommandsInSandbox();
+}
+
 // A project's other folders, which its sessions work in as in its own.
 const projectFolders = (folder: string): readonly string[] => readProjects().find(each => each.directory === folder)?.folders ?? [];
 
@@ -143,7 +153,7 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
     const folder = data.location?.directory ?? data.directory ?? "";
     const rules = rulesOf((caller.place.data.permissions ?? []) as KitRule[]);
     const seen = await callOf(target, permission, signal);
-    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen);
+    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, commandsInSandbox(target, permission));
     const user = `The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`;
     if (why === "above") return refused(`You can't allow that: you'd have to ask the user about it yourself. ${user}`);
     if (why) return refused(`That's ${why}, which always comes to the user: you can't allow it. ${user}`);

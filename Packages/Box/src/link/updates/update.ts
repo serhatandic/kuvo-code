@@ -396,7 +396,7 @@ export async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL
     step("checking it");
     const engine = staged ?? path.join(engineFolder, "opencode");
     if (ran(engine, ["--version"]).status !== 0) throw new Error("The new engine doesn't run here.");
-    const tried = ran(engine, [path.join(stage, "files", "bin", "kuvo-link.js"), "selftest"], { BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", KUVO_HOME: K });
+    const tried = ran(engine, ["--config=/dev/null", "--no-env-file", path.join(stage, "files", "bin", "kuvo-link.js"), "selftest"], { BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", KUVO_HOME: K });
     if (tried.status !== 0 || !tried.output.includes("ok")) throw new Error("The new link doesn't work with it here.");
     if (ran("sh", ["-n", path.join(stage, "files", "bin", "kuvo-start")]).status !== 0) throw new Error("The new keeper doesn't read.");
     if (!now && await boxBusy()) return { result: "busy", message: "Something is running there now." };

@@ -2,7 +2,6 @@
 // vault_run. Both tool servers (this Mac's app, a machine's kuvo-browser.js) pass a call here as it
 // is and give back what this says. None of them ever gives an agent a value.
 
-import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -17,6 +16,7 @@ import { itemNamed, noteUsed, readItems, setGrant, siteOf, valuesOf, VaultRefusa
 import { type Caller, grantFor } from "./who";
 import { allowOnce, alwaysFor, mayUse, noteUse } from "./use";
 import { note } from "./activity";
+import { commandEnv, runCommand } from "../run-command";
 
 /** What a tool answers: words for the agent, and whether it failed. */
 export interface ToolAnswer {
@@ -124,26 +124,13 @@ async function askForItem(caller: Caller, args: Record<string, unknown>, signal?
 // ── vault_run ─────────────────────────────────────────────────────────────────────────────────
 
 const MOST_OUTPUT = 64 * 1024;
-// What's kept of a command's output before it's masked and cut to its last MOST_OUTPUT: masked
-// first, so a value the cut would split is still hidden.
-const MOST_KEPT = 4 * 1024 * 1024;
+// (What's kept of a command's output, its last few megabytes, is masked before it's cut to its last
+// MOST_OUTPUT, so a value the cut would split is still hidden.)
 // What a call may take, the asking included: a little under the tool servers' 16 minutes.
 const CALL_BUDGET = 15.5 * 60_000;
 const VARIABLE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
-// What the box's own process has that no command it runs should.
-const PRIVATE = ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "KUVO_HOST_VAULT_SECRET", "KUVO_VAULT_FILE_KEY", "BUN_BE_BUN"];
 /** Where commands' copies of files go while they run: emptied as the vault is held, and as it ends. */
 export const RUN_FOLDER = path.join(RUN, "vault-run");
-
-// The commands running now, by their scratch folder: stopped, and their copies taken away, when
-// this process ends (a newer box taking over, an update).
-const running = new Map<string, number>();
-process.once("exit", () => {
-  for (const [scratch, pid] of running) {
-    try { process.kill(-pid, "SIGKILL"); } catch {}
-    try { fs.rmSync(scratch, { recursive: true, force: true }); } catch {}
-  }
-});
 
 /** The item and field a variable names: the whole as an item's name, else `Item.field`. */
 function namedValue(named: string): { item: VaultItem; field: string | null } | null {
@@ -193,8 +180,7 @@ async function runWith(caller: Caller, args: Record<string, unknown>, signal?: A
     allowed.set(item.id, may.how);
   }
   const scratch = path.join(RUN_FOLDER, crypto.randomBytes(8).toString("hex"));
-  const env: Record<string, string> = {};
-  for (const [name, value] of Object.entries(process.env)) if (value !== undefined && !PRIVATE.includes(name)) env[name] = value;
+  const env = commandEnv();
   const hidden: Hidden[] = [];
   try {
     fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
@@ -226,7 +212,7 @@ async function runWith(caller: Caller, args: Record<string, unknown>, signal?: A
     // Within what a tool call may take altogether (the tool servers' 16 minutes), however long you took to answer.
     const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
     const seconds = Math.max(1, Math.min(600, left, Number(args.timeout) || 300));
-    const { output, code, timedOut } = await run(command, folder, env, seconds * 1000, scratch, signal);
+    const { output, code, timedOut } = await runCommand(command, folder, env, seconds * 1000, signal, scratch, () => fs.rmSync(scratch, { recursive: true, force: true }));
     let shown = maskValues(output, hidden);
     // Its last part when there's a lot, from a line's start.
     if (shown.length > MOST_OUTPUT) shown = "…" + shown.slice(-MOST_OUTPUT).replace(/^[^\n]*\n/, "");
@@ -235,36 +221,6 @@ async function runWith(caller: Caller, args: Record<string, unknown>, signal?: A
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
-}
-
-/** Runs `command` with the user's shell in `folder`: its output (the last few megabytes of it), its exit code, and whether it ran out of time. */
-function run(command: string, folder: string, env: Record<string, string>, timeout: number, scratch: string, signal?: AbortSignal): Promise<{ output: string; code: number | null; timedOut: boolean }> {
-  return new Promise(resolve => {
-    const shell = env.SHELL && fs.existsSync(env.SHELL) ? env.SHELL : "/bin/sh";
-    const child = spawn(shell, ["-lc", command], { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
-    if (child.pid) running.set(scratch, child.pid);
-    let output = Buffer.alloc(0);
-    const take = (chunk: Buffer) => {
-      output = Buffer.concat([output, chunk]);
-      if (output.length > MOST_KEPT) output = output.subarray(output.length - MOST_KEPT);
-    };
-    child.stdout.on("data", take);
-    child.stderr.on("data", take);
-    let timedOut = false;
-    const stop = () => {
-      try { process.kill(-child.pid!, "SIGTERM"); } catch { try { child.kill("SIGTERM"); } catch {} }
-      setTimeout(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch {} }, 3000).unref();
-    };
-    const timer = setTimeout(() => { timedOut = true; stop(); }, timeout);
-    signal?.addEventListener("abort", stop, { once: true });
-    child.on("error", error => take(Buffer.from(String(error.message))));
-    child.on("close", code => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", stop);
-      running.delete(scratch);
-      resolve({ output: output.toString("utf8"), code, timedOut });
-    });
-  });
 }
 
 // ── The door ──────────────────────────────────────────────────────────────────────────────────

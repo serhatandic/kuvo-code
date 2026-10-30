@@ -15,6 +15,7 @@ let package = Package(
         .library(name: "ClientSessions", targets: ["ClientSessions"]),
         .library(name: "ClientChanges", targets: ["ClientChanges"]),
         .library(name: "ClientVault", targets: ["ClientVault"]),
+        .library(name: "ClientSandbox", targets: ["ClientSandbox"]),
     ],
     // Textual draws the replies' code blocks in both apps; ClientDesign gives it their colors.
     dependencies: [
@@ -40,5 +41,7 @@ let package = Package(
         .testTarget(name: "ClientChangesTests", dependencies: ["ClientChanges"]),
         .target(name: "ClientVault"),
         .testTarget(name: "ClientVaultTests", dependencies: ["ClientVault"]),
+        .target(name: "ClientSandbox"),
+        .testTarget(name: "ClientSandboxTests", dependencies: ["ClientSandbox"]),
     ]
 )

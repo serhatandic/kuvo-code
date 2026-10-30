@@ -287,6 +287,7 @@ final class AppModel {
         botWork.app = self
         botAsks.app = self
         botAsks.onChange = { [weak self] sessions in self?.workspace.askingForWork = sessions }
+        Sandboxes.shared.onChange = { [weak self] sessions in self?.workspace.askingOutsideSandbox = sessions }
         boxGroups.app = self
         moves.app = self
         // What this Mac's box says is moving, as it changes.
@@ -466,7 +467,7 @@ final class AppModel {
             guard launch == self.launch else { return }
             // What some providers need until opencode handles it, on top, as this Mac's box learned
             // it from its engine (as a machine's start adds it).
-            shell["OPENCODE_CONFIG_CONTENT"] = await BoxProcess.engineConfig(engine: binary, content: shell["OPENCODE_CONFIG_CONTENT"], environment: shell)
+            shell["OPENCODE_CONFIG_CONTENT"] = await box.engineConfig(engine: binary, content: shell["OPENCODE_CONFIG_CONTENT"], environment: shell)
             // COMPAT(0.7 provider-compatibility): what the app learned before its box did, gone. Goes 3 months after 0.8.0.
             UserDefaults.standard.removeObject(forKey: "copilotClaudeModels")
             #if DEBUG
@@ -545,6 +546,7 @@ final class AppModel {
                         async let personalities: Void = Personalities.shared.follow()
                         async let bots: Void = bots.follow()
                         async let asks: Void = botAsks.follow(BoxClient.mac)
+                        async let sandboxAsks: Void = Sandboxes.shared.follow(BoxClient.mac)
                         // COMPAT(0.7 mac-personalities): what an earlier Kuvo Code changed in its own copy, taken in. Goes 3 months after 0.8.0.
                         // What a 0.8.0 beta changed of your personalities where it kept them.
                         await Personalities.shared.takeFromOld()
@@ -555,6 +557,7 @@ final class AppModel {
                         await personalities
                         await bots
                         await asks
+                        await sandboxAsks
                     }
                 }
             }
@@ -686,6 +689,9 @@ final class AppModel {
         environment["KUVO_BOTS"] = Bots.root.path
         environment["KUVO_WAKES"] = WakeUps.root.path
         environment["KUVO_BIN"] = bin
+        // The box's sandbox, which the coding agents run their commands in while it's on, as a
+        // machine's is in `~/.kuvo-code/run/fence`.
+        environment["KUVO_FENCE"] = BoxProcess.run.appending(path: "fence").path
         // This Mac's group chats, in its own folder, as a machine's are in `~/.kuvo-code`: their
         // bots are its bots, what they let go of goes to the box's trash (and on to the Finder's,
         // `kuvo.group.trashed`), and a bot remembers them under the key it always has.

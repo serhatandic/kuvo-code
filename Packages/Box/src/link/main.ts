@@ -48,7 +48,7 @@ import { engineConfigContent } from "./engine/compatibility";
 import { watchBox } from "./engine/watch";
 import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
-import { IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, takeVaultSecrets, VERSION_FILE, homeFolder } from "./home";
+import { IS_MAC, K, NEEDED_FILE, OWN_RUNTIME, PID_FILE, REAL_BOX, RUN, scriptIs, socketKey, takeVaultSecrets, VERSION_FILE } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
 import { noteRelay } from "./letters/leave";
 import { deliverLeftAnswers, sendOutbox } from "./letters/outbox";
@@ -57,6 +57,7 @@ import { macNoticeHold, macTell } from "./mac/notices";
 import { runMacPeers } from "./mac/peers";
 import { runMacLink } from "./mac/relay";
 import { watchVaultAsks } from "./vault/asks";
+import { watchSandboxAsks } from "./fence/outside";
 import { holdVault } from "./vault/holder";
 import { primeGenerations } from "./vault/store";
 import { setVaultTell } from "./vault/use";
@@ -79,6 +80,7 @@ import { BRIDGE_VERSION } from "./version";
 import type { AddressInfo } from "node:net";
 import type { SignedDoc } from "../shared/documents";
 import type { EngineRecord } from "../shared/records";
+import { fenceOwnPort, keepFence } from "./fence/state";
 import type { KeptNotice } from "./notices/hold";
 import type { Notice } from "./notices/notice";
 import type { GivenLibrary } from "./personalities/library";
@@ -301,10 +303,14 @@ async function run(): Promise<void> {
   // Moves to and from your other computers, carried on the same connection.
   watchMoves(() => current);
   watchAsks(tell, { answered });
+  // Agents' commands, in the sandbox wherever it can run (fence/state.ts), set up before the vault
+  // goes by it.
+  keepFence();
   // The vault, held here: its key in this process's memory, its asks told to your phones.
   holdVault(engineHandler(readEngineFile, { name: os.hostname() }));
   setVaultTell(tell);
   watchVaultAsks(tell, answered);
+  watchSandboxAsks(tell, answered);
   // What its bots ask you before they do it (making a project): told the same way.
   watchWorkAsks(tell, { answered });
   // Your other computers: this box's agents told to them while the relay connection is up (and
@@ -410,7 +416,7 @@ async function box(command: string): Promise<void> {
       const blocked = updatesBlocked();
       if (blocked) return say({ status: 409, message: blocked });
       if (isUpdating()) return say({ status: 409, message: "It's updating already." });
-      spawn(process.execPath, [fileURLToPath(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+      spawn(process.execPath, [...OWN_RUNTIME, fileURLToPath(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
       return say({ status: 202, ...updateStatus(), updating: "checking" });
     }
     case "route": {
@@ -529,6 +535,11 @@ async function serve(): Promise<void> {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
+  // The key to its sockets, and agents' commands in the sandbox (fence/state.ts), which refuses them
+  // this server too, there before it says where it is (holdVault makes the key too, after).
+  try { socketKey(); } catch {}
+  fenceOwnPort((server.address() as AddressInfo).port);
+  keepFence();
   console.log(JSON.stringify({ url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }));
   // The vault, held here (on a machine, `run` holds it; a test's box serves alone), its asks told
   // to your phones through this Mac's link.
@@ -543,6 +554,7 @@ async function serve(): Promise<void> {
   if (IS_MAC) {
     setVaultTell(macTell);
     watchVaultAsks(macTell, id => macLink.hold?.resolve(id));
+    watchSandboxAsks(macTell, id => macLink.hold?.resolve(id));
   }
   // Its bots' folders' settings, as its keys and integrations are now (after an update, say), as a
   // machine's bridge does as it starts; where its keys can't be reached yet, they stay as they were.
@@ -555,8 +567,8 @@ async function serve(): Promise<void> {
   if (IS_MAC) runMacLink().catch(() => {});
   // Its agents and their letters, and its group chats' mail, for your other computers. (Not for
   // the app's route scenarios, `KUVO_TEST_NO_PEERS`, whose fixture tells its bridge who they are.)
-  // Never the real app's box (`run.kuvo.code/box`).
-  const testsAlone = process.env.KUVO_TEST_NO_PEERS && path.basename(path.dirname(path.resolve(K))) !== "run.kuvo.code";
+  // Never a real box (a test's folder only).
+  const testsAlone = process.env.KUVO_TEST_NO_PEERS && !REAL_BOX;
   if (IS_MAC && !testsAlone) runMacPeers();
   // Recently Deleted's skills past their 30 days, gone with no client there too.
   keepSkillTrashClear();
@@ -778,7 +790,7 @@ if (main) {
     // it's updated, the running bridge goes, for the keeper to start the new one.
     const args = process.argv.slice(3);
     const option = (name: string): string | undefined => (args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined);
-    const test = option("--url") && option("--key") && path.resolve(K) !== path.join(homeFolder(), ".kuvo-code");
+    const test = option("--url") && option("--key") && !REAL_BOX;
     const outcome = await update({ now: args.includes("--now"), step: running => noteUpdate({ running }), ...(test ? { url: option("--url"), keys: [option("--key")!], blocked: null } : {}) });
     noteUpdate({ running: null, ...(outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } }) });
     if (outcome.result === "updated") {

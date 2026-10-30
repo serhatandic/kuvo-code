@@ -3,9 +3,11 @@ import Foundation
 
 extension AppModel {
     /// The vault's tools for this Mac's conversations, which its box lists and carries out
-    /// (KuvoLink's PROTOCOL.md, "Vault"), and the fills its browser asks it for.
+    /// (KuvoLink's PROTOCOL.md, "Vault"), and the fills its browser asks it for; and the sandbox's,
+    /// alike ("Sandbox").
     func wireVault() {
         Vaults.shared.client = { [weak self] box in self?.box(box) }
+        Sandboxes.shared.client = { [weak self] box in self?.box(box) }
         Vaults.shared.proof = { [weak self] machine in self?.phoneLink.vaultProof(machine: machine) }
         Vaults.shared.requestProof = { [weak self] machine, method, path, body in self?.phoneLink.vaultRequestProof(machine: machine, method: method, path: path, body: body) }
         // This Mac's vault, for the panel browser's sign-ins (those kept before it moved in), once
@@ -42,21 +44,36 @@ extension AppModel {
         }
         BrowserTools.vault = { [weak self] name, arguments, caller in
             guard let self else { return ("Kuvo Code isn't ready yet.", true) }
-            var body: [String: Any] = ["name": name, "arguments": arguments]
-            if let caller { body["session"] = caller }
-            guard let data = try? JSONSerialization.data(withJSONObject: body),
-                  let answer = try? await box(BoxClient.mac).send("POST", "kuvo/vault/tools", body: data) else {
-                return ("This Mac's vault can't be reached now. Try again in a moment.", true)
-            }
-            let said = (try? JSONSerialization.jsonObject(with: answer.body)) as? [String: Any]
-            guard answer.status == 200, let text = said?["text"] as? String else { return (said?["message"] as? String ?? "The vault couldn't do that (\(answer.status)).", true) }
-            return (text, said?["isError"] as? Bool ?? false)
+            return await callBoxTool("kuvo/vault/tools", name, arguments, caller, unreachable: "This Mac's vault can't be reached now. Try again in a moment.", failed: "The vault couldn't do that")
+        }
+        // (Asked each time it's empty: the sandbox is set up as the box starts, and checked again.)
+        BrowserTools.sandboxDefinitions = { [weak self] in
+            if let kept = SandboxTools.definitions { return kept }
+            guard let self, let answer = try? await box(BoxClient.mac).send("GET", "kuvo/sandbox/tools"), answer.status == 200,
+                  let tools = (try? JSONSerialization.jsonObject(with: answer.body) as? [String: Any])?["tools"] as? [[String: Any]] else { return [] }
+            if !tools.isEmpty { SandboxTools.definitions = tools }
+            return tools
+        }
+        BrowserTools.sandbox = { [weak self] name, arguments, caller in
+            guard let self else { return ("Kuvo Code isn't ready yet.", true) }
+            return await callBoxTool("kuvo/sandbox/tools", name, arguments, caller, unreachable: "This Mac's box can't be reached now. Try again in a moment.", failed: "The sandbox couldn't do that")
         }
         BrowserTools.vaultFill = { [weak self] body in
             guard let self, let data = try? JSONSerialization.data(withJSONObject: body),
                   let answer = try? await box(BoxClient.mac).send("POST", "kuvo/vault/fill", body: data) else { return nil }
             return (answer.status, ((try? JSONSerialization.jsonObject(with: answer.body)) as? [String: Any]) ?? [:])
         }
+    }
+
+    /// One of the tools this Mac's box carries out for a conversation (`POST <route>`).
+    private func callBoxTool(_ route: String, _ name: String, _ arguments: [String: Any], _ caller: String?, unreachable: String, failed: String) async -> (text: String, isError: Bool) {
+        var body: [String: Any] = ["name": name, "arguments": arguments]
+        if let caller { body["session"] = caller }
+        guard let data = try? JSONSerialization.data(withJSONObject: body),
+              let answer = try? await box(BoxClient.mac).send("POST", route, body: data) else { return (unreachable, true) }
+        let said = (try? JSONSerialization.jsonObject(with: answer.body)) as? [String: Any]
+        guard answer.status == 200, let text = said?["text"] as? String else { return (said?["message"] as? String ?? "\(failed) (\(answer.status)).", true) }
+        return (text, said?["isError"] as? Bool ?? false)
     }
 }
 
@@ -88,5 +105,11 @@ extension AppModel {
 /// The vault tools' definitions, as this Mac's box gave them: asked once a launch.
 @MainActor
 enum VaultTools {
+    static var definitions: [[String: Any]]?
+}
+
+/// The sandbox's tool, as this Mac's box gave it, once it did.
+@MainActor
+enum SandboxTools {
     static var definitions: [[String: Any]]?
 }
