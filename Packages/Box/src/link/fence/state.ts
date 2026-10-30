@@ -208,12 +208,6 @@ function writeProfiles(): void {
   lastProfiles = text;
 }
 
-// Each shell this computer has, by the name Claude Code knows it by.
-const AGENT_SHELLS: [string, string | undefined][] = [
-  ["zsh", ["/bin/zsh", "/usr/bin/zsh"].find(shell => fs.existsSync(shell))],
-  ["bash", ["/bin/bash", "/usr/bin/bash"].find(shell => fs.existsSync(shell))],
-];
-
 function writeExecutable(file: string, text: string): void {
   if (textOf(file) === text) return;
   writePrivate(file, text);
@@ -309,9 +303,10 @@ export function setUpFence(): FenceState {
     fs.mkdirSync(path.join(FOLDER, "tmp"), { recursive: true, mode: 0o700 });
     writeExecutable(places.launcher, launcherScript(places));
     if (platform === "linux") writeExecutable(places.runner, LANDLOCK_RUNNER);
-    // The shells Claude Code's commands run with (the coding agents' bridge picks one).
+    // The launcher as the coding agents' bridge runs an agent whole in the sandbox (the shells a
+    // box before put beside it for Claude Code's commands go: Claude Code runs whole too).
     fs.mkdirSync(path.join(FOLDER, "shell"), { recursive: true, mode: 0o700 });
-    for (const [name, real] of AGENT_SHELLS) if (real) writeExecutable(path.join(FOLDER, "shell", name), agentShellScript(places, real));
+    for (const name of ["zsh", "bash"]) fs.rmSync(path.join(FOLDER, "shell", name), { force: true });
     writeExecutable(path.join(FOLDER, "shell", "run"), agentShellScript(places));
     lastProfiles = "";
     writeProfiles();

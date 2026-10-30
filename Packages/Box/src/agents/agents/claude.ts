@@ -2,6 +2,7 @@
 // your own plan or key (`claude auth login`), one long-lived Claude Code per session fed message
 // by message, its replies streamed into the session as the engine's own would be.
 
+import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync, readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
@@ -19,9 +20,10 @@ import { Queue } from "../queue"
 import { commandSignIn } from "../signin"
 import { newID } from "../ids"
 import { kuvoTools } from "../kuvotools"
+import { dropRelayed, relayedTools, relayPort } from "../toolrelay"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
 import { onMachine, ownFoldersScript } from "../machine"
-import { fenceKey, fenceOn, fenceShell } from "../fence"
+import { fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceOn } from "../fence"
 import { addShell, endShell } from "../shells"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import type { Turn } from "../turn"
@@ -31,6 +33,20 @@ const SDK = [{ name: "@anthropic-ai/claude-agent-sdk", version: "0.3.303" }]
 const places = [join(homedir(), ".local/bin"), join(homedir(), ".claude/local"), "/opt/homebrew/bin", "/usr/local/bin"]
 /** Kept of a tool's output: enough to read, not a whole file's worth. */
 const outputLimit = 30_000
+
+/**
+ * What Claude Code writes at its settings folder's top as it runs whole in the box's sandbox: its
+ * conversations, their files and notes, its caches and logs, and its sign-in (in a file on Linux;
+ * on an added account's, its settings file too: `.claude.json`). Not its settings, hooks, skills,
+ * agents, commands or plugins, which run outside the sandbox when you use it yourself.
+ */
+const STATE_IN_HOME = [
+  "projects", "sessions", "session-env", "shell-snapshots", "file-history", "todos", "tasks", "teams", "plans", "history.jsonl*",
+  "statsig", "telemetry", "debug", "cache", "paste-cache", "image-cache", "ide", "state", "backups", "logs", "uploads",
+  "stats-cache.json*", "mcp-needs-auth-cache.json*", ".credentials.json*", ".claude.json*", "*.lock",
+]
+/** What it never writes in its state either: settings put there. */
+const KEPT_IN_HOME = ["settings*.json", "hooks", ".mcp.json"]
 
 interface Status {
   loggedIn?: boolean
@@ -556,8 +572,9 @@ class ClaudeThread implements Thread {
     const effort = input.model.variant
     const append = hooks.instructions()
     // What the app adds to its instructions changed (a worktree, the project's folders), or Claude
-    // Code was updated: it starts again, going on with the same conversation.
-    const tools = kuvoTools(this.session.id)
+    // Code was updated: it starts again, going on with the same conversation. (Run whole in the
+    // box's sandbox, through the relay, the one way out of it to them.)
+    const tools = fenceOn() ? relayedTools(this.session.id) : kuvoTools(this.session.id)
     // Settings › Skills' skills, as a plugin of its own (but those it reads itself).
     const skills = skillsFolder(await skillsFor(this.session.location.directory, this.agent.ownSkillFolders(this.session.location.directory), turnedOff(hooks)))
     // So does it when the box's sandbox was turned on or off, or its rules changed.
@@ -581,7 +598,7 @@ class ClaudeThread implements Thread {
     if (hooks.signal.aborted) return { outcome: "interrupted" }
     return new Promise<RunResult>((resolve) => {
       this.lastHooks = hooks
-      const message = userMessage(input)
+      const message = userMessage(input, this.copies())
       // The turn ends with the result that answers it (one of its own before, like a command's
       // end it took up, doesn't end it).
       this.active = this.turnFor(turn, hooks, resolve, input.auto, new Map([[message.uuid, ""]]))
@@ -779,8 +796,11 @@ class ClaudeThread implements Thread {
     }
     // A new conversation counts its cost from nothing.
     if (!resume) delete this.state.claudeCost
+    // While the box's sandbox is on, Claude Code runs whole in it, and so does all it starts: its
+    // commands, its hooks and MCP servers (yours, and a project's).
+    const whole = this.whole(skills)
     this.input = new Queue()
-    const tools = kuvoTools(this.session.id)
+    const tools = fenceOn() ? relayedTools(this.session.id) : kuvoTools(this.session.id)
     this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() }
     this.query = sdk.query({
       prompt: this.input,
@@ -800,10 +820,10 @@ class ClaudeThread implements Thread {
         ...(skills ? { plugins: [{ type: "local" as const, path: skills, skipMcpDiscovery: true }] } : {}),
         ...(resume ? { resume: id } : { sessionId: id }),
         // Its commands know their conversation, as the engine's do (kuvo-wake schedules for it).
-        env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id, ...this.fenced() },
+        env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id, ...whole?.env },
         // Its own sandbox off while the box's is on (yours, or a project's settings, may turn it
         // on): one sandbox can't run inside another on a Mac, and every command would fail.
-        ...(this.fenceShellMissing !== undefined ? { sandbox: { enabled: false } } : {}),
+        ...(whole ? { sandbox: { enabled: false }, spawnClaudeCodeProcess: whole.spawn } : {}),
         stderr: () => {},
       },
     })
@@ -811,28 +831,60 @@ class ClaudeThread implements Thread {
   }
 
   /**
-   * While the box's sandbox is on here, Claude Code runs each command in it: its shell is the box's
-   * (fenceShell), which it runs every command with, and its own temporary files, where it notes a
-   * command's folder after a cd, are where commands write.
+   * While the box's sandbox is on here, how Claude Code starts in it, whole: through the box's
+   * launcher, in the conversation's folder, with its settings folder its own (`STATE_IN_HOME`), the
+   * skills it's given and the files you attach to read, and its Kuvo Code tools through the relay.
+   * Undefined while it's off; on, but with no launcher yet (a box from before it had one, until it
+   * starts again), it doesn't start, rather than outside it.
    */
-  private fenced(): Record<string, string> {
-    const fence = fenceShell(this.session.location.directory)
-    // On, but its shell isn't there (a box from before it had one, until it starts again): no
-    // commands, rather than outside it.
-    this.fenceShellMissing = fenceOn() ? !fence : undefined
-    if (!fence) return {}
-    return { CLAUDE_CODE_SHELL: fence.shell, CLAUDE_CODE_TMPDIR: fence.temporary, KUVO_FENCE_WORK: fence.work, KUVO_FENCE_GIT: fence.git }
+  private whole(skills: string | undefined) {
+    this.sandboxedNow = fenceOn() || undefined
+    if (!this.sandboxedNow) return undefined
+    const directory = this.session.location.directory
+    const relayed = relayedTools(this.session.id)
+    const attached = fenceAttachments(directory)
+    const settings = this.agent.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
+    // (On a machine, the script that gives its commands the machine's own folders back, in Kuvo Code's.)
+    const machineFolders = this.agent.env().CLAUDE_ENV_FILE
+    const fence = fenceAgent(this.agent.executable()!, directory, {
+      homes: [settings],
+      state: STATE_IN_HOME,
+      kept: KEPT_IN_HOME,
+      read: [...(skills ? [skills] : []), ...(attached ? [attached] : []), ...(machineFolders ? [machineFolders] : [])],
+      port: relayed ? relayPort() : undefined,
+    })
+    if (!fence) throw new Error("Claude Code runs in the sandbox here, and it isn't ready: restart Kuvo Code.")
+    // Its temporary files where the launcher puts them (the box's own folder is hidden from it),
+    // its commands with no shell of the box's (they're in the sandbox already, and one can't run
+    // inside another), and no updates of its own, which it can't write there (Update does, outside).
+    const env: Record<string, string | undefined> = { CLAUDE_CODE_TMPDIR: undefined, CLAUDE_CODE_SHELL: undefined, DISABLE_AUTOUPDATER: "1" }
+    return {
+      env,
+      spawn: (options: { command: string; args: string[]; cwd?: string; env: Record<string, string | undefined>; signal?: AbortSignal }) => {
+        // (The program as the SDK names it.)
+        const given = Object.fromEntries(Object.entries({ ...options.env, ...fence.env, KUVO_FENCE_SHELL: options.command, ...env }).filter((entry): entry is [string, string] => entry[1] !== undefined))
+        const child = spawn(fence.command, options.args, { cwd: options.cwd ?? directory, env: given, signal: options.signal, stdio: ["pipe", "pipe", "ignore"] })
+        child.once("exit", () => fence.ended())
+        return child
+      },
+    }
   }
 
-  /** While the box's sandbox is on: whether its shell for Claude Code is missing. */
-  private fenceShellMissing?: boolean
+  /** How the files you attach reach this Claude Code: in the box's sandbox, copies it reads. */
+  private copies(): ((path: string) => string) | undefined {
+    const directory = this.session.location.directory
+    return this.sandboxedNow ? (path) => fenceCopy(directory, path) : undefined
+  }
+
+  /** Whether the box's sandbox was on as this Claude Code started: it runs whole in it. */
+  private sandboxedNow?: true
 
   get sandboxed() {
-    return Boolean(this.query) && this.fenceShellMissing === false
+    return Boolean(this.query) && this.sandboxedNow === true
   }
-  // (Started while the sandbox was off: its commands run with your own shell.)
+  // (Started while the sandbox was off: it, and what it runs, are outside it.)
   get outside() {
-    return Boolean(this.query) && this.fenceShellMissing === undefined
+    return Boolean(this.query) && this.sandboxedNow === undefined
   }
 
   private async read(query: any) {
@@ -1298,9 +1350,6 @@ class ClaudeThread implements Thread {
     if (input?.hook_event_name !== "PreToolUse") return {}
     // What a command runs, before it does (one left running is named by it in the bar).
     if (input.tool_name === "Bash" && typeof input.tool_use_id === "string" && typeof input.tool_input?.command === "string") this.commands.set(input.tool_use_id, input.tool_input.command)
-    if (input.tool_name === "Bash" && this.fenceShellMissing) {
-      return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "Commands run in the sandbox here, and it isn't ready for Claude Code yet: ask the user to restart Kuvo Code." } }
-    }
     await this.ownTaken()
     const hooks = this.active?.hooks ?? this.lastHooks
     if (!hooks) return {}
@@ -1410,7 +1459,7 @@ class ClaudeThread implements Thread {
   async steer(input: { id: string; text: string; files: PromptFile[] }): Promise<boolean> {
     const active = this.active
     if (!active || !this.input || active.stopping) return false
-    const message = { ...userMessage(input), priority: "next" }
+    const message = { ...userMessage(input, this.copies()), priority: "next" }
     active.steered.set(message.uuid, input.id)
     this.input.push(message)
     return true
@@ -1461,6 +1510,8 @@ class ClaudeThread implements Thread {
     this.query = undefined
     this.input = undefined
     this.leftRunning()
+    // Its key to its tools through the relay goes with it.
+    if (this.sandboxedNow) dropRelayed(this.session.id)
   }
 
   /** What it left running ends with it. */
@@ -1693,14 +1744,15 @@ function reason(result: any): string {
   }
 }
 
-function userMessage(input: Pick<RunInput, "text" | "files">): any {
+/** A message of yours, with the files you attach as Claude Code reaches them (`copy`: run whole in the box's sandbox, copies it reads). */
+function userMessage(input: Pick<RunInput, "text" | "files">, copy: (path: string) => string = (path) => path): any {
   const content: any[] = []
   const others: string[] = []
   for (const file of input.files) {
     const isImage = /^image\/(png|jpeg|gif|webp)$/.test(file.mime)
     const data = file.data ?? (isImage && file.path ? safeBase64(file.path) : undefined)
     if (isImage && data) content.push({ type: "image", source: { type: "base64", media_type: file.mime, data } })
-    else if (file.path) others.push(file.path)
+    else if (file.path) others.push(copy(file.path))
   }
   let text = input.text
   if (others.length) text += `\n\nAttached files:\n${others.map((path) => `- ${path}`).join("\n")}`

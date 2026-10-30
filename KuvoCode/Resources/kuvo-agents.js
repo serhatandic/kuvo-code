@@ -6393,19 +6393,6 @@ function repositoryOf2(folder) {
   }
   return "";
 }
-function fenceShell(directory) {
-  const where = folder();
-  if (!where || !fenceRules())
-    return;
-  const mine = basename5(process.env.SHELL ?? "");
-  const shell = [mine, "zsh", "bash"].filter((name) => name === "zsh" || name === "bash").map((name) => join14(where, "shell", name)).find((place) => existsSync7(place));
-  if (!shell)
-    return;
-  const work = real(directory);
-  const temporary = join14(where, "tmp", sum(work));
-  mkdirSync8(temporary, { recursive: true, mode: 448 });
-  return { shell, work, git: repositoryOf2(work), temporary };
-}
 var AGENT_FOLDERS = 4;
 function fenceAgent(program, directory, mine) {
   const where = folder();
@@ -8685,6 +8672,7 @@ function unzipper() {
 }
 
 // Packages/Box/src/agents/agents/claude.ts
+import { spawn as spawn5 } from "child_process";
 import { randomUUID } from "crypto";
 import { existsSync as existsSync13, readFileSync as readFileSync18, statSync as statSync8 } from "fs";
 import { homedir } from "os";
@@ -8976,6 +8964,35 @@ async function stopShell(id) {
 var SDK = [{ name: "@anthropic-ai/claude-agent-sdk", version: "0.3.303" }];
 var places = [join19(homedir(), ".local/bin"), join19(homedir(), ".claude/local"), "/opt/homebrew/bin", "/usr/local/bin"];
 var outputLimit3 = 30000;
+var STATE_IN_HOME = [
+  "projects",
+  "sessions",
+  "session-env",
+  "shell-snapshots",
+  "file-history",
+  "todos",
+  "tasks",
+  "teams",
+  "plans",
+  "history.jsonl*",
+  "statsig",
+  "telemetry",
+  "debug",
+  "cache",
+  "paste-cache",
+  "image-cache",
+  "ide",
+  "state",
+  "backups",
+  "logs",
+  "uploads",
+  "stats-cache.json*",
+  "mcp-needs-auth-cache.json*",
+  ".credentials.json*",
+  ".claude.json*",
+  "*.lock"
+];
+var KEPT_IN_HOME = ["settings*.json", "hooks", ".mcp.json"];
 
 class ClaudeAgent {
   context;
@@ -9357,7 +9374,7 @@ class ClaudeThread {
     const modelID = input.model.id;
     const effort = input.model.variant;
     const append = hooks.instructions();
-    const tools = kuvoTools(this.session.id);
+    const tools = fenceOn() ? relayedTools(this.session.id) : kuvoTools(this.session.id);
     const skills = skillsFolder(await skillsFor(this.session.location.directory, this.agent.ownSkillFolders(this.session.location.directory), turnedOff(hooks)));
     const fence = fenceKey();
     if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence))
@@ -9381,7 +9398,7 @@ class ClaudeThread {
       return { outcome: "interrupted" };
     return new Promise((resolve) => {
       this.lastHooks = hooks;
-      const message = userMessage(input);
+      const message = userMessage(input, this.copies());
       this.active = this.turnFor(turn, hooks, resolve, input.auto, new Map([[message.uuid, ""]]));
       this.input.push(message);
     });
@@ -9568,8 +9585,9 @@ class ClaudeThread {
     }
     if (!resume)
       delete this.state.claudeCost;
+    const whole = this.whole(skills);
     this.input = new Queue;
-    const tools = kuvoTools(this.session.id);
+    const tools = fenceOn() ? relayedTools(this.session.id) : kuvoTools(this.session.id);
     this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() };
     this.query = sdk.query({
       prompt: this.input,
@@ -9586,26 +9604,52 @@ class ClaudeThread {
         systemPrompt: { type: "preset", preset: "claude_code", ...append ? { append } : {} },
         ...skills ? { plugins: [{ type: "local", path: skills, skipMcpDiscovery: true }] } : {},
         ...resume ? { resume: id } : { sessionId: id },
-        env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id, ...this.fenced() },
-        ...this.fenceShellMissing !== undefined ? { sandbox: { enabled: false } } : {},
+        env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id, ...whole?.env },
+        ...whole ? { sandbox: { enabled: false }, spawnClaudeCodeProcess: whole.spawn } : {},
         stderr: () => {}
       }
     });
     this.read(this.query);
   }
-  fenced() {
-    const fence = fenceShell(this.session.location.directory);
-    this.fenceShellMissing = fenceOn() ? !fence : undefined;
+  whole(skills) {
+    this.sandboxedNow = fenceOn() || undefined;
+    if (!this.sandboxedNow)
+      return;
+    const directory = this.session.location.directory;
+    const relayed = relayedTools(this.session.id);
+    const attached = fenceAttachments(directory);
+    const settings = this.agent.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join19(homedir(), ".claude");
+    const machineFolders = this.agent.env().CLAUDE_ENV_FILE;
+    const fence = fenceAgent(this.agent.executable(), directory, {
+      homes: [settings],
+      state: STATE_IN_HOME,
+      kept: KEPT_IN_HOME,
+      read: [...skills ? [skills] : [], ...attached ? [attached] : [], ...machineFolders ? [machineFolders] : []],
+      port: relayed ? relayPort() : undefined
+    });
     if (!fence)
-      return {};
-    return { CLAUDE_CODE_SHELL: fence.shell, CLAUDE_CODE_TMPDIR: fence.temporary, KUVO_FENCE_WORK: fence.work, KUVO_FENCE_GIT: fence.git };
+      throw new Error("Claude Code runs in the sandbox here, and it isn't ready: restart Kuvo Code.");
+    const env = { CLAUDE_CODE_TMPDIR: undefined, CLAUDE_CODE_SHELL: undefined, DISABLE_AUTOUPDATER: "1" };
+    return {
+      env,
+      spawn: (options) => {
+        const given = Object.fromEntries(Object.entries({ ...options.env, ...fence.env, KUVO_FENCE_SHELL: options.command, ...env }).filter((entry) => entry[1] !== undefined));
+        const child = spawn5(fence.command, options.args, { cwd: options.cwd ?? directory, env: given, signal: options.signal, stdio: ["pipe", "pipe", "ignore"] });
+        child.once("exit", () => fence.ended());
+        return child;
+      }
+    };
   }
-  fenceShellMissing;
+  copies() {
+    const directory = this.session.location.directory;
+    return this.sandboxedNow ? (path) => fenceCopy(directory, path) : undefined;
+  }
+  sandboxedNow;
   get sandboxed() {
-    return Boolean(this.query) && this.fenceShellMissing === false;
+    return Boolean(this.query) && this.sandboxedNow === true;
   }
   get outside() {
-    return Boolean(this.query) && this.fenceShellMissing === undefined;
+    return Boolean(this.query) && this.sandboxedNow === undefined;
   }
   async read(query) {
     let ended;
@@ -10079,9 +10123,6 @@ class ClaudeThread {
       return {};
     if (input.tool_name === "Bash" && typeof input.tool_use_id === "string" && typeof input.tool_input?.command === "string")
       this.commands.set(input.tool_use_id, input.tool_input.command);
-    if (input.tool_name === "Bash" && this.fenceShellMissing) {
-      return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "Commands run in the sandbox here, and it isn't ready for Claude Code yet: ask the user to restart Kuvo Code." } };
-    }
     await this.ownTaken();
     const hooks = this.active?.hooks ?? this.lastHooks;
     if (!hooks)
@@ -10181,7 +10222,7 @@ class ClaudeThread {
     const active = this.active;
     if (!active || !this.input || active.stopping)
       return false;
-    const message = { ...userMessage(input), priority: "next" };
+    const message = { ...userMessage(input, this.copies()), priority: "next" };
     active.steered.set(message.uuid, input.id);
     this.input.push(message);
     return true;
@@ -10225,6 +10266,8 @@ class ClaudeThread {
     this.query = undefined;
     this.input = undefined;
     this.leftRunning();
+    if (this.sandboxedNow)
+      dropRelayed(this.session.id);
   }
   leftRunning() {
     for (const task of this.tasks.values())
@@ -10465,7 +10508,7 @@ function reason(result) {
       return "Claude Code stopped with an error.";
   }
 }
-function userMessage(input) {
+function userMessage(input, copy = (path) => path) {
   const content = [];
   const others = [];
   for (const file of input.files) {
@@ -10474,7 +10517,7 @@ function userMessage(input) {
     if (isImage && data)
       content.push({ type: "image", source: { type: "base64", media_type: file.mime, data } });
     else if (file.path)
-      others.push(file.path);
+      others.push(copy(file.path));
   }
   let text = input.text;
   if (others.length)
@@ -10632,7 +10675,7 @@ function parse2(directive) {
 // Packages/Box/src/agents/agents/codex.ts
 var places2 = ["/opt/homebrew/bin", "/usr/local/bin", join20(homedir2(), ".local/bin"), join20(homedir2(), ".codex/bin")];
 var outputLimit4 = 30000;
-var STATE_IN_HOME = [
+var STATE_IN_HOME2 = [
   "sessions",
   "archived_sessions",
   "log",
@@ -10655,7 +10698,7 @@ var STATE_IN_HOME = [
   "thread_history_*.sqlite*",
   "memories_*.sqlite*"
 ];
-var KEPT_IN_HOME = ["*.toml", ".env", "hooks.json", "rules"];
+var KEPT_IN_HOME2 = ["*.toml", ".env", "hooks.json", "rules"];
 var noComputerUse = ["unified-computer-use@openai-bundled", "computer-use@openai-bundled"];
 var SHARED = "";
 var ACCOUNT = "account";
@@ -10801,8 +10844,8 @@ class CodexAgent {
     const attached = sessionID ? fenceAttachments(directory) : undefined;
     return fenceAgent(this.executable(), directory, {
       homes,
-      state: STATE_IN_HOME,
-      kept: KEPT_IN_HOME,
+      state: STATE_IN_HOME2,
+      kept: KEPT_IN_HOME2,
       read: [...skills ? [skills] : [], ...attached ? [attached] : []],
       port: relayed ? relayPort() : undefined
     });
@@ -13355,7 +13398,7 @@ import { homedir as homedir4 } from "os";
 import { mkdirSync as mkdirSync15, readFileSync as readFileSync22, writeFileSync as writeFileSync16 } from "fs";
 import { dirname as dirname11, join as join23 } from "path";
 var places3 = [join23(homedir4(), ".grok/bin"), join23(homedir4(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
-var STATE_IN_HOME2 = [
+var STATE_IN_HOME3 = [
   "sessions",
   "logs",
   "memtrace",
@@ -13371,7 +13414,7 @@ var STATE_IN_HOME2 = [
   "*.log",
   "sandbox-events.jsonl"
 ];
-var KEPT_IN_HOME2 = ["*.toml", "hooks-paths", "disabled-hooks", "*.sh"];
+var KEPT_IN_HOME3 = ["*.toml", "hooks-paths", "disabled-hooks", "*.sh"];
 
 class GrokAgent {
   context;
@@ -13513,7 +13556,7 @@ class GrokAgent {
       authMethod: () => process.env.XAI_API_KEY ? "xai.api_key" : "cached_token",
       restartAfterInterrupt: true,
       program: () => agent.program,
-      whole: { homes: (env) => [env.GROK_HOME ?? join23(homedir4(), ".grok")], state: STATE_IN_HOME2, kept: KEPT_IN_HOME2, env: { GROK_SANDBOX: "off", GROK_MEMORY: "0" } },
+      whole: { homes: (env) => [env.GROK_HOME ?? join23(homedir4(), ".grok")], state: STATE_IN_HOME3, kept: KEPT_IN_HOME3, env: { GROK_SANDBOX: "off", GROK_MEMORY: "0" } },
       async command({ approvesAll, plan, skills, whole }) {
         const executable = agent.executable();
         if (!executable)
@@ -21868,4 +21911,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents a66cc01f85b20e74d7c16be57222cb5fff86be24c512c800edaefda3711df39b
+// Built from Packages/Box/src/agents efe7b05663013bb59a4854c60e3d4df48ec852916a799b45f27d12cb5e4a7fc4

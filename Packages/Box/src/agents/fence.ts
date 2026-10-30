@@ -1,7 +1,6 @@
 // The box's sandbox, as the coding agents' own programs run their commands in it (PROTOCOL.md,
 // "Sandbox"): the rules the box writes for its launcher (`run/fence/policy.json`), while it has the
-// sandbox on here (`run/fence/on`). Claude Code runs its commands through the launcher, as the
-// engine does; Codex runs whole in it.
+// sandbox on here (`run/fence/on`). The coding agents run whole in it, through its launcher.
 
 import { createHash, randomBytes } from "node:crypto"
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, type Dirent } from "node:fs"
@@ -160,24 +159,6 @@ export function repositoryOf(folder: string): string {
   return ""
 }
 
-/**
- * For an agent whose commands run through a shell it's given (Claude Code): the box's shell that
- * runs them in the sandbox (the user's own, zsh or bash, by name), what the launcher's told (the
- * conversation's folder and its repository), and the commands' temporary folder, which they write.
- * Undefined while the sandbox is off here.
- */
-export function fenceShell(directory: string): { shell: string; work: string; git: string; temporary: string } | undefined {
-  const where = folder()
-  if (!where || !fenceRules()) return undefined
-  const mine = basename(process.env.SHELL ?? "")
-  const shell = [mine, "zsh", "bash"].filter((name) => name === "zsh" || name === "bash").map((name) => join(where, "shell", name)).find((place) => existsSync(place))
-  if (!shell) return undefined
-  const work = real(directory)
-  const temporary = join(where, "tmp", sum(work))
-  mkdirSync(temporary, { recursive: true, mode: 0o700 })
-  return { shell, work, git: repositoryOf(work), temporary }
-}
-
 /** How many homes of its own, and folders it only reads, an agent run whole has (each; link/fence/seatbelt.ts). */
 const AGENT_FOLDERS = 4
 
@@ -196,7 +177,7 @@ export interface AgentPlaces {
 }
 
 /**
- * For an agent run whole in the sandbox (Codex, Grok, Cursor): the launcher that runs it
+ * For an agent run whole in the sandbox (Claude Code, Codex, Grok, Cursor): the launcher that runs it
  * (`run/fence/shell/run`) and what it's told: its program, the conversation's folder and
  * repository, and its own places. (On a Mac, its homes only read but their state: what runs
  * outside the sandbox when you use it yourself, its settings, plugins and skills, stays as it was.

@@ -2919,8 +2919,16 @@ it's empty.
   agents bridge notes it, `{pid, on}`, in `run/fence/agents`, for the sandbox as it is: `on` is the
   token each setup writes in `run/fence/on`; with no bridge running, it's true). It counts the
   agents' own processes, from their start: a command one of them started outside the sandbox that
-  outlives it isn't followed, as with the engine's. How each does: Claude Code runs its commands through the
-  box's shell for it (`run/fence/shell/zsh` or `bash`); Codex runs whole in the sandbox
+  outlives it isn't followed, as with the engine's. Each runs whole in it, and so does all it
+  starts: its commands, and its hooks and MCP servers, yours and a project's. Claude Code through
+  `run/fence/shell/run` (the SDK's own start of it, `spawnClaudeCodeProcess`), in the conversation's
+  folder, its own sandbox off; of its settings folder (`~/.claude`, or an added account's) it writes,
+  on a Mac, only what's named as its state (its conversations, their files, todos and plans, shell
+  snapshots, history, caches and logs, its sign-in, an added account's `.claude.json`), and in
+  those never settings (`settings*.json`, `hooks`, `.mcp.json`); never your `~/.claude.json` (it
+  goes on without saving to it), nor its own updates (`DISABLE_AUTOUPDATER`; Update does them,
+  outside); Kuvo Code's tools through the relay, and files you attach as copies, as for Codex.
+  Codex runs whole in the sandbox
   (`run/fence/shell/run`), an app-server for each session in that session's folder (and your
   account's in its `sessions` folder), its own sandbox off, asking as it does, and Kuvo Code's tools
   through the agents bridge's relay on 127.0.0.1, a key for each session. Of its home it writes, on

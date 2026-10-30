@@ -12972,11 +12972,11 @@ function launcherScript(places) {
 `) + `
 `;
 }
-function agentShellScript(places, shell) {
+function agentShellScript(places) {
   return [
     "#!/bin/sh",
     "# Kuvo Code writes this each time its box starts: changes here don't last.",
-    `${shell ? `KUVO_FENCE_SHELL=${sh(shell)} ` : ""}exec ${sh(places.launcher)} "$@"`,
+    `exec ${sh(places.launcher)} "$@"`,
     ""
   ].join(`
 `);
@@ -13335,10 +13335,6 @@ function writeProfiles() {
     writePrivate(path54.join(FOLDER, name), body);
   lastProfiles = text;
 }
-var AGENT_SHELLS = [
-  ["zsh", ["/bin/zsh", "/usr/bin/zsh"].find((shell) => fs52.existsSync(shell))],
-  ["bash", ["/bin/bash", "/usr/bin/bash"].find((shell) => fs52.existsSync(shell))]
-];
 function writeExecutable(file, text) {
   if (textOf(file) === text)
     return;
@@ -13430,9 +13426,8 @@ function setUpFence() {
     if (platform === "linux")
       writeExecutable(places.runner, LANDLOCK_RUNNER);
     fs52.mkdirSync(path54.join(FOLDER, "shell"), { recursive: true, mode: 448 });
-    for (const [name, real] of AGENT_SHELLS)
-      if (real)
-        writeExecutable(path54.join(FOLDER, "shell", name), agentShellScript(places, real));
+    for (const name of ["zsh", "bash"])
+      fs52.rmSync(path54.join(FOLDER, "shell", name), { force: true });
     writeExecutable(path54.join(FOLDER, "shell", "run"), agentShellScript(places));
     lastProfiles = "";
     writeProfiles();
