@@ -125,6 +125,34 @@ struct TranscriptReplayTests {
         #expect(retries(goneOn) == [:])
     }
 
+    /// Instructions changed mid-conversation (a project's folders, say) and the engine's own notices
+    /// show as they happen, as reading the conversation has them: what changed, and what it's about.
+    @Test func noticesShowAsTheyHappenAsAReadHasThem() throws {
+        var transcript = Transcript(sessionID: "ses_1")
+        transcript.apply(try ServerEvent(json: Data(#"""
+        {"id":"evt_1","created":1,"type":"session.instructions.updated","metadata":{"by":"kuvo"},"data":{"sessionID":"ses_1","delta":{"kuvo/project-folders":"Also /src/web"},"text":"Folders: /src/web"}}
+        """#.utf8)))
+        transcript.apply(try ServerEvent(json: Data(#"""
+        {"id":"evt_2","created":2,"type":"session.instructions.updated","data":{"sessionID":"ses_1","delta":{"core/x":"y"}}}
+        """#.utf8)))
+        transcript.apply(try ServerEvent(json: Data(#"""
+        {"id":"evt_3","created":3,"type":"session.synthetic","data":{"sessionID":"ses_1","text":"Exited 0","description":"npm test","metadata":{"source":"shell","state":"completed","exit":0}}}
+        """#.utf8)))
+
+        guard transcript.messages.count == 2,
+              case .system(let instructions) = transcript.messages[0],
+              case .synthetic(let ended) = transcript.messages[1] else {
+            Issue.record("Expected the instructions' notice and the command's, got \(transcript.messages)")
+            return
+        }
+        #expect(instructions.id == "msg_1")
+        #expect(instructions.text == "Folders: /src/web")
+        #expect(instructions.description == "Instructions updated: kuvo/project-folders")
+        #expect(instructions.instructionSources == ["kuvo/project-folders"])
+        #expect(instructions.metadata?["by"]?.string == "kuvo")
+        #expect(ended.backgroundEnd == "Background command finished: npm test")
+    }
+
     /// The engine's own notice (a background command finished) waiting to go in when the
     /// conversation was read: it shows when it goes in, once, as one that waited while it was open does.
     @Test func aNoticeWaitingWhenReadShowsWhenItGoesIn() throws {
