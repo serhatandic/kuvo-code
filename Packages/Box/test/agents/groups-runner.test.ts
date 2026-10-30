@@ -561,6 +561,33 @@ describe("a group chat on a machine", () => {
     expect(engine.prompts(seat).filter((request) => String(request.body.text).includes("And the docs?")).map((request) => request.body.delivery)).toEqual(["steer", "queue"])
   })
 
+  test("written to as a bot ends its turn, the message still on its way as the turn picks it up: it's answered, and not told it again at its next turn", async () => {
+    const { groups } = runner()
+    engine.lines = { Ada: ["First.", "Yes, the docs too."], Ben: ["Agreed."] }
+    engine.held.add("Ada")
+    engine.held.add("Ben")
+    engine.lateSteers.add("Ada")
+    engine.holdSteers = true
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Go")
+    await until(() => engine.prompts().length === 1)
+    const docs = groups.send("grp_team000001", "And the docs?")!
+    await until(() => engine.prompts().some((request) => request.body.delivery === "steer"))
+    // Its run ends with the message in its inbox, its sending not answered yet: the turn sends it again.
+    engine.release("Ada")
+    const said = () => groups.get("grp_team000001")!.messages.filter((message) => message.author === "bot_ada").map((message) => message.text)
+    await until(() => said().length > 0)
+    expect(said()).toEqual(["First.\n\nYes, the docs too."])
+    // Its sending answered at last: Ada has heard it.
+    engine.letSteers()
+    const seat = groups.get("grp_team000001")!.group.seats.bot_ada
+    const takenBack = () => engine.requests.filter((request) => request.method === "DELETE" && request.path.startsWith(`/api/session/${seat}/inbox`)).length
+    const heard = () => groups.get("grp_team000001")!.group.heard.bot_ada === docs.id
+    await until(() => heard() || takenBack() > 1)
+    expect(heard()).toBe(true)
+    engine.release("Ben")
+  })
+
   test("a bot answering as the bridge started over: its answer still reaches the chat, once, and the chat waits for Keep Going", async () => {
     // The bridge that goes: from then on, nothing it asks of the engine comes back.
     let gone = false

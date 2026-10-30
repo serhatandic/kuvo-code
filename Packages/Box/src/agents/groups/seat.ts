@@ -180,6 +180,9 @@ export class Seats implements SeatHome {
   private declined = new Set<string>()
   /** Messages of yours steered into each seat's run under way: what each says, by its id there. */
   private steered = new Map<string, Map<string, string>>()
+  /** Of those, the ones still on their way (by their ids), and the ones of these its turn took back and sent again as it ended: it answered them. */
+  private sending = new Set<string>()
+  private resent = new Set<string>()
   /** Seats whose rules were brought up to date since this started, and what each was last told. */
   private seatsChecked = new Set<string>()
   private seatTexts = new Map<string, string>()
@@ -628,14 +631,20 @@ export class Seats implements SeatHome {
     const id = newID("msg")
     const sent = this.steered.get(seat) ?? new Map<string, string>()
     this.steered.set(seat, sent.set(id, text))
+    this.sending.add(id)
     try {
       await api.prompt(seat, id, text, "steer")
     } catch {
       sent.delete(id)
+      this.resent.delete(id)
       return false
+    } finally {
+      this.sending.delete(id)
     }
-    // Its turn ended as it went: it'd wait there for a run nobody reads, so it's taken back, unheard.
+    // Its turn ended as it went: sent again by the turn, which answered it; or it'd wait there for
+    // a run nobody reads, so it's taken back, unheard.
     if (this.steered.get(seat) !== sent) {
+      if (this.resent.delete(id)) return true
       await api.cancelInbox(seat, id).catch(() => {})
       return false
     }
@@ -655,6 +664,8 @@ export class Seats implements SeatHome {
       const text = sent.get(item.id)
       if (text === undefined) continue
       await api.cancelInbox(seat, item.id).catch(() => {})
+      // Its sending may not be answered yet: then `steer` hears it was sent again.
+      if (this.sending.has(item.id)) this.resent.add(item.id)
       late.push(text)
     }
     return late

@@ -27,6 +27,9 @@ export class Engine {
   cutShort = new Set<string>()
   /** Bots whose seats take a message steered in too late for the run under way: it waits in the inbox once the run ends. */
   lateSteers = new Set<string>()
+  /** A message steered in is answered only at `letSteers` (it's in the inbox meanwhile): as one still on its way as the run ends. */
+  holdSteers = false
+  private steerAnswers: (() => void)[] = []
   /** Seats being made wait until `letMake`: so a turn can be stopped while its seat is made. */
   holdMaking = false
   private making: (() => void)[] = []
@@ -72,6 +75,12 @@ export class Engine {
   /** A conversation as it is already (a bot's own, with a part it was given before). */
   seed(session: string, messages: any[]) {
     this.conversations.set(session, messages)
+  }
+
+  /** Messages steered in are answered now, and the next ones at once. */
+  letSteers() {
+    this.holdSteers = false
+    for (const go of this.steerAnswers.splice(0)) go()
   }
 
   /** The seats waiting to be made are, and the next ones aren't held. */
@@ -145,6 +154,7 @@ export class Engine {
     // Steered into a run under way: it hears it at its next step, and its run goes on.
     if (what === "prompt" && body.delivery === "steer" && this.busy.has(session)) {
       if (this.lateSteers.has(this.seats.get(session) ?? "")) this.queued.set(session, [...(this.queued.get(session) ?? []), { id: body.id }])
+      if (this.holdSteers) await new Promise<void>((go) => this.steerAnswers.push(go))
       return ok()
     }
     if (what === "prompt" && this.stuck.has(this.seats.get(session) ?? "")) {
