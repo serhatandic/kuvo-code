@@ -107,8 +107,10 @@ export interface MacWaiter {
 }
 
 // Senders being told of to their letters' boxes first (one made a moment ago, which those boxes
-// don't know yet): its letter goes the round after.
-const introducing = new Map<string, number>();
+// don't know yet): its letter goes once that's done (or couldn't be), or a minute on, whatever
+// rounds come meanwhile.
+const introducing = new Map<string, { at: number; done: boolean }>();
+const INTRODUCING_FOR = 60_000;
 
 export const REPLIES = path.join(RUN, "replies");
 
@@ -350,10 +352,15 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
     if (!peer) continue;
     if (offline || now - (letterTries.get(id) ?? 0) < 60_000) continue;
     // Its sender, told of to that box first, so it's taken for one of this box's agents.
-    if (letter.from && !toldPeers.get(peer.key)?.sessions?.has(letter.from) && !introducing.has(id)) {
-      introducing.set(id, now);
-      announce(host, readEngineFile, link).catch(() => {});
-      continue;
+    if (letter.from && !toldPeers.get(peer.key)?.sessions?.has(letter.from)) {
+      const introduced = introducing.get(id);
+      if (!introduced) {
+        const introduction = { at: now, done: false };
+        introducing.set(id, introduction);
+        telling.push(announce(host, readEngineFile, link).catch(() => {}).finally(() => { introduction.done = true; }));
+        continue;
+      }
+      if (!introduced.done && now - introduced.at < INTRODUCING_FOR) continue;
     }
     letterTries.set(id, now);
     const bytes = letterMail(peer, { id, from: letter.from, to: letter.to, text: cutText(letter.text), wait: letter.wait === true, at: made,

@@ -10835,6 +10835,7 @@ async function readConversation(target, session, data, name, signal) {
 
 // Packages/Box/src/link/letters/outbox.ts
 var introducing = new Map;
+var INTRODUCING_FOR = 60000;
 var REPLIES = path51.join(RUN, "replies");
 var LETTER_BYTES = 24000;
 var ANSWER_TEXT = 8000;
@@ -11072,10 +11073,18 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
       continue;
     if (offline || now - (letterTries.get(id) ?? 0) < 60000)
       continue;
-    if (letter.from && !toldPeers.get(peer.key)?.sessions?.has(letter.from) && !introducing.has(id)) {
-      introducing.set(id, now);
-      announce(host, readEngineFile, link).catch(() => {});
-      continue;
+    if (letter.from && !toldPeers.get(peer.key)?.sessions?.has(letter.from)) {
+      const introduced = introducing.get(id);
+      if (!introduced) {
+        const introduction = { at: now, done: false };
+        introducing.set(id, introduction);
+        telling.push(announce(host, readEngineFile, link).catch(() => {}).finally(() => {
+          introduction.done = true;
+        }));
+        continue;
+      }
+      if (!introduced.done && now - introduced.at < INTRODUCING_FOR)
+        continue;
     }
     letterTries.set(id, now);
     const bytes = letterMail(peer, {
