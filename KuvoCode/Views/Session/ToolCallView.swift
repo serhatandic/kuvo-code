@@ -37,7 +37,10 @@ struct ToolCallView: View {
 
     @Environment(\.answerAgent) private var answerAgent
     @Environment(\.workAnswers) private var workAnswers
-    @Environment(\.sandboxStopped) private var sandboxStopped
+    @Environment(\.sandboxStopped) private var heardStopped
+    /// What its box asks, where it's given rather than heard (a summary outside the transcript).
+    private(set) var givenStopped: Set<String>?
+    private var sandboxStopped: Set<String>? { givenStopped ?? heardStopped }
 
     @ViewBuilder private var step: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -133,7 +136,10 @@ struct ToolCallView: View {
             if let mark = sandboxMark {
                 mark
             }
-            if case .failed(_, let error, _, _) = call.state {
+            // A command run outside the sandbox: its mark says how, and only that it failed, here.
+            if ranOutsideAndFailed {
+                Text("Failed").foregroundStyle(.red)
+            } else if case .failed(_, let error, _, _) = call.state, !(isSandboxAsk && Self.sandboxOutcome(outputText) != nil) {
                 if error.isInterruption {
                     Text("Stopped")
                 } else {
@@ -194,8 +200,10 @@ struct ToolCallView: View {
     private var isActive: Bool { !call.state.isFinished }
 
     /// What the call did, in words: its line in the transcript.
-    static func summary(of call: Message.ToolCall, in directory: String) -> String {
-        ToolCallView(call: call, directory: directory).summary
+    static func summary(of call: Message.ToolCall, in directory: String, stopped: Set<String>? = nil) -> String {
+        var view = ToolCallView(call: call, directory: directory)
+        view.givenStopped = stopped
+        return view.summary
     }
 
     private var summary: String {
@@ -221,8 +229,13 @@ struct ToolCallView: View {
         case "question": return isActive ? "Asking you a question" : "Asked you a question"
         case _ where isSandboxAsk:
             let command = string("command").map { "`\($0)`" } ?? "a command"
-            if isActive { return "Asking to run \(command) outside the sandbox" }
-            return (Self.sandboxOutcome(outputText) == "You said no" ? "Didn’t run " : "Ran ") + command
+            // Asking while its ask is open; once you allowed it, the command runs in the same call.
+            if isActive { return (isAskOpen != false ? "Asking to run " : "Running ") + command + " outside the sandbox" }
+            switch Self.sandboxOutcome(outputText) {
+            case "You said no", "No answer": return "Didn’t run " + command
+            case let outcome? where outcome.hasPrefix("Ran outside"): return "Ran " + command
+            default: return "Asked to run \(command) outside the sandbox"
+            }
         case "subagent": return (string("description") ?? (isActive ? "Starting a subagent…" : "A subagent's task")) + (string("agent").map { " · \($0)" } ?? "")
         case "skill": return "Used a skill"
         case "tool_search": return (isActive ? "Looking for a tool" : "Looked for a tool") + (string("query").map { ": “\($0)”" } ?? "")
@@ -406,20 +419,42 @@ struct ToolCallView: View {
         if output.hasPrefix("Ran outside the sandbox · Always for this") { return "Ran outside the sandbox · Always for this" }
         if output.hasPrefix("Ran outside the sandbox · Allowed once") { return "Ran outside the sandbox · Allowed once" }
         if output.hasPrefix("The user said no") { return "You said no" }
+        if output.hasPrefix("Nobody answered in time") { return "No answer" }
         return nil
     }
 
     /// A command's quiet mark beside its row: stopped by the sandbox while its ask waits for you;
     /// run outside it, once or always, or not, once you answered.
     private var sandboxMark: Text? {
-        if call.name == "shell", wake == nil, let command = string("command"), sandboxStopped.contains(command.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        // One that failed: an earlier run of the same command that went fine isn't marked.
+        if call.name == "shell", wake == nil, isStopped, let command = string("command"), sandboxStopped?.contains(command.trimmingCharacters(in: .whitespacesAndNewlines)) == true {
             return Text("Stopped by the sandbox").foregroundStyle(.orange)
         }
         guard isSandboxAsk else { return nil }
-        if isActive { return Text("Waiting for you").foregroundStyle(.orange) }
+        if isActive { return isAskOpen == true ? Text("Waiting for you").foregroundStyle(.orange) : nil }
         guard let outcome = Self.sandboxOutcome(outputText) else { return nil }
-        let symbol = outcome == "You said no" ? "" : "\(Image(systemName: "lock.open")) "
+        let symbol = outcome.hasPrefix("Ran outside") ? "\(Image(systemName: "lock.open")) " : ""
         return Text("\(symbol)\(outcome)").foregroundStyle(.secondary)
+    }
+
+    /// A command that didn't go through: it exited with an error, or failed.
+    private var isStopped: Bool {
+        if case .failed = call.state { return true }
+        return !exitSuffix.isEmpty
+    }
+
+    /// A `sandbox_ask` whose ask is still open on its box: waiting for your answer, not running;
+    /// nil before its box's asks are heard, when it may be either.
+    private var isAskOpen: Bool? {
+        guard let sandboxStopped else { return nil }
+        return string("command").map { sandboxStopped.contains($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? false
+    }
+
+    /// A command run outside the sandbox that failed (it ended with an error, or was stopped):
+    /// "Failed" beside its mark, rather than the whole of what it printed in red.
+    private var ranOutsideAndFailed: Bool {
+        guard isSandboxAsk, case .failed = call.state else { return false }
+        return Self.sandboxOutcome(outputText)?.hasPrefix("Ran outside") == true
     }
 
     private var diffs: [FileDiff] {
@@ -629,8 +664,9 @@ extension Message.ToolState {
 }
 
 extension EnvironmentValues {
-    /// The commands its agents ask to run outside the sandbox now, which their rows mark stopped.
-    @Entry var sandboxStopped: Set<String> = []
+    /// The commands its agents ask to run outside the sandbox now, which their rows mark stopped;
+    /// nil while its box's asks aren't known yet.
+    @Entry var sandboxStopped: Set<String>? = nil
     /// What a bot answered for the conversation's asks, by the tool call that asked (`kuvo.answers`).
     @Entry var workAnswers: [String: WorkAnswer] = [:]
 }

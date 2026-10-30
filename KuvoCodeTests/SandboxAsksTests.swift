@@ -1,6 +1,7 @@
 import ClientSandbox
 import Foundation
 import KuvoLink
+import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
@@ -29,7 +30,7 @@ import Testing
             sent.add(request)
             return AsyncThrowingStream { continuation in
                 continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                continuation.yield(.body(Data(status == 200 ? "{}".utf8 : #"{"error": "no"}"#.utf8)))
+                continuation.yield(.body(Data(status == 200 ? "{}".utf8 : #"{"message": "The command's folder is gone."}"#.utf8)))
                 continuation.finish()
             }
         })
@@ -78,22 +79,45 @@ import Testing
         sandboxes.take([ask], from: BoxClient.mac)
         await #expect(throws: BoxRefusal.self) { try await sandboxes.answer(ask, .once, on: BoxClient.mac) }
         #expect(sandboxes.asks(for: "ses_scout", on: BoxClient.mac).map(\.id) == ["sask_1"])
+        #expect(sandboxes.failures["sask_1"] == "The command's folder is gone.", "its card says why, in its computer's words")
         #expect(app.workspace.needsAttention("ses_scout"))
     }
 
     @Test func aMachineRemovedTakesItsAsksWithIt() {
+        #expect(sandboxes.stoppedCommands(for: "ses_scout", on: "lokum") == nil, "not heard yet: unknown, not nothing")
         sandboxes.take([ask], from: "lokum")
         #expect(app.workspace.needsAttention("ses_scout"))
         sandboxes.forget("lokum")
         #expect(sandboxes.asks(for: "ses_scout", on: "lokum").isEmpty)
+        #expect(sandboxes.stoppedCommands(for: "ses_scout", on: "lokum") == nil)
         #expect(!app.workspace.needsAttention("ses_scout"))
     }
 
-    /// The `sandbox_ask` row, once answered, says how its command ran, from what the box answered.
-    @Test func theAskRowSaysHowItsCommandRan() {
-        #expect(ToolCallView.sandboxOutcome("Ran outside the sandbox · Allowed once\n\nInstalled.") == "Ran outside the sandbox · Allowed once")
-        #expect(ToolCallView.sandboxOutcome("Ran outside the sandbox · Always for this: /Users/me/.zshrc\n\nok") == "Ran outside the sandbox · Always for this")
-        #expect(ToolCallView.sandboxOutcome("The user said no: run it in the sandbox instead.") == "You said no")
-        #expect(ToolCallView.sandboxOutcome("Installed.") == nil)
+    /// The `sandbox_ask` row says what's happening to its command: asked while its ask is open,
+    /// running once you allowed it, then how it ran, and never "Ran" for one that didn't.
+    @Test func theAskRowSaysWhatHappenedToItsCommand() throws {
+        let input: [String: Any] = ["command": "npm run build:icons", "why": "Its renders cache."]
+        #expect(try words(input, running: true, stopped: []) == "Running `npm run build:icons` outside the sandbox", "allowed, it runs in the same call")
+        #expect(try words(input, running: true, stopped: ["npm run build:icons"]) == "Asking to run `npm run build:icons` outside the sandbox")
+        #expect(try words(input, running: true, stopped: nil) == "Asking to run `npm run build:icons` outside the sandbox", "its box not heard yet: never said to be running")
+        #expect(try words(input, failed: "Ran outside the sandbox · Allowed once\n\nnpm ERR!\n\nIt ended with 1.") == "Ran `npm run build:icons`")
+        #expect(try words(input, output: "Ran outside the sandbox · Allowed once\n\nIt ended with 0.") == "Ran `npm run build:icons`")
+        #expect(try words(input, output: "The user said no: don't run it.") == "Didn’t run `npm run build:icons`")
+        #expect(try words(input, output: "Nobody answered in time, so it didn't run.") == "Didn’t run `npm run build:icons`")
+        #expect(try words(input, output: "Say why the task needs it.") == "Asked to run `npm run build:icons` outside the sandbox", "a call the box refused ran nothing")
+        #expect(ToolCallView.sandboxOutcome("Ran outside the sandbox · Always for this: from now on…") == "Ran outside the sandbox · Always for this")
+        #expect(ToolCallView.sandboxOutcome("Nobody answered in time, so it didn't run.") == "No answer", "not “You said no”")
+    }
+
+    private func words(_ input: [String: Any], running: Bool = false, stopped: Set<String>? = [], output: String = "", failed: String? = nil) throws -> String {
+        let state: [String: Any] = running ? ["status": "running", "input": input]
+            : failed.map { ["status": "error", "input": input, "error": ["type": "tool", "message": $0]] }
+            ?? ["status": "completed", "input": input, "content": [["type": "text", "text": output]], "metadata": [:]]
+        let message: [String: Any] = ["id": "m", "type": "assistant", "agent": "build", "time": ["created": 1], "model": ["id": "m", "providerID": "p"],
+                                      "content": [["type": "tool", "id": "c", "name": "kuvo-browser_sandbox_ask", "executed": true, "state": state]]]
+        let decoded = try JSONDecoder().decode(Message.self, from: JSONSerialization.data(withJSONObject: message))
+        guard case .assistant(let assistant) = decoded, case .tool(let call)? = assistant.content.first else { throw TestFailure("no tool call") }
+        if let failed { guard case .failed = call.state else { throw TestFailure("not failed: \(failed)") } }
+        return ToolCallView.summary(of: call, in: "/Users/me/kuvo-ai", stopped: stopped)
     }
 }

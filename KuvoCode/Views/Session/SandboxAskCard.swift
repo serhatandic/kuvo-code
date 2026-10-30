@@ -24,20 +24,19 @@ struct SandboxAskCard: View {
     let asked: SandboxAsk
     let box: String
     var takesKeys = false
-    @State private var trouble: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // A bot's run with you away: how long it's been waiting.
-            TimelineView(.periodic(from: .now, by: 30)) { context in
+        // A bot's run with you away: how long it's been waiting, over the card once it's a minute.
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            VStack(alignment: .leading, spacing: 6) {
                 if let waiting = asked.waiting(now: context.date.timeIntervalSince1970 * 1000) {
                     Label(waiting, systemImage: "clock")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.leading, 4)
                 }
+                card.modifier(ComposerSurface())
             }
-            card.modifier(ComposerSurface())
         }
     }
 
@@ -84,7 +83,8 @@ struct SandboxAskCard: View {
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if let trouble {
+            // Why the last answer didn't go through: the card stays, to try again.
+            if let trouble = Sandboxes.shared.failures[asked.id] {
                 Text(trouble)
                     .font(.callout)
                     .foregroundStyle(.red)
@@ -142,12 +142,7 @@ struct SandboxAskCard: View {
     }
 
     private func answer(_ answer: SandboxAnswer) {
-        Task {
-            do {
-                try await Sandboxes.shared.answer(asked, answer, on: box)
-                trouble = nil
-            } catch { trouble = error.localizedDescription }
-        }
+        Task { try? await Sandboxes.shared.answer(asked, answer, on: box) }
     }
 }
 
