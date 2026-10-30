@@ -136,7 +136,8 @@ nonisolated struct FolderFailure: Error, Hashable, Sendable {
     static func checking(_ path: String, then body: String) -> String {
         """
         p=\(SSHConnection.quoted(path))
-        if [ ! -e "$p" ]; then if [ -x "$(dirname -- "$p")" ]; then echo kuvo-folder:missing; else echo kuvo-folder:denied; fi
+        if [ ! -e "$p" ]; then d=$(dirname -- "$p"); while [ ! -e "$d" ]; do d=$(dirname -- "$d"); done
+          if [ -x "$d" ]; then echo kuvo-folder:missing; else echo kuvo-folder:denied; fi
         elif [ ! -d "$p" ]; then echo kuvo-folder:not-a-folder
         elif ! cd "$p" 2>/dev/null || [ ! -r . ]; then echo kuvo-folder:denied
         else echo kuvo-folder:ok; \(body) 2>/dev/null; fi

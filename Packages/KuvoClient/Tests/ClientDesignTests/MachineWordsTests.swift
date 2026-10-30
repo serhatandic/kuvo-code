@@ -41,6 +41,8 @@ struct MachineWordsTests {
         let words = MachineWords.removal(of: "lokum", home: nil, otherMacs: nil, phones: 0, phonesKeepIt: true, device: "this Mac")
         #expect(words.uninstall == "Uninstall from lokum")
         #expect(words.message.contains("for any other Mac or phone that uses it"))
+        #expect(words.message.contains("your phones keep it"), "a paired phone keeps it, known or not")
+        #expect(!MachineWords.removal(of: "lokum", home: nil, otherMacs: nil, phones: 0, phonesKeepIt: false, device: "this Mac").message.contains("phones keep it"))
     }
 
     @Test func aRowWhileTheEngineComesSaysHowFar() {

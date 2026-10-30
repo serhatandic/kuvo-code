@@ -46,7 +46,7 @@ public enum MachineWords {
         }
         // Not known (not read since it last connected): Uninstall says it would stop it for anyone.
         guard otherMacs != nil else {
-            return ("Remove takes it off \(device); it keeps running, with its sessions, bots, sign-ins and keys. Uninstall also stops it there, for any other Mac or phone that uses it, and deletes its sign-ins and keys.", "Uninstall from \(name)")
+            return ("Remove takes it off \(device); it keeps running, with its sessions, bots, sign-ins and keys\(phonesKeepIt ? ", and your phones keep it" : ""). Uninstall also stops it there, for any other Mac or phone that uses it, and deletes its sign-ins and keys.", "Uninstall from \(name)")
         }
         return ("Remove takes it off \(device); it keeps running, with its sessions, bots, sign-ins and keys\(phonesKeepIt ? ", and your phones keep it" : ""). Uninstall also stops it there and deletes its sign-ins and keys.", "Uninstall from \(name)")
     }

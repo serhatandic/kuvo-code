@@ -99,6 +99,9 @@ import Testing
         let inside = FileTree(roots: [root.appending(path: "secrets")])
         try await until { inside.rootFailure != nil }
         #expect(inside.rootFailure == .denied)
+        let deeper = FileTree(roots: [root.appending(path: "secrets/keys")])
+        try await until { deeper.rootFailure != nil }
+        #expect(deeper.rootFailure == .denied)
         await locked.loadAllFiles()
         #expect(locked.allFilesFailure == .denied)
 
@@ -107,6 +110,10 @@ import Testing
         let gone = FileTree(roots: [root.appending(path: "gone")])
         try await until { gone.rootFailure != nil }
         #expect(gone.rootFailure?.detail(on: "lokum") == "lokum said: No such folder.")
+        // Its folder gone too (a project moved away): not there, never said to be locked.
+        let goneWithIt = FileTree(roots: [root.appending(path: "old/app")])
+        try await until { goneWithIt.rootFailure != nil }
+        #expect(goneWithIt.rootFailure == .missing)
 
         SSHConnection.standIn = { _, _ in nil }
         let away = FileTree(roots: [root])

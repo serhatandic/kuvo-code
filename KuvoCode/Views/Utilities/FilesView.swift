@@ -227,6 +227,7 @@ final class FileTree {
 
     /// Reads a folder that couldn't be read again.
     func retry(_ directory: URL) {
+        reads[directory, default: 0] += 1
         failures[directory] = nil
         children[directory] = nil
         loading.remove(directory)
@@ -257,6 +258,7 @@ final class FileTree {
 
     /// Forgets what's been read, so the tree shows files created since.
     func reload() {
+        reads = reads.mapValues { $0 + 1 }
         children = [:]
         failures = [:]
         loading = []
