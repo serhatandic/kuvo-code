@@ -58,6 +58,8 @@ the Mac's own git). Foundation only.
 The look both apps draw with, the same on each: SwiftUI, no app state. It's taking the place of the
 phone's copies of the Mac's design files, a piece at a time.
 
+- `MoveWords`: Move to Computer's words in both apps: what a moving row says ("Moving to lab…
+  12 of 30 MB", sizes as `ProgressLine` says them) and the question asked before a move.
 - `Surface`: the window's materials (canvas, card fills, lit rims, accent glass, recessed wells),
   and the `accent` and `cardIsFocused` they read.
 - `Metrics`, `Animation.ui`, `.fold`, `readableColumn()`: the shared sizes, the app's spring, how

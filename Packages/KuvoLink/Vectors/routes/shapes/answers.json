@@ -3278,6 +3278,7 @@
          "sessions": {
           "list": "string"
          },
+         "place?": "string",
          "sent?": "number",
          "size?": "number"
         }
@@ -3311,7 +3312,8 @@
           ]
          },
          "ok": "bool",
-         "why?": "string"
+         "why?": "string",
+         "note?": "string"
         }
        }
       }
@@ -3373,6 +3375,7 @@
         "sessions": {
          "list": "string"
         },
+        "place?": "string",
         "sent?": "number",
         "size?": "number"
        }

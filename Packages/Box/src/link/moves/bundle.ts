@@ -17,8 +17,9 @@ import { BOTS, IS_MAC, K, SESSION_WAKES } from "../home";
 import { hostTrash } from "../host-interface";
 import { bundleOf } from "./records";
 
-/** The most a move carries: past that it's refused before anything's held for long. */
-export const MOST_BUNDLE = 1024 ** 3;
+/** The most a move carries (1 GB, as clients say sizes): past that it's refused before anything's
+ * held for long. */
+export const MOST_BUNDLE = 1_000_000_000;
 
 /** What `move.json` holds. */
 export interface Contents {

@@ -35,6 +35,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Searching what was said in your conversations is done by each computer itself, so a machine's conversations come up as quickly as your Mac's, and your phone finds them too.
 - GitHub Copilot's Claude models work on a machine that restarted while your Mac was closed, and each computer goes by its own Copilot account's models rather than your Mac's.
 - **Move to Computer** is done by the two computers themselves: a bot, chat or group chat goes straight from one machine to another, a move cut short by a restart finishes or goes back as it was on its own, and quitting Kuvo Code on your Mac doesn't stop one under way.
+- Move to Computer lists each of your computers, and says under one it can't go to why not. While something moves, its row says where to and how far it is ("Moving to lab… 12 of 30 MB"). Anything over 1 GB can't move, and says so.
 - Agents writing to each other, reading each other's conversations and starting sessions work the same on every computer, answered by that computer itself: an agent on a machine can read a conversation on your Mac or another machine, and a session a coding agent there starts lands in the right folder with the right approval, as on your Mac.
 - Each computer keeps its sessions' queues itself: on a machine, queued messages go one after another with your Mac closed, and a Stop or Resume from your phone or your Mac works the same everywhere.
 - A session an agent starts from a conversation in Plan mode plans too, instead of building.

@@ -1445,8 +1445,8 @@ private struct GroupRow: View {
                 bots.bot(id).map { GroupAvatar.Face(look: $0.look, mood: $0.id == speaker?.id ? .working : .idle) }
             }, size: 28)
         } subtitle: {
-            if let destination = app.moves.underWay[group.id] {
-                ShimmerText(text: "Moving to \(destination.flatMap { place in app.machines.engine(place)?.machine.name ?? place } ?? "this Mac")…")
+            if let going = app.moves.underWay[group.id] {
+                ShimmerText(text: going.words)
             } else if let speaker {
                 ShimmerText(text: "\(speaker.name) is thinking…")
             } else if groups.isDiscussing(group.id) {
@@ -1562,8 +1562,8 @@ private struct BotRow: View {
     /// wakes next, or its job. What it's set to do (wake up, watch) and how it's set (paused)
     /// stand apart from what it said, with their sign.
     @ViewBuilder private var status: some View {
-        if let destination = app.moves.underWay[bot.id] {
-            ShimmerText(text: "Moving to \(destination ?? "this Mac")…")
+        if let going = app.moves.underWay[bot.id] {
+            ShimmerText(text: going.words)
         } else if workspace.needsAttention(bot.sessionID) {
             Text("Needs you")
                 .foregroundStyle(.orange)
@@ -1736,113 +1736,122 @@ private struct MoveToProjectMenu: View {
     }
 }
 
-/// "Move to Computer ›": a bot's or chat's way to this Mac or another of your machines, where it
-/// carries on (`Moves`). Asked first, as the original goes to the trash where it was.
+/// "Move to Computer ›": a bot's, chat's or group chat's way to another of your computers, where it
+/// carries on (`Moves`), as the box it lives on says it can go, with why not where it can't. Asked
+/// first, as the original goes to the trash where it was.
 private struct MoveToComputerMenu: View {
+    let thing: MoveToComputerItems.Thing
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        Menu("Move to Computer") {
+            MoveToComputerItems(thing: thing)
+        }
+        .disabled(app.moves.isMoving(thing.id))
+        .onAppear { Task { await app.moves.loadPlaces(thing.kind, thing.id, from: thing.machine(in: app)) } }
+    }
+}
+
+/// What "Move to Computer ›" lists.
+struct MoveToComputerItems: View {
     enum Thing {
         case bot(Bot)
         case chat(Session)
         case group(BotGroup)
+
+        var id: String {
+            switch self {
+            case .bot(let bot): bot.id
+            case .chat(let session): session.id
+            case .group(let group): group.id
+            }
+        }
+
+        var kind: String {
+            switch self {
+            case .bot: "bot"
+            case .chat: "chat"
+            case .group: "group"
+            }
+        }
+
+        /// The machine it lives on (nil: this Mac).
+        @MainActor func machine(in app: AppModel) -> String? {
+            switch self {
+            case .bot(let bot): bot.machine
+            case .chat(let session): RemoteFolder.machine(of: session.location.directory)
+            case .group(let group): app.chats.machine(of: group.id)
+            }
+        }
     }
 
     let thing: Thing
     @Environment(AppModel.self) private var app
 
-    private var id: String {
-        switch thing {
-        case .bot(let bot): bot.id
-        case .chat(let session): session.id
-        case .group(let group): group.id
-        }
-    }
+    private var id: String { thing.id }
+    private var kind: String { thing.kind }
+    private var here: String? { thing.machine(in: app) }
 
-    private var here: String? {
-        switch thing {
-        case .bot(let bot): bot.machine
-        case .chat(let session): RemoteFolder.machine(of: session.location.directory)
-        case .group(let group): app.chats.machine(of: group.id)
-        }
-    }
-
-    /// Where a group chat can go: from a machine, this Mac; from this Mac, the machine its bots
-    /// all live on, if they do.
-    private func groupPlaces(_ group: BotGroup) -> [String?] {
-        if here != nil { return [nil] }
-        let homes = Set(group.members.compactMap { app.bots.bot($0) }.map(\.machine))
-        guard homes.count == 1, let machine = homes.first ?? nil else { return [] }
-        return [machine]
+    /// Where it can go, as the box it lives on said last (asked again as the menu opens); before
+    /// it has, your other computers as this Mac knows them, each asked as it's picked.
+    private var places: [Moves.Place] {
+        app.moves.places(of: id, from: here) ?? app.moves.knownPlaces(from: here)
     }
 
     var body: some View {
-        Menu("Move to Computer") {
-            if case .bot(let bot) = thing, bot.project != nil {
-                Text("It works in one of your projects, which stays where it is")
-            } else if case .bot(let bot) = thing, bot.agents == true {
-                Text("It talks with a coding agent, which can’t move yet")
-            } else if case .group(let group) = thing, groupPlaces(group).isEmpty {
-                // A chat whose bots live on different computers, or all here, is this Mac's.
-                Text(Set(group.members.compactMap { app.bots.bot($0)?.machine }).isEmpty
-                     ? "Move its bots to a machine first; then it can go there too" : "Its bots live on different computers, so it stays on this Mac")
-            } else if case .group(let group) = thing {
-                ForEach(groupPlaces(group), id: \.self) { place in
-                    if let place, app.machines.engine(place)?.isReady != true {
-                        Text("\(place), not connected")
-                    } else {
-                        Button(place ?? "This Mac") { move(to: place) }
-                    }
+        let places = places
+        let reasons = Set(places.map(\.why))
+        if let why = app.moves.whyNotAsked(from: here) {
+            Text(why)
+        } else if places.isEmpty {
+            Text("No other computers to move it to")
+        } else if places.count > 1, reasons.count == 1, let one = places.first, !one.ok {
+            // Why it can't go anywhere (it works in a project, it's moving already), once.
+            Text(one.note ?? one.why ?? "")
+        } else {
+            // Why not one, in a few words beside its name (a menu doesn't wrap).
+            ForEach(places, id: \.key) { place in
+                Button { move(to: place) } label: {
+                    Text(place.name)
+                    if let why = place.note ?? place.why { Text(why) }
                 }
-            } else {
-                ForEach(app.moves.destinations(from: here), id: \.self) { place in
-                    if let place, app.machines.engine(place)?.isReady != true {
-                        Text("\(place), not connected")
-                    } else {
-                        Button(place ?? "This Mac") { move(to: place) }
-                    }
-                }
+                .disabled(!place.ok)
             }
         }
-        .disabled(app.moves.isMoving(id))
     }
 
-    private func move(to place: String?) {
-        let name: String
-        let what: String
-        switch thing {
-        case .bot(let bot):
-            name = bot.name
-            what = "Its memory, files, wake-ups and conversation go there, and it carries on there; its seats in group chats start afresh there."
-        case .chat(let session):
-            name = (session.title ?? "").isEmpty ? "this chat" : "“\(session.title ?? "")”"
-            what = "Its conversation and wake-ups go there, and it carries on there."
-        case .group(let group):
-            name = "“\(group.name)”"
-            what = place == nil
-                ? "Its messages and meeting come here, and it carries on here while this Mac is on; its bots stay where they are."
-                : "Its messages and meeting go there, and it carries on there, also while this Mac is off."
+    private func move(to place: Moves.Place) {
+        let name = switch thing {
+        case .bot(let bot): bot.name
+        case .chat(let session): (session.title ?? "").isEmpty ? "this chat" : "“\(session.title ?? "")”"
+        case .group(let group): "“\(group.name)”"
         }
-        let trash = here.map { "Kuvo Code’s trash folder on \($0)" } ?? "the Trash"
-        let leaves: String
-        if case .group = thing {
-            leaves = "Nothing goes to it while it moves. What it leaves here goes to \(trash)."
-        } else {
-            leaves = "Nothing goes to it while it moves. Its folder here goes to \(trash), with a copy of its conversation in it."
-        }
+        let question = MoveWords.question(kind: kind, name: name, place: place.name, placeIsMac: place.kind == "mac", toHere: place.key == app.phoneLink.macKey,
+                                          from: here.map { app.machines.engine($0)?.machine.name ?? $0 }, fromMachine: here != nil)
         Task {
+            // Asked again as it's picked: what the menu showed may be old, or this Mac's own guess.
+            let now = await app.moves.loadPlaces(kind, id, from: here, fresh: true)
+            let why = if let now {
+                // Gone from the list: it lives there now, or that computer isn't one of yours.
+                now.contains { $0.key == place.key } ? now.first { $0.key == place.key }?.why : "It can’t go to \(place.name) now."
+            } else {
+                app.moves.whyNotAsked(from: here)
+            }
+            if let why {
+                Modal.show(Moves.Failure.refused(why))
+                return
+            }
             let confirmed = await Modal.run {
                 let alert = NSAlert()
-                alert.messageText = "Move \(name) to \(place ?? "this Mac")?"
-                alert.informativeText = "\(what) \(leaves)"
+                alert.messageText = question.title
+                alert.informativeText = question.message
                 alert.addButton(withTitle: "Move")
                 alert.addButton(withTitle: "Cancel")
                 return alert.runModal() == .alertFirstButtonReturn
             }
             guard confirmed else { return }
             do {
-                switch thing {
-                case .bot(let bot): try await app.moves.move(bot: bot.id, to: place)
-                case .chat(let session): try await app.moves.move(chat: session.id, to: place)
-                case .group(let group): try await app.moves.move(group: group.id, to: place)
-                }
+                try await app.moves.move(kind, id, from: here, to: place)
             } catch {
                 Modal.show(error)
             }
@@ -1897,13 +1906,13 @@ private struct SessionStatus: View {
         let fromUnder = !folded.isEmpty && kind != statusMark(of: session, isNew: isUnread ?? session.isUnread, workspace: workspace, app: app)
         StatusMark(showing: kind)
             .help(kind.map { fromUnder ? $0.wordsFromUnder : help($0) } ?? "")
-            .modifier(SpokenFromUnder(words: fromUnder ? kind?.wordsFromUnder : nil))
+            .modifier(SpokenFromUnder(words: fromUnder ? kind?.wordsFromUnder : app.moves.underWay[session.id]?.words))
     }
 
     private func help(_ kind: StatusMark.Kind) -> String {
         switch kind {
         case .working:
-            app.moves.underWay[session.id].map { "Moving to \($0 ?? "this Mac")…" } ?? kind.words
+            app.moves.underWay[session.id]?.words ?? kind.words
         case .subagents: workspace.helpersAtWork(in: session.id).counting("subagent") + " at work"
         case .failed: "The last run failed"
         case .new: "Finished"
