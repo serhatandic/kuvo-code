@@ -44,17 +44,25 @@ import Testing
         }
     }
 
+    /// Opens the folder shown as `name`, as clicking it does.
+    private func open(_ name: String, in tree: FileTree) throws -> URL {
+        let row = tree.rows.first { if case .entry(let entry, _) = $0 { entry.name == name } else { false } }
+        guard case .entry(let entry, _) = try #require(row) else { throw CancellationError() }
+        tree.toggle(entry.url)
+        return entry.url
+    }
+
     @Test func anOpenFolderThisMacCantReadSaysWhyAndAnEmptyOneSaysEmpty() throws {
         defer { done() }
-        let secrets = folder.appending(path: "secrets")
-        try lock(secrets.path)
+        try lock(folder.appending(path: "secrets").path)
         let tree = FileTree(roots: [folder])
-        tree.expanded = [secrets, folder.appending(path: "fixtures")]
+        let secrets = try open("secrets", in: tree)
+        _ = try open("fixtures", in: tree)
         #expect(shown(tree) == ["fixtures", "  Empty", "secrets", "  Couldn’t read this folder · Permission denied", "README.md"])
         #expect(tree.rootFailure == nil)
 
         // Let in, Try Again reads it.
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: secrets.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.appending(path: "secrets").path)
         tree.retry(secrets)
         #expect(shown(tree) == ["fixtures", "  Empty", "secrets", "  key.pem", "README.md"])
     }
@@ -94,6 +102,8 @@ import Testing
         await locked.loadAllFiles()
         #expect(locked.allFilesFailure == .denied)
 
+        // Let in again, one that isn't there is said not to be.
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
         let gone = FileTree(roots: [root.appending(path: "gone")])
         try await until { gone.rootFailure != nil }
         #expect(gone.rootFailure?.detail(on: "lokum") == "lokum said: No such folder.")
