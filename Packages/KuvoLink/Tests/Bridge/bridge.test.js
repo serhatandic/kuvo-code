@@ -1139,12 +1139,12 @@ test("a Mac's phones document, by mail, counts from the Macs that set the machin
   await give(other, link.signDoc(seeds.other, "phones", 1, { phones: [{ key: k(others), name: "Other iPhone", pairing: "" }], removed: [] }));
   assert.deepEqual(names(), ["mac:New iPhone", "mac:Other iPhone", "pair:Paired here"]);
 
-  // A Mac not heard from in 30 days, the machine online all that time, no longer counts: its
-  // phones go, not for good.
+  // A Mac not heard from in 30 days, the machine's box running all that time, no longer counts:
+  // its phones go, not for good.
   const later = link.readLink();
   link.forgetOldMacs(later, otherKey);
   const month = Date.now() + 31 * 24 * 3600 * 1000;
-  later.online = month - 60_000;
+  for (let at = Date.now(); at < month; at += 4 * 60_000) link.noteOnline(at);
   link.forgetOldMacs(later, macKey, month);
   link.foldPhones(later);
   assert.deepEqual(later.phones.map(phone => phone.name), ["New iPhone", "Paired here"]);

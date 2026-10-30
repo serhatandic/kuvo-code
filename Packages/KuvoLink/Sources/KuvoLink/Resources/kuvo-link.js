@@ -5616,13 +5616,45 @@ function pieces(head, body, end) {
 var KEY = /^[A-Za-z0-9_-]{43}$/;
 var ADDRESS = /^[A-Za-z0-9_-]{22}$/;
 var macsOf = (link) => [...new Set([...Array.isArray(link?.macs) ? link.macs : [], ...typeof link?.mac === "string" ? [link.mac] : []])];
+var ONLINE_FILE = path32.join(RUN, "online");
 var AWAY_AFTER = 5 * 60000;
-function countAway(link, now = Date.now()) {
-  const away = typeof link.online === "number" ? now - link.online : 0;
-  if (away > AWAY_AFTER && link.macSeen)
+var notedOnline = () => {
+  try {
+    const at = Number(fs33.readFileSync(ONLINE_FILE, "utf8"));
+    return Number.isFinite(at) && at > 0 ? at : undefined;
+  } catch {
+    return;
+  }
+};
+var writeOnline = (now) => {
+  try {
+    fs33.mkdirSync(RUN, { recursive: true, mode: 448 });
+    fs33.writeFileSync(`${ONLINE_FILE}.${process.pid}.tmp`, String(now), { mode: 384 });
+    fs33.renameSync(`${ONLINE_FILE}.${process.pid}.tmp`, ONLINE_FILE);
+  } catch {}
+};
+function countAway(link, now) {
+  const seen = Object.values(link.macSeen ?? {});
+  const last = notedOnline() ?? (seen.length ? Math.max(...seen) : undefined);
+  const away = last === undefined ? 0 : now - last;
+  if (Math.abs(away) > AWAY_AFTER && link.macSeen)
     for (const mac of Object.keys(link.macSeen))
       link.macSeen[mac] += away;
-  link.online = now;
+  writeOnline(now);
+}
+function noteOnline(now = Date.now()) {
+  const last = notedOnline();
+  if (last !== undefined && Math.abs(now - last) <= AWAY_AFTER) {
+    if (now - last >= AWAY_AFTER / 2)
+      writeOnline(now);
+    return;
+  }
+  updateLink((link) => {
+    if (!link || !macsOf(link).length)
+      return void writeOnline(now);
+    countAway(link, now);
+    return link;
+  });
 }
 var MAC_GONE_AFTER = 30 * 24 * 3600 * 1000;
 function forgetOldMacs(link, keep, now = Date.now()) {
@@ -19464,10 +19496,9 @@ async function run2() {
       announce(current, readEngineFile).catch(() => {});
     else
       refreshOwn(readEngineFile).catch(() => {});
-    if (current?.welcomed)
-      try {
-        updateLink((link) => link && macsOf(link).length ? (countAway(link), link) : null);
-      } catch {}
+    try {
+      noteOnline();
+    } catch {}
   }, 60000);
   setInterval(() => {
     if (current?.welcomed && docsNoted())
@@ -20063,6 +20094,7 @@ export {
   noteDocsChanged,
   noteLauncher,
   noteOlderMacs,
+  noteOnline,
   noteSignIn,
   noticeFor,
   noticeJSON,
