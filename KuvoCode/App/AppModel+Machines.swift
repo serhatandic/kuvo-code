@@ -427,7 +427,7 @@ extension AppModel {
             var macs: [Mac]?
             var phones: Int?
         }
-        // (Which of them is this Mac is known once this Mac set it up.)
+        // (Which of them is this Mac: its key, as they know it.)
         guard let own = phoneLink.macKey, let info = try? await box(engine.machine.id).value(Info.self, "GET", "kuvo/info"), let macs = info.macs else { return }
         engine.alsoUsedBy = .init(macs: macs.filter { $0.key != own }.map { $0.name ?? "another Mac" }, phones: info.phones ?? 0)
     }

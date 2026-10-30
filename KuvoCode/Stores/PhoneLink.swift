@@ -500,8 +500,6 @@ final class PhoneLink {
     }
 
     @ObservationIgnored private var settingUp: [String: Task<Void, Never>] = [:]
-    /// This Mac's key, as its machines know it (`kuvo/info`'s `macs`), once one was set up.
-    @ObservationIgnored private(set) var macKey: String?
     /// The machines being set up for your phones and other computers now (Settings › Machines).
     private(set) var settingUpNow: Set<String> = []
 
@@ -560,7 +558,6 @@ final class PhoneLink {
                 if asked { setupFailed[machine.id] = starting }
                 return
             }
-            macKey = given.mac
             try JSONEncoder().encode(Setup(relay: relay.absoluteString, name: machine.name, mac: given.mac, macSign: given.macSign,
                                            docs: given.docs, id: machine.id)).write(to: settings)
             let output = try await machine.connection.run(RemoteEngineInstaller.script("""
