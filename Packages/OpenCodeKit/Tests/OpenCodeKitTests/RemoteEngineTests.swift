@@ -143,6 +143,28 @@ struct RemoteEngineTests {
         #expect(api.enginePath("/Users/me/app") == "/Users/me/app")
     }
 
+    /// A machine whose host key changed since this Mac last connected (it was reinstalled, or the
+    /// connection is being intercepted) is said to have a changed key, not an unknown one, which
+    /// connecting once in Terminal wouldn't fix.
+    @Test func aChangedHostKeyIsSaidApartFromAnUnknownOne() {
+        let changed = """
+            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+            @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
+            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+            IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!
+            Someone could be eavesdropping on you right now (man-in-the-middle attack)!
+            Offending ED25519 key in /Users/me/.ssh/known_hosts:12
+            Host key for box has changed and you have requested strict checking.
+            Host key verification failed.
+            """
+        let said = RemoteEngineError.ssh(status: 255, message: changed).localizedDescription
+        #expect(said.contains("changed"))
+        #expect(said.contains("ssh-keygen -R"))
+        #expect(!said.contains("doesn't know"))
+        let unknown = "No ED25519 host key is known for box and you have requested strict checking.\nHost key verification failed."
+        #expect(RemoteEngineError.ssh(status: 255, message: unknown).localizedDescription.contains("doesn't know the machine's host key yet"))
+    }
+
     @Test func findsAFreeLocalPort() throws {
         let port = try RemoteServer.freeLocalPort()
         #expect((1024...65535).contains(port))
