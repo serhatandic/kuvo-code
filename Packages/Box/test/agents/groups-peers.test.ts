@@ -434,6 +434,27 @@ describe("a group chat with a bot on another of your computers", () => {
     await until(() => turns().length > asked)
   })
 
+  test("its computer away, then heard from again (any mail of its, not only about a turn): its bots are asked at once, not after the five minutes", async () => {
+    const clock = hostOnClock()
+    relay.away.add("key_lokum")
+    host.engine.lines = { Ada: ["Hello.", "Again."] }
+    host.runner.put(team(["bot_ben", "bot_ada"]), [], "active", false)
+    host.runner.send(id, "Anyone?")
+    await until(() => turns().length === 1)
+    clock.advance(askAgainAfter)
+    await until(() => turns().length === 2)
+    clock.advance(awayAfter - askAgainAfter)
+    await over(host, () => said(host).some((message) => message.text === "Hello."))
+    const asked = turns().length
+
+    // Back, and it says something of a chat of its own (it stops a turn it gave this Mac), the clock not moving.
+    relay.back("key_lokum")
+    host.receive("key_lokum", { kind: "stop", id: "turn_elsewhere" })
+    host.runner.send(id, "Back?")
+    await until(() => turns().length > asked || said(host).some((message) => message.text === "Again."))
+    expect(turns().length).toBeGreaterThan(asked)
+  })
+
   test("its words lost on the way after its computer took the turn: asked again, they're said again, and reach the chat", async () => {
     const clock = hostOnClock()
     relay.loses.push((each) => each.mail.kind === "result")

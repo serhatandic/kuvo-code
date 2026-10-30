@@ -231,10 +231,15 @@ export class RemoteHome implements SeatHome {
     pending.done({ ok: false, away: true, why: `${this.place()} can’t be reached now.` })
   }
 
+  /** Its computer (`from`) was heard from: it isn't away any more. */
+  heardFrom(from: string) {
+    if (from === this.box) this.awaySince = undefined
+  }
+
   /** What its computer says of a turn: only from the computer it was asked of (`from`), never another's. */
   take(from: string, mail: SeatMail) {
     if (from !== this.box) return
-    this.awaySince = undefined
+    this.heardFrom(from)
     if (mail.kind !== "state" && mail.kind !== "result") return
     const pending = this.pending.get(mail.id)
     if (!pending) return
