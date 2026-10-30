@@ -229,6 +229,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Add to Message in a terminal tab of the window starts a new session in its folder with what you selected, instead of doing nothing.
 - Showing or hiding the side panel or the sidebar no longer catches at the start of its slide when you have many sessions: the sidebar isn't drawn again for it.
 - Kuvo Code takes about 200 MB less memory for the first seconds after it opens: checking the engine before it starts no longer keeps the whole engine in memory.
+- Switching tabs with many sessions in the sidebar is a little quicker: the sidebar draws again only the rows whose highlight moved.
 
 ## 0.7.2
 
