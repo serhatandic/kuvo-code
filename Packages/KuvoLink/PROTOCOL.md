@@ -1651,7 +1651,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 - `kuvo/wakes/<session>`: a session's (or chat's) wake-ups and watches, which its
   agent sets with `kuvo-wake`, as the bar over the Mac's composer shows them: `{"wakes": [{id,
   due, note, every}], "watches": [{letters, every, check, note}], "paused"}` (`due` in seconds
-  since 1970, `every` like `1d` or null; paused while it's archived: archive it as the Mac does,
+  since 1970, `every` like `1d`, left out for one that doesn't repeat; paused while it's archived: archive it as the Mac does,
   `PATCH api/session/<id>` with `{"metadata": {"kuvo.archived": true}}` (`false` brings it back),
   and its wake-ups wait, or come back, when the flag changes (it can go with every change to its
   metadata); a Mac sees to it, and a machine's bridge does with the Mac closed too;
