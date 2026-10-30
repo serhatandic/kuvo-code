@@ -89,6 +89,13 @@ final class ProjectChanges {
     /// A machine's box couldn't be asked before anything showed: not a folder without git, and
     /// Stage and Discard come back with the list.
     private(set) var isUnreachable = false
+    /// When the list was last read: what's said of it as last seen while its machine is away. Not
+    /// watched, so a look every few seconds doesn't redraw the panel (nothing reads it while away).
+    @ObservationIgnored private(set) var read: Date?
+    private var hasRead = false
+    /// Its machine isn't connected: its box isn't asked until it's back, and the list shows as last
+    /// seen. Set from the machine's engine.
+    var isAway = false
     private var signature = 0
     /// Each refresh's number: only the latest one's list shows.
     private var generation = 0
@@ -103,6 +110,10 @@ final class ProjectChanges {
         self.directory = directory
         self.box = box
     }
+
+    /// The list as it is, as last seen under the away bar, or (never read) the machine's connection
+    /// in its place.
+    var shown: ChangesAway.Shown { ChangesAway.shown(isAway: isAway || isUnreachable, read: hasRead ? read : nil) }
 
     var additions: Int { files.reduce(0) { $0 + $1.additions } }
     var deletions: Int { files.reduce(0) { $0 + $1.deletions } }
@@ -119,8 +130,11 @@ final class ProjectChanges {
             isUnreachable = false
             apply(fallback.map { DiffParser.file(from: $0, directory: directory) })
             isLoaded = true
+            stamp()
             return
         }
+        // Not asked while it's away: its connection says when it's back.
+        if isAway { return }
         let found = await Git.found(in: directory, scope: scope, base: base, box: box)
         // A machine's box out of reach for a moment: what showed stays, rather than reading as no
         // repository. Out of reach from the start: said so.
@@ -150,6 +164,7 @@ final class ProjectChanges {
             apply((fallback.isEmpty ? edits : fallback).map { DiffParser.file(from: $0, directory: directory) })
         }
         isLoaded = true
+        stamp()
     }
 
     enum Action { case stage, unstage, discard }
@@ -186,6 +201,11 @@ final class ProjectChanges {
         let directory = directory
         guard RemoteFolder.parse(directory) != nil else { return await Task.detached { Git.hasStaged(in: directory) }.value }
         return await Git.commitDiffing(in: directory).staged
+    }
+
+    private func stamp() {
+        read = .now
+        if !hasRead { hasRead = true }
     }
 
     /// Only publishes when something changed, so a refresh doesn't redraw the panel.

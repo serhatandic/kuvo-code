@@ -46,6 +46,7 @@ struct ChangesPanel: View {
     @Environment(AppModel.self) private var app
     @Environment(Workspace.self) private var workspace
     @Environment(Catalog.self) private var catalog
+    @Environment(\.colorScheme) private var scheme
     @State private var isCommitting = false
 
     /// The session's own worktree, when it has one.
@@ -68,6 +69,13 @@ struct ChangesPanel: View {
     }
 
     private var isPrimary: Bool { changes.directory == folders.first }
+
+    /// The machine the project is on, if it's on one.
+    private var machine: MachineEngine? { RemoteFolder.machine(of: changes.directory).flatMap { app.machines.engine($0) } }
+    /// Its machine isn't connected: nothing is asked of it, and the list shows as last seen.
+    private var isMachineAway: Bool { machine.map { !$0.isReady } ?? false }
+    /// As last seen, or not read: what needs the machine waits until it's back.
+    private var isAway: Bool { changes.shown != .list }
 
     /// The session's record of its edits is about its own folder.
     /// The session's changes as kept for it: the engine's record, or for a coding agent's session
@@ -118,7 +126,9 @@ struct ChangesPanel: View {
         }
         // Git is quick to ask; look again every few seconds while the panel is open. Started over
         // for another session in the same folder: the loop reads the session it began with.
-        .task(id: "\(changes.directory)\n\(changes.scope)\n\(changes.base ?? "")\n\(model?.id ?? "")") {
+        .onChange(of: isMachineAway, initial: true) { changes.isAway = isMachineAway }
+        // (Its machine back: looked at again at once.)
+        .task(id: "\(changes.directory)\n\(changes.scope)\n\(changes.base ?? "")\n\(model?.id ?? "")\n\(isMachineAway)") {
             while !Task.isCancelled {
                 await changes.refresh(fallback: engineChanges, edits: editedFiles)
                 try? await Task.sleep(for: .seconds(3))
@@ -149,6 +159,7 @@ struct ChangesPanel: View {
                     Picker("Folder", selection: Binding(get: { changes.directory }, set: { folder in
                         let scope = changes.scope
                         changes = ProjectChanges(directory: folder)
+                        changes.isAway = isMachineAway
                         // Set here too: the same as the last folder's, it isn't a change.
                         changes.base = base(of: folder)
                         changes.scope = scope == .branch || scope == .session ? .uncommitted : scope
@@ -203,7 +214,9 @@ struct ChangesPanel: View {
                 .menuIndicator(.hidden)
                 .buttonStyle(TextButtonStyle(outset: true, dimsAtRest: false))
                 .fixedSize()
-                .help("What to show: uncommitted, unstaged or staged changes, and more")
+                .help(isAway ? ChangesAway.waits("Show other changes", for: machineName) : "What to show: uncommitted, unstaged or staged changes, and more")
+                // What showed is the scope it was read for.
+                .disabled(isAway)
             } else {
                 Text("This Session")
                     .font(.system(size: 13, weight: .semibold))
@@ -213,10 +226,12 @@ struct ChangesPanel: View {
             Spacer()
             if let worktree {
                 BranchMenu(tree: worktree, isWorktree: true, directory: changes.directory, model: model, environment: app.shellEnvironment)
+                    .disabled(isAway)
             } else if let base, let branch = workspace.branches[changes.directory] {
                 // A branch of your own, in the project's folder: it can go up for a pull request.
                 BranchMenu(tree: Workspace.Worktree(project: changes.directory, root: changes.directory, branch: branch, base: base), isWorktree: false,
                            directory: changes.directory, model: model, environment: app.shellEnvironment)
+                    .disabled(isAway)
             }
             if let model, changes.isRepository, !changes.files.isEmpty, changes.scope != .session,
                catalog.commands(in: model.session.location.directory).contains(where: { $0.name == "review" }) {
@@ -226,15 +241,17 @@ struct ChangesPanel: View {
                     Image(systemName: "text.badge.checkmark")
                 }
                 .buttonStyle(CardActionStyle())
-                .disabled(model.isRunning)
-                .help(model.isRunning ? "Review the changes once the agent is done" : "Have the agent review these changes (/review)")
+                .disabled(model.isRunning || isAway)
+                .help(isAway ? ChangesAway.waits("Review", for: machineName)
+                      : model.isRunning ? "Review the changes once the agent is done" : "Have the agent review these changes (/review)")
             }
             // Kept while its form is open, so a push problem stays readable after the commit.
             if changes.isRepository, !changes.files.isEmpty && changes.hasUncommitted || isCommitting {
                 Button("Commit…") { isCommitting = true }
                     .buttonStyle(.borderless)
                     .font(.system(size: 12, weight: .medium))
-                    .help("Commit the changes, and push them if you like")
+                    .help(isAway && !isCommitting ? ChangesAway.waits("Commit", for: machineName) : "Commit the changes, and push them if you like")
+                    .disabled(isAway && !isCommitting)
                     .popover(isPresented: $isCommitting, arrowEdge: .bottom) {
                         // A coding agent's session asks its own model (Claude Code, Codex); one whose
                         // agent can't answer outside the conversation, the engine's default model.
@@ -288,14 +305,33 @@ struct ChangesPanel: View {
     }
 
     @ViewBuilder private var content: some View {
-        if changes.files.isEmpty, changes.isUnreachable {
+        if changes.shown == .waiting, let machine {
+            MachineWaitingView(engine: machine, note: "Its changes show here once it’s connected.")
+        } else if changes.shown == .waiting {
             ContentUnavailableView {
                 Label("Can’t Reach \(machineName)", systemImage: "network.slash")
             } description: {
                 Text("Its changes show once it’s back.")
             }
             .frame(maxHeight: .infinity)
-        } else if changes.files.isEmpty {
+        } else if changes.shown == .asLastSeen, let machine {
+            VStack(spacing: 0) {
+                // "3 minutes ago" kept true while it stays away.
+                TimelineView(.everyMinute) { context in
+                    MachineOfflineBar(engine: machine, kept: ChangesAway.asLastSeen(changes.read, now: context.date))
+                }
+                .background(Surface.well(scheme), in: .rect(cornerRadius: 12))
+                .padding(8)
+                list
+                    .accessibilityHint("As last seen, while \(machine.machine.name) isn’t connected")
+            }
+        } else {
+            list
+        }
+    }
+
+    @ViewBuilder private var list: some View {
+        if changes.files.isEmpty {
             ContentUnavailableView {
                 Label(changes.isLoaded ? "No Changes" : "Reading Changes…", systemImage: "doc.text.magnifyingglass")
             } description: {
@@ -319,6 +355,7 @@ struct ChangesPanel: View {
                                     comments: model?.reviewComments.filter { $0.file == commentPrefix + file.path } ?? [],
                                     expandedFolds: $expandedFolds,
                                     draft: $draft,
+                                    isAsLastSeen: isAway,
                                     addComment: model.map { model in { [commentPrefix] comment in
                                         var comment = comment
                                         comment.file = commentPrefix + comment.file
@@ -329,7 +366,8 @@ struct ChangesPanel: View {
                                 )
                             }
                         } header: {
-                            FileHeader(file: file, isCollapsed: collapsed.contains(file.id), scope: changes.isRepository && changes.scope != .branch && changes.scope != .session ? changes.scope : nil) {
+                            FileHeader(file: file, isCollapsed: collapsed.contains(file.id), scope: changes.isRepository && changes.scope != .branch && changes.scope != .session ? changes.scope : nil,
+                                       waitsFor: isAway ? machineName : nil) {
                                 withAnimation(.ui) {
                                     if collapsed.contains(file.id) { collapsed.remove(file.id) } else { collapsed.insert(file.id) }
                                 }
@@ -633,6 +671,8 @@ private struct FileHeader: View {
     let isCollapsed: Bool
     /// What the panel shows, for which git actions make sense; nil outside a repository.
     let scope: ProjectChanges.Scope?
+    /// Its machine, while it's away: the file is as last seen, and staging it waits.
+    var waitsFor: String?
     let toggle: () -> Void
     let perform: (ProjectChanges.Action) -> Void
     @Environment(\.colorScheme) private var scheme
@@ -660,6 +700,7 @@ private struct FileHeader: View {
                 .lineLimit(1)
                 .truncationMode(.head)
                 .help(file.oldPath.map { "\($0) → \(file.path)" } ?? file.path)
+                .opacity(waitsFor == nil ? 1 : 0.55)
             if file.status != .modified {
                 Text(statusLabel)
                     .font(.system(size: 10, weight: .semibold))
@@ -671,6 +712,7 @@ private struct FileHeader: View {
             Spacer(minLength: 6)
             if hasBody {
                 DiffStat(additions: file.additions, deletions: file.deletions)
+                    .opacity(waitsFor == nil ? 1 : 0.55)
             } else {
                 // Why it has no lines to show.
                 Text(file.isTooBig ? "Too big to show" : "Binary")
@@ -770,11 +812,16 @@ private struct FileHeader: View {
         menu.addItem(ActionItem("Copy Relative Path") { Clipboard.copy(file.path) })
         if let scope {
             menu.addItem(.separator())
-            if scope == .staged {
-                menu.addItem(ActionItem("Unstage") { perform(.unstage) })
-            } else {
-                menu.addItem(ActionItem("Stage") { perform(.stage) })
-                menu.addItem(ActionItem("Discard Changes…") { confirmsDiscard = true })
+            let items: [(ActionItem, verb: String)] = scope == .staged
+                ? [(ActionItem("Unstage") { perform(.unstage) }, "Unstage")]
+                : [(ActionItem("Stage") { perform(.stage) }, "Stage"), (ActionItem("Discard Changes…") { confirmsDiscard = true }, "Discard")]
+            for (item, verb) in items {
+                // As last seen: they wait for its machine, and say so.
+                if let waitsFor {
+                    item.isEnabled = false
+                    item.toolTip = ChangesAway.waits(verb, for: waitsFor)
+                }
+                menu.addItem(item)
             }
         }
         return menu
@@ -808,6 +855,9 @@ private struct FileBody: View {
     let comments: [ReviewComment]
     @Binding var expandedFolds: Set<String>
     @Binding var draft: ChangesPanel.DraftTarget?
+    /// Its machine is away: the lines are dimmed as last seen (comments stay as they are, and can
+    /// still be written: they go with your next message).
+    var isAsLastSeen = false
     /// Nil without a session: lines don't take comments then.
     let addComment: ((ReviewComment) -> Void)?
     let deleteComment: (ReviewComment) -> Void
@@ -815,6 +865,7 @@ private struct FileBody: View {
     var body: some View {
         if file.isImage {
             ImageDiff(file: file)
+                .opacity(isAsLastSeen ? 0.55 : 1)
         } else if file.isBinary || file.isTooBig {
             // Nothing to show line by line; the header says what changed.
             EmptyView()
@@ -840,6 +891,7 @@ private struct FileBody: View {
                                 comment: addComment == nil ? nil : {
                                     draft = .init(file: file.id, side: line.kind == .removed ? .old : .new, number: line.number, text: line.text)
                                 })
+                                .opacity(isAsLastSeen ? 0.55 : 1)
                     ForEach(comments.filter { $0.matches(line) }) { comment in
                         CommentCard(comment: comment) { deleteComment(comment) }
                     }
