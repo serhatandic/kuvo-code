@@ -124,12 +124,14 @@ struct BotVaultSection: View {
 /// always, give it an item, or say no. Its conversation follows the box's asks (`Vaults.follow`):
 /// with none, this is nothing, so a task here would never start.
 struct VaultAskCards: View {
-    let session: String
+    /// A conversation's, or a group chat's (its bots' seats').
+    var session: String?
+    var group: String?
     let box: String
 
     var body: some View {
         let shown = Vaults.shared[box]
-        ForEach(shown.asks.filter { $0.session == session }) { asked in
+        ForEach(shown.asks.filter { group != nil ? $0.group == group : $0.session == session && $0.group == nil }) { asked in
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "lock.shield.fill").foregroundStyle(.tint).font(.title3)
                 VaultAskRow(asked: asked, box: box, items: shown.vault?.items ?? [])

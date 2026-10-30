@@ -97,6 +97,8 @@ export const VAULT_ASK = object({
   "why?": string,
   "site?": string,
   "machine?": string,
+  /** From a bot's seat in this group chat, where it shows: answered only once, never for good. */
+  "group?": string,
 });
 export const VAULT_ASKS = object({ asks: list(VAULT_ASK) });
 

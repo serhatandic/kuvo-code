@@ -10318,7 +10318,8 @@ var VAULT_ASK = object({
   "need?": string,
   "why?": string,
   "site?": string,
-  "machine?": string
+  "machine?": string,
+  "group?": string
 });
 var VAULT_ASKS = object({ asks: list(VAULT_ASK) });
 var VAULT_KEY = object({ key: string });
@@ -16958,7 +16959,9 @@ async function callerOf(session, readEngine, readBridge) {
   for (let step = 0;step < 5 && current?.parentID; step++)
     current = await sessionAt(targets, current.parentID) ?? current;
   const root = current?.id ?? session;
-  const bot = listBots().find((each) => each.session === root);
+  const seat = current?.metadata?.kuvo?.seat;
+  const bots = listBots();
+  const bot = seat ? bots.find((each) => typeof seat.bot === "string" && each.id === seat.bot) : bots.find((each) => each.session === root);
   const folder = current?.location?.directory ?? current?.directory;
   return {
     session,
@@ -16966,7 +16969,7 @@ async function callerOf(session, readEngine, readBridge) {
     ...current?.title ? { sessionName: current.title } : {},
     ...folder ? { folder: path71.resolve(folder) } : {},
     ...bot ? { bot: bot.id, botName: bot.name } : {},
-    ...current?.metadata?.kuvo?.seat ? { seat: true } : {}
+    ...seat ? { seat: true, ...typeof seat.group === "string" ? { group: seat.group } : {} } : {}
   };
 }
 var ordered = (value) => Array.isArray(value) ? value.map(ordered) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, ordered(value[key])])) : value;
@@ -17010,7 +17013,7 @@ function grantFor(item, caller, grants = readGrants()) {
     const fits = grant.who.everyone || grant.who.bot && grant.who.bot === caller.bot || grant.who.project && caller.folder && (caller.folder === grant.who.project || caller.folder.startsWith(grant.who.project + path71.sep));
     if (!fits)
       continue;
-    if (grant.how === "own")
+    if (grant.how === "own" && !caller.seat)
       return "own";
     how = "ask";
   }
@@ -17048,6 +17051,8 @@ function hasOnce(caller, item, take = false) {
   return true;
 }
 function alwaysFor2(caller) {
+  if (caller.seat)
+    return null;
   if (caller.bot)
     return { bot: caller.bot };
   if (caller.folder && caller.folder !== "/" && caller.folder !== homeFolder())
@@ -17071,7 +17076,7 @@ async function mayUse(item, caller, use) {
     return { ok: false, message: `You may not use “${item.name}”. Ask the user for it with vault_ask.` };
   }
   note2({ what: "asked", ...itemOf(item), ...whoOf(caller), ...where });
-  const answered = await ask({ kind: "use", ...whoOf(caller), item: item.id, itemName: item.name, ...use.site ? { site: use.site } : {}, ...use.why ? { why: use.why } : {}, ...machineName() ? { machine: machineName() } : {} }, use.signal);
+  const answered = await ask({ kind: "use", ...whoOf(caller), ...caller.seat ? { group: caller.group ?? "" } : {}, item: item.id, itemName: item.name, ...use.site ? { site: use.site } : {}, ...use.why ? { why: use.why } : {}, ...machineName() ? { machine: machineName() } : {} }, use.signal);
   if (answered.answer === "no") {
     note2({ what: "declined", ...itemOf(item), ...whoOf(caller), ...where, ...answered.client ? { client: answered.client } : {} });
     return { ok: false, message: `The user didn't let you use “${item.name}”.` };
@@ -18511,6 +18516,7 @@ async function askForItem(caller, args, signal) {
     kind: "item",
     need,
     why,
+    ...caller.seat ? { group: caller.group ?? "" } : {},
     ...site ? { site } : {},
     ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {},
     ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {},

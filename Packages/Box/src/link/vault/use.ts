@@ -63,8 +63,9 @@ export function hasOnce(caller: Caller, item: string, take = false): boolean {
 }
 
 /** Whom "always" grants for `caller`: its bot, or its project's folder (never a home folder or the
- * whole disk, which would be every project); null for neither, when it's a once. */
+ * whole disk, which would be every project); null for neither, or a seat in a group chat, when it's a once. */
 export function alwaysFor(caller: Caller): { bot: string } | { project: string } | null {
+  if (caller.seat) return null;
   if (caller.bot) return { bot: caller.bot };
   if (caller.folder && caller.folder !== "/" && caller.folder !== homeFolder()) return { project: caller.folder };
   return null;
@@ -85,7 +86,7 @@ export async function mayUse(item: VaultItem, caller: Caller, use: Use): Promise
     return { ok: false, message: `You may not use “${item.name}”. Ask the user for it with vault_ask.` };
   }
   note({ what: "asked", ...itemOf(item), ...whoOf(caller), ...where });
-  const answered = await ask({ kind: "use", ...whoOf(caller), item: item.id, itemName: item.name, ...(use.site ? { site: use.site } : {}), ...(use.why ? { why: use.why } : {}), ...(machineName() ? { machine: machineName() } : {}) }, use.signal);
+  const answered = await ask({ kind: "use", ...whoOf(caller), ...(caller.seat ? { group: caller.group ?? "" } : {}), item: item.id, itemName: item.name, ...(use.site ? { site: use.site } : {}), ...(use.why ? { why: use.why } : {}), ...(machineName() ? { machine: machineName() } : {}) }, use.signal);
   if (answered.answer === "no") {
     note({ what: "declined", ...itemOf(item), ...whoOf(caller), ...where, ...(answered.client ? { client: answered.client } : {}) });
     return { ok: false, message: `The user didn't let you use “${item.name}”.` };

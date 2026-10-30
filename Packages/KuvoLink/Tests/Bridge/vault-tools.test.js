@@ -31,16 +31,22 @@ const TOKEN = "glpat-very-secret-token-0001";
 
 // The engine: a bot's conversation, in its folder, and the tool call it's making now (the box
 // answers a vault call only as one its conversation makes: vault/who.ts).
-let calling = [];
+// Also its seat in a group chat, a conversation of its own the chat marks as the bot's.
+const conversations = {
+  ses_ship: { id: "ses_ship", title: "Ship", location: { directory: home } },
+  ses_seat: { id: "ses_seat", title: "Release chat", location: { directory: home }, metadata: { kuvo: { seat: { group: "grp_release", bot: "bot_ship" } } } },
+};
+let calling = { ses_ship: [], ses_seat: [] };
 let calls = 0;
 const engine = http.createServer((request, response) => {
-  if (/^\/api\/session\/ses_ship\/message/.test(request.url)) {
+  const messages = request.url.match(/^\/api\/session\/(ses_ship|ses_seat)\/message/);
+  if (messages) {
     response.writeHead(200, { "content-type": "application/json" });
-    return response.end(JSON.stringify({ data: [{ type: "assistant", content: calling }] }));
+    return response.end(JSON.stringify({ data: [{ type: "assistant", content: calling[messages[1]] }] }));
   }
-  const found = request.url.match(/^\/api\/session\/(ses_ship)$/);
+  const found = request.url.match(/^\/api\/session\/(ses_ship|ses_seat)$/);
   response.writeHead(found ? 200 : 404, { "content-type": "application/json" });
-  response.end(JSON.stringify(found ? { data: { id: "ses_ship", title: "Ship", location: { directory: home } } } : { message: "No such session." }));
+  response.end(JSON.stringify(found ? { data: conversations[found[1]] } : { message: "No such session." }));
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
 after(() => { engine.closeAllConnections(); engine.close(); });
@@ -86,10 +92,18 @@ function ask(method, params) {
     mcp.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
   });
 }
-const call = (name, args) => {
-  calling = [{ type: "tool", id: `call_${++calls}`, name: `kuvo-browser_${name}`, state: { status: "running", input: args ?? {} } }];
-  return ask("tools/call", { name, arguments: args, _meta: { "ai.opencode/sessionID": "ses_ship" } });
+const call = (name, args, session = "ses_ship") => {
+  calling[session] = [{ type: "tool", id: `call_${++calls}`, name: `kuvo-browser_${name}`, state: { status: "running", input: args ?? {} } }];
+  return ask("tools/call", { name, arguments: args, _meta: { "ai.opencode/sessionID": session } });
 };
+/** What the box asks you now, once it's asked. */
+async function asked() {
+  for (;;) {
+    const { asks } = (await client("GET", "kuvo/vault/asks")).value;
+    if (asks?.length) return asks;
+    await new Promise(done => setTimeout(done, 20));
+  }
+}
 
 test("an agent on a machine lists the vault's tools, in its box's words", async () => {
   const { tools } = await ask("tools/list", {});
@@ -110,4 +124,32 @@ test("its bot uses what it's granted, through its box, and never sees a value", 
   assert.ok(!JSON.stringify(ran).includes(TOKEN));
   const activity = (await client("GET", "kuvo/vault/activity")).value.entries;
   assert.ok(activity.some(entry => entry.what === "used" && entry.botName === "Ship" && entry.program === "echo"));
+});
+
+test("its seat in a group chat asks you each time, whatever it may use on its own, and never for good", async () => {
+  const deploy = (await client("POST", "kuvo/vault/items", { kind: "key", name: "Deploy key", sites: [], values: { token: "deploy-secret-0002" } })).value.item;
+  assert.equal((await client("POST", "kuvo/vault/grants", { item: deploy.id, who: { everyone: true }, how: "own" })).status, 200);
+  const grants = (await client("GET", "kuvo/vault")).value.grants.length;
+  // (The bot's own grant is from the test before.)
+  const listed = (await call("vault_items", {}, "ses_seat")).content[0].text;
+  assert.match(listed, /“GitLab token”: a key on gitlab\.com; the user is asked each time/);
+  assert.match(listed, /“Deploy key”: a key; the user is asked each time/);
+  const running = call("vault_run", { command: "echo \"using $T\"", variables: { T: "Deploy key" }, why: "To deploy." }, "ses_seat");
+  const first = await Promise.race([asked(), running.then(ran => assert.fail(`It ran without asking: ${ran.content[0].text}`))]);
+  const [card] = first;
+  assert.equal(card.kind, "use");
+  assert.equal(card.botName, "Ship");
+  assert.equal(card.session, "ses_seat");
+  assert.equal(card.group, "grp_release");
+  // An Always (from a client that doesn't know) is this once.
+  assert.equal((await client("POST", `kuvo/vault/asks/${card.id}`, { answer: "always" })).status, 200);
+  const ran = await running;
+  assert.equal(ran.isError, false, ran.content[0].text);
+  assert.match(ran.content[0].text, /using \[vault: Deploy key\]/);
+  assert.equal((await client("GET", "kuvo/vault")).value.grants.length, grants);
+  const again = call("vault_run", { command: "echo again", variables: { T: "GitLab token" }, why: "Once more." }, "ses_seat");
+  const [next] = await Promise.race([asked(), again.then(ran => assert.fail(`It ran without asking: ${ran.content[0].text}`))]);
+  assert.notEqual(next.id, card.id);
+  assert.equal((await client("POST", `kuvo/vault/asks/${next.id}`, { answer: "no" })).status, 200);
+  assert.match((await again).content[0].text, /didn't let you use “GitLab token”/);
 });

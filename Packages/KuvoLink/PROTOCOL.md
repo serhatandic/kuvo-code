@@ -2564,11 +2564,14 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
   `refused`, `added`, `changed`, `removed`, `granted`, `ungranted`, `paused`, `resumed`, `shown`.
 - `GET kuvo/vault/asks` → `{asks}`, and `GET kuvo/vault/asks/events` (`application/x-ndjson`, the
   list now and on each change): what agents wait on you for, `{id, kind: "use" | "item", at,
-  session?, sessionName?, bot?, botName?, item?, itemName?, need?, why?, site?, machine?}`. `use`:
-  an item it may use only by asking (or has no grant for); `item`: something it needs (`need`).
+  session?, sessionName?, bot?, botName?, item?, itemName?, need?, why?, site?, machine?, group?}`.
+  `use`: an item it may use only by asking (or has no grant for); `item`: something it needs
+  (`need`). `group`: asked from a bot's seat in that group chat (`session` the seat, `bot` its
+  bot), which a client shows in the chat, since no one opens a seat. A seat asks each time, whatever
+  it may use on its own, and is answered only once: no Always.
   `POST kuvo/vault/asks/<id> {answer: "once" | "always" | "no", item?}` → `{}` (`item`, for an
   `item` ask, the one you give; `always` grants it on its own, to the bot or, for another session,
-  its project). An agent waits 15 minutes, then takes it as no. Your phones hear of one still open
+  its project; for a seat's, it's once). An agent waits 15 minutes, then takes it as no. Your phones hear of one still open
   after two seconds (`category: "ask"`, `data: {session?, vaultAsk}`).
 
 **The agents' own.** Both tool servers pass these on as they come, with the calling conversation.
