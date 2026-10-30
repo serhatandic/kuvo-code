@@ -205,13 +205,12 @@ final class Sandboxes {
 
     #if DEBUG
     /// KUVO_DEMO_SANDBOX_STATE: how every box's sandbox says it is, for a look at Settings ›
-    /// Permissions: `on`, `antigravity` (on, not Antigravity's), `checking`, `checkFailed`,
+    /// Permissions: `on`, `checking`, `checkFailed`,
     /// `failedAgain`, `plugin`, `waiting`, `engineDown`, `engineMissing`, `kernel` or `macos`.
     /// KUVO_DEMO_SANDBOX_RULES=1: every project's Also Allowed has two folders.
     static let demoState: SandboxState? = ProcessInfo.processInfo.environment["KUVO_DEMO_SANDBOX_STATE"].map { kind in
         switch kind {
         case "on": SandboxState(on: true, agents: true)
-        case "antigravity": SandboxState(on: true, agents: false)
         case "checkFailed": SandboxState(on: false, reason: .checkFailed, action: .retry, route: SandboxRoutes.check, check: .readsOwn, failures: 1)
         case "failedAgain": SandboxState(on: false, reason: .checkFailed, action: .retry, route: SandboxRoutes.check, check: .writesOwn, failures: 3)
         case "kernel": SandboxState(on: false, why: "Linux 5.10 can't sandbox commands: it needs Landlock (Linux 5.13 or later, with it on).", able: false, reason: .kernel, action: .help, needs: "Linux 5.13")

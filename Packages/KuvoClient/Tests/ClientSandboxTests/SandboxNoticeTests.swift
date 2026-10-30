@@ -12,8 +12,6 @@ struct SandboxNoticeTests {
     @Test func onIsAQuietLineAndAnythingElseSaysWhyWithItsFix() throws {
         let on = try state(#"{"on": true, "able": true, "agents": false}"#).notice
         #expect(on.look == .on && on.title == nil && on.buttons.isEmpty)
-        #expect(try state(#"{"on": true, "agents": false}"#).agentsNote?.contains("Antigravity") == true)
-        #expect(try state(#"{"on": true, "agents": true}"#).agentsNote == nil, "once every agent's commands are in it, the line alone is true")
 
         let failed = try state(#"{"on": false, "reason": "checkFailed", "check": "readsOwn", "action": "retry", "route": "kuvo/sandbox/check", "failures": 1}"#).notice
         #expect(failed.look == .needsYou)

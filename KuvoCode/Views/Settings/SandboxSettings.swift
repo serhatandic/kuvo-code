@@ -66,9 +66,6 @@ struct SandboxSettings: View {
                         }
                         Text(notice.detail)
                     }
-                    if let note = state.agentsNote {
-                        Text(note).padding(.leading, 20)
-                    }
                     // What's shown may be out of date.
                     if let failed = sandboxes.stateFailures[id] {
                         Text(failed).foregroundStyle(.red).padding(.leading, 20)
@@ -130,7 +127,7 @@ struct SandboxSettings: View {
         switch action {
         case .check: Task { try? await sandboxes.check(id) }
         case .restartEngine(let asking): if asking { confirmsRestart = true } else { restartEngine() }
-        case .help: NSWorkspace.shared.open(URL(string: "https://kuvo.run/docs/code/machines#sandbox")!)
+        case .help: NSWorkspace.shared.open(URL(string: "https://www.kuvo.run/code/docs/machines/#sandbox")!)
         case .softwareUpdate: NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Software-Update-Settings.extension")!)
         case .report: app.reportProblem()
         }

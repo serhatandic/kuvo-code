@@ -90,12 +90,6 @@ extension SandboxState {
         }
     }
 
-    /// Under the line while it's on: the coding agents whose own programs still run their commands
-    /// outside it (every other one's are in it while it's on).
-    public var agentsNote: String? {
-        on && !agents ? "Antigravity runs its commands as it always has, outside the sandbox." : nil
-    }
-
     /// What the failed check found, in words.
     private var found: String {
         switch check {
