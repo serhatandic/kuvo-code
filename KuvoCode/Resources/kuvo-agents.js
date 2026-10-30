@@ -18177,6 +18177,7 @@ class GroupRunner {
     this.append(message, id);
     const live = this.state(id);
     live.asked++;
+    live.since ??= message.id;
     live.splitStop?.();
     this.setPaused(id, false);
     if (live.speaking)
@@ -18192,6 +18193,7 @@ class GroupRunner {
     const message = this.append({ id: groupMessageID(), text: topic, time: stamp3(), kind: "meeting" }, id);
     const live = this.state(id);
     live.asked++;
+    live.since ??= message.id;
     live.splitStop?.();
     this.setPaused(id, false);
     live.meeting = message.id;
@@ -18250,6 +18252,7 @@ class GroupRunner {
     live.abort?.abort();
     live.abort = undefined;
     live.run = undefined;
+    live.since = undefined;
     this.answering.get(id)?.abort();
     this.setPaused(id, false);
     live.speaking = undefined;
@@ -18357,8 +18360,11 @@ class GroupRunner {
     let absent = new Set;
     let saidCount = 0;
     const guested = new Set;
-    const begun = Math.max(0, (this.chat(id)?.messages ?? []).findLastIndex((message) => message.kind !== "note"));
+    const all = this.chat(id)?.messages ?? [];
+    const since = live.since ? all.findIndex((message) => message.id === live.since) : -1;
+    const begun = since >= 0 ? since : Math.max(0, all.findLastIndex((message) => message.kind !== "note"));
     while (!signal.aborted) {
+      live.since = undefined;
       const kept = this.chat(id);
       if (!kept)
         return epoch;
@@ -20733,4 +20739,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents c9ea99b3e4a0c29eb83d0f6cd2c7476993c5ded729d5f0685bbfb643f72ba605
+// Built from Packages/Box/src/agents fe27b2dfcc9166baafff06a58d2cd139aa85b47be1347afec66a58fb473acd5f

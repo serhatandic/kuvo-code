@@ -19,6 +19,8 @@ export class Engine {
   slow = new Map<string, number>()
   /** Bots whose seats and own conversation stay at work until `release`: as `slow`, but on the test's word, not a clock's. */
   held = new Set<string>()
+  /** Prompts that stay at work until `release`, by what they say. */
+  heldPrompts = new Set<string>()
   private releases = new Map<string, (() => void)[]>()
   stuck = new Set<string>()
   /** Bots whose seats take a message steered in too late for the run under way: it waits in the inbox once the run ends. */
@@ -70,14 +72,16 @@ export class Engine {
     this.conversations.set(session, messages)
   }
 
-  /** A held bot's runs end now, and its next ones aren't held. */
+  /** The seats waiting to be made are, and the next ones aren't held. */
   letMake() {
     this.holdMaking = false
     for (const go of this.making.splice(0)) go()
   }
 
+  /** A held bot's runs (or held prompts', by what they say) end now, and its next ones aren't held. */
   release(bot: string) {
     this.held.delete(bot)
+    this.heldPrompts.delete(bot)
     for (const finish of this.releases.get(bot) ?? []) finish()
     this.releases.delete(bot)
   }
@@ -168,8 +172,9 @@ export class Engine {
         this.busy.delete(session)
       }
       const delay = (bot ? this.slow.get(bot) : undefined) ?? [...this.slowPrompts].find(([text]) => String(body.text).includes(text))?.[1]
-      const holder = bot ?? owner
-      const held = holder !== undefined && this.held.has(holder)
+      const heldText = [...this.heldPrompts].find((text) => String(body.text).includes(text))
+      const holder = heldText ?? bot ?? owner
+      const held = heldText !== undefined || (holder !== undefined && this.held.has(holder))
       if (delay || held) {
         // At work a while, its answer not there yet.
         const said = conversation.at(-1)?.type === "assistant" ? conversation.pop() : undefined

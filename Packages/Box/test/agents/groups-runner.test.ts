@@ -218,6 +218,21 @@ describe("a group chat on a machine", () => {
     expect(asked.body.text).toStartWith(`You're not in "Team", but the user named you there with &Carl`)
   }, 15_000)
 
+  test("a guest you name while the lead wraps up still answers", async () => {
+    const { groups } = runner()
+    bot("bot_carl", "Carl")
+    engine.lines = { Ada: ["A.", "C.", "Wrapped.", "PASS", "NONE"], Ben: ["B.", "PASS", "PASS"], Carl: ["Carl here."] }
+    engine.heldPrompts.add("Wrap up this discussion now")
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Should we ship?")
+    await until(() => engine.prompts().some((request) => String(request.body.text).includes("Wrap up this discussion now")))
+    groups.send("grp_team000001", "&Carl, thoughts?")
+    engine.release("Wrap up this discussion now")
+    const said = () => groups.get("grp_team000001")!.messages.map((message) => message.text)
+    await until(() => said().includes("Carl here.") && !groups.talk("grp_team000001").discussing)
+    expect(said().indexOf("Carl here.")).toBeGreaterThan(said().indexOf("Wrapped."))
+  })
+
   test("a seat grown well past the chat starts over at the bot's next turn, given the whole chat", async () => {
     const { groups } = runner()
     // Her seat grown by 35,000 from its first turn, at its second (each discussion's work list,

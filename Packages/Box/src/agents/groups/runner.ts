@@ -106,6 +106,8 @@ interface Live {
   paused: boolean
   /** Goes up with each message of yours, so a discussion under way starts its count again. */
   asked: number
+  /** Your first message since the discussion last looked for what's new (one that came during the wrap-up): where its next pass begins. */
+  since?: string
   /** The meeting being talked over, by its message: how it went is told when it ends. */
   meeting?: string
   /** Stops the lead's list of who does what: a message of yours is newer than the go-ahead it reads. */
@@ -448,6 +450,7 @@ export class GroupRunner {
     this.append(message, id)
     const live = this.state(id)
     live.asked++
+    live.since ??= message.id
     live.splitStop?.()
     this.setPaused(id, false)
     if (live.speaking) void this.steer(live.speaking, id, message)
@@ -462,6 +465,7 @@ export class GroupRunner {
     const message = this.append({ id: groupMessageID(), text: topic, time: stamp(), kind: "meeting" }, id)
     const live = this.state(id)
     live.asked++
+    live.since ??= message.id
     live.splitStop?.()
     this.setPaused(id, false)
     live.meeting = message.id
@@ -518,6 +522,7 @@ export class GroupRunner {
     live.abort?.abort()
     live.abort = undefined
     live.run = undefined
+    live.since = undefined
     this.answering.get(id)?.abort()
     this.setPaused(id, false)
     live.speaking = undefined
@@ -639,9 +644,14 @@ export class GroupRunner {
     // Guests that answered (or tried), each by the message that named it and its id.
     const guested = new Set<string>()
     // Where the discussion began: from that message on, each one's guests are asked, even one that
-    // came while a bot was talking and isn't the latest any more.
-    const begun = Math.max(0, (this.chat(id)?.messages ?? []).findLastIndex((message) => message.kind !== "note"))
+    // came while a bot was talking and isn't the latest any more; one that came as the last pass
+    // was wrapped up, with the wrap-up after it.
+    const all = this.chat(id)?.messages ?? []
+    const since = live.since ? all.findIndex((message) => message.id === live.since) : -1
+    const begun = since >= 0 ? since : Math.max(0, all.findLastIndex((message) => message.kind !== "note"))
     while (!signal.aborted) {
+      // (What's come so far, it looks at now.)
+      live.since = undefined
       const kept = this.chat(id)
       if (!kept) return epoch
       if (live.asked !== epoch) {
