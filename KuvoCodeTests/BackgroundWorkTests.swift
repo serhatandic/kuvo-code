@@ -109,7 +109,8 @@ import Testing
         bridge.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 2])
         // A session runs on the engine for the first two looks, then it's done.
         let looks = Looks()
-        engine.on("GET", "/api/session/active") { _ in
+        // (Answered on the listener's own queue, not the test's actor.)
+        engine.on("GET", "/api/session/active") { @Sendable _ in
             StubWeb.json(["data": looks.next() <= 2 ? ["ses_busy": ["type": "busy"]] : [:] as [String: Any]])
         }
         bridge.on("GET", "/api/session/active", json: ["data": [:] as [String: Any]])
@@ -129,7 +130,7 @@ import Testing
 }
 
 /// How many times the engine was asked what runs.
-private final class Looks: @unchecked Sendable {
+nonisolated private final class Looks: @unchecked Sendable {
     private let lock = NSLock()
     private var looked = 0
     var count: Int { lock.withLock { looked } }
