@@ -3580,7 +3580,7 @@ class Goals {
       messages = await this.messages(session, place);
     } catch (error) {
       if (error?.status === 404)
-        return this.forget(session);
+        return this.stopped ? undefined : this.forget(session);
       return this.lookLater(session);
     }
     if (!current())
@@ -21867,4 +21867,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f012c61c77e529d2a399cda0d1bf3b36ac7d6f97c34c4f2fc8db0f31f1ad8b8b
+// Built from Packages/Box/src/agents 15bb7d2f1636a3cd6ebbdb8b9beb7dae118d29df0564eb525bdaf9fcba5c879d

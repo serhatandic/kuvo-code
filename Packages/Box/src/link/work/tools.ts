@@ -155,14 +155,22 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
     const folder = data.location?.directory ?? data.directory ?? "";
     const rules = rulesOf((caller.place.data.permissions ?? []) as KitRule[]);
     const seen = await callOf(target, permission, signal);
-    // What always comes to the user, whatever the mode, the plan or the goal's switches. In the
-    // sandbox too: its rule is within the engine's, which ask for these in every session of a bot's.
-    const always = alwaysAsks(permission.action, permission.resources, seen);
-    if (always) return refused(`That's ${ALWAYS[always]}, which always comes to the user: you can't allow it. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
-    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, commandsInSandbox(target, permission));
+    // What always comes to the user, whatever the mode, the plan or the goal's switches, and the
+    // policy (in the sandbox, its rule). Where the command runs in the sandbox, the sandbox's rule
+    // answers first, in its words; what always comes to the user still does after it.
+    const sandboxed = commandsInSandbox(target, permission);
     const user = `The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`;
-    if (why === "above") return refused(`You can't allow that: you'd have to ask the user about it yourself. ${user}`);
-    if (why) return refused(`That's ${why}, which always comes to the user: you can't allow it. ${user}`);
+    const always = () => {
+      const kind = alwaysAsks(permission.action, permission.resources, seen);
+      return kind ? refused(`That's ${ALWAYS[kind]}, which always comes to the user: you can't allow it. ${user}`) : null;
+    };
+    const policy = () => {
+      const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, sandboxed);
+      if (why === "above") return refused(`You can't allow that: you'd have to ask the user about it yourself. ${user}`);
+      return why ? refused(`That's ${why}, which always comes to the user: you can't allow it. ${user}`) : null;
+    };
+    const refusal = sandboxed && (permission.action === "shell" || permission.action === "bash") ? policy() ?? always() : always() ?? policy();
+    if (refusal) return refusal;
   }
   try {
     await call(target, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, args.decision === "allow" ? { decision: "once" } : { decision: "reject", message: `${by.name}: ${reason}` }, signal);
