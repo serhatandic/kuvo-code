@@ -49,6 +49,8 @@ let made = [];
 let marked = new Map();
 let told = new Map();
 let busy = new Map();
+// What comes into a conversation after its answer to a message, while it's still at work.
+let after_ = {};
 const promptHeard = [];
 const engine = http.createServer((request, response) => {
   let body = "";
@@ -88,7 +90,7 @@ const engine = http.createServer((request, response) => {
       }
       // Its answer, after the message (ids sort by time).
       busy.set(id, 1);
-      messages.set(id, [...(messages.get(id) ?? []), { id: given.id, type: "user", text: given.text }, { id: given.id + "z", type: "assistant", content: [{ type: "text", text: `On it (${id}).` }] }]);
+      messages.set(id, [...(messages.get(id) ?? []), { id: given.id, type: "user", text: given.text }, { id: given.id + "z", type: "assistant", content: [{ type: "text", text: `On it (${id}).` }] }, ...(after_[id] ?? [])]);
       return reply({});
     }
     if (one?.[2] === "/message") return reply({ data: [...(messages.get(id) ?? [])].reverse() });
@@ -114,6 +116,7 @@ beforeEach(() => {
   marked = new Map();
   told = new Map();
   busy = new Map();
+  after_ = {};
   fs.rmSync(path.join(home, "run", "tool-limits.json"), { force: true });
 });
 
@@ -175,6 +178,16 @@ test("send_message with wait gives back what the agent answered", async () => {
   const said = await tool("send_message", { to: "Scout", text: "Is the build green?", wait: true }, "ses_lead");
   assert.deepEqual(said, { text: "Scout answered:\n\nOn it (ses_scout).", isError: false });
   assert.match(prompts[0].text, /^\[Message from Lead · ses_lead\] \(They're waiting for your reply: just answer, in your words\.\)/);
+});
+
+test("send_message with wait gives back the answer to its message, not to one that came after it", async () => {
+  // You write to Scout while it answers; its answer to you isn't the asker's.
+  after_.ses_scout = [
+    { id: "zzz_1", type: "user", text: "And the docs?" },
+    { id: "zzz_2", type: "assistant", content: [{ type: "text", text: "The docs are done (for you, not the asker)." }] },
+  ];
+  const said = await tool("send_message", { to: "Scout", text: "Is the build green?", wait: true }, "ses_lead");
+  assert.deepEqual(said, { text: "Scout answered:\n\nOn it (ses_scout).", isError: false });
 });
 
 test("read_conversation reads another's conversation as the export words it, or the parts a query finds", async () => {

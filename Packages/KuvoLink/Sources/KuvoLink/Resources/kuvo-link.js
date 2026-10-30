@@ -11636,6 +11636,21 @@ function takeBack2(kind, key, at, file = LIMITS_FILE) {
 }
 
 // Packages/Box/src/link/letters/take.ts
+function answerAfter(messages, id) {
+  const replies = [];
+  for (const message of messages) {
+    if (message.id <= id)
+      continue;
+    if (message.type === "assistant") {
+      const text = (message.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join(`
+`);
+      if (text)
+        replies.push(text);
+    } else if (message.type === "user" && replies.length)
+      break;
+  }
+  return replies;
+}
 function lettersSeen(now) {
   let seen = {};
   try {
@@ -11671,8 +11686,7 @@ async function answerTo(target, session, id, { wait = 2000, signal } = {}) {
     if (!started && Date.now() - began < 3 * wait)
       continue;
     const page = await asked(target, "GET", `api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`).catch(() => null);
-    const replies = (page?.data ?? []).filter((message) => message.type === "assistant" && message.id > id).reverse().map((message) => (message.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join(`
-`)).filter(Boolean);
+    const replies = answerAfter((page?.data ?? []).slice().reverse(), id);
     if (replies.length)
       return cutText(replies.join(`
 

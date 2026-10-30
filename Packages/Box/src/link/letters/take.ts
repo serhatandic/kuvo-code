@@ -53,6 +53,20 @@ interface EngineMessage {
   content?: { type: string; text?: string }[];
 }
 
+// What it wrote after message `id`, oldest first: up to the next message someone else gave it once
+// it's answered, whose answer is theirs (one that came before it answered, it answered with this).
+function answerAfter(messages: EngineMessage[], id: string): string[] {
+  const replies: string[] = [];
+  for (const message of messages) {
+    if (message.id <= id) continue;
+    if (message.type === "assistant") {
+      const text = (message.content ?? []).filter(part => part.type === "text").map(part => part.text).join("\n");
+      if (text) replies.push(text);
+    } else if (message.type === "user" && replies.length) break;
+  }
+  return replies;
+}
+
 // Letters remembered, by id, with when: one seen again is said to be there, not delivered twice.
 export function lettersSeen(now: number): Record<string, number> {
   let seen: Record<string, number> = {};
@@ -96,11 +110,7 @@ export async function answerTo(target: Target, session: string, id: string, { wa
     }
     if (!started && Date.now() - began < 3 * wait) continue;
     const page: { data?: EngineMessage[] } | null = await asked(target, "GET", `api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`).catch(() => null) as EngineAnswer<EngineMessage[]> | null;
-    const replies = (page?.data ?? [])
-      .filter(message => message.type === "assistant" && message.id > id)
-      .reverse()
-      .map(message => (message.content ?? []).filter(part => part.type === "text").map(part => part.text).join("\n"))
-      .filter(Boolean);
+    const replies = answerAfter((page?.data ?? []).slice().reverse(), id);
     if (replies.length) return cutText(replies.join("\n\n"), ANSWER_TEXT);
     if (started) break;
   }
