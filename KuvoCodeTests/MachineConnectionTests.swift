@@ -131,6 +131,35 @@ import Testing
         #expect(clock.waits == [60, 600])
     }
 
+    /// Reconnected while the machine is slow to say whether a conversation open here is still
+    /// there (it isn't among the newest it lists): the conversation stays open and goes on
+    /// following the agent there. Only one the machine says it hasn't goes.
+    @Test func aConversationTheMachineCouldntSayAboutStaysOpen() async throws {
+        defer { done() }
+        let id = Self.name()
+        let older = StubEngine.session("ses_older", title: "Older", directory: "/home/tests/project")
+        machine.list([older])
+        machine.conversation("ses_older", [])
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        try await until { app.workspace.session("ses_older") != nil }
+        let model = try #require(app.workspace.model(for: "ses_older"))
+        await model.load()
+
+        // Back, with newer ones listed and this one's own answer failing for a moment.
+        machine.list([StubEngine.session("ses_newer", title: "Newer", directory: "/home/tests/project", created: 2)])
+        machine.on("GET", "/api/session/ses_older", json: ["error": "busy"], status: 500)
+        await app.reconnectNow(engine)?.value
+        #expect(app.workspace.model(for: "ses_older") === model, "still the conversation on screen")
+        app.workspace.handle(try machine.event("session.execution.started", session: "ses_older"), machine: id)
+        #expect(model.isRunning, "it still follows the agent there")
+
+        // Deleted there: it goes.
+        machine.on("GET", "/api/session/ses_older", json: ["error": "not found"], status: 404)
+        await app.reconnectNow(engine)?.value
+        #expect(app.workspace.model(for: "ses_older") !== model)
+    }
+
     /// Your personalities changed, so each connected machine's round begins a moment later:
     /// one disconnected meanwhile gets nothing; another still connected gets its round.
     @Test func disconnectStopsAPersonalitiesRoundAboutToBegin() async throws {
