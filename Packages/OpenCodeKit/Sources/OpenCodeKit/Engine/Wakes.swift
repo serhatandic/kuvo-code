@@ -685,9 +685,13 @@ public enum Wakes {
           200) ;;
           *) return 0 ;;
         esac
-        # One held (`held`) is only let go once it's gone.
-        [ -z "$held" ] || return 1
         s_body=$(printf '%s' "$s_out" | sed '$d')
+        # One held (`held`) is only let go once it's gone, or, held as archived, once it's back
+        # (its bringing back didn't reach this computer): its wake-ups go from the next minute.
+        if [ -n "$held" ]; then
+          [ "$(cat "${bot}paused" 2>/dev/null)" = archived ] && ! printf '%s' "$s_body" | grep -qE "$archived" && rm -f "${bot}paused"
+          return 1
+        fi
         # Archived, from any app (a Mac's, a phone's: they mark the session itself), wherever it
         # was done: its wake-ups wait, as when paused, until it's brought back.
         printf '%s' "$s_body" | grep -qE "$archived" && return 1
@@ -717,6 +721,7 @@ public enum Wakes {
           tools=1; pended=; began=$(date +%s)
           folder=$(encoded "$(cat "${bot}directory")")
           while listed=$(printf 'user = "opencode:%s"\n' "$password" | curl -q -sf -m 5 --noproxy '*' -K - -H "x-opencode-directory: $folder" "http://127.0.0.1:$port/api/mcp"); do
+            [ -z "$stopping" ] || return 1
             waited=$(($(date +%s) - began))
             [ "$waited" -ge 20 ] && break
             case "$listed" in
@@ -728,6 +733,7 @@ public enum Wakes {
           done
           [ -n "$pended" ] && sleep 1.5
         fi
+        [ -z "$stopping" ] || return 1
         ms=$(date +%s%3N 2>/dev/null); case "$ms" in *[!0-9]*|'') ms=$((now * 1000));; esac
         id=msg_$(printf '%012x' $(((ms * 4096 + 1) & 0xFFFFFFFFFFFF)))$(random 14)
         body="{\"id\":\"$id\",\"text\":\"$(json "[Wake-up] $1")\",\"delivery\":\"queue\"}"
@@ -758,15 +764,19 @@ public enum Wakes {
       for bots in "$2" "${2%/*}/wakes"; do
       [ -d "$bots" ] || continue
       # One at a time: two at once (a watchdog left from before the engine started over, say)
-      # would send a wake-up twice. One stopped lets go of it (dash runs no EXIT trap for a
-      # signal), and one left by one that was killed outright goes after ten minutes.
+      # would send a wake-up twice. One stopped lets go of it once the wake-up it's sending is
+      # done with (dash runs no EXIT trap for a signal): stopped as soon as the signal comes, one
+      # the engine took would be sent again. One left by one killed outright goes after ten minutes.
       lock="$bots/.firing"
       [ -z "$(find "$lock" -maxdepth 0 -mmin +10 2>/dev/null)" ] || rmdir "$lock" 2>/dev/null
       mkdir "$lock" 2>/dev/null || continue
+      stopping=
       trap 'rmdir "$lock" 2>/dev/null' EXIT
-      trap 'rmdir "$lock" 2>/dev/null; exit 143' INT TERM HUP
+      trap 'stopping=1' INT TERM HUP
+      stop() { [ -z "$stopping" ] || { rmdir "$lock" 2>/dev/null; exit 143; }; }
       held=
       for bot in "$bots"/*/; do
+        stop
         # Paused by you (a session's, while it's archived: see `settle` too): its wake-ups wait.
         # Though one whose session is gone (deleted while it was held) goes to the trash, as
         # `settle` has one go; not one on its way to another computer.
@@ -789,6 +799,7 @@ public enum Wakes {
         settle || continue
         failed=
         for wake in "$bot"wakes/*; do
+          stop
           [ -f "$wake" ] || continue
           file=${wake##*/}; rest=${file#*-}; due=${file%%-*}
           case "$rest" in *-*) every=${rest#*-};; *) every=;; esac
@@ -814,6 +825,7 @@ public enum Wakes {
             failed=1
           fi
         done
+        stop
         if [ -n "$failed" ]; then
           case "$r_wait" in ''|*[!0-9]*) r_wait=30;; esac
           r_wait=$((r_wait * 2)); [ "$r_wait" -le 1800 ] || r_wait=1800

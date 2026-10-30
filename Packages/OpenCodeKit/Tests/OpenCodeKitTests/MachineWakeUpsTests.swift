@@ -46,6 +46,8 @@ import Testing
             printf '%s %s %s %s\n' "$port" "$method" "$path" "$body" >>"$K/requests"
             # The watchdog stopping it as it asks (its machine shutting down, say).
             if [ -f "$K/stop-on-ask" ]; then rm "$K/stop-on-ask"; kill -TERM "$(cat "$K/fire.pid")"; exit 22; fi
+            # Or as it sends a wake-up, which the engine takes.
+            case "$method $path" in "POST "*/prompt) if [ -f "$K/stop-on-send" ]; then rm "$K/stop-on-send"; kill -TERM "$(cat "$K/fire.pid")"; fi ;; esac
             key=$(printf '%s %s %s' "$port" "$method" "$path" | tr '/ ?' '___')
             # A prompt is taken, unless an answer says otherwise; the rest isn't there.
             code=404; out=
@@ -244,6 +246,22 @@ import Testing
         #expect(wakes(of: bot).isEmpty, "sent, and done")
     }
 
+    /// Stopped as it sends one the engine takes: it's done, not sent again the next minute.
+    @Test(arguments: WakesTests.shells)
+    func oneStoppedAsItSendsAWakeUpDoesntSendItTwice(_ shell: String) throws {
+        defer { cleanUp() }
+        let bot = try folder("bot_a", session: "ses_a", wake: "Morning report")
+        try folder("bot_b", session: "ses_b", wake: "Evening report")
+        try write(k.appending(path: "stop-on-send"), "")
+        let stopped = try sh(#"echo $$ >"$K/fire.pid"; exec \#(shell) "$K/bin/kuvo-wake" fire "$K/bots" "$K/run/engine.json""#)
+        #expect(stopped.status != 0)
+        #expect(!FileManager.default.fileExists(atPath: bots.appending(path: ".firing").path), "\(shell)")
+        #expect(wakes(of: bot).isEmpty, "\(shell): sent, and done")
+        #expect(prompts() == ["\(Self.enginePort) ses_a [Wake-up] Morning report"], "\(shell): stopped before the next")
+        try fire(shell: shell)
+        #expect(prompts() == ["\(Self.enginePort) ses_a [Wake-up] Morning report", "\(Self.enginePort) ses_b [Wake-up] Evening report"], "\(shell)")
+    }
+
     @Test func aPausedBotsWakeUpsWait() throws {
         defer { cleanUp() }
         let bot = try folder("bot_a", session: "ses_a", wake: "Check the build")
@@ -337,6 +355,37 @@ import Testing
         #expect(wakes(of: moving).count == 1, "kept for its move")
         let trash = try FileManager.default.contentsOfDirectory(atPath: k.appending(path: "trash").path).map { String($0.prefix(16)) }.sorted()
         #expect(trash == ["wakes-ses_gone-1", "wakes-ses_left-1"], "kept, not lost")
+    }
+
+    /// Held as archived, though the session is back (its bringing back never reached this
+    /// computer): let go, and its wake-ups go from the next minute. One paused by you stays.
+    @Test func aSessionHeldAsArchivedThoughItsBackIsLetGo() throws {
+        defer { cleanUp() }
+        let back = try folder("ses_back", in: sessions, session: "ses_back", wake: "Follow up")
+        try write(back.appending(path: "paused"), "archived")
+        try answer(Self.enginePort, "GET", "api/session/ses_back", #"{"id":"ses_back","metadata":{"kuvo.archived":false}}"#)
+        let mine = try folder("ses_mine", in: sessions, session: "ses_mine", wake: "Later")
+        try write(mine.appending(path: "paused"), "paused")
+        try answer(Self.enginePort, "GET", "api/session/ses_mine", #"{"id":"ses_mine"}"#)
+        try fire()
+        try fire()
+        #expect(prompts() == ["\(Self.enginePort) ses_back [Wake-up] Follow up"])
+        #expect(wakes(of: mine).count == 1, "paused by you")
+    }
+
+    /// A subagent's, paused: it stays as it is, rather than going to the conversation that
+    /// started it and being sent there.
+    @Test func aPausedSubagentsWakeUpsStayPut() throws {
+        defer { cleanUp() }
+        let child = try folder("ses_child", in: sessions, session: "ses_child", wake: "Report back")
+        try write(child.appending(path: "paused"), "paused")
+        try answer(Self.enginePort, "GET", "api/session/ses_child", #"{"id":"ses_child","parentID":"ses_parent"}"#)
+        try answer(Self.enginePort, "GET", "api/session/ses_parent", #"{"id":"ses_parent"}"#)
+        try fire()
+        try fire()
+        #expect(prompts().isEmpty)
+        #expect(wakes(of: child).count == 1)
+        #expect(!FileManager.default.fileExists(atPath: sessions.appending(path: "ses_parent").path))
     }
 
     @Test func aSessionTheBridgeHasIsWokenThereFromNowOn() throws {
