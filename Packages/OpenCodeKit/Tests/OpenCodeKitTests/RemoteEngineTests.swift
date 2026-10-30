@@ -153,13 +153,19 @@ struct RemoteEngineTests {
             @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
             IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!
             Someone could be eavesdropping on you right now (man-in-the-middle attack)!
+            It is also possible that a host key has just been changed.
+            The fingerprint for the ED25519 key sent by the remote host is
+            SHA256:sKNORHL/HwRODsf8tsptRPXRwuhgwygPaUhqaEUg+vI.
+            Please contact your system administrator.
+            Add correct host key in /Users/me/.ssh/known_hosts to get rid of this message.
             Offending ED25519 key in /Users/me/.ssh/known_hosts:12
-            Host key for box has changed and you have requested strict checking.
+            Host key for 192.168.1.100 has changed and you have requested strict checking.
             Host key verification failed.
             """
         let said = RemoteEngineError.ssh(status: 255, message: changed).localizedDescription
         #expect(said.contains("changed"))
-        #expect(said.contains("ssh-keygen -R"))
+        // The name the key is kept under (the machine's address, not the name in ~/.ssh/config).
+        #expect(said.contains("ssh-keygen -R 192.168.1.100"))
         #expect(!said.contains("doesn't know"))
         let unknown = "No ED25519 host key is known for box and you have requested strict checking.\nHost key verification failed."
         #expect(RemoteEngineError.ssh(status: 255, message: unknown).localizedDescription.contains("doesn't know the machine's host key yet"))

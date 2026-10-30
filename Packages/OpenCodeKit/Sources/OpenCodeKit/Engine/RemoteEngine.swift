@@ -143,8 +143,12 @@ public enum RemoteEngineError: LocalizedError {
         case .ssh(let status, let message):
             let message = message.trimmingCharacters(in: .whitespacesAndNewlines)
             // Its key isn't the one this Mac knows: reinstalled, or someone in between.
+            // (The key is kept under the name ssh says, its address rather than a name in
+            // ~/.ssh/config.)
             if status == 255, message.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") {
-                return "The machine's host key has changed since this Mac last connected. If you expect that (it was reinstalled, say), remove the old key in Terminal with ssh-keygen -R and the machine's address, then try again. If not, someone may be intercepting the connection."
+                let name = message.firstMatch(of: /Host key for (\S+) has changed/).map { String($0.1) }
+                let remove = name.map { "with ssh-keygen -R \($0)" } ?? "with ssh-keygen -R and the machine's address"
+                return "The machine's host key has changed since this Mac last connected. If you expect that (it was reinstalled, say), remove the old key in Terminal \(remove), then try again. If not, someone may be intercepting the connection."
             }
             if status == 255, message.contains("Host key verification failed") {
                 return "This Mac doesn't know the machine's host key yet. Connect to it once in Terminal with ssh, then try again."
