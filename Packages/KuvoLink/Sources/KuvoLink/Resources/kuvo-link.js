@@ -8,6 +8,25 @@ import os11 from "node:os";
 import path73 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
+// Packages/Box/src/shared/text.ts
+import crypto from "node:crypto";
+var oneLine = (text, limit) => Array.from(String(text).replace(/[\t\r\n]/g, " ")).slice(0, limit).join("");
+var stamp = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+var newID = (prefix) => prefix + Array.from(crypto.randomBytes(10), (byte) => "abcdefghijklmnopqrstuvwxyz0123456789"[byte % 36]).join("");
+var plainName = (text) => String(text ?? "").replace(/[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, " ").split(/\s+/).filter(Boolean).join(" ");
+function prefixBytes(text, bytes) {
+  let out = "", count = 0;
+  for (const character of text) {
+    count += Buffer.byteLength(character);
+    if (count > bytes)
+      break;
+    out += character;
+  }
+  return out;
+}
+var cut = (text, count) => text.length <= count ? text : text.slice(0, count - 1) + "…";
+var quote = (text) => `'${String(text).replace(/'/g, `'\\''`)}'`;
+
 // Packages/Box/src/shared/wait.ts
 var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 var pause = (ms, signal) => new Promise((resolve) => {
@@ -473,14 +492,14 @@ function changeDescription(folder, change) {
 }
 
 // Packages/Box/src/link/engine/sessions.ts
-import crypto from "node:crypto";
+import crypto2 from "node:crypto";
 var isHiddenRun = (session) => Boolean(session?.metadata?.kuvo?.engineFor || session?.metadata?.kuvo?.seat || session?.metadata?.kuvo?.reviewPart);
 var lastMessage = { time: 0, counter: 0 };
 function messageID(now = Date.now()) {
   lastMessage = lastMessage.time === now ? { time: now, counter: lastMessage.counter + 1 } : { time: now, counter: 1 };
   const time = (BigInt(now) * 0x1000n + BigInt(lastMessage.counter) & 0xFFFFFFFFFFFFn).toString(16).padStart(12, "0");
   const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-  return `msg_${time}${Array.from(crypto.randomBytes(14), (byte) => alphabet[byte % alphabet.length]).join("")}`;
+  return `msg_${time}${Array.from(crypto2.randomBytes(14), (byte) => alphabet[byte % alphabet.length]).join("")}`;
 }
 
 // Packages/Box/src/link/letters/letter.ts
@@ -632,27 +651,6 @@ var WATCH_SETTLES = [250, 1000, 5000];
 import { execFile } from "node:child_process";
 import fs8 from "node:fs";
 import path7 from "node:path";
-
-// Packages/Box/src/shared/text.ts
-import crypto2 from "node:crypto";
-var oneLine = (text, limit) => Array.from(String(text).replace(/[\t\r\n]/g, " ")).slice(0, limit).join("");
-var stamp = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-var newID = (prefix) => prefix + Array.from(crypto2.randomBytes(10), (byte) => "abcdefghijklmnopqrstuvwxyz0123456789"[byte % 36]).join("");
-var plainName = (text) => String(text ?? "").replace(/[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, " ").split(/\s+/).filter(Boolean).join(" ");
-function prefixBytes(text, bytes) {
-  let out = "", count = 0;
-  for (const character of text) {
-    count += Buffer.byteLength(character);
-    if (count > bytes)
-      break;
-    out += character;
-  }
-  return out;
-}
-var cut = (text, count) => text.length <= count ? text : text.slice(0, count - 1) + "…";
-var quote = (text) => `'${String(text).replace(/'/g, `'\\''`)}'`;
-
-// Packages/Box/src/link/areas/wakes.ts
 var WAKE_MARKER = "[Wake-up] ";
 function repeatText(text) {
   if (text === "weekdays")
@@ -4985,6 +4983,7 @@ var FEATURES = [
   "engine.start",
   "file",
   "folders",
+  "folders.files",
   "git",
   "goals",
   "groups",
@@ -5433,7 +5432,7 @@ function leaveMac(link, mac) {
     else
       delete link.mac;
   }
-  for (const field of ["macSeen", "macSigns", "legacy"])
+  for (const field of ["macSeen", "macSigns", "macNames", "legacy"])
     if (link[field])
       delete link[field][mac];
   link.phones = (link.phones ?? []).filter((phone) => !(phone.from === "mac" && phone.mac === mac));
@@ -14417,6 +14416,18 @@ async function* botsRoute(context) {
 // Packages/Box/src/link/areas/folders.ts
 import fs61 from "node:fs";
 import path63 from "node:path";
+var byName = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+function refusal(at, error) {
+  const code = error?.code;
+  if (code === "ENOENT")
+    return { status: 404, value: { message: `There's no folder ${at} here.`, reason: "No such folder" } };
+  if (code === "ENOTDIR")
+    return { status: 404, value: { message: `${at} isn't a folder.`, reason: "Not a folder" } };
+  if (code === "EACCES" || code === "EPERM")
+    return { status: 403, value: { message: `${at} can't be read here.`, reason: "Permission denied" } };
+  const said = error?.message?.replace(/^[A-Z]+: /, "").split(",")[0]?.trim();
+  return { status: 500, value: { message: `${at} can't be read here.`, reason: said ? said[0].toUpperCase() + said.slice(1) : "It couldn't be read" } };
+}
 function listFolders(requestPath) {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
   const home = homeFolder();
@@ -14429,9 +14440,7 @@ function listFolders(requestPath) {
   try {
     entries = fs61.readdirSync(at, { withFileTypes: true });
   } catch (error) {
-    if (error?.code === "ENOENT" || error?.code === "ENOTDIR")
-      return { status: 404, value: { message: `There's no folder ${at} here.` } };
-    return { status: 403, value: { message: `${at} can't be read here.` } };
+    return refusal(at, error);
   }
   const hidden = query.get("hidden") === "1";
   const asks = at === home ? promptedFolders() : new Set;
@@ -14442,8 +14451,9 @@ function listFolders(requestPath) {
       return false;
     }
   })();
-  const folders = entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && isFolder(entry)).map((entry) => !asks.has(entry.name) && fs61.existsSync(path63.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
-  return { status: 200, value: { path: at, home, parent: at === path63.dirname(at) ? null : path63.dirname(at), folders } };
+  const folders = entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && isFolder(entry)).map((entry) => !asks.has(entry.name) && fs61.existsSync(path63.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }).sort((a, b) => byName(a.name, b.name));
+  const files = query.get("files") === "1" ? entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && entry.name !== ".DS_Store" && !isFolder(entry)).map((entry) => entry.name).sort(byName) : undefined;
+  return { status: 200, value: { path: at, home, parent: at === path63.dirname(at) ? null : path63.dirname(at), folders, ...files ? { files } : {} } };
 }
 function makeFolder(body) {
   const given = typeof body?.path === "string" ? body.path.trim() : "";
@@ -14541,8 +14551,14 @@ async function* infoRoute(context) {
   } catch {}
   const notes = engine.notes ?? {};
   const home = typeof notes.mac === "string" ? { mac: notes.mac, ...typeof notes.macName === "string" ? { name: notes.macName } : {} } : undefined;
+  let link = null;
+  try {
+    link = readLink();
+  } catch {}
+  const macs = macsOf(link).map((key) => ({ key, ...link?.macNames?.[key] ? { name: link.macNames[key] } : {}, seen: link?.macSeen?.[key] ?? 0 }));
+  const phones = new Set((link?.phones ?? []).map((phone) => phone.key)).size;
   yield { head: { status: 200, headers: { "content-type": "application/json" } } };
-  yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...home ? { home } : {}, ...info })) };
+  yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...home ? { home } : {}, macs, phones, ...info })) };
   return;
 }
 
@@ -17354,6 +17370,8 @@ async function setup() {
       next.mac = mac;
       next.macs = [...new Set([...macsOf(next), mac])];
       forgetOldMacs(next, mac);
+      if (typeof input.macName === "string" && plainName(input.macName))
+        next.macNames = { ...next.macNames ?? {}, [mac]: plainName(input.macName).slice(0, 100) };
       if (typeof input.macSign === "string" && SIGN.test(input.macSign)) {
         next.macSigns = { ...next.macSigns ?? {}, [mac]: input.macSign };
         if (next.legacy)

@@ -7,13 +7,16 @@ import { any, bool, type Infer, list, nullable, number, object, type RouteShape,
 
 /** The folders in one of this box's folders: its path, the home folder, the one it's in (null for
  * the top), and the folders in it, ordered as Finder orders names (`repository`: a git
- * repository's own checkout). */
+ * repository's own checkout); asked with `files=1`, its files too, as the Files panel lists them. */
 export const FOLDER_LIST = object({
   path: string,
   home: string,
   parent: nullable(string),
   folders: list(object({ name: string, "repository?": bool })),
+  "files?": list(string),
 });
+/** Why a folder couldn't be read, as the computer says it ("Permission denied"). */
+export const FOLDER_REFUSED = object({ message: string, "reason?": string });
 /** A new folder, made where it was asked. */
 export const FOLDER_MADE = object({ path: string });
 
@@ -38,6 +41,7 @@ export const SIGN_IN_RETURNED = object({ status: number });
 
 export type FolderList = Infer<typeof FOLDER_LIST>;
 export type FolderMade = Infer<typeof FOLDER_MADE>;
+export type FolderRefused = Infer<typeof FOLDER_REFUSED>;
 export type PluginSearch = Infer<typeof PLUGIN_SEARCH>;
 export type ProgramFound = Infer<typeof PROGRAM_FOUND>;
 export type ProviderModels = Infer<typeof PROVIDER_MODELS>;
@@ -53,7 +57,7 @@ export const SEARCH_FOUND = object({ results: list(object({ session: string, sni
 export type SearchFound = Infer<typeof SEARCH_FOUND>;
 
 export const MISC_ROUTES: RouteShape[] = [
-  { route: "GET kuvo/folders", answers: { 200: FOLDER_LIST } },
+  { route: "GET kuvo/folders", answers: { 200: FOLDER_LIST, 403: FOLDER_REFUSED, 404: FOLDER_REFUSED } },
   { route: "POST kuvo/folders", answers: { 200: FOLDER_MADE } },
   { route: "GET kuvo/plugins/search", answers: { 200: PLUGIN_SEARCH } },
   { route: "GET kuvo/programs", answers: { 200: PROGRAM_FOUND } },

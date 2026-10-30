@@ -30,6 +30,9 @@ public enum ChildProcess {
         case nothing
         /// A file, from its start.
         case file(URL)
+        /// A file, from its start, saying as it goes how far into it the program has read (a
+        /// few times a second, and when it's done): an upload's progress.
+        case reported(URL, read: @Sendable (Int64) -> Void)
     }
 
     /// Where what it says on stdout goes.
@@ -187,6 +190,8 @@ public enum ChildProcess {
         private var readers: [FileHandle] = []
         /// Files handed to it, closed once it's done.
         private var files: [FileHandle] = []
+        /// What tells how far it has read its input (`Input.reported`), stopped once it's done.
+        private var inputRead: (timer: DispatchSourceTimer, file: FileHandle, read: @Sendable (Int64) -> Void)?
         private var started = false
         private var ended: (status: Int32, reason: Process.TerminationReason)?
         private var timedOut = false
@@ -217,6 +222,21 @@ public enum ChildProcess {
                 let file = try FileHandle(forReadingFrom: url)
                 files.append(file)
                 process.standardInput = file
+            case .reported(let url, let read):
+                let file = try FileHandle(forReadingFrom: url)
+                files.append(file)
+                process.standardInput = file
+                // The program reads it through the same open file, so where it is in it here is
+                // how far the program has read.
+                let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+                timer.schedule(deadline: .now(), repeating: .milliseconds(250))
+                timer.setEventHandler { [weak self] in
+                    guard let self else { return }
+                    let offset = lock.withLock { done ? -1 : lseek(file.fileDescriptor, 0, SEEK_CUR) }
+                    if offset >= 0 { read(Int64(offset)) }
+                }
+                timer.resume()
+                inputRead = (timer, file, read)
             }
             // Pipes of its own, so a terminal's shell started meanwhile doesn't keep them open
             // (see `Pipe.unshared`).
@@ -394,6 +414,12 @@ public enum ChildProcess {
         /// running closes them: closed here, that would be killed the next time it printed.
         private func letGo() {
             process.terminationHandler = nil
+            if let inputRead {
+                inputRead.timer.cancel()
+                // Where it got to, last: the whole of it, for one that read it all.
+                let offset = lseek(inputRead.file.fileDescriptor, 0, SEEK_CUR)
+                if offset >= 0 { inputRead.read(Int64(offset)) }
+            }
             for file in files { try? file.close() }
         }
     }

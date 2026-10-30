@@ -1,0 +1,37 @@
+import ClientDesign
+import Testing
+
+/// What both apps say of a machine one of your Macs connects and removes: the step its first
+/// connection is on, and whom Uninstall would stop it for.
+struct MachineWordsTests {
+    @Test func aFirstConnectionsStepInARow() {
+        #expect(MachineWords.step("copying") == "Copying the engine")
+        #expect(MachineWords.step("downloading") == "Downloading the engine")
+        #expect(MachineWords.step("reading") == "Reading its sessions")
+        #expect(MachineWords.step("something-newer") == nil)
+    }
+
+    /// Others use it: named, and Uninstall says it's for every Mac; Remove stays off this one only.
+    @Test func removeNamesWhoElseUsesItBeforeUninstallStopsItForThem() {
+        let both = MachineWords.removal(of: "lokum", home: nil, otherMacs: ["Studio"], phones: 2, phonesKeepIt: true, device: "this Mac")
+        #expect(both.message == "Remove takes it off this Mac only. Studio and your phones also use lokum: Uninstall stops it for everyone and deletes its sign-ins and keys.")
+        #expect(both.uninstall == "Uninstall for Every Mac")
+        let mac = MachineWords.removal(of: "lokum", home: nil, otherMacs: ["Studio"], phones: 0, phonesKeepIt: false, device: "this Mac")
+        #expect(mac.message == "Remove takes it off this Mac only. Studio also uses lokum: Uninstall stops it for everyone and deletes its sign-ins and keys.")
+        let phone = MachineWords.removal(of: "lokum", home: nil, otherMacs: [], phones: 1, phonesKeepIt: true, device: "MacBook Air")
+        #expect(phone.message == "Remove takes it off MacBook Air only. Your phone also uses lokum: Uninstall stops it for everyone and deletes its sign-ins and keys.")
+        #expect(phone.uninstall == "Uninstall from lokum", "no other Mac: it's this one's to uninstall")
+    }
+
+    @Test func oneAnotherMacRunsIsUninstalledOnlyFromThere() {
+        let words = MachineWords.removal(of: "lokum", home: "Studio", otherMacs: ["Studio"], phones: 0, phonesKeepIt: true, device: "this Mac")
+        #expect(words.uninstall == nil)
+        #expect(words.message == "Studio runs lokum, so it can be uninstalled only from there. Remove takes it off this Mac; it keeps running, with its sessions, bots, sign-ins and keys.")
+    }
+
+    @Test func noOneElseKnownItSaysWhatEachDoes() {
+        let words = MachineWords.removal(of: "lokum", home: nil, otherMacs: nil, phones: 0, phonesKeepIt: true, device: "this Mac")
+        #expect(words.uninstall == "Uninstall from lokum")
+        #expect(words.message == "Remove takes it off this Mac; it keeps running, with its sessions, bots, sign-ins and keys, and your phones keep it. Uninstall also stops it there and deletes its sign-ins and keys.")
+    }
+}

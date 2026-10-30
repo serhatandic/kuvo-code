@@ -58,6 +58,11 @@ the Mac's own git). Foundation only.
 The look both apps draw with, the same on each: SwiftUI, no app state. It's taking the place of the
 phone's copies of the Mac's design files, a piece at a time.
 
+- `MachineWords`: a machine's words in both apps: the step its first connection is on ("Copying
+  the engine"), and what Remove's dialog says Uninstall would stop it for (your other Macs, your
+  phones), or that only the Mac that runs it can uninstall it.
+- `ProgressRing`: how far a wait has come where there's room only for a mark (a machine's engine
+  being copied there), the working ring's size.
 - `MoveWords`: Move to Computer's words in both apps: what a moving row says ("Moving to lab…
   12 of 30 MB", sizes as `ProgressLine` says them) and the question asked before a move.
 - `Surface`: the window's materials (canvas, card fills, lit rims, accent glass, recessed wells),

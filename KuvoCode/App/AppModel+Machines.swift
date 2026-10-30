@@ -419,6 +419,19 @@ extension AppModel {
         }
     }
 
+    /// Who else uses a machine, as its box says (`kuvo/info`'s `macs` and `phones`): your other
+    /// Macs, by name, and your phones. What Uninstall would stop it for, so its dialog says so.
+    func readAlsoUsedBy(_ engine: MachineEngine) async {
+        struct Info: Decodable {
+            struct Mac: Decodable { var key: String; var name: String? }
+            var macs: [Mac]?
+            var phones: Int?
+        }
+        // (Which of them is this Mac is known once this Mac set it up.)
+        guard let own = phoneLink.macKey, let info = try? await box(engine.machine.id).value(Info.self, "GET", "kuvo/info"), let macs = info.macs else { return }
+        engine.alsoUsedBy = .init(macs: macs.filter { $0.key != own }.map { $0.name ?? "another Mac" }, phones: info.phones ?? 0)
+    }
+
     /// After a dropped connection (the Mac slept, the machine restarted): tries further apart
     /// each time, for half an hour, while its sessions wait.
     private func reconnect(_ engine: MachineEngine) async {
@@ -461,9 +474,13 @@ extension AppModel {
         guard await MachineConnection.inTurn([{ await self.machines.runWaiting(only: machine) }]) else { return }
         // Its sessions, once it's up: tried again a few times, as they're what makes them live.
         await MachineClock.retry(after: [0, 2, 5, 10, 20]) { await workspace.refresh(engine) }
+        engine.sessionsRead()
         guard await MachineConnection.inTurn([
-            // Phones you've paired reach it directly, through its own bridge.
-            { await self.phoneLink.sync(engine) },
+            // Phones you've paired reach it directly, through its own bridge; then who else uses it.
+            {
+                await self.phoneLink.sync(engine)
+                await self.readAlsoUsedBy(engine)
+            },
             // Its worktrees, as it keeps them (some this Mac made there before, handed over once).
             { await self.workspace.takeWorktrees(from: machine) },
             // Its bots' keys of their own are its own: any this Mac kept from before go to it, and

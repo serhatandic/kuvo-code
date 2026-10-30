@@ -10,10 +10,11 @@ struct MachineStatus: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            MachineIndicator(connection: engine.connection, size: 7)
+            MachineIndicator(connection: engine.connection, size: 7, progress: engine.installProgress)
             // Another Mac runs it: which one, where its start said.
-            Text((namesHome ? MachinesSettings.otherMac(engine) : nil).map { engine.statusText + " · runs from " + ($0.name ?? "another Mac") } ?? engine.statusText)
+            Text((namesHome ? MachinesSettings.otherMac(engine) : nil).map { engine.statusText + " · runs from " + ($0.name ?? "another Mac") } ?? engine.statusDetail)
                 .font(.subheadline)
+                .monospacedDigit()
                 .foregroundStyle(.secondary)
         }
         .help(engine.failure ?? engine.statusText)
@@ -27,13 +28,20 @@ struct MachineIndicator: View {
     var size: CGFloat = 7
     /// Only what needs you (it couldn't connect) or is under way; nothing while all is well.
     var quiet = false
+    /// How far its engine has come to it, while that can say: the ring fills.
+    var progress: Double? = nil
 
     var body: some View {
         switch connection {
         case .connected: if !quiet { Circle().fill(.green).frame(width: size, height: size) }
         case .failed: Circle().fill(.orange).frame(width: size, height: size)
         case .notConnected, .stopped: Circle().fill(.secondary).frame(width: size, height: size)
-        case .connecting, .reconnecting, .installing: Spinner(size: size + 4)
+        case .connecting, .reconnecting, .installing:
+            if let progress {
+                ProgressRing(progress, size: size + 4)
+            } else {
+                Spinner(size: size + 4)
+            }
         }
     }
 }
@@ -64,9 +72,6 @@ struct MachineWaitingView: View {
                     .multilineTextAlignment(.center)
             }
             switch engine.state {
-            case .downloading(let progress) where progress > 0:
-                ProgressLine("Downloading the agent engine", fraction: progress)
-                    .frame(width: 220)
             case .downloading, .starting:
                 link
             case .failed where engine.isRetrying:
@@ -103,10 +108,30 @@ struct MachineWaitingView: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// On its way there: the title above says where.
+    /// On its way there (the title above says where): its wire filling as its engine is copied
+    /// there, with the step under way and, where it can say, how far.
     private var link: some View {
-        ConnectingLink()
-            .accessibilityHidden(true)
+        VStack(spacing: 12) {
+            ConnectingLink(progress: engine.step?.isCopying == true ? engine.step?.fraction : nil)
+                .accessibilityHidden(true)
+            if let step = engine.step {
+                Text(step.line(engine.machine.name))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .contentTransition(.opacity)
+                    .animation(.ui, value: step.name)
+                switch step {
+                case .copying(let sent, let total) where total > 0:
+                    ProgressLine("Copying the engine", bytes: sent, of: total)
+                        .frame(width: 240)
+                case .downloading(let fraction):
+                    ProgressLine("Downloading the engine", fraction: fraction)
+                        .frame(width: 240)
+                default:
+                    EmptyView()
+                }
+            }
+        }
     }
 
 }
@@ -153,6 +178,8 @@ struct MacGroupsBar: View {
 /// conversation above is as last seen and what you write waits, and a way to connect now.
 struct MachineOfflineBar: View {
     let engine: MachineEngine
+    /// What's shown meanwhile, as last seen, and what waits: a conversation's by default.
+    var kept = "This is the conversation as last seen. You can write meanwhile, and send once it’s back."
     @Environment(AppModel.self) private var app
 
     /// Up, but this conversation not on it yet (its sessions being read): still on its way.
@@ -170,9 +197,10 @@ struct MachineOfflineBar: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(engine.statusTitle(connection))
                     .font(.system(size: 13, weight: .medium))
-                Text("This is the conversation as last seen. You can write meanwhile, and send once it’s back.")
+                Text(kept)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .help(engine.failure ?? engine.statusTitle(connection))
             Spacer(minLength: 8)

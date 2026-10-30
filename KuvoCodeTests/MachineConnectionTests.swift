@@ -383,6 +383,28 @@ import Testing
         #expect(engine.isReady, "Connect connects it")
     }
 
+    /// Disconnected, its Accounts page shows its accounts as last seen, saying when (I3): they're
+    /// kept, with when they were read; one never read has none to show, and waits for it.
+    @Test func disconnectedItsAccountsAreKeptAsLastSeen() async throws {
+        defer { done() }
+        machine.on("GET", "/api/integration", json: ["location": ["directory": "/"], "data": [
+            ["id": "anthropic", "name": "Anthropic", "methods": [["type": "key"]], "connections": [["type": "credential", "label": "Key"]]],
+        ]])
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        #expect(engine.catalog.integrationsRead == nil, "never read: nothing to show as last seen")
+        await app.connect(engine).value
+        try await until { engine.catalog.integrationsRead != nil }
+        let read = try #require(engine.catalog.integrationsRead)
+
+        app.disconnect(engine)
+        #expect(!engine.isReady)
+        #expect(engine.catalog.providers.map(\.id) == ["anthropic"], "its accounts as last seen")
+        #expect(engine.catalog.integrationsRead == read)
+        #expect(ProvidersView.asLastSeen(read, now: read.addingTimeInterval(2 * 3600), locale: Locale(identifier: "en_US")) == "These are its accounts as last seen, 2 hours ago. They can’t change until it’s back.")
+        #expect(ProvidersView.asLastSeen(read, now: read.addingTimeInterval(5), locale: Locale(identifier: "en_US")) == "These are its accounts as last seen, a moment ago. They can’t change until it’s back.")
+    }
+
     /// Unreachable when it's first connected (the app opened before the network was up): it's
     /// tried again by itself, as a dropped connection is, and connects once it answers.
     @Test func unreachableAtFirstItsTriedAgainByItself() async throws {
