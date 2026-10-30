@@ -2010,7 +2010,8 @@ final class Workspace {
     func resync() async {
         await refresh()
         let before = asking
-        asking = [:]
+        // A machine's asks are its own connection's, which may change them while this reads: as they are.
+        asking = asking.filter { sessionMachines[$0.value] != nil }
         // A machine's are read again by its own connection when that's back (see `refresh(_ engine:)`):
         // its feed is its own, and waiting on it here would hold up this Mac's.
         let here = models.values.filter { !RemoteFolder.isRemote($0.session.location.directory) }
@@ -2026,12 +2027,8 @@ final class Workspace {
                 asking[request] = session
                 continue
             }
-            // On a machine: as it was, read again by its own connection when that's back (and not
-            // told again then as news).
-            guard sessionMachines[session] == nil else {
-                asking[request] = session
-                continue
-            }
+            // On a machine: answered meanwhile, as its connection says.
+            guard sessionMachines[session] == nil else { continue }
             // A closed session's: still asked (or not known), it stays; its notification goes otherwise.
             if sharedForms[request] == nil, let api = api(forSession: session) {
                 guard let asked = await Self.stillAsked(in: session, api: api), !asked.contains(request) else {

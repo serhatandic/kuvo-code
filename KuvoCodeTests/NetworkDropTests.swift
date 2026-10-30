@@ -102,4 +102,33 @@ import Testing
         }
         #expect(texts == ["The linker can't find libz"])
     }
+
+    /// This Mac's engine back while a machine's ask is answered elsewhere (on the phone): it stays
+    /// answered, rather than coming back as waiting on you.
+    @Test func aMachinesAskAnsweredWhileThisMacsEngineIsReadStaysAnswered() async throws {
+        defer { engine.stop() }
+        engine.list([session()])
+        engine.conversation(id, [you])
+        workspace.machines = ["far.invalid"]
+        await workspace.refresh()
+        // A conversation of this Mac's open, read again as its engine comes back.
+        await try #require(workspace.model(for: id)).load()
+        let asked: [String: Any] = ["id": "per_far", "sessionID": "ses_far", "action": "shell", "resources": ["make deploy"]]
+        workspace.handle(try engine.event("permission.asked", asked), machine: "far.invalid")
+        #expect(workspace.waitingCount == 1)
+
+        let gate = Gate()
+        defer { gate.open() }
+        engine.on("GET", "/api/session/\(id)/message") { [you] _ in
+            gate.wait()
+            return StubWeb.json(["data": [you]])
+        }
+        let reads = engine.requests("GET", "/api/session/\(id)/message").count
+        let resync = Task { await workspace.resync() }
+        try await until { engine.requests("GET", "/api/session/\(id)/message").count > reads }
+        workspace.handle(try engine.event("permission.replied", ["requestID": "per_far", "sessionID": "ses_far", "reply": "once"]), machine: "far.invalid")
+        gate.open()
+        await resync.value
+        #expect(workspace.waitingCount == 0)
+    }
 }
