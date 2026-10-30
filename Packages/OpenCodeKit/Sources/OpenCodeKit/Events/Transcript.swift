@@ -79,12 +79,14 @@ public struct Transcript: Sendable, Equatable {
             }
             return read
         } + local
-        // The engine's own notices waiting too, for when they go in (when they were queued, the
-        // read doesn't say: 0 until then).
-        waitingNotices = Dictionary(inbox.filter { item in item.type == "synthetic" && !messages.contains { $0.id == item.id } }.map { item in
-            (item.id, Message.Notice(id: item.id, time: Message.Time(created: 0), text: item.text ?? "", description: item.payload["description"]?.string,
-                                     metadata: item.payload["metadata"]))
-        }, uniquingKeysWith: { first, _ in first })
+        // The engine's own notices waiting too, for when they go in: those known already as they
+        // were (with when they were queued), and those the read adds (it doesn't say when: 0 until
+        // then). One the read has in already goes.
+        for item in inbox where item.type == "synthetic" && waitingNotices[item.id] == nil {
+            waitingNotices[item.id] = Message.Notice(id: item.id, time: Message.Time(created: 0), text: item.text ?? "",
+                                                     description: item.payload["description"]?.string, metadata: item.payload["metadata"])
+        }
+        waitingNotices = waitingNotices.filter { id, _ in !messages.contains { $0.id == id } }
         self.permissions = permissions
         self.forms = forms.filter(isOurs)
         self.isRunning = isRunning

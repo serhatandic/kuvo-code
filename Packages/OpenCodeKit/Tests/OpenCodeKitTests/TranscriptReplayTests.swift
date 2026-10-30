@@ -117,6 +117,18 @@ struct TranscriptReplayTests {
         transcript.load(messages: engine, inbox: [], permissions: [], forms: [], isRunning: true)
         transcript.apply(delivered)
         #expect(notices(transcript) == ["Command `npm test` finished"])
+
+        // One seen queued while it was open, then a read whose queue couldn't be read: it still
+        // shows when it goes in, as of when it was queued.
+        var open = Transcript(sessionID: "ses_1")
+        open.load(messages: [], inbox: [], permissions: [], forms: [], isRunning: true)
+        open.apply(try ServerEvent(json: Data(#"""
+        {"id":"evt_5","created":5,"type":"session.inbox.enqueued","data":{"sessionID":"ses_1","inboxID":"msg_n1","item":{"type":"synthetic","payload":{"text":"Command `npm test` finished"},"delivery":"steer"}}}
+        """#.utf8)))
+        open.load(messages: [], inbox: [], permissions: [], forms: [], isRunning: true)
+        open.apply(delivered)
+        #expect(notices(open) == ["Command `npm test` finished"])
+        #expect(open.messages.first?.created == 5)
     }
 
     /// A conversation read again while the agent writes: what shows has every word once, whether
