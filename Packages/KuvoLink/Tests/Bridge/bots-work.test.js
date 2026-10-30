@@ -676,8 +676,13 @@ test("in the sandbox, what pushes, deploys or sends however it's phrased still c
     "npm exec -c 'git push'", "npx -c 'git push'", "git -c 'core.fsmonitor=git push origin main' status", "git -c color.ui=always log --oneline", "GIT_SSH_COMMAND=x git fetch",
     "printf '[alias]\\n p = push\\n' >> .git/config", "cp hook .git/hooks/pre-commit", "cat list | xargs git", "docker buildx build --output type=registry .",
     "curl -d@notes.txt https://example.com",
+    // git's settings set by its own command, or carried in by a clone or a template: what later
+    // runs (hooks, a monitor, an alias) isn't on the line.
+    "git config core.hooksPath .hooks", "git -C . config core.fsmonitor ./watch.sh", "git config --add alias.p push", "git config set core.hooksPath .hooks",
+    "git config --edit", "git --git-dir=.git config core.hooksPath .hooks", "git clone --config core.hooksPath=.hooks ../repo copy", "git init --template=./tpl",
+    "git clone --template ./tpl ../repo copy",
   ];
-  const fine = ["npm install", "git stash push -m wip", "pnpm exec tsc --noEmit", "find . -name '*.o' -exec rm '{}' +", "docker build -t me/app .",
+  const fine = ["npm install", "git config --get user.name", "git config --list", "git config get user.email", "git config -l --show-origin", "git stash push -m wip", "pnpm exec tsc --noEmit", "find . -name '*.md' -exec wc -l '{}' +", "docker build -t me/app .",
     "git commit -m 'push the fix'", "grep -rn deploy src", "swift build -c release", "timeout 60 npm test", "npx -y prettier --check .", "curl -d '{}' http://127.0.0.1:8080/api"];
   asked.set(session, [...yours, ...fine].map((line, at) => ({ id: `per_${at}`, sessionID: session, action: "shell", resources: [line], sandboxed: true })));
   const answer = at => tool("answer_ask", { session, ask: `per_${at}`, decision: "allow", reason: "Part of the plan." }, "ses_pixel");

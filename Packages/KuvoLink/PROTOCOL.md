@@ -624,7 +624,8 @@ client shows it from the same routes.
   accounts, and whatever it can't be sure isn't (any part, past `sudo`, `env`, `npx` and the like,
   with no option but a bare flag before the program, and the program a package runner runs, `npm
   exec`, `pnpm dlx`, `bun x`, or `find -exec` does; `xargs`, a runner's `-c`, git's settings on the
-  line, `-c` and `GIT_…=`, and naming or writing git's own files, `.git/…`, aren't): a `push`,
+  line, `-c` and `GIT_…=`, setting them (`git config` but its reads, a clone's `--config`, a
+  `--template`), and naming or writing git's own files, `.git/…`, aren't): a `push`,
   `send-pack`, `send-email`, `dcommit` or `upload` anywhere among a program's words but the ones
   that only read or print them (`grep`, `echo`…; `git stash push` stays here), `docker push`,
   `--push`, a registry output, publishing (`npm publish`,

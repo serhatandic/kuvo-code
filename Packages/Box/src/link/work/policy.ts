@@ -348,6 +348,25 @@ const BARE: Record<string, RegExp> = {
 // git's own settings and hooks, which a command in the project can name or write (on Linux the
 // sandbox doesn't keep them, as macOS's does): what git runs next isn't on the line.
 const GIT_OWN = /(^|\/)\.git(\/|$)|(^|\/)\.git(config|modules)$/;
+// git's own options that take the next word as their value.
+const GIT_VALUED = /^(-C|-c|--git-dir|--work-tree|--namespace|--super-prefix|--config-env|--exec-path)$/;
+// What `git config` only reads with (`--get`, `--list`, or `git config get`), and what writes even then.
+const GIT_CONFIG_READS = /^(--get|--get-all|--get-regexp|--get-urlmatch|--get-color|--get-colorbool|--list|-l)$/;
+const GIT_CONFIG_WRITES = /^(--add|--replace-all|--unset|--unset-all|--rename-section|--remove-section|--edit|-e)$/;
+
+/** Whether git's words set its own settings, or carry them in (a clone's `--config`, a template's
+ * hooks): what git runs next (`core.hooksPath`, `core.fsmonitor`, an alias) isn't on the line. */
+function setsGitSettings(rest: string[]): boolean {
+  let at = 0;
+  while (at < rest.length && rest[at].startsWith("-")) at += GIT_VALUED.test(rest[at]) ? 2 : 1;
+  const [sub, ...args] = rest.slice(at);
+  if (sub === "config") {
+    const first = args.find(word => !word.startsWith("-"));
+    const reads = first === "get" || first === "list" || (args.some(word => GIT_CONFIG_READS.test(word)) && first !== "set" && first !== "unset");
+    return !reads || args.some(word => GIT_CONFIG_WRITES.test(word));
+  }
+  return (sub === "clone" || sub === "init" || sub === "submodule") && args.some(word => /^--(config|template)(=|$)/.test(word));
+}
 
 /** Why a bot can't allow a command even in the sandbox: it pushes, publishes, deploys, uploads or
  * reaches another computer, or runs code that can't be read (a shell's `-c`, `node -e`), or can't be
@@ -397,6 +416,7 @@ function outwardWords(words: string[]): string | null {
   if (rest.some(word => /^--push(=|$)/.test(word) || /(^|[=,])(type=registry|push=true)(,|$)/.test(word))) return "sending it beyond this computer";
   // git's settings on its line can name what one of its commands runs.
   if (name === "git" && rest.some(word => /^(-c|--config-env)/.test(word))) return CANT;
+  if (name === "git" && setsGitSettings(rest)) return `${CANT} (it changes git's own settings)`;
   const subs = rest.filter(word => !word.startsWith("-"));
   if (!QUIET.has(name)) {
     // (`git stash push` keeps your changes aside, here.)

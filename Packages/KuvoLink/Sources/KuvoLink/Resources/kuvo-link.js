@@ -2367,6 +2367,21 @@ var BARE = {
   command: /^-p$/
 };
 var GIT_OWN = /(^|\/)\.git(\/|$)|(^|\/)\.git(config|modules)$/;
+var GIT_VALUED = /^(-C|-c|--git-dir|--work-tree|--namespace|--super-prefix|--config-env|--exec-path)$/;
+var GIT_CONFIG_READS = /^(--get|--get-all|--get-regexp|--get-urlmatch|--get-color|--get-colorbool|--list|-l)$/;
+var GIT_CONFIG_WRITES = /^(--add|--replace-all|--unset|--unset-all|--rename-section|--remove-section|--edit|-e)$/;
+function setsGitSettings(rest) {
+  let at = 0;
+  while (at < rest.length && rest[at].startsWith("-"))
+    at += GIT_VALUED.test(rest[at]) ? 2 : 1;
+  const [sub, ...args] = rest.slice(at);
+  if (sub === "config") {
+    const first = args.find((word) => !word.startsWith("-"));
+    const reads = first === "get" || first === "list" || args.some((word) => GIT_CONFIG_READS.test(word)) && first !== "set" && first !== "unset";
+    return !reads || args.some((word) => GIT_CONFIG_WRITES.test(word));
+  }
+  return (sub === "clone" || sub === "init" || sub === "submodule") && args.some((word) => /^--(config|template)(=|$)/.test(word));
+}
 function outwardRefusal(line) {
   const read = readLine(line, true);
   if ("unreadable" in read)
@@ -2422,6 +2437,8 @@ function outwardWords(words) {
     return "sending it beyond this computer";
   if (name === "git" && rest.some((word) => /^(-c|--config-env)/.test(word)))
     return CANT;
+  if (name === "git" && setsGitSettings(rest))
+    return `${CANT} (it changes git's own settings)`;
   const subs = rest.filter((word) => !word.startsWith("-"));
   if (!QUIET.has(name)) {
     const sending = subs.find((word, at) => Object.hasOwn(SENDING2, word) && !(name === "git" && subs[at - 1] === "stash"));
@@ -2565,7 +2582,7 @@ var PROGRAMS2 = {
   "git-credential": "credentials"
 };
 var SUBCOMMANDS = [
-  [/^git$/, /^(config\s+(?!(--get|--get-all|--get-regexp|--list|-l)\b)\S+\s+\S|config\s+--(add|unset|unset-all|replace-all|rename-section|remove-section|edit|one-off)\b|config\s+-e\b|remote\s+(add|set-url|remove|rm)\b|credential\b)/, "gitConfig"],
+  [/^git$/, /^(config\s+(?!((--get|--get-all|--get-regexp|--list|-l)\b|(get|list)(\s|$)))\S+\s+\S|config\s+--(add|unset|unset-all|replace-all|rename-section|remove-section|edit|one-off)\b|config\s+-e\b|remote\s+(add|set-url|remove|rm)\b|credential\b)/, "gitConfig"],
   [/^git$/, /^(clean\s+(?!.*(-n|--dry-run)\b)|reset\s+.*--hard|branch\s+.*-D\b|push\s+.*(--delete\b|--force\b|--force-with-lease\b|\s-f\b|\s-d\b|\s:\S|\s\+\S)|stash\s+(drop|clear)\b|reflog\s+expire\b|gc\s+.*--prune)/, "delete"],
   [/^gh$/, /^(issue\s+(create|comment)|pr\s+(create|comment|review)|gist\s+create|discussion|release\s+create)\b/, "message"],
   [/^gh$/, /^api\b.*(\s(-X|--method)[\s=]*(POST|PATCH|PUT|DELETE)\b|\s-[fF]\s|\s--(raw-)?field\b|\s--input\b)/i, "message"],
@@ -2844,7 +2861,7 @@ var ALWAYS_ASK_RULES = [
     "*.netrc*",
     "*.git-credentials*"
   ].map((resource) => ({ action: "shell", resource, effect: "ask" })),
-  ...["git config --get*", "git config --list*", "git config -l*", "git config --get-all*", "git config --get-regexp*"].map((resource) => ({ action: "shell", resource, effect: "allow" })),
+  ...["git config --get*", "git config --list*", "git config -l*", "git config --get-all*", "git config --get-regexp*", "git config get *", "git config list", "git config list -*"].map((resource) => ({ action: "shell", resource, effect: "allow" })),
   ...["*.env", "*.env.*", "*/.ssh/*", "*/.gitconfig", "*/.gitmodules", "*/.git/config", "*/.netrc", "*/.npmrc", "*/.pypirc", "*/.git-credentials", "*/.aws/credentials", "*/.docker/config.json", "*/.kube/config"].map((resource) => ({ action: "edit", resource, effect: "ask" })),
   { action: "edit", resource: "*.env.example", effect: "allow" }
 ];
