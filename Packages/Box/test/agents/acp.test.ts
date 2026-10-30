@@ -3,9 +3,10 @@
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { AcpThread, acpTiming } from "../../src/agents/acp"
 import type { Agent } from "../../src/agents/agent"
 import { AntigravityAgent } from "../../src/agents/agents/antigravity"
@@ -729,6 +730,27 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
     expect(words(id)).toBe("elsewhere=no")
     // Also Allowed, as the box writes it for this project.
     const allowed = join(kuvo, "run", "fence", "allowed", createHash("sha256").update(realpathSync(root)).digest("hex").slice(0, 32))
+    mkdirSync(dirname(allowed), { recursive: true })
+    writeFileSync(allowed, elsewhere + "\n")
+    send(id, "again")
+    await settled(id, 2)
+    expect(words(id)).toBe("elsewhere=noelsewhere=yes")
+  })
+
+  test("in a session's worktree, a folder you let its project's commands write it writes from its next message, as the project's", async () => {
+    // The session's branch: a worktree of the project's repository.
+    const project = realpathSync(mkdtempSync(join(base, "project-")))
+    const git = (...args: string[]) => execFileSync("git", ["-C", project, ...args], { stdio: "ignore" })
+    git("init", "-q")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "first")
+    root = join(base, `branch-${basename(project)}`)
+    git("worktree", "add", "-q", root)
+    root = realpathSync(root)
+    const agent = trying({ elsewhere: ["write", join(elsewhere, "e.txt")] })
+    const id = await run(agent)
+    expect(words(id)).toBe("elsewhere=no")
+    // Also Allowed, as the box writes it for the project.
+    const allowed = join(kuvo, "run", "fence", "allowed", createHash("sha256").update(project).digest("hex").slice(0, 32))
     mkdirSync(dirname(allowed), { recursive: true })
     writeFileSync(allowed, elsewhere + "\n")
     send(id, "again")

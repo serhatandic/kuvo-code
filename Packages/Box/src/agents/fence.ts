@@ -92,14 +92,21 @@ const real = (place: string) => {
 
 /**
  * The folders you let a project's commands write in too (Also Allowed, `link/fence/allowed.ts`), as
- * the box tells its launcher: by its real path's sum, one a line. Each by the real path it was
- * given: one that's become a link since isn't.
+ * the box tells its launcher: by its real path's sum, one a line; a worktree of a repository (a
+ * session's branch) by its repository's folder, the project's, as the launcher reads it. Each by
+ * the real path it was given: one that's become a link since isn't.
  */
 export function allowedFolders(directory: string): string[] {
   const where = folder()
   if (!where) return []
+  const work = real(directory)
+  const git = repositoryOf(work)
+  let project = work
   try {
-    return readFileSync(join(where, "allowed", sum(real(directory))), "utf8").split("\n").filter((line) => line.startsWith("/") && real(line) === line).slice(0, 8)
+    if (statSync(join(work, ".git")).isFile() && git.endsWith("/.git")) project = dirname(git)
+  } catch {}
+  try {
+    return readFileSync(join(where, "allowed", sum(project)), "utf8").split("\n").filter((line) => line.startsWith("/") && real(line) === line).slice(0, 8)
   } catch {
     return []
   }

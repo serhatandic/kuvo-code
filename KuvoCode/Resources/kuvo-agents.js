@@ -6249,8 +6249,15 @@ function allowedFolders(directory) {
   const where = folder();
   if (!where)
     return [];
+  const work = real(directory);
+  const git = repositoryOf2(work);
+  let project = work;
   try {
-    return readFileSync13(join14(where, "allowed", sum(real(directory))), "utf8").split(`
+    if (statSync5(join14(work, ".git")).isFile() && git.endsWith("/.git"))
+      project = dirname6(git);
+  } catch {}
+  try {
+    return readFileSync13(join14(where, "allowed", sum(project)), "utf8").split(`
 `).filter((line) => line.startsWith("/") && real(line) === line).slice(0, 8);
   } catch {
     return [];
@@ -21791,4 +21798,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 81c38ffbbcf6dc240369ca6435e5e4d0adb2f7799b09e374ed328828efcd4fe2
+// Built from Packages/Box/src/agents 00758aaa501cbed6bfcf160417b919d3abcd9c5154554ab99accd9e02020f3bc
