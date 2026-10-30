@@ -38,6 +38,8 @@ final class BotWork {
             app?.botAsks.demo = [WorkAsk(id: "wak_demo", action: .makeProject, session: bot.sessionID, name: bot.name, bot: bot.id, project: "Tidepool", folderName: "tidepool",
                                          folder: nil, suggested: NSHomeDirectory() + "/Developer", at: Date.now.timeIntervalSince1970 * 1000)]
         }
+        // KUVO_DEMO_GOAL=<bot's name>:<kind>: its goal, a sample (`GoalPlans.demo(for:)`).
+        if app?.goalPlans.demo == nil { app?.goalPlans.demo(for: bot) }
         if environment["KUVO_DEMO_MADE_BY"] == bot.name, let first = app?.workspace.projects.first {
             app?.workspace.noteMadeBy(first.directory, .init(bot: bot.id, name: bot.name))
         }

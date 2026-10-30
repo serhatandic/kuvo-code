@@ -685,6 +685,126 @@ folder you pick once per box, after asking you.
   the same way (no `madeBy`): 403 `{needs: "projectsFolder"}` with none picked, 409 for one there,
   400 for a name or address that won't do, 502 when git fails.
 
+**What always comes to you** (bridge 0.9.111, `work/always.ts`): payments, permanent deletes,
+changes to who may do what, new accounts, messages to people, your passwords, keys and sign-ins,
+and git's settings. No mode, Always, plan or goal's switch turns this off.
+- `answer_ask` checks it first, before the policy above, by the tool call's whole input: a
+  command's programs and subcommands, git's past its own options (`rm`, `chmod`, `sudo`, `git -C x
+  config`, `git push --force` or `+ref`, `gh pr create`, `gh api` that writes, `stripe … create`,
+  `docker rm`…), a request to a payment's or a message's service (an address like
+  `https://api.stripe.com`), anything naming where keys are kept (`.ssh`, `.env`, `.netrc`…), a
+  file written in place (`sed -i`, `>>`), an edit of `.env`, `.ssh/`, `.gitconfig`, and another tool
+  by its name's words, in any case (`gmail_send_email`, `sendMail`, `create_pull_request`), unless
+  its first verb only reads (`get_order`) and it reads no secret. It refuses with the kind in words:
+  "That's a permanent delete, which always comes to the user".
+- Every session a bot starts, and the bot's own conversation, carries engine rules that ask for
+  them whatever its approval: `shell` for those programs, subcommands and services, and `edit` for
+  where keys are kept and git's settings, after its own rules so they win over Approve All, then
+  its own Don't Allows of commands again, so those stay Don't Allow. Nothing else of its rules
+  moves, and its approval reads as it was (Ask First is its own `shell *` rule). Another tool (an
+  integration's) can't be named ahead in the engine's rules: on Approve All, only the bot's answers
+  and words hold it back.
+
+**Goals** (bridge 0.9.112, feature `work.goals`, `work/goals.ts`): you give a bot a goal of any
+length, a couple of hours or a month, and it takes it end to end. It's the conversation's own goal
+("Goals", below: the agents bridge keeps the bot at it turn after turn), with a plan kept here
+beside it.
+- **Tools** (a bot's conversation only): `propose_goal` (`{goal, title?, steps: [text | {text, phase?,
+  site?, after?: [step number]}],
+  checks?: [{text, ok?, detail?, url?, button?}], spend?: [{what, cap, currency?, per?:
+  day|week|month|goal}], public?: [text], projects?: [name], ends?, digest?:
+  day|week|milestones|none}`) puts the card up, replacing one it proposed before (refused while one
+  runs; `digest` is a day's for a plan in phases or of more than 12 steps unless it says);
+  `goal_progress` (`{steps: [{step, state?: todo|doing|done|waiting|paused|skipped, progress?: 0–1,
+  note?}]}`, `add?: [text | {text, phase?, after?}]`, `waiting?: {kind: you|judgment|outside, text,
+  detail?, url?}`, `resolved?: [id or words]` (what waited and is dealt with), `spent?: [{what,
+  amount}]` (one on no spend line is kept as waiting, kind `outside`), `watching?: [text]}`; all
+  checked before any is kept; it says whether you're here); `may_publish` (`{step}`: yes only for a public step you switched on); `may_spend` (`{what,
+  amount}`: whether it fits the line's cap in its period now); `finish_goal` (`{report, watching?}`).
+  `start_session` takes `step` (its number or id), and that step's track lists the session.
+- **Asked for**: `POST kuvo/work/goals/ask` `{session, goal}` (`/goal` in a bot's chat, from a
+  client) has the bot plan it and propose it at once (`[Goal] …`) → `{text}`; 400 for a conversation
+  that isn't a bot's.
+- **Only you start it**: `POST kuvo/work/goals/<id>` from a client, `{action: start, public?: {<id>:
+  bool}, wake?, digest?, ends?, spend?: [{cap?, per?}] (by line)}`, `{action: decline}` or `{action:
+  stop}` → `{goal}` (`ends: null` starts it with no end, taking away the one the bot proposed; left
+  out, the bot's stands); while it runs, `{action: change, …the same but start's}` (a cap raised past what's
+  spent lets what spends go on; the bot is told `[Goal changed] …`) and `{action: clear, waiting:
+  <id>}` (what waited, put away). An end written without a zone (`2026-11-30T18:00`) is in yours
+  (`KUVO_TZ`, else the computer's). Never a tool, an agent's message or another computer's mail. 400 for one in the
+  wrong state or a card from more than a day ago; 404 for none. Starting tells the bot `[Goal
+  started] …` (what's switched on and off, what it may spend, the projects it may make, the end) and
+  sets the conversation's goal with `long: true` (no brief of its own: this is it); declining tells
+  it `[Not now] …`; stopping stops its work as `stop-all` does, and takes the conversation's goal
+  away. The box's watch keeps the two as one: it sets the conversation's goal again where its bridge
+  lost it, takes it away once the plan has ended, and shows the bot's own pause at a model's limit
+  as the plan's (`paused` with `session` the bot's conversation).
+- **`GET kuvo/work/goals`** and **`GET kuvo/work/goals/events`** (ndjson, now and at each change) →
+  `{goals: [{id, bot, name, session, goal, title?, state: proposed|running|done|stopped|declined, steps:
+  [{id, text, state, progress?, note?, phase?, site?, after?, sessions?, resumes?,
+  began?, ended?}], checks: [{id, text,
+  detail?, state: ok|needs|failed, by: bot|box, site?, action?: {kind: open|projectsFolder, label, url?}}], spend:
+  [{what, cap, currency, per, spent, until?}], public: [{id, text, on}], projects, wake, digest,
+  ends?, proposed, started?, ended?, waiting: [{id, kind: you|judgment|outside|ask, text, detail?,
+  url?, site?, session?, at}], paused: [{why, until?, session?}], waited, watching, lastDigest?: {at, text},
+  report?, alone}]}`: each bot's latest, while it's proposed or running, or ended within a day. Kept
+  in `run/work/goals.json`; `kuvo/work/events` moves too. While it's proposed, the box's own checks
+  come first: `alone` (failed where this box can't work on it alone yet), `power` (a Mac on battery),
+  `projectsFolder` (needs, when the plan makes a project and none is picked). `progress` is given only
+  where the bot counted it, always with what it counted in `note` ("3 of 8 pages"), which is what
+  the apps show; a step without it is in progress, not some share of it. `site` (a step,
+  a check or what waits, tied to a service: `stripe.com`, from its page's address or as the bot
+  names it) is for the service's own icon, which each client loads from the site itself.
+- **Alone, or with you there**: a goal goes on alone only where the box's commands run in the
+  sandbox (`sandboxOn`, false until it's built in; a test box says yes with `KUVO_TEST_SANDBOX_ON=1`,
+  never the real app's, `run.kuvo.code/box`, whose app takes it out). Elsewhere it runs all the same,
+  with what its sessions ask waiting for you. Clients never say "sandbox" on the card: the check
+  reads "This Mac can't work on its own yet".
+- **The goal's own work**: the sessions the bot started since the goal did (a minute's slack); what it
+  started before isn't the goal's.
+- **Carrying on**: once nothing of the goal has been at work (the bot or its sessions) for 10
+  minutes, then 30, an hour, two, four, eight and twelve, the bot is told `[Goal] Nothing of the goal
+  is at work now…`, unless all that's left waits for you or a limit. Anything at work, or a
+  `goal_progress`, starts the wait over.
+- **Present or away**: you're here while a client is in use (`kuvo/attention`); the box keeps it in
+  `run/work/here.json` for the tools. Whether you're here or not, unattended rules hold:
+  - what its sessions ask that the bot hasn't answered in a couple of minutes, and what the bot
+    asks itself, is listed as `waiting` (kind `ask`) and waits for you, however long: it never
+    stalls the rest and is never said no to; it leaves the list once it's answered;
+  - a session the bot starts for a goal is told you may not be watching: prepare, don't publish,
+    deploy, send or pay unless its task says so;
+  - while no public step is switched on, publishing and deploying (`git push`, `npm publish`,
+    `vercel`, `wrangler deploy`, `docker push`, `gh release`…) ask too, in the bot's conversation
+    and every session of its work, whatever their approval;
+  - a project the plan names is made without asking.
+- **Limits pause; they never end it**:
+  - a session of its work whose turn failed at a model's limit (its words: a 429, a plan's window,
+    a rate limit) is paused until the reset (`resetsIn` reads when from its words, counted from when
+    the turn ended; 30 minutes otherwise), the steps it works on shown `paused` with `resumes`, and
+    told `[Limit reset] … Carry on where you stopped.` once it comes, a box restart in between too;
+    one that's gone or put away meanwhile is let go; the time anything was paused counts once in
+    `waited`;
+  - the bot's own turn at a model's limit pauses the conversation's goal ("Goals", below), shown as
+    the plan's pause;
+  - a day's limit you set (Edit Bot › Work, sessions or tokens a day) holds new sessions until your
+    midnight, and the bot is told `[Limit reset] …` then;
+  - a spend line's cap reached holds what spends on it until its period starts again (`until`); the
+    rest carries on;
+  - an end you set (`ends`) is the only one that ends it: the bot is told `[Goal's end] …` to finish
+    the step under way and report, and two hours on, the box ends it (`stopped`, with a short
+    report).
+- **Keep-awake**: a Mac's box holds `caffeinate -s -w <its pid>` while a goal's work is at it (the bot
+  or one of its sessions running), on power, and lets go while it waits or once it's over. A machine
+  doesn't sleep. On a Mac, a goal goes on while Kuvo Code runs; asleep or closed, it picks up when
+  the Mac wakes or the app opens again.
+- **Your phones**: what waits for you (not the asks, which notify as asks do), once, as category
+  `blocked` (`title` the bot, `subtitle` "Needs you", `data: {session, quiet: "1"}`, or `wake: "1"`
+  for kind `you` where you asked to be woken); a digest as often as `digest` says (daily or weekly
+  from its start, or as a phase is done), as `report` with `quiet: "1"` ("Day 3: 4 of 30 steps done,
+  1 waits for you, waited 2 h at limits"), kept as `lastDigest`; and the report, once, as `report`.
+  A Mac's box sends them while its phone link is on; the Mac app shows its own from
+  `kuvo/work/goals`.
+
 ### Updates
 
 A box's files say which Kuvo Code put them there: `~/.kuvo-code/bin/box-version`. It holds that
@@ -792,7 +912,7 @@ with a mail frame, sealed with the sender's static key for the phone's. Its payl
 | `body` | What the Mac shows: the request, the question, the last words of a reply. |
 | `category` | What it's about, below. |
 | `thread` | What it's grouped under: the session's id, or the group chat's. |
-| `data` | Where it opens: `session` or `group`; `request` for a permission or a form, with `requestSession` when the session asking isn't the one shown (a subagent's), and `answerable: "0"` when its notification mustn't answer it from buttons (it can't show all it covers, or some of its text shows as dots); `ask` for a browser ask. |
+| `data` | Where it opens: `session` or `group`; `request` for a permission or a form, with `requestSession` when the session asking isn't the one shown (a subagent's), and `answerable: "0"` when its notification mustn't answer it from buttons (it can't show all it covers, or some of its text shows as dots); `ask` for a browser ask; `quiet: "1"` for one that shows without lighting the screen or a sound (what a goal needs of you, its digest), and `wake: "1"` for what a goal needs of you where you asked to be woken. |
 
 | Category | When |
 | --- | --- |
@@ -801,7 +921,8 @@ with a mail frame, sealed with the sender's static key for the phone's. Its payl
 | `ask` | An agent browsing asks for a sign-in, a code or a step. `ask` is it. |
 | `finished` | A run finished. |
 | `failed` | A run stopped with an error. |
-| `report` | A bot's run finished: a wake-up's or a watch's news. |
+| `report` | A bot's run finished: a wake-up's or a watch's news, a goal's digest (`quiet`) or its report. |
+| `blocked` | A bot's goal needs you (`quiet`, or `wake` where you asked to be woken). |
 | `message` | Something in a group chat. |
 
 A phone should ignore a category it doesn't know, and show the notification plainly.
@@ -1764,7 +1885,9 @@ Grok). With none to answer, the goal pauses and says so. A client reaches them a
 
 - `GET kuvo/agents/api/kuvo/goals` → `{data: [goal]}`: every goal on the box, a met one too until
   it's put away. `GET …/goals/<session>` → `{data: goal}`, or 404 when it has none.
-- `PUT …/goals/<session>` with `{"condition"}` (at most 4,000 characters) sets it, in place of one
+- `PUT …/goals/<session>` with `{"condition", "long"?}` (at most 4,000 characters; `long` for a bot's
+  goal with a plan, "Work › Goals": not briefed, checked or nudged here, only kept and paused at a
+  model's limit) sets it, in place of one
   it had, and starts the agent on it at once: `{data: goal}`; 400 `{message}` for no condition or
   one too long, 404 for a conversation that isn't there, 409 for a subagent's (the conversation it
   works for has the goal), 503 when it can't be reached. A turn already under way counts only if
@@ -1774,10 +1897,13 @@ Grok). With none to answer, the goal pauses and says so. A client reaches them a
   is checked (however it ended), and it carries on unless that met it. Both `{data: goal}`, 404 when it has none, 409 for one that's over (set it
   again instead).
 - `DELETE …/goals/<session>` puts it away, over or not: `{}`, or 404.
-- A goal: `{session, condition, state, note?, pausedBy?, started, ended?, turns, checking, last?}`.
-  `state` is `working`, `paused` (`pausedBy`: `you`, `error` (a turn failed, said in `note`),
-  `stalled` (three turns in a row doing nothing) or `limit` (a hundred turns since it was set or
-  resumed)), `met`, or `unmet` (it can't be met as asked: `note` says why). `turns`: the agent's
+- A goal: `{session, condition, state, note?, pausedBy?, resumesAt?, long?, started, ended?, turns,
+  checking, last?}`. A goal at a model's limit carries on with a word to its agent ("the limit has
+  reset"), not a check of the turn that failed; a check that meets one waits too. A `long` goal's
+  turns are only kept: its plan says when to carry on. `state` is `working`, `paused` (`pausedBy`: `you`, `error` (a turn failed, said
+  in `note`), `stalled` (three turns in a row doing nothing) or `limit` (a hundred turns since it was
+  set or resumed; or a model's limit reached, with `resumesAt`: it carries on by itself then, a box
+  restart in between too, and `note` says until when)), `met`, or `unmet` (it can't be met as asked: `note` says why). `turns`: the agent's
   turns toward it, each checked; `checking`: a check is under way; `last`: `{verdict: "met" |
   "not_met" | "impossible", reason, at}`, its reason what's left or what shows it's met. Times in
   ms since 1970.

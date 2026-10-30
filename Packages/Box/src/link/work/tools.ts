@@ -11,6 +11,8 @@ import { holdArchived } from "../areas/wakes";
 import { noteWorkChanged } from "./changes";
 import { callOf, keepAnswer, noteSession, pendingAsk, permissionWords, ruleFor, rulesOf, type PendingPermission } from "./answers";
 import { allowRefusal } from "./policy";
+import { ALWAYS, alwaysAsks } from "./always";
+import { finishGoal, goalProgress, mayPublish, maySpend, proposeGoal, runningGoal } from "./goals";
 import fs from "node:fs";
 import path from "node:path";
 import { readProjects } from "../areas/projects";
@@ -153,7 +155,13 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
     const folder = data.location?.directory ?? data.directory ?? "";
     const rules = rulesOf((caller.place.data.permissions ?? []) as KitRule[]);
     const seen = await callOf(target, permission, signal);
-    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, commandsInSandbox(target, permission));
+    // A command that runs in the sandbox is the sandbox's to judge (`allowRefusal`): anything but
+    // what acts beyond this computer. Otherwise, what always comes to the user, whatever the mode,
+    // the plan or the goal's switches.
+    const sandboxed = commandsInSandbox(target, permission);
+    const always = sandboxed && (permission.action === "shell" || permission.action === "bash") ? null : alwaysAsks(permission.action, permission.resources, seen);
+    if (always) return refused(`That's ${ALWAYS[always]}, which always comes to the user: you can't allow it. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
+    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, sandboxed);
     const user = `The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`;
     if (why === "above") return refused(`You can't allow that: you'd have to ask the user about it yourself. ${user}`);
     if (why) return refused(`That's ${why}, which always comes to the user: you can't allow it. ${user}`);
@@ -191,7 +199,9 @@ export async function makeProjectTool(caller: Caller, args: Record<string, unkno
   const asker = { session: caller.session, name: bot?.name ?? caller.name, ...(bot ? { bot: bot.bot } : {}) };
   const action = clone ? "cloneProject" : "makeProject";
   const given = { name, ...(args.git === false ? { git: false } : {}), ...(clone ? { clone } : {}) };
-  if (bot && botAllows(bot.bot, action) && projectsFolder()) {
+  // Named in the goal you started, or allowed Always.
+  const planned = Boolean(bot && runningGoal(bot.bot)?.projects.some(each => each.toLowerCase() === name.toLowerCase()));
+  if (bot && (planned || botAllows(bot.bot, action)) && projectsFolder()) {
     try {
       const done = await doWork(action, given, asker);
       return done.isError ? refused(done.text) : said(done.text);
@@ -217,4 +227,46 @@ export function listProjectsTool(): ToolAnswer {
     return `- ${each.name ?? path.basename(each.directory)}: ${shownPath(each.directory)} (${git})${each.madeBy ? `, made by ${each.madeBy.name}` : ""}`;
   });
   return said(`Projects on ${HERE}:\n${lines.join("\n")}\n${folder.trim()}`);
+}
+
+// The bot a conversation is, for the goal's tools: only a bot works through a goal of this kind (a
+// session's /goal is the conversation's own, `agents/goals.ts`).
+const goalBot = (caller: Caller) => botOfConversation(caller.session);
+const ONLY_BOTS = "Only a bot takes a goal with a plan: ask the user to give it to one of their bots.";
+const answered = (outcome: { said: string } | { refused: string }): ToolAnswer => ("said" in outcome ? said(outcome.said) : refused(outcome.refused));
+
+/** propose_goal: the goal's plan and checks, put to the user on the goal card. */
+export function proposeGoalTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
+  const bot = goalBot(caller);
+  if (!bot) return refused(ONLY_BOTS);
+  const outcome = proposeGoal({ ...bot, session: caller.session }, args);
+  if ("refused" in outcome) return refused(outcome.refused);
+  const { goal } = outcome;
+  const yours = goal.checks.filter(check => check.state === "needs").map(check => check.text);
+  const alone = goal.alone ? "" : ` ${HERE[0].toUpperCase()}${HERE.slice(1)} can't work on it alone yet, so once it starts, what your sessions ask waits for the user rather than for you.`;
+  return said(`The card is up on ${HERE}: the user starts the goal from it, or says not now. ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Goal started]. If they change something, propose it again as it is now.${alone}`);
+}
+
+/** goal_progress: the goal's steps, what waits for the user, what's spent and what's still watched. */
+export function goalProgressTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
+  const bot = goalBot(caller);
+  return bot ? answered(goalProgress(bot.bot, args)) : refused(ONLY_BOTS);
+}
+
+/** may_publish: whether one of the goal's public steps is switched on. */
+export function mayPublishTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
+  const bot = goalBot(caller);
+  return bot ? answered(mayPublish(bot.bot, args)) : refused(ONLY_BOTS);
+}
+
+/** may_spend: whether a purchase fits the plan's cap for it, in its period. */
+export function maySpendTool(caller: Caller, args: Record<string, unknown>): ToolAnswer {
+  const bot = goalBot(caller);
+  return bot ? answered(maySpend(bot.bot, args)) : refused(ONLY_BOTS);
+}
+
+/** finish_goal: the goal done, with the report. */
+export async function finishGoalTool(caller: Caller, args: Record<string, unknown>, targets: Target[]): Promise<ToolAnswer> {
+  const bot = goalBot(caller);
+  return bot ? answered(await finishGoal(bot.bot, args, () => targets)) : refused(ONLY_BOTS);
 }

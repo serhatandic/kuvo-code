@@ -113,8 +113,9 @@ final class BoxProcess {
         checksRuntime = checked
         runsEngine = true
         var env = environment
-        // The tests' stand-ins (GitHub's, npm's, a box kept from your other computers) are for the
-        // tests' box only (`TestBox`), never the app's.
+        // The tests' stand-ins (GitHub's, npm's, a box kept from your other computers, one that may
+        // work on goals alone without the sandbox) are for the tests' box only (`TestBox`), never the
+        // app's.
         for name in env.keys where name.hasPrefix("KUVO_TEST_") { env[name] = nil }
         env["BUN_BE_BUN"] = "1"
         // Bun would otherwise keep a copy of the script, compiled, in ~/Library/Caches/bun.

@@ -536,6 +536,8 @@ extension AppModel {
             { await Utilities.shareTabTidying(on: machine) },
             // What its bots ask you (making a project), then followed while it's connected.
             { await self.botAsks.read(machine) },
+            // Its bots' goals, the same way.
+            { await self.goalPlans.read(machine) },
         ]) else { return }
         connection.every(600, "sign-ins", [
             { await self.syncSignIns(with: engine) },
@@ -549,6 +551,7 @@ extension AppModel {
         connection.run("bot-asks") { [weak self] in await self?.botAsks.follow(machine) }
         // What its agents ask to run outside its sandbox, followed while it's connected.
         connection.run("sandbox-asks") { await Sandboxes.shared.follow(machine) }
+        connection.run("goal-plans") { [weak self] in await self?.goalPlans.follow(machine) }
     }
 
     /// Closes this Mac's connection to a machine. It runs on, as a box of its own: its sessions,

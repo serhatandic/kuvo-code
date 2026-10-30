@@ -61,7 +61,8 @@ final class MachineTestBox {
     var endpoint: ServerEndpoint { server.endpoint }
 
     /// `folder`: its `~/.kuvo-code`, when a test gives one (a machine its moves reach as files).
-    init(name: String = "lab", settings: [String: Any] = [:], folder: URL? = nil) async throws {
+    /// `environment`: more for its process (`KUVO_TEST_SANDBOX_ON`, a box that may run a night).
+    init(name: String = "lab", settings: [String: Any] = [:], folder: URL? = nil, environment: [String: String] = [:]) async throws {
         guard let node = TestBox.node else { throw TestFailure("Node runs the boxes in the tests, and there's none.") }
         let folder = folder ?? AppInfo.testRoot.appending(path: "Machines/\(name)-\(UUID().uuidString.prefix(8))")
         self.folder = folder
@@ -75,7 +76,7 @@ final class MachineTestBox {
         try BotWords.data.write(to: folder.appending(path: "bin/\(BotWords.fileName)"))
         let script = try Bridge.scriptURL.orThrow("The box's script isn't in the app.")
         server = try await ServerProcess.start(executable: node, arguments: [script.path, "serve"],
-                                               environment: ["KUVO_HOME": folder.path, "PATH": "/usr/bin:/bin"], directory: folder)
+                                               environment: ["KUVO_HOME": folder.path, "PATH": "/usr/bin:/bin"].merging(environment) { _, given in given }, directory: folder)
         StubWeb.letThrough(port: server.endpoint.url.port ?? 0)
     }
 

@@ -19,6 +19,7 @@ import { readFileSync, renameSync, writeFileSync } from "node:fs"
 import { emit } from "./events"
 import type { Requester } from "./groups/api"
 import { freshAnswer, sessionInfo, type SessionInfo } from "./oneoff"
+import { isLimit, resetsIn, resetTime } from "../shared/limits"
 
 export type GoalState = "working" | "paused" | "met" | "unmet"
 export type Verdict = "met" | "not_met" | "impossible"
@@ -41,6 +42,12 @@ export interface Goal {
   checking: boolean
   /** The last check: its verdict and why (what's left, or the proof it's met). */
   last?: { verdict: Verdict; reason: string; at: number }
+  /** Paused at a model's limit: when it carries on by itself (ms since 1970). */
+  resumesAt?: number
+  /** A bot's goal with a plan (`kuvo/work/goals`): its box's plan tells the bot what to do and when
+   * to carry on, so here it's only kept, shown, and paused at a model's limit until the reset; its
+   * turns aren't checked, capped or followed by a nudge. */
+  long?: boolean
 }
 
 /** What the box keeps besides, never sent. */
@@ -73,6 +80,9 @@ export interface GoalPlaces {
   isBridge(session: string): boolean
 }
 
+/** How long a goal paused at a limit that didn't say when it resets waits before trying again. */
+export const unknownReset = 30 * 60_000
+
 /** A goal's condition is at most this long, as Claude Code's are. */
 export const conditionLimit = 4_000
 /** Turns in a row without doing anything that pause a goal. */
@@ -104,6 +114,8 @@ export class Goals {
   private firstLooks = new Set<string>()
   /** Sessions to look at again in a while: their conversation didn't answer. */
   private later = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Goals paused at a limit, carried on when it resets. */
+  private resumes = new Map<string, ReturnType<typeof setTimeout>>()
 
   constructor(
     private readonly file: string,
@@ -120,6 +132,7 @@ export class Goals {
    * ended meanwhile. The others go if their conversation was deleted meanwhile. */
   start() {
     for (const goal of this.goals.values()) {
+      if (goal.state === "paused" && goal.pausedBy === "limit" && goal.resumesAt) this.resumeAt(goal.session, goal.resumesAt)
       this.follow(goal.session)
       if (goal.state === "working") {
         this.firstLooks.add(goal.session)
@@ -138,7 +151,7 @@ export class Goals {
   }
 
   /** Sets a session's goal (in place of one it had), and starts the agent on it. */
-  async set(session: string, condition: string): Promise<Goal> {
+  async set(session: string, condition: string, { long = false }: { long?: boolean } = {}): Promise<Goal> {
     const text = condition.trim()
     if (!text) throw new GoalError(400, "Say what the goal is.")
     if (text.length > conditionLimit) throw new GoalError(400, `A goal can be at most ${conditionLimit.toLocaleString("en-US")} characters.`)
@@ -150,13 +163,15 @@ export class Goals {
     // A subagent works for the conversation that started it: the goal is that one's to set.
     if (found?.data?.parentID) throw new GoalError(409, "A subagent's conversation can't have a goal of its own. Set it in the conversation it works for.")
     const messages = await this.messages(session, place).catch(unreachable)
-    const goal: Kept = { session, condition: text, state: "working", started: this.now(), turns: 0, checking: false, quiet: 0, limit: turnLimit, checkedIdle: lastIdle(messages)?.id, since: messages.at(-1)?.id, epoch: (this.goals.get(session)?.epoch ?? 0) + 1 }
+    this.cancelResume(session)
+    const goal: Kept = { session, condition: text, state: "working", started: this.now(), turns: 0, checking: false, quiet: 0, limit: turnLimit, checkedIdle: lastIdle(messages)?.id, since: messages.at(-1)?.id, epoch: (this.goals.get(session)?.epoch ?? 0) + 1, ...(long ? { long: true } : {}) }
     this.goals.set(session, goal)
     this.follow(session)
     this.changed(goal)
     // A conversation that starts with its goal has no message of yours to be named from: it's named after the goal.
     if (!found?.data?.title) await place.api.request("PATCH", at(session), { title: line(text, 60) }).catch(() => {})
-    try {
+    // (A bot's long goal is briefed by its plan as it starts: nothing more to say here.)
+    if (!long) try {
       await place.api.request("POST", at(session) + "/synthetic", { text: brief(text), description: `Goal: ${line(text)}` })
     } catch (error: any) {
       this.pause(goal, "error", `The goal couldn't be given to the agent: ${error?.message ?? error}`)
@@ -168,8 +183,10 @@ export class Goals {
   pauseByYou(session: string): Goal {
     const goal = this.found(session)
     if (goal.state === "met" || goal.state === "unmet") throw new GoalError(409, "That goal is over.")
-    if (goal.state === "working") {
+    if (goal.state === "working" || (goal.state === "paused" && goal.pausedBy === "limit")) {
       goal.epoch = (goal.epoch ?? 0) + 1
+      this.cancelResume(session)
+      delete goal.resumesAt
       this.pause(goal, "you", "You paused it.")
     }
     return shown(goal)
@@ -179,20 +196,34 @@ export class Goals {
    * Lets it go again. Idle now, its last turn is checked (however it ended): met meanwhile, it's
    * met; not, it carries on. At work, the turn under way is checked when it ends.
    */
-  async resume(session: string): Promise<Goal> {
+  async resume(session: string, { atLimit: onlyAtLimit = false }: { atLimit?: boolean } = {}): Promise<Goal> {
     const goal = this.found(session)
     if (goal.state === "met" || goal.state === "unmet") throw new GoalError(409, "That goal is over: set it again to carry on.")
     if (goal.state === "paused") {
       const messages = await this.messages(session, this.place(session)).catch(() => undefined)
       if (!messages) throw new GoalError(503, "The conversation can't be reached now.")
       if (this.goals.get(session) !== goal || goal.state !== "paused") return shown(goal)
+      // (Carried on at a reset, but you paused it meanwhile: it stays as you left it.)
+      if (onlyAtLimit && goal.pausedBy !== "limit") return shown(goal)
+      // At a model's limit, its last turn is the one that failed: nothing to check, only to carry on.
+      const atLimit = goal.pausedBy === "limit" && goal.resumesAt !== undefined
       goal.state = "working"
       goal.epoch = (goal.epoch ?? 0) + 1
+      this.cancelResume(session)
       delete goal.note
       delete goal.pausedBy
+      delete goal.resumesAt
       goal.quiet = 0
       goal.limit = goal.turns + turnLimit
       const idle = lastIdle(messages)
+      if (atLimit) {
+        if (idle) goal.checkedIdle = idle.id
+        this.follow(session)
+        this.changed(goal)
+        const words = goal.long ? "[Limit reset] The model's limit has reset. Carry on with the goal." : nudge(goal.condition, "The model's limit has reset: carry on where you stopped.")
+        await this.place(session).api.request("POST", at(session) + "/synthetic", { text: words, description: "The limit has reset" }).catch(() => this.pauseUntil(goal, this.now() + unknownReset, ""))
+        return shown(goal)
+      }
       if (idle && !atWork(messages, idle)) {
         goal.recheck = idle.id
         delete goal.checkedIdle
@@ -208,6 +239,7 @@ export class Goals {
   clear(session: string) {
     this.found(session)
     this.goals.delete(session)
+    this.cancelResume(session)
     this.stops.get(session)?.()
     this.stops.delete(session)
     this.save()
@@ -232,6 +264,8 @@ export class Goals {
     this.stopped = true
     for (const timer of this.later.values()) clearTimeout(timer)
     this.later.clear()
+    for (const timer of this.resumes.values()) clearTimeout(timer)
+    this.resumes.clear()
     for (const stop of this.stops.values()) stop()
     this.stops.clear()
   }
@@ -331,7 +365,16 @@ export class Goals {
     }
     if (!resumed && idle.outcome === "failed") {
       settle()
-      return this.pause(goal, "error", idle.error?.message ? `The turn failed: ${sentence(String(idle.error.message))}` : "The turn failed.")
+      // A model's limit isn't a failure: it waits for the reset (from when the turn ended, said in
+      // its words, or a while), and carries on by itself then.
+      const words = idle.error?.message ? String(idle.error.message) : ""
+      if (isLimit(words)) return this.pauseUntil(goal, resetsIn(words, Number(idle.time?.created) || this.now()) ?? this.now() + unknownReset, words)
+      return this.pause(goal, "error", words ? `The turn failed: ${sentence(words)}` : "The turn failed.")
+    }
+    // A bot's long goal: its plan says what's next; a turn here is only kept.
+    if (goal.long) {
+      settle()
+      return this.save()
     }
     const worked = turn.some((message) => message.type === "assistant" && (message.content ?? []).some((part: any) => part?.type === "tool"))
     const info = await sessionInfo(place.api, session).catch((): SessionInfo => ({ id: session }))
@@ -351,7 +394,10 @@ export class Goals {
       goal.checking = false
       if (!current()) return void this.changed(goal)
       settle()
-      return this.pause(goal, "error", `The goal couldn't be checked: ${sentence(String(error?.message ?? error))}`)
+      const words = String(error?.message ?? error)
+      // The check met a model's limit: the goal waits for the reset as the agent's turn would.
+      if (isLimit(words)) return this.pauseUntil(goal, resetsIn(words, this.now()) ?? this.now() + unknownReset, words)
+      return this.pause(goal, "error", `The goal couldn't be checked: ${sentence(words)}`)
     }
     goal.checking = false
     // Taken away, paused or resumed while it was checked: as it is now.
@@ -411,6 +457,46 @@ export class Goals {
     goal.pausedBy = by
     goal.note = note
     this.changed(goal)
+  }
+
+  /** Paused at a model's limit until `until`, when it carries on by itself. */
+  private pauseUntil(goal: Kept, until: number, words: string) {
+    goal.resumesAt = until
+    this.pause(goal, "limit", `Paused until ${resetTime(until)}: the model's limit${words ? ` (${line(words, 120)})` : ""}. It carries on by itself then.`)
+    this.resumeAt(goal.session, until)
+  }
+
+  // Carries a goal paused at a limit on at `until`; tried again in a while if its conversation
+  // can't be reached then.
+  private resumeAt(session: string, until: number) {
+    this.cancelResume(session)
+    if (this.stopped) return
+    const timer = setTimeout(() => {
+      this.resumes.delete(session)
+      const goal = this.goals.get(session)
+      if (!goal || goal.state !== "paused" || goal.pausedBy !== "limit") return
+      // (A reset further off than a timer reaches: waited for again.)
+      if (goal.resumesAt && goal.resumesAt > this.now()) return this.resumeAt(session, goal.resumesAt)
+      this.resume(session, { atLimit: true }).catch(() => {
+        const later = this.now() + unknownReset
+        goal.resumesAt = later
+        this.changed(goal)
+        this.resumeAt(session, later)
+      })
+    }, Math.max(0, Math.min(until - this.now(), 2_147_000_000)))
+    timer.unref?.()
+    this.resumes.set(session, timer)
+  }
+
+  private cancelResume(session: string) {
+    const timer = this.resumes.get(session)
+    if (timer) clearTimeout(timer)
+    this.resumes.delete(session)
+  }
+
+  /** A paused-at-a-limit goal carried on now (a test's clock moved past its reset). */
+  resumeDue() {
+    for (const goal of this.goals.values()) if (goal.state === "paused" && goal.pausedBy === "limit" && goal.resumesAt && goal.resumesAt <= this.now()) void this.resume(goal.session, { atLimit: true }).catch(() => {})
   }
 
   private found(session: string): Kept {
@@ -630,9 +716,9 @@ export async function goalRoutes(goals: Goals | undefined, method: string, parts
         return goal ? json({ data: goal }) : json({ message: "That conversation has no goal." }, 404)
       }
       if (method === "PUT") {
-        const { condition } = (await body()) ?? {}
+        const { condition, long } = (await body()) ?? {}
         if (typeof condition !== "string") return json({ message: "Say what the goal is." }, 400)
-        return json({ data: await goals.set(session, condition) })
+        return json({ data: await goals.set(session, condition, { long: long === true }) })
       }
       if (method === "DELETE") {
         goals.clear(session)
