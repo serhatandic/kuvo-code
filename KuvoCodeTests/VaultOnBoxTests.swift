@@ -1,8 +1,10 @@
 import ClientVault
 import Foundation
+import Observation
 import KuvoLink
 import Security
 import Testing
+import WebKit
 @testable import KuvoCode
 
 /// This Mac's vault (PROTOCOL.md, "Vault"), kept by its own box (the real `kuvo-link.js serve`),
@@ -96,6 +98,72 @@ import Testing
         #expect(logins.count == 1)
         #expect(logins.first.flatMap(Passwords.password(for:)) == "second-password")
         #expect(agentsOwn("example.com") == "me@example.com", "still theirs")
+    }
+
+    /// Shows `html` in the panel's browser as the page at `address`, once it's finished.
+    private func show(_ html: String, at address: String, in browser: BrowserSession) async {
+        await withCheckedContinuation { (finished: CheckedContinuation<Void, Never>) in
+            browser.onVisit = { _, _, _ in
+                browser.onVisit = nil
+                finished.resume()
+            }
+            browser.webView.loadHTMLString(html, baseURL: URL(string: address))
+        }
+    }
+
+    private func value(of id: String, in browser: BrowserSession) async -> String? {
+        try? await browser.webView.evaluateJavaScript("document.getElementById('\(id)').value") as? String
+    }
+
+    /// Saved for example.com, as the Vault's placeholder has it: offered and filled on
+    /// accounts.example.com, and a new password signing in on www.example.com changes it rather
+    /// than saving a second. Filled into the form you see: not the search box above it, nor a
+    /// hidden form's fields.
+    @Test func aSignInForASiteIsOfferedAndFilledOnPagesUnderIt() async throws {
+        defer { done() }
+        #expect(await Passwords.ready())
+        #expect(await Passwords.save(host: "example.com", account: "ada", password: "first-password") != nil)
+        #expect(Passwords.logins(for: "accounts.example.com").map(\.account) == ["ada"])
+        #expect(Passwords.logins(for: "notexample.com").isEmpty)
+
+        #expect(await Passwords.save(host: "www.example.com", account: "ada", password: "second-password") != nil)
+        let logins = Passwords.logins(for: "www.example.com")
+        #expect(logins.count == 1, "changed, not saved twice")
+        let login = try #require(logins.first)
+        #expect(Passwords.password(for: login) == "second-password")
+
+        let browser = BrowserSession()
+        defer { browser.close() }
+        await show("""
+            <input id="search" type="text" placeholder="Search">
+            <form style="display:none"><input id="new-user" type="text"><input id="new-password" type="password"></form>
+            <form><input id="user" type="text" autocomplete="username"><input id="password" type="password"></form>
+            """, at: "https://accounts.example.com/login", in: browser)
+        #expect(browser.savedLogins.map(\.account) == ["ada"], "the toolbar's key offers it")
+        await browser.fill(login)?.value
+        #expect(await value(of: "user", in: browser) == "ada")
+        #expect(await value(of: "password", in: browser) == "second-password")
+        #expect(await value(of: "search", in: browser) == "")
+        #expect(await value(of: "new-password", in: browser) == "")
+    }
+
+    /// A sign-in form a page's script puts in after it loaded: the toolbar's key comes with it.
+    @Test func aSignInFormThatComesLaterGetsTheKey() async throws {
+        defer { done() }
+        #expect(await Passwords.ready())
+        #expect(await Passwords.save(host: "app.example.com", account: "ada", password: "first-password") != nil)
+        let browser = BrowserSession()
+        defer { browser.close() }
+        await show("""
+            <div id="app">Loading…</div>
+            <script>setTimeout(() => { document.getElementById('app').innerHTML = '<input type="email"><input type="password">' }, 50)</script>
+            """, at: "https://app.example.com/", in: browser)
+        while !browser.hasLoginField {
+            await withCheckedContinuation { (changed: CheckedContinuation<Void, Never>) in
+                withObservationTracking { _ = browser.hasLoginField } onChange: { changed.resume() }
+            }
+        }
+        #expect(browser.savedLogins.map(\.account) == ["ada"])
     }
 
     /// Any of your processes can read another's environment (`ps -E`), agents' commands among them:

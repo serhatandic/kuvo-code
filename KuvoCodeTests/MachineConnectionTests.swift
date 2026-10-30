@@ -43,6 +43,32 @@ import Testing
         machine.stop()
     }
 
+    /// Removed: the terminals on it stop (they'd only be SSH sessions to a machine that's gone
+    /// from the sidebar), in any session's panel and the window's own; a terminal here goes on.
+    @Test func removedItsTerminalsStop() async throws {
+        defer { done() }
+        let id = Self.name()
+        _ = add(id, at: machine)
+        let panel = app.utilities
+        defer { panel.closeAll() }
+        let shell = ["SHELL": "/bin/sh"]
+        panel.inView = .init(session: "ses_there", place: id)
+        panel.newTerminal(in: RemoteFolder.folder("/home/me", on: id), environment: shell)
+        panel.inView = .init(session: "ses_here")
+        panel.newTerminal(in: FileManager.default.temporaryDirectory.path, environment: shell)
+        // And the window's own terminal tabs, one there and one here.
+        let windows = app.mainTerminals
+        defer { windows.closeAll() }
+        let there = windows.open(in: RemoteFolder.folder("/home/me", on: id), command: nil, environment: shell)
+        let here = windows.open(in: FileManager.default.temporaryDirectory.path, command: nil, environment: shell)
+        let shellThere = try #require(windows.entry(there)?.session)
+
+        app.removeMachine(id)
+        #expect(panel.tabs.filter { $0.kind == .terminal }.map(\.owner) == ["ses_here"])
+        #expect(windows.opened.map(\.key) == [here])
+        #expect(!shellThere.isRunning)
+    }
+
     /// Once it's connected, it's sent what its bots are made with (their kit: templates, your
     /// personalities, its projects), so it makes bots itself with this Mac closed.
     @Test func connectedItsSentItsBotsKit() async throws {
@@ -103,6 +129,64 @@ import Testing
         clock.pass(60)
         try await until { clock.waits == [60, 600] }
         #expect(clock.waits == [60, 600])
+    }
+
+    /// Reconnected while the machine is slow to say whether a conversation open here is still
+    /// there (it isn't among the newest it lists): the conversation stays open and goes on
+    /// following the agent there. Only one the machine says it hasn't goes.
+    @Test func aConversationTheMachineCouldntSayAboutStaysOpen() async throws {
+        defer { done() }
+        let id = Self.name()
+        let older = StubEngine.session("ses_older", title: "Older", directory: "/home/tests/project")
+        machine.list([older])
+        machine.conversation("ses_older", [])
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        try await until { app.workspace.session("ses_older") != nil }
+        let model = try #require(app.workspace.model(for: "ses_older"))
+        await model.load()
+
+        // Back, with newer ones listed and this one's own answer failing for a moment. Meanwhile
+        // the agent there answered.
+        machine.list([StubEngine.session("ses_newer", title: "Newer", directory: "/home/tests/project", created: 2)])
+        machine.on("GET", "/api/session/ses_older", json: ["error": "busy"], status: 500)
+        let answer: [String: Any] = ["id": "msg_02", "type": "assistant", "agent": "build", "time": ["created": 2, "completed": 3],
+                                     "model": ["id": "m", "providerID": "p"], "content": [["type": "text", "text": "Done: the tests pass."]]]
+        machine.conversation("ses_older", [answer])
+        await app.reconnectNow(engine)?.value
+        #expect(app.workspace.model(for: "ses_older") === model, "still the conversation on screen")
+        #expect(model.transcript.messages.map(\.id) == ["msg_02"], "what happened while it was away shows")
+        app.workspace.handle(try machine.event("session.execution.started", session: "ses_older"), machine: id)
+        #expect(model.isRunning, "it still follows the agent there")
+
+        // Deleted there: it goes.
+        machine.on("GET", "/api/session/ses_older", json: ["error": "not found"], status: 404)
+        await app.reconnectNow(engine)?.value
+        #expect(app.workspace.model(for: "ses_older") !== model)
+    }
+
+    /// This Mac's engine back (after the Mac slept, say) while a machine is slow to answer: this
+    /// Mac's conversations are read again and its feed goes on, rather than waiting on the
+    /// machine's, which its own connection reads again when it's back.
+    @Test func thisMacsEngineBackDoesntWaitOnAMachine() async throws {
+        defer { done() }
+        let id = Self.name()
+        machine.list([StubEngine.session("ses_far", title: "Far", directory: "/home/tests/project")])
+        machine.conversation("ses_far", [])
+        await app.connect(add(id, at: machine)).value
+        try await until { app.workspace.session("ses_far") != nil }
+        let far = try #require(app.workspace.model(for: "ses_far"))
+        await far.load()
+
+        let gate = Gate()
+        defer { gate.open() }
+        machine.on("GET", "/api/session/ses_far/message") { _ in
+            gate.wait()
+            return StubWeb.json(["data": []])
+        }
+        let asked = machine.requests("GET", "/api/session/ses_far/message").count
+        await app.workspace.resync()
+        #expect(machine.requests("GET", "/api/session/ses_far/message").count == asked, "done without asking the machine")
     }
 
     /// Your personalities changed, so each connected machine's round begins a moment later:

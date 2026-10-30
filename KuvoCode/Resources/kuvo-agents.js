@@ -13871,8 +13871,10 @@ class Turn {
         step.time.streamed = Date.now();
       this.send(`session.${kind}.started`, { assistantMessageID: step.id, ordinal });
     }
-    this.block.content.text += delta;
-    this.send(`session.${kind}.delta`, { assistantMessageID: step.id, ordinal: this.block.ordinal, delta });
+    const content = this.block.content;
+    const at = content.text.length;
+    content.text += delta;
+    this.send(`session.${kind}.delta`, { assistantMessageID: step.id, ordinal: this.block.ordinal, delta, at });
     this.save();
   }
   blockStart(key, kind) {
@@ -13896,8 +13898,10 @@ class Turn {
     const step = this.step;
     if (!block || !step)
       return;
-    block.content.text += delta;
-    this.send(`session.${kind}.delta`, { assistantMessageID: step.id, ordinal: block.ordinal, delta });
+    const content = block.content;
+    const at = content.text.length;
+    content.text += delta;
+    this.send(`session.${kind}.delta`, { assistantMessageID: step.id, ordinal: block.ordinal, delta, at });
     this.save();
   }
   blockEnd(key) {
@@ -13953,8 +13957,9 @@ class Turn {
     const tool = this.tools.get(id);
     if (!tool || tool.call.state.status !== "streaming" || this.ended)
       return;
+    const at = tool.call.state.input.length;
     tool.call.state.input += delta;
-    this.send("session.tool.input.delta", { assistantMessageID: tool.step.id, id, delta });
+    this.send("session.tool.input.delta", { assistantMessageID: tool.step.id, id, delta, at });
   }
   toolCalled(id, input) {
     if (this.ended)
@@ -21784,4 +21789,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f9966658afc79f8f380734818d47ad48dd1927bdda879adbb85054d90dd44a46
+// Built from Packages/Box/src/agents 4c974a22e516a6612012479a67067ca09640dc512d470c994d637b76574b1edd

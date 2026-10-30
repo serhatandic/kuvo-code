@@ -93,4 +93,131 @@ struct TranscriptReplayTests {
         #expect(texts(transcript) == ["First.", "Second."])
         #expect(!transcript.isStale)
     }
+
+    /// The engine's own notice (a background command finished) waiting to go in when the
+    /// conversation was read: it shows when it goes in, once, as one that waited while it was open does.
+    @Test func aNoticeWaitingWhenReadShowsWhenItGoesIn() throws {
+        let delivered = try ServerEvent(json: Data(#"""
+        {"id":"evt_9","created":9,"type":"session.inbox.delivered","data":{"sessionID":"ses_1","inboxID":"msg_n1"}}
+        """#.utf8))
+        let waiting = InboxItem(id: "msg_n1", sessionID: "ses_1", type: "synthetic",
+                                payload: .object(["text": .string("Command `npm test` finished"), "description": .string("Background command")]), delivery: .steer)
+        func notices(_ transcript: Transcript) -> [String] {
+            transcript.messages.compactMap { if case .synthetic(let notice) = $0 { notice.text } else { nil } }
+        }
+
+        var transcript = Transcript(sessionID: "ses_1")
+        transcript.load(messages: [], inbox: [waiting], permissions: [], forms: [], isRunning: true)
+        #expect(notices(transcript).isEmpty, "not before it goes in")
+        transcript.apply(delivered)
+        #expect(notices(transcript) == ["Command `npm test` finished"])
+
+        // Read again, with the engine's copy of it, then the event again: still once.
+        let engine = transcript.messages
+        transcript.load(messages: engine, inbox: [], permissions: [], forms: [], isRunning: true)
+        transcript.apply(delivered)
+        #expect(notices(transcript) == ["Command `npm test` finished"])
+
+        // One seen queued while it was open, then a read whose queue couldn't be read: it still
+        // shows when it goes in, as of when it was queued.
+        var open = Transcript(sessionID: "ses_1")
+        open.load(messages: [], inbox: [], permissions: [], forms: [], isRunning: true)
+        open.apply(try ServerEvent(json: Data(#"""
+        {"id":"evt_5","created":5,"type":"session.inbox.enqueued","data":{"sessionID":"ses_1","inboxID":"msg_n1","item":{"type":"synthetic","payload":{"text":"Command `npm test` finished"},"delivery":"steer"}}}
+        """#.utf8)))
+        open.load(messages: [], inbox: [], permissions: [], forms: [], isRunning: true)
+        open.apply(delivered)
+        #expect(notices(open) == ["Command `npm test` finished"])
+        #expect(open.messages.first?.created == 5)
+    }
+
+    /// A conversation read again while the agent writes: what shows has every word once, whether
+    /// the read has none of the words so far (the engine's) or some (the coding agents' bridge),
+    /// and whether the conversation was showing already or is opened now.
+    @Test func aReadMadeMidReplyShowsEveryWordOnce() throws {
+        func event(_ number: Int, _ type: String, _ fields: String) throws -> ServerEvent {
+            try ServerEvent(json: Data(#"""
+            {"id":"evt_\#(number)","created":\#(number),"type":"\#(type)","data":{"sessionID":"ses_1","assistantMessageID":"msg_1",\#(fields)}}
+            """#.utf8))
+        }
+        func step(text: String, thinking: String, input: String) -> [Message] {
+            [.assistant(Message.Assistant(id: "msg_1", time: Message.Time(created: 1), agent: "build", model: ModelRef(id: "m", providerID: "p"), content: [
+                .reasoning(Message.Content.Text(text: thinking, time: Message.Time(created: 1))),
+                .text(Message.Content.Text(text: text)),
+                .tool(Message.ToolCall(id: "call_1", name: "read", state: .streaming(input: input))),
+            ]))]
+        }
+        func shown(_ transcript: Transcript) -> [String] {
+            guard case .assistant(let step)? = transcript.messages.last else { return [] }
+            return step.content.compactMap {
+                switch $0 {
+                case .text(let block), .reasoning(let block): block.text
+                case .tool(let call): if case .streaming(let input) = call.state { input } else { nil }
+                default: nil
+                }
+            }
+        }
+        // Before the read began, then while it was on its way: as the engine sends them, and as the
+        // coding agents' bridge does, saying where each goes.
+        func pieces(saying: Bool) throws -> (before: [ServerEvent], during: [ServerEvent]) {
+            func at(_ at: Int) -> String { saying ? #","at":\#(at)"# : "" }
+            return try ([
+                event(2, "session.reasoning.delta", #""ordinal":0,"delta":"Look at ""# + at(0)),
+                event(3, "session.text.delta", #""ordinal":0,"delta":"Hello ""# + at(0)),
+                event(4, "session.tool.input.delta", #""id":"call_1","delta":"{\"pa""# + at(0)),
+            ], [
+                event(5, "session.reasoning.delta", #""ordinal":0,"delta":"it""# + at(8)),
+                event(6, "session.text.delta", #""ordinal":0,"delta":"wor""# + at(6)),
+                event(7, "session.text.delta", #""ordinal":0,"delta":"ld""# + at(9)),
+                event(8, "session.tool.input.delta", #""id":"call_1","delta":"th\"""# + at(4)),
+            ])
+        }
+        let whole = ["Look at it", "Hello world", #"{"path""#]
+        let reads = [
+            ("the engine's, none of the words", false, step(text: "", thinking: "", input: "")),
+            ("the bridge's, some of the pieces since", true, step(text: "Hello wor", thinking: "Look at ", input: #"{"pa"#)),
+            ("the bridge's, all of them", true, step(text: "Hello world", thinking: "Look at it", input: #"{"path""#)),
+        ]
+        for (what, saying, read) in reads {
+            let (before, during) = try pieces(saying: saying)
+            var showing = Transcript(sessionID: "ses_1")
+            showing.load(messages: step(text: "", thinking: "", input: ""), inbox: [], permissions: [], forms: [], isRunning: true)
+            for event in before + during { showing.apply(event) }
+            #expect(shown(showing) == whole)
+
+            var fresh = showing
+            fresh.load(messages: read, inbox: [], permissions: [], forms: [], isRunning: true)
+            fresh.catchUp(on: during, shown: showing)
+            #expect(shown(fresh) == whole, "read again: \(what)")
+
+            // Opened while it writes: over the bridge, the pieces its read has already go once.
+            guard saying else { continue }
+            var opened = Transcript(sessionID: "ses_1")
+            opened.load(messages: read, inbox: [], permissions: [], forms: [], isRunning: true)
+            opened.catchUp(on: during, shown: Transcript(sessionID: "ses_1"))
+            #expect(shown(opened) == whole, "opened: \(what)")
+        }
+
+        // Opened over the bridge, its read ending as the next piece does (a blank line): that one
+        // is still added.
+        var opened = Transcript(sessionID: "ses_1")
+        opened.load(messages: step(text: "Line.\n", thinking: "", input: ""), inbox: [], permissions: [], forms: [], isRunning: true)
+        opened.catchUp(on: try [
+            event(9, "session.text.delta", #""ordinal":0,"delta":"\n","at":6"#),
+            event(10, "session.text.delta", #""ordinal":0,"delta":"Next","at":7"#),
+        ], shown: Transcript(sessionID: "ses_1"))
+        #expect(shown(opened)[1] == "Line.\n\nNext")
+
+        // Read further than the copy on screen had come (the bridge keeps a piece before it's sent):
+        // the pieces that come after, during the read and once it's in, are there once.
+        var behind = Transcript(sessionID: "ses_1")
+        behind.load(messages: step(text: "Hello ", thinking: "", input: ""), inbox: [], permissions: [], forms: [], isRunning: true)
+        let wor = try event(11, "session.text.delta", #""ordinal":0,"delta":"wor","at":6"#)
+        behind.apply(wor)
+        var ahead = behind
+        ahead.load(messages: step(text: "Hello world", thinking: "", input: ""), inbox: [], permissions: [], forms: [], isRunning: true)
+        ahead.catchUp(on: [wor], shown: behind)
+        ahead.apply(try event(12, "session.text.delta", #""ordinal":0,"delta":"ld","at":9"#))
+        #expect(shown(ahead)[1] == "Hello world")
+    }
 }

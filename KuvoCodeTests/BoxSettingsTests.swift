@@ -34,7 +34,7 @@ import Testing
             return asked
         }
 
-        func change(_ changes: [(path: [String], value: JSONValue?)]) async throws -> [String: JSONValue] {
+        func change(_ changes: [(path: [String], value: JSONValue?)], was: [JSONValue?]) async throws -> [String: JSONValue] {
             if holdsChanges { await withCheckedContinuation { heldChanges.append($0) } }
             if refusesChanges { throw MachineBox.Failure.refused("ssh: connect to host box port 22: Connection refused") }
             self.changes.append(changes.map(\.path))
@@ -164,7 +164,7 @@ import Testing
     @Test func aMachineThatCantBeReachedSaysSo() async throws {
         struct Away: RemoteSettings {
             func read() async throws -> [String: JSONValue] { throw MachineBox.Failure.refused("ssh: connect to host box port 22: Connection refused") }
-            func change(_ changes: [(path: [String], value: JSONValue?)]) async throws -> [String: JSONValue] { throw MachineBox.Failure.refused("ssh: connect to host box port 22: Connection refused") }
+            func change(_ changes: [(path: [String], value: JSONValue?)], was: [JSONValue?]) async throws -> [String: JSONValue] { throw MachineBox.Failure.refused("ssh: connect to host box port 22: Connection refused") }
         }
         let config = EngineConfig(remote: Away())
         config.reload()
