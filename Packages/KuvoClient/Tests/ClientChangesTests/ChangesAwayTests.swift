@@ -21,5 +21,7 @@ struct ChangesAwayTests {
         #expect(ChangesAway.asLastSeen(read, now: read.addingTimeInterval(20), locale: english)
                 == "These are its changes as last seen, a moment ago. They can’t be staged or committed until it’s back.")
         #expect(ChangesAway.waits("Stage", for: "build-box") == "Stage once build-box is back")
+        #expect(ChangesAway.waits(for: "build-box") == "Once build-box is back")
+        #expect(ChangesAway.notBack("build-box") == "build-box isn’t connected. Try again once it’s back.")
     }
 }

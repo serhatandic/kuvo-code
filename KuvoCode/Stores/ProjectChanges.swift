@@ -75,7 +75,8 @@ final class ProjectChanges {
     }
 
     let directory: String
-    var scope = Scope.uncommitted
+    /// Another scope's list isn't this one's as last seen.
+    var scope = Scope.uncommitted { didSet { if scope != oldValue { hasRead = false } } }
     /// The branch this one comes from, for the Branch scope: a worktree's base, or the
     /// repository's default branch.
     var base: String?
@@ -123,6 +124,8 @@ final class ProjectChanges {
     /// session's edits changed.
     func refresh(fallback: [FileDiff] = [], edits: [FileDiff] = []) async {
         let directory = directory, scope = scope, base = base
+        // Not asked while it's away: its connection says when it's back.
+        if isAway { return }
         generation += 1
         let mine = generation
         if scope == .session {
@@ -133,8 +136,6 @@ final class ProjectChanges {
             stamp()
             return
         }
-        // Not asked while it's away: its connection says when it's back.
-        if isAway { return }
         let found = await Git.found(in: directory, scope: scope, base: base, box: box)
         // A machine's box out of reach for a moment: what showed stays, rather than reading as no
         // repository. Out of reach from the start: said so.
@@ -174,6 +175,8 @@ final class ProjectChanges {
     /// A file git doesn't know yet goes to the Trash. Returns git's complaint, if any.
     func perform(_ action: Action, on file: ChangedFile) async -> String? {
         guard let root = file.root else { return nil }
+        // (Asked for before it went: its alert was open.)
+        if isAway { return ChangesAway.notBack(RemoteFolder.machine(of: directory) ?? "Its machine") }
         let failure = await Git.performing(action, on: file, root: root, scope: scope)
         await refresh()
         return failure
@@ -184,6 +187,7 @@ final class ProjectChanges {
     /// hooks, signing and pushing see what they do in Terminal.
     func commit(message: String, push: Bool, environment: [String: String]) async -> String? {
         let directory = directory
+        if isAway { return ChangesAway.notBack(RemoteFolder.machine(of: directory) ?? "Its machine") }
         let failure = await Git.committing(message: message, push: push, in: directory, environment: environment)
         if failure == nil { Analytics.shared.track("changes_committed", ["pushed": push]) }
         await refresh()

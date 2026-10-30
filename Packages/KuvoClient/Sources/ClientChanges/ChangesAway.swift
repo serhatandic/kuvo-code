@@ -33,4 +33,15 @@ public enum ChangesAway {
     public static func waits(_ action: String, for name: String) -> String {
         "\(action) once \(name) is back"
     }
+
+    /// Under a greyed-out menu item: "Once build-box is back".
+    public static func waits(for name: String) -> String {
+        "Once \(name) is back"
+    }
+
+    /// An action that needs the computer, tried while it's away (a form or an alert opened before
+    /// it went): what it says rather than its connection's error.
+    public static func notBack(_ name: String) -> String {
+        "\(name) isn’t connected. Try again once it’s back."
+    }
 }

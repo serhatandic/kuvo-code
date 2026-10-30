@@ -259,6 +259,12 @@ import Testing
         #expect(changes.shown == .asLastSeen)
         #expect(changes.files.map(\.path) == ["README.md"])
         #expect(changes.read == read)
+        // Its Discard alert or commit form open from before it went: said to wait, nothing done.
+        let readme = try #require(changes.files.first)
+        #expect(await changes.perform(.discard, on: readme) == ChangesAway.notBack("lab"))
+        #expect(await changes.commit(message: "Later", push: false, environment: [:]) == ChangesAway.notBack("lab"))
+        #expect(asked.count == count)
+        #expect(try repo.status().contains(" M README.md"))
         #expect(ChangesAway.asLastSeen(changes.read, now: read.addingTimeInterval(180), locale: Locale(identifier: "en_US"))
                 == "These are its changes as last seen, 3 minutes ago. They can’t be staged or committed until it’s back.")
 
