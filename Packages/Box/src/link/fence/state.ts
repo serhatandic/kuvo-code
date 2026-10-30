@@ -28,7 +28,7 @@ export interface FenceState {
   why?: string;
   /** This computer can sandbox commands at all. */
   able: boolean;
-  /** The coding agents' own programs' commands are sandboxed too. Not yet. */
+  /** The coding agents' own programs run in it too, as they start (each run whole in it). */
   agents: boolean;
   /** Why not, for a client to map without reading `why`, and what you can do about it. */
   reason?: FenceReason;
@@ -124,9 +124,11 @@ export function engineCommandsInSandbox(): boolean {
   return fenceWanted() && fs.existsSync(ON) && loaded().on;
 }
 
-/** Whether the coding agents' own programs' commands (Claude Code, Codex…, which don't go through
- * the engine) run in it too: not yet. */
-export const agentsCommandsInSandbox = (): boolean => false;
+/** Whether the coding agents' own programs (Claude Code, Codex, Cursor, Grok, Antigravity, whose
+ * commands don't go through the engine) run in it: each runs whole in it, as the bridge starts
+ * it, while it's set up and checked (`run/fence/on`, which the bridge reads too). One begun before
+ * finishes its turn as it started; the next starts it again in it. */
+export const agentsCommandsInSandbox = (): boolean => fenceWanted() && fs.existsSync(ON);
 
 // Why a box doesn't have it on, and what you can do.
 function cannot(why: Checked): Partial<FenceState> {

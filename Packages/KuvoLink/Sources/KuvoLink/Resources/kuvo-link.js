@@ -8111,7 +8111,7 @@ async function asksIn(target, session, signal) {
         continue;
       const resources = Array.isArray(each.resources) ? each.resources.filter((one) => typeof one === "string") : [];
       const source = isObject(each.source) ? each.source : null;
-      permissions.push({ id: each.id, asker, action: String(each.action ?? ""), resources, ...typeof source?.id === "string" ? { call: source.id } : {}, ...typeof source?.messageID === "string" ? { message: source.messageID } : {} });
+      permissions.push({ id: each.id, asker, action: String(each.action ?? ""), resources, ...typeof source?.id === "string" ? { call: source.id } : {}, ...typeof source?.messageID === "string" ? { message: source.messageID } : {}, ...each.sandboxed === true ? { sandboxed: true } : {} });
     }
     const forms = await call(target, "GET", `${at}/form`, undefined, signal).catch(() => null);
     for (const form of Array.isArray(forms) ? forms : []) {
@@ -10937,7 +10937,7 @@ function loaded() {
 function engineCommandsInSandbox() {
   return fenceWanted() && fs50.existsSync(ON) && loaded().on;
 }
-var agentsCommandsInSandbox = () => false;
+var agentsCommandsInSandbox = () => fenceWanted() && fs50.existsSync(ON);
 function cannot(why) {
   const said = why.why ? { why: why.why } : {};
   switch (why.reason) {
@@ -14136,7 +14136,7 @@ function checkSpec(spec, words, place) {
 function commandRefusal(line, folders) {
   if (!/^[\x20-\x7E]*$/.test(line))
     return `${CANT} (a character it can't read plainly)`;
-  const read = readLine(line, true);
+  const read = readLine(line);
   if ("unreadable" in read)
     return `${CANT} (${read.unreadable})`;
   if (!read.parts.length || !folders.length)
@@ -14384,12 +14384,12 @@ async function stopSessionTool(caller, args, targets, signal) {
   }
   return said(`Stopped "${data.title || "New Session"}".`);
 }
-function commandsInSandbox(target) {
+function commandsInSandbox(target, permission) {
   let engine = false;
   try {
     engine = readEngineFile().port === target.port;
   } catch {}
-  return engine ? engineCommandsInSandbox() : agentsCommandsInSandbox();
+  return engine ? engineCommandsInSandbox() : permission.sandboxed === true && agentsCommandsInSandbox();
 }
 var projectFolders = (folder) => readProjects().find((each) => each.directory === folder)?.folders ?? [];
 async function answerAskTool(caller, args, targets, signal) {
@@ -14432,7 +14432,7 @@ async function answerAskTool(caller, args, targets, signal) {
     const folder = data.location?.directory ?? data.directory ?? "";
     const rules = rulesOf(caller.place.data.permissions ?? []);
     const seen = await callOf(target, permission, signal);
-    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, commandsInSandbox(target));
+    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, commandsInSandbox(target, permission));
     const user = `The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`;
     if (why === "above")
       return refused(`You can't allow that: you'd have to ask the user about it yourself. ${user}`);

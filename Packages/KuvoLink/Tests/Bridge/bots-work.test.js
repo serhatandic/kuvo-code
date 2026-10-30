@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { runningAs } from "./running-as.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-bots-work-")));
 after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -63,7 +64,8 @@ function resetEngine() {
 resetEngine();
 // An ask names the tool call it's for, as the engine's do.
 const withSource = ask => ({ ...ask, source: ask.source ?? { type: "tool", messageID: `msg_${ask.id}`, id: `call_${ask.id}` } });
-const engine = http.createServer((request, response) => {
+// The coding agents' bridge answers as the engine does, for the sessions on it (`bridge`).
+const standIn = onBridge => (request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
   request.on("end", () => {
@@ -81,7 +83,7 @@ const engine = http.createServer((request, response) => {
     if (url.pathname === "/api/session" && request.method === "GET") {
       // A session's subagents by `parentID`; the rest, those at the top.
       const parent = url.searchParams.get("parentID");
-      const listed = [...sessions.values()].filter(each => (parent && parent !== "null" ? each.parentID === parent : !each.parentID));
+      const listed = [...sessions.values()].filter(each => Boolean(each.bridge) === onBridge && (parent && parent !== "null" ? each.parentID === parent : !each.parentID));
       // Two hundred to a page, as the engine pages them.
       if (url.searchParams.get("limit") === "200") {
         const from = Number(url.searchParams.get("cursor") ?? 0);
@@ -104,7 +106,7 @@ const engine = http.createServer((request, response) => {
     }
     const one = url.pathname.match(/^\/api\/session\/([^/]+)(\/.*)?$/);
     const id = one && decodeURIComponent(one[1]);
-    if (one && !one[2] && request.method === "GET") return sessions.has(id) ? reply({ data: sessions.get(id) }) : reply({ message: "No such session." }, 404);
+    if (one && !one[2] && request.method === "GET") return sessions.has(id) && Boolean(sessions.get(id).bridge) === onBridge ? reply({ data: sessions.get(id) }) : reply({ message: "No such session." }, 404);
     if (one && !one[2] && request.method === "PATCH") {
       const change = JSON.parse(body);
       // The engine keeps the metadata it's sent, whole.
@@ -140,8 +142,12 @@ const engine = http.createServer((request, response) => {
     if (request.url.includes("/instructions/entries/")) return reply({});
     reply({ message: "Not here." }, 404);
   });
-});
+};
+const engine = http.createServer(standIn(false));
+const bridge = http.createServer(standIn(true));
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
+await new Promise(resolve => bridge.listen(0, "127.0.0.1", resolve));
+after(() => { bridge.closeAllConnections(); bridge.close(); });
 after(() => { engine.closeAllConnections(); engine.close(); });
 write(path.join(home, "run", "engine.json"), JSON.stringify({ port: engine.address().port, password: "p", version: "0.0.0" }));
 
@@ -555,6 +561,35 @@ test("a bot judges the tool call whole: a cd the engine leaves out of the ask, o
   assert.equal((await answer("per_here")).isError, false, "its own folder, named");
   assert.match((await answer("per_tree")).text, /a tool it can't tell is safe/, "removing a worktree isn't an edit, however it's asked");
   assert.equal((await answer("per_unseen")).isError, true, "a call it can't find isn't judged");
+});
+
+test("a coding agent's session that runs in the sandbox lets a bot allow its commands beyond reading, as the engine's do; one that doesn't, or once it's off, leaves them to you", async t => {
+  // The coding agents' bridge runs (a stand-in, its record naming a process that runs as it), and
+  // the box's sandbox is set up and checked.
+  write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
+  write(path.join(home, "run", "fence", "on"), "");
+  t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
+  t.after(() => fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true }));
+  // Pixel's session, its conversation now with a coding agent on the bridge.
+  const session = startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel"));
+  sessions.get(session).bridge = true;
+  // The bridge says which asks come from an agent run whole in the sandbox now.
+  asked.set(session, [
+    { id: "install", sessionID: session, action: "shell", resources: ["npm install"], sandboxed: true },
+    { id: "push", sessionID: session, action: "shell", resources: ["git push origin main"], sandboxed: true },
+    { id: "outside", sessionID: session, action: "shell", resources: ["npm test"] },
+  ]);
+  const answer = ask => tool("answer_ask", { session, ask, decision: "allow", reason: "Part of the plan." }, "ses_pixel");
+  assert.deepEqual(await answer("install"), { text: "Allowed: npm install.", isError: false });
+  // What acts beyond this computer comes to you all the same.
+  assert.match((await answer("push")).text, /pushing/);
+  // An agent started before the sandbox was on (or one not run in it): what a bot can't read as safe comes to you.
+  assert.match((await answer("outside")).text, /always comes to the user/);
+  // The sandbox gone (its check failed): even an agent that said so leaves it to you.
+  fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true });
+  asked.set(session, [{ id: "again", sessionID: session, action: "shell", resources: ["npm install"], sandboxed: true }]);
+  assert.match((await answer("again")).text, /always comes to the user/);
+  assert.deepEqual(replied.map(each => each.permission), ["install"]);
 });
 
 test("a bot never lets a session change what the user's own tools run later, nor a folder named like a file", async () => {

@@ -164,7 +164,7 @@ test("on, a command writes in its own project, git works there, and Kuvo Code's 
     assert.equal(state.able, true, state.why);
     assert.equal(state.on, false, "the engine hasn't loaded it yet");
     assert.equal(state.why, "Waiting for the engine to load it.");
-    assert.equal(state.agents, false, "the coding agents' own programs aren't sandboxed yet");
+    assert.equal(state.agents, true, "the coding agents' own programs run whole in it as they start, the engine's wait or not");
     const kept = path.join(box.home, "run", "engine.json");
     // The vault's socket (its holder is this box): straight, and as the Mac's \`box route\` asks it
     // (refused: its holder can't be reached, 503; anything else, even nothing, counts as reached),

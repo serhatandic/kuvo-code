@@ -166,6 +166,11 @@ export interface PermissionRequest {
   metadata?: Record<string, unknown>
   source?: { type: string; messageID: string; id: string }
   message?: string
+  /**
+   * Kuvo Code's own: the commands of the agent that asks run in the box's sandbox now (its whole
+   * program, run in it), so a bot may weigh it as one (PROTOCOL.md, "Work").
+   */
+  sandboxed?: boolean
 }
 
 export type Decision = "once" | "always" | "reject"

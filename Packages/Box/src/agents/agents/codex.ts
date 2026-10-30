@@ -768,6 +768,10 @@ class CodexThread implements Thread {
   /** The app-server its thread is in, as its last turn started. */
   server?: RPC
 
+  get sandboxed() {
+    return Boolean(this.server && !this.server.isClosed && this.agent.isFenced(this.server))
+  }
+
   /** The session's folder, when `rpc` runs whole in the box's sandbox (attachments are copied for it). */
   private fencedIn(rpc: RPC): string | undefined {
     return this.agent.isFenced(rpc) ? this.session.location.directory : undefined

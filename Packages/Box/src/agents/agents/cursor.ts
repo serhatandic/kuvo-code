@@ -267,6 +267,10 @@ class CursorThread implements Thread {
   private startedFence?: string
   /** Its SDK in a process of its own, run whole in the box's sandbox while it's on. */
   private worker?: CursorWorker
+
+  get sandboxed() {
+    return Boolean(this.agent && this.startedFence && this.worker && !this.worker.isClosed)
+  }
   /** Stops the worker once it's been done a while. */
   private idle?: ReturnType<typeof setTimeout>
   private active?: Active

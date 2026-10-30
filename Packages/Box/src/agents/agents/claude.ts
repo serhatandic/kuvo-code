@@ -827,6 +827,10 @@ class ClaudeThread implements Thread {
   /** While the box's sandbox is on: whether its shell for Claude Code is missing. */
   private fenceShellMissing?: boolean
 
+  get sandboxed() {
+    return Boolean(this.query) && this.fenceShellMissing === false
+  }
+
   private async read(query: any) {
     let ended: unknown
     try {

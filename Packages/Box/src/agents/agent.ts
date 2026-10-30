@@ -238,6 +238,8 @@ export interface Thread {
   turnAway?(): void
   /** It has work going that closing it would end (commands left running): it's kept open. */
   readonly keepsWorking?: boolean
+  /** Its commands run in the box's sandbox now: the agent's whole program runs in it. */
+  readonly sandboxed?: boolean
 }
 
 export interface Agent {

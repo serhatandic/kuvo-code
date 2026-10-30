@@ -5914,7 +5914,7 @@ function ancestors(path) {
 // Packages/Box/src/agents/agents/antigravity.ts
 import { createHash as createHash5 } from "crypto";
 import { chmodSync as chmodSync3, existsSync as existsSync11, mkdirSync as mkdirSync12, readdirSync as readdirSync11, readFileSync as readFileSync17, renameSync as renameSync9, rmSync as rmSync9, statSync as statSync7, writeFileSync as writeFileSync14 } from "fs";
-import { join as join17 } from "path";
+import { dirname as dirname9, join as join17 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
 
 // Packages/Box/src/agents/acp.ts
@@ -6500,6 +6500,12 @@ class AcpThread {
   loading = false;
   stale;
   fenced = false;
+  get files() {
+    return this.flavor.fileSystem && !this.fenced;
+  }
+  get sandboxed() {
+    return this.fenced;
+  }
   startedOver = false;
   onOwnTurn;
   own;
@@ -6591,7 +6597,7 @@ class AcpThread {
     try {
       const init = await rpc.request("initialize", {
         protocolVersion: 1,
-        clientCapabilities: { fs: { readTextFile: this.flavor.fileSystem, writeTextFile: this.flavor.fileSystem }, terminal: false },
+        clientCapabilities: { fs: { readTextFile: this.files, writeTextFile: this.files }, terminal: false },
         clientInfo: { name: "kuvo-code", title: "Kuvo Code", version: "1" },
         ...this.flavor.initializeMeta ? { _meta: this.flavor.initializeMeta } : {}
       }, 120000);
@@ -6656,8 +6662,6 @@ class AcpThread {
     const whole = this.flavor.whole;
     if (!whole || !fenceRules())
       return;
-    if (this.flavor.fileSystem)
-      throw new Error(`${this.name} can't run in the sandbox here: it reads and writes files through Kuvo Code.`);
     const directory = this.session.location.directory;
     const attached = fenceAttachments(directory);
     const relayed = relayedTools(this.session.id);
@@ -6666,7 +6670,7 @@ class AcpThread {
       homes: whole.homes(started),
       state: whole.state,
       kept: whole.kept,
-      read: [...skills?.startsWith("/") ? [skills] : [], ...attached ? [attached] : []],
+      read: [...skills?.startsWith("/") ? [skills] : [], ...attached ? [attached] : [], ...whole.read?.(started) ?? []],
       port: relayed ? relayPort() : undefined
     });
     if (!fence)
@@ -7070,7 +7074,7 @@ ${others.map((path) => `- ${path}`).join(`
     active.turn.startStep();
   }
   settleReads(active, all) {
-    if (!this.flavor.fileSystem)
+    if (!this.files)
       return;
     for (const [id, call] of active.tools) {
       if (!this.openRead(call) || call.settled)
@@ -7216,7 +7220,7 @@ ${others.map((path) => `- ${path}`).join(`
         return option ? { outcome: { outcome: "selected", optionId: option.optionId } } : { outcome: { outcome: "cancelled" } };
       }
       case "fs/read_text_file": {
-        if (!this.flavor.fileSystem)
+        if (!this.files)
           break;
         await this.allowFile(active, "read", resolve4(this.session.location.directory, params.path));
         let content;
@@ -7237,7 +7241,7 @@ ${others.map((path) => `- ${path}`).join(`
         return { content };
       }
       case "fs/write_text_file": {
-        if (!this.flavor.fileSystem)
+        if (!this.files)
           break;
         const file = resolve4(this.session.location.directory, params.path);
         if (active?.hooks.check({ action: "edit", resources: [file] }) === "deny")
@@ -8212,6 +8216,12 @@ class AntigravityAgent {
   ownSkillFolders(directory) {
     return [join17(this.profile, "antigravity-cli", "skills"), join17(directory, ".agents", "skills"), join17(directory, ".gemini", "skills")];
   }
+  places(env) {
+    return { homes: [env.GEMINI_HOME, env.TMPDIR].filter((place) => Boolean(place)), state: ["*"], kept: [] };
+  }
+  reads(env) {
+    return [env.ANTIGRAVITY_HARNESS_PATH, env.BROWSER].filter((place) => Boolean(place)).map((place) => dirname9(place));
+  }
   launch() {
     mkdirSync12(join17(this.profile, "antigravity-acp", "tmp"), { recursive: true, mode: 448 });
     const settings = join17(this.profile, "antigravity-acp", "settings.json");
@@ -8253,9 +8263,12 @@ class AntigravityAgent {
       const launch = this.launch();
       const cwd = join17(this.context.temporary, "antigravity", newID("att"));
       mkdirSync12(cwd, { recursive: true });
-      rpc = new RPC(launch.argv, {
+      const whole = fenceRules() ? fenceAgent(launch.argv[0], cwd, { ...this.places(launch.env), read: this.reads(launch.env) }) : undefined;
+      if (fenceRules() && !whole)
+        throw new Error("Antigravity runs in the sandbox here, and it isn't ready: restart Kuvo Code.");
+      rpc = new RPC(whole ? [whole.command, ...launch.argv.slice(1)] : launch.argv, {
         cwd,
-        env: launch.env,
+        env: { ...launch.env, ...whole?.env },
         cleanEnv: true,
         jsonrpc: true,
         firstID: 2 ** 30,
@@ -8269,6 +8282,7 @@ class AntigravityAgent {
         }
       });
       rpc.onExit = () => {
+        whole?.ended();
         launch.onExit();
         rmSync9(cwd, { recursive: true, force: true });
       };
@@ -8370,6 +8384,7 @@ class AntigravityAgent {
           emit("model.updated", {});
       },
       fileSystem: true,
+      whole: { homes: (env) => agent.places(env).homes, state: ["*"], kept: [], read: (env) => agent.reads(env) },
       authenticatesFirst: true,
       resumes: true,
       limitScope: "model",
@@ -9359,6 +9374,9 @@ class ClaudeThread {
     return { CLAUDE_CODE_SHELL: fence.shell, CLAUDE_CODE_TMPDIR: fence.temporary, KUVO_FENCE_WORK: fence.work, KUVO_FENCE_GIT: fence.git };
   }
   fenceShellMissing;
+  get sandboxed() {
+    return Boolean(this.query) && this.fenceShellMissing === false;
+  }
   async read(query) {
     let ended;
     try {
@@ -10954,6 +10972,9 @@ class CodexThread {
       this.agent.adopt(threadID, this);
   }
   server;
+  get sandboxed() {
+    return Boolean(this.server && !this.server.isClosed && this.agent.isFenced(this.server));
+  }
   fencedIn(rpc) {
     return this.agent.isFenced(rpc) ? this.session.location.directory : undefined;
   }
@@ -12201,7 +12222,7 @@ ${others.map((path) => `- ${path}`).join(`
 // Packages/Box/src/agents/agents/cursor.ts
 import { existsSync as existsSync15, mkdirSync as mkdirSync14, readFileSync as readFileSync21, rmSync as rmSync11 } from "fs";
 import { homedir as homedir3 } from "os";
-import { dirname as dirname9, join as join22 } from "path";
+import { dirname as dirname10, join as join22 } from "path";
 
 // Packages/Box/src/agents/agents/cursor-worker.ts
 import { readFileSync as readFileSync20, renameSync as renameSync10, writeFileSync as writeFileSync15 } from "fs";
@@ -12567,6 +12588,9 @@ class CursorThread {
   startedTools;
   startedFence;
   worker;
+  get sandboxed() {
+    return Boolean(this.agent && this.startedFence && this.worker && !this.worker.isClosed);
+  }
   idle;
   active;
   constructor(owner, session, state) {
@@ -12883,7 +12907,7 @@ ${text}`;
       homes: [conversations, own],
       state: ["*"],
       kept: [],
-      read: [runtime, dirname9(process.execPath), ...options.local?.dirs ?? [], ...attached ? [attached] : []],
+      read: [runtime, dirname10(process.execPath), ...options.local?.dirs ?? [], ...attached ? [attached] : []],
       port: options.mcpServers ? relayPort() : undefined
     });
     if (!fence)
@@ -13089,7 +13113,7 @@ function withTimeout2(promise, milliseconds) {
 // Packages/Box/src/agents/agents/grok.ts
 import { homedir as homedir4 } from "os";
 import { mkdirSync as mkdirSync15, readFileSync as readFileSync22, writeFileSync as writeFileSync16 } from "fs";
-import { dirname as dirname10, join as join23 } from "path";
+import { dirname as dirname11, join as join23 } from "path";
 var places3 = [join23(homedir4(), ".grok/bin"), join23(homedir4(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
 var STATE_IN_HOME2 = [
   "sessions",
@@ -13141,7 +13165,7 @@ class GrokAgent {
     if (!Object.keys(known).length || JSON.stringify(known) === JSON.stringify(this.efforts()))
       return;
     try {
-      mkdirSync15(dirname10(this.effortsFile), { recursive: true });
+      mkdirSync15(dirname11(this.effortsFile), { recursive: true });
       writeFileSync16(this.effortsFile, JSON.stringify(known));
     } catch {}
   }
@@ -13434,7 +13458,7 @@ import { createHash as createHash6 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
 import { readFileSync as readFileSync23, statSync as statSync9 } from "fs";
 import { homedir as homedir5 } from "os";
-import { dirname as dirname11, join as join24, resolve as resolve6 } from "path";
+import { dirname as dirname12, join as join24, resolve as resolve6 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 
 // Packages/Box/src/agents/handover.ts
@@ -14398,7 +14422,7 @@ var fileActions = new Set(["read", "edit", "write", "patch", "list", "grep", "gl
 function ownPlaces() {
   const places = [process.env.KUVO_AGENTS_HOME, process.env.TMPDIR?.replace(/\/$/, ""), join24(homedir5(), ".claude", "plans")].filter((place) => Boolean(place));
   if (process.env.KUVO_AGENTS_HOME && !onMachine)
-    places.push(join24(dirname11(process.env.KUVO_AGENTS_HOME), "Attachments"));
+    places.push(join24(dirname12(process.env.KUVO_AGENTS_HOME), "Attachments"));
   return [...places, ...skillFolders()];
 }
 function outsidePaths(ask, directory, attached, own = ownPlaces()) {
@@ -14408,7 +14432,7 @@ function outsidePaths(ask, directory, attached, own = ownPlaces()) {
   return paths.filter((path) => !within(path, [directory, ...own]) && !attached.has(path));
 }
 function outsideAsk(ask, paths) {
-  return { ...ask, action: "external_directory", resources: paths, save: [...new Set(paths.map((path) => join24(dirname11(path), "*")))], unclassified: false };
+  return { ...ask, action: "external_directory", resources: paths, save: [...new Set(paths.map((path) => join24(dirname12(path), "*")))], unclassified: false };
 }
 function partsOf2(ask) {
   return isShell(ask.action) ? ask.resources.flatMap(commandParts) : ask.resources;
@@ -16039,6 +16063,10 @@ ${live.agentPrompt}` : ""
       metadata: ask.metadata,
       message: ask.message
     };
+    if (live.doing.kind === "running" || live.doing.kind === "stopping") {
+      if (live.doing.run.agent?.thread.sandboxed)
+        request.sandboxed = true;
+    }
     const step = ask.toolCallID ? turn.toolStep(ask.toolCallID) : undefined;
     if (ask.toolCallID && step)
       request.source = { type: "tool", messageID: step, id: ask.toolCallID };
@@ -21408,4 +21436,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents c175d45e67593ca577ca69984998ddbe87b09b47df8d638715eefaec4302bbf8
+// Built from Packages/Box/src/agents ea9e53d6ad315908d7cacef56c4f0e68615101f8663670853fda4e8445b0a85c

@@ -2454,6 +2454,10 @@ export class Sessions {
       metadata: ask.metadata,
       message: ask.message,
     }
+    // Asked while its agent runs in the box's sandbox: a bot may weigh its commands as such.
+    if (live.doing.kind === "running" || live.doing.kind === "stopping") {
+      if (live.doing.run.agent?.thread.sandboxed) request.sandboxed = true
+    }
     const step = ask.toolCallID ? turn.toolStep(ask.toolCallID) : undefined
     if (ask.toolCallID && step) request.source = { type: "tool", messageID: step, id: ask.toolCallID }
     return new Promise<Decision>((resolve) => {

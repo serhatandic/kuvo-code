@@ -56,6 +56,9 @@ export interface PendingPermission {
   call?: string;
   /** The message its tool call is in. */
   message?: string;
+  /** The coding agents' bridge says the agent asking runs in the box's sandbox now (its whole
+   * program, so its commands too). The engine says nothing: its own state does. */
+  sandboxed?: boolean;
 }
 
 /** A tool call, as the engine keeps it in its message: its tool and its whole input. */
@@ -111,7 +114,7 @@ export async function asksIn(target: Target, session: string, signal?: AbortSign
       if (!isObject(each) || typeof each.id !== "string") continue;
       const resources = Array.isArray(each.resources) ? each.resources.filter((one: unknown): one is string => typeof one === "string") : [];
       const source = isObject(each.source) ? each.source : null;
-      permissions.push({ id: each.id, asker, action: String(each.action ?? ""), resources, ...(typeof source?.id === "string" ? { call: source.id } : {}), ...(typeof source?.messageID === "string" ? { message: source.messageID } : {}) });
+      permissions.push({ id: each.id, asker, action: String(each.action ?? ""), resources, ...(typeof source?.id === "string" ? { call: source.id } : {}), ...(typeof source?.messageID === "string" ? { message: source.messageID } : {}), ...(each.sandboxed === true ? { sandboxed: true } : {}) });
     }
     const forms = await call(target, "GET", `${at}/form`, undefined, signal).catch(() => null);
     for (const form of Array.isArray(forms) ? forms : []) {

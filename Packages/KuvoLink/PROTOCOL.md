@@ -603,8 +603,8 @@ client shows it from the same routes.
     - A file can change between the check and the run, and a hard link looks like any file.
     - git follows the diff, textconv and LFS settings the user already has.
 - **Answering asks in the sandbox** (`work/policy.ts`): where the session's commands run in the
-  sandbox ("Sandbox": the engine's, while it's `on`; the coding agents' own programs', once
-  `agents`), which holds what they write and read, a bot may allow any of its commands, wherever it
+  sandbox ("Sandbox": the engine's, while it's `on`; a coding agent's, when the agents bridge marks
+  its ask `sandboxed`, its program having started in it, and while it's still set up), which holds what they write and read, a bot may allow any of its commands, wherever it
   runs, within the engine's rules as above; but never one that acts beyond this computer with your
   accounts, read as plainly as the line allows (any part, past `sudo`, `env`, `npx` and the like):
   `git push`, any `push` or `upload` (`docker push`, `twine upload`), publishing (`npm publish`,
@@ -980,6 +980,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `api/kuvo/engine` (where the engine is), `api/kuvo/groups` (group chats' own steps, which a
   phone takes through `kuvo/groups`) and `api/kuvo/artifacts` (what its browser downloaded; the
   record is read through `kuvo/artifacts`). The same on both (`Vectors/link.json`, `agentRoutes`).
+  - A permission it lists (`…/session/<id>/permission`) has `sandboxed: true` when the agent asking
+    runs in the box's sandbox now (its whole program started in it), which a bot answering it reads
+    ("Work"); the engine's never have it.
   - Accounts: besides each agent's own sign-in, ones you added, each its own provider
     `<agent's provider>@<id>` (`claude-code@1f2e3d4c`), named `Claude Code · Work` in
     `kuvo/agents/api/integration` (`metadata.accountID`, `metadata.accountLabel`). Their models
@@ -2529,13 +2532,12 @@ bridge) has a tool call of that name running in it (`api/session/<id>/message`, 
 `running` or `pending`; for `tools`, with the same arguments; for `fill`, `browser_sign_in` or
 `browser_fill`, and one fill for each such call). Any program on the computer could name a session;
 only the conversation's own call uses its grants. (On a machine its browser, and anything that runs
-as you there, can still reach a value a fill puts in a page: until agents' commands are in the sandbox,
-that's what a machine can't keep from them.)
+as you there outside the sandbox, can still reach a value a fill puts in a page.)
 
 Agents use the vault only on a box whose agents' commands are all in the sandbox (below: its state's
-`on` and `agents`, not yet on any box; the tests open it with `KUVO_VAULT_AGENTS=1`, which a Mac's app never passes its box, and which a box
+`on` and `agents`; the tests open it with `KUVO_VAULT_AGENTS=1`, which a Mac's app never passes its box, and which a box
 takes only in a test's own folder, never the account's own `~/.kuvo-code` or a Mac's
-`run.kuvo.code…/box`). Until then `GET kuvo/vault/tools` lists no tools, and a call says the vault
+`run.kuvo.code…/box`). Elsewhere `GET kuvo/vault/tools` lists no tools, and a call says the vault
 isn't open to agents. A fill does only what Kuvo Code did before the vault: for `browser_sign_in`
 with no item, the one sign-in for the page's site the conversation may use on its own (else `404`,
 and the browser asks you); an item named, or a field, is `404`. The browser tools leave out
@@ -2674,8 +2676,9 @@ it's empty.
   words for Settings: why this computer can't (`able: false`: no Landlock, no engine
   yet), a failed check, `Its plugin for the engine was changed or removed.`, `The engine isn't
   running.`, `Waiting for the engine to load it.`. `agents`: the coding agents' own
-  programs' commands (Claude Code, Codex…, which don't go through the engine) are in it too; `false`
-  for now, so on doesn't yet cover them. How each will: Claude Code runs its commands through the
+  programs (Claude Code, Codex, Cursor, Grok and Antigravity, whose commands don't go through the
+  engine) run in it too: true once it's set up and checked here, as each starts its next turn in
+  it (one begun before finishes as it started). How each does: Claude Code runs its commands through the
   box's shell for it (`run/fence/shell/zsh` or `bash`); Codex runs whole in the sandbox
   (`run/fence/shell/run`), an app-server for each session in that session's folder (and your
   account's in its `sessions` folder), its own sandbox off, asking as it does, and Kuvo Code's tools
@@ -2690,7 +2693,7 @@ it's empty.
   database it opens as it starts, so a command can write it (what your Codex is told later, never
   what it runs; so can a conversation of its, when you take it up). Files you attach are copied for
   it to `run/fence/attachments`, which it only reads.
-  Grok runs whole the same way (and so will the other agents that speak ACP): its process per
+  Grok runs whole the same way, as Antigravity does: its process per
   session through `run/fence/shell/run`, its own sandbox off (`GROK_SANDBOX=off`), its memories
   off (`GROK_MEMORY=0`), never in a shared leader (`--no-leader`; on a Mac its socket in `~/.grok`
   is refused), Kuvo Code's tools through the relay; of its home, on a Mac, only what's named as its
@@ -2707,6 +2710,11 @@ it's empty.
   bridge, which hands it the key it runs with, out of its reach: of Cursor's folders it reads and
   writes only its conversations and a folder of its own for its notes, sandbox policies and computer
   use's (`cursor/in-sandbox`, never what Cursor keeps run in the bridge), and it reads its SDK.
+  Antigravity runs whole too, for its sessions and its sign-in alike: its home (`GEMINI_HOME`, Kuvo
+  Code's own, never yours) and its temporary folder, where it unpacks itself, written whole; its
+  program and the bridge's browser catcher only read; Kuvo Code's tools through the relay. It
+  writes and reads files with its own tools then: the bridge offers none (`fs` false in
+  `initialize`), since it would write outside the sandbox.
   When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
   you can do (`action`) and the box's route that does it (`route`, where there is one):
 
