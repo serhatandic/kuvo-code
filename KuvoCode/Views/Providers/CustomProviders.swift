@@ -153,7 +153,7 @@ struct CustomProviderEditor: View {
                 remove(CustomProvidersSection.path + [id ?? ""])
             }
         } message: {
-            Text("Its models go away from the model menu, and its key or sign-in is removed, here and on your machines. Sessions that used them need another model.")
+            Text("Its models go away from the model menu, and its key or sign-in on \(app.name(of: box)) is removed. Sessions that used them need another model.")
         }
     }
 

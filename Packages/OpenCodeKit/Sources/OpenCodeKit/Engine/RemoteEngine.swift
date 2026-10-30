@@ -40,9 +40,14 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     }
 
     /// For every connection: never a password prompt (there's no terminal to type it in), a
-    /// timeout to connect, and a check that notices when the machine goes away.
+    /// timeout to connect, and a check that notices when the machine goes away. A command and a
+    /// terminal of the machine's own in `~/.ssh/config` (`RemoteCommand tmux …`, `RequestTTY
+    /// force`) are left out: ssh refuses a command beside one, and a terminal mangles what comes
+    /// back. (The panel's terminal asks for one with `-t`, which still counts.)
     static let options = [
         "-o", "BatchMode=yes",
+        "-o", "RemoteCommand=none",
+        "-o", "RequestTTY=no",
         "-o", "ConnectTimeout=15",
         "-o", "ServerAliveInterval=15",
         "-o", "ServerAliveCountMax=3",
@@ -137,11 +142,22 @@ public enum RemoteEngineError: LocalizedError {
         switch self {
         case .ssh(let status, let message):
             let message = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Its key isn't the one this Mac knows: reinstalled, or someone in between.
+            // (The key is kept under the name ssh says, its address rather than a name in
+            // ~/.ssh/config, `[address]:port` on another port: quoted for the shell. Only a line
+            // that's all ssh's, with an address's characters in it: a machine could print text of
+            // its own, which must never be advised to paste.)
+            if status == 255, message.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") {
+                let line = /^Host key for ([A-Za-z0-9._:\-\[\]]+) has changed and you have requested strict checking\.$/.anchorsMatchLineEndings()
+                let name = message.firstMatch(of: line).map { String($0.1) }
+                let remove = name.map { "with ssh-keygen -R '\($0)'" } ?? "with ssh-keygen -R and the machine's address"
+                return "The machine's host key has changed since this Mac last connected. If you expect that (it was reinstalled, say), remove the old key in Terminal \(remove), then try again. If not, someone may be intercepting the connection."
+            }
             if status == 255, message.contains("Host key verification failed") {
                 return "This Mac doesn't know the machine's host key yet. Connect to it once in Terminal with ssh, then try again."
             }
             if status == 255, message.localizedCaseInsensitiveContains("permission denied") {
-                return "The machine didn't accept this Mac's SSH key. Kuvo Code connects with your keys and SSH agent, without a password."
+                return "The machine didn't accept this Mac's SSH key. Kuvo Code connects with your keys and SSH agent, without a password. If your key is in an app like 1Password or Secretive, or on a security key, unlock it, then try again."
             }
             return message.isEmpty ? "SSH stopped (exit code \(status))." : message
         case .unsupportedPlatform(let platform):

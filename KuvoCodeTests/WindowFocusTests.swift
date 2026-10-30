@@ -257,8 +257,11 @@ import Testing
     @Test func closingThePanelAsItSlidesInGivesTheKeyboardBack() async throws {
         defer { done() }
         _ = try #require(reply)
-        // A slide still under way all through the test.
-        withAnimation(.linear(duration: 600)) { app.tabs.showPanel(true) }
+        // A slide still under way all through the test. The window slides the panel at its own
+        // pace whatever animation shows it, so its pace is set aside for this one.
+        var slide = Transaction(animation: .linear(duration: 600))
+        slide.disablesAnimations = true
+        withTransaction(slide) { app.tabs.showPanel(true) }
         app.utilities.newTerminal(in: folder, environment: [:])
         let terminal = try #require(app.utilities.terminals.values.first)
         try await until { isInWindow(terminal.view) }
@@ -267,7 +270,8 @@ import Testing
         #expect(window.firstResponder === terminal.view)
         #expect(terminal.view.visibleRect.isEmpty, "still past the window's edge")
 
-        withAnimation(.ui) { app.tabs.showPanel(false) }
+        // Sliding out as slowly, so the terminal is still in the window as the keyboard goes back.
+        withTransaction(slide) { app.tabs.showPanel(false) }
         try await until { composerHasKeys }
         #expect(app.tabs.focus == .conversation)
     }

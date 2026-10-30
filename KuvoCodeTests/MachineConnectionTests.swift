@@ -365,6 +365,114 @@ import Testing
         #expect(link.machineHosts[id] == nil, "named to your phones and other computers again")
     }
 
+    /// Disconnected, it stays so when this Mac's engine starts again (after a restart, or a
+    /// change to your accounts), until you connect it.
+    @Test func disconnectedItStaysSoWhenThisMacsEngineStartsAgain() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        app.disconnect(engine)
+        #expect(!engine.isReady)
+
+        // What this Mac's engine starting again begins for machines.
+        for start in app.startMachines() { await start.value }
+        #expect(!engine.isReady, "it didn't connect by itself")
+
+        await app.connect(engine).value
+        #expect(engine.isReady, "Connect connects it")
+    }
+
+    /// Unreachable when it's first connected (the app opened before the network was up): it's
+    /// tried again by itself, as a dropped connection is, and connects once it answers.
+    @Test func unreachableAtFirstItsTriedAgainByItself() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        let api = reachable.apis[id]
+        reachable.apis[id] = nil
+        await app.connect(engine).value
+        guard case .failed = engine.state else { Issue.record("it reached a machine that doesn't answer"); return }
+
+        try await until { clock.waits == [3] }
+        #expect(clock.waits == [3], "it's tried again in a moment")
+        reachable.apis[id] = api
+        clock.pass(3)
+        try await until { engine.isReady }
+        #expect(engine.isReady)
+    }
+
+    /// A machine that answers but can't run the engine (an unsupported system; its key refused, a
+    /// changed host key) says why at once, with Try Again, rather than "Reconnecting…" for half an
+    /// hour while trying again won't change it.
+    @Test func aMachineThatCantBeSetUpSaysWhyRatherThanTryingAgain() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        // Over SSH for real (as far as the stand-in goes), where it answers as nothing the engine
+        // runs on.
+        MachineEngine.standIn = nil
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            return ""
+        }
+        await app.connect(engine).value
+        guard case .failed(let reason) = engine.state else { Issue.record("it connected"); return }
+        #expect(reason.contains("Linux"), "it says what it runs on")
+        #expect(!engine.isRetrying, "not tried again: it shows why, with Try Again")
+        #expect(clock.waits == [])
+    }
+
+    /// One that couldn't be set up for a reason that won't pass by itself is still tried once more
+    /// when the Mac wakes: a key in an agent (1Password, Secretive, a YubiKey) is refused while
+    /// it's locked, and works once it's unlocked.
+    @Test func aMachineThatCouldntBeSetUpIsTriedAgainWhenTheMacWakes() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        MachineEngine.standIn = nil
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            return ""
+        }
+        await app.connect(engine).value
+        #expect(!engine.isRetrying)
+
+        app.wakeMachines()
+        #expect(engine.isRetrying, "tried again")
+        try await until { clock.waits == [3] }
+        clock.pass(3)
+        // Still the same: it says why again, with Try Again, rather than trying on.
+        try await until { !engine.isRetrying }
+        guard case .failed = engine.state else { Issue.record("it connected"); return }
+        #expect(clock.waits == [])
+    }
+
+    /// Uninstalled, its sign-outs went but its engine wouldn't stop (the connection dropped just
+    /// then): what's tried there next stops it, rather than only tidying away how it starts again,
+    /// which would leave it running with nothing to ever stop it.
+    @Test func uninstalledWhenItsEngineWouldntStopItsStoppedNextTime() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        #expect(engine.isReady)
+        // The sign-outs go; then it's away: the stop, and what's tried after, don't reach it.
+        let stop = String(RemoteServer.stopCommand.dropFirst(2).dropLast(2))
+        let removal = Machines.removalMark
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            return script == stop || script.hasPrefix(removal) ? nil : ""
+        }
+        app.removeMachine(id, uninstall: true)
+        await app.machines.waitForRemoval(of: id)
+        // How it starts again isn't tidied away before it's stopped: what's tried there first, and
+        // waits for it, stops it.
+        try await until { ssh.scripts(to: id).contains { $0.hasPrefix(removal) } }
+        let tried = ssh.scripts(to: id).filter { $0.hasPrefix(removal) }
+        #expect(tried.first?.contains(RemoteServer.stopCommand) == true, "what waits for it stops its engine first")
+    }
+
     /// A new session in a machine's project that has other folders works in them there from its
     /// start: its rules and what its agent is told name the machine's own paths.
     @Test func aNewSessionInAMachinesProjectWorksInItsOtherFoldersThere() async throws {

@@ -780,6 +780,7 @@ final class Utilities {
     func closeTabs(of owner: String) {
         for tab in tabs where tab.owner == owner { close(tab.id, refills: false) }
         chosen = chosen.filter { !$0.key.hasPrefix(owner + "|") }
+        runs = runs.filter { !$0.key.hasPrefix(owner + "|") }
         kept[owner] = nil
     }
 

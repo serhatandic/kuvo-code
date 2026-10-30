@@ -11,6 +11,7 @@ nonisolated final class FakeEngine: @unchecked Sendable {
     private var credentials: [[String: Any]] = []
     private var integrations: [[String: Any]]
     private var servers: [[String: Any]] = []
+    private var refused: Set<String> = []
     private var next = 1
 
     /// An engine on `port` offering `accounts` (integration IDs).
@@ -32,6 +33,11 @@ nonisolated final class FakeEngine: @unchecked Sendable {
     @discardableResult
     func store(_ integration: String, label: String? = nil, value: [String: Any], active: Bool = true) -> String {
         lock.withLock { add(integration, label: label ?? integration, value: value, active: active) }
+    }
+
+    /// Removing this credential is refused, as an engine that can't write its file refuses it.
+    func refuseRemoving(_ id: String) {
+        lock.withLock { _ = refused.insert(id) }
     }
 
     /// What it has, by integration: each credential's ID, whether it's in use, and its refresh
@@ -72,6 +78,7 @@ nonisolated final class FakeEngine: @unchecked Sendable {
             case ("DELETE", let path) where path.hasPrefix("/api/credential/"):
                 let id = String(path.dropFirst("/api/credential/".count))
                 guard credentials.contains(where: { $0["id"] as? String == id }) else { return StubWeb.Answer(status: 404) }
+                if refused.contains(id) { return StubWeb.json(["message": "The credentials file couldn't be written."], status: 500) }
                 credentials.removeAll { $0["id"] as? String == id }
                 return StubWeb.json([:])
             case ("GET", "/api/integration"):

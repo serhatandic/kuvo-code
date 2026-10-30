@@ -1,5 +1,6 @@
 import ClientAccounts
 import ClientDesign
+import OpenCodeKit
 import SwiftUI
 
 // MARK: Bring your subscriptions
@@ -88,6 +89,7 @@ struct SubscriptionsStep: View {
         // KUVO_DEMO_SHOW_KEYS: the API keys found, open in place.
         .onAppear { if ProcessInfo.processInfo.environment["KUVO_DEMO_SHOW_KEYS"] != nil { showsKeys = true } }
         #endif
+        .modifier(InstallFailureAlert(isShown: signingIn == nil && adding == nil))
         .sheet(item: $signingIn) { signIn in
             ConnectView(integrationID: signIn.id, onDone: { finishedSigningIn() }, onCancel: { signingIn = nil })
                 .frame(width: 480)
@@ -168,7 +170,7 @@ struct SubscriptionsStep: View {
                 await app.usage.sync()
             }
         case .install(let id):
-            app.agents.install(id) { installed in
+            onboarding.install(row, with: app.agents) { installed in
                 await catalog.refreshAgents(fresh: true)
                 await onboarding.look(in: box, agentsUp: app.agents.api != nil)
                 if installed { signIn(id) }
@@ -254,6 +256,28 @@ struct OfferRow: View {
             case .signIn: Button("Sign In…") { act(row.action) }.buttonStyle(.glass)
             case .install: Button("Install") { act(row.action) }.buttonStyle(.glass).help("Runs its maker’s installer, then signs in")
             }
+        }
+    }
+}
+
+/// An agent's install from the step (or Add Another) that didn't work, as Settings › Accounts says
+/// it: the installer's words, and its command to run yourself. The step says it, or Add Another
+/// while it's open over the step, so it's said once, wherever you are, each in turn.
+struct InstallFailureAlert: ViewModifier {
+    /// Nothing is open over this view.
+    let isShown: Bool
+    @Environment(AppModel.self) private var app
+    @Environment(Catalog.self) private var catalog
+
+    func body(content: Content) -> some View {
+        let failure = isShown ? app.onboarding.installFailure : nil
+        content.alert("Couldn't Install \(failure?.name ?? "")", isPresented: Binding(get: { failure != nil }, set: { if !$0, let failure { app.onboarding.seenInstallFailure(failure.integrationID) } }), presenting: failure) { failure in
+            if let command = catalog.integrations.first(where: { $0.id == failure.integrationID })?.metadata?["install"]?.string {
+                Button("Copy Command") { Clipboard.copy(command) }
+            }
+            Button("OK", role: .cancel) {}
+        } message: { failure in
+            Text(failure.message)
         }
     }
 }

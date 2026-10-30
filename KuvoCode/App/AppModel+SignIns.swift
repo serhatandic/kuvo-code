@@ -227,12 +227,18 @@ extension AppModel {
 
     /// Signs out of `integration` (a server's or an account's, which engines name alike) on one
     /// computer: this Mac, or a machine, in its tab in Settings. Each keeps its own.
-    func forgetSignIn(_ integration: String, on box: SidebarBox = .mac) {
-        guard let api = api(for: box) else { return }
-        Task {
-            guard let entries = try? await api.credentialEntries() else { return }
-            for entry in entries where entry.integrationID == integration { try? await api.removeCredential(entry.id) }
+    /// Throws when that computer's engine can't be reached, or refused one.
+    func forgetSignIn(_ integration: String, on box: SidebarBox = .mac) async throws {
+        try await Self.forgetSignIn(integration, in: reachableAPI(for: box))
+    }
+
+    /// Each of its keys and sign-ins that can go goes; then throws if the engine refused one.
+    static func forgetSignIn(_ integration: String, in api: OpenCodeAPI) async throws {
+        var refused: (any Error)?
+        for entry in try await api.credentialEntries() where entry.integrationID == integration {
+            do { try await api.removeCredential(entry.id) } catch { refused = error }
         }
+        if let refused { throw refused }
     }
 
     /// A sign-out of an account's copies only (its keys, GitHub Copilot's sign-in), in `pendingSignOuts`.

@@ -27,16 +27,20 @@ final class Moves {
     @ObservationIgnored private var asked: [String: Going] = [:]
 
     /// Where each thing can go, as the box it lives on last said (`kuvo/moves/places`), by its ID:
-    /// its Move to Computer menu.
+    /// its Move to Computer menu. Set only when what a box says differs, since every row's menu
+    /// reads it: reading the same again draws nothing (it's read ahead, as the panel slides in, say).
     private var places: [String: Known] = [:]
     private struct Known: Equatable {
         /// The box that said it.
         var box: String
         var list: [Place]
-        var read: Date
     }
-    /// Each thing's reads of its places, numbered: an answer older than one taken already isn't taken.
+    /// When each thing's places were last read: they're kept for its menu a while.
+    @ObservationIgnored private var placesRead: [String: Date] = [:]
+    /// Each thing's reads of its places, numbered.
     @ObservationIgnored private var placeReads: [String: Int] = [:]
+    /// The read of each thing's places kept last (or begun last as it moved): older ones aren't.
+    @ObservationIgnored private var placesKept: [String: Int] = [:]
     @ObservationIgnored private var prefetching: Task<Void, Never>?
 
     /// A move of something, as its row shows it: the computer it's going to, by name, and how far.
@@ -122,7 +126,10 @@ final class Moves {
     /// `KUVO_DEMO_MOVES`: moves on their way and places, as boxes would say them (`DemoMoves`).
     func showDemo(going: [String: Going] = [:], places demo: [String: (machine: String?, list: [Place])] = [:]) {
         asked.merge(going) { _, new in new }
-        for (id, known) in demo { places[id] = Known(box: known.machine ?? BoxClient.mac, list: known.list, read: .distantFuture) }
+        for (id, known) in demo {
+            places[id] = Known(box: known.machine ?? BoxClient.mac, list: known.list)
+            placesRead[id] = .distantFuture
+        }
         show()
     }
     #endif
@@ -139,20 +146,47 @@ final class Moves {
     /// kept for its menu a while. Nil when it can't be asked (`whyNotAsked`), or didn't answer.
     @discardableResult
     func loadPlaces(_ kind: String, _ id: String, from machine: String?, fresh: Bool = false) async -> [Place]? {
+        guard let read = await readPlaces(kind, id, from: machine, fresh: fresh) else { return nil }
+        if let heard = read.heard { keep([id: heard]) }
+        return read.list
+    }
+
+    /// A box's answer, numbered among its thing's reads, to keep once it's heard.
+    private struct Heard {
+        var known: Known
+        var read: Int
+        var at = Date.now
+    }
+
+    /// Where `id` can go, as kept still (a while), or as its box says now: then `heard`, to keep.
+    private func readPlaces(_ kind: String, _ id: String, from machine: String?, fresh: Bool) async -> (list: [Place], heard: Heard?)? {
         let box = machine ?? BoxClient.mac
-        if !fresh, let known = places[id], known.box == box, Date.now.timeIntervalSince(known.read) < 30 { return known.list }
+        if !fresh, let known = places[id], known.box == box, let read = placesRead[id], Date.now.timeIntervalSince(read) < 30 { return (known.list, nil) }
         guard whyNotAsked(from: machine) == nil, let client = client(box) else { return nil }
         placeReads[id, default: 0] += 1
-        let read = placeReads[id]
+        let read = placeReads[id, default: 0]
         struct Answer: Decodable { var places: [Place] }
         let query = "kind=\(kind)&id=" + (id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)
         guard let answer = try? await client.value(Answer.self, "GET", "kuvo/moves/places?" + query) else { return nil }
-        if placeReads[id] == read { places[id] = Known(box: box, list: answer.places, read: .now) }
-        return answer.places
+        return (answer.places, Heard(known: Known(box: box, list: answer.places), read: read))
+    }
+
+    /// What boxes said of where things can go, kept all at once and only where it differs, since
+    /// every row's menu reads it; an answer older than one kept already isn't.
+    private func keep(_ heard: [String: Heard]) {
+        var next = places
+        for (id, said) in heard where said.read > placesKept[id, default: 0] {
+            placesKept[id] = said.read
+            placesRead[id] = said.at
+            next[id] = said.known
+        }
+        if next != places { places = next }
     }
 
     /// The bots', chats' and group chats' places, read ahead so their menus open with them (a menu
     /// that's open isn't drawn again): as Kuvo Code starts or a machine connects, and as moves change.
+    /// Kept once each box's are read (or as far as they got, when read ahead again), so the sidebar
+    /// is drawn again once a box at most, and not at all when nothing changed.
     private func readPlacesAhead() {
         prefetching?.cancel()
         prefetching = Task { [weak self] in
@@ -160,10 +194,17 @@ final class Moves {
             let chats = app.workspace.sessions.filter { $0.parentID == nil && Workspace.isChat($0.location.directory) && !Workspace.isArchived($0) }
             let things = app.bots.list.map { ("bot", $0.id, $0.machine) } + app.chats.list.map { ("group", $0.id, app.chats.machine(of: $0.id)) }
                 + chats.map { ("chat", $0.id, RemoteFolder.machine(of: $0.location.directory)) }
-            for (kind, id, machine) in things {
-                guard !Task.isCancelled, let self else { return }
-                await self.loadPlaces(kind, id, from: machine)
+            let byBox = things.sorted { ($0.2 ?? "") < ($1.2 ?? "") }
+            var heard: [String: Heard] = [:]
+            for (index, (kind, id, machine)) in byBox.enumerated() {
+                guard !Task.isCancelled, let self else { break }
+                heard[id] = await self.readPlaces(kind, id, from: machine, fresh: false)?.heard
+                if index == byBox.count - 1 || byBox[index + 1].2 != machine {
+                    self.keep(heard)
+                    heard = [:]
+                }
             }
+            self?.keep(heard)
         }
     }
 
@@ -338,8 +379,13 @@ final class Moves {
         guard stages(before?.moves ?? []) != stages(said?.moves ?? []) else { return }
         let over = (before?.moves ?? []).filter { old in !(said?.moves ?? []).contains { $0.id == old.id } }
         let ends = Set(((said?.moves ?? []) + (before?.moves ?? [])).map(\.peer))
-        // Where things can go changed with them ("moving already", where one lives now).
-        places = [:]
+        // Where things can go changed with them ("moving already", where one lives now): read again,
+        // and the things that moved shown as they are once their boxes say (they may live elsewhere).
+        placesRead = [:]
+        let moved = Set(((said?.moves ?? []) + (before?.moves ?? [])).flatMap { [$0.thing] + $0.sessions })
+        // Reads begun before aren't kept: they'd say where those could go from where they were.
+        for id in moved { placesKept[id] = placeReads[id, default: 0] }
+        if places.keys.contains(where: moved.contains) { places = places.filter { !moved.contains($0.key) } }
         readPlacesAhead()
         Task {
             for machine in machinesOf(keys: ends) where machine != box { await reload(machine) }
