@@ -165,6 +165,13 @@ final class WindowTabs {
     /// The folder of the new session in view.
     var draftDirectory: String? { selection?.draftFolder }
 
+    /// Open Beside, while a session can open beside the tab in view: it's a session's (not a
+    /// draft or a group chat), and there.
+    var besideOpener: ((String) -> Void)? {
+        guard let sessionID, workspace.session(sessionID) != nil else { return nil }
+        return { [weak self] in self?.openBeside($0) }
+    }
+
     /// The session in split view, while it's another than the one in view (and there).
     var splitModel: SessionModel? {
         guard let selection, let beside = pairs[selection], beside != sessionID, workspace.session(beside) != nil else { return nil }
