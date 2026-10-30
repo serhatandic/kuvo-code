@@ -13,11 +13,15 @@ var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 var pause = (ms, signal) => new Promise((resolve) => {
   if (signal?.aborted)
     return resolve();
-  const timer = setTimeout(resolve, ms);
-  signal?.addEventListener("abort", () => {
+  const stopped = () => {
     clearTimeout(timer);
     resolve();
-  }, { once: true });
+  };
+  const timer = setTimeout(() => {
+    signal?.removeEventListener("abort", stopped);
+    resolve();
+  }, ms);
+  signal?.addEventListener("abort", stopped, { once: true });
 });
 var soon = (run, ms) => setTimeout(run, ms).unref?.();
 
