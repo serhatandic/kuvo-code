@@ -365,6 +365,24 @@ import Testing
         #expect(link.machineHosts[id] == nil, "named to your phones and other computers again")
     }
 
+    /// Disconnected, it stays so when this Mac's engine starts again (after a restart, or a
+    /// change to your accounts), until you connect it.
+    @Test func disconnectedItStaysSoWhenThisMacsEngineStartsAgain() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        app.disconnect(engine)
+        #expect(!engine.isReady)
+
+        // What this Mac's engine starting again begins for machines.
+        for start in app.startMachines() { await start.value }
+        #expect(!engine.isReady, "it didn't connect by itself")
+
+        await app.connect(engine).value
+        #expect(engine.isReady, "Connect connects it")
+    }
+
     /// Uninstalled, its sign-outs went but its engine wouldn't stop (the connection dropped just
     /// then): what's tried there next stops it, rather than only tidying away how it starts again,
     /// which would leave it running with nothing to ever stop it.

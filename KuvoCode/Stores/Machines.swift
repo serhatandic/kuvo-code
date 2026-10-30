@@ -60,6 +60,9 @@ final class MachineEngine {
     private(set) var isLive = false
     /// Waiting to try again by itself, after the connection dropped.
     var isRetrying = false
+    /// Disconnect was pressed (here or from a phone): it isn't connected again by itself, as this
+    /// Mac's engine starts again, until it's connected.
+    var isDisconnected = false
     // COMPAT(0.7 engine-stop): an engine an older Mac stopped. Goes 3 months after 0.8.0.
     /// Its engine is stopped on purpose (Stop, here or from anywhere): it stays so until Start.
     private(set) var isStopped = false

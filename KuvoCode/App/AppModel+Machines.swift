@@ -4,8 +4,10 @@ import OpenCodeKit
 import os
 
 extension AppModel {
-    /// Connects every machine you've added, each in the background on its own.
-    func startMachines() {
+    /// Connects every machine you've added, each in the background on its own, but one you
+    /// disconnected. The connections it began, which a test waits for.
+    @discardableResult
+    func startMachines() -> [Task<Void, Never>] {
         #if DEBUG
         // KUVO_DEMO_MACHINE_ROOT: a folder of its own on machines (like .kuvo-code-demo), so a demo
         // copy's engine and browser there never touch the ones your own copy of the app runs.
@@ -152,7 +154,7 @@ extension AppModel {
                 MainActor.assumeIsolated { self?.wakeMachines() }
             }
         }
-        for engine in machines.engines.values { connect(engine) }
+        return machines.engines.values.filter { !$0.isDisconnected }.map { connect($0) }
     }
 
     private func wakeMachines() {
@@ -337,6 +339,7 @@ extension AppModel {
     @discardableResult
     func connect(_ engine: MachineEngine) -> Task<Void, Never> {
         let machine = engine.machine.id
+        engine.isDisconnected = false
         // Its pages are the panel's browser tabs while a session there is in view.
         engine.browser.onPages = { [weak self] pages in self?.utilities.syncMachinePages(machine, pages) }
         engine.browser.onActive = { [weak self] page, byAgent, session in self?.utilities.machinePageActive(machine, page: page, byAgent: byAgent, session: session) }
@@ -483,6 +486,7 @@ extension AppModel {
     /// test copy's stops, unless a session there is working.)
     func disconnect(_ engine: MachineEngine) {
         engine.startWanted = false
+        engine.isDisconnected = true
         engine.browser.reset()
         utilities.closeMachineBrowser(engine.machine.id)
         // What runs for its connection ends now, a test copy's too, whose engine stops after.
