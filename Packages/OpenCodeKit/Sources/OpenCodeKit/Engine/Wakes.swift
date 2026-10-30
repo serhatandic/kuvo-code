@@ -674,6 +674,11 @@ public enum Wakes {
           s_out=$(s_ask "$bport" "$bpassword") || return 0
           s_code=$(printf '%s' "$s_out" | tail -n 1)
           [ "$s_code" = 200 ] && printf bridge >"${bot}via" && port=$bport password=$bpassword tools=1
+        # Or the engine's, which its folder took for the bridge's (neither answered as it was made).
+        elif [ "$s_code" = 404 ] && [ "$port" = "$bport" ] && [ -n "$eport" ] && [ -n "$epassword" ]; then
+          s_out=$(s_ask "$eport" "$epassword") || return 0
+          s_code=$(printf '%s' "$s_out" | tail -n 1)
+          [ "$s_code" = 200 ] && rm -f "${bot}via" && port=$eport password=$epassword tools=
         fi
         case "$s_code" in
           404) mkdir -p "${botsroot%/*}/trash" && mv "${bot%/}" "${botsroot%/*}/trash/wakes-$session-$now" 2>/dev/null; return 1 ;;

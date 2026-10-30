@@ -351,6 +351,20 @@ import Testing
         #expect(try String(contentsOf: moved.appending(path: "via"), encoding: .utf8) == "bridge")
     }
 
+    /// Taken for a coding agent's when it was made (neither answered just then), but the engine's:
+    /// woken there, not thrown away for the bridge not having it.
+    @Test func aSessionTheEngineHasIsWokenThereThoughItsFolderSaidTheBridge() throws {
+        defer { cleanUp() }
+        try write(k.appending(path: "run/bridge.json"), #"{"pid":2,"port":\#(Self.bridgePort),"password":"bridge-pass"}"#)
+        let mine = try folder("ses_mine", in: sessions, session: "ses_mine", wake: "Carry on")
+        try write(mine.appending(path: "via"), "bridge")
+        try answer(Self.bridgePort, "GET", "api/session/ses_mine", "{}", code: 404)
+        try answer(Self.enginePort, "GET", "api/session/ses_mine", #"{"id":"ses_mine"}"#)
+        try fire()
+        #expect(prompts() == ["\(Self.enginePort) ses_mine [Wake-up] Carry on"])
+        #expect(!FileManager.default.fileExists(atPath: mine.appending(path: "via").path))
+    }
+
     @Test func aSubagentsWakeUpsGoToTheConversationThatStartedIt() throws {
         defer { cleanUp() }
         let child = try folder("ses_child", in: sessions, session: "ses_child", wake: "Report back")
