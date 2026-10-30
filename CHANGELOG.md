@@ -197,6 +197,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Archiving a session, here or from your phone, ends its terminals in the side panel, and removing a machine ends the terminals on it, in the side panel and the window's tabs, rather than leaving them running out of sight (a dev server holding its port). A conversation moved to the coding agents keeps its terminals.
 - In Changes, the review button on a branch reviews what the branch changed since main, rather than finding nothing to review.
 - Settings › Integrations no longer shows Notion, Linear and other signed-in integrations as needing a sign-in when the engine is too busy to say who's signed in.
+- A reply the agent is still writing keeps its words when its conversation is read again, after the network or a machine comes back: they no longer vanish until the paragraph ends, or show twice in a coding agent's reply.
+- A note the agent's engine adds by itself, like a background command finishing, shows even when it was waiting as you opened the conversation.
+- A conversation on a machine goes on updating after the machine reconnects, even when the machine is slow to answer at first; and when your Mac wakes, its own conversations no longer wait on a machine that's still reconnecting.
 - A comment on a line in Changes, and one you're still writing, stays on its line while the agent adds lines above it, rather than disappearing, and your message tells the agent the line it's on now.
 - A machine's Changes tab opened while the machine can't be reached no longer says it isn't a git repository, and a project there with many new files no longer reads them all from the machine again every few seconds.
 - A file a bot shows you in a group chat opens in the side panel, instead of "No Project".
