@@ -454,6 +454,8 @@ export class GroupRunner {
     live.asked++
     live.since ??= message.id
     live.splitStop?.()
+    // Written to at the pause, as Keep Going: the talk before it gets its wrap-up at the end.
+    if (live.paused) live.resumed = true
     this.setPaused(id, false)
     if (live.speaking) void this.steer(live.speaking, id, message)
     if (!live.abort) this.begin(id)
@@ -742,10 +744,11 @@ export class GroupRunner {
       }
     }
     // The lead sums up a discussion that went back and forth, or a meeting where more than one spoke, unless you've written since
-    // or the lead couldn't take part (its note is in the chat already). Paused at the limit, it waits for the end: one wrap-up, after Keep Going.
+    // or the lead couldn't take part (its note is in the chat already). Paused at the limit, it waits for the end: one wrap-up, after
+    // Keep Going or your message; but a meeting (held while you may be away) is summed up there.
     const kept = this.chat(id)
     const lead = kept?.group.members[0]
-    if (paused || signal.aborted || (saidCount === 0 && !resumed) || live.asked !== epoch || !kept || !lead || !this.member(lead) || absent.has(lead)) return epoch
+    if ((paused && live.meeting === undefined) || signal.aborted || (saidCount === 0 && !resumed) || live.asked !== epoch || !kept || !lead || !this.member(lead) || absent.has(lead)) return epoch
     if ((resumed || saidCount >= (live.meeting !== undefined ? 2 : 3)) && kept.group.members.length >= 2) {
       const before = kept.messages.at(-1)?.id
       await this.turn(lead, id, signal, true)

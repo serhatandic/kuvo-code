@@ -306,6 +306,27 @@ describe("a group chat on a machine", () => {
     await until(() => said() > 6 && !groups.talk("grp_team000001").discussing, 8000)
   }, 20_000)
 
+  test("a debate paused at its limit that you answer with a message rather than Keep Going is summed up once, at its end", async () => {
+    const { groups } = runner()
+    engine.lines = { Ada: ["Ada 0", "Ada 1", "Ada 2", "Ada 3"], Ben: ["Ben 0", "Ben 1", "Ben 2"] }
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Debate it.")
+    await until(() => groups.talk("grp_team000001").paused && !groups.talk("grp_team000001").discussing, 8000)
+    const wrapUps = () => groups.get("grp_team000001")!.messages.filter((message) => message.kind === "wrapUp").length
+    groups.send("grp_team000001", "One more round.")
+    await until(() => !groups.talk("grp_team000001").discussing && groups.get("grp_team000001")!.messages.some((message) => message.text === "Ada 3"), 8000)
+    expect(wrapUps()).toBe(1)
+  }, 20_000)
+
+  test("a meeting that reaches its limit while you're away is still summed up", async () => {
+    const { groups } = runner()
+    engine.lines = { Ada: ["Ada 0", "Ada 1", "Ada 2", "Ada 3"], Ben: ["Ben 0", "Ben 1", "Ben 2"] }
+    groups.put(group({ next: stamp(new Date(Date.now() - 1000)), topic: "Standup: what's new?" }), [], "active", false)
+    groups.meetDue()
+    await until(() => groups.talk("grp_team000001").paused && !groups.talk("grp_team000001").discussing, 8000)
+    expect(groups.get("grp_team000001")!.messages.filter((message) => message.kind === "wrapUp")).toHaveLength(1)
+  }, 20_000)
+
   test("a debate paused at its limit isn't wrapped up yet: the lead sums it up once, at its real end", async () => {
     const { groups } = runner()
     engine.lines = { Ada: ["Ada 0", "Ada 1", "Ada 2", "Ada 3"], Ben: ["Ben 0", "Ben 1", "Ben 2"] }
