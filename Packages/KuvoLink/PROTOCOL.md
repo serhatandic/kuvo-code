@@ -1626,7 +1626,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `every` 30m, 2h, 1d, 1w or weekdays, at least 5m), with the computer's own clock and weekends;
   `400 {"message"}` for what can't be one, `409` with 50 waiting. `POST
   kuvo/wakes/<session>/pause` with `{"paused": true}` holds them (a pause of your own), `false`
-  lets them go; with `{"archived": true}` they're held as archiving holds them (a client that
+  lets them go (not archiving's hold: they still wait until it's back, bridge 0.9.119); with `{"archived": true}` they're held as archiving holds them (a client that
   archived it on the engine directly says so), `false` lets go of only that hold. Both answer the
   list as it is then. `POST
   kuvo/wakes/<session>/cancel` with `{"wake": "<id>"}` or `{"watch": "<letters>"}` cancels one;
