@@ -15,11 +15,18 @@ export const readBridgeFile = (): BridgeRecord => JSON.parse(fs.readFileSync(BRI
 export function peerTargets(): Target[] {
   const targets: Target[] = [];
   try { targets.push(readEngineFile()); } catch {}
+  const bridge = runningAgentsBridge();
+  if (bridge) targets.push(bridge);
+  return targets;
+}
+
+/** The coding agents' bridge here, while it runs (its record, and its process). */
+export function runningAgentsBridge(): Target | null {
   try {
     const bridge = readBridgeFile();
-    if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) targets.push(bridge);
+    if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) return bridge;
   } catch {}
-  return targets;
+  return null;
 }
 
 /** An answer of the engine's (or the coding agents' bridge's) as their APIs always give one, with

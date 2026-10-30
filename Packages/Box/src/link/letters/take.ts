@@ -44,6 +44,9 @@ export interface TakeLetterOptions {
   now?: number;
   wait?: number;
   moving?: (session: string) => Promise<boolean>;
+  /** The coding agents' bridge isn't running here now (it's starting, or starting again): a
+   * conversation the engine doesn't have may be one of theirs, so a letter for it comes again. */
+  bridgeDown?: boolean;
 }
 
 /** A message in a session, as far as an answer is read from it: its id, whose it is, its blocks of text. */
@@ -107,6 +110,10 @@ export async function answerTo(target: Target, session: string, id: string, { wa
   return null;
 }
 
+// Said of a letter for a conversation the engine doesn't have while the coding agents' bridge
+// isn't running: it may be one of theirs, so it comes again.
+const BRIDGE_DOWN = "The coding agents there aren't running right now: it comes again once they are.";
+
 // A letter from a peer: delivered once, said to be there (or why not, and whether to try again),
 // and with `wait`, answered by a letter back. Who it's from is the sending box's own agent, by the
 // name that box gave it, only when that box alone lists it and it isn't one of this box's own;
@@ -117,7 +124,7 @@ export async function answerTo(target: Target, session: string, id: string, { wa
 // lives on another now, comes again, and reaches it where it lives then. `send(peer, payload)`
 // mails the peer; `answer(letter)` sends this box's answer back.
 // (`send` and `targets` are always given: the `{}` is only there as the default.)
-export async function takeLetter(sender: LetterSender, letter: unknown, { send, targets, answer = () => {}, told = readPeerAgents(), peers = peersOf(readLink()), moved = movedOf(readLink()), now = Date.now(), wait, moving = async () => false }: TakeLetterOptions = {} as TakeLetterOptions): Promise<void> {
+export async function takeLetter(sender: LetterSender, letter: unknown, { send, targets, answer = () => {}, told = readPeerAgents(), peers = peersOf(readLink()), moved = movedOf(readLink()), now = Date.now(), wait, moving = async () => false, bridgeDown = false }: TakeLetterOptions = {} as TakeLetterOptions): Promise<void> {
   if (!isObject(letter) || typeof letter.id !== "string" || !LETTER_ID.test(letter.id)) return;
   const { id } = letter;
   const no = (why: string, again = false) => send(sender, { delivered: { id, ok: false, why, ...(again ? { retry: true } : {}) } });
@@ -131,7 +138,7 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     noteSeen(id, now);
     return send(sender, { delivered: { id, ok: true } });
   }
-  if (isObject(letter.read)) return readFor(sender, letter as ReadLetter, { send, targets, answer, now, moved, moving });
+  if (isObject(letter.read)) return readFor(sender, letter as ReadLetter, { send, targets, answer, now, moved, moving, bridgeDown });
   if (tooMany(sender.key, now)) return no("It's sent a lot of messages in the last few minutes.", true);
   delivering.add(id);
   let place: SessionPlace | null, prompt: string, fromAgent: ListedAgent | null = null;
@@ -139,7 +146,7 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     const lives = moved.get(letter.to);
     if ((lives && lives !== ownKey(readLink() ?? {})) || (await moving(letter.to))) return no("It's moving to another computer: it comes again once it's there.", true);
     place = await placeOfSession(letter.to, targets);
-    if (!place) return no("There's no such conversation here.");
+    if (!place) return bridgeDown ? no(BRIDGE_DOWN, true) : no("There's no such conversation here.");
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return no("That conversation doesn't take messages.");
     // Its sender: that box's own agent, as it named it; one of this box's own claimed from there isn't.
@@ -170,7 +177,7 @@ type ReadLetter = { id: string; to: string; from?: unknown; read: { query?: unkn
 // then its words go back as the letter's answer, as much as fits in one. Any agent of your other
 // computers may read one here, as on this one, but only one an agent could be (not a subagent's, a
 // group chat's seat, nor one put away). Reading isn't writing to it: it isn't counted.
-async function readFor(sender: LetterSender, letter: ReadLetter, { send, targets, answer = () => {}, now = Date.now(), moved = new Map(), moving = async () => false }: Pick<TakeLetterOptions, "send" | "targets" | "answer" | "now" | "moved" | "moving">): Promise<void> {
+async function readFor(sender: LetterSender, letter: ReadLetter, { send, targets, answer = () => {}, now = Date.now(), moved = new Map(), moving = async () => false, bridgeDown = false }: Pick<TakeLetterOptions, "send" | "targets" | "answer" | "now" | "moved" | "moving" | "bridgeDown">): Promise<void> {
   const { id } = letter;
   const no = (why: string, again = false) => send(sender, { delivered: { id, ok: false, why, ...(again ? { retry: true } : {}) } });
   if (typeof letter.from !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(letter.from)) return no("Its answer has nowhere to go.");
@@ -182,7 +189,7 @@ async function readFor(sender: LetterSender, letter: ReadLetter, { send, targets
     const lives = moved.get(letter.to);
     if ((lives && lives !== ownKey(readLink() ?? {})) || (await moving(letter.to))) return no("It's moving to another computer: it's read once it's there.", true);
     const place = await placeOfSession(letter.to, targets);
-    if (!place) return no("There's no such conversation here.");
+    if (!place) return bridgeDown ? no(BRIDGE_DOWN, true) : no("There's no such conversation here.");
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return no("That conversation can't be read.");
     const markdown = await readConversation(place.target, letter.to, place.data ?? {}, String(place.data?.title || "New session"));

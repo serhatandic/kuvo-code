@@ -134,12 +134,18 @@ function peerTargets() {
   try {
     targets.push(readEngineFile());
   } catch {}
+  const bridge = runningAgentsBridge();
+  if (bridge)
+    targets.push(bridge);
+  return targets;
+}
+function runningAgentsBridge() {
   try {
     const bridge = readBridgeFile();
     if (bridge?.port && bridge?.password && processRuns(bridge.pid, "kuvo-agents"))
-      targets.push(bridge);
+      return bridge;
   } catch {}
-  return targets;
+  return null;
 }
 function engineGet(engine, route) {
   return fetch(`http://127.0.0.1:${engine.port}/${route}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` }, signal: AbortSignal.timeout(1e4) }).then((response) => response.ok ? response.json() : Promise.reject(new Error(`${response.status}`)));
@@ -11682,7 +11688,8 @@ async function answerTo(target, session, id, { wait = 2000, signal } = {}) {
   }
   return null;
 }
-async function takeLetter(sender, letter, { send, targets, answer = () => {}, told = readPeerAgents(), peers = peersOf(readLink()), moved = movedOf(readLink()), now = Date.now(), wait, moving = async () => false } = {}) {
+var BRIDGE_DOWN = "The coding agents there aren't running right now: it comes again once they are.";
+async function takeLetter(sender, letter, { send, targets, answer = () => {}, told = readPeerAgents(), peers = peersOf(readLink()), moved = movedOf(readLink()), now = Date.now(), wait, moving = async () => false, bridgeDown = false } = {}) {
   if (!isObject(letter) || typeof letter.id !== "string" || !LETTER_ID.test(letter.id))
     return;
   const { id } = letter;
@@ -11700,7 +11707,7 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
     return send(sender, { delivered: { id, ok: true } });
   }
   if (isObject(letter.read))
-    return readFor(sender, letter, { send, targets, answer, now, moved, moving });
+    return readFor(sender, letter, { send, targets, answer, now, moved, moving, bridgeDown });
   if (tooMany(sender.key, now))
     return no("It's sent a lot of messages in the last few minutes.", true);
   delivering.add(id);
@@ -11711,7 +11718,7 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
       return no("It's moving to another computer: it comes again once it's there.", true);
     place = await placeOfSession(letter.to, targets);
     if (!place)
-      return no("There's no such conversation here.");
+      return bridgeDown ? no(BRIDGE_DOWN, true) : no("There's no such conversation here.");
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
       return no("That conversation doesn't take messages.");
@@ -11737,7 +11744,7 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
   if (text)
     answer({ from: letter.to, to: letter.from, text, answers: id, peer: sender.key });
 }
-async function readFor(sender, letter, { send, targets, answer = () => {}, now = Date.now(), moved = new Map, moving = async () => false }) {
+async function readFor(sender, letter, { send, targets, answer = () => {}, now = Date.now(), moved = new Map, moving = async () => false, bridgeDown = false }) {
   const { id } = letter;
   const no = (why, again = false) => send(sender, { delivered: { id, ok: false, why, ...again ? { retry: true } : {} } });
   if (typeof letter.from !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(letter.from))
@@ -11752,7 +11759,7 @@ async function readFor(sender, letter, { send, targets, answer = () => {}, now =
       return no("It's moving to another computer: it's read once it's there.", true);
     const place = await placeOfSession(letter.to, targets);
     if (!place)
-      return no("There's no such conversation here.");
+      return bridgeDown ? no(BRIDGE_DOWN, true) : no("There's no such conversation here.");
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
       return no("That conversation can't be read.");
@@ -11798,7 +11805,7 @@ function peerMail(sender, payload, host, targets = () => []) {
     }
   }
   if (isObject(payload.letter))
-    takeLetter(sender, payload.letter, { send, targets: targets(), answer: leaveAnswer, moving: async (session) => frozen().has(session) }).catch(() => {});
+    takeLetter(sender, payload.letter, { send, targets: targets(), answer: leaveAnswer, moving: async (session) => frozen().has(session), bridgeDown: !runningAgentsBridge() }).catch(() => {});
   if (isObject(payload.move))
     takeMoveMail(sender, payload.move).catch(() => {});
   if (isObject(payload.seat) || isObject(payload.seatPart))

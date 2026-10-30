@@ -127,6 +127,21 @@ async function engine(t) {
   return { prompts, target: { port: server.address().port, password: "pw" } };
 }
 
+test("a letter for a conversation the engine doesn't have, while the coding agents' bridge isn't running (it's starting, or starting again), comes again instead of being refused for good", async t => {
+  fresh();
+  const { prompts, target } = await engine(t);
+  const said = [];
+  const take = extra => link.takeLetter(second.peer, { id: "ltr_" + crypto.randomBytes(6).toString("hex"), from: "ses_sender", to: "ses_agents", text: "Still there?", at: Date.now() },
+    { send: (peer, message) => said.push(message.delivered), targets: [target], peers: [second.peer], told: {}, wait: 10, ...extra });
+
+  await take({ bridgeDown: true });
+  assert.deepEqual([said[0].ok, said[0].retry, said[0].why], [false, true, "The coding agents there aren't running right now: it comes again once they are."]);
+  // With the bridge running and still nowhere: there's no such conversation, and it isn't tried again.
+  await take({ bridgeDown: false });
+  assert.deepEqual([said[1].ok, said[1].retry, said[1].why], [false, undefined, "There's no such conversation here."]);
+  assert.equal(prompts.length, 0);
+});
+
 test("a letter from a peer: delivered once, said to be there, by its sender's own name; one it can't verify comes from an agent there, with no way back; with wait, answered by a letter", async t => {
   fresh();
   const { prompts, target } = await engine(t);

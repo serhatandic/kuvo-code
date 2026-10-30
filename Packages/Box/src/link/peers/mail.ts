@@ -4,7 +4,7 @@
 
 import { isObject } from "../../shared/json";
 import { receiveDocs } from "../documents/exchange";
-import { readEngineFile } from "../engine/client";
+import { readEngineFile, runningAgentsBridge } from "../engine/client";
 import { leaveAnswer, letterWent } from "../letters/outbox";
 import { takeLetter } from "../letters/take";
 import { takeMoveMail } from "../moves/move";
@@ -50,7 +50,7 @@ export function peerMail(sender: MailSender, payload: Record<string, unknown>, h
       answeringAsk = announce(host, readEngineFile).catch(() => {}).finally(() => { answeringAsk = null; });
     }
   }
-  if (isObject(payload.letter)) takeLetter(sender, payload.letter, { send, targets: targets(), answer: leaveAnswer, moving: async session => frozen().has(session) }).catch(() => {});
+  if (isObject(payload.letter)) takeLetter(sender, payload.letter, { send, targets: targets(), answer: leaveAnswer, moving: async session => frozen().has(session), bridgeDown: !runningAgentsBridge() }).catch(() => {});
   // A move between this box and that one (PROTOCOL.md, `kuvo/moves`).
   if (isObject(payload.move)) takeMoveMail(sender, payload.move).catch(() => {});
   // Group chats across your computers: to the coding agents' bridge here.
