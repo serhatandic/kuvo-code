@@ -285,7 +285,8 @@ connection.
     `run/replies/<id>.json` (`{text}`, `{failed}` or `{note}`), and touches `<id>.alive` as it
     looks. An answer that comes once it isn't is delivered as a message, and so is one it was given
     but never took (its turn stopped as the answer came): once the tool's gone (`<id>.gaveup`, or
-    `<id>.alive` ten seconds old), once (bridge 0.9.63). After eleven minutes, or stopped, it leaves
+    `<id>.alive` ten seconds old), once (bridge 0.9.63), kept a day while the coding agents' bridge
+    isn't running for a conversation the engine doesn't know. After eleven minutes, or stopped, it leaves
     `<id>.gaveup`, and its letter goes on without waiting. The link notes `run/relay-down` while
     it's been off the relay half a minute, so a tool says so at once rather than wait.
   - Letters an older Kuvo Code left in `run/outbox` for a Mac to collect over SSH are taken on by
@@ -574,7 +575,9 @@ client shows it from the same routes.
   `kuvo: {startedBy, by: {bot, name}, depth, wake?}`: the bot it works for, how deep it is
   (1 for one the bot started), and what its starter hears of it (a bot: both, or only its asks
   when it waited for the answer). What a starter hears is gathered a few seconds and sent as one
-  message (an ask to be read at its next step), kept in `run/work/wakes.json` until it's sent. Clients mark rows by `kuvo.by`.
+  message (an ask to be read at its next step), kept in `run/work/wakes.json` until it's sent (for a
+  conversation the engine doesn't know while the coding agents' bridge isn't running, a day at most,
+  since it may be the bridge's; and so is an answer given late, below). Clients mark rows by `kuvo.by`.
   Its task ends with the session's half of the playbook: review your work with reviewer subagents,
   fix what they find, and end with a short report.
 - **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
@@ -649,8 +652,9 @@ client shows it from the same routes.
   stopped (held and paused, as the queue's Stop), and the bot's own turn too, with what it was
   still to hear of them dropped. 404 for no such bot here, 503 with no engine.
 - **A box starting again** (its link): what its followed sessions did while it was down (finished,
-  failed, asked) is told to their starters once, by what `run/work/told.json` says was told, and an
-  answer to an ask given after its tool stopped waiting goes to its conversation if it hadn't.
+  failed, asked; not one that was stopped) is told to their starters once, by what
+  `run/work/told.json` says was told, and an answer to an ask given after its tool stopped waiting
+  goes to its conversation if it hadn't.
 
 **Projects** (bridge 0.9.107, feature `work.projects`): a bot makes new projects on its box, in a
 folder you pick once per box, after asking you.

@@ -130,6 +130,37 @@ test("a wake that can't reach the bot now (its engine starting again) is kept an
   assert.match(prompts[0].text, /^\[Session finished\] "Sign-in"/);
 });
 
+test("a wake for a bot that runs with the coding agents is kept while their bridge isn't running, and goes once it is", async t => {
+  // Scout's conversation is the bridge's (the engine doesn't know it); it started Docs, in the engine.
+  sessions.ses_docs = { id: "ses_docs", title: "Docs", location: { directory: tidepool }, time: { created: 1, updated: 1 }, metadata: { kuvo: { startedBy: "ses_scout", by: { bot: "bot_scout00001", name: "Scout" }, depth: 1, wake: ["finished"] } } };
+  t.after(() => { delete sessions.ses_docs; });
+  const told = [];
+  const bridge = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+      if (request.url === "/api/session/ses_scout") return reply({ data: { id: "ses_scout", title: "Scout" } });
+      if (request.url === "/api/session/ses_scout/prompt") { told.push(JSON.parse(body)); return reply({}); }
+      reply({ message: "No such session." }, 404);
+    });
+  });
+  await new Promise(resolve => bridge.listen(0, "127.0.0.1", resolve));
+  t.after(() => { bridge.closeAllConnections(); bridge.close(); });
+  const atBridge = { port: bridge.address().port, password: "b" };
+  let bridgeRuns = false;
+  const { schedule, runAll } = clock();
+  const watch = link.workWatcher(source, () => (bridgeRuns ? [source, atBridge] : [source]), { schedule, bridgeRuns: () => bridgeRuns });
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_docs" } });
+  await runAll();
+  assert.deepEqual(told, []);
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(wakesFile, "utf8"))), ["ses_scout"], "kept, not taken for a conversation that's gone");
+  bridgeRuns = true;
+  await runAll();
+  assert.equal(told.length, 1);
+  assert.match(told[0].text, /^\[Session finished\] "Docs"/);
+});
+
 test("what happened while the box was down reaches the bot as it starts again, once", async () => {
   const toldFile = path.join(home, "run", "work", "told.json");
   // It last heard of anything a while ago; since, Sign-in finished and Haptics asked something.
@@ -194,4 +225,18 @@ test("an answer given after its bot stopped waiting reaches it as the box starts
   // Told once.
   await link.workWatcher(source, () => [source], { schedule }).caughtUp;
   assert.equal(prompts.length, 1);
+});
+
+test("an answer given late for a bot that runs with the coding agents waits while their bridge isn't running, rather than being taken as told", async () => {
+  const asksFile = path.join(home, "run", "work", "asks.json");
+  fs.mkdirSync(path.dirname(asksFile), { recursive: true });
+  fs.writeFileSync(asksFile, JSON.stringify({ asks: [{ id: "wak_2", action: "makeProject", session: "ses_scout", name: "Scout", project: "Tidepool", folderName: "tidepool", folder: null, at: 1,
+    given: { name: "Tidepool" }, late: true, answered: { answer: "allow", text: "Made Tidepool at ~/Developer/tidepool.", isError: false, at: Date.now() - 60 * 60_000 } }] }));
+  const { schedule } = clock();
+  await link.workWatcher(source, () => [source], { schedule, bridgeRuns: () => false }).caughtUp;
+  assert.equal(JSON.parse(fs.readFileSync(asksFile, "utf8")).asks[0].toldLate, undefined, "still to tell");
+  // The bridge runs, and has no such conversation either: gone, so it's done with.
+  await link.workWatcher(source, () => [source], { schedule, bridgeRuns: () => true }).caughtUp;
+  assert.deepEqual(JSON.parse(fs.readFileSync(asksFile, "utf8")).asks, []);
+  assert.equal(prompts.length, 0);
 });

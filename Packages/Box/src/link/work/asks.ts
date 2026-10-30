@@ -9,7 +9,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { pause } from "../../shared/wait";
 import { botHere, changeDescription, noteBotsChanged } from "../bots/here";
-import { asked } from "../engine/client";
+import { asked, peerPlaces } from "../engine/client";
 import { messageID } from "../engine/sessions";
 import { locked, textOf, writePrivate } from "../files";
 import { HERE } from "../home";
@@ -58,9 +58,9 @@ function changeKept<T>(change: (asks: KeptAsk[]) => T, file = WORK_ASKS): T {
   const result = locked(LOCK, () => {
     const asks = readKept(file);
     const value = change(asks);
-    // Answered ones once their tool has had them; unanswered ones of a bot that's gone, or asked a
-    // week ago and more.
-    const kept = asks.filter(each => (each.answered ? Date.now() - each.answered.at < 15 * 60_000 || (each.late === true && !each.toldLate) : (!each.bot || botHere(each.bot)) && Date.now() - each.at < 7 * 86_400_000));
+    // Answered ones once their tool has had them (or their conversation, told a week at most);
+    // unanswered ones of a bot that's gone, or asked a week ago and more.
+    const kept = asks.filter(each => (each.answered ? Date.now() - each.answered.at < 15 * 60_000 || (each.late === true && !each.toldLate && Date.now() - each.answered.at < 7 * 86_400_000) : (!each.bot || botHere(each.bot)) && Date.now() - each.at < 7 * 86_400_000));
     writePrivate(file, JSON.stringify({ asks: kept }, null, 2));
     return value;
   });
@@ -237,10 +237,13 @@ export async function answerWork(id: string, given: Record<string, unknown>, tar
 }
 
 // One answered after its tool stopped waiting, told to its conversation, and noted once it is.
-async function tellLate(id: string, targets: () => Target[], file: string) {
+async function tellLate(id: string, targets: () => Target[], file: string, bridgeRuns = () => peerPlaces().bridge) {
   const ask = readKept(file).find(each => each.id === id);
   if (!ask?.answered || !ask.late || ask.toldLate) return;
   const place = await placeOfSession(ask.session, targets()).catch(() => undefined);
+  // Not known while the coding agents' bridge isn't running: it may be the bridge's, told as the box
+  // starts again.
+  if (place === null && !bridgeRuns()) return;
   // Gone for sure: no one to tell.
   if (place !== null) {
     if (!place) return;
@@ -255,8 +258,8 @@ async function tellLate(id: string, targets: () => Target[], file: string) {
 
 /** What was answered after its tool stopped waiting and not told yet (the box stopping in
  * between), told now, as a box starts. */
-export async function tellLateAnswers(targets: () => Target[], file = WORK_ASKS): Promise<void> {
-  for (const ask of readKept(file).filter(each => each.answered && each.late && !each.toldLate)) await tellLate(ask.id, targets, file);
+export async function tellLateAnswers(targets: () => Target[], file = WORK_ASKS, bridgeRuns?: () => boolean): Promise<void> {
+  for (const ask of readKept(file).filter(each => each.answered && each.late && !each.toldLate)) await tellLate(ask.id, targets, file, bridgeRuns);
 }
 
 /** The ask in words for a notification: who asks, and what. */

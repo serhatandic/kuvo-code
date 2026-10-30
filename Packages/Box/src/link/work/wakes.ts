@@ -8,10 +8,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { cut } from "../../shared/text";
-import { asked, call } from "../engine/client";
+import { asked, call, peerPlaces } from "../engine/client";
 import { messageID } from "../engine/sessions";
 import { locked, writePrivate } from "../files";
-import { placeOfSession } from "../letters/letter";
+import { LETTER_LIFE, placeOfSession } from "../letters/letter";
 import { describeForm, describePermission } from "../notices/news";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
 import { asksIn } from "./answers";
@@ -147,12 +147,14 @@ export interface WorkWatch {
   toldFile?: string;
   schedule?: (run: () => Promise<void>, ms: number) => unknown;
   file?: string;
+  /** Whether the coding agents' bridge runs now (a conversation the engine doesn't know may be its). */
+  bridgeRuns?: () => boolean;
 }
 
 /** Follows `source`'s events for the work of bots and of any conversation that started sessions:
  * each one that ends or asks, told to whoever started it (as its `kuvo.wake` says), close ones as
  * one message; each, a change to its bot's work. `targets()`: where conversations here run. */
-export function workWatcher(source: Target, targets: () => Target[], { gather = GATHER, schedule = setTimeout, file = WORK_WAKES, toldFile = WORK_TOLD }: WorkWatch = {}): ((event: WorkEvent) => Promise<void>) & { caughtUp: Promise<void> } {
+export function workWatcher(source: Target, targets: () => Target[], { gather = GATHER, schedule = setTimeout, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge }: WorkWatch = {}): ((event: WorkEvent) => Promise<void>) & { caughtUp: Promise<void> } {
   const due = new Set<string>();
   // How many tries in a row each has failed, for the wait before the next.
   const failures = new Map<string, number>();
@@ -168,10 +170,11 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       return one;
     });
     if (!waiting?.lines.length) return;
-    // Gone for sure: nothing to tell. Not to be reached now (the engine starting again): kept, and
-    // tried again a little later each time.
+    // Gone for sure: nothing to tell. Not to be reached now (the engine starting again, or the coding
+    // agents' bridge not running, whose it may be): kept, a day at most, and tried again a little
+    // later each time.
     const place = await placeOfSession(starter, targets()).catch(() => undefined);
-    if (place === null) return;
+    if (place === null && (bridgeRuns() || Date.now() - waiting.since > LETTER_LIFE)) return;
     try {
       if (!place) throw new Error("Not reached.");
       await asked(place.target, "POST", `api/session/${encodeURIComponent(starter)}/prompt`, { id: messageID(), text: wakeText(waiting.lines), delivery: waiting.asks ? "steer" : "queue" });
@@ -250,7 +253,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     }
     changeTold(toldFile, () => {});
   };
-  const caughtUp = Promise.all([catchUp().catch(() => {}), tellLateAnswers(targets).catch(() => {})]).then(() => {});
+  const caughtUp = Promise.all([catchUp().catch(() => {}), tellLateAnswers(targets, undefined, bridgeRuns).catch(() => {})]).then(() => {});
   // (What each event set going, for a test to wait on.)
   const watch = (event: WorkEvent) => {
     const id = event.data?.sessionID ?? event.data?.form?.sessionID;
