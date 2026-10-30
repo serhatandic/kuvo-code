@@ -74,6 +74,17 @@ final class Moves {
 
     static func isFrozen(_ id: String) -> Bool { frozen.contains(id) }
 
+    /// Conversations carrying on with the coding agents now (`Workspace.moveToAgents`): what you
+    /// send stays in the composer, and goes to the new session with the rest of what you wrote.
+    static var toAgents: Set<String> = []
+
+    /// Throws when something sent to `id` can't go now: it's moving, to another computer or to
+    /// the coding agents.
+    static func checkNotMoving(_ id: String) throws {
+        if isFrozen(id) { throw Failure.moving }
+        if toAgents.contains(id) { throw Failure.movingToAgents }
+    }
+
     enum Failure: LocalizedError {
         case notConnected(String)
         /// A machine whose box doesn't talk to your other computers yet.
@@ -82,12 +93,15 @@ final class Moves {
         case refused(String)
         /// Something sent to one that's moving.
         case moving
+        /// Something sent to one carrying on with the coding agents.
+        case movingToAgents
         var errorDescription: String? {
             switch self {
             case .notConnected(let place): "\(place) isn’t connected. Connect to it, then try again."
             case .needsUpdate(let place): "\(place) needs a newer Kuvo Code before things can move to or from it. It updates by itself overnight, or connect to it from this Mac."
             case .refused(let message): message
             case .moving: "It’s moving to another computer. Try again once it’s there."
+            case .movingToAgents: "It’s moving to the coding agents. What you wrote goes with it: send it once it’s there."
             }
         }
     }

@@ -253,6 +253,9 @@ struct Composer: View {
                     if SlashCommands.query(in: new) == nil {
                         commandIndex = 0
                         if new.isEmpty { dismissedCommands = false }
+                    } else if let query = SlashCommands.query(in: new), let commandMatches {
+                        // As you type, the one named exactly what you typed, else the first.
+                        commandIndex = SlashItem.chosen(query, in: commandMatches)
                     }
                     // Not /review any more: its lists can open again.
                     if !new.hasPrefix(Keyword.review.typed) {

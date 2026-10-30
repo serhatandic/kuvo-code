@@ -23,6 +23,19 @@ import Testing
         #expect(SlashCommands.matches("", in: commands).map(\.name) == ["compact", "init", "preview-deploy", "review"])
     }
 
+    /// A project's command typed in full is what Return picks, though a keyword has its name
+    /// inside (/review has "view"; /goal starts with "go") and is listed first.
+    @MainActor @Test func aCommandTypedInFullIsPickedOverAKeywordThatHasItsName() throws {
+        let own = try ["view", "go"].map { try JSONDecoder().decode(Command.self, from: Data(#"{"name":"\#($0)"}"#.utf8)) }
+        for name in ["view", "go"] {
+            let items = SlashItem.matches(name, keywords: Keyword.allCases, commands: own)
+            #expect(items[SlashItem.chosen(name, in: items)] == .command(own.first { $0.name == name }!), "\(name)")
+        }
+        // Half typed, the first as before.
+        let items = SlashItem.matches("vi", keywords: Keyword.allCases, commands: own)
+        #expect(SlashItem.chosen("vi", in: items) == 0)
+    }
+
     @Test func aMessageThatRunsOne() throws {
         let run = try #require(SlashCommands.parse("  /review main --strict\n", commands: commands))
         #expect(run.name == "review")

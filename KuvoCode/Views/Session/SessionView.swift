@@ -711,6 +711,8 @@ struct DraftSessionView: View {
 
     private func send() {
         guard !isCreating else { return }
+        // What the last try said goes with this one.
+        failure = nil
         // "/goal" with nothing to give the agent (alone, pause, resume, clear): a new conversation
         // has no goal to act on, so none is made for it.
         if let goal = GoalCommand(Drafts.shared[draftKey].text), !goal.needsModel {
