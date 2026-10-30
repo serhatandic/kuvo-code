@@ -197,6 +197,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A file a bot shows you in a group chat opens in the side panel, instead of "No Project".
 - Reload in the Files tab while you're filtering reads the files again, instead of leaving the filter loading.
 - Add to Message in a terminal tab of the window starts a new session in its folder with what you selected, instead of doing nothing.
+- Showing or hiding the side panel or the sidebar no longer catches at the start of its slide when you have many sessions: the sidebar isn't drawn again for it.
 
 ## 0.7.2
 

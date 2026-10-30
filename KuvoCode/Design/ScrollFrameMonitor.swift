@@ -15,6 +15,10 @@ final class ScrollFrameMonitor: NSObject {
     static var piecesMade = 0
     /// Rows made, by row.
     static var rowsMadeByID: [String: Int] = [:]
+    /// The sidebar's body worked out, and its rows' (`KUVO_PERF_TOGGLE` says how many a toggle
+    /// of the panel took, which should be none).
+    static var sidebarBodies = 0
+    static var sidebarRowBodies = 0
 
     private var link: CADisplayLink?
     private var last: CFTimeInterval = 0
