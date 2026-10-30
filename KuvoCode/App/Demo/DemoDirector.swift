@@ -235,7 +235,7 @@ enum DemoDirector {
 
     /// KUVO_DEMO_PANEL: tools to open in the panel, comma-separated: terminal, browser=<address>,
     /// machine=<machine>[=<address>] (a tab in its browser, with a session there in view), files,
-    /// file=<path>, changes, run (the project's run command), expand, toggle=<seconds>.
+    /// file=<path>, folder=<path>, changes, run (the project's run command), expand, toggle=<seconds>.
     private static func openPanelTools(_ list: String, app: AppModel, window: DemoWindow) {
         let utilities = app.utilities
         for item in list.split(separator: ",").map(String.init) {
@@ -262,6 +262,12 @@ enum DemoDirector {
                 Task {
                     await DemoWait.pause(.conversationShows)
                     utilities.show(RemoteFolder.url(parts[1]))
+                }
+            case "folder" where parts.count > 1:
+                // Files, open down to that folder, as an agent's show_in_panel opens it.
+                Task {
+                    await DemoWait.pause(.conversationShows)
+                    utilities.show(RemoteFolder.url(parts[1]), isFolder: true)
                 }
             case "changes": utilities.showChanges()
             case "run": window.runProject()

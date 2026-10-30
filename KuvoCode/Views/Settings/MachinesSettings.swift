@@ -87,7 +87,7 @@ struct MachinesSettings: View {
                 try? await Task.sleep(for: .seconds(1))
                 // Once it's up, as you'd open it (it says who else uses it then), or after a while.
                 for _ in 0..<60 where app.machines.engine(id)?.isReady == false { try? await Task.sleep(for: .seconds(1)) }
-                removing = app.machines.list.first { $0.id == id }
+                if let machine = app.machines.list.first(where: { $0.id == id }) { askToRemove(machine) }
             }
         }
         #endif
@@ -117,10 +117,26 @@ struct MachinesSettings: View {
         } message: { machine in
             Text(Self.removal(of: machine.name, engine: app.machines.engine(machine.id), phones: PhoneLink.isEnabled).message)
         }
-        // Who else uses it, read afresh as the dialog opens (one that isn't connected keeps what
-        // was read last, or says Uninstall would stop it for anyone).
-        .task(id: removing?.id) {
-            if let id = removing?.id, let engine = app.machines.engine(id), engine.isReady { await app.readAlsoUsedBy(engine) }
+    }
+
+    /// Remove's dialog, once who else uses it is read afresh (a dialog doesn't change once it's
+    /// up): a moment at most, then with what was read last, or saying Uninstall would stop it for
+    /// anyone. One that isn't connected opens at once.
+    private func askToRemove(_ machine: Machine) {
+        guard let engine = app.machines.engine(machine.id), engine.isReady else {
+            removing = machine
+            return
+        }
+        let app = app
+        Task {
+            // (The read is let go when the moment's up: it only reads.)
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { await app.readAlsoUsedBy(engine) }
+                group.addTask { try? await Task.sleep(for: .seconds(1.5)) }
+                await group.next()
+                group.cancelAll()
+            }
+            removing = machine
         }
     }
 
@@ -232,7 +248,7 @@ struct MachinesSettings: View {
                 case nil:
                     EmptyView()
                 }
-                Button("Remove…") { removing = engine.machine }
+                Button("Remove…") { askToRemove(engine.machine) }
             }
         }
         .contextMenu {
