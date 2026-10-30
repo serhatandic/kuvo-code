@@ -50,10 +50,10 @@ export function integrationCatalog(file = INTEGRATIONS_FILE): CatalogIntegration
  * won't start until it's turned on. Just turned on, while the engine still says it's off, it's
  * starting. A server that signs in by itself with a code the first time it's used (Outlook's,
  * `signInFile` in the catalog) waits for that code until its sign-in is there. */
-function integrationHealth(entry: CatalogIntegration, server: EngineServer | undefined, off: boolean, signedIn: Set<string>): IntegrationHealth {
+function integrationHealth(entry: CatalogIntegration, server: EngineServer | undefined, off: boolean, signedIn: Set<string> | null): IntegrationHealth {
   if (off) return "disabled";
   let health: IntegrationHealth = ({ connected: "connected", needs_auth: "needsSignIn", failed: "failed" } as Record<string, IntegrationHealth>)[server?.status?.status as string] ?? "starting";
-  if (health === "connected" && server?.integrationID && !signedIn.has(server.integrationID) && ["official", "app"].includes(entry.way)) health = "needsSignIn";
+  if (health === "connected" && server?.integrationID && signedIn && !signedIn.has(server.integrationID) && ["official", "app"].includes(entry.way)) health = "needsSignIn";
   if (health === "connected" && typeof entry.signInFile === "string" && !fs.existsSync(path.join(INTEGRATION_DATA, entry.id, path.basename(entry.signInFile)))) health = "waitsForCode";
   return health;
 }
@@ -64,15 +64,16 @@ function integrationHealth(entry: CatalogIntegration, server: EngineServer | und
 async function integrationEntries(catalog: CatalogIntegration[], engine: EngineRecord | null, signal: AbortSignal | undefined): Promise<{ entries: Integration[]; engineDown: boolean }> {
   const { settings } = readSettings();
   let servers: EngineServer[] | null = null;
-  let signedIn: Set<string> = new Set();
+  // Null where the engine didn't say (busy, or not answering): not the same as none.
+  let signedIn: Set<string> | null = new Set();
   // Integrations it has had a sign-in for, in use or not: one of them needing a sign-in had one that ended.
   let hadSignIn: Set<string> = new Set();
   if (engine) {
     // (As the engine answers it: its MCP servers, a list.)
     servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => null) as EngineServer[] | null;
-    const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
+    const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => null);
     const oauth = (Array.isArray(credentials) ? credentials as EngineCredential[] : []).filter(each => each?.value?.type === "oauth");
-    signedIn = new Set(oauth.filter(each => each.active).map(each => each.integrationID));
+    signedIn = Array.isArray(credentials) ? new Set(oauth.filter(each => each.active).map(each => each.integrationID)) : null;
     hadSignIn = new Set(oauth.map(each => each.integrationID));
   }
   const engineDown = !Array.isArray(servers);

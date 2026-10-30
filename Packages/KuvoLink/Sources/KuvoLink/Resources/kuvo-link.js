@@ -2012,7 +2012,7 @@ function integrationHealth(entry, server, off, signedIn) {
   if (off)
     return "disabled";
   let health = { connected: "connected", needs_auth: "needsSignIn", failed: "failed" }[server?.status?.status] ?? "starting";
-  if (health === "connected" && server?.integrationID && !signedIn.has(server.integrationID) && ["official", "app"].includes(entry.way))
+  if (health === "connected" && server?.integrationID && signedIn && !signedIn.has(server.integrationID) && ["official", "app"].includes(entry.way))
     health = "needsSignIn";
   if (health === "connected" && typeof entry.signInFile === "string" && !fs17.existsSync(path16.join(INTEGRATION_DATA, entry.id, path16.basename(entry.signInFile))))
     health = "waitsForCode";
@@ -2025,9 +2025,9 @@ async function integrationEntries(catalog, engine, signal) {
   let hadSignIn = new Set;
   if (engine) {
     servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => null);
-    const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
+    const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => null);
     const oauth = (Array.isArray(credentials) ? credentials : []).filter((each) => each?.value?.type === "oauth");
-    signedIn = new Set(oauth.filter((each) => each.active).map((each) => each.integrationID));
+    signedIn = Array.isArray(credentials) ? new Set(oauth.filter((each) => each.active).map((each) => each.integrationID)) : null;
     hadSignIn = new Set(oauth.map((each) => each.integrationID));
   }
   const engineDown = !Array.isArray(servers);
