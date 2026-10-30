@@ -296,6 +296,16 @@ test("a command is never let out of the sandbox for good: Always is only the fol
   const other = await engineRuns(shop, `echo next > ${JSON.stringify(path.join(logs, "next.log"))}`, "ses_shop2");
   assert.equal(other.status, 0, other.out);
   assert.equal((await fromMac("DELETE", `kuvo/sandbox/allowed/${rules[0].id}`)).status, 200);
+  // A file in its own project it was stopped writing (the settings an agent starts with): Always
+  // there would give nothing, so it's once.
+  const settings = `echo '{}' > ${JSON.stringify(path.join(shop, ".mcp.json"))}`;
+  assert.notEqual((await engineRuns(shop, settings, "ses_shop2")).status, 0, "the sandbox stops it");
+  const set = sandboxAsk(box, "ses_shop2", { command: settings, why: "To add a server." });
+  const [setAsk] = await asked(box, set);
+  assert.deepEqual(setAsk.stopped, [{ kind: "write", path: path.join(shop, ".mcp.json") }]);
+  assert.equal(setAsk.always, undefined);
+  await box.ask("POST", `kuvo/sandbox/asks/${setAsk.id}`, { answer: "no" });
+  await set;
 });
 
 test("a folder in Also Allowed is one a project's commands write in the sandbox, and another project's still can't", async () => {

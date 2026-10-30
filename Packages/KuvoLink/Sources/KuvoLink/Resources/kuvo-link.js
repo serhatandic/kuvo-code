@@ -16538,9 +16538,20 @@ async function stopsFor(session, command, minutes = 3) {
   }
   return stops.slice(-MOST_STOPS);
 }
-function alwaysFor(stops) {
+function alwaysFor(stops, project) {
   const writes = [...new Set(stops.filter((stop) => stop.kind === "write" && stop.path).map((stop) => stop.path))];
   if (writes.length !== 1 || !stops.every((stop) => stop.kind === "write"))
+    return;
+  const real = (where) => {
+    try {
+      return fs69.realpathSync(where);
+    } catch {
+      return path70.resolve(where);
+    }
+  };
+  const own = real(project);
+  const where = real(path70.dirname(writes[0]));
+  if (where === own || where.startsWith(own + "/"))
     return;
   const isFolder = (() => {
     try {
@@ -16549,8 +16560,8 @@ function alwaysFor(stops) {
       return false;
     }
   })();
-  const where = (isFolder ? null : writeRuleWouldBe(path70.dirname(writes[0]))) ?? writeRuleWouldBe(writes[0]);
-  return where ? { kind: "write", path: where } : undefined;
+  const given = (isFolder ? null : writeRuleWouldBe(path70.dirname(writes[0]))) ?? writeRuleWouldBe(writes[0]);
+  return given ? { kind: "write", path: given } : undefined;
 }
 function sandboxAskNotice(asked) {
   const who = asked.botName ?? asked.sessionName ?? "An agent";
@@ -16583,7 +16594,7 @@ async function askToRun(caller, args, signal) {
   if (!project)
     return failed("This conversation's folder isn't there, so nothing can run for it.");
   const stopped = caller.session ? await stopsFor(caller.session, String(args.command)) : [];
-  const always = caller.seat ? undefined : alwaysFor(stopped);
+  const always = caller.seat ? undefined : alwaysFor(stopped, project);
   const answered = await book.ask({
     ...caller.root ? { session: caller.root, ...caller.sessionName ? { sessionName: caller.sessionName } : {} } : {},
     ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {},
