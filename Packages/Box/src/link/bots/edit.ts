@@ -43,6 +43,21 @@ function keepAllowed(changed: BotDescription, now: BotDescription | null, names:
   return next;
 }
 
+// What a change changes (from `before`, its description as the change read it, to `after`), onto
+// its description as it is now: what another saved while this one waited (on the engine, carrying
+// it to the coding agents) is kept.
+function onto(now: BotDescription | null, before: BotDescription, after: BotDescription): BotDescription {
+  if (!now) return after;
+  const next: Record<string, unknown> = { ...now };
+  const was = before as Record<string, unknown>, is = after as Record<string, unknown>;
+  for (const key of new Set([...Object.keys(was), ...Object.keys(is)])) {
+    if (JSON.stringify(was[key]) === JSON.stringify(is[key])) continue;
+    if (is[key] === undefined) delete next[key];
+    else next[key] = is[key];
+  }
+  return next as BotDescription;
+}
+
 /** A change to a bot, as Edit Bot sends it (`PATCH kuvo/bots/<id>`): its name, look, personality,
  * job or model, and its work's settings (`work: {limits, allowed}`: the limits you set, null for
  * none, and what it may do without asking, each only when named),
@@ -148,7 +163,7 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
   // Only its work's settings changed: its description kept, nothing to tell it.
   if (limitsChanged && !Object.keys(given).some(key => key !== "work")) {
     try {
-      changeDescription(here.folder, now => keepAllowed(changed, now, namesAllowed));
+      changeDescription(here.folder, now => keepAllowed(onto(now, described, changed), now, namesAllowed));
     } catch (error) {
       return no(503, `The bot couldn’t be changed: ${(error as Error | null)?.message ?? error}`);
     }
@@ -175,7 +190,7 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
         writeJob(here, job!);
         changed.job = job!.line;
       }
-      here.described = changeDescription(here.folder, now => keepAllowed(changed, now, namesAllowed));
+      here.described = changeDescription(here.folder, now => keepAllowed(onto(now, described, changed), now, namesAllowed));
     } catch (error) {
       return no(503, `The bot couldn’t be changed: ${(error as Error | null)?.message ?? error}`);
     }

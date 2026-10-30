@@ -340,14 +340,12 @@ test("a folder in Also Allowed is one a project's commands write in the sandbox,
   assert.notEqual((await engineRuns(shop, write.replace("made", "again"), "ses_shop")).status, 0);
 });
 
-test("a group chat's seat is asked about once only: nobody's there to answer for it for good", async () => {
+test("a group chat's seat runs no commands, so it can't have one run outside the sandbox: nobody's asked, and it hears why", async () => {
   const args = { command: "./tools/lint.sh", why: "To check the post before the standup." };
-  const called = sandboxAsk(box, "ses_seat", args);
-  const [open] = await asked(box, called);
-  assert.equal(open.session, "ses_seat");
-  assert.equal(open.always, undefined, "no Always for This");
-  assert.equal((await fromMac("POST", `kuvo/sandbox/asks/${open.id}`, { answer: "no" })).status, 200);
-  assert.match((await called).value.text, /^The user said no/);
+  const answer = (await sandboxAsk(box, "ses_seat", args)).value;
+  assert.equal(answer.isError, true);
+  assert.match(answer.text, /^In a group chat you don't run commands/);
+  assert.deepEqual((await box.ask("GET", "kuvo/sandbox/asks")).value.asks, [], "nobody's asked");
 });
 
 test("only a conversation's own call asks: one it isn't making, or a command naming it, gets nothing", async () => {

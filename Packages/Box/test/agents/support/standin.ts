@@ -28,6 +28,8 @@ export class StandIn {
   holding = false
   /** Goal checks that wait for `answerChecks`. */
   holdingChecks = false
+  /** Reads of a conversation's messages that wait for `answerReads` (a look under way). */
+  holdingReads = false
   /** Its model is one of OpenCode's free ones, which answer a check only in the session's own context. */
   freeModel = false
   /** A note sent while a turn runs waits for it to end (as the bridge's sessions take them), rather than joining it. */
@@ -52,6 +54,7 @@ export class StandIn {
   readonly interrupted: string[] = []
   private held: (() => void)[] = []
   private heldChecks: (() => void)[] = []
+  private heldReads: (() => void)[] = []
   private queued = new Map<string, { text: string; description?: string }[]>()
   private busy = new Set<string>()
   private feeds = new Set<ReadableStreamDefaultController<Uint8Array>>()
@@ -100,6 +103,16 @@ export class StandIn {
 
   answerChecks() {
     for (const answer of this.heldChecks.splice(0)) answer()
+  }
+
+  get readsHeld() {
+    return this.heldReads.length
+  }
+
+  /** The reads held, answered as the conversation is now; later ones aren't held. */
+  answerReads() {
+    this.holdingReads = false
+    for (const answer of this.heldReads.splice(0)) answer()
   }
 
   /** Told each event it sends, as a place's `listen` would be. */
@@ -184,11 +197,7 @@ export class StandIn {
         return Response.json({ data: { id, ...body } })
       }
       const [, , session, what] = parts
-      if (what === "message" && this.holdingMessages) {
-        this.heldMessages += 1
-        this.beat()
-        await new Promise<void>((resolve) => this.messagesHeld.push(resolve))
-      }
+      if (what === "message" && this.holdingReads) await new Promise<void>((resolve) => (this.heldReads.push(resolve), this.beat()))
       const conversation = this.conversations.get(session)
       if (!conversation) return Response.json({ message: "No such session." }, { status: 404 })
       if (!what && request.method === "DELETE") {
@@ -291,15 +300,6 @@ export class StandIn {
     this.busy.delete(session)
     if (!this.silentParts) this.emit(failing ? "session.execution.failed" : "session.execution.succeeded", { sessionID: session })
     this.beat()
-  }
-
-  /** A conversation's messages are answered only at `answerMessages`, as it is then. */
-  holdingMessages = false
-  /** Times its messages were asked for while `holdingMessages`. */
-  heldMessages = 0
-  private messagesHeld: (() => void)[] = []
-  answerMessages() {
-    for (const answer of this.messagesHeld.splice(0)) answer()
   }
 
   /** A part's prompt is taken but its turn doesn't begin until `beginPrompts`. */

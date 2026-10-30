@@ -17345,7 +17345,8 @@ function seatRules(folder, askFirst, denies) {
     "kuvo-browser_browser_upload",
     "kuvo-browser_schedule_wake_up",
     "kuvo-browser_watch_for_change",
-    "kuvo-browser_set_job"
+    "kuvo-browser_set_job",
+    "kuvo-browser_sandbox_ask"
   ].map((action) => ({ action, resource: "*", effect: "deny" }));
   if (askFirst)
     rules.push({ action: "webfetch", resource: "*", effect: "deny" });
@@ -21867,4 +21868,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 0a3b75688ed47f3222cbaa3f3cdede779638bd6ffc8156e76024550b88ac3809
+// Built from Packages/Box/src/agents a66cc01f85b20e74d7c16be57222cb5fff86be24c512c800edaefda3711df39b

@@ -288,7 +288,8 @@ connection.
     `run/replies/<id>.json` (`{text}`, `{failed}` or `{note}`), and touches `<id>.alive` as it
     looks. An answer that comes once it isn't is delivered as a message, and so is one it was given
     but never took (its turn stopped as the answer came): once the tool's gone (`<id>.gaveup`, or
-    `<id>.alive` ten seconds old), once (bridge 0.9.63). After eleven minutes, or stopped, it leaves
+    `<id>.alive` ten seconds old), once (bridge 0.9.63), kept a day while the coding agents' bridge
+    isn't running for a conversation the engine doesn't know. After eleven minutes, or stopped, it leaves
     `<id>.gaveup`, and its letter goes on without waiting. The link notes `run/relay-down` while
     it's been off the relay half a minute, so a tool says so at once rather than wait.
   - Letters an older Kuvo Code left in `run/outbox` for a Mac to collect over SSH are taken on by
@@ -577,7 +578,10 @@ client shows it from the same routes.
   `kuvo: {startedBy, by: {bot, name}, depth, wake?}`: the bot it works for, how deep it is
   (1 for one the bot started), and what its starter hears of it (a bot: both, or only its asks
   when it waited for the answer). What a starter hears is gathered a few seconds and sent as one
-  message (an ask to be read at its next step), kept in `run/work/wakes.json` until it's sent. Clients mark rows by `kuvo.by`.
+  message (an ask to be read at its next step), kept in `run/work/wakes.json` until it's sent (for a
+  conversation the engine doesn't know while the coding agents' bridge isn't running, a day at most,
+  since it may be the bridge's; and so is an answer given late, below; for an archived one, until
+  it's brought back, as its own wake-ups wait, a week at most). Clients mark rows by `kuvo.by`.
   Its task ends with the session's half of the playbook: review your work with reviewer subagents,
   fix what they find, and end with a short report.
 - **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
@@ -617,8 +621,13 @@ client shows it from the same routes.
   sandbox ("Sandbox": the engine's, while it's `on`; a coding agent's, when the agents bridge marks
   its ask `sandboxed`, its program having started in it, and while it's still set up), which holds what they write and read, a bot may allow any of its commands, wherever it
   runs, within the engine's rules as above; but never one that acts beyond this computer with your
-  accounts, read as plainly as the line allows (any part, past `sudo`, `env`, `npx` and the like):
-  `git push`, any `push` or `upload` (`docker push`, `twine upload`), publishing (`npm publish`,
+  accounts, and whatever it can't be sure isn't (any part, past `sudo`, `env`, `npx` and the like,
+  with no option but a bare flag before the program, and the program a package runner runs, `npm
+  exec`, `pnpm dlx`, `bun x`, or `find -exec` does; `xargs`, a runner's `-c`, git's settings on the
+  line, `-c` and `GIT_…=`, and naming or writing git's own files, `.git/…`, aren't): a `push`,
+  `send-pack`, `send-email`, `dcommit` or `upload` anywhere among a program's words but the ones
+  that only read or print them (`grep`, `echo`…; `git stash push` stays here), `docker push`,
+  `--push`, a registry output, publishing (`npm publish`,
   `cargo publish`…), deploying or releasing (`vercel`, `netlify`, `firebase`, `fastlane`, `xcrun
   altool`, a program or script named for it, a package script so named: `npm run deploy`), sending
   with `curl` or `wget` anywhere but this computer, reaching another computer (`ssh`, `scp`,
@@ -649,8 +658,9 @@ client shows it from the same routes.
   stopped (held and paused, as the queue's Stop), and the bot's own turn too, with what it was
   still to hear of them dropped. 404 for no such bot here, 503 with no engine.
 - **A box starting again** (its link): what its followed sessions did while it was down (finished,
-  failed, asked) is told to their starters once, by what `run/work/told.json` says was told, and an
-  answer to an ask given after its tool stopped waiting goes to its conversation if it hadn't.
+  failed, asked; not one that was stopped) is told to their starters once, by what
+  `run/work/told.json` says was told, and an answer to an ask given after its tool stopped waiting
+  goes to its conversation if it hadn't.
 
 **Projects** (bridge 0.9.107, feature `work.projects`): a bot makes new projects on its box, in a
 folder you pick once per box, after asking you.
@@ -666,7 +676,8 @@ folder you pick once per box, after asking you.
 - **Asking you first**: `make_project` asks unless you said Always to that bot for that kind,
   and a projects folder is picked. The ask is kept in `run/work/asks.json` until you answer; the
   tool waits up to ten minutes, then says it stays asked, and the conversation gets
-  `[The user answered] …` as a message when you do.
+  `[The user answered] …` as a message when you do (for a conversation the engine doesn't know
+  while the coding agents' bridge isn't running, tried again every few minutes, a week at most).
   - An ask goes with its bot (deleted), or after a week unanswered.
   - `GET kuvo/work/asks` and `GET kuvo/work/asks/events` (ndjson, a line now and at each change)
     → `{asks: [{id, action: makeProject|cloneProject, session, name, bot?, project, clone?,
@@ -2977,7 +2988,8 @@ folder its commands now write in); on Don't Allow,
 `The user said no: …`, and nothing runs. An ask nobody answers in 15 minutes runs nothing either, and
 the text starts `Nobody answered in time` (a client shows it as no answer, not as your no). The agent
 never lets a command out itself, and no tool answers an ask (a bot neither): only a client. A bot's
-seat in a group chat is asked once only, never with Always.
+seat in a group chat runs no commands, so it has nothing to ask: its rules deny the tool, and the box
+refuses one from a seat, asking nobody.
 
 The tool is the box's, so an agent has it on every box (`sandbox.asks`): this Mac's tool server and a
 machine's (`kuvo-browser.js mcp`, through `box route`) list what `GET kuvo/sandbox/tools` gives (only

@@ -599,6 +599,28 @@ test("a bot changed from a phone that leaves mid-way has its conversation told a
   }
 });
 
+test("a change that waits on the engine (a new model's sign-in) keeps what another change saved meanwhile", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  const folder = bot("bot_scout00001");
+  const file = path.join(folder, "bot.json");
+  // As the engine is asked whether the new model is signed in, another client's change is saved.
+  const engine = await makingEngine(["opencode", "anthropic"], {}, request => {
+    if (request.method === "GET" && request.url === "/api/provider") write(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), look: { color: "mint", shape: "round", face: "happy" }, personality: "preset.straight" }));
+  });
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+    const changed = await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", { name: "Scout Prime", model: { id: "opus", providerID: "anthropic" } });
+    assert.equal(changed.status, 200, JSON.stringify(changed.json));
+    const described = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(described.name, "Scout Prime");
+    assert.deepEqual(described.model, { id: "opus", providerID: "anthropic" });
+    assert.deepEqual(described.look, { color: "mint", shape: "round", face: "happy" }, "the other change's look is kept");
+    assert.equal(described.personality, "preset.straight");
+  } finally {
+    engine.close();
+  }
+});
+
 test("a change that can't be is said, and nothing changes", async () => {
   write(path.join(bots, "kit.json"), JSON.stringify(kit));
   const folder = bot("bot_scout00001");

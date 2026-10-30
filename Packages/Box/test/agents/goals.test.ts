@@ -418,30 +418,24 @@ describe("a goal", () => {
     engine.conversations.delete("ses_other")
     goals = makeGoals()
     goals.start()
-    await until(() => told("ses_work") === null && told("ses_other") === null)
-    expect(goals.list()).toEqual([])
+    await until(() => goals.list().length === 0)
+    expect([told("ses_work"), told("ses_other")]).toEqual([null, null])
   })
 
-  test("is left as it is by a box that has stopped, whatever the engine answers it late", async () => {
+  test("a look under way as the box stops keeps and tells nothing as it ends, though its conversation is gone by then", async () => {
     engine.holding = true
     await goals.set("ses_work", "the build is green")
-    engine.holdingMessages = true
+    engine.holdingReads = true
     engine.finish()
-    await until(() => engine.heldMessages === 1)
-    // The box stops while its look at the turn waits on the engine, and the conversation goes meanwhile.
-    const stopped = goals
-    let looked = false
-    stopped.onSettled = () => {
-      looked = true
-      beat()
-    }
-    stopped.stopAll()
+    await until(() => engine.readsHeld === 1)
+    goals.stopAll()
     engine.conversations.delete("ses_work")
-    engine.answerMessages()
-    await until(() => looked)
-    expect(told()).toMatchObject({ condition: "the build is green", state: "working" })
-    // Kept for the box that starts next, which finds the conversation gone itself.
-    expect(JSON.parse(readFileSync(join(root, "goals.json"), "utf8"))).toMatchObject([{ session: "ses_work" }])
+    const before = settled
+    engine.answerReads()
+    await until(() => settled > before)
+    // The box started again finds it gone and says so; the stopped one leaves that to it.
+    expect(told()?.state).toBe("working")
+    expect(JSON.parse(readFileSync(join(root, "goals.json"), "utf8")).map((kept: Goal) => kept.session)).toEqual(["ses_work"])
   })
 
   test("over, goes when its conversation was deleted while the engine was away", async () => {
