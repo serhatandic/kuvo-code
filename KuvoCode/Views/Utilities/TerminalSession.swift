@@ -259,6 +259,11 @@ final class MainTerminals {
         entries.removeValue(forKey: key)?.session.terminate()
     }
 
+    /// Ends the terminals on a machine: it was removed. Their tabs go with them (`dropClosed`).
+    func close(on machine: String) {
+        for (key, entry) in entries where entry.session.machine == machine { close(key) }
+    }
+
     /// Ends every terminal: the window closed, and its tabs with it.
     func closeAll() {
         for entry in entries.values { entry.session.terminate() }

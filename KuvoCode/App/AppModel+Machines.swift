@@ -574,6 +574,7 @@ extension AppModel {
         browserAsks.closeAll(on: id)
         utilities.closeMachineBrowser(id)
         utilities.closeTerminals(on: id)
+        mainTerminals.close(on: id)
         machines.remove(id, uninstall: uninstall)
         if uninstall { phoneLink.forget(machine: id) } else { phoneLink.machineRemoved(id) }
         workspace.machines = Set(machines.list.map(\.id))

@@ -43,9 +43,9 @@ import Testing
         machine.stop()
     }
 
-    /// Removed: the side panel's terminals on it stop (they'd only be SSH sessions to a machine
-    /// that's gone from the sidebar), wherever they are; a terminal here goes on.
-    @Test func removedItsTerminalsInThePanelStop() async throws {
+    /// Removed: the terminals on it stop (they'd only be SSH sessions to a machine that's gone
+    /// from the sidebar), in any session's panel and the window's own; a terminal here goes on.
+    @Test func removedItsTerminalsStop() async throws {
         defer { done() }
         let id = Self.name()
         _ = add(id, at: machine)
@@ -56,9 +56,17 @@ import Testing
         panel.newTerminal(in: RemoteFolder.folder("/home/me", on: id), environment: shell)
         panel.inView = .init(session: "ses_here")
         panel.newTerminal(in: FileManager.default.temporaryDirectory.path, environment: shell)
+        // And the window's own terminal tabs, one there and one here.
+        let windows = app.mainTerminals
+        defer { windows.closeAll() }
+        let there = windows.open(in: RemoteFolder.folder("/home/me", on: id), command: nil, environment: shell)
+        let here = windows.open(in: FileManager.default.temporaryDirectory.path, command: nil, environment: shell)
+        let shellThere = try #require(windows.entry(there)?.session)
 
         app.removeMachine(id)
         #expect(panel.tabs.filter { $0.kind == .terminal }.map(\.owner) == ["ses_here"])
+        #expect(windows.opened.map(\.key) == [here])
+        #expect(!shellThere.isRunning)
     }
 
     /// Once it's connected, it's sent what its bots are made with (their kit: templates, your
