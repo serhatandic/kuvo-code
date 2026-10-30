@@ -199,6 +199,24 @@ describe("a goal", () => {
     expect(nudges().map((message) => message.description)).toEqual(["Not met yet: Tests still fail."])
   })
 
+  test("archived, and its turn cut short as the box stopped: brought back, that turn is checked, not taken as you stopping it", async () => {
+    engine.turns = [{ tool: true, outcome: "interrupted" }]
+    engine.holding = true
+    await goals.set("ses_work", "the build is green")
+    engine.metadata.set("ses_work", { "kuvo.archived": true })
+    goals.stopAll()
+    engine.finish()
+    goals = makeGoals()
+    const before = settled
+    goals.start()
+    await until(() => settled > before)
+    expect(engine.checks).toHaveLength(0)
+    engine.metadata.set("ses_work", { "kuvo.archived": false })
+    engine.emit("session.metadata.updated", { sessionID: "ses_work" })
+    await until(() => goal()?.state !== "working")
+    expect(goal()?.state).toBe("met")
+  })
+
   test("pauses on a turn that failed, with the error", async () => {
     engine.turns = [{ outcome: "failed", error: "Rate limited by the provider" }]
     await goals.set("ses_work", "the build is green")

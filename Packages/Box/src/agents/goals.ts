@@ -336,8 +336,12 @@ export class Goals {
     const worked = turn.some((message) => message.type === "assistant" && (message.content ?? []).some((part: any) => part?.type === "tool"))
     const info = await sessionInfo(place.api, session).catch((): SessionInfo => ({ id: session }))
     if (!current()) return
-    // Archived (from any app), as its wake-ups wait: this turn is checked once it's brought back.
-    if (info.archived) return
+    // Archived (from any app), as its wake-ups wait: this turn is checked once it's brought back,
+    // as it would have been now (one cut short as the box stopped still isn't taken as yours).
+    if (info.archived) {
+      if (afterStart) this.firstLooks.add(session)
+      return
+    }
     goal.checking = true
     this.changed(goal)
     let verdict: { verdict: Verdict; reason: string }
