@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientText
 import SwiftUI
 import WebKit
 
@@ -257,7 +258,11 @@ final class BrowserSession: NSObject {
     func offerToSave(_ login: PendingLogin) {
         pendingLogin = login
         pendingLoginFailed = false
+        pagesSinceLogin = 0
     }
+
+    /// Pages finished on other sites since the sign-in was offered.
+    @ObservationIgnored private var pagesSinceLogin = 0
 
     func savePendingLogin() {
         guard let login = pendingLogin else { return }
@@ -280,11 +285,15 @@ final class BrowserSession: NSObject {
         pendingLogin = nil
     }
 
-    /// Fills the page's sign-in fields with a saved login: only when you ask, from the toolbar.
-    func fill(_ login: Passwords.Login) {
-        guard let password = Passwords.password(for: login) else { return }
-        Task {
-            _ = try? await webView.callAsyncJavaScript(Passwords.fillScript, arguments: ["username": login.account, "secret": password, "host": login.host], contentWorld: Passwords.world)
+    /// Fills the page's sign-in fields with a saved login: only when you ask, from the toolbar,
+    /// and only one saved for the page's site (or a site it's under). (A test waits for it.)
+    @discardableResult
+    func fill(_ login: Passwords.Login) -> Task<Void, Never>? {
+        guard let url = webView.url, url.scheme == "https", let host = url.host(),
+              Passwords.logins(for: host).contains(where: { $0.item == login.item }),
+              let password = Passwords.password(for: login) else { return nil }
+        return Task {
+            _ = try? await webView.callAsyncJavaScript(Passwords.fillScript, arguments: ["username": login.account, "secret": password, "host": host], contentWorld: Passwords.world)
         }
     }
 
@@ -306,6 +315,25 @@ final class BrowserSession: NSObject {
         }
     }
 
+    /// Whether a page is on the site a sign-in was on (or the sign-in's host itself, for a
+    /// local one with no site).
+    static func sameSite(_ host: String, _ url: URL) -> Bool {
+        guard let page = url.host()?.lowercased() else { return false }
+        if page == host.lowercased() { return true }
+        guard let site = SiteAddresses.site(of: url), let theirs = URL(string: "https://" + host).flatMap(SiteAddresses.site) else { return false }
+        return site == theirs
+    }
+
+    /// An address on this Mac or its network, which a dev server answers over plain http:
+    /// localhost, `.localhost` and `.test` names, and private addresses by number.
+    static func isLocal(_ host: String) -> Bool {
+        let host = host.lowercased()
+        if host == "localhost" || host.hasSuffix(".localhost") || host.hasSuffix(".test") || host.hasSuffix(".local") { return true }
+        let parts = host.split(separator: ".").compactMap { Int($0) }
+        guard parts.count == 4 else { return false }
+        return parts[0] == 127 || parts[0] == 10 || (parts[0] == 192 && parts[1] == 168) || (parts[0] == 172 && (16...31).contains(parts[1]))
+    }
+
     static func url(from input: String) -> URL? {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
@@ -318,8 +346,8 @@ final class BrowserSession: NSObject {
         }
         // "localhost:3000", "example.com/path": an address without its scheme.
         let looksLikeHost = !text.contains(" ") && (text.contains(".") || text.hasPrefix("localhost") || text.contains(":"))
-        if looksLikeHost, let url = URL(string: (text.hasPrefix("localhost") || text.hasPrefix("127.") ? "http://" : "https://") + text) {
-            return url
+        if looksLikeHost, let typed = URL(string: "https://" + text), let host = typed.host() {
+            return isLocal(host) ? URL(string: "http://" + text) : typed
         }
         return SearchEngine.current.url(for: text)
     }
@@ -446,8 +474,14 @@ extension BrowserSession: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        // A login offered on another site doesn't follow you around.
-        if let pending = pendingLogin, pending.host != webView.url?.host() { pendingLogin = nil }
+        // The offer stays through where signing in leads: the same site's other pages
+        // (accounts.google.com to myaccount.google.com) and the first page after it, wherever it
+        // is (a sign-in service sending you back to the site). A login offered on another site
+        // doesn't follow you around after that.
+        if let pending = pendingLogin, let url = webView.url, !Self.sameSite(pending.host, url) {
+            pagesSinceLogin += 1
+            if pagesSinceLogin > 1 { pendingLogin = nil }
+        }
         refreshLogins()
         guard let url = webView.url, let onVisit else { return }
         let title = webView.title ?? ""

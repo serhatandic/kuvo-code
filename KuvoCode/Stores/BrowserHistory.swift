@@ -2,7 +2,8 @@ import AppKit
 import Foundation
 
 /// The sites the panel's browser has visited, for the new tab page's suggestions, with
-/// each site's icon. Kept in `<support>/Browser`, a site per host, at most a few hundred.
+/// each site's icon. Kept in `<support>/Browser`, a site per host (and port: two dev servers on
+/// localhost are two), at most a few hundred.
 @Observable
 final class BrowserHistory {
     nonisolated struct Site: Codable, Identifiable, Hashable {
@@ -38,10 +39,22 @@ final class BrowserHistory {
         return Array(sites.sorted { score($0) > score($1) }.prefix(count))
     }
 
+    /// A page's site in the history: its host without "www.", with its port when it names one.
+    static func key(for url: URL) -> String? {
+        guard var host = url.host(), ["http", "https"].contains(url.scheme ?? "") else { return nil }
+        if host.hasPrefix("www.") { host.removeFirst(4) }
+        return url.port.map { "\(host):\($0)" } ?? host
+    }
+
+    /// The site a page is on, if it's been visited.
+    func site(for url: URL?) -> Site? {
+        guard let key = url.flatMap(Self.key) else { return nil }
+        return sites.first { $0.host == key }
+    }
+
     /// A finished page load; `iconURL` is the page's own icon if it names one.
     func record(_ url: URL, title: String, iconURL: URL?) {
-        guard let host = url.host(), ["http", "https"].contains(url.scheme ?? "") else { return }
-        let key = host.replacingOccurrences(of: "www.", with: "")
+        guard let key = Self.key(for: url) else { return }
         if let index = sites.firstIndex(where: { $0.host == key }) {
             sites[index].visits += 1
             sites[index].lastVisit = .now
@@ -57,7 +70,7 @@ final class BrowserHistory {
             }
         }
         save()
-        loadIcon(for: key, from: iconURL ?? URL(string: "https://\(host)/favicon.ico"))
+        loadIcon(for: key, from: iconURL ?? URL(string: "/favicon.ico", relativeTo: url)?.absoluteURL)
     }
 
     /// Leaves a site out of the suggestions until it's visited again.

@@ -280,8 +280,13 @@ final class Utilities {
         browser.openWindow = { [weak self] configuration in
             self?.newBrowser(configuration: configuration, openedFrom: tab.id).webView
         }
-        browser.onClose = { [weak self] in
+        browser.onClose = { [weak self, weak browser] in
             guard let self else { return }
+            // A sign-in window closing itself once you're in ("Sign in with Google"): its offer
+            // to save the password goes to the page that opened it, rather than with it.
+            if let pending = browser?.pendingLogin, let opener, let page = browsers[opener], page.pendingLogin == nil {
+                page.offerToSave(pending)
+            }
             close(tab.id)
             if let opener, let page = tabs.first(where: { $0.id == opener }), isVisible(page) { selection = opener }
         }
