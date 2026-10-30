@@ -131,6 +131,24 @@ import Testing
         #expect(app.news(on: SidebarBox(directory: folder)) == nil)
     }
 
+    /// Read here while the list is read again (a reconnect, an engine settings change) before
+    /// the engine has the read, or with the read lost on the way: it stays read, not bold again.
+    @Test func aConversationYouReadStaysReadWhenTheListIsReadAgain() async throws {
+        // (Its own ID: the sessions this Mac last saw, as other tests left them, are listed first.)
+        defer { engine.stop() }
+        engine.list([session("ses_readagain", "Timer cycle", created: 1, idle: 5)])
+        await workspace.refresh()
+        #expect(workspace.session("ses_readagain")?.isUnread == true)
+        workspace.markViewed("ses_readagain")
+        // The engine's list, without the read yet.
+        await workspace.refresh()
+        #expect(workspace.session("ses_readagain")?.isUnread == false)
+        // It finishes again: new again.
+        engine.list([session("ses_readagain", "Timer cycle", created: 1, idle: 9)])
+        await workspace.refresh()
+        #expect(workspace.session("ses_readagain")?.isUnread == true)
+    }
+
     /// A sub-session's tab, as the app opens again: it learns whose it is, so it opens as a
     /// sub-session with the way back.
     @Test func aSubSessionsTabKnowsWhoseItIs() async throws {

@@ -234,6 +234,16 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Showing or hiding the side panel or the sidebar no longer catches at the start of its slide when you have many sessions: the sidebar isn't drawn again for it.
 - Kuvo Code takes about 200 MB less memory for the first seconds after it opens: checking the engine before it starts no longer keeps the whole engine in memory.
 - Switching tabs with many sessions in the sidebar is a little quicker: the sidebar draws again only the rows whose highlight moved.
+- /review-quick, picked from the "/" list or typed, runs the engine's own review again, instead of going to the model as a message.
+- A message you send while a session moves to a coding agent stays in the composer and goes to the new session, instead of being lost in the archived one; what you write meanwhile goes too, and isn't also left behind.
+- A project's own "/" commands show once the engine is up, when you opened the project while it was starting.
+- A command typed in full (a project's /view, say) is what Return picks, over a keyword that has its name inside.
+- A new session's error goes away when you send again.
+- A session that finishes while Settings, a bot's or group chat's editor, or the expanded side panel covers it stays new until you see it, instead of counting as read.
+- A conversation on a machine you read stays read after you quit and open Kuvo Code again, also when you read it while the machine was away; a coding agent's conversation read that way is marked read on the machine once it connects.
+- A conversation you just read no longer turns bold again when the sessions are read again before the engine has the read.
+- Deleting a conversation closes the tab of its subagent you had open in its place.
+- Searching the sidebar again clears what the earlier search found in conversations, instead of leaving it under the new search until each computer answers.
 
 ## 0.7.2
 

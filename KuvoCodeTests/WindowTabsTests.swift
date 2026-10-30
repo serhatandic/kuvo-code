@@ -76,6 +76,30 @@ import Testing
         #expect(tabs.selection == .session("ses_timer"))
     }
 
+    /// A conversation deleted while one of its subagents shows in its tab (its own subagent's
+    /// too): the tab goes with it, rather than showing a subagent of a conversation that's gone.
+    @Test func deletingAConversationClosesItsSubagentsTab() async {
+        defer { done() }
+        engine.list([
+            StubEngine.session("ses_a", title: "ses_a", directory: folder),
+            StubEngine.session("ses_timer", title: "Timer cycle", directory: folder),
+            StubEngine.session("ses_find", title: "Find the timer", directory: folder, extra: ["parentID": "ses_timer"]),
+            StubEngine.session("ses_deep", title: "Read the slider", directory: folder, extra: ["parentID": "ses_find"]),
+        ])
+        engine.on("DELETE", "/api/session/ses_timer", json: [:])
+        await app.workspace.refresh()
+        tabs.open(.session("ses_a"))
+        tabs.open(.session("ses_timer"))
+        tabs.openInPlace("ses_find")
+        tabs.openInPlace("ses_deep")
+        #expect(keys == ["ses_a", "ses_deep"])
+
+        await app.workspace.delete("ses_timer")
+        // (As the window does when the list changes.)
+        tabs.dropClosed()
+        #expect(keys == ["ses_a"])
+    }
+
     // A review's part reads in a session of its own under the conversation: never listed (its
     // review shows it), it opens from the review's card in the conversation's place, as a
     // subagent does, with the way back to the conversation.
@@ -235,6 +259,31 @@ import Testing
         #expect(tabs.sessionsInView == ["ses_a"])
         #expect(tabs.layout().split == nil)
         #expect(tabs.layout().sessions != nil)
+    }
+
+    /// A conversation that finishes under Settings, a bot's or group chat's editor, or the
+    /// expanded panel isn't seen: it stays new in the sidebar, the tab and the Dock until you look
+    /// at it again.
+    @Test func aConversationCoveredUpIsntSeen() async {
+        defer {
+            app.showsSettings = false
+            done()
+        }
+        await sessions(["ses_a"])
+        tabs.open(.session("ses_a"))
+        #expect(tabs.sessionsSeen == ["ses_a"])
+
+        app.showsSettings = true
+        #expect(tabs.sessionsSeen.isEmpty, "under Settings")
+        app.showsSettings = false
+        tabs.openBotEditor(bot: nil)
+        #expect(tabs.sessionsSeen.isEmpty, "under a new bot's editor")
+        tabs.botEditor = nil
+        tabs.showPanel()
+        tabs.panelExpanded = true
+        #expect(tabs.sessionsSeen.isEmpty, "under the expanded panel")
+        tabs.panelExpanded = false
+        #expect(tabs.sessionsSeen == ["ses_a"], "and seen again once uncovered")
     }
 
     @Test func anotherTabStartsInItsOwnConversation() async {
