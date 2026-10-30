@@ -389,27 +389,30 @@ final class Workspace {
     func setArchived(_ id: String, _ archived: Bool) async -> Bool {
         // Not archived if the engine didn't take it: its wake-ups aren't held for it.
         guard await setFlag(Self.archivedKey, archived, of: id) else { return false }
-        onArchived?(id, archived)
+        onArchived?(id, archived, nil)
         return true
     }
 
-    /// A session was archived, or brought back. The app sets it.
-    @ObservationIgnored var onArchived: ((_ session: String, _ isArchived: Bool) -> Void)?
+    /// A session was archived, or brought back. The app sets it. `carriedTo`: archived as its box
+    /// carried it on in that session (moved it to the coding agents) just now, never for one
+    /// carried on before, brought back and archived again.
+    @ObservationIgnored var onArchived: ((_ session: String, _ isArchived: Bool, _ carriedTo: String?) -> Void)?
 
     /// The sessions read again: one archived or brought back meanwhile (from a phone, while the
     /// feed was down) is told, as `upsert` tells one.
     private func noteArchiving(since before: [Session]) {
         guard onArchived != nil else { return }
-        let was = Dictionary(before.map { ($0.id, Self.isArchived($0)) }, uniquingKeysWith: { first, _ in first })
+        let was = Dictionary(before.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for session in sessions {
-            if let wasArchived = was[session.id] { noteArchiving(session, was: wasArchived) }
+            if let earlier = was[session.id] { noteArchiving(session, was: earlier) }
         }
     }
 
-    /// `session` as it is now, archived or brought back since it was `wasArchived`: told.
-    private func noteArchiving(_ session: Session, was wasArchived: Bool) {
+    /// `session` as it is now, archived or brought back since it was `earlier`: told.
+    private func noteArchiving(_ session: Session, was earlier: Session) {
         let archived = Self.isArchived(session)
-        if archived != wasArchived { onArchived?(session.id, archived) }
+        guard archived != Self.isArchived(earlier) else { return }
+        onArchived?(session.id, archived, archived && Self.carriedTo(earlier) == nil ? Self.carriedTo(session) : nil)
     }
 
     /// Pins a session to the top of the sidebar, or takes it off.
@@ -764,7 +767,7 @@ final class Workspace {
         var metadata = sessions[index].metadata?.object ?? [:]
         metadata[Self.archivedKey] = .bool(true)
         sessions[index].metadata = .object(metadata)
-        onArchived?(id, true)
+        onArchived?(id, true, nil)
     }
 
     /// The project's name: its own, or its primary folder's. A worktree has its project's.
@@ -2884,14 +2887,14 @@ final class Workspace {
         nameBranch(of: session)
         var session = session
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
-            let wasArchived = Self.isArchived(sessions[index])
+            let earlier = sessions[index]
             // Read since this was asked for (here, or on the phone): that stands, as the box keeps
             // the later look.
             if let seen = sessions[index].time.viewed, seen > (session.time.viewed ?? 0) { session.time.viewed = seen }
             sessions[index] = session
             // Archived or brought back elsewhere (from a phone): its wake-ups wait, or come back,
             // as with Archive here. (Archive here notes it first, so it isn't told twice.)
-            noteArchiving(session, was: wasArchived)
+            noteArchiving(session, was: earlier)
         } else {
             sessions.insert(session, at: 0)
             tellWorktree(session)

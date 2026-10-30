@@ -121,6 +121,20 @@ import Testing
         #expect(terminals.allSatisfy { $0.isRunning })
     }
 
+    /// One carried on before, brought back from the archive and archived again: its terminals end
+    /// as any archived session's do, rather than moving into the conversation it carried on in.
+    @Test func aCarriedOnConversationBroughtBackAndArchivedAgainStopsItsTerminals() async throws {
+        defer { done() }
+        sessions.archive("ses_a", carriedTo: "ses_c")
+        await app.workspace.refresh()
+        #expect(await app.workspace.setArchived("ses_a", false))
+        openPanels()
+        let terminals = sesATerminals
+        #expect(await app.workspace.setArchived("ses_a", true))
+        expectOnlySesATerminalsGone(terminals)
+        #expect(!app.utilities.tabs.contains { $0.owner == "ses_c" }, "nothing moved into the other conversation")
+    }
+
     @Test func aSessionArchivedFromAPhoneStopsItsTerminalsHere() async throws {
         defer { done() }
         openPanels()

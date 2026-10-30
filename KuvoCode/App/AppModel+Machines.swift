@@ -276,13 +276,14 @@ extension AppModel {
             // Its wake-ups and watches go with it.
             if let found = self?.workspace.session(session) { self?.wakeUps.forget(found) } else { self?.wakeUps.forget(sessionID: session) }
         }
-        workspace.onArchived = { [weak self] session, archived in
+        workspace.onArchived = { [weak self] session, archived, carriedTo in
             guard let self else { return }
             if archived {
-                // Carried on in another (moved to the coding agents by its box): its panel goes
-                // with it, its Run still running. Otherwise, out of sight in the archive, nothing
-                // of it goes on running in the panel.
-                if let carried = workspace.session(session).flatMap(Workspace.carriedTo) {
+                // Carried on in another just now (moved to the coding agents by its box): its panel
+                // goes with it, its Run still running. Otherwise (one carried on before, brought
+                // back and archived again too), out of sight in the archive, nothing of it goes on
+                // running in the panel.
+                if let carried = carriedTo {
                     utilities.handOver(from: session, to: carried)
                 } else {
                     utilities.closeTerminals(of: session)
