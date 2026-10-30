@@ -184,8 +184,9 @@ import Testing
             gate.wait()
             return StubWeb.json(["data": []])
         }
+        let asked = machine.requests("GET", "/api/session/ses_far/message").count
         await app.workspace.resync()
-        #expect(!gate.isOpen, "done without the machine's answer")
+        #expect(machine.requests("GET", "/api/session/ses_far/message").count == asked, "done without asking the machine")
     }
 
     /// Your personalities changed, so each connected machine's round begins a moment later:
