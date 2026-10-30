@@ -153,6 +153,9 @@ final class EngineConfig {
             .filter { defaults.bool(forKey: $0.0) }.map(\.1)
     }
 
+    /// What a box answers a change to a list someone changed since it was read (`was`).
+    static let changedMeanwhile = "It changed since you read it."
+
     /// Settings › Permissions' rules, in their order: what every session and mode is held to.
     var permissionRules: [PermissionRule] {
         guard let value = settings["permissions"], let data = try? JSONEncoder().encode(value) else { return [] }
@@ -307,8 +310,10 @@ final class EngineConfig {
                 // what it was here, so one a phone changed meanwhile is refused, and said, rather
                 // than its change written over.
                 let was: [JSONValue?] = sent.map { change in
-                    guard case .array? = change.value else { return nil }
-                    return Self.value(at: change.path, in: confirmed) ?? .null
+                    let before = Self.value(at: change.path, in: confirmed)
+                    // A list's last item taken away goes too: the list then goes.
+                    guard case .array? = change.value ?? before else { return nil }
+                    return before ?? .null
                 }
                 do {
                     let after = try await remote.change(sent, was: was)
@@ -323,7 +328,7 @@ final class EngineConfig {
                     noteRules()
                     if before != confirmed { onChanged() }
                 } catch {
-                    notSaved = (error as? BoxRefusal)?.status == 409 && (error as? BoxRefusal)?.problem == nil
+                    notSaved = (error as? BoxRefusal).map { $0.status == 409 && $0.message == Self.changedMeanwhile } == true
                         ? "It was changed elsewhere meanwhile (from your phone, say), so yours wasn't saved. Here it is as it is now: make your change again."
                         : "It couldn't be saved there: \(error.localizedDescription)"
                     sent.removeAll()

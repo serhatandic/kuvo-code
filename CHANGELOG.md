@@ -21,7 +21,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Settings › Agents: removing, turning off or making a subagent of the agent new sessions start in makes Build the one again, and a machine's page no longer offers this Mac's Claude Code agents.
 - In the panel's terminal, ⌥ types what your keyboard puts on it (`@` on a Turkish keyboard, `{` on a German one) instead of sending Esc and the letter; elsewhere it still works as Meta, so ⌥← moves back a word.
 - A terminal whose shell ended, or whose connection to a machine dropped, says so instead of going quiet, and Return starts it again in the same tab. It keeps 10,000 lines to scroll back through, not 500, and a folder that's gone (a removed worktree) says so instead of the shell starting somewhere else.
-- Archiving a session ends its panel's terminals, so a dev server it started no longer holds its port.
+- Archiving a session closes its panel's tabs, ending its terminals, so a dev server it started no longer holds its port.
 - A sign-in saved for `example.com` is offered and filled in on `accounts.example.com` too, a new password on `www.example.com` changes it rather than saving a second, and it fills in the form you see, not a search box above it or a hidden form.
 - The browser's offer to save a password stays through where signing in takes you (to another page of the site, or back from a sign-in service), and a sign-in window that closes itself hands it to the page that opened it. The key to fill a password in shows on sign-in forms a page puts in after it loads.
 - Addresses on your network open over plain http, as a dev server answers them (`192.168.1.5:3000`, `app.localhost:5173`), and two dev servers on different ports are two sites in the new tab page.

@@ -325,13 +325,16 @@ final class BrowserSession: NSObject {
     }
 
     /// An address on this Mac or its network, which a dev server answers over plain http:
-    /// localhost, `.localhost` and `.test` names, and private addresses by number.
+    /// localhost, a computer's own name (`lokum:3000`), `.localhost`, `.test` and `.local`
+    /// names, and private addresses by number (Tailscale's too).
     static func isLocal(_ host: String) -> Bool {
-        let host = host.lowercased()
-        if host == "localhost" || host.hasSuffix(".localhost") || host.hasSuffix(".test") || host.hasSuffix(".local") { return true }
+        let host = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if host == "localhost" || host == "::1" || !host.contains(".") && !host.contains(":") { return true }
+        if host.hasSuffix(".localhost") || host.hasSuffix(".test") || host.hasSuffix(".local") { return true }
         let parts = host.split(separator: ".").compactMap { Int($0) }
         guard parts.count == 4 else { return false }
-        return parts[0] == 127 || parts[0] == 10 || (parts[0] == 192 && parts[1] == 168) || (parts[0] == 172 && (16...31).contains(parts[1]))
+        return parts[0] == 127 || parts[0] == 10 || parts[0] == 0 || (parts[0] == 192 && parts[1] == 168) || (parts[0] == 172 && (16...31).contains(parts[1]))
+            || (parts[0] == 169 && parts[1] == 254) || (parts[0] == 100 && (64...127).contains(parts[1]))
     }
 
     static func url(from input: String) -> URL? {

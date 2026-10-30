@@ -159,7 +159,8 @@ extension EngineConfig {
     func changeAgent(_ id: String, _ key: String?, to value: JSONValue?) {
         let path = ["agents", id] + (key.map { [$0] } ?? [])
         let ends = switch key {
-        case nil: value == nil
+        // A built-in one's settings taken away (Reset to Built-In): it's still there.
+        case nil: value == nil && !BuiltInAgents.contains(id)
         case "disabled": value == .bool(true)
         case "mode": value == .string("subagent")
         default: false

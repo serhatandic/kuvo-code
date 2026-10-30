@@ -54,7 +54,7 @@ import WebKit
     }
 
     @Test func anAddressOnThisMacOrItsNetworkOpensOverHTTP() {
-        for local in ["localhost:3000", "127.0.0.1:8080", "192.168.1.5:3000", "10.0.0.2", "app.localhost:5173", "shop.test", "printer.local"] {
+        for local in ["localhost:3000", "127.0.0.1:8080", "192.168.1.5:3000", "10.0.0.2", "app.localhost:5173", "shop.test", "printer.local", "lokum:3000", "100.101.1.2:8080", "0.0.0.0:4000"] {
             #expect(BrowserSession.url(from: local)?.scheme == "http", "\(local)")
         }
         for site in ["example.com", "example.com/docs", "172.32.0.1"] {

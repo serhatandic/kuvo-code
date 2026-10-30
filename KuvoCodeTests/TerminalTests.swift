@@ -64,8 +64,18 @@ import Testing
         // Turkish Q: ⌥Q is @. German: ⌥8 is {.
         #expect(type(try optionKey("@", on: "q", code: 12), in: session) == Array("@".utf8))
         #expect(type(try optionKey("{", on: "8", code: 28), in: session) == Array("{".utf8))
-        // US: ⌥B would be ∫; in a shell it's word back, Esc B, as before.
+        // US: ⌥B would be ∫; in a shell it's word back, Esc B, as before. ⌥← too.
         #expect(type(try optionKey("∫", on: "b", code: 11), in: session) == [0x1B] + Array("b".utf8))
+        let left = String(UnicodeScalar(UInt16(NSLeftArrowFunctionKey))!)
+        #expect(type(try optionKey(left, on: left, code: 123), in: session) == [0x1B] + Array("b".utf8), "word back")
+    }
+
+    /// ⌥N on a German keyboard waits for the next key to make ~ (an accent key): not Meta either.
+    /// The keyboard layout is asked what it stands for; here, as a German one answers.
+    @Test func anOptionAccentKeyIsntMeta() throws {
+        let tilde = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .option, timestamp: 0, windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "n", isARepeat: false, keyCode: 45))
+        #expect(!TerminalSession.optionIsMeta(for: tilde) { _ in "~" })
+        #expect(TerminalSession.optionIsMeta(for: tilde) { _ in "˜" }, "a US keyboard's ⌥N accent isn't ASCII: Meta, as before")
     }
 
     @Test func aLongBuildsFirstLinesAreStillThere() {
@@ -83,10 +93,12 @@ import Testing
         defer { done(session) }
         await ended(session)
         #expect(shown(session).replacingOccurrences(of: "\n", with: "").contains("Process completed. Press Return to start a new shell."))
+        let first = session.view.process.shellPid
 
         let enter = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
         #expect(session.typed(enter), "Return is taken: there's no shell to send it to")
         #expect(session.isRunning, "a new one started, in the same tab")
+        #expect(session.view.process.running && session.view.process.shellPid != first)
     }
 
     /// Waits for the session's shell to end, as the terminal hears it.

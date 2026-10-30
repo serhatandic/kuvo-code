@@ -27,5 +27,11 @@ import Testing
         let config = config()
         config.changeAgent("bug-hunter", "mode", to: .string("all"))
         #expect(config.value(at: ["default_agent"]) == .string("bug-hunter"), "still a mode too")
+
+        // Reset to Built-In: Plan's own settings taken away, and Plan still there to start in.
+        let plan = EngineConfig.inMemory(["default_agent": .string("plan"), "agents": .object(["plan": .object(["model": .string("openai/luna")])])])
+        plan.changeAgent("plan", nil, to: nil)
+        #expect(plan.value(at: ["agents", "plan"]) == nil)
+        #expect(plan.value(at: ["default_agent"]) == .string("plan"))
     }
 }

@@ -275,12 +275,12 @@ struct SkillsSettings: View {
         // Its engine not answering yet (a machine's, connecting): still loading, and read again
         // once it does.
         guard let api = app.api(for: box) else { return }
-        // The engine notices a folder added or taken away within a moment: asked again a few
-        // times while its list and the box's folders still differ.
-        var listed: [Skill] = []
+        // The engine notices a folder added or taken away within a moment: its list shown as the
+        // box has the folder, and asked again a few times while the two still differ.
         for attempt in 0..<4 {
             try? await Task.sleep(for: .milliseconds(attempt == 0 ? 500 : 1_000))
             if Task.isCancelled { return }
+            let listed: [Skill]
             do {
                 listed = try await api.skills()
                 listFailure = nil
@@ -289,9 +289,9 @@ struct SkillsSettings: View {
                 skills = []
                 return
             }
+            skills = here.current(listed).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             if here.folder == nil || (here.current(listed).count == listed.count && here.unlisted(listed).isEmpty) { break }
         }
-        skills = here.current(listed).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private func listCollections() async {

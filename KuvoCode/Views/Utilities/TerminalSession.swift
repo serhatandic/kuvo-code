@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import ClientDesign
 import OpenCodeKit
 import SwiftTerm
@@ -38,7 +39,7 @@ final class TerminalSession: NSObject {
         let menu = NSMenu()
         menu.delegate = self
         view.menu = menu
-        if start(), let command { view.send(txt: command + "\r") }
+        if start(typing: command != nil), let command { view.send(txt: command + "\r") }
     }
 
     /// Lines kept above the screen, for a long build's or test run's first lines.
@@ -52,21 +53,22 @@ final class TerminalSession: NSObject {
     @ObservationIgnored fileprivate var exit: DispatchSourceProcess?
 
     /// Starts the shell in the folder; false when the folder isn't there, and it started in the
-    /// home folder instead, saying so.
+    /// home folder instead, saying so. `typing`: a command is typed once it starts, which a
+    /// machine's folder that's gone takes in rather than run in the home folder.
     @discardableResult
-    private func start() -> Bool {
-        isRunning = true
+    private func start(typing: Bool = false) -> Bool {
         if let remote = RemoteFolder.parse(directory) {
             // A folder on a machine: the machine's own login shell, there, over SSH.
             let missing = Self.note("That folder isn’t there anymore: \(remote.path). This is your home folder.")
-            let script = "cd \(SSHConnection.quoted(remote.path)) 2>/dev/null || printf '%s\\r\\n' \(SSHConnection.quoted(missing)); exec \"${SHELL:-/bin/sh}\" -l"
+            let swallow = typing ? "; stty -echo; IFS= read -r _; stty echo" : ""
+            let script = "cd \(SSHConnection.quoted(remote.path)) 2>/dev/null || { printf '%s\\r\\n' \(SSHConnection.quoted(missing))\(swallow); }; exec \"${SHELL:-/bin/sh}\" -l"
             view.startProcess(
                 executable: "/usr/bin/ssh",
                 args: SSHConnection(destination: remote.machine).arguments(running: script, extra: ["-t"]),
                 environment: environment.map { "\($0.key)=\($0.value)" },
                 currentDirectory: NSHomeDirectory()
             )
-            watchShell()
+            started()
             return true
         }
         var isFolder: ObjCBool = false
@@ -81,8 +83,14 @@ final class TerminalSession: NSObject {
             execName: "-" + (shell as NSString).lastPathComponent,
             currentDirectory: there ? directory : NSHomeDirectory()
         )
-        watchShell()
+        started()
         return there
+    }
+
+    /// Running if SwiftTerm started it, and watched for its end.
+    private func started() {
+        isRunning = view.process.running
+        if isRunning { watchShell() }
     }
 
     /// Keys typed in a terminal: Option as Meta (Esc and the key, for a shell's word moves) except
@@ -96,7 +104,8 @@ final class TerminalSession: NSObject {
 
     /// Readies the terminal for a key typed in it; true when that's taken care of here.
     func typed(_ event: NSEvent) -> Bool {
-        if !isRunning, event.keyCode == 36 || event.keyCode == 76 {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.numericPad, .function, .capsLock])
+        if !isRunning, event.keyCode == 36 || event.keyCode == 76, modifiers.isEmpty {
             restart()
             return true
         }
@@ -106,9 +115,12 @@ final class TerminalSession: NSObject {
 
     /// Whether Option sends Esc and the key: not when it types a character of its own on your
     /// keyboard that's plain ASCII (on a US one, ⌥B's "∫" isn't wanted in a shell: word back is).
-    static func optionIsMeta(for event: NSEvent) -> Bool {
-        guard event.modifierFlags.contains(.option), let typed = event.characters, typed.count == 1,
-              typed != event.charactersIgnoringModifiers, let scalar = typed.unicodeScalars.first,
+    /// A key that starts a character with the next (⌥N's ~ on a German keyboard) is asked of the
+    /// keyboard layout, as `accent` does.
+    static func optionIsMeta(for event: NSEvent, accent: (NSEvent) -> String? = KeyboardLayout.accent(of:)) -> Bool {
+        guard event.modifierFlags.contains(.option), !event.modifierFlags.contains(.command) else { return true }
+        let typed = event.characters?.isEmpty == false ? event.characters : accent(event)
+        guard let typed, typed.count == 1, typed != event.charactersIgnoringModifiers, let scalar = typed.unicodeScalars.first,
               scalar.isASCII, (0x20..<0x7F).contains(scalar.value) else { return true }
         return false
     }
@@ -119,6 +131,10 @@ final class TerminalSession: NSObject {
     /// Return in a terminal whose shell ended starts a new one there (a machine's: reconnects).
     func restart() {
         guard !isRunning, !closed else { return }
+        // Done with the old one: a job it left running in the background no longer writes here,
+        // nor ends the new one as it closes.
+        hangUp()
+        view.terminate()
         view.feed(text: "\r\n")
         start()
     }
@@ -137,21 +153,22 @@ final class TerminalSession: NSObject {
         exit?.cancel()
         exit = nil
         guard isRunning else { return }
-        // Hung up, as closing a terminal window does: SwiftTerm doesn't know the shell's process
-        // (it starts it through Subprocess) and sends at most a SIGTERM, which an interactive
-        // shell ignores, so it stayed running after its tab closed, with whatever it ran (a dev
-        // server holding its port). The terminal knows: what runs in front, and the shell that
-        // leads it.
-        if let terminal = view.process?.childfd, terminal >= 0 {
-            let front = tcgetpgrp(terminal)
-            if front > 0 {
-                let shell = getsid(front)
-                killpg(front, SIGHUP)
-                if shell > 0 { kill(shell, SIGHUP) }
-            }
-        }
+        hangUp()
         view.terminate()
         isRunning = false
+    }
+
+    /// Hung up, as closing a terminal window does: SwiftTerm sends at most a SIGTERM, which an
+    /// interactive shell ignores, so it stayed running after its tab closed, with whatever it ran
+    /// (a dev server holding its port). The terminal knows: what runs in front, and the shell that
+    /// leads it.
+    private func hangUp() {
+        guard let terminal = view.process?.childfd, terminal >= 0 else { return }
+        let front = tcgetpgrp(terminal)
+        guard front > 0 else { return }
+        let shell = getsid(front)
+        killpg(front, SIGHUP)
+        if shell > 0 { kill(shell, SIGHUP) }
     }
 
     /// Colors for the app's appearance: the card's own background, so the terminal is part of
@@ -200,6 +217,30 @@ final class TerminalSession: NSObject {
         0x000000, 0xCD3131, 0x107C10, 0x949800, 0x0451A5, 0xBC05BC, 0x0598BC, 0x555555,
         0x666666, 0xCD3131, 0x14A314, 0xB5BA00, 0x0451A5, 0xBC05BC, 0x0598BC, 0xA5A5A5,
     ])
+}
+
+/// The keyboard layout in use, for what a key types with Option.
+nonisolated enum KeyboardLayout {
+    /// The character a key that waits for the next one (an accent: ⌥N on a German keyboard)
+    /// stands for on its own, with the modifiers it was pressed with.
+    static func accent(of event: NSEvent) -> String? {
+        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let pointer = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
+        let data = Unmanaged<CFData>.fromOpaque(pointer).takeUnretainedValue() as Data
+        var dead: UInt32 = 0
+        var length = 0
+        var characters = [UniChar](repeating: 0, count: 4)
+        var modifiers: UInt32 = 0
+        if event.modifierFlags.contains(.option) { modifiers |= UInt32(optionKey >> 8) }
+        if event.modifierFlags.contains(.shift) { modifiers |= UInt32(shiftKey >> 8) }
+        let status = data.withUnsafeBytes { layout -> OSStatus in
+            guard let layout = layout.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else { return -1 }
+            return UCKeyTranslate(layout, event.keyCode, UInt16(kUCKeyActionDown), modifiers, UInt32(LMGetKbdType()),
+                                  OptionBits(kUCKeyTranslateNoDeadKeysMask), &dead, characters.count, &length, &characters)
+        }
+        guard status == noErr, length > 0 else { return nil }
+        return String(utf16CodeUnits: characters, count: length)
+    }
 }
 
 /// Right-click: Add to Message, Copy and Paste.
