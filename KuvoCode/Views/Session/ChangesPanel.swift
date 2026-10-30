@@ -18,6 +18,8 @@ struct ChangesPanel: View {
     @State private var expandedFolds: Set<String> = []
     /// The line a comment is being written for: file and line index.
     @State private var draft: DraftTarget?
+    /// The files' lines as comments were last moved with them (`follow`).
+    @State private var followed: (directory: String, scope: ProjectChanges.Scope, lines: [String: [DiffLine]])?
     /// Syntax colors, per file, worked out off the main thread.
     @State private var highlighting: [String: DiffHighlighting] = [:]
 
@@ -28,9 +30,17 @@ struct ChangesPanel: View {
         var side: ReviewComment.Side
         var number: Int
         var text: String
+        /// What's written so far, kept while the line moves (its row is made again then).
+        let typed = Typed()
+
+        final class Typed { var text = "" }
 
         func isFor(_ line: DiffLine, in file: String) -> Bool {
             self.file == file && side == (line.kind == .removed ? .old : .new) && number == line.number && text == line.text
+        }
+
+        static func == (a: Self, b: Self) -> Bool {
+            a.file == b.file && a.side == b.side && a.number == b.number && a.text == b.text && a.typed === b.typed
         }
     }
     @Environment(AppModel.self) private var app
@@ -70,6 +80,28 @@ struct ChangesPanel: View {
     /// as the agent knows the project's folders.
     private var commentPrefix: String { isPrimary ? "" : (changes.directory as NSString).lastPathComponent + "/" }
 
+    /// Moves the session's comments, and the one being written, to where their lines are in
+    /// `files` now, from where they were in the list before. Only where lines are the files on
+    /// disk, which is what the agent reads the numbers against (not Staged's, not the engine's).
+    private func follow(_ files: [ChangedFile]) {
+        let lines = Dictionary(files.map { ($0.path, $0.lines) }, uniquingKeysWith: { first, _ in first })
+        defer { followed = (changes.directory, changes.scope, lines) }
+        guard [.uncommitted, .unstaged, .branch].contains(changes.scope),
+              let before = followed, before.directory == changes.directory, before.scope == changes.scope else { return }
+        if let model {
+            func named(_ lines: [String: [DiffLine]]) -> [String: [DiffLine]] {
+                Dictionary(lines.map { (commentPrefix + $0.key, $0.value) }, uniquingKeysWith: { first, _ in first })
+            }
+            let moved = ReviewComment.following(model.reviewComments, from: named(before.lines), to: named(lines))
+            if moved != model.reviewComments { model.reviewComments = moved }
+        }
+        if let target = draft, let old = before.lines[target.file], let new = lines[target.file],
+           let line = ReviewComment.line(side: target.side, number: target.number, from: old, to: new),
+           line.text == target.text, line.number != target.number {
+            draft?.number = line.number
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -90,6 +122,8 @@ struct ChangesPanel: View {
                 try? await Task.sleep(for: .seconds(3))
             }
         }
+        // The agent edited above a commented line: the comment, and one being written, follow it.
+        .onChange(of: changes.files, initial: true) { follow(changes.files) }
         .task(id: changes.files) {
             for file in changes.files {
                 guard !Task.isCancelled else { return }
@@ -237,8 +271,20 @@ struct ChangesPanel: View {
 
     // MARK: Files
 
+    /// The machine the project is on, as the app names it.
+    private var machineName: String {
+        RemoteFolder.machine(of: changes.directory).map { app.machines.engine($0)?.machine.name ?? $0 } ?? "the Machine"
+    }
+
     @ViewBuilder private var content: some View {
-        if changes.files.isEmpty {
+        if changes.files.isEmpty, changes.isUnreachable {
+            ContentUnavailableView {
+                Label("Can’t Reach \(machineName)", systemImage: "network.slash")
+            } description: {
+                Text("Its changes show once it’s back.")
+            }
+            .frame(maxHeight: .infinity)
+        } else if changes.files.isEmpty {
             ContentUnavailableView {
                 Label(changes.isLoaded ? "No Changes" : "Reading Changes…", systemImage: "doc.text.magnifyingglass")
             } description: {
@@ -278,7 +324,9 @@ struct ChangesPanel: View {
                                 }
                             } perform: { action in
                                 Task {
-                                    if let failure = await changes.perform(action, on: file) { model?.failure = failure }
+                                    // In the session's bar; with none open, an alert.
+                                    guard let failure = await changes.perform(action, on: file) else { return }
+                                    if let model { model.failure = failure } else { Modal.show(GitFailure(message: failure)) }
                                 }
                             }
                         }
@@ -785,7 +833,7 @@ private struct FileBody: View {
                         CommentCard(comment: comment) { deleteComment(comment) }
                     }
                     if let target = draft, target.isFor(line, in: file.id) {
-                        CommentEditor {
+                        CommentEditor(typed: target.typed) {
                             draft = nil
                         } save: { text in
                             addComment?(ReviewComment(file: file.path, line: target.number, side: target.side, snippet: target.text.trimmingCharacters(in: .whitespaces), text: text))
@@ -870,15 +918,15 @@ private struct ImageDiff: View {
 }
 
 extension ReviewComment {
-    /// The line it was written on: by its number, and, once the file has changed, by its text,
-    /// so it doesn't slide onto another line.
+    /// The line it was written on: by its number (kept where its line is, `following`) and its
+    /// text, so it doesn't slide onto another line.
     func matches(_ line: DiffLine) -> Bool {
         side == (line.kind == .removed ? .old : .new) && self.line == line.number
             && line.text.trimmingCharacters(in: .whitespaces) == snippet
     }
 }
 
-extension DiffLine {
+nonisolated extension DiffLine {
     /// The number shown in the gutter: the old one for a removed line, the new one otherwise.
     var number: Int { (kind == .removed ? oldNumber : newNumber) ?? 0 }
 }
@@ -1116,10 +1164,18 @@ struct CommentReference: View {
 /// Writing a comment: ⌘Return saves, Escape cancels. In the same accent glass as the comment
 /// it becomes.
 private struct CommentEditor: View {
+    let typed: ChangesPanel.DraftTarget.Typed
     let cancel: () -> Void
     let save: (String) -> Void
-    @State private var text = ""
+    @State private var text: String
     @FocusState private var focused: Bool
+
+    init(typed: ChangesPanel.DraftTarget.Typed, cancel: @escaping () -> Void, save: @escaping (String) -> Void) {
+        self.typed = typed
+        self.cancel = cancel
+        self.save = save
+        _text = State(initialValue: typed.text)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1161,6 +1217,7 @@ private struct CommentEditor: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .onAppear { focused = true }
+        .onChange(of: text) { typed.text = text }
     }
 
     private func submit() {

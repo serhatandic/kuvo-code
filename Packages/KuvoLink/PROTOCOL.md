@@ -1363,8 +1363,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     branch left `base` for `branch`, or git's empty tree before the first commit); `patch` git's
     diff of the folder's files with each whole file as context (`a/` and `b/` prefixes, paths not
     quoted, renames found); `untracked` the new files git doesn't know (not for `staged`; a
-    repository inside this one ends in `/`), and `hashes` git's hash of each, by path, so a client
-    reads one again (`kuvo/file`) only when it changed; `uncommitted`, anything not committed yet
+    repository inside this one ends in `/`), and `hashes` a stamp of each (its size and when it
+    last changed, opaque to a client), by path, so a client reads one again (`kuvo/file`) only when
+    it changed; `uncommitted`, anything not committed yet
     (always true but for `branch`). `500 {"message"}` when git couldn't say.
   - `POST kuvo/git/stage`, `…/unstage` or `…/discard` with `{"root", "path", "oldPath"?, "status":
     "added|deleted|modified|renamed", "scope"?}` → `200 {}`, or `422 {"message"}` with what went

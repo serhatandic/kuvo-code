@@ -49,4 +49,21 @@ import Testing
         #expect(await changes.perform(.stage, on: file) == nil)
         #expect(try repo.git("diff", "--cached", "--name-only").contains("build/app.bin"))
     }
+
+    /// A one-line change in a big file (a lock file of 25,000 lines) shows that change with lines
+    /// around it, not "Too big to show"; the rest is left out as a gap.
+    @Test func aSmallChangeInABigFileShowsAroundTheChange() async throws {
+        let lines = (1...25_000).map { "line \($0)" }
+        try repo.write("package-lock.json", lines.joined(separator: "\n") + "\n")
+        try repo.commitAll("Lock")
+        var edited = lines
+        edited[12_000] = "line 12001, changed"
+        try repo.write("package-lock.json", edited.joined(separator: "\n") + "\n")
+        let file = try await row("package-lock.json")
+        #expect(!file.isTooBig)
+        #expect(file.lines.filter { $0.kind == .added }.map(\.text) == ["line 12001, changed"])
+        #expect(file.lines.filter { $0.kind == .removed }.map(\.text) == ["line 12001"])
+        #expect(file.lines.count < 100, "only what's around the change")
+        #expect(file.lines.first?.gapBefore == true, "what's left out shows as a gap")
+    }
 }

@@ -14009,7 +14009,6 @@ async function* fileAt(requestPath, json) {
 
 // Packages/Box/src/link/areas/changes.ts
 var EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-var HASHED = 500;
 var AUTHOR = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"];
 var SCOPES = ["uncommitted", "unstaged", "staged", "branch"];
 var STATUSES = ["added", "deleted", "modified", "renamed"];
@@ -14085,17 +14084,17 @@ async function changesIn(directory, scope, base) {
   const hashes = {};
   if (scope !== "staged") {
     untracked = (await text(root, ["-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard", "-z", "--", limit]) ?? "").split("\x00").filter(Boolean);
-    const files = untracked.filter((name) => !name.endsWith("/")).slice(0, HASHED);
-    const all = files.length ? (await text(root, ["hash-object", "--no-filters", "--", ...files]))?.trim().split(`
-`) : [];
-    if (all && all.length === files.length)
-      files.forEach((name, at) => hashes[name] = all[at]);
-    else
-      for (const name of files) {
-        const one = (await text(root, ["hash-object", "--no-filters", "--", name]))?.trim();
-        if (one)
-          hashes[name] = one;
-      }
+    const files = untracked.filter((name) => !name.endsWith("/"));
+    const now = BigInt(Date.now()) * 1000000n;
+    for (let at = 0;at < files.length; at += 64) {
+      await Promise.all(files.slice(at, at + 64).map(async (name) => {
+        try {
+          const stat = await fs60.promises.stat(path62.join(root, name), { bigint: true });
+          if (now - stat.mtimeNs > 3000000000n)
+            hashes[name] = `${stat.size}-${stat.mtimeNs}`;
+        } catch {}
+      }));
+    }
   }
   const status = scope === "branch" ? await text(root, ["status", "--porcelain", "--untracked-files=normal"]) : "x";
   return { repository: true, root, against, patch, untracked, hashes, uncommitted: status === null || status.length > 0 };
@@ -14197,6 +14196,9 @@ async function perform(action, root, file, scope) {
   if (file.status === "renamed" && file.oldPath) {
     const failed = await untrack(file.path) ?? await clear([file.oldPath]) ?? await run(scope === "unstaged" ? ["restore", "--worktree", "--", file.oldPath] : ["restore", "--source=HEAD", "--staged", "--worktree", "--", file.oldPath]);
     return failed ?? gone(file.path);
+  }
+  if (file.status === "modified" && (await text(root, ["--literal-pathspecs", "ls-files", "-s", "--", file.path]))?.startsWith("160000") && (await text(path62.join(root, file.path), ["status", "--porcelain"]))?.trim()) {
+    return `${file.path} is a submodule: its changes are in its own repository, so discard them there.`;
   }
   const failed = await clear(scope === "unstaged" ? paths : [file.path]);
   if (failed)
