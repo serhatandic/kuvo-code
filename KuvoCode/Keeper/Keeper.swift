@@ -73,6 +73,8 @@ final class Keeper {
             link.hasMachines = { Machines.anySaved }
             box.host.phoneLink = link
             box.host.appAnswers = false
+            // kuvo-wake run for the wake-up tools gets your shell's environment, as the engine does.
+            tools.boxTools.shell = { [box] in box.shell }
             do {
                 box.tools = try await tools.start()
             } catch {
@@ -83,6 +85,7 @@ final class Keeper {
             while !box.claim() {
                 try? await Task.sleep(for: .seconds(5))
             }
+            watchForUpdate()
             await box.start()
         } catch {
             // Nothing could reach it: gone, to be started again by launchd.
@@ -115,8 +118,11 @@ final class Keeper {
         case .status:
             return .json(await status)
         case .stop:
-            // Said first, then done: the client hears it was taken.
-            Task { @MainActor in self.finish(.stopped) }
+            // Said first, then done: the client hears it was taken before it goes.
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(300))
+                self.finish(.stopped)
+            }
             return .json([:])
         case .restartEngine:
             box.restartEngine()
@@ -177,6 +183,29 @@ final class Keeper {
             await Self.makeWay(within: limit, busy: box.isBusy)
             finish(.again)
         }
+    }
+
+    /// The app installed over this one (an update installed as you quit, with no app open to say
+    /// so): it makes way for the new one's keeper, as when the app asks.
+    private func watchForUpdate() {
+        Task { @MainActor in
+            while updating == nil {
+                try? await Task.sleep(for: .seconds(60))
+                if let installed = Self.installedVersion(), installed != "\(AppInfo.version) (\(AppInfo.build))" {
+                    log.info("Kuvo Code \(installed, privacy: .public) is installed now")
+                    update(within: Self.updateWait)
+                }
+            }
+        }
+    }
+
+    /// The version of the app now at this one's place, as "0.9.0 (123)": read from its file, as the
+    /// running one's own is kept from when it started.
+    nonisolated static func installedVersion(of app: URL = Bundle.main.bundleURL) -> String? {
+        guard let data = try? Data(contentsOf: app.appending(path: "Contents/Info.plist")),
+              let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let version = info["CFBundleShortVersionString"] as? String, let build = info["CFBundleVersion"] as? String else { return nil }
+        return "\(version) (\(build))"
     }
 
     /// Waits until `busy` says nothing is under way, asking every `every`, or until `limit` seconds

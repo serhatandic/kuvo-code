@@ -37,12 +37,21 @@ final class KeeperFollower {
     /// When the engine was last asked to start over: a reason it stopped from before then is the
     /// last engine's.
     private var restartAsked: Date?
+    /// Since when the running keeper hasn't answered.
+    private var silentSince: Date?
 
     /// The engine started over by the keeper: starting, until its records say otherwise.
     func restartEngine() async throws {
         restartAsked = .now
+        silentSince = nil
         engine = .starting
-        try await KeeperControl.send(.restartEngine)
+        do {
+            try await KeeperControl.send(.restartEngine)
+        } catch {
+            // One that doesn't answer is started over itself, by launchd.
+            guard KeeperRecord.read() != nil else { throw error }
+            BackgroundWork.shared.start(over: true)
+        }
     }
     /// How long a keeper asked to start has to record itself before the window says it didn't.
     static let startWait: TimeInterval = 30
@@ -101,8 +110,36 @@ final class KeeperFollower {
         }
     }
 
+    /// Not followed any more: a start waiting on it hears `reason`, and the app nothing else.
+    func giveUp(_ reason: String) {
+        stop()
+        onEngine = { _ in }
+        engine = .failed(reason)
+    }
+
+    /// The keeper isn't coming (switched off in Login Items & Extensions, or macOS doesn't let it
+    /// run): the app runs this Mac's box itself instead.
+    var onGone: () -> Void = {}
+    /// A read under way, and whether the records changed while it was: one at a time, so an older
+    /// one that waited on the keeper never says what a newer one already said otherwise.
+    private var reading = false
+    private var readAgain = false
+
     /// What the records say now.
     func read() async {
+        if reading {
+            readAgain = true
+            return
+        }
+        reading = true
+        repeat {
+            readAgain = false
+            await readOnce()
+        } while readAgain
+        reading = false
+    }
+
+    private func readOnce() async {
         let running = KeeperRecord.read()?.pid
         if running != keeper {
             keeper = running
@@ -113,7 +150,18 @@ final class KeeperFollower {
         let bridge = Self.record("bridge.json")
         // Why one isn't there, when the keeper can say (asked only then).
         var status: [String: Any] = [:]
-        if serve == nil || bridge == nil || engineRecord == nil { status = (try? await KeeperControl.send(.status)) ?? [:] }
+        var answered = true
+        if serve == nil || bridge == nil || engineRecord == nil {
+            let said = try? await KeeperControl.send(.status)
+            answered = said != nil
+            status = said ?? [:]
+        }
+        // A keeper that runs but doesn't answer (hung): since when, for how long the window waits.
+        if engineRecord != nil || answered || KeeperRecord.read() == nil {
+            silentSince = nil
+        } else if silentSince == nil {
+            silentSince = .now
+        }
         box.follow(serve, failure: (status["box"] as? [String: Any])?["failure"] as? String)
         agents.follow(bridge, failure: (status["agents"] as? [String: Any])?["failure"] as? String)
         if let engineRecord {
@@ -121,8 +169,12 @@ final class KeeperFollower {
             engine = .ready(engineRecord)
         } else if let reason = stoppedReason() {
             engine = .failed(reason)
+        } else if KeeperRecord.read() == nil, isGone() {
+            onGone()
         } else if KeeperRecord.read() == nil, let askedToStart, -askedToStart.timeIntervalSinceNow > Self.startWait {
             engine = .failed("Kuvo Code’s background work didn’t start. Check that Kuvo Code is allowed in System Settings › General › Login Items & Extensions.")
+        } else if let silentSince, -silentSince.timeIntervalSinceNow > Self.startWait {
+            engine = .failed("Kuvo Code’s background work isn’t answering. Try again, or restart your Mac if it still doesn’t.")
         } else if let engineState = status["engine"] as? [String: Any], engineState["state"] as? String == "downloading" {
             engine = .downloading(progress: engineState["progress"] as? Double ?? 0)
         } else {
@@ -134,6 +186,16 @@ final class KeeperFollower {
             }
             engine = .starting
         }
+    }
+
+    /// No keeper, and none will come: macOS has it switched off (or never registered it).
+    private func isGone() -> Bool {
+        #if DEBUG
+        // A test's keeper, followed without asking macOS.
+        if ProcessInfo.processInfo.environment["KUVO_KEEPER"] == "follow" { return false }
+        #endif
+        BackgroundWork.shared.refresh()
+        return BackgroundWork.shared.state != .on
     }
 
     /// Why the engine stopped and isn't started again (`run/engine-stopped`): one from before the

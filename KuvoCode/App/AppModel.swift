@@ -386,6 +386,7 @@ final class AppModel {
         guard starting == start else { return }
         let launch = UUID()
         self.launch = launch
+        engineStoppedWhileRunning = false
         // How far it got, for analytics when it fails: the download, the launch, or the connection.
         var stage = "download"
         let began = SuspendingClock.now
@@ -506,7 +507,9 @@ final class AppModel {
             let reason = error.localizedDescription
             log.error("Engine failed to start: \(reason, privacy: .public)")
             Analytics.shared.track("engine_failed", ["reason": stage, "kind": EngineInstallError.kind(of: error)])
-            stop()
+            // Its box stopped the engine already, and said why (`run/engine-stopped`), which stopping
+            // it here again would take away.
+            disconnect()
             engine = .failed(reason)
             workspace.macEngineStopped()
         }
@@ -523,7 +526,16 @@ final class AppModel {
 
     /// Whether quitting leaves this Mac's work going (the keeper runs it): Quit takes Kuvo Code to
     /// the menu bar (`InBackground`), and Stop Background Work is there.
-    var keepsWorkingAfterQuit: Bool { keeperBox != nil }
+    /// The keeper's turned on while the app ran its own box counts too: the app's goes on in the
+    /// menu bar until it quits for real, and the keeper takes over then.
+    /// Switched off in Login Items & Extensions, it's off at once, keeper followed or not.
+    var keepsWorkingAfterQuit: Bool {
+        #if DEBUG
+        // A test's keeper, followed without asking macOS.
+        if keeperBox != nil, ProcessInfo.processInfo.environment["KUVO_KEEPER"] == "follow" { return true }
+        #endif
+        return BackgroundWork.shared.state == .on
+    }
     /// The own box was started this launch (restarting it is starting its engine over).
     @ObservationIgnored private var ownBoxStarted = false
 
@@ -537,6 +549,8 @@ final class AppModel {
             let follower = KeeperFollower(box: box, agents: agents)
             follower.onEngine = { [weak self] state in self?.boxEngineChanged(state) }
             follower.onKeeper = { [weak self] in Task { await self?.tellKeeper() } }
+            follower.onGone = { [weak self] in self?.keeperGone() }
+            host.tellsBox = false
             keeperBox = follower
             await follower.start()
         }
@@ -560,6 +574,24 @@ final class AppModel {
         return try await ownBox.ready()
     }
 
+    /// The keeper isn't coming (background work switched off in Login Items & Extensions, or
+    /// macOS doesn't let it run): the app runs this Mac's box itself from now on, which stops when
+    /// you quit, and connects to it.
+    private func keeperGone() {
+        guard let keeperBox else { return }
+        log.notice("Background work is off: this Mac's box runs in the app")
+        keeperBox.stop()
+        self.keeperBox = nil
+        box.unfollow()
+        agents.unfollow()
+        host.tellsBox = true
+        // A start waiting on the keeper gives up (disconnected), and one starts with the app's own.
+        disconnect()
+        keeperBox.giveUp("Kuvo Code’s background work is off.")
+        engine = .preparing
+        Task { await start() }
+    }
+
     /// The keeper told of the open app: where the panel's browser tools answer, for its engine's and
     /// agents' browser calls, and the app's host interface, for what only the app answers its box.
     private func tellKeeper() async {
@@ -569,7 +601,7 @@ final class AppModel {
         } catch {
             log.error("Browser tools didn't start: \(error.localizedDescription, privacy: .public)")
         }
-        try? await host.startForKeeper()
+        try? await host.start()
         var app: [String: Any] = [:]
         if let tools = browserTools.agentsServer { app["tools"] = ["url": tools.url, "token": tools.token] }
         if let address = host.address { app["host"] = address }

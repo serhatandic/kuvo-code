@@ -58,10 +58,10 @@ final class HostInterface {
         server.port.map { ["url": "http://127.0.0.1:\($0)", "password": password] }
     }
 
-    /// Starts answering without telling the box (see `address`).
-    func startForKeeper() async throws {
-        _ = try await server.start()
-    }
+    /// Whether it tells this Mac's box where it answers (`file`): not the open app's while the keeper
+    /// runs the box, whose own host tells it; the app's then only answers the keeper (`address`), so
+    /// starting it again (Try Again in Integrations) never takes the keeper's record.
+    var tellsBox = true
 
     init() {
         // Quitting, crashes aside: the box's record of where it answers goes with it, so nothing
@@ -83,6 +83,10 @@ final class HostInterface {
     /// box was told before goes first, so a start that fails leaves it nothing to follow.
     @discardableResult
     func start() async throws -> [String: String] {
+        guard tellsBox else {
+            _ = try await server.start()
+            return [:]
+        }
         tried = true
         if !isAnswering { Self.forget() }
         let port = try await server.start()
@@ -101,7 +105,7 @@ final class HostInterface {
             retrying = nil
             return true
         }
-        Self.forget()
+        if tellsBox { Self.forget() }
         retry(after: Self.firstWait)
         return false
     }
@@ -302,7 +306,8 @@ final class HostInterface {
             default:
                 return await Task.detached(operation: { VaultValues.remove(id) }).value ? .json([:]) : Self.failed
             }
-        case "/sites/signed-in", "/link/route" where !appAnswers:
+        // (`where` binds only the pattern it follows: each one needs its own.)
+        case "/sites/signed-in" where !appAnswers, "/link/route" where !appAnswers:
             guard let appHost else { return Self.needsApp }
             return await Self.forward(request, to: appHost) ?? Self.needsApp
         case "/sites/signed-in":

@@ -50,6 +50,10 @@ final class BackgroundWork {
     func register() -> Bool {
         refresh()
         guard state == .off else { return state == .on }
+        guard !AppInfo.isHostingTests, Self.mayRegister(ProcessInfo.processInfo.environment) else {
+            failure = "This copy runs its work itself (a demo, test or measurement): KUVO_KEEPER=on registers it."
+            return false
+        }
         guard AppInfo.mayPrompt("Background work (macOS adds a background item and tells you)") else {
             failure = "This copy never asks macOS (KUVO_DEMO_NO_PROMPTS)."
             return false
@@ -65,13 +69,22 @@ final class BackgroundWork {
         return state == .on
     }
 
+    /// Whether this copy registers its keeper: a copy launched for a demo, a test or a measurement
+    /// (any `KUVO_DEMO_*`, `KUVO_PERF_*` or `KUVO_E2E`) never does unless `KUVO_KEEPER=on` asks,
+    /// since launchd would go on running its box after it quits, without what it was launched with.
+    nonisolated static func mayRegister(_ environment: [String: String]) -> Bool {
+        if environment["KUVO_KEEPER"] == "on" { return true }
+        return !environment.keys.contains { $0.hasPrefix("KUVO_DEMO_") || $0.hasPrefix("KUVO_PERF_") || $0 == "KUVO_E2E" }
+    }
+
     /// Started again after Stop Background Work (opening the app, or Start in Settings): launchd
     /// runs it now, as it would at the next login.
-    func start() {
+    /// `over`: one running (but not answering) is stopped and started again.
+    func start(over: Bool = false) {
         guard register() else { return }
         let launchctl = Process()
         launchctl.executableURL = URL(filePath: "/bin/launchctl")
-        launchctl.arguments = ["kickstart", "gui/\(getuid())/\(Self.label)"]
+        launchctl.arguments = ["kickstart"] + (over ? ["-k"] : []) + ["gui/\(getuid())/\(Self.label)"]
         launchctl.standardOutput = FileHandle.nullDevice
         launchctl.standardError = FileHandle.nullDevice
         try? launchctl.run()
@@ -83,7 +96,8 @@ final class BackgroundWork {
         do {
             try await KeeperControl.send(.stop, to: keeper)
         } catch {
-            // Gone as it answered: stopped.
+            // Gone as it answered, or going (it waits for what it ran to stop first): stopped.
+            for _ in 0..<40 where keeper.isAlive { try? await Task.sleep(for: .milliseconds(250)) }
             guard keeper.isAlive else { return }
             throw error
         }

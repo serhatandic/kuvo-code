@@ -1,4 +1,5 @@
 import Foundation
+import OpenCodeKit
 import os
 
 nonisolated private let log = Logger(subsystem: "run.kuvo.code", category: "keeper")
@@ -6,17 +7,33 @@ nonisolated private let log = Logger(subsystem: "run.kuvo.code", category: "keep
 /// Kuvo Code's own tools (the panel's browser, `BrowserToolServer`) as the keeper's engine and
 /// coding agents reach them: an MCP server of the keeper's, on 127.0.0.1, whose address stays the
 /// same while the app opens and quits. While the app is open, it has said where its tools answer
-/// (`KeeperControl.Command.app`) and each call goes there as it is; while it isn't, the tools are
-/// still listed (as the app last listed them), and a call says the browser needs Kuvo Code open.
+/// (`KeeperControl.Command.app`) and each call goes there as it is. While it isn't, the tools are
+/// still listed (as the app last listed them), and the box answers what a machine's box answers
+/// without any app (`KeeperBoxTools`): agents writing to each other and running their sessions,
+/// wake-ups, a bot's job, the vault, and a file or widget shown in the conversation. Only the
+/// browser and the side panel need the app: a call to them says so.
 @MainActor
 final class KeeperTools {
     private lazy var server = LoopbackServer { [weak self] request in await self?.respond(to: request) ?? .init(status: 503) }
     private let token = UUID().uuidString + UUID().uuidString
     /// Where the open app's tools answer, and to what token.
     private var app: (url: URL, token: String)?
+    /// The tools this Mac's box answers while the app isn't open.
+    let boxTools: KeeperBoxTools
+    /// Tool calls under way without the app, by client and request: one the client cancels stops
+    /// (a message that waits for its answer stops waiting).
+    private var calls: [String: Task<CallResult, Never>] = [:]
+    private struct CallResult: @unchecked Sendable { let value: [String: Any] }
 
-    /// What a call says while the app isn't open.
-    static let needsApp = "The browser needs Kuvo Code open on this Mac. Ask the user to open Kuvo Code, then try again."
+    /// `record`: where the box's processes answer, by their records in `run` (a test's own).
+    init(record: @escaping @MainActor (String) -> ServerEndpoint? = { KeeperFollower.record($0) }) {
+        boxTools = KeeperBoxTools(record: record)
+    }
+
+    /// What a browser call says while the app isn't open.
+    static let needsApp = "The browser needs Kuvo Code open on this Mac, and it isn't open now. Ask the user to open Kuvo Code, then try again."
+    /// What show_in_panel says while the app isn't open.
+    static let panelNeedsApp = "Kuvo Code isn't open on this Mac, so its side panel can't show anything now. To show the user a file, use show_file: it's in the conversation, on their Mac and their phone."
     /// The tools as the app last listed them, for while it isn't open.
     static var listFile: URL { KeeperRecord.run.appending(path: "tools-list.json") }
 
@@ -55,7 +72,7 @@ final class KeeperTools {
         guard let authorization = request.headers["authorization"], authorization.hasPrefix("Bearer "),
               samePassword(String(authorization.dropFirst(7)), token) else { return .init(status: 401) }
         if let app, let answer = await forward(request, to: app) { return answer }
-        return answerWithoutApp(request)
+        return await answerWithoutApp(request)
     }
 
     /// The call, to the open app's tools, as it came: nil when the app doesn't answer (it quit
@@ -77,6 +94,11 @@ final class KeeperTools {
             return HTTPResponse(status: response.statusCode, headers: headers, body: data)
         } catch {
             log.info("The app's tools didn't answer: \(error.localizedDescription, privacy: .public)")
+            // Nobody there: the app quit without saying. Anything else (a call stopped, or one that
+            // took too long) leaves it the app's, and says what happened.
+            guard (error as? URLError)?.code == .cannotConnectToHost else {
+                return await answerWithoutApp(request, failed: "The call didn’t finish: \(error.localizedDescription)")
+            }
             self.app = nil
             return nil
         }
@@ -92,33 +114,57 @@ final class KeeperTools {
         FileManager.default.createFile(atPath: Self.listFile.path, contents: data, attributes: [.posixPermissions: 0o600])
     }
 
-    /// MCP, answered here: the tools listed as the app last listed them, and each call saying the
-    /// browser needs the app.
-    private func answerWithoutApp(_ request: HTTPRequest) -> HTTPResponse {
+    /// MCP, answered here: the tools listed as the app last listed them; a call to the browser or
+    /// the panel saying they need the app, and the rest answered by the box (`KeeperBoxTools`).
+    /// `failed`: what a call says instead, the open app's having not finished.
+    private func answerWithoutApp(_ request: HTTPRequest, failed: String? = nil) async -> HTTPResponse {
         guard request.method == "POST" else {
             // A client ending its session (DELETE): nothing kept here to end.
             return request.method == "DELETE" ? .init(status: 200) : .init(status: 405, headers: ["Allow": "POST, DELETE"])
         }
         guard let message = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
               let method = message["method"] as? String else { return .init(status: 400) }
-        // A notification has nothing to answer.
-        guard let id = message["id"] else { return .init(status: 202) }
         let params = message["params"] as? [String: Any] ?? [:]
+        let client = request.headers["mcp-session-id"]
+        // A notification has nothing to answer; a call the client gave up on stops.
+        guard let id = message["id"] else {
+            if method == "notifications/cancelled", let asked = params["requestId"] { calls[Self.key(asked, client: client)]?.cancel() }
+            return .init(status: 202)
+        }
         let result: [String: Any]
         switch method {
         case "initialize":
+            let requested = params["protocolVersion"] as? String
+            let supported = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
             result = [
-                "protocolVersion": params["protocolVersion"] as? String ?? "2025-06-18",
-                "capabilities": ["tools": [:] as [String: Any]],
-                "serverInfo": ["name": "kuvo-browser", "version": AppInfo.version],
+                "protocolVersion": requested.flatMap { supported.contains($0) ? $0 : nil } ?? "2025-06-18",
+                "capabilities": ["tools": ["listChanged": false]],
+                "serverInfo": ["name": "kuvo-browser", "title": "Kuvo Code browser", "version": AppInfo.version],
+                // What the tools are for, as the app tells it: a model that starts while the app
+                // is closed hears it too.
+                "instructions": BrowserTools.instructions(machine: false, vault: await listed().contains { BrowserTools.isVault($0["name"] as? String ?? "") }),
             ]
         case "ping":
             result = [:]
         case "tools/list":
-            let tools = (try? Data(contentsOf: Self.listFile)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [Any] } ?? []
-            result = ["tools": tools]
+            result = ["tools": await listed()]
         case "tools/call":
-            result = ["content": [["type": "text", "text": Self.needsApp]], "isError": true]
+            let name = params["name"] as? String ?? ""
+            let arguments = params["arguments"] as? [String: Any] ?? [:]
+            if let failed {
+                result = ["content": [["type": "text", "text": failed]], "isError": true]
+            } else if KeeperBoxTools.answers(name) {
+                // The engine names the session calling; the coding agents' bridge, in a header.
+                let caller = (params["_meta"] as? [String: Any])?["ai.opencode/sessionID"] as? String ?? request.headers["x-kuvo-session"]
+                let key = Self.key(id, client: client)
+                let call = Task { [boxTools] in CallResult(value: await boxTools.call(name, arguments, caller: caller)) }
+                calls[key] = call
+                defer { if calls[key] == call { calls[key] = nil } }
+                // The connection closing stops it too.
+                result = await withTaskCancellationHandler { await call.value } onCancel: { call.cancel() }.value
+            } else {
+                result = ["content": [["type": "text", "text": name == BrowserTools.showInPanel ? Self.panelNeedsApp : Self.needsApp]], "isError": true]
+            }
         default:
             var answer = HTTPResponse.json(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "Method not found"]])
             answer.status = 200
@@ -128,4 +174,13 @@ final class KeeperTools {
         if method == "initialize" { answer.headers["Mcp-Session-Id"] = UUID().uuidString }
         return answer
     }
+
+    /// The tools as the app last listed them; before it ever has, Kuvo Code's own, with the
+    /// vault's as this Mac's box lists them.
+    private func listed() async -> [[String: Any]] {
+        if let kept = (try? Data(contentsOf: Self.listFile)).flatMap({ try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] }) { return kept }
+        return BrowserTools.definitions(vault: await boxTools.vaultDefinitions())
+    }
+
+    private static func key(_ id: Any, client: String?) -> String { (client ?? "") + "|" + String(describing: id) }
 }

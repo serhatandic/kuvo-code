@@ -257,6 +257,12 @@ final class BoxProcess {
         self.failure = endpoint == nil ? failure : nil
     }
 
+    /// Not the keeper's any more (background work switched off): the app runs it itself from now on.
+    func unfollow() {
+        follow(nil, failure: nil)
+        follows = false
+    }
+
     /// It stopped by itself: started again, unless it keeps stopping.
     private func exited(status: Int32) {
         guard server != nil else { return }

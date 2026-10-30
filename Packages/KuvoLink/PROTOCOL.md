@@ -247,7 +247,10 @@ connection.
     take letters. One it can't look up now (its engine starting) is answered `retry`, and so is one
     for a conversation moving to or from another computer now, or that lives on another one now
     (`moved`): it reaches it where it lives once the move is over (bridge 0.9.63). A box knows by
-    its own moves (`kuvo/moves`; bridge 0.9.108, before which this Mac's box asked its app).
+    its own moves (`kuvo/moves`; bridge 0.9.108, before which this Mac's box asked its app). One
+    for a conversation its engine doesn't have, while its coding agents' bridge isn't running, is
+    answered `retry` too (it may be one of theirs, starting again), for half an hour from the first
+    time; after that it's refused as for no conversation.
   - **Sender**: it names the sender as the sending box named that agent, when that box alone
     lists `from` and it isn't one of the receiver's own conversations. Otherwise the letter is from
     "an agent on <box>", with no address to answer.
@@ -2066,11 +2069,14 @@ the engine, the box and the bridge as they say, starting the keeper with launchd
 While macOS doesn't let the keeper run (switched off in Login Items & Extensions), the app runs the
 same three itself, and they stop when it quits.
 
-The engine and the agents reach the panel's browser tools through the keeper's own MCP server,
+The engine and the agents reach Kuvo Code's own tools through the keeper's own MCP server,
 whose address doesn't change as the app opens and quits: the open app says where its tools answer
 (`app {tools: {url, token}}`, again whenever a new keeper starts), and each call goes there as it
 is. With the app closed, the tools are listed as the app last listed them (`run/tools-list.json`),
-and a call answers `isError` with "The browser needs Kuvo Code open on this Mac".
+and the keeper answers them through this Mac's box, as a machine's `kuvo-browser.js` does: the
+agents' tools (`POST kuvo/agent-tools`), wake-ups (kuvo-wake), `set_job` (`PATCH kuvo/bots/<id>`),
+the vault (`POST kuvo/vault/tools`), and show_file, show_widget and mark_final. Only the browser's
+tools and show_in_panel need the app: a call answers `isError`, saying Kuvo Code must be open.
 
 Its group chats run in its coding agents' bridge, as a machine's do, with folders in the app's
 own: the chats in `groups` (`KUVO_GROUPS`), its bots' in `bots` (`KUVO_BOTS`), what it lets go

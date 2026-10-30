@@ -89,6 +89,8 @@ final class MacBoxRunner {
         let launch = UUID()
         self.launch = launch
         engine = .starting
+        // Why one before stopped (a keeper killed before it could take it away) isn't this one's.
+        try? FileManager.default.removeItem(at: KeeperRecord.run.appending(path: "engine-stopped"))
         do {
             async let environment = ShellEnvironment.load()
             let binary: URL
@@ -217,17 +219,39 @@ final class MacBoxRunner {
         if case .ready = engine { engine = .starting }
     }
 
-    /// Everything stopped: the engine, the bridge and the box.
+    /// Everything stopped: the engine, the bridge and the box, waited for (a few seconds at most)
+    /// before another process may run the box (the keeper, as the app quits): never two engines on
+    /// the same data, and the engine always gets to close its database itself.
     func stop() {
+        let running = [server?.processID, agents.processID, box.processID].compactMap(\.self)
         stopEngine()
         agents.stop()
         box.stop()
         host.stop()
         IntegrationKeys.removeFiles()
+        Self.waitForExit(running)
         if lock >= 0 {
             close(lock)
             lock = -1
         }
+    }
+
+    /// Waits for `processes` to exit after being told to stop, `within` seconds at most; ones still
+    /// running then are terminated, and killed a second after.
+    nonisolated static func waitForExit(_ processes: [Int32], within: TimeInterval = 4) {
+        func running() -> [Int32] { processes.filter { kill($0, 0) == 0 } }
+        func wait(_ seconds: TimeInterval) -> Bool {
+            let until = Date.now.addingTimeInterval(seconds)
+            while !running().isEmpty {
+                guard Date.now < until else { return false }
+                usleep(50_000)
+            }
+            return true
+        }
+        guard !processes.isEmpty, !wait(within) else { return }
+        for process in running() { kill(process, SIGTERM) }
+        guard !wait(1) else { return }
+        for process in running() { kill(process, SIGKILL) }
     }
 
     /// Whether something is under way: a session running on the engine or with the coding agents.

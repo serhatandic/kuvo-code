@@ -69,23 +69,23 @@ import Testing
 
         // It stops: started again by itself, ready, the sessions still there.
         crash()
-        try await until { starts == 2 && app.engine == .ready }
-        #expect(starts == 2, "started again")
+        try await until { engineStarts == 2 && app.engine == .ready }
+        #expect(engineStarts == 2, "started again")
         #expect(app.engine == .ready)
         #expect(app.workspace.session("ses_keep") != nil)
 
         // It keeps stopping: started over a few times, then it says so, with what it wrote.
         var failure: String?
         for _ in 0..<5 where failure == nil {
-            let before = starts
+            let before = engineStarts
             crash()
-            try await until { starts > before && app.engine == .ready || { if case .failed = app.engine { true } else { false } }() }
+            try await until { engineStarts > before && app.engine == .ready || { if case .failed = app.engine { true } else { false } }() }
             if case .failed(let reason) = app.engine { failure = reason }
         }
         let reason = try #require(failure, "it never stopped trying")
         #expect(reason.contains("stopped unexpectedly"))
         #expect(reason.contains("the database disk image is malformed"), "with what the engine wrote: \(reason)")
-        #expect(starts <= 4, "not started over for ever: \(starts) starts")
+        #expect(engineStarts <= 4, "not started over for ever: \(engineStarts) starts")
         #expect(!FileManager.default.fileExists(atPath: crashFile))
     }
 
@@ -111,9 +111,9 @@ import Testing
         #expect(app.engine == .ready)
         var failed = false
         for _ in 0..<5 where !failed {
-            let before = starts
+            let before = engineStarts
             crash()
-            try await until { starts > before && app.engine == .ready || { if case .failed = app.engine { true } else { false } }() }
+            try await until { engineStarts > before && app.engine == .ready || { if case .failed = app.engine { true } else { false } }() }
             if case .failed = app.engine { failed = true }
         }
         #expect(failed, "it never stopped trying")
