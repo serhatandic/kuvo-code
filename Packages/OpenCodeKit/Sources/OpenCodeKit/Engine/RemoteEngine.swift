@@ -157,7 +157,7 @@ public enum RemoteEngineError: LocalizedError {
                 return "This Mac doesn't know the machine's host key yet. Connect to it once in Terminal with ssh, then try again."
             }
             if status == 255, message.localizedCaseInsensitiveContains("permission denied") {
-                return "The machine didn't accept this Mac's SSH key. Kuvo Code connects with your keys and SSH agent, without a password."
+                return "The machine didn't accept this Mac's SSH key. Kuvo Code connects with your keys and SSH agent, without a password. If your key is in an app like 1Password or Secretive, or on a security key, unlock it, then try again."
             }
             return message.isEmpty ? "SSH stopped (exit code \(status))." : message
         case .unsupportedPlatform(let platform):

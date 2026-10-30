@@ -177,6 +177,9 @@ struct RemoteEngineTests {
         let advice = RemoteEngineError.ssh(status: 255, message: planted).localizedDescription
         #expect(!advice.contains("curl"))
         #expect(advice.contains("ssh-keygen -R and the machine's address"))
+        // A refused key that may be in a locked agent says so.
+        let refused = RemoteEngineError.ssh(status: 255, message: "me@box: Permission denied (publickey).").localizedDescription
+        #expect(refused.contains("unlock"))
         let unknown = "No ED25519 host key is known for box and you have requested strict checking.\nHost key verification failed."
         #expect(RemoteEngineError.ssh(status: 255, message: unknown).localizedDescription.contains("doesn't know the machine's host key yet"))
     }

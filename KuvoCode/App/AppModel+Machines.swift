@@ -157,9 +157,11 @@ extension AppModel {
         return machines.engines.values.filter { !$0.isDisconnected }.map { connect($0) }
     }
 
-    private func wakeMachines() {
+    /// What waking does: each machine that couldn't connect is tried again, a failure that won't
+    /// pass by itself too, once (a key in an agent, refused while it was locked, may work now).
+    func wakeMachines() {
         for engine in machines.engines.values where !engine.isRetrying {
-            guard case .failed = engine.state, engine.failureMayPass else { continue }
+            guard case .failed = engine.state else { continue }
             engine.isRetrying = true
             Task { await reconnect(engine) }
         }

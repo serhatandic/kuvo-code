@@ -423,6 +423,31 @@ import Testing
         #expect(clock.waits == [])
     }
 
+    /// One that couldn't be set up for a reason that won't pass by itself is still tried once more
+    /// when the Mac wakes: a key in an agent (1Password, Secretive, a YubiKey) is refused while
+    /// it's locked, and works once it's unlocked.
+    @Test func aMachineThatCouldntBeSetUpIsTriedAgainWhenTheMacWakes() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        MachineEngine.standIn = nil
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            return ""
+        }
+        await app.connect(engine).value
+        #expect(!engine.isRetrying)
+
+        app.wakeMachines()
+        #expect(engine.isRetrying, "tried again")
+        try await until { clock.waits == [3] }
+        clock.pass(3)
+        // Still the same: it says why again, with Try Again, rather than trying on.
+        try await until { !engine.isRetrying }
+        guard case .failed = engine.state else { Issue.record("it connected"); return }
+        #expect(clock.waits == [])
+    }
+
     /// Uninstalled, its sign-outs went but its engine wouldn't stop (the connection dropped just
     /// then): what's tried there next stops it, rather than only tidying away how it starts again,
     /// which would leave it running with nothing to ever stop it.
