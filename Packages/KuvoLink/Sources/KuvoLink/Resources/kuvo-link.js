@@ -89,11 +89,13 @@ async function loginPath(env = process.env, wait = { interactive: 6000, login: 2
         return resolve(undefined);
       }
       let settled = false;
+      let gone;
       const done = (value) => {
         if (settled)
           return;
         settled = true;
         clearTimeout(timer);
+        clearTimeout(gone);
         try {
           if (child.pid)
             process.kill(-child.pid, "SIGKILL");
@@ -112,7 +114,10 @@ async function loginPath(env = process.env, wait = { interactive: 6000, login: 2
       });
       child.on("error", () => done(undefined));
       child.on("close", () => done(undefined));
-      child.on("exit", () => setTimeout(() => done(undefined), 300));
+      child.on("exit", () => {
+        if (!settled)
+          gone = setTimeout(() => done(undefined), 300);
+      });
     });
     if (found)
       return joinPath(found, env.PATH);

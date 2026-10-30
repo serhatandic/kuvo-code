@@ -509,11 +509,13 @@ async function loginPath(env = process.env, wait = { interactive: 6000, login: 2
         return resolve(undefined);
       }
       let settled = false;
+      let gone;
       const done = (value) => {
         if (settled)
           return;
         settled = true;
         clearTimeout(timer);
+        clearTimeout(gone);
         try {
           if (child.pid)
             process.kill(-child.pid, "SIGKILL");
@@ -532,7 +534,10 @@ async function loginPath(env = process.env, wait = { interactive: 6000, login: 2
       });
       child.on("error", () => done(undefined));
       child.on("close", () => done(undefined));
-      child.on("exit", () => setTimeout(() => done(undefined), 300));
+      child.on("exit", () => {
+        if (!settled)
+          gone = setTimeout(() => done(undefined), 300);
+      });
     });
     if (found)
       return joinPath(found, env.PATH);
@@ -644,17 +649,21 @@ async function refreshLoginPath(now = false) {
   if (onMachine && !now)
     return;
   if (reading) {
-    await reading;
     if (!now)
-      return;
-  }
-  if (!now && Date.now() - pathRead < 5000)
+      return answerSoon(reading);
+    await reading;
+  } else if (!now && Date.now() - pathRead < 5000)
     return;
-  reading = readLoginPath().finally(() => {
+  const read = reading = readLoginPath().finally(() => {
     pathRead = Date.now();
     reading = undefined;
   });
-  await reading;
+  await (now ? read : answerSoon(read));
+}
+async function answerSoon(read) {
+  let timer;
+  await Promise.race([read, new Promise((resolve) => timer = setTimeout(resolve, 1000))]);
+  clearTimeout(timer);
 }
 async function readLoginPath() {
   const found = await loginPath({ ...process.env, PATH: startPath });
@@ -20709,4 +20718,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents c21018f9bcd7727775dc2f4279bce1ad8dae38ee0b87097f359baf737e72bb1b
+// Built from Packages/Box/src/agents ed0c40fc036d4655721bdce7c5704088cac7f97e77e85cb1d9f4f62e66d289da
