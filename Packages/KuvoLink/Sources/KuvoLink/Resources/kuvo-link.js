@@ -19296,11 +19296,11 @@ function serveBox(password, handle = engineHandler(readEngineFile, { name: os12.
           response.write(part.body);
       }
     } catch (error) {
-      if (!headed) {
-        response.writeHead(500, { "content-type": "application/json" });
-        response.write(JSON.stringify({ message: String(error?.message ?? error) }));
-        headed = true;
-      }
+      if (headed)
+        return response.destroy(error);
+      response.writeHead(500, { "content-type": "application/json" });
+      response.write(JSON.stringify({ message: String(error?.message ?? error) }));
+      headed = true;
     }
     if (!headed)
       response.writeHead(502);
