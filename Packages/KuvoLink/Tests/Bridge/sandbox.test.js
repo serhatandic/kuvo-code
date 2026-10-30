@@ -665,14 +665,14 @@ test("a commit runs pre-commit's hooks, which set themselves up as they first ru
   }
 });
 
-test("a command's own socket in its temporary folder works, as a server's tests or Python's multiprocessing make one", async () => {
+test("a command's own socket in its temporary folder works, as a server's tests or Python's multiprocessing make one", { skip: linux && "this Mac's box only (a machine's is in its own short ~/.kuvo-code, where this test's folder is deeper)" }, async () => {
   // This Mac's box as the app starts it, its temporary files in the app's temporary folder (named
   // as long as the app's own), its folder as deep as `~/Library/Application Support/<bundle>`.
   const bundle = "kuvo.sock.tst";
-  const box = boxAt(path.join("Library", "Application Support", bundle), !linux);
+  const box = boxAt(path.join("Library", "Application Support", bundle), true);
   const temporary = path.join(os.tmpdir(), bundle);
   fs.rmSync(temporary, { recursive: true, force: true });
-  if (!linux) box.env.TMPDIR = path.join(temporary, "box") + "/";
+  box.env.TMPDIR = path.join(temporary, "box") + "/";
   const project = path.join(root, "sockets");
   fs.mkdirSync(project);
   const python = [
