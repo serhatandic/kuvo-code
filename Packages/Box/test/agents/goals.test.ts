@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { EngineLink } from "../../src/agents/engine"
@@ -360,6 +360,28 @@ describe("a goal", () => {
     goals.start()
     await until(() => told("ses_work") === null && told("ses_other") === null)
     expect(goals.list()).toEqual([])
+  })
+
+  test("is left as it is by a box that has stopped, whatever the engine answers it late", async () => {
+    engine.holding = true
+    await goals.set("ses_work", "the build is green")
+    engine.holdingMessages = true
+    engine.finish()
+    await until(() => engine.heldMessages === 1)
+    // The box stops while its look at the turn waits on the engine, and the conversation goes meanwhile.
+    const stopped = goals
+    let looked = false
+    stopped.onSettled = () => {
+      looked = true
+      beat()
+    }
+    stopped.stopAll()
+    engine.conversations.delete("ses_work")
+    engine.answerMessages()
+    await until(() => looked)
+    expect(told()).toMatchObject({ condition: "the build is green", state: "working" })
+    // Kept for the box that starts next, which finds the conversation gone itself.
+    expect(JSON.parse(readFileSync(join(root, "goals.json"), "utf8"))).toMatchObject([{ session: "ses_work" }])
   })
 
   test("over, goes when its conversation was deleted while the engine was away", async () => {
