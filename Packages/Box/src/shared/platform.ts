@@ -6,8 +6,9 @@
 // by its command line where there's /proc, and by its being alive where there isn't
 // (`keepForRollback`'s `restore.sh`, link/updates/update.ts).
 
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 /** Whether process `pid` is alive (and ours to signal). */
@@ -47,18 +48,17 @@ export function promptedFolders(platform: NodeJS.Platform = process.platform): R
 /**
  * The shell you log in with, whose startup files set up your PATH. macOS: `$SHELL`, else zsh (a
  * new account's). Linux: `$SHELL`, unless it's missing or cron's plain `/bin/sh` (a start after a
- * restart), then your account's own (`getent passwd`), else sh.
+ * restart), then your account's own (its passwd entry), else sh.
  */
 export function loginShell(env: Record<string, string | undefined> = process.env, platform: NodeJS.Platform = process.platform): string {
   const given = env.SHELL && path.isAbsolute(env.SHELL) ? env.SHELL : undefined;
   if (platform === "darwin") return given ?? "/bin/zsh";
   if (given && given !== "/bin/sh") return given;
+  let own: string | undefined;
   try {
-    const entry = execFileSync("getent", ["passwd", String(process.getuid?.() ?? "")], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] });
-    const shell = entry.trim().split(":")[6];
-    if (shell && path.isAbsolute(shell)) return shell;
+    own = os.userInfo().shell ?? undefined;
   } catch {}
-  return given ?? "/bin/sh";
+  return own && path.isAbsolute(own) ? own : given ?? "/bin/sh";
 }
 
 const LOGIN_PATH_MARKERS = ["__KUVO_PATH__", "__KUVO_END__"] as const;
@@ -68,17 +68,17 @@ const LOGIN_PATH_MARKERS = ["__KUVO_PATH__", "__KUVO_END__"] as const;
  * .zshrc), which a command over SSH, cron or launchd doesn't get: what the engine and the agents'
  * programs need to find what you installed. Read as a terminal would have it, an interactive login
  * shell, then a login shell only (one whose startup files hang or fail), in a login's environment
- * (none of the box's own folders or keys); undefined when neither answers in time. What its
- * startup files start in the background is stopped with it.
+ * (none of the box's own folders or keys, but your SSH agent's socket, so a .bashrc that starts an
+ * agent when there's none doesn't start another); undefined when neither answers in time. What its
+ * startup files start in the background is stopped with it, and what leaves it (a daemon) is let go.
  */
-export async function loginPath(options: { env?: Record<string, string | undefined>; platform?: NodeJS.Platform; interactive?: number; login?: number } = {}): Promise<string | undefined> {
-  const env = options.env ?? process.env;
-  const shell = loginShell(env, options.platform);
+export async function loginPath(env: Record<string, string | undefined> = process.env): Promise<string | undefined> {
+  const shell = loginShell(env);
   // nushell takes no POSIX flags.
   if (shell.endsWith("/nu")) return undefined;
-  const kept = Object.entries(env).filter(([name, value]) => value !== undefined && (/^(HOME|USER|LOGNAME|LANG|LC_[A-Z_]+|TERM|TMPDIR|PATH)$/.test(name)));
+  const kept = Object.entries(env).filter(([name, value]) => value !== undefined && (/^(HOME|USER|LOGNAME|LANG|LC_[A-Z_]+|TERM|TMPDIR|PATH|SSH_AUTH_SOCK)$/.test(name)));
   const login: Record<string, string> = { ...Object.fromEntries(kept as [string, string][]), SHELL: shell, DISABLE_AUTO_UPDATE: "true" };
-  for (const [flags, timeout] of [["-ilc", options.interactive ?? 15_000], ["-lc", options.login ?? 5_000]] as const) {
+  for (const [flags, timeout] of [["-ilc", 15_000], ["-lc", 5_000]] as const) {
     const found = await new Promise<string | undefined>(resolve => {
       let output = "";
       let child: ReturnType<typeof spawn>;
@@ -87,11 +87,18 @@ export async function loginPath(options: { env?: Record<string, string | undefin
       } catch {
         return resolve(undefined);
       }
+      let settled = false;
       const done = (value: string | undefined) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         try {
           if (child.pid) process.kill(-child.pid, "SIGKILL");
         } catch {}
+        // What left its group (a daemon) may still hold its output open: let go of it, so it never
+        // keeps this running.
+        child.stdout?.destroy();
+        child.unref();
         resolve(value);
       };
       const timer = setTimeout(() => done(undefined), timeout);

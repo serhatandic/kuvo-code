@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { processRuns, promptedFolders } from "../src/shared/platform"
@@ -105,4 +105,34 @@ test("on both: the coding agents' bridge on a machine finds nvm's node too", () 
   const { folder, nvm } = home()
   const script = 'import { refreshLoginPath, which } from "./src/agents/proc"; await refreshLoginPath(true); process.stdout.write(which("node") ?? "none")'
   expect(ran(["-e", script], folder, { KUVO_AGENTS_REMOTE: "1" })).toBe(join(nvm, "node"))
+})
+
+test("on both: a startup file that leaves a program running in the background doesn't hold up the engine's start", async () => {
+  const { folder, nvm } = home()
+  // Like an agent some .bashrc starts: on its own, apart from the shell, still holding what it printed to.
+  writeFileSync(join(folder, ".bashrc"), readFileSync(join(folder, ".bashrc"), "utf8") +
+    `perl -MPOSIX -e 'POSIX::setsid(); open(F, ">", "$ENV{HOME}/daemon.pid.new"); print F $$; close F; rename("$ENV{HOME}/daemon.pid.new", "$ENV{HOME}/daemon.pid"); sleep 30' &\n` +
+    `until [ -f "$HOME/daemon.pid" ]; do :; done\n`)
+  const box = resolve(import.meta.dir, "..")
+  const child = Bun.spawn([process.execPath, "src/link/main.ts", "login-path"], {
+    cwd: box,
+    env: { HOME: folder, SHELL: "/bin/bash", PATH: "/usr/bin:/bin", KUVO_HOME: join(folder, ".kuvo-code"), BUN_BE_BUN: "1" },
+    stdout: "pipe",
+  })
+  try {
+    const printed = await new Response(child.stdout).text()
+    await child.exited
+    expect(printed.split(":")).toContain(nvm)
+  } finally {
+    child.kill()
+    try { process.kill(Number(readFileSync(join(folder, "daemon.pid"), "utf8"))) } catch {}
+  }
+})
+
+test("on both: reading it doesn't start another SSH agent where you have one", () => {
+  const { folder, nvm } = home()
+  // The usual .bashrc lines that start an agent when there's none (here, it only notes that it would).
+  writeFileSync(join(folder, ".bashrc"), readFileSync(join(folder, ".bashrc"), "utf8") + `[ -n "$SSH_AUTH_SOCK" ] || echo started >>"$HOME/agents"\n`)
+  expect(ran(["src/link/main.ts", "login-path"], folder, { SSH_AUTH_SOCK: join(folder, "agent.sock") }).split(":")).toContain(nvm)
+  expect(existsSync(join(folder, "agents"))).toBe(false)
 })

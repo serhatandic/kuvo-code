@@ -462,7 +462,8 @@ import { accessSync, constants } from "fs";
 import { delimiter, join as join3 } from "path";
 
 // Packages/Box/src/shared/platform.ts
-import { execFileSync, spawn } from "child_process";
+import { spawn } from "child_process";
+import os from "os";
 import path from "path";
 function loginShell(env = process.env, platform = process.platform) {
   const given = env.SHELL && path.isAbsolute(env.SHELL) ? env.SHELL : undefined;
@@ -470,23 +471,20 @@ function loginShell(env = process.env, platform = process.platform) {
     return given ?? "/bin/zsh";
   if (given && given !== "/bin/sh")
     return given;
+  let own;
   try {
-    const entry = execFileSync("getent", ["passwd", String(process.getuid?.() ?? "")], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
-    const shell = entry.trim().split(":")[6];
-    if (shell && path.isAbsolute(shell))
-      return shell;
+    own = os.userInfo().shell ?? undefined;
   } catch {}
-  return given ?? "/bin/sh";
+  return own && path.isAbsolute(own) ? own : given ?? "/bin/sh";
 }
 var LOGIN_PATH_MARKERS = ["__KUVO_PATH__", "__KUVO_END__"];
-async function loginPath(options = {}) {
-  const env = options.env ?? process.env;
-  const shell = loginShell(env, options.platform);
+async function loginPath(env = process.env) {
+  const shell = loginShell(env);
   if (shell.endsWith("/nu"))
     return;
-  const kept = Object.entries(env).filter(([name, value]) => value !== undefined && /^(HOME|USER|LOGNAME|LANG|LC_[A-Z_]+|TERM|TMPDIR|PATH)$/.test(name));
+  const kept = Object.entries(env).filter(([name, value]) => value !== undefined && /^(HOME|USER|LOGNAME|LANG|LC_[A-Z_]+|TERM|TMPDIR|PATH|SSH_AUTH_SOCK)$/.test(name));
   const login = { ...Object.fromEntries(kept), SHELL: shell, DISABLE_AUTO_UPDATE: "true" };
-  for (const [flags, timeout] of [["-ilc", options.interactive ?? 15000], ["-lc", options.login ?? 5000]]) {
+  for (const [flags, timeout] of [["-ilc", 15000], ["-lc", 5000]]) {
     const found = await new Promise((resolve) => {
       let output = "";
       let child;
@@ -495,12 +493,18 @@ async function loginPath(options = {}) {
       } catch {
         return resolve(undefined);
       }
+      let settled = false;
       const done = (value) => {
+        if (settled)
+          return;
+        settled = true;
         clearTimeout(timer);
         try {
           if (child.pid)
             process.kill(-child.pid, "SIGKILL");
         } catch {}
+        child.stdout?.destroy();
+        child.unref();
         resolve(value);
       };
       const timer = setTimeout(() => done(undefined), timeout);
@@ -613,7 +617,7 @@ async function refreshLoginPath(now = false) {
   await reading;
 }
 async function readLoginPath() {
-  const found = await loginPath({ env: { ...process.env, PATH: startPath } });
+  const found = await loginPath({ ...process.env, PATH: startPath });
   if (found)
     process.env.PATH = [...new Set([process.env.KUVO_BIN, ...found.split(":")].filter(Boolean))].join(":");
 }
@@ -20662,4 +20666,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 187aaa7770f696f20eda3839629ae2210b92c80f63270af83511ed3c64fbce12
+// Built from Packages/Box/src/agents 3ddc067fc446e1f4a368b4d731e7c8e2aae1cea6c2418fcb226a6e659e0de32e

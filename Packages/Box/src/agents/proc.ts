@@ -113,7 +113,7 @@ export async function refreshLoginPath(now = false): Promise<void> {
 }
 
 async function readLoginPath() {
-  const found = await loginPath({ env: { ...process.env, PATH: startPath } })
+  const found = await loginPath({ ...process.env, PATH: startPath })
   // Kuvo Code's own commands (kuvo-wake) first, as the app gave them; each folder once.
   if (found) process.env.PATH = [...new Set([process.env.KUVO_BIN, ...found.split(":")].filter(Boolean))].join(":")
 }
