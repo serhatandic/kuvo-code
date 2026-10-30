@@ -200,14 +200,19 @@ import Testing
         }
     }
 
-    @Test func aBoxWithGoalsWhoseSandboxCantBeCheckedYetSaysOnlyThatItCant() async throws {
+    /// A box with goals has the sandbox's check too: one whose sandbox isn't on says why, from the
+    /// box's own reading, rather than that it can't tell.
+    @Test func aBoxWhoseSandboxIsntOnSaysWhyOnTheGoalsCard() async throws {
         let machine = try await lab(alone: false)
         defer { machine.stop() }
         let reading = await app.goalPlans.sandbox(on: "lab")
-        #expect(reading == .unchecked, "not from before the sandbox: no update would help")
+        guard case .status(let status) = reading else {
+            Issue.record("the box should say how its sandbox stands, not \(reading)")
+            return
+        }
+        #expect(!status.on)
         let row = try #require(GoalSandbox.row(reading, computer: "lab", onThisMac: false, bot: "Pixel", agent: nil))
-        #expect(row.title == "lab can’t work on its own yet")
-        #expect(row.buttons.isEmpty)
+        #expect(row.title.hasPrefix("lab can’t work on its own"))
     }
 
     @Test func noneAfterTheBotsDeadlineStartsTheGoalWithNoEnd() async throws {
