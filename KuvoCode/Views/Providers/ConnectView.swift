@@ -638,12 +638,18 @@ struct ConnectView: View {
         }
     }
 
-    /// Why it can't sign in now: the computer's engine (a coding agent's, this Mac's agents) isn't there.
+    /// Why it can't sign in now: the computer's engine isn't there, or, for a coding agent, its
+    /// agents' bridge.
     private var unreachable: String {
-        if catalog.machine == nil, OutsideAgents.isAgent(integrationID) {
-            return OutsideAgents.Failure.notRunning(catalog.outsideAgents?.failure).localizedDescription
-        }
-        return AppModel.Unreachable(computer: catalog.machine.map { app.name(of: .machine($0)) }).localizedDescription
+        Self.unreachable(agent: OutsideAgents.isAgent(integrationID), machine: catalog.machine.map { app.name(of: .machine($0)) },
+                         engineUp: catalog.api != nil, agentsFailure: catalog.outsideAgents?.failure)
+    }
+
+    /// `machine`: its name (nil: this Mac). `engineUp`: that computer's engine answers.
+    static func unreachable(agent: Bool, machine: String?, engineUp: Bool, agentsFailure: String?) -> String {
+        guard agent, machine == nil || engineUp else { return AppModel.Unreachable(computer: machine).localizedDescription }
+        guard let machine else { return OutsideAgents.Failure.notRunning(agentsFailure).localizedDescription }
+        return agentsFailure.map { "\(machine)’s coding agents couldn’t start: \($0)" } ?? "\(machine)’s coding agents aren’t running. Try again in a moment."
     }
 
     private func finish(method: String) {

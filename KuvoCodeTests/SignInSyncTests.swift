@@ -179,3 +179,17 @@ import Testing
         #expect(engine.stored("openai").map(\.secret) == ["sk-openai"])
     }
 }
+
+/// Signing in where it can't now says what isn't there: a machine that isn't connected, or, for a
+/// coding agent on a machine that is, its coding agents.
+@MainActor
+@Suite struct ConnectWordsTests {
+    @Test func itSaysWhatIsntThere() {
+        #expect(ConnectView.unreachable(agent: false, machine: "lokum", engineUp: false, agentsFailure: nil) == "lokum isn’t connected. Try again once it is.")
+        #expect(ConnectView.unreachable(agent: true, machine: "lokum", engineUp: false, agentsFailure: nil) == "lokum isn’t connected. Try again once it is.")
+        #expect(ConnectView.unreachable(agent: true, machine: "lokum", engineUp: true, agentsFailure: nil) == "lokum’s coding agents aren’t running. Try again in a moment.")
+        #expect(ConnectView.unreachable(agent: true, machine: "lokum", engineUp: true, agentsFailure: "Bun crashed") == "lokum’s coding agents couldn’t start: Bun crashed")
+        #expect(ConnectView.unreachable(agent: true, machine: nil, engineUp: true, agentsFailure: nil) == "The coding agents are still starting. Try again in a moment.")
+        #expect(ConnectView.unreachable(agent: false, machine: nil, engineUp: false, agentsFailure: nil) == "This Mac’s engine isn’t running. Try again in a moment.")
+    }
+}
