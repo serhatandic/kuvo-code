@@ -383,6 +383,25 @@ import Testing
         #expect(engine.isReady, "Connect connects it")
     }
 
+    /// Unreachable when it's first connected (the app opened before the network was up): it's
+    /// tried again by itself, as a dropped connection is, and connects once it answers.
+    @Test func unreachableAtFirstItsTriedAgainByItself() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        let api = reachable.apis[id]
+        reachable.apis[id] = nil
+        await app.connect(engine).value
+        guard case .failed = engine.state else { Issue.record("it reached a machine that doesn't answer"); return }
+
+        try await until { clock.waits == [3] }
+        #expect(clock.waits == [3], "it's tried again in a moment")
+        reachable.apis[id] = api
+        clock.pass(3)
+        try await until { engine.isReady }
+        #expect(engine.isReady)
+    }
+
     /// Uninstalled, its sign-outs went but its engine wouldn't stop (the connection dropped just
     /// then): what's tried there next stops it, rather than only tidying away how it starts again,
     /// which would leave it running with nothing to ever stop it.

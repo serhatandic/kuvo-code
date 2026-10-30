@@ -399,7 +399,14 @@ extension AppModel {
             engine.isRetrying = true
             Task { await self?.reconnect(engine) }
         }
-        return Task { await start(engine) }
+        return Task {
+            await start(engine)
+            // Not reached the first time (the app opened before the network was up): tried again
+            // as a dropped connection is, while what waited for this goes on.
+            guard case .failed = engine.state, !engine.isRetrying else { return }
+            engine.isRetrying = true
+            Task { await reconnect(engine) }
+        }
     }
 
     /// After a dropped connection (the Mac slept, the machine restarted): tries further apart
