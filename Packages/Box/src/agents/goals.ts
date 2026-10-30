@@ -250,7 +250,8 @@ export class Goals {
           // A subagent's events come to its parent's listener too: only the session's own turns count.
           if (data?.sessionID !== session) return
           if (type === "session.deleted") return this.forget(session)
-          if (type === "session.execution.succeeded" || type === "session.execution.failed" || type === "session.execution.interrupted") this.look(session)
+          // (Its metadata: brought back from Archived, a turn waiting there is checked.)
+          if (type === "session.execution.succeeded" || type === "session.execution.failed" || type === "session.execution.interrupted" || type === "session.metadata.updated") this.look(session)
         },
         reconnected: () => (this.goals.get(session)?.state === "working" ? this.look(session) : void this.forgetIfGone(session)),
       }),
@@ -333,11 +334,15 @@ export class Goals {
       return this.pause(goal, "error", idle.error?.message ? `The turn failed: ${sentence(String(idle.error.message))}` : "The turn failed.")
     }
     const worked = turn.some((message) => message.type === "assistant" && (message.content ?? []).some((part: any) => part?.type === "tool"))
+    const info = await sessionInfo(place.api, session).catch((): SessionInfo => ({ id: session }))
+    if (!current()) return
+    // Archived (from any app), as its wake-ups wait: this turn is checked once it's brought back.
+    if (info.archived) return
     goal.checking = true
     this.changed(goal)
     let verdict: { verdict: Verdict; reason: string }
     try {
-      verdict = await this.check(session, place, goal.condition, messages, goal.started)
+      verdict = await this.check(info, place, goal.condition, messages, goal.started)
     } catch (error: any) {
       goal.checking = false
       if (!current()) return void this.changed(goal)
@@ -385,8 +390,7 @@ export class Goals {
   }
 
   /** The check's verdict on a turn: the session's model, apart from the agent (oneoff.ts). */
-  private async check(session: string, place: GoalPlace, condition: string, messages: any[], since: number) {
-    const info = await sessionInfo(place.api, session).catch((): SessionInfo => ({ id: session }))
+  private async check(info: SessionInfo, place: GoalPlace, condition: string, messages: any[], since: number) {
     return parseVerdict(await freshAnswer(place.api, place === this.places.engine, info, checkPrompt(condition, transcript(messages, since))))
   }
 

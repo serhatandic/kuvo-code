@@ -1752,7 +1752,9 @@ Grok). With none to answer, the goal pauses and says so. A client reaches them a
 - In the conversation, the goal's messages to the agent are notes (`synthetic`) whose text starts
   with `[Goal] `: show their `description` ("Goal: …", "Not met yet: …") as the goal's. A turn
   you stop pauses it ("The turn was stopped."); so does one that fails. A turn cut short as the box
-  stopped is checked once it's back, as any turn, and one is never checked twice.
+  stopped is checked once it's back, as any turn, and one is never checked twice. While its
+  conversation is archived (`kuvo.archived` in its metadata, or the engine's own), the goal waits,
+  still `working`: its last turn is checked once the conversation is brought back.
 - "/goal" in a composer: `/goal <condition>` sets it, `/goal` alone shows it, and `/goal pause`,
   `/goal resume` and `/goal clear` (or `stop`, `off`, `reset`, `none`, `cancel`) do what they say
   (OpenCodeKit's `GoalCommand`, for every client alike).

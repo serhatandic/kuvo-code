@@ -179,6 +179,26 @@ describe("a goal", () => {
     expect(nudges().map((message) => message.description)).toEqual(["Not met yet: Tests still fail."])
   })
 
+  test("waits while its conversation is archived, as its wake-ups do, and carries on once it's back", async () => {
+    engine.verdicts = [`{"verdict": "not_met", "reason": "Tests still fail."}`, `{"verdict": "met", "reason": "Green."}`]
+    engine.holding = true
+    await goals.set("ses_work", "the build is green")
+    // Archived while the agent works on it: the turn under way ends, and nothing more goes.
+    engine.metadata.set("ses_work", { "kuvo.archived": true })
+    const before = settled
+    engine.finish()
+    await until(() => settled > before)
+    expect(engine.checks).toHaveLength(0)
+    expect(nudges()).toHaveLength(0)
+    expect(goal()?.state).toBe("working")
+    // Brought back: that turn is checked, and the agent told what's left.
+    engine.holding = false
+    engine.metadata.set("ses_work", { "kuvo.archived": false })
+    engine.emit("session.metadata.updated", { sessionID: "ses_work" })
+    await until(() => goal()?.state === "met")
+    expect(nudges().map((message) => message.description)).toEqual(["Not met yet: Tests still fail."])
+  })
+
   test("pauses on a turn that failed, with the error", async () => {
     engine.turns = [{ outcome: "failed", error: "Rate limited by the provider" }]
     await goals.set("ses_work", "the build is green")
