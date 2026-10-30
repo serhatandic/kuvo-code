@@ -151,8 +151,12 @@ export class Turn {
       if (!step.time.streamed) step.time.streamed = Date.now()
       this.send(`session.${kind}.started`, { assistantMessageID: step.id, ordinal })
     }
-    ;(this.block.content as { text: string }).text += delta
-    this.send(`session.${kind}.delta`, { assistantMessageID: step.id, ordinal: this.block.ordinal, delta })
+    const content = this.block.content as { text: string }
+    // Where it goes (the block's length before it): a client that read the block with it in
+    // already leaves it out.
+    const at = content.text.length
+    content.text += delta
+    this.send(`session.${kind}.delta`, { assistantMessageID: step.id, ordinal: this.block.ordinal, delta, at })
     this.save()
   }
 
@@ -174,8 +178,10 @@ export class Turn {
     const block = this.keyed.get(key)
     const step = this.step
     if (!block || !step) return
-    ;(block.content as { text: string }).text += delta
-    this.send(`session.${kind}.delta`, { assistantMessageID: step.id, ordinal: block.ordinal, delta })
+    const content = block.content as { text: string }
+    const at = content.text.length
+    content.text += delta
+    this.send(`session.${kind}.delta`, { assistantMessageID: step.id, ordinal: block.ordinal, delta, at })
     this.save()
   }
 
@@ -231,8 +237,9 @@ export class Turn {
   toolInputDelta(id: string, delta: string) {
     const tool = this.tools.get(id)
     if (!tool || tool.call.state.status !== "streaming" || this.ended) return
+    const at = tool.call.state.input.length
     tool.call.state.input += delta
-    this.send("session.tool.input.delta", { assistantMessageID: tool.step.id, id, delta })
+    this.send("session.tool.input.delta", { assistantMessageID: tool.step.id, id, delta, at })
   }
 
   toolCalled(id: string, input: unknown) {

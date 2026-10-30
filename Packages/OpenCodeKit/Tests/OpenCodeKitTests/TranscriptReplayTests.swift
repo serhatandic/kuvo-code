@@ -145,43 +145,67 @@ struct TranscriptReplayTests {
                 }
             }
         }
-        // Before the read began, then while it was on its way.
-        let before = try [
-            event(2, "session.reasoning.delta", #""ordinal":0,"delta":"Look at ""#),
-            event(3, "session.text.delta", #""ordinal":0,"delta":"Hello ""#),
-            event(4, "session.tool.input.delta", #""id":"call_1","delta":"{\"pa""#),
-        ]
-        let during = try [
-            event(5, "session.reasoning.delta", #""ordinal":0,"delta":"it""#),
-            event(6, "session.text.delta", #""ordinal":0,"delta":"wor""#),
-            event(7, "session.text.delta", #""ordinal":0,"delta":"ld""#),
-            event(8, "session.tool.input.delta", #""id":"call_1","delta":"th\"""#),
-        ]
+        // Before the read began, then while it was on its way: as the engine sends them, and as the
+        // coding agents' bridge does, saying where each goes.
+        func pieces(saying: Bool) throws -> (before: [ServerEvent], during: [ServerEvent]) {
+            func at(_ at: Int) -> String { saying ? #","at":\#(at)"# : "" }
+            return try ([
+                event(2, "session.reasoning.delta", #""ordinal":0,"delta":"Look at ""# + at(0)),
+                event(3, "session.text.delta", #""ordinal":0,"delta":"Hello ""# + at(0)),
+                event(4, "session.tool.input.delta", #""id":"call_1","delta":"{\"pa""# + at(0)),
+            ], [
+                event(5, "session.reasoning.delta", #""ordinal":0,"delta":"it""# + at(8)),
+                event(6, "session.text.delta", #""ordinal":0,"delta":"wor""# + at(6)),
+                event(7, "session.text.delta", #""ordinal":0,"delta":"ld""# + at(9)),
+                event(8, "session.tool.input.delta", #""id":"call_1","delta":"th\"""# + at(4)),
+            ])
+        }
         let whole = ["Look at it", "Hello world", #"{"path""#]
-
-        var showing = Transcript(sessionID: "ses_1")
-        showing.load(messages: step(text: "", thinking: "", input: ""), inbox: [], permissions: [], forms: [], isRunning: true)
-        for event in before + during { showing.apply(event) }
-        #expect(shown(showing) == whole)
-
         let reads = [
-            ("the engine's, none of the words", step(text: "", thinking: "", input: "")),
-            ("the bridge's, some of the pieces since", step(text: "Hello wor", thinking: "Look at ", input: #"{"pa"#)),
-            ("the bridge's, all of them", step(text: "Hello world", thinking: "Look at it", input: #"{"path""#)),
+            ("the engine's, none of the words", false, step(text: "", thinking: "", input: "")),
+            ("the bridge's, some of the pieces since", true, step(text: "Hello wor", thinking: "Look at ", input: #"{"pa"#)),
+            ("the bridge's, all of them", true, step(text: "Hello world", thinking: "Look at it", input: #"{"path""#)),
         ]
-        for (what, read) in reads {
+        for (what, saying, read) in reads {
+            let (before, during) = try pieces(saying: saying)
+            var showing = Transcript(sessionID: "ses_1")
+            showing.load(messages: step(text: "", thinking: "", input: ""), inbox: [], permissions: [], forms: [], isRunning: true)
+            for event in before + during { showing.apply(event) }
+            #expect(shown(showing) == whole)
+
             var fresh = showing
             fresh.load(messages: read, inbox: [], permissions: [], forms: [], isRunning: true)
             fresh.catchUp(on: during, shown: showing)
             #expect(shown(fresh) == whole, "read again: \(what)")
-        }
 
-        // Opened while it writes, over the bridge: the pieces its read has already go once.
-        for (what, read) in reads.dropFirst() {
+            // Opened while it writes: over the bridge, the pieces its read has already go once.
+            guard saying else { continue }
             var opened = Transcript(sessionID: "ses_1")
             opened.load(messages: read, inbox: [], permissions: [], forms: [], isRunning: true)
             opened.catchUp(on: during, shown: Transcript(sessionID: "ses_1"))
             #expect(shown(opened) == whole, "opened: \(what)")
         }
+
+        // Opened over the bridge, its read ending as the next piece does (a blank line): that one
+        // is still added.
+        var opened = Transcript(sessionID: "ses_1")
+        opened.load(messages: step(text: "Line.\n", thinking: "", input: ""), inbox: [], permissions: [], forms: [], isRunning: true)
+        opened.catchUp(on: try [
+            event(9, "session.text.delta", #""ordinal":0,"delta":"\n","at":6"#),
+            event(10, "session.text.delta", #""ordinal":0,"delta":"Next","at":7"#),
+        ], shown: Transcript(sessionID: "ses_1"))
+        #expect(shown(opened)[1] == "Line.\n\nNext")
+
+        // Read further than the copy on screen had come (the bridge keeps a piece before it's sent):
+        // the pieces that come after, during the read and once it's in, are there once.
+        var behind = Transcript(sessionID: "ses_1")
+        behind.load(messages: step(text: "Hello ", thinking: "", input: ""), inbox: [], permissions: [], forms: [], isRunning: true)
+        let wor = try event(11, "session.text.delta", #""ordinal":0,"delta":"wor","at":6"#)
+        behind.apply(wor)
+        var ahead = behind
+        ahead.load(messages: step(text: "Hello world", thinking: "", input: ""), inbox: [], permissions: [], forms: [], isRunning: true)
+        ahead.catchUp(on: [wor], shown: behind)
+        ahead.apply(try event(12, "session.text.delta", #""ordinal":0,"delta":"ld","at":9"#))
+        #expect(shown(ahead)[1] == "Hello world")
     }
 }

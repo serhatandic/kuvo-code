@@ -250,6 +250,40 @@ describe("blocks an agent keeps apart", () => {
       rmSync(folder, { recursive: true, force: true })
     }
   })
+
+  test("a client that reads a block mid-reply, then gets pieces from before its read, has each word once", () => {
+    const folder = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-turn-"))
+    try {
+      const store = new Store(folder)
+      store.add({ id: "ses_r", projectID: "p", cost: 0, tokens: noTokens(), time: { created: 1, updated: 1 }, location: { directory: "/tmp" } })
+      const seen: ServerEvent[] = []
+      const stop = subscribe((event) => seen.push(event))
+      const turn = new Turn(store, "ses_r", "/tmp", { providerID: "opencode", id: "m" }, "build")
+      turn.startStep()
+      // Repeated pieces, as replies have them (blank lines, indentation), and a character in two halves.
+      const pieces = ["Line.\n", "\n", "\n", "Next 🙂", " ", " ", "end."]
+      const reads: string[] = []
+      for (const piece of pieces) {
+        reads.push((store.get("ses_r")!.messages.find((message) => message.type === "assistant") as any)?.content.find((content: any) => content.type === "text")?.text ?? "")
+        turn.text(piece)
+      }
+      stop()
+      const deltas = seen.filter((event) => event.type === "session.text.delta").map((event) => (event as any).data as { delta: string; at: number })
+      // A read at any point, with the pieces from any point before it on top, each where it says it goes.
+      for (const [read, text] of reads.entries()) {
+        for (let since = 0; since <= read; since++) {
+          let shown = text
+          for (const { delta, at } of deltas.slice(since)) {
+            if (shown.length >= at + delta.length) continue
+            shown += delta.slice(shown.length - at)
+          }
+          expect(shown).toBe(pieces.join(""))
+        }
+      }
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
 })
 
 describe("signing in with an agent's command", () => {
