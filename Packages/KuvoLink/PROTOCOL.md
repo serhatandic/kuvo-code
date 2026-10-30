@@ -701,8 +701,9 @@ folder you pick once per box, after asking you.
 
 **What always comes to you** (bridge 0.9.122, `work/always.ts`): payments, permanent deletes,
 changes to who may do what, new accounts, messages to people, your passwords, keys and sign-ins,
-and git's settings. No mode, Always, plan or goal's switch turns this off, nor the sandbox: what a
-bot may allow there is within these rules.
+and git's settings. No mode, Always, plan or goal's switch turns this off. A command that runs in
+the sandbox is the sandbox's rule's alone ("Answering asks in the sandbox"): there a bot may allow
+what stays on this computer.
 - `answer_ask` checks it first, before the policy above, by the tool call's whole input: a
   command's programs and subcommands, git's past its own options (`rm`, `chmod`, `sudo`, `git -C x
   config`, `git push --force` or `+ref`, `gh pr create`, `gh api` that writes, `stripe … create`,

@@ -350,18 +350,13 @@ function bridgeTarget() {
 }
 function peerPlaces() {
   const targets = [];
-  let bridge = false;
   try {
     targets.push(readEngineFile());
   } catch {}
-  try {
-    const record = readBridgeFile();
-    if (record?.port && record?.password && processRuns(record.pid, "kuvo-agents")) {
-      targets.push(record);
-      bridge = true;
-    }
-  } catch {}
-  return { targets, bridge };
+  const bridge = bridgeTarget();
+  if (bridge)
+    targets.push(bridge);
+  return { targets, bridge: bridge !== null };
 }
 var peerTargets = () => peerPlaces().targets;
 function engineGet(engine, route) {
@@ -15265,6 +15260,7 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
     place = await placeOfSession(letter.to, targets);
     if (!place)
       return notDelivered(...noConversation(id, bridge, now));
+    bridgeWaits.delete(id);
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
       return notDelivered("That conversation doesn't take messages.");
@@ -15306,6 +15302,7 @@ async function readFor(sender, letter, { send, targets, answer = () => {}, now =
     const place = await placeOfSession(letter.to, targets);
     if (!place)
       return no(...noConversation(id, bridge, now));
+    bridgeWaits.delete(id);
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
       return no("That conversation can't be read.");
@@ -16409,7 +16406,7 @@ async function answerAskTool(caller, args, targets, signal) {
         return refused(`You can't allow that: you'd have to ask the user about it yourself. ${user}`);
       return why ? refused(`That's ${why}, which always comes to the user: you can't allow it. ${user}`) : null;
     };
-    const refusal = sandboxed && (permission.action === "shell" || permission.action === "bash") ? policy() ?? always() : always() ?? policy();
+    const refusal = sandboxed && (permission.action === "shell" || permission.action === "bash") ? policy() : always() ?? policy();
     if (refusal)
       return refusal;
   }

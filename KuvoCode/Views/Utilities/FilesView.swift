@@ -257,13 +257,15 @@ final class FileTree {
     }
 
     /// Reads again what's been read, keeping what's open, so files the agent made, removed or
-    /// renamed since show; a folder that can't be read now keeps what it showed. A look
-    /// overtaken by Reload or Try Again lands nowhere.
+    /// renamed since show; a folder that can't be read now keeps what it showed, and one that
+    /// couldn't be read (its machine asleep) shows its files once it can. A look overtaken by
+    /// Reload or Try Again lands nowhere.
     func refresh() async {
-        for directory in children.keys where failures[directory] == nil && !loading.contains(directory) {
+        for directory in children.keys where !loading.contains(directory) {
             let read = reads[directory]
             guard case .success(let listed) = await Task.detached(operation: { Self.list(directory) }).value,
                   reads[directory] == read, children[directory] != nil else { continue }
+            if failures[directory] != nil { failures[directory] = nil }
             if children[directory] != listed { children[directory] = listed }
         }
         // The list a filter searches: read again while one's typed, otherwise when one is.
