@@ -85,6 +85,8 @@ struct MachinesSettings: View {
             }
             if let id = ProcessInfo.processInfo.environment["KUVO_DEMO_REMOVE_MACHINE"] {
                 try? await Task.sleep(for: .seconds(1))
+                // Once it's up, as you'd open it (it says who else uses it then), or after a while.
+                for _ in 0..<60 where app.machines.engine(id)?.isReady == false { try? await Task.sleep(for: .seconds(1)) }
                 removing = app.machines.list.first { $0.id == id }
             }
         }

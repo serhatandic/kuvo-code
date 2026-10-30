@@ -365,6 +365,29 @@ import Testing
         #expect(link.machineHosts[id] == nil, "named to your phones and other computers again")
     }
 
+    /// On its way there (connecting the first time, its engine copied over): its Settings pages say
+    /// how far, rather than read its settings before there's anything there to read them with
+    /// (which failed, in the shell's own words); up, they're read.
+    @Test func connectingItsSettingsPagesWaitForItRatherThanFail() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        let held = Gate()
+        MachineEngine.standIn = { [reachable] machine in
+            while !held.isOpen { await Task.yield() }
+            return reachable.apis[machine.id]
+        }
+        let connecting = app.connect(engine)
+        try await until { engine.connection.isUnderWay }
+        #expect(SettingsUnread.shown(engine) == .onItsWay)
+        held.open()
+        await connecting.value
+        #expect(engine.isReady)
+        #expect(SettingsUnread.shown(engine) == .unread, "up: read now")
+        app.disconnect(engine)
+        #expect(SettingsUnread.shown(engine) == .unread, "away and never read: why, with Connect")
+    }
+
     /// Disconnected, it stays so when this Mac's engine starts again (after a restart, or a
     /// change to your accounts), until you connect it.
     @Test func disconnectedItStaysSoWhenThisMacsEngineStartsAgain() async throws {
