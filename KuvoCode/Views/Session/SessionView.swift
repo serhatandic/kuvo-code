@@ -177,6 +177,10 @@ private struct BottomStack: View {
         liveBars.map { bar in
             switch bar {
             case .goal:
+                if let plan = shownPlan?.plan {
+                    let words = plan.state == .done ? "Goal met" : plan.state == .stopped ? "Goal stopped" : "Goal · \(GoalPlanWords.progress(plan))"
+                    return BarStripItem(bar: bar, symbol: plan.state == .done ? "checkmark.circle.fill" : "scope", isDone: plan.state == .done, words: words)
+                }
                 let state = model.goal?.state
                 let words = state == .met ? "Goal met" : state == .unmet ? "Goal can’t be met" : state == .paused ? "Goal paused" : "Goal"
                 return BarStripItem(bar: bar, symbol: state == .met ? "checkmark.circle.fill" : "scope", isDone: state == .met, words: words)
@@ -221,7 +225,7 @@ private struct BottomStack: View {
     /// The bars showing in the card, in its order.
     private var bars: [ComposerBar] {
         var bars: [ComposerBar] = []
-        if model.goal != nil { bars.append(.goal) }
+        if model.goal != nil || shownPlan != nil { bars.append(.goal) }
         if let handoff = model.handoff, handoff != model.putAwayHandoff { bars.append(.handoff) }
         if model.review != nil { bars.append(.review) }
         if let id = model.shownSideQuestion, model.sideQuestions.contains(where: { $0.id == id }) { bars.append(.sideQuestion) }
@@ -235,6 +239,19 @@ private struct BottomStack: View {
     /// A card over the composer asks you something: it's what needs you, and the bars fold.
     private var isAsking: Bool {
         !model.permissions.isEmpty || !forms.isEmpty || !app.browserAsks.asks(for: model.session.id).isEmpty || !app.botAsks.asks(for: model.session.id).isEmpty
+            || proposedPlan != nil
+    }
+
+    /// A bot's goal whose plan waits for you, for its card.
+    private var proposedPlan: (box: String, plan: GoalPlan)? {
+        app.goalPlans.plan(for: model.id).flatMap { $0.plan.isProposed ? $0 : nil }
+    }
+
+    /// A bot's goal under way (or over, and not put away), in the goal bar's place.
+    private var shownPlan: (box: String, plan: GoalPlan)? {
+        guard let found = app.goalPlans.plan(for: model.id), [.running, .done, .stopped].contains(found.plan.state),
+              !app.goalPlans.putAway.contains(found.plan.id) else { return nil }
+        return found
     }
 
     /// Whether a bar is folded: its own way with fewer than three, the card's with more.
@@ -253,7 +270,7 @@ private struct BottomStack: View {
     private var news: [ComposerBar: Bool] {
         [.review: model.review.map { $0.state == .done && !$0.findings.isEmpty } ?? false,
          .sideQuestion: model.shownSideThread?.latest.state == .answered,
-         .goal: model.goal.map { goal in
+         .goal: shownPlan.map { !$0.plan.waiting.isEmpty || $0.plan.state != .running } ?? model.goal.map { goal in
              goal.state == .met || goal.state == .unmet || (goal.state == .paused && (goal.pausedBy == .error || goal.pausedBy == .stalled))
          } ?? false]
     }
@@ -352,6 +369,12 @@ private struct BottomStack: View {
                                      && Sandboxes.shared.asks(for: model.session.id, on: Workspace.box(of: model.session.location.directory)).isEmpty)
                         .modifier(ComposerSurface())
                 }
+                if let (box, plan) = proposedPlan {
+                    GoalCard(plan: plan, box: box)
+                        .environment(\.takesCardKeys, takesCardKeys && model.permissions.isEmpty && forms.isEmpty && app.botAsks.asks(for: model.session.id).isEmpty)
+                        .disabled(offlineMachine != nil && box != BoxClient.mac)
+                        .modifier(ComposerSurface())
+                }
                 // What went wrong, over the composer rather than in an alert you must click away.
                 if let failure = model.failure, offlineMachine == nil {
                     FailureBar(text: failure) { model.failure = nil }
@@ -390,6 +413,17 @@ private struct BottomStack: View {
                             UndoLine(text: text, undo: model.putAways.canUndo(item) ? { model.putAways.undo(item) } : nil)
                                 .modifier(CardRow())
                                 .transition(.fold)
+                        } else if let (box, plan) = shownPlan {
+                            GoalPlanBar(plan: plan, box: box, goal: model.goal, isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil) {
+                                model.changeGoal(.pause)
+                            } resume: {
+                                model.changeGoal(.resume)
+                            } putAway: {
+                                app.goalPlans.putAway.insert(plan.id)
+                                if model.goal?.isOver == true { model.putAwayGoal() }
+                            } failed: { model.failure = $0 }
+                            .modifier(CardRow())
+                            .transition(.fold)
                         } else if let goal = model.goal {
                             GoalBar(goal: goal, isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil, hasWaiting: !model.waiting.isEmpty) {
                                 model.changeGoal(.pause)

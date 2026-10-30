@@ -1370,6 +1370,10 @@ final class SessionModel {
     /// subagent's, whose goal is the conversation it works for): "/goal" is offered then.
     var takesGoals: Bool { session.parentID == nil && (goalBridge().map { $0.api != nil && $0.runsGoals != false } ?? false) }
 
+    /// "/goal <words>" in a bot's conversation: its box has the bot plan it and put it to you on a
+    /// card (PROTOCOL.md, "Work › Goals"); false for a conversation that isn't a bot's (set by the app).
+    @ObservationIgnored static var askBotForGoal: ((_ session: String, _ words: String) async throws -> Bool)?
+
     /// "/goal …" sent: its computer's box sets the goal and starts the agent on it, or pauses,
     /// resumes or takes away the one there. "/goal" alone shows it; with none, what to type is
     /// left ready to finish. A goal is words: files wait in the composer. What can't be done comes
@@ -1381,6 +1385,24 @@ final class SessionModel {
             hidesGoal = false
             return
         }
+        // A bot's goal starts from its plan: the bot is asked for one, and puts it to you.
+        if case .set(let words) = command, let ask = Self.askBotForGoal {
+            let session = id
+            Task {
+                do {
+                    if try await ask(session, words) { return }
+                    runGoalHere(command, written: written)
+                } catch {
+                    restore(text: written)
+                    failure = error.localizedDescription
+                }
+            }
+            return
+        }
+        runGoalHere(command, written: written)
+    }
+
+    private func runGoalHere(_ command: GoalCommand, written: String) {
         guard takesGoals else {
             restore(text: written)
             failure = session.parentID != nil

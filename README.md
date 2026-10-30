@@ -84,9 +84,13 @@ side panel and the usage menu.
   binary, unmodified. Kuvo Code downloads the version it's written against,
   checks its checksum and its code signature, and keeps it in
   `~/Library/Application Support/run.kuvo.code/engine`.
-- **Each launch runs a private server**, `opencode serve --stdio --port 0`
-  with a random password, which exits when the app does. The app talks to its
-  HTTP API and follows its event stream to show live transcripts.
+- **A private server runs in the background**, `opencode serve --stdio --port 0`
+  with a random password. Kuvo Code's own executable, started by launchd with
+  `--box` (`KuvoCode/Keeper`), keeps it, the coding agents' bridge and this
+  Mac's box running when you quit the app, as a machine's keeper does there,
+  and records where each answers in the box's `run` folder. The app follows
+  those records, talks to the engine's HTTP API and follows its event stream to
+  show live transcripts.
 - **Its data is kept apart** from any opencode you've installed. Sessions,
   accounts and settings live in
   `~/Library/Application Support/run.kuvo.code/opencode`. The commands the

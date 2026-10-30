@@ -211,6 +211,9 @@ const places: GoalPlaces = {
   },
 }
 const goals = new Goals(join(home, "goals.json"), places)
+// Goals paused at a limit, looked at once a minute too: a timer can come late after the computer
+// slept.
+setInterval(() => goals.resumeDue(), 60_000).unref?.()
 // Its other keywords, for the same conversations: side questions, handoffs and reviews.
 const sideQuestions = new SideQuestions(join(home, "side-questions.json"), places)
 const handoffs = new Handoffs(places)

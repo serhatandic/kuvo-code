@@ -42,6 +42,8 @@ final class OutsideAgents {
     private(set) var failure: String?
 
     @ObservationIgnored private var server: ServerProcess?
+    /// Its process while it runs: waited for as this Mac's box stops (`MacBoxRunner.stop`).
+    var processID: Int32? { server.map(\.processID) }
 
     /// Tells this Mac's box where it is again (a box whose folder started afresh, a test's).
     func recordForBox() {
@@ -231,10 +233,15 @@ final class OutsideAgents {
     }
 
     /// Whether it was started (there was a Bun to run it with), so it can be started again.
-    var wasStarted: Bool { engine != nil }
+    var wasStarted: Bool { engine != nil || follows }
 
-    /// Started again after it stopped for good (Restart where that shows), as it was started.
+    /// Started again after it stopped for good (Restart where that shows), as it was started: by
+    /// this Mac's keeper, when it's the keeper's.
     func startAgain() async {
+        if follows {
+            do { try await KeeperControl.send(.restartAgents) } catch { failure = error.localizedDescription }
+            return
+        }
         guard server == nil, !isStarting, let engine else { return }
         restarts.removeAll()
         failure = nil
@@ -266,6 +273,39 @@ final class OutsideAgents {
         sideQuestionCounts = [:]
         reviews = [:]
         handoffs = [:]
+    }
+
+    /// Whether it's this Mac's keeper's (`Keeper`), which runs it whether or not the app is open:
+    /// this follows it, by its record (`run/bridge.json`), rather than starting it.
+    private(set) var follows = false
+
+    /// Not the keeper's any more (background work switched off): the app runs it itself from now on.
+    func unfollow() {
+        follow(nil, failure: nil)
+        follows = false
+    }
+
+    /// The keeper's bridge, as its record and the keeper say: where it answers, or why it doesn't.
+    func follow(_ endpoint: ServerEndpoint?, failure: String?) {
+        follows = true
+        guard let endpoint else {
+            self.failure = failure
+            guard api != nil else { return }
+            eventTask?.cancel()
+            eventTask = nil
+            api = nil
+            goals = [:]
+            forgetKeywords()
+            onStopped?()
+            return
+        }
+        self.failure = nil
+        guard endpoint != api?.client.endpoint else { return }
+        eventTask?.cancel()
+        let api = OpenCodeAPI(endpoint: endpoint)
+        self.api = api
+        listen(to: api)
+        Task { await loadAuto() }
     }
 
     /// A machine's bridge, through its engine's tunnel (`endpoint`; nil when that engine started

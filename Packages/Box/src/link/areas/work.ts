@@ -4,28 +4,32 @@
 // each change; `POST kuvo/bots/<id>/stop-all`, every session of its work stopped, and the bot's own
 // turn with what it was still to hear of them. What a bot asks
 // you before it does it (`kuvo/work/asks`, its events, and your answer, `POST kuvo/work/asks/<id>`),
-// where new projects go (`kuvo/work/settings`), and a project made (`POST kuvo/projects/new`).
+// where new projects go (`kuvo/work/settings`), a project made (`POST kuvo/projects/new`), and a
+// bot's goal (`kuvo/work/goals`, its events, a goal asked for, `POST kuvo/work/goals/ask`, and your
+// answer to one, `POST kuvo/work/goals/<id>`).
 
 import { isObject, parsed } from "../../shared/json";
 import { followed } from "../follow";
 import { botHere } from "../bots/here";
-import { stopSession } from "../engine/queue";
 import { targetsOf } from "../letters/tools";
 import { answersOn } from "../work/answers";
 import { noteWorkChanged, readWorkChanges, WORK_FOLDER, workFollowers } from "../work/changes";
-import { forgetWakes } from "../work/wakes";
+import { stopBotWork } from "../work/stop";
 import { botLimits } from "../work/limits";
 import { answerWork, askFollowers, workAsks } from "../work/asks";
 import { madeWords, makeProject } from "../work/projects";
+import { startOfDay } from "../work/clock";
 import { setProjectsFolder, workSettings } from "../work/settings";
+import { answerGoal, askGoal, goalFollowers, goalPlans } from "../work/goals";
 import { readProjects } from "./projects";
 import { HERE } from "../home";
-import { askingNow, describeWork, ofBot, workingNow, workSessions } from "../work/tree";
+import { botOfConversation, describeWork, ofBot, workingNow, workSessions } from "../work/tree";
 import type { BotWork, WorkAnswer } from "../../shared/routes/work";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
 export const WORK_ROUTE = /^kuvo\/(?:work(?:\/events)?|bots\/([^/]+)\/stop-all)$/;
 export const WORK_ASKS_ROUTE = /^kuvo\/work\/(?:settings|asks(?:\/([^/]+))?)$/;
+export const GOALS_ROUTE = /^kuvo\/work\/goals(?:\/([^/]+))?$/;
 
 // A bot's work as clients show it.
 async function botWork(bot: string, context: RouteContext): Promise<BotWork> {
@@ -40,7 +44,7 @@ async function botWork(bot: string, context: RouteContext): Promise<BotWork> {
     sessions.push(...await Promise.all(shown.slice(at, at + 8).map(each => describeWork(each, working, { replies: true, signal: signal ?? undefined }))));
   }
   const answered: WorkAnswer[] = work.flatMap(each => answersOn(each.data.metadata).map(answer => ({ ...answer, session: each.data.id }))).sort((a, b) => b.at - a.at).slice(0, 100);
-  const midnight = new Date().setHours(0, 0, 0, 0);
+  const midnight = startOfDay(Date.now());
   const today = work.filter(each => (each.data.time?.created ?? 0) >= midnight);
   const cost = today.reduce((sum, each) => sum + (typeof each.data.cost === "number" ? each.data.cost : 0), 0);
   return {
@@ -86,23 +90,7 @@ export async function* workRoute(context: RouteContext, match: RegExpMatchArray)
   if (!botHere(bot)) return yield* json(404, { message: "There's no such bot here." });
   const targets = targetsOf({ readEngine, bridge });
   if (!targets.length) return yield* json(503, { message: "The engine isn't running." });
-  const work = ofBot(bot, await workSessions(targets, signal ?? undefined));
-  const working = await workingNow(targets, signal ?? undefined);
-  // Those working, and those waiting on an answer (which may not count as working).
-  let stopped = 0;
-  for (const each of work) {
-    if (!working.has(each.data.id) && !(await askingNow(each, signal ?? undefined))) continue;
-    if (await stopSession(each.target, each.data.id).then(() => true, () => false)) stopped += 1;
-  }
-  // The bot itself, mid-turn, and what it was still to hear of them: it would only start them again.
-  const own = botHere(bot)?.session;
-  if (own) {
-    forgetWakes(own);
-    if (working.has(own)) {
-      for (const target of targets) if (await stopSession(target, own).then(() => true, () => false)) break;
-    }
-  }
-  noteWorkChanged(bot);
+  const stopped = await stopBotWork(bot, targets, signal ?? undefined);
   return yield* json(200, { stopped });
 }
 
@@ -145,4 +133,32 @@ export async function* newProjectRoute(context: RouteContext): AsyncGenerator<An
     return yield* json(status, refusal);
   }
   return yield* json(201, { project: outcome.made.project, text: madeWords(outcome.made, HERE) });
+}
+
+// The goals here (each bot's latest), their events, a goal asked for in a bot's chat (/goal), and
+// your answer to one: start (with your switches and limits), decline or stop.
+export async function* goalsRoute(context: RouteContext, match: RegExpMatchArray): AsyncGenerator<AnswerPiece> {
+  const { request, readEngine, bridge, signal, json } = context;
+  const method = request.method.toUpperCase();
+  if (!match[1] || match[1] === "events") {
+    if (method !== "GET") return yield* json(405, {});
+    if (!match[1]) return yield* json(200, { goals: goalPlans() });
+    yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+    return yield* followed(() => ({ goals: goalPlans() }), goalFollowers, signal ?? undefined, { folders: [WORK_FOLDER], recursive: false });
+  }
+  if (method !== "POST") return yield* json(405, {});
+  const given = parsed(request.body);
+  const targets = () => targetsOf({ readEngine, bridge });
+  if (match[1] === "ask") {
+    if (!isObject(given) || typeof given.session !== "string" || !botOfConversation(given.session)) return yield* json(400, { message: "Send {session, goal}: a bot's conversation, and the goal in your words." });
+    const outcome = await askGoal(given.session, typeof given.goal === "string" ? given.goal : "", targets);
+    if ("refused" in outcome) return yield* json(outcome.refused.status, { message: outcome.refused.message });
+    return yield* json(200, outcome);
+  }
+  const outcome = await answerGoal(decodeURIComponent(match[1]), isObject(given) ? given : {}, targets);
+  if ("refused" in outcome) {
+    const { status, ...refusal } = outcome.refused;
+    return yield* json(status, refusal);
+  }
+  return yield* json(200, outcome);
 }

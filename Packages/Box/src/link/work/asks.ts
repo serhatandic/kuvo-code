@@ -208,7 +208,9 @@ export async function answerWork(id: string, given: Record<string, unknown>, tar
   const asker: Asker = { session: ask.session, name: ask.name, ...(ask.bot ? { bot: ask.bot } : {}) };
   const what = ask.action === "cloneProject" ? `cloning ${ask.clone} as ${ask.project}` : `making ${ask.project}`;
   let outcome: { text: string; isError: boolean };
-  if (answer === "deny") {
+  if (answer === "deny" && given.overnight === true) {
+    outcome = { text: `No one could answer ${what} overnight, so it's no for now. Go on without it; it waits for the user in the morning report.`, isError: true };
+  } else if (answer === "deny") {
     outcome = { text: `The user said no to ${what}. Don't ask again for it: go on without it, or ask them in a line what they'd like instead.`, isError: true };
   } else {
     // Whatever goes wrong is its answer, so the ask is never left half answered.

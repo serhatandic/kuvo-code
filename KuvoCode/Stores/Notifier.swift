@@ -156,8 +156,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// ask from the panel's browser, sent from here whether the Mac shows it or not): shown here,
     /// the boxes count it as seen while you're at this Mac. An `ask` the box tells your phones itself
     /// (a sandbox's): cleared here as it's answered anywhere.
+    /// A `quiet` one shows in Notification Center without lighting the screen or a sound (a
+    /// night's blockers and its morning report).
     func notify(session: String, title: String, subtitle: String? = nil, body: String, permission: (session: String, request: String)? = nil,
-                question: Question? = nil, replies: Bool = false, push: Push? = nil, ask: String? = nil) {
+                question: Question? = nil, replies: Bool = false, quiet: Bool = false, push: Push? = nil, ask: String? = nil) {
         // What looks like a secret in a command or reply (a token, a key) isn't shown: these stay
         // in Notification Center, and a phone's lock screen.
         let body = Self.masked(body)
@@ -174,7 +176,11 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             content.title = Self.masked(title)
             if let subtitle { content.subtitle = Self.masked(subtitle) }
             content.body = body
-            if Self.playsSound { content.sound = .default }
+            if quiet {
+                content.interruptionLevel = .passive
+            } else if Self.playsSound {
+                content.sound = .default
+            }
             content.threadIdentifier = session
             content.userInfo = Self.info(session: session, permission: permission, question: question)
             // A browser's ask: cleared as it's answered, or goes unanswered.
