@@ -43,6 +43,24 @@ import Testing
         machine.stop()
     }
 
+    /// Removed: the side panel's terminals on it stop (they'd only be SSH sessions to a machine
+    /// that's gone from the sidebar), wherever they are; a terminal here goes on.
+    @Test func removedItsTerminalsInThePanelStop() async throws {
+        defer { done() }
+        let id = Self.name()
+        _ = add(id, at: machine)
+        let panel = app.utilities
+        defer { panel.closeAll() }
+        let shell = ["SHELL": "/bin/sh"]
+        panel.inView = .init(session: "ses_there", place: id)
+        panel.newTerminal(in: RemoteFolder.folder("/home/me", on: id), environment: shell)
+        panel.inView = .init(session: "ses_here")
+        panel.newTerminal(in: FileManager.default.temporaryDirectory.path, environment: shell)
+
+        app.removeMachine(id)
+        #expect(panel.tabs.filter { $0.kind == .terminal }.map(\.owner) == ["ses_here"])
+    }
+
     /// Once it's connected, it's sent what its bots are made with (their kit: templates, your
     /// personalities, its projects), so it makes bots itself with this Mac closed.
     @Test func connectedItsSentItsBotsKit() async throws {

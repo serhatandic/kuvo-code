@@ -791,6 +791,11 @@ final class Utilities {
         runs = runs.filter { !$0.key.hasPrefix(owner + "|") }
     }
 
+    /// Ends the terminals on a machine, in every panel: it was removed.
+    func closeTerminals(on machine: String) {
+        for tab in tabs where terminals[tab.id]?.machine == machine { close(tab.id) }
+    }
+
     /// Takes a tab out of the strip; the tab beside it takes its place. A panel that's going
     /// (its conversation was deleted) isn't refilled.
     private func remove(_ id: UUID, refills: Bool = true) {

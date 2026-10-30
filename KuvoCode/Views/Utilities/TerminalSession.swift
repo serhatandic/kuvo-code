@@ -16,10 +16,13 @@ final class TerminalSession: NSObject {
     @ObservationIgnored private var appliedLook: (dark: Bool, focused: Bool)?
     /// It has been on screen: shown again, it takes the keyboard only in the card you work in.
     @ObservationIgnored var wasShown = false
+    /// The machine it's a shell on, over SSH; nil for this Mac.
+    let machine: String?
 
     /// A shell, typing `command` once it starts (so it stays a shell when the command ends).
     init(directory: String, environment: [String: String], command: String? = nil) {
         view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
+        machine = RemoteFolder.parse(directory)?.machine
         super.init()
         view.processDelegate = self
         view.font = Self.font
