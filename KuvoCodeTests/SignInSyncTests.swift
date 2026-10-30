@@ -145,3 +145,20 @@ import Testing
         #expect(mac.stored("mcp_linear").contains { $0.active && $0.secret == "rt_renewed" })
     }
 }
+
+/// Signing out of an account (Disconnect, Remove Account, an agent's Sign Out) on a computer whose
+/// engine can't be reached now says so, rather than doing nothing: this Mac's engine not running,
+/// a machine not connected, this Mac's coding agents not started.
+@MainActor
+@Suite struct UnreachableSignOutTests {
+    @Test func signingOutWhereNothingAnswersSaysWhy() async {
+        TestEnvironment.prepare()
+        let app = AppModel()
+        let mac = await #expect(throws: AppModel.Unreachable.self) { try await app.forgetSignIn("github-copilot") }
+        #expect(mac?.localizedDescription == "This Mac’s engine isn’t running. Try again in a moment.")
+        let machine = await #expect(throws: AppModel.Unreachable.self) { try await app.forgetSignIn("github-copilot", on: .machine("lokum")) }
+        #expect(machine?.localizedDescription == "lokum isn’t connected. Try again once it is.")
+        let agent = await #expect(throws: OutsideAgents.Failure.self) { try await OutsideAgents().signOut("cursor") }
+        #expect(agent?.localizedDescription == "The coding agents are still starting. Try again in a moment.")
+    }
+}

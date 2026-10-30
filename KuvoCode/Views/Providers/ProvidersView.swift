@@ -17,6 +17,8 @@ struct ProvidersView: View {
     @State private var editing: ProviderEdit?
     /// What to remove once its editor has closed (and its fields are done saving).
     @State private var removal: [String]?
+    /// Why a removed provider's key couldn't go with it.
+    @State private var removalFailure: String?
     @State private var search = ""
 
     /// The machine whose accounts these are, on a machine's tab.
@@ -47,6 +49,11 @@ struct ProvidersView: View {
                     editing = nil
                 }
             }
+            .alert("Couldn't Remove Its Key", isPresented: Binding(get: { removalFailure != nil }, set: { if !$0 { removalFailure = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(removalFailure ?? "")
+            }
         #if DEBUG
         .task {
             if let id = ProcessInfo.processInfo.environment["KUVO_DEMO_PROVIDERS"], let provider = catalog.providers.first(where: { $0.id == id }) {
@@ -65,11 +72,13 @@ struct ProvidersView: View {
         app.config(for: box).set(nil, at: removal)
         // Its key goes with it: one made again with its name doesn't quietly reconnect with the
         // old one.
-        if let id = removal.last, let api = app.api(for: box), let provider = catalog.integrations.first(where: { $0.id == id }) {
-            let ids = provider.connections.filter { $0.type == "credential" }.compactMap(\.credentialID)
+        if let id = removal.last, catalog.integrations.contains(where: { $0.id == id && $0.connections.contains { $0.type == "credential" } }) {
             Task {
-                for credential in ids { try? await api.removeCredential(credential) }
-                app.forgetSignIn(id, on: box)
+                do {
+                    try await app.forgetSignIn(id, on: box)
+                } catch {
+                    removalFailure = error.localizedDescription
+                }
             }
         }
         self.removal = nil
@@ -303,6 +312,7 @@ private struct ConnectedRow: View {
     @Environment(AppModel.self) private var app
     @Environment(\.settingsBox) private var box
     @Environment(Catalog.self) private var catalog
+    @State private var failure: String?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -325,6 +335,11 @@ private struct ConnectedRow: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
+        .alert("Couldn't Disconnect \(provider.name)", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(failure ?? "")
+        }
     }
 
     private var active: Integration.Connection? { provider.connections.first }
@@ -348,6 +363,12 @@ private struct ConnectedRow: View {
 
     /// Its sign-ins and keys on this computer.
     private func disconnect() {
-        app.forgetSignIn(provider.id, on: box)
+        Task {
+            do {
+                try await app.forgetSignIn(provider.id, on: box)
+            } catch {
+                failure = error.localizedDescription
+            }
+        }
     }
 }

@@ -481,7 +481,7 @@ struct ConnectView: View {
     }
 
     private func proceed(_ method: Integration.Method) {
-        guard let api = catalog.api(forIntegration: integrationID) else { return }
+        guard let api = catalog.api(forIntegration: integrationID) else { return step = .failed(unreachable) }
         let answer = FormFieldsView.payload(method.form, answers)
         isWorking = true
         Task {
@@ -521,7 +521,8 @@ struct ConnectView: View {
     private func connectKey(_ method: Integration.Method) {
         // Return in the field gets here too, past the disabled button.
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let api = catalog.api(forIntegration: integrationID), !trimmed.isEmpty, FormFieldsView.isComplete(method.form, answers), !isWorking else { return }
+        guard !trimmed.isEmpty, FormFieldsView.isComplete(method.form, answers), !isWorking else { return }
+        guard let api = catalog.api(forIntegration: integrationID) else { return keyError = unreachable }
         let answer = FormFieldsView.payload(method.form, answers)
         isWorking = true
         Task {
@@ -598,7 +599,8 @@ struct ConnectView: View {
 
     private func complete(_ attempt: OAuthAttempt) {
         let code = pastedCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let api = catalog.api(forIntegration: integrationID), !code.isEmpty, !isWorking else { return }
+        guard !code.isEmpty, !isWorking else { return }
+        guard let api = catalog.api(forIntegration: integrationID) else { return codeError = unreachable }
         isWorking = true
         Task {
             defer { isWorking = false }
@@ -615,7 +617,8 @@ struct ConnectView: View {
     /// The code the page gave, typed into the sign-in; how it went comes with the next status.
     private func submitCode(_ attempt: OAuthAttempt) {
         let code = pastedCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let api = catalog.api(forIntegration: integrationID), !code.isEmpty, !isCheckingCode else { return }
+        guard !code.isEmpty, !isCheckingCode else { return }
+        guard let api = catalog.api(forIntegration: integrationID) else { return codeError = unreachable }
         isCheckingCode = true
         codeError = nil
         Task {
@@ -633,6 +636,14 @@ struct ConnectView: View {
                 codeError = error.localizedDescription
             }
         }
+    }
+
+    /// Why it can't sign in now: the computer's engine (a coding agent's, this Mac's agents) isn't there.
+    private var unreachable: String {
+        if catalog.machine == nil, OutsideAgents.isAgent(integrationID) {
+            return OutsideAgents.Failure.notRunning(catalog.outsideAgents?.failure).localizedDescription
+        }
+        return AppModel.Unreachable(computer: catalog.machine.map { app.name(of: .machine($0)) }).localizedDescription
     }
 
     private func finish(method: String) {

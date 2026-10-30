@@ -606,8 +606,12 @@ private struct AgentAccountRow: View {
 
     private func signOut() {
         Task {
-            try? await agents.signOut(account.id)
-            await catalog.refreshAgents()
+            do {
+                try await agents.signOut(account.id)
+                await catalog.refreshAgents()
+            } catch {
+                failure = error.localizedDescription
+            }
         }
     }
 }
@@ -625,6 +629,9 @@ private struct PlanAccountRow: View {
     private var agents: OutsideAgents { bridge ?? app.agents }
     /// Where it's signed in: this Mac's engine, or a machine's.
     @Environment(Catalog.self) private var catalog
+    @State private var failure: String?
+
+    private var box: SidebarBox { catalog.machine.map { .machine($0) } ?? .mac }
 
     /// Its sign-in ended: the engine says so, or a run was refused it (the one in use).
     private var needsSignIn: Bool {
@@ -647,7 +654,7 @@ private struct PlanAccountRow: View {
             if connection.type == "credential" {
                 if !isInUse, let id = connection.credentialID {
                     Button("Use This Account") {
-                        Task { try? await catalog.api?.activateCredential(id) }
+                        change { try await app.reachableAPI(for: box).activateCredential(id) }
                         app.releaseLimit(plan.id)
                     }
                 }
@@ -658,6 +665,11 @@ private struct PlanAccountRow: View {
                 Text("Set in your shell's environment")
             }
         }
+        .alert("Couldn't Change This Account", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(failure ?? "")
+        }
     }
 
     /// Removes the account from the computer it's on: with it the last, that computer is signed
@@ -665,12 +677,23 @@ private struct PlanAccountRow: View {
     private func remove() {
         guard let id = connection.credentialID else { return }
         let accounts = plan.connections.filter { $0.type == "credential" }
-        if catalog.machine != nil {
-            Task { try? await catalog.api?.removeCredential(id) }
-        } else if accounts.count <= 1 {
-            app.forgetSignIn(plan.id)
-        } else {
-            Task { try? await app.api?.removeCredential(id) }
+        change {
+            if catalog.machine == nil, accounts.count <= 1 {
+                try await app.forgetSignIn(plan.id)
+            } else {
+                try await app.reachableAPI(for: box).removeCredential(id)
+            }
+        }
+    }
+
+    /// Why one didn't work, in its alert.
+    private func change(_ work: @escaping () async throws -> Void) {
+        Task {
+            do {
+                try await work()
+            } catch {
+                failure = error.localizedDescription
+            }
         }
     }
 }
