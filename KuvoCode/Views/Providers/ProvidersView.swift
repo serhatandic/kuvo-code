@@ -72,7 +72,10 @@ struct ProvidersView: View {
         app.config(for: box).set(nil, at: removal)
         // Its key goes with it: one made again with its name doesn't quietly reconnect with the
         // old one.
-        if let id = removal.last, catalog.integrations.contains(where: { $0.id == id && $0.connections.contains { $0.type == "credential" } }) {
+        // Its key, any the engine has (the list may not show one added just now); with the
+        // computer out of reach, only one the list shows is worth saying couldn't go.
+        if let id = removal.last, let provider = catalog.integrations.first(where: { $0.id == id }),
+           app.api(for: box) != nil || provider.connections.contains(where: { $0.type == "credential" }) {
             Task {
                 do {
                     try await app.forgetSignIn(id, on: box)
