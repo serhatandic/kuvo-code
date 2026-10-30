@@ -13,11 +13,15 @@ var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 var pause = (ms, signal) => new Promise((resolve) => {
   if (signal?.aborted)
     return resolve();
-  const timer = setTimeout(resolve, ms);
-  signal?.addEventListener("abort", () => {
+  const stopped = () => {
     clearTimeout(timer);
     resolve();
-  }, { once: true });
+  };
+  const timer = setTimeout(() => {
+    signal?.removeEventListener("abort", stopped);
+    resolve();
+  }, ms);
+  signal?.addEventListener("abort", stopped, { once: true });
 });
 var soon = (run, ms) => setTimeout(run, ms).unref?.();
 
@@ -291,6 +295,8 @@ function listedAsk(ask, machine, asker) {
     listed.prompt = String(ask.prompt ?? "");
   if (ask.kind === "action")
     listed.instruction = String(ask.instruction ?? "");
+  if (ask.passkey === true)
+    listed.passkey = true;
   return listed;
 }
 function askAnswer(ask, given) {
@@ -790,10 +796,10 @@ function listWakes() {
     const session = (textOf(path7.join(folder, "session")) ?? "").trim();
     if (!session)
       continue;
-    const { wakes, watches } = readWakes(folder);
+    const { wakes, watches, paused } = readWakes(folder);
     if (!wakes.length && !watches.length)
       continue;
-    sessions.push({ session, ...wakes.length ? { next: wakes[0].due } : {}, watching: watches.length > 0 });
+    sessions.push({ session, ...wakes.length ? { next: wakes[0].due } : {}, watching: watches.length > 0, wakes: wakes.map(listedWake), watches, paused });
   }
   return sessions;
 }
@@ -6628,8 +6634,11 @@ async function ownAgents(readEngine, machine, kit = readKit(), readBridge = read
 }
 var ownList = null;
 var ownMachine = null;
+var refreshes = 0;
+var keptRefresh = 0;
 function keepOwn(list, machine) {
   ownList = list;
+  keptRefresh = refreshes;
   ownMachine = machine;
 }
 function ownAsLast(ownID) {
@@ -6657,9 +6666,12 @@ async function refreshOwn(readEngine, link = readLink()) {
   if (!link?.key && !IS_MAC)
     return ownList;
   ownMachine = link?.id ?? null;
+  const turn = ++refreshes;
   const list = await ownAgents(readEngine, link?.id);
-  if (list)
+  if (list && turn > keptRefresh) {
     ownList = list;
+    keptRefresh = turn;
+  }
   writeAgents(link);
   return ownList;
 }
@@ -8931,7 +8943,7 @@ import { spawn as spawn3 } from "node:child_process";
 import crypto18 from "node:crypto";
 import fs46 from "node:fs";
 import path46 from "node:path";
-var MOST_BUNDLE = 1024 ** 3;
+var MOST_BUNDLE = 1e9;
 var CHATS2 = IS_MAC ? path46.join(path46.dirname(K), "Chats") : path46.join(K, "chats");
 var folderOf = (kind, thing) => kind === "bot" ? path46.join(BOTS, thing) : kind === "chat" ? path46.join(SESSION_WAKES, thing) : null;
 var directoryOf = (kind, thing) => kind === "bot" ? path46.join(BOTS, thing, "workspace") : CHATS2;
@@ -9142,11 +9154,20 @@ var say = {
   busy: (name) => `${name} kept getting messages while it moved, so it stayed where it is. Try again in a moment.`,
   botsElsewhere: (chat) => `${chat}’s bots live on different computers, so it can’t go there.`,
   inBoxGroup: (name, chat) => `${name} is in “${chat}”, which lives on ${HERE} with its bots. Move the chat to a Mac first, or take ${name} out of it.`,
-  tooBig: (name) => `${name} is too big to move over the internet (more than 1 GB).`,
+  tooBig: (name) => `${name} is more than 1 GB, too big to move to another computer, so it stays where it is.`,
   noGroups: (place) => `Group chats on ${place} aren’t running right now. Try again once they are.`,
   noEngine: (place) => `The engine on ${place} isn’t running. Try again once it is.`,
   needsUpdate: (place) => `${place} needs a newer Kuvo Code before things can move to or from it.`,
+  botsNotThere: (chat, place) => `${chat}’s bots don’t all live on ${place}. Move them there first, then the chat can follow.`,
   moving: MOVING
+};
+var note = {
+  inProject: "Works in a project",
+  withAgents: "Talks with a coding agent",
+  inBoxGroup: "In a group chat that lives here",
+  needsUpdate: "Needs a newer Kuvo Code",
+  botsNotThere: "Its bots don’t all live there",
+  moving: "Moving already"
 };
 var waiting = new Map;
 var outcomeFile = (id) => path47.join(MOVES, `${id}.outcome.json`);
@@ -9226,9 +9247,9 @@ async function movable(kind, thing, signal) {
       return null;
     const name = here.described.name;
     if (here.described.project)
-      return { name, why: say.inProject(name) };
+      return { name, why: say.inProject(name), note: note.inProject };
     if (here.agents)
-      return { name, why: say.withAgents(name) };
+      return { name, why: say.withAgents(name), note: note.withAgents };
     if (!IS_MAC) {
       let bridge = null;
       try {
@@ -9237,7 +9258,7 @@ async function movable(kind, thing, signal) {
       const listed = bridge ? await askGroups(bridge, "GET", "", undefined, signal).catch(() => null) : null;
       const chat = (listed?.status === 200 && Array.isArray(listed.value?.data) ? listed.value.data : []).find((each) => Array.isArray(each?.group?.members) && each.group.members.includes(thing));
       if (chat)
-        return { name, root: here.session, why: say.inBoxGroup(name, plainName(chat.group?.name ?? "") || "a group chat") };
+        return { name, root: here.session, why: say.inBoxGroup(name, plainName(chat.group?.name ?? "") || "a group chat"), note: note.inBoxGroup };
     }
     return { name, root: here.session };
   }
@@ -9256,7 +9277,7 @@ async function movable(kind, thing, signal) {
       return null;
     const kuvo = isObject(session.metadata) && isObject(session.metadata.kuvo) ? session.metadata.kuvo : {};
     if (kuvo.agents || kuvo.agent)
-      return { name: title, why: say.withAgents(title) };
+      return { name: title, why: say.withAgents(title), note: note.withAgents };
     return { name: title, root: thing };
   }
   let bridge;
@@ -9268,18 +9289,30 @@ async function movable(kind, thing, signal) {
   const listed = await askGroups(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, signal).catch(() => null);
   if (listed?.status !== 200)
     return null;
-  return { name: `“${plainName(listed.value?.data?.group?.name ?? "") || "Group chat"}”` };
+  const members = listed.value?.data?.group?.members;
+  return {
+    name: `“${plainName(listed.value?.data?.group?.name ?? "") || "Group chat"}”`,
+    members: Array.isArray(members) ? members.filter((member) => typeof member === "string") : []
+  };
+}
+function botsLiveOn(members, peer) {
+  if (members.some((member) => botHere(member)))
+    return false;
+  const list = readPeerAgents()[peer.key]?.list;
+  if (!Array.isArray(list))
+    return true;
+  return members.every((member) => list.some((agent) => agent.kind === "bot" && agent.id === member));
 }
 async function placesFor(kind, thing, signal) {
   const what = await movable(kind, thing, signal);
   if (!what)
     return null;
-  const why = moveOf(thing) ? say.moving : what.why;
+  const moving = moveOf(thing) !== null;
   const own = ownKey(readLink() ?? {});
   return peersOf(readLink()).filter((peer) => peer.key !== own).map((peer) => {
     const name = plainName(peer.name) || (peer.kind === "mac" ? "Mac" : "Machine");
-    const not = why ?? (olderThanMoves(peer.key) ? say.needsUpdate(name) : undefined);
-    return { key: peer.key, name, kind: peer.kind, ok: !not, ...not ? { why: not } : {} };
+    const not = moving ? [say.moving, note.moving] : what.why ? [what.why, what.note ?? what.why] : olderThanMoves(peer.key) ? [say.needsUpdate(name), note.needsUpdate] : kind === "group" && peer.kind === "machine" && !botsLiveOn(what.members ?? [], peer) ? [say.botsNotThere(what.name, name), note.botsNotThere] : null;
+    return { key: peer.key, name, kind: peer.kind, ok: !not, ...not ? { why: not[0], note: not[1] } : {} };
   });
 }
 function olderThanMoves(key) {
@@ -11936,6 +11969,7 @@ async function readConversation(target, session, data, name, signal) {
 
 // Packages/Box/src/link/letters/outbox.ts
 var introducing = new Map;
+var INTRODUCING_FOR = 60000;
 var REPLIES = path53.join(RUN, "replies");
 var LETTER_BYTES = 24000;
 var ANSWER_TEXT = 8000;
@@ -12007,6 +12041,8 @@ function letterWent(sender, { id, ok, why, retry, answer }) {
     reply(id, { note: words ?? "It got your message, but its answer can't come back to you here." });
 }
 function answered(sender, { answers: id, text, from }, now = Date.now()) {
+  if (LETTER_ID.test(id) && fs53.existsSync(path53.join(SENDING, `${id}.json`)))
+    letterWent(sender, { id, ok: true });
   if (IS_MAC) {
     const waiter = macWaiting.get(id);
     if (!waiter || waiter.sentTo !== sender.key || waiter.gone())
@@ -12173,10 +12209,18 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
       continue;
     if (offline || now - (letterTries.get(id) ?? 0) < 60000)
       continue;
-    if (letter.from && !toldPeers.get(peer.key)?.sessions?.has(letter.from) && !introducing.has(id)) {
-      introducing.set(id, now);
-      announce(host, readEngineFile, link).catch(() => {});
-      continue;
+    if (letter.from && !toldPeers.get(peer.key)?.sessions?.has(letter.from)) {
+      const introduced = introducing.get(id);
+      if (!introduced) {
+        const introduction = { at: now, done: false };
+        introducing.set(id, introduction);
+        telling.push(announce(host, readEngineFile, link).catch(() => {}).finally(() => {
+          introduction.done = true;
+        }));
+        continue;
+      }
+      if (!introduced.done && now - introduced.at < INTRODUCING_FOR)
+        continue;
     }
     letterTries.set(id, now);
     const bytes = letterMail(peer, {
@@ -12690,6 +12734,7 @@ var LIMITS2 = {
 };
 var LIMITS_FILE = path56.join(RUN, "tool-limits.json");
 var LIMITS_LOCK = path56.join(RUN, ".tool-limits.lock");
+var STARTING_FOR = 120000;
 function changeCounts(now, change, file) {
   return locked(LIMITS_LOCK, () => {
     let counts = {};
@@ -12707,6 +12752,13 @@ function changeCounts(now, change, file) {
       }
       counts[kind] = byKey;
     }
+    const starting = {};
+    for (const [bot, starts] of Object.entries(isObject(counts.starting) ? counts.starting : {})) {
+      const lately = Object.entries(isObject(starts) ? starts : {}).filter(([, start]) => isObject(start) && typeof start.at === "number" && now - start.at < STARTING_FOR);
+      if (lately.length)
+        starting[bot] = Object.fromEntries(lately);
+    }
+    counts.starting = starting;
     const value = change(counts);
     try {
       writePrivate(file, JSON.stringify(counts));
@@ -12735,8 +12787,55 @@ function takeBack2(kind, key, at, file = LIMITS_FILE) {
       delete counts[kind][key];
   }, file);
 }
+function noteStarting(bot, now = Date.now(), file = LIMITS_FILE) {
+  const token = `${now}-${Math.random().toString(36).slice(2, 10)}`;
+  return changeCounts(now, (counts) => {
+    const starts = counts.starting[bot] ?? {};
+    counts.starting[bot] = { ...starts, [token]: { at: now } };
+    return { token, before: Object.keys(starts) };
+  }, file);
+}
+function startsBefore(bot, before, file = LIMITS_FILE) {
+  return changeCounts(Date.now(), (counts) => {
+    const starts = counts.starting[bot] ?? {};
+    return before.flatMap((token) => starts[token] ? [starts[token]] : []);
+  }, file);
+}
+function startedAs(bot, token, session, prompted = false, file = LIMITS_FILE) {
+  changeCounts(Date.now(), (counts) => {
+    const starts = counts.starting[bot] ?? {};
+    if (!starts[token])
+      return;
+    if (session)
+      starts[token] = { ...starts[token], session, ...prompted ? { prompted } : {} };
+    else
+      delete starts[token];
+    if (Object.keys(starts).length)
+      counts.starting[bot] = starts;
+    else
+      delete counts.starting[bot];
+  }, file);
+}
 
 // Packages/Box/src/link/letters/take.ts
+function answerAfter(messages, id) {
+  const replies = [];
+  let answered = false;
+  for (const message of messages) {
+    if (message.id <= id)
+      continue;
+    if (message.type === "assistant") {
+      const parts = message.content ?? [];
+      const text = parts.filter((part) => part.type === "text").map((part) => part.text).join(`
+`);
+      if (text)
+        replies.push(text);
+      answered = Boolean(text) && !parts.some((part) => part.type === "tool");
+    } else if (message.type === "user" && answered)
+      break;
+  }
+  return replies;
+}
 function lettersSeen(now) {
   let seen = {};
   try {
@@ -12756,7 +12855,6 @@ function noteSeen(id, now = Date.now()) {
   });
 }
 var delivering = new Set;
-var tooMany = (key, now = Date.now()) => allowed2("messages", `peer:${key}`, now) === null;
 async function answerTo(target, session, id, { wait = 2000, signal } = {}) {
   const began = Date.now();
   let started = false;
@@ -12772,8 +12870,7 @@ async function answerTo(target, session, id, { wait = 2000, signal } = {}) {
     if (!started && Date.now() - began < 3 * wait)
       continue;
     const page = await asked(target, "GET", `api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`).catch(() => null);
-    const replies = (page?.data ?? []).filter((message) => message.type === "assistant" && message.id > id).reverse().map((message) => (message.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join(`
-`)).filter(Boolean);
+    const replies = answerAfter((page?.data ?? []).slice().reverse(), id);
     if (replies.length)
       return cutText(replies.join(`
 
@@ -12802,20 +12899,27 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
   }
   if (isObject(letter.read))
     return readFor(sender, letter, { send, targets, answer, now, moved, moving });
-  if (tooMany(sender.key, now))
+  let counted = allowed2("messages", `peer:${sender.key}`, now);
+  if (counted === null)
     return no("It's sent a lot of messages in the last few minutes.", true);
+  const notDelivered = (why, again = false) => {
+    if (again && counted !== null)
+      takeBack2("messages", `peer:${sender.key}`, counted);
+    counted = null;
+    return no(why, again);
+  };
   delivering.add(id);
   let place, prompt, fromAgent = null;
   try {
     const lives = moved.get(letter.to);
     if (lives && lives !== ownKey(readLink() ?? {}) || await moving(letter.to))
-      return no("It's moving to another computer: it comes again once it's there.", true);
+      return notDelivered("It's moving to another computer: it comes again once it's there.", true);
     place = await placeOfSession(letter.to, targets);
     if (!place)
-      return no("There's no such conversation here.");
+      return notDelivered("There's no such conversation here.");
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
-      return no("That conversation doesn't take messages.");
+      return notDelivered("That conversation doesn't take messages.");
     const listed = peerOf(letter.from, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find((agent) => agent.session === letter.from) : null;
     if (listed && !await placeOfSession(letter.from, targets).catch(() => ({})))
       fromAgent = listed;
@@ -12824,7 +12928,7 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
     const waits = letter.wait === true && Boolean(fromAgent);
     await asked(place.target, "POST", `api/session/${encodeURIComponent(letter.to)}/prompt`, { id: prompt, text: composeLetter(name, fromAgent ? letter.from : "unknown", cutText(letter.text), waits), delivery: "steer" });
   } catch (error) {
-    return no(`It didn't reach it: ${String(error?.message ?? error)}`, true);
+    return notDelivered(`It didn't reach it: ${String(error?.message ?? error)}`, true);
   } finally {
     delivering.delete(id);
   }
@@ -12945,6 +13049,10 @@ function fromRelay(host, message, self) {
     host.receive(message.address, message.payload);
   if (message.kind === "unreachable" || message.kind === "gone")
     host.forget(message.address);
+}
+function nextTry(attempt, welcomed, heldFor) {
+  const next = welcomed && heldFor >= 60000 ? 0 : attempt + 1;
+  return { attempt: next, wait: Math.min(60000, 1000 * 2 ** Math.min(next, 6)) };
 }
 function connectOnce(relay, secret, host, onWelcome = () => {}) {
   return new Promise((resolve) => {
@@ -13688,28 +13796,44 @@ async function startSession(given, by, place) {
     picked.push("Plan");
   if (!target)
     return no(503, `The engine on ${HERE} isn't running.`);
-  if (bot) {
-    const limits = botLimits(bot.bot);
-    if (limits) {
-      const targets = [engine, bridge].filter((each) => Boolean(each));
-      const work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
-      const working = await workingNow(targets, place.signal);
-      const midnight = new Date().setHours(0, 0, 0, 0);
-      const today = work.filter((each) => (each.data.time?.created ?? 0) >= midnight);
-      const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
-      const past = pastLimit(limits, { depth, working: work.filter((each) => working.has(each.data.id)).length, started: today.length, tokens });
-      if (past)
-        return no(429, past);
+  const limits = bot ? botLimits(bot.bot) : null;
+  const noted = bot && limits ? noteStarting(bot.bot) : null;
+  const went = (session, prompted = false) => {
+    if (bot && noted)
+      startedAs(bot.bot, noted.token, session, prompted);
+  };
+  if (bot && limits && noted) {
+    const targets = [engine, bridge].filter((each) => Boolean(each));
+    const work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
+    const working = await workingNow(targets, place.signal);
+    const midnight = new Date().setHours(0, 0, 0, 0);
+    const today = work.filter((each) => (each.data.time?.created ?? 0) >= midnight);
+    const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
+    const workIDs = new Set(work.map((each) => each.data.id));
+    const todayIDs = new Set(today.map((each) => each.data.id));
+    const earlier = startsBefore(bot.bot, noted.before);
+    const past = pastLimit(limits, {
+      depth,
+      working: work.filter((each) => working.has(each.data.id)).length + earlier.filter((each) => !each.session || !each.prompted || !workIDs.has(each.session)).length,
+      started: todayIDs.size + earlier.filter((each) => !each.session || !todayIDs.has(each.session)).length,
+      tokens
+    });
+    if (past) {
+      went(null);
+      return no(429, past);
     }
   }
   const kind = bot ? "botSessions" : "sessions";
   const key = by ? bot ? `bot:${bot.bot}` : by.place ? by.session : "outside" : null;
   const counted = key ? allowed2(kind, key) : null;
-  if (key && counted === null)
+  if (key && counted === null) {
+    went(null);
     return no(429, bot ? "You've started a great many sessions in the last few minutes, which looks like a loop. Stop, check on the ones you have (list_sessions), and tell the user." : "You've started several sessions in the last few minutes. Write to those (send_message), or ask the user before starting more.");
+  }
   const giveBack = () => {
     if (key && counted !== null)
       takeBack2(kind, key, counted);
+    went(null);
   };
   let madeTree = null;
   if (given.worktree === true) {
@@ -13718,7 +13842,7 @@ async function startSession(given, by, place) {
       giveBack();
       return no(400, "A chat has no worktree: give a project.");
     }
-    const made = await answerWorktrees("POST", "kuvo/worktrees", { project }, engine, place.signal);
+    const made = await answerWorktrees("POST", "kuvo/worktrees", { project }, engine, place.signal).catch((error) => ({ status: 502, value: { message: String(error?.message ?? error) } }));
     const tree = made.value;
     if (made.status !== 200 || typeof tree.folder !== "string") {
       giveBack();
@@ -13741,6 +13865,7 @@ async function startSession(given, by, place) {
     if (!isObject(made) || typeof made.id !== "string" || !made.id)
       throw new Error("No session was made.");
     session = made.id;
+    went(session);
   } catch (error) {
     giveBack();
     if (madeTree)
@@ -13767,8 +13892,10 @@ ${sessionNote(bot.name)}` : "") : task;
   try {
     await asked(target, "POST", `api/session/${address}/prompt`, { id, text, delivery: "steer" });
   } catch (error) {
+    went(session, true);
     return no(502, `Started a session (${session}), but the task didn't reach it: ${String(error?.message ?? error)}`, session);
   }
+  went(session, true);
   const started = { session, title, folder, project: project?.name ?? null, ...picked.length ? { picked: picked.join(" · ") } : {}, ...askedFirst ? { askedFirst } : {}, ...wakes.length ? { wakes } : {} };
   if (!waits)
     return { started };
@@ -15708,7 +15835,7 @@ import fs66 from "node:fs";
 import path66 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.114";
+var BRIDGE_VERSION = "0.9.117";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -16586,7 +16713,7 @@ import path69 from "node:path";
 var ACTIVITY = path69.join(VAULT_FOLDER, "activity.jsonl");
 var DAY2 = 86400000;
 var prunedAt = 0;
-function note(what, now = Date.now()) {
+function note2(what, now = Date.now()) {
   const entry = { id: newID("a_"), at: now, ...what };
   if (entry.why)
     entry.why = oneLine(entry.why, 300);
@@ -16790,7 +16917,7 @@ async function mayUse(item, caller, use) {
   const where = { ...use.site ? { site: use.site } : {}, ...use.program ? { program: use.program } : {}, ...use.why ? { why: use.why } : {} };
   const paused = pausedFor(caller.bot, caller.root ?? caller.session);
   if (paused) {
-    note({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: "paused" });
+    note2({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: "paused" });
     return { ok: false, message: paused };
   }
   const how = grantFor(item, caller);
@@ -16799,22 +16926,22 @@ async function mayUse(item, caller, use) {
   if (hasOnce(caller, item.id, true))
     return { ok: true, how: "once" };
   if (how === null && !use.askWithout) {
-    note({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: "no grant" });
+    note2({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: "no grant" });
     return { ok: false, message: `You may not use “${item.name}”. Ask the user for it with vault_ask.` };
   }
-  note({ what: "asked", ...itemOf(item), ...whoOf(caller), ...where });
+  note2({ what: "asked", ...itemOf(item), ...whoOf(caller), ...where });
   const answered = await ask({ kind: "use", ...whoOf(caller), item: item.id, itemName: item.name, ...use.site ? { site: use.site } : {}, ...use.why ? { why: use.why } : {}, ...machineName() ? { machine: machineName() } : {} }, use.signal);
   if (answered.answer === "no") {
-    note({ what: "declined", ...itemOf(item), ...whoOf(caller), ...where, ...answered.client ? { client: answered.client } : {} });
+    note2({ what: "declined", ...itemOf(item), ...whoOf(caller), ...where, ...answered.client ? { client: answered.client } : {} });
     return { ok: false, message: `The user didn't let you use “${item.name}”.` };
   }
   const always = answered.answer === "always" ? alwaysFor2(caller) : null;
   if (always) {
     setGrant(item.id, always, "own");
-    note({ what: "granted", ...itemOf(item), ...whoOf(caller), how: "own", ...answered.client ? { client: answered.client } : {} });
+    note2({ what: "granted", ...itemOf(item), ...whoOf(caller), how: "own", ...answered.client ? { client: answered.client } : {} });
   }
   const allowed = always ? "always" : "once";
-  note({ what: "allowed", ...itemOf(item), ...whoOf(caller), ...where, how: allowed, ...answered.client ? { client: answered.client } : {} });
+  note2({ what: "allowed", ...itemOf(item), ...whoOf(caller), ...where, how: allowed, ...answered.client ? { client: answered.client } : {} });
   return { ok: true, how: allowed };
 }
 function tripwire(item, caller, site) {
@@ -16822,13 +16949,13 @@ function tripwire(item, caller, site) {
   const who = caller.bot ?? caller.root ?? caller.session;
   if (who)
     setPaused(true, who, why);
-  note({ what: "refused", ...itemOf(item), ...whoOf(caller), site, how: "wrong site" });
+  note2({ what: "refused", ...itemOf(item), ...whoOf(caller), site, how: "wrong site" });
   try {
     tell2({ title: caller.botName ? `${caller.botName} paused` : "A fill was refused", subtitle: machineName(), body: why, category: "message", thread: caller.root ?? "vault", data: caller.root ? { session: caller.root } : {} });
   } catch {}
   return `${why} Kuvo Code only fills it on ${item.sites.join(", ")}.${who ? ` The user has been told, and this ${caller.bot ? "bot" : "conversation"}'s use of the vault is paused until they look.` : ""}`;
 }
-var noteUse = (item, caller, use, how) => note({ what: "used", ...itemOf(item), ...whoOf(caller), ...use.site ? { site: use.site } : {}, ...use.program ? { program: use.program } : {}, ...use.why ? { why: use.why } : {}, how });
+var noteUse = (item, caller, use, how) => note2({ what: "used", ...itemOf(item), ...whoOf(caller), ...use.site ? { site: use.site } : {}, ...use.program ? { program: use.program } : {}, ...use.why ? { why: use.why } : {}, how });
 
 // Packages/Box/src/link/vault/ssh.ts
 var isSshKey = (item) => item.kind === "key" && item.fields.includes("private_key");
@@ -17640,7 +17767,16 @@ async function* settingsRoute(context) {
 
 // Packages/Box/src/link/areas/moves.ts
 var KINDS2 = ["bot", "chat", "group"];
-var movesNow = () => ({ moves: liveMoves().map(shownMove), away: awaySessions() });
+var movesNow = () => {
+  const peers = peersOf(readLink());
+  return {
+    moves: liveMoves().map((record) => {
+      const place = plainName(peers.find((peer) => peer.key === record.peer)?.name ?? "");
+      return { ...shownMove(record), ...place ? { place } : {} };
+    }),
+    away: awaySessions()
+  };
+};
 async function* movesRoute(context) {
   const { request, signal, json } = context;
   const method = request.method.toUpperCase();
@@ -18229,7 +18365,7 @@ async function askForItem(caller, args, signal) {
   if (!need || !why)
     return failed2("Say what you need and why.");
   const site = siteOf(args.site) ?? undefined;
-  note({ what: "asked", ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {}, ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}, why: `${need}: ${why}`, ...site ? { site } : {} });
+  note2({ what: "asked", ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {}, ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}, why: `${need}: ${why}`, ...site ? { site } : {} });
   const answered = await ask({
     kind: "item",
     need,
@@ -18247,7 +18383,7 @@ async function askForItem(caller, args, signal) {
     setGrant(item.id, always, "own");
   else
     allowOnce(caller, item.id);
-  note({ what: always ? "granted" : "allowed", item: item.id, itemName: item.name, kind: item.kind, ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {}, ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}, how: always ? "own" : "once", ...answered.client ? { client: answered.client } : {} });
+  note2({ what: always ? "granted" : "allowed", item: item.id, itemName: item.name, kind: item.kind, ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {}, ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}, how: always ? "own" : "once", ...answered.client ? { client: answered.client } : {} });
   const once = !always;
   return { text: `The user gave you “${item.name}” (a ${KIND_WORDS[item.kind]}${item.sites.length ? ` for ${item.sites.join(", ")}` : ""})${once ? ", for this once" : ""}. Use it by that name${item.kind === "login" ? " with browser_sign_in" : " with vault_run or browser_fill"}.`, isError: false };
 }
@@ -18548,7 +18684,7 @@ async function* answerVault(context) {
     const bot = typeof given.bot === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(given.bot) ? given.bot : undefined;
     const paused = given.paused === true;
     setPaused(paused, bot);
-    note({ what: paused ? "paused" : "resumed", client, ...bot ? { bot } : {} });
+    note2({ what: paused ? "paused" : "resumed", client, ...bot ? { bot } : {} });
     return yield* json(200, vaultState());
   }
   if (route === "kuvo/vault/activity") {
@@ -18573,7 +18709,7 @@ async function* answerVault(context) {
       return yield* json(400, { message: 'Send {"item", "who": {"bot"} or {"project"} or {"everyone": true}, "how": "own" | "ask" | null}.' });
     const grants = setGrant(given.item, who, given.how ?? null);
     const item = itemByID(given.item);
-    note({ what: given.how ? "granted" : "ungranted", client, ...item ? { item: item.id, itemName: item.name, kind: item.kind } : {}, ...who.bot ? { bot: who.bot } : {}, ...typeof given.how === "string" ? { how: given.how } : {} });
+    note2({ what: given.how ? "granted" : "ungranted", client, ...item ? { item: item.id, itemName: item.name, kind: item.kind } : {}, ...who.bot ? { bot: who.bot } : {}, ...typeof given.how === "string" ? { how: given.how } : {} });
     return yield* json(200, { grants });
   }
   if (route === "kuvo/vault/asks" || route === "kuvo/vault/asks/events") {
@@ -18618,7 +18754,7 @@ async function* answerVault(context) {
     if (isLocked())
       return yield* json(423, { message: LOCKED });
     const item = await addItem(given);
-    note({ what: "added", client, item: item.id, itemName: item.name, kind: item.kind });
+    note2({ what: "added", client, item: item.id, itemName: item.name, kind: item.kind });
     return yield* json(200, { item, ...key ? { key } : {} });
   }
   if (parts[2] === "items" && parts.length >= 4) {
@@ -18632,19 +18768,19 @@ async function* answerVault(context) {
       if (!item)
         return yield* json(404, { message: "That item isn't in this vault." });
       const values = await valuesOf(id);
-      note({ what: "shown", client, item: item.id, itemName: item.name, kind: item.kind });
+      note2({ what: "shown", client, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, { values });
     }
     if (parts.length !== 4)
       return yield* json(404, {});
     if (method === "PATCH") {
       const item = await changeItem(id, given);
-      note({ what: "changed", client, item: item.id, itemName: item.name, kind: item.kind });
+      note2({ what: "changed", client, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, { item });
     }
     if (method === "DELETE") {
       const item = await removeItem(id);
-      note({ what: "removed", client, item: item.id, itemName: item.name, kind: item.kind });
+      note2({ what: "removed", client, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, {});
     }
     return yield* json(405, {});
@@ -18884,12 +19020,13 @@ async function runMacLink() {
         attempt = 0;
         continue;
       }
-      attempt = welcomed && Date.now() - started >= 60000 ? 0 : attempt + 1;
+      const next = nextTry(attempt, welcomed, Date.now() - started);
+      attempt = next.attempt;
       if (!welcomed)
         setLinkStatus("failed", `Can't reach the relay at ${new URL(link.relay).host}.`);
       else
         setLinkStatus("connecting");
-      await macLinkWait(Math.min(60000, 1000 * 2 ** Math.min(attempt, 6)));
+      await macLinkWait(next.wait);
     } catch (error) {
       macLink.host = null;
       setLinkStatus("failed", String(error?.message ?? error));
@@ -19138,9 +19275,11 @@ async function run2() {
       send: () => {}
     });
     current = host;
+    const started = Date.now();
     const welcomed = await connectOnce(link.relay, Buffer.from(link.secret, "base64url"), host, machineWelcomed);
-    attempt = welcomed ? 0 : attempt + 1;
-    await sleep(Math.min(60000, 1000 * 2 ** Math.min(attempt, 6)));
+    const next = nextTry(attempt, welcomed, Date.now() - started);
+    attempt = next.attempt;
+    await sleep(next.wait);
   }
 }
 async function box(command) {
@@ -19681,6 +19820,7 @@ export {
   newPairing,
   newSigningSeed,
   newerVersion,
+  nextTry,
   nextWake,
   noLongerNeeded,
   noteDocsChanged,

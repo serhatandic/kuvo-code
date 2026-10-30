@@ -10,13 +10,14 @@ export const MOVE_KIND = words("bot", "chat", "group");
 export const MOVE_STAGE = words("holding", "copying", "switching", "finishing");
 
 /** A computer it could go to: its box's key, its name and kind, and whether it can go there now
- * (with why not, in words to show). */
-export const MOVE_PLACE = object({ key: string, name: string, kind: words("mac", "machine"), ok: bool, "why?": string });
+ * (with why not, in words to show, and `note`, the same in a few words, for beside its name). */
+export const MOVE_PLACE = object({ key: string, name: string, kind: words("mac", "machine"), ok: bool, "why?": string, "note?": string });
 export const MOVE_PLACES = object({ places: list(MOVE_PLACE) });
 
 /** A move under way, as either box says it: what moves (`thing`, `name`), from which box to which
  * (keys), whether this box is where it was (`from`) or where it's going (`to`), how far it is, its
- * conversations (root first), and while its copy's on its way, how much of it went (bytes). */
+ * conversations (root first), the other computer's name (`place`, when this box knows it), and while
+ * its copy's on its way, how much of it went (bytes). */
 export const MOVE = object({
   id: string,
   kind: MOVE_KIND,
@@ -27,6 +28,7 @@ export const MOVE = object({
   role: words("from", "to"),
   stage: MOVE_STAGE,
   sessions: list(string),
+  "place?": string,
   "sent?": number,
   "size?": number,
 });

@@ -12,23 +12,10 @@ struct SidebarView: View {
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
 
-    @Binding var selection: String?
-    let newSession: (String?) -> Void
-    let newProject: () -> Void
-    let editProject: (Workspace.Project) -> Void
-    let showProviders: () -> Void
-    let newBot: () -> Void
-    let editBot: (Bot) -> Void
-    let newGroup: () -> Void
-    let editGroup: (BotGroup) -> Void
-    /// A conversation in the project, where its new sessions open a terminal instead.
-    let newConversation: (String) -> Void
-    /// Ends a terminal tab.
-    let closeTerminal: (String) -> Void
-    /// Bots moving in the main card; their rows hold still.
+    /// Bots moving in the main card; their rows hold still. The one thing the window hands in
+    /// (see `==`, below): the rest comes from the stores, which tell the sidebar when they change.
+    /// Anything else handed in has to be compared in `==` too, or the sidebar misses its changes.
     var stagedBots: Set<String> = []
-    /// Shows a session beside the one in view (split view).
-    var openBeside: ((String) -> Void)?
     @Environment(Bots.self) private var bots
     @Environment(GroupChats.self) private var groups
     /// The group chat waiting for the user to confirm its deletion.
@@ -86,6 +73,27 @@ struct SidebarView: View {
     private static let sessionsPerProject = 5
     private static let recentCount = 8
 
+    // What the rows do, through the window's stores rather than closures handed in, so the view
+    // the window makes is equal to the one before unless `stagedBots` changed (`==`, below).
+    private var tabs: WindowTabs { app.tabs }
+    /// The tab in view, by its tag; picking one opens its tab.
+    private var selection: String? {
+        get { tabs.selection?.text }
+        nonmutating set { if let newValue { tabs.open(TabKey(newValue)) } }
+    }
+    private func newSession(_ directory: String?) { tabs.newSession(in: directory) }
+    /// A conversation in the project, where its new sessions open a terminal instead.
+    private func newConversation(_ directory: String) { tabs.open(.draft(directory)) }
+    private func newProject() { tabs.openProjectEditor(ProjectEditorRequest(project: nil)) }
+    private func editProject(_ project: Workspace.Project) { tabs.openProjectEditor(ProjectEditorRequest(project: project)) }
+    private func showProviders() { app.openSettings(.accounts) }
+    private func newBot() { tabs.openBotEditor(bot: nil) }
+    private func editBot(_ bot: Bot) { tabs.openBotEditor(bot: bot) }
+    private func newGroup() { tabs.openGroupEditor(group: nil) }
+    private func editGroup(_ group: BotGroup) { tabs.openGroupEditor(group: group) }
+    /// Ends a terminal tab.
+    private func closeTerminal(_ key: String) { tabs.close(TabKey(key)) }
+
     /// The selection tag of a project's not-yet-sent new session.
     static func draftTag(_ directory: String) -> String { TabKey.draft(directory).text }
 
@@ -94,6 +102,9 @@ struct SidebarView: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = ScrollFrameMonitor.sidebarBodies += 1
+        #endif
         VStack(spacing: 0) {
             // Above the boxes' pages: a new session on the box in view, and a search of them all.
             VStack(alignment: .leading, spacing: 1) {
@@ -899,12 +910,15 @@ struct SidebarView: View {
         isUnfolded(id) ? [] : Branches.all(under: id, in: branches)
     }
 
+    /// KUVO_DEMO_UNFOLD: every session's branches shown, for a look at them.
+    #if DEBUG
+    private static let demoUnfolds = ProcessInfo.processInfo.environment["KUVO_DEMO_UNFOLD"] != nil
+    #else
+    private static let demoUnfolds = false
+    #endif
+
     private func isUnfolded(_ id: String) -> Bool {
-        #if DEBUG
-        // KUVO_DEMO_UNFOLD: every session's branches shown, for a look at them.
-        if ProcessInfo.processInfo.environment["KUVO_DEMO_UNFOLD"] != nil { return true }
-        #endif
-        return unfolded.contains(id)
+        Self.demoUnfolds || unfolded.contains(id)
     }
 
     private func toggleBranches(of id: String) {
@@ -1054,7 +1068,7 @@ struct SidebarView: View {
                 Button("Pin") { Task { await workspace.setPinned(session.id, true) } }
             }
         }
-        if let openBeside, session.id != selection {
+        if let openBeside = tabs.besideOpener, session.id != selection {
             Button("Open Beside") { openBeside(session.id) }
         }
         sideQuestionsMenu(for: session, in: place)
@@ -1248,6 +1262,9 @@ private struct SidebarRow<Icon: View, Title: View, Accessory: View>: View {
     @ViewBuilder var accessory: () -> Accessory
 
     var body: some View {
+        #if DEBUG
+        let _ = ScrollFrameMonitor.sidebarRowBodies += 1
+        #endif
         if isEditing {
             row
         } else {
@@ -1445,8 +1462,8 @@ private struct GroupRow: View {
                 bots.bot(id).map { GroupAvatar.Face(look: $0.look, mood: $0.id == speaker?.id ? .working : .idle) }
             }, size: 28)
         } subtitle: {
-            if let destination = app.moves.underWay[group.id] {
-                ShimmerText(text: "Moving to \(destination.flatMap { place in app.machines.engine(place)?.machine.name ?? place } ?? "this Mac")…")
+            if let going = app.moves.underWay[group.id] {
+                ShimmerText(text: going.words)
             } else if let speaker {
                 ShimmerText(text: "\(speaker.name) is thinking…")
             } else if groups.isDiscussing(group.id) {
@@ -1562,8 +1579,8 @@ private struct BotRow: View {
     /// wakes next, or its job. What it's set to do (wake up, watch) and how it's set (paused)
     /// stand apart from what it said, with their sign.
     @ViewBuilder private var status: some View {
-        if let destination = app.moves.underWay[bot.id] {
-            ShimmerText(text: "Moving to \(destination ?? "this Mac")…")
+        if let going = app.moves.underWay[bot.id] {
+            ShimmerText(text: going.words)
         } else if workspace.needsAttention(bot.sessionID) {
             Text("Needs you")
                 .foregroundStyle(.orange)
@@ -1736,113 +1753,122 @@ private struct MoveToProjectMenu: View {
     }
 }
 
-/// "Move to Computer ›": a bot's or chat's way to this Mac or another of your machines, where it
-/// carries on (`Moves`). Asked first, as the original goes to the trash where it was.
+/// "Move to Computer ›": a bot's, chat's or group chat's way to another of your computers, where it
+/// carries on (`Moves`), as the box it lives on says it can go, with why not where it can't. Asked
+/// first, as the original goes to the trash where it was.
 private struct MoveToComputerMenu: View {
+    let thing: MoveToComputerItems.Thing
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        Menu("Move to Computer") {
+            MoveToComputerItems(thing: thing)
+        }
+        .disabled(app.moves.isMoving(thing.id))
+        .onAppear { Task { await app.moves.loadPlaces(thing.kind, thing.id, from: thing.machine(in: app)) } }
+    }
+}
+
+/// What "Move to Computer ›" lists.
+struct MoveToComputerItems: View {
     enum Thing {
         case bot(Bot)
         case chat(Session)
         case group(BotGroup)
+
+        var id: String {
+            switch self {
+            case .bot(let bot): bot.id
+            case .chat(let session): session.id
+            case .group(let group): group.id
+            }
+        }
+
+        var kind: String {
+            switch self {
+            case .bot: "bot"
+            case .chat: "chat"
+            case .group: "group"
+            }
+        }
+
+        /// The machine it lives on (nil: this Mac).
+        @MainActor func machine(in app: AppModel) -> String? {
+            switch self {
+            case .bot(let bot): bot.machine
+            case .chat(let session): RemoteFolder.machine(of: session.location.directory)
+            case .group(let group): app.chats.machine(of: group.id)
+            }
+        }
     }
 
     let thing: Thing
     @Environment(AppModel.self) private var app
 
-    private var id: String {
-        switch thing {
-        case .bot(let bot): bot.id
-        case .chat(let session): session.id
-        case .group(let group): group.id
-        }
-    }
+    private var id: String { thing.id }
+    private var kind: String { thing.kind }
+    private var here: String? { thing.machine(in: app) }
 
-    private var here: String? {
-        switch thing {
-        case .bot(let bot): bot.machine
-        case .chat(let session): RemoteFolder.machine(of: session.location.directory)
-        case .group(let group): app.chats.machine(of: group.id)
-        }
-    }
-
-    /// Where a group chat can go: from a machine, this Mac; from this Mac, the machine its bots
-    /// all live on, if they do.
-    private func groupPlaces(_ group: BotGroup) -> [String?] {
-        if here != nil { return [nil] }
-        let homes = Set(group.members.compactMap { app.bots.bot($0) }.map(\.machine))
-        guard homes.count == 1, let machine = homes.first ?? nil else { return [] }
-        return [machine]
+    /// Where it can go, as the box it lives on said last (asked again as the menu opens); before
+    /// it has, your other computers as this Mac knows them, each asked as it's picked.
+    private var places: [Moves.Place] {
+        app.moves.places(of: id, from: here) ?? app.moves.knownPlaces(from: here)
     }
 
     var body: some View {
-        Menu("Move to Computer") {
-            if case .bot(let bot) = thing, bot.project != nil {
-                Text("It works in one of your projects, which stays where it is")
-            } else if case .bot(let bot) = thing, bot.agents == true {
-                Text("It talks with a coding agent, which can’t move yet")
-            } else if case .group(let group) = thing, groupPlaces(group).isEmpty {
-                // A chat whose bots live on different computers, or all here, is this Mac's.
-                Text(Set(group.members.compactMap { app.bots.bot($0)?.machine }).isEmpty
-                     ? "Move its bots to a machine first; then it can go there too" : "Its bots live on different computers, so it stays on this Mac")
-            } else if case .group(let group) = thing {
-                ForEach(groupPlaces(group), id: \.self) { place in
-                    if let place, app.machines.engine(place)?.isReady != true {
-                        Text("\(place), not connected")
-                    } else {
-                        Button(place ?? "This Mac") { move(to: place) }
-                    }
+        let places = places
+        let reasons = Set(places.map(\.why))
+        if let why = app.moves.whyNotAsked(from: here) {
+            Text(why)
+        } else if places.isEmpty {
+            Text("No other computers to move it to")
+        } else if places.count > 1, reasons.count == 1, let one = places.first, !one.ok {
+            // Why it can't go anywhere (it works in a project, it's moving already), once.
+            Text(one.note ?? one.why ?? "")
+        } else {
+            // Why not one, in a few words beside its name (a menu doesn't wrap).
+            ForEach(places, id: \.key) { place in
+                Button { move(to: place) } label: {
+                    Text(place.name)
+                    if let why = place.note ?? place.why { Text(why) }
                 }
-            } else {
-                ForEach(app.moves.destinations(from: here), id: \.self) { place in
-                    if let place, app.machines.engine(place)?.isReady != true {
-                        Text("\(place), not connected")
-                    } else {
-                        Button(place ?? "This Mac") { move(to: place) }
-                    }
-                }
+                .disabled(!place.ok)
             }
         }
-        .disabled(app.moves.isMoving(id))
     }
 
-    private func move(to place: String?) {
-        let name: String
-        let what: String
-        switch thing {
-        case .bot(let bot):
-            name = bot.name
-            what = "Its memory, files, wake-ups and conversation go there, and it carries on there; its seats in group chats start afresh there."
-        case .chat(let session):
-            name = (session.title ?? "").isEmpty ? "this chat" : "“\(session.title ?? "")”"
-            what = "Its conversation and wake-ups go there, and it carries on there."
-        case .group(let group):
-            name = "“\(group.name)”"
-            what = place == nil
-                ? "Its messages and meeting come here, and it carries on here while this Mac is on; its bots stay where they are."
-                : "Its messages and meeting go there, and it carries on there, also while this Mac is off."
+    private func move(to place: Moves.Place) {
+        let name = switch thing {
+        case .bot(let bot): bot.name
+        case .chat(let session): (session.title ?? "").isEmpty ? "this chat" : "“\(session.title ?? "")”"
+        case .group(let group): "“\(group.name)”"
         }
-        let trash = here.map { "Kuvo Code’s trash folder on \($0)" } ?? "the Trash"
-        let leaves: String
-        if case .group = thing {
-            leaves = "Nothing goes to it while it moves. What it leaves here goes to \(trash)."
-        } else {
-            leaves = "Nothing goes to it while it moves. Its folder here goes to \(trash), with a copy of its conversation in it."
-        }
+        let question = MoveWords.question(kind: kind, name: name, place: place.name, placeIsMac: place.kind == "mac", toHere: place.key == app.phoneLink.macKey,
+                                          from: here.map { app.machines.engine($0)?.machine.name ?? $0 }, fromMachine: here != nil)
         Task {
+            // Asked again as it's picked: what the menu showed may be old, or this Mac's own guess.
+            let now = await app.moves.loadPlaces(kind, id, from: here, fresh: true)
+            let why = if let now {
+                // Gone from the list: it lives there now, or that computer isn't one of yours.
+                now.contains { $0.key == place.key } ? now.first { $0.key == place.key }?.why : "It can’t go to \(place.name) now."
+            } else {
+                app.moves.whyNotAsked(from: here)
+            }
+            if let why {
+                Modal.show(Moves.Failure.refused(why))
+                return
+            }
             let confirmed = await Modal.run {
                 let alert = NSAlert()
-                alert.messageText = "Move \(name) to \(place ?? "this Mac")?"
-                alert.informativeText = "\(what) \(leaves)"
+                alert.messageText = question.title
+                alert.informativeText = question.message
                 alert.addButton(withTitle: "Move")
                 alert.addButton(withTitle: "Cancel")
                 return alert.runModal() == .alertFirstButtonReturn
             }
             guard confirmed else { return }
             do {
-                switch thing {
-                case .bot(let bot): try await app.moves.move(bot: bot.id, to: place)
-                case .chat(let session): try await app.moves.move(chat: session.id, to: place)
-                case .group(let group): try await app.moves.move(group: group.id, to: place)
-                }
+                try await app.moves.move(kind, id, from: here, to: place)
             } catch {
                 Modal.show(error)
             }
@@ -1897,13 +1923,13 @@ private struct SessionStatus: View {
         let fromUnder = !folded.isEmpty && kind != statusMark(of: session, isNew: isUnread ?? session.isUnread, workspace: workspace, app: app)
         StatusMark(showing: kind)
             .help(kind.map { fromUnder ? $0.wordsFromUnder : help($0) } ?? "")
-            .modifier(SpokenFromUnder(words: fromUnder ? kind?.wordsFromUnder : nil))
+            .modifier(SpokenFromUnder(words: fromUnder ? kind?.wordsFromUnder : app.moves.underWay[session.id]?.words))
     }
 
     private func help(_ kind: StatusMark.Kind) -> String {
         switch kind {
         case .working:
-            app.moves.underWay[session.id].map { "Moving to \($0 ?? "this Mac")…" } ?? kind.words
+            app.moves.underWay[session.id]?.words ?? kind.words
         case .subagents: workspace.helpersAtWork(in: session.id).counting("subagent") + " at work"
         case .failed: "The last run failed"
         case .new: "Finished"
@@ -2199,5 +2225,18 @@ private struct AccountsRow: View {
         case 1: catalog.connectedProviders[0].name
         case let count: "\(count) Accounts"
         }
+    }
+}
+
+/// The window makes the sidebar again whenever anything around it changes (the panel shown or
+/// hidden, the focus, a sheet), and SwiftUI took each one for a new sidebar, since its
+/// `@AppStorage` keeps a store of its own each time it's made: it worked the whole list out again,
+/// every row, at the start of the panel's slide. Equal while what's handed in is (`.equatable()`
+/// where it's made); what it reads from the stores and keeps itself still updates it as before.
+/// So `==` compares every property the window hands in: one left out here is a change the sidebar
+/// never shows.
+extension SidebarView: Equatable {
+    static func == (lhs: SidebarView, rhs: SidebarView) -> Bool {
+        lhs.stagedBots == rhs.stagedBots
     }
 }

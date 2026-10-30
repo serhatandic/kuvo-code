@@ -35,18 +35,33 @@ nonisolated public struct BotLook: Codable, Hashable, Sendable {
         public var isDeep: Bool { [.indigo, .violet, .graphite].contains(self) }
 
         public var title: String { rawValue.capitalized }
+
+        /// One a newer Kuvo Code added: graphite, as a box shows a look it doesn't know.
+        public init(from decoder: Decoder) throws {
+            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .graphite
+        }
     }
 
     public enum Form: String, CaseIterable, Codable, Identifiable, Sendable {
         case round, squircle, pebble, gem, bloom
         public var id: String { rawValue }
         public var title: String { rawValue.capitalized }
+
+        /// One a newer Kuvo Code added: round.
+        public init(from decoder: Decoder) throws {
+            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .round
+        }
     }
 
     public enum Face: String, CaseIterable, Codable, Identifiable, Sendable {
         case calm, happy, sleepy, wink, curious, bright
         public var id: String { rawValue }
         public var title: String { rawValue.capitalized }
+
+        /// One a newer Kuvo Code added: calm.
+        public init(from decoder: Decoder) throws {
+            self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .calm
+        }
     }
 
     public static func random() -> BotLook {

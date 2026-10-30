@@ -177,6 +177,11 @@ struct UtilitiesPane: View {
                 if let directory {
                     FilesView(roots: folders.isEmpty ? [directory] : folders, file: url, showsTree: $utilities.showsTree, reveal: utilities.treeReveal, revealed: utilities.revealed) { utilities.open($0) }
                         .id(folders.joined(separator: "\n") + directory)
+                } else if let url {
+                    // A file a group chat's bot showed: with its folder beside it.
+                    let folder = tab.folder ?? RemoteFolder.folder(of: url.deletingLastPathComponent())
+                    FilesView(roots: [folder], file: url, showsTree: $utilities.showsTree, reveal: utilities.treeReveal, revealed: utilities.revealed) { utilities.open($0) }
+                        .id(folder)
                 } else {
                     placeholder("No Project", symbol: "folder", detail: "Open a project to browse its files.")
                 }

@@ -608,7 +608,7 @@ final class OutsideAgents {
 
     /// Signs out of an agent, where the agent lets an app do that (Cursor's browser sign-in).
     func signOut(_ providerID: String) async throws {
-        guard let api else { return }
+        guard let api else { throw Failure.notRunning(failure) }
         try await api.disconnectAgent(providerID)
     }
 

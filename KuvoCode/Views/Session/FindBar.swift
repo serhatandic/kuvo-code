@@ -206,16 +206,22 @@ nonisolated enum FindText {
     }
 
     /// The characters of `text` Find looks in: a formula of its own (a code block drawn as math)
-    /// as object characters, as nothing in it can be marked.
+    /// as object characters, as nothing in it can be marked, and a name's face as the "@" or "&"
+    /// it's drawn for, as Find reads it.
     static func searchable(_ text: AttributedString) -> String {
         func isMath(_ intent: PresentationIntent?) -> Bool {
             intent?.components.contains { $0.kind == .codeBlock(languageHint: MathText.blockLanguage) } == true
         }
-        guard text.runs[\.presentationIntent].contains(where: { isMath($0.0) }) else { return String(text.characters) }
+        guard text.runs[\.presentationIntent].contains(where: { isMath($0.0) }) || text.runs[FindReadsAs.self].contains(where: { $0.0 != nil })
+        else { return String(text.characters) }
         var plain = ""
-        for (intent, range) in text.runs[\.presentationIntent] {
-            let characters = text[range].characters
-            plain += isMath(intent) ? String(repeating: "\u{FFFC}", count: characters.count) : String(characters)
+        for run in text.runs {
+            let characters = text[run.range].characters
+            if let written = run[FindReadsAs.self] {
+                plain += String(repeating: written, count: characters.count)
+            } else {
+                plain += isMath(run.presentationIntent) ? String(repeating: "\u{FFFC}", count: characters.count) : String(characters)
+            }
         }
         return plain
     }
@@ -247,13 +253,36 @@ nonisolated enum FindText {
             }
         }
         let plain = searchable(text)
-        for (number, range) in ranges(of: highlight.query, in: plain).enumerated() {
-            // From the start each time, as marking may move what an index points at.
-            let lower = text.characters.index(text.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: range.lowerBound))
-            let upper = text.characters.index(lower, offsetBy: plain.distance(from: range.lowerBound, to: range.upperBound))
-            text[lower..<upper].swiftUI.backgroundColor = number == highlight.current ? currentPlace : place
-            text[lower..<upper].swiftUI.foregroundColor = .black
+        let found = ranges(of: highlight.query, in: plain)
+        guard !found.isEmpty else { return }
+        // Each place found on from the one before (a pasted log can have thousands), then all
+        // marked at once, as marking moves what indices point at; the one you're on after, found again.
+        var places: [Range<AttributedString.Index>] = []
+        var current: (offset: Int, length: Int)?
+        var (at, atPlain, offset) = (text.startIndex, plain.startIndex, 0)
+        for (number, range) in found.enumerated() {
+            let gap = plain.distance(from: atPlain, to: range.lowerBound)
+            let length = plain.distance(from: range.lowerBound, to: range.upperBound)
+            let lower = text.characters.index(at, offsetBy: gap)
+            let upper = text.characters.index(lower, offsetBy: length)
+            offset += gap
+            if number == highlight.current { current = (offset, length) } else { places.append(lower..<upper) }
+            offset += length
+            (at, atPlain) = (upper, range.upperBound)
         }
+        text[RangeSet(places)].mergeAttributes(marks(place))
+        if let current {
+            let lower = text.characters.index(text.startIndex, offsetBy: current.offset)
+            text[lower..<text.characters.index(lower, offsetBy: current.length)].mergeAttributes(marks(currentPlace))
+        }
+    }
+
+    /// A place's mark: `color` behind dark letters.
+    private static func marks(_ color: Color) -> AttributeContainer {
+        var marks = AttributeContainer()
+        marks.swiftUI.backgroundColor = color
+        marks.swiftUI.foregroundColor = .black
+        return marks
     }
 
     /// `text`, marked by `highlight` when there is one.
@@ -263,6 +292,13 @@ nonisolated enum FindText {
         mark(&text, highlight)
         return text
     }
+}
+
+/// A character drawn as a picture in its place (a name's face for its "@" or "&"), and the one
+/// written there, which Find reads.
+nonisolated enum FindReadsAs: AttributedStringKey {
+    typealias Value = Character
+    static let name = "kuvo.findReadsAs"
 }
 
 extension InlineStyle {

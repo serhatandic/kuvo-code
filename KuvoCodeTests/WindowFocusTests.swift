@@ -187,12 +187,23 @@ import Testing
         await withCheckedContinuation { done in DispatchQueue.main.async { done.resume() } }
     }
 
-    /// The composers in view, left to right: the conversation's, then the one beside it.
+    /// The composers in view, left to right: the conversation's, then the one beside it. Laid out
+    /// first, and looked at again, as `reply` is.
     private var composers: [MessageTextView] {
         window.contentView?.layoutSubtreeIfNeeded()
+        TestPulse.beat()
         return all(MessageTextView.self, in: window.contentView)
             .filter { $0.accessibilityIdentifier() == "composer" && !$0.visibleRect.isEmpty }
             .sorted { $0.convert($0.bounds, to: nil).minX < $1.convert($1.bounds, to: nil).minX }
+    }
+
+    /// Whether `view` is in the window, once it's laid out: nothing tells `until` it went in (the
+    /// keyboard moving as it does was only by the way), so each look lays it out first and looks
+    /// again, as `reply` does.
+    private func isInWindow(_ view: NSView) -> Bool {
+        window.contentView?.layoutSubtreeIfNeeded()
+        TestPulse.beat()
+        return view.window === window
     }
 
     /// The panel open with a terminal, and the keyboard in it, as a click there puts it.
@@ -200,7 +211,7 @@ import Testing
         withAnimation(.ui) { app.tabs.showPanel(true) }
         app.utilities.newTerminal(in: folder, environment: [:])
         let terminal = try #require(app.utilities.terminals.values.first)
-        try await until { terminal.view.window === window }
+        try await until { isInWindow(terminal.view) }
         try await settle()
         window.makeFirstResponder(terminal.view)
         #expect(window.firstResponder === terminal.view)
@@ -234,9 +245,34 @@ import Testing
         #expect(app.tabs.focus == .conversation)
 
         withAnimation(.ui) { app.tabs.showPanel(true) }
-        try await until { terminal.view.window === window }
+        try await until { isInWindow(terminal.view) }
         try await drain()
         #expect(composerHasKeys, "the panel back with its terminal leaves the keyboard in the composer")
+        #expect(app.tabs.focus == .conversation)
+    }
+
+    /// The panel closed while it's still sliding in, with the keyboard in its terminal, which
+    /// shows nothing yet past the window's edge: the keyboard goes back to the composer all the
+    /// same, rather than staying in a terminal that's gone.
+    @Test func closingThePanelAsItSlidesInGivesTheKeyboardBack() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        // A slide still under way all through the test. The window slides the panel at its own
+        // pace whatever animation shows it, so its pace is set aside for this one.
+        var slide = Transaction(animation: .linear(duration: 600))
+        slide.disablesAnimations = true
+        withTransaction(slide) { app.tabs.showPanel(true) }
+        app.utilities.newTerminal(in: folder, environment: [:])
+        let terminal = try #require(app.utilities.terminals.values.first)
+        try await until { isInWindow(terminal.view) }
+        window.makeFirstResponder(terminal.view)
+        try await drain()
+        #expect(window.firstResponder === terminal.view)
+        #expect(terminal.view.visibleRect.isEmpty, "still past the window's edge")
+
+        // Sliding out as slowly, so the terminal is still in the window as the keyboard goes back.
+        withTransaction(slide) { app.tabs.showPanel(false) }
+        try await until { composerHasKeys }
         #expect(app.tabs.focus == .conversation)
     }
 

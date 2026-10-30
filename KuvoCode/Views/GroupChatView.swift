@@ -452,6 +452,8 @@ private struct WorkState: View {
             case .failed:
                 Label("Didn’t Finish", systemImage: "exclamationmark.circle")
                     .foregroundStyle(.orange)
+            case .other:
+                EmptyView()
             }
         }
         .font(.caption.weight(.medium))

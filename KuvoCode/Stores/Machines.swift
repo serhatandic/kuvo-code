@@ -60,6 +60,13 @@ final class MachineEngine {
     private(set) var isLive = false
     /// Waiting to try again by itself, after the connection dropped.
     var isRetrying = false
+    /// Its last failure may pass by itself (the network, the machine away), so trying again is
+    /// worth it; not one trying again won't change (its key refused, a changed host key, a system
+    /// the engine doesn't run on), which is said at once, with Try Again.
+    private(set) var failureMayPass = true
+    /// Disconnect was pressed (here or from a phone): it isn't connected again by itself, as this
+    /// Mac's engine starts again, until it's connected.
+    var isDisconnected = false
     // COMPAT(0.7 engine-stop): an engine an older Mac stopped. Goes 3 months after 0.8.0.
     /// Its engine is stopped on purpose (Stop, here or from anywhere): it stays so until Start.
     private(set) var isStopped = false
@@ -367,6 +374,7 @@ final class MachineEngine {
             let api = await standIn(machine)
             guard connections == attempt else { return nil }
             guard let api else {
+                failureMayPass = true
                 state = .failed("Couldn’t reach \(machine.name).")
                 return nil
             }
@@ -531,6 +539,7 @@ final class MachineEngine {
             log.error("\(self.machine.destination, privacy: .public) didn't start: \(error.localizedDescription, privacy: .public)")
             server?.disconnect()
             server = nil
+            failureMayPass = Self.mayPass(error)
             state = .failed(error.localizedDescription)
         }
         return nil
@@ -653,10 +662,11 @@ final class MachineEngine {
     }
 
     /// Closes the connection and stops everything Kuvo Code runs there, for good (the machine
-    /// removed, or a demo or test copy's, which leaves nothing running).
-    func shutDown() async {
+    /// removed, or a demo or test copy's, which leaves nothing running). Whether it stopped.
+    @discardableResult
+    func shutDown() async -> Bool {
         disconnect()
-        try? await RemoteServer.stop(on: machine.connection)
+        return (try? await RemoteServer.stop(on: machine.connection)) != nil
     }
 
     /// Signs out of every account the machine's engine has (copied from this Mac) and of its coding
@@ -753,8 +763,21 @@ final class MachineEngine {
     /// The connection is gone: say so, and let the app connect again.
     private func lost(_ reason: String) {
         disconnect()
+        failureMayPass = true
         state = .failed(reason)
         onExit()
+    }
+
+    /// Whether `error` may pass by itself: SSH not getting through (255), but for its key or
+    /// the machine's turned away; a download, or the engine taking too long.
+    static func mayPass(_ error: Error) -> Bool {
+        switch error {
+        case RemoteEngineError.ssh(let status, let message):
+            let refused = ["Host key verification failed", "Permission denied", "Too many authentication failures"]
+            return status == 255 && !refused.contains { message.localizedCaseInsensitiveContains($0) }
+        case RemoteEngineError.timedOut, is URLError: return true
+        default: return false
+        }
     }
 
     private func exited(status: Int32) {
@@ -1112,14 +1135,16 @@ final class Machines {
                     removing.insert(id)
                     Task { [weak self] in
                         let forgotten = await engine.forgetAccounts()
-                        await engine.shutDown()
+                        let stopped = await engine.shutDown()
                         // What it kept to work on its own goes too: its keys, how it starts after
-                        // a restart, and the crontab line that does it.
+                        // a restart, and the crontab line that does it. Not before it's stopped:
+                        // its stop goes by how it starts.
                         let leftovers = Self.leftoversScript
-                        let tidied = await Task.detached { RemoteShell.run(leftovers, on: id) }.value != nil
+                        let tidied = stopped ? await Task.detached { RemoteShell.run(leftovers, on: id) }.value != nil : false
                         self?.removing.remove(id)
-                        // What didn't go, the next time it answers.
-                        if !forgotten { self?.runLater(Self.removalScript, on: id) } else if !tidied { self?.runLater(Self.leftoversScript, on: id) }
+                        // What didn't go, the next time it answers. One still running is stopped
+                        // then too: without how it starts, nothing else ever would.
+                        if !forgotten || !stopped { self?.runLater(Self.removalScript, on: id) } else if !tidied { self?.runLater(Self.leftoversScript, on: id) }
                     }
                 }
             } else {

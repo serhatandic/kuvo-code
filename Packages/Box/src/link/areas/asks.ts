@@ -30,6 +30,8 @@ export interface BrowserAsk {
   password?: boolean;
   prompt?: string;
   instruction?: string;
+  /** The site asked for a passkey, which the browser can't use yet. */
+  passkey?: boolean;
 }
 
 /** An ask as `kuvo/asks` lists it, as the Mac's does. */
@@ -93,6 +95,7 @@ export function listedAsk(ask: BrowserAsk, machine: string, asker: string | null
   if (ask.kind === "signIn") Object.assign(listed, { username: Boolean(ask.username), password: Boolean(ask.password), saved: [], offersToSave: false });
   if (ask.kind === "code") listed.prompt = String(ask.prompt ?? "");
   if (ask.kind === "action") listed.instruction = String(ask.instruction ?? "");
+  if (ask.passkey === true) listed.passkey = true;
   return listed;
 }
 

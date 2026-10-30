@@ -1257,10 +1257,15 @@ final class Workspace {
     }
 
     /// What a box is given for a project's settings: all of them, so it ends up as it is here.
+    /// Its keys always in one order, so the same settings are the same body: `send` tells by it
+    /// whether they changed while they went (without, one sent was sometimes kept to send again,
+    /// and undid what a phone changed next).
     private static func boxBody(_ project: ProjectSettings, removed: Bool) -> Data? {
         struct Body: Encodable { var name: String; var folders: [String]; var run: String; var terminal: String; var removed: Bool }
         let body = Body(name: project.name ?? "", folders: project.folders.map(onBox), run: project.run ?? "", terminal: project.terminal ?? "", removed: removed)
-        return try? JSONEncoder().encode(body)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return try? encoder.encode(body)
     }
 
     /// The project at `directory`, changed here, on its way to its box (when it answers, if it's

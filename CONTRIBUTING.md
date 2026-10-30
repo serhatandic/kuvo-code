@@ -371,6 +371,8 @@ when you're there to answer.
 | `KUVO_DEMO_EDIT_BOT_SAVE` | With `KUVO_DEMO_EDIT_BOT`: its job in a few words changed to this, and saved, ten seconds on (with `KUVO_DEMO_BOX_FAILED`, to see what Save says while this Mac's box is down) |
 | `KUVO_DEMO_MOVE_BOT` | With `KUVO_DEMO_BOT`: once that bot is done (and its prompt with it), it moves to this machine, or to this Mac when empty, as Move to Computer does |
 | `KUVO_DEMO_MOVE_GROUP` | With `KUVO_DEMO_GROUP`: that group chat moves to this machine, or to this Mac when empty, as Move to Computer does, before its message goes |
+| `KUVO_DEMO_MOVES` | Move to Computer without a second computer: the first bot, group chat and chat shown on their way (copying, getting ready, finishing), and every bot's menu listing lab and a Mac mini that needs a newer Kuvo Code |
+| `KUVO_DEMO_MOVE_MENU` | A bot's name: its Move to Computer list built as its menu is, before and after its box says where it can go, with what it shows each time printed |
 | `KUVO_DEMO_ADD_WAKE` | With `KUVO_DEMO_EDIT_BOT`: adding a wake-up, every day, with this note (`KUVO_DEMO_ADD_WAKE_NOW`: and adds it) |
 | `KUVO_DEMO_REPLY` | With `KUVO_DEMO_BOT`: sends this to the bot as a notification's Reply does |
 | `KUVO_DEMO_IMPORT_BOT` | A shared bot's file: New Bot opens from it, as File › Import Bot… does |
@@ -401,11 +403,13 @@ when you're there to answer.
 | `KUVO_DEMO_SHOW_HOVER` | Show group chat messages' buttons as if under the pointer |
 | `KUVO_DEMO_CYCLE_TABS` | Go to the next session tab every this many seconds, a few times |
 | `KUVO_PERF_SWITCH` | Ten seconds after launch, go to the next session tab this many times, 1.5 s apart, and write how the main thread kept up to `KUVO_PERF_LOG` (stalls to `KUVO_PERF_STALLS`); `KUVO_PERF_SWITCH_CHECK` also gives each tab's session a draft and checks the composer shows it and takes typing after each switch |
+| `KUVO_PERF_TOGGLE` | Ten seconds after launch, hide and show the sidebar this many times, then the panel, a second apart, and write how the main thread kept up with each to `KUVO_PERF_LOG` (stalls to `KUVO_PERF_STALLS`); for the panel, also how many times the sidebar and its rows were worked out again, which should be none. `KUVO_PERF_TOGGLE_ONLY=panel` measures the panel alone |
 | `KUVO_PERF_TYPE` | Ten seconds after launch, type this many characters into the composer, one every 60 ms, and write how the main thread kept up (and the longest a character took) to `KUVO_PERF_LOG` |
 | `KUVO_PERF_LAYERS` | A file: the window's layers drawn on the CPU that were drawn again between looks 1.5 s apart, four times from `KUVO_PERF_LAYERS_AT` seconds after launch (12), largest first |
 | `KUVO_DEMO_REOPEN_WINDOW` | Close the window after this many seconds, and open it again |
 | `KUVO_DEMO_NAME` | A name to use instead of yours, for the initials on review comments |
 | `KUVO_DEMO_MACHINE_BROWSING` | As if an agent on this machine started browsing, as `<machine>\|<seconds after launch>` |
+| `KUVO_DEMO_PASSKEY` | A site: the agent of the session in view asks for a step there, and the site asked for a passkey (the card's line about it) |
 | `KUVO_DEMO_ASKING` | As if the agent of the session in view started asking you for something in its browser (call the browser's tools to make the ask); with a session's title, opens that session first |
 | `KUVO_DEMO_ANSWER_ASKS` | Answers each sign-in, code or step the agent asks for, as `<username>\|<password>\|<code>[\|<seconds>]` |
 | `KUVO_DEMO_LOG_FRAMES` | Log a machine's browser's live view: frames a second, their size and bytes, how long after a scroll its picture arrives and where each picture is scrolled to, and how long a page you go to takes to commit, load and show |

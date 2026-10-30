@@ -30,6 +30,9 @@ final class Utilities {
         /// group chat's. A bot browses in its tabs out of sight. `Utilities.unclaimed` for a
         /// machine's page no conversation has yet.
         var owner: String
+        /// A file's tab outside a project (a file a group chat's bot showed): the folder its tree
+        /// shows, the first file's, kept as you open others from it.
+        var folder: String?
     }
 
     /// A machine's page whose conversation isn't known (one left open there when the app last
@@ -100,6 +103,9 @@ final class Utilities {
         /// The bots on this Mac whose conversation is in view (one, or a group chat's): their tabs
         /// show beside yours.
         var bots: Set<String> = []
+        /// The window's tab in view when it's no conversation's (a new session's draft, a
+        /// terminal), by its key (`draft:<folder>`, `terminal:<id>`): its panel is its own.
+        var draft: String?
     }
 
     var inView = InView() {
@@ -114,11 +120,12 @@ final class Utilities {
     @ObservationIgnored var panelOf: (String) -> String = { $0 }
 
     /// The conversation whose panel shows: the group chat in view, else the session you work in
-    /// (either half of a split); "" for none (a new session's draft).
+    /// (either half of a split), else the window's tab in view (a new session's draft, a
+    /// terminal); "" for none.
     var panelKey: String { panelKey(of: inView) }
 
     private func panelKey(of view: InView) -> String {
-        view.group ?? (view.worksBeside ?? view.session).map(panelOf) ?? ""
+        view.group ?? (view.worksBeside ?? view.session).map(panelOf) ?? view.draft ?? ""
     }
 
     /// The session whose agent a tab you pick in the panel is: the one you work in.
@@ -462,8 +469,13 @@ final class Utilities {
         } else if let current = selected, case .file = current.kind, let index = tabs.firstIndex(of: current) {
             tabs[index].kind = .file(url)
         } else {
-            add(Tab(kind: .file(url), owner: panelKey))
+            add(fileTab(url))
         }
+    }
+
+    /// A file's tab in the panel in view; outside a project, with the file's folder for its tree.
+    private func fileTab(_ url: URL) -> Tab {
+        Tab(kind: .file(url), owner: panelKey, folder: hasProject ? nil : RemoteFolder.folder(of: url.deletingLastPathComponent()))
     }
 
     /// A new tab: an empty browser tab of the place in view, which shows the tools and suggested
@@ -538,7 +550,7 @@ final class Utilities {
             // Shown again: as it is now (the agent may have changed it since).
             fileShown += 1
         } else {
-            add(Tab(kind: .file(url), owner: panelKey))
+            add(fileTab(url))
         }
         treeReveal = url
         revealRequest += 1
@@ -731,11 +743,13 @@ final class Utilities {
         remove(id, refills: refills)
     }
 
-    /// A new session's draft became the session: the tabs you opened while writing it are its.
-    func adoptDraft(as session: String) {
+    /// A new session's draft (by its tab's key) became the session: the tabs you opened while
+    /// writing it are its.
+    func adoptDraft(_ draft: String, as session: String) {
         let panel = panelOf(session)
-        for index in tabs.indices where tabs[index].owner == "" { tabs[index].owner = panel }
-        if let tab = chosen.removeValue(forKey: chosenKey("", place)) { chosen[chosenKey(panel, place)] = tab }
+        for index in tabs.indices where tabs[index].owner == draft { tabs[index].owner = panel }
+        if let tab = chosen.removeValue(forKey: chosenKey(draft, place)) { chosen[chosenKey(panel, place)] = tab }
+        moveRuns(from: draft, to: panel)
     }
 
     /// A conversation that carries on in another (moved to the coding agents): its panel's tabs,
@@ -748,15 +762,25 @@ final class Utilities {
             chosen[key] = nil
             chosen[to + key.dropFirst(from.count)] = tab
         }
+        moveRuns(from: from, to: to)
         if let file = kept.removeValue(forKey: from) { kept[to] = file }
         for (id, claim) in agentClaims where claim.session == old { agentClaims[id] = (new, claim.at) }
         if let picked = picks.removeValue(forKey: old) { picks[new] = picked }
+    }
+
+    /// A panel's run terminals go with its tabs, so Run again restarts the same one.
+    private func moveRuns(from: String, to: String) {
+        for (key, id) in runs where key.hasPrefix(from + "|") {
+            runs[key] = nil
+            runs[to + key.dropFirst(from.count)] = id
+        }
     }
 
     /// Closes a conversation's panel: the bot or session was deleted.
     func closeTabs(of owner: String) {
         for tab in tabs where tab.owner == owner { close(tab.id, refills: false) }
         chosen = chosen.filter { !$0.key.hasPrefix(owner + "|") }
+        runs = runs.filter { !$0.key.hasPrefix(owner + "|") }
         kept[owner] = nil
     }
 

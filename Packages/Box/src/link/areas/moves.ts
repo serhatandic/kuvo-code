@@ -4,14 +4,27 @@
 
 import { isObject } from "../../shared/json";
 import type { MoveKind, MovePlaces, Moves } from "../../shared/routes/moves";
+import { plainName } from "../../shared/text";
 import { followed } from "../follow";
 import { placesFor, startMove } from "../moves/move";
 import { awaySessions, liveMoves, moveFollowers, shownMove } from "../moves/records";
+import { peersOf } from "../peers/known";
 import type { AnswerPiece, RouteContext } from "../server/context";
+import { readLink } from "../state";
 
 const KINDS: MoveKind[] = ["bot", "chat", "group"];
 
-const movesNow = (): Moves => ({ moves: liveMoves().map(shownMove), away: awaySessions() });
+// Each with the other computer's name, as your computers call it, for clients that don't know it.
+const movesNow = (): Moves => {
+  const peers = peersOf(readLink());
+  return {
+    moves: liveMoves().map(record => {
+      const place = plainName(peers.find(peer => peer.key === record.peer)?.name ?? "");
+      return { ...shownMove(record), ...(place ? { place } : {}) };
+    }),
+    away: awaySessions(),
+  };
+};
 
 export async function* movesRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, signal, json } = context;

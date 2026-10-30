@@ -4,8 +4,10 @@ import OpenCodeKit
 import os
 
 extension AppModel {
-    /// Connects every machine you've added, each in the background on its own.
-    func startMachines() {
+    /// Connects every machine you've added, each in the background on its own, but one you
+    /// disconnected. The connections it began, which a test waits for.
+    @discardableResult
+    func startMachines() -> [Task<Void, Never>] {
         #if DEBUG
         // KUVO_DEMO_MACHINE_ROOT: a folder of its own on machines (like .kuvo-code-demo), so a demo
         // copy's engine and browser there never touch the ones your own copy of the app runs.
@@ -81,6 +83,8 @@ extension AppModel {
         // connection that brings the ask here.
         browserAsks.onChange = { [weak self] sessions in self?.workspace.askingInBrowser = sessions }
         browserAsks.conversation = { [weak self] session in self?.workspace.root(of: session) ?? session }
+        // A page in this Mac's browser asked for a passkey: an agent's ask for its site says so.
+        PasskeyAsks.shared.onAsked = { [weak self] site in self?.browserAsks.passkeyAsked(host: site, machine: nil) }
         workspace.botName = { [weak self] session in self?.bots.bot(forSession: session)?.name }
         workspace.botMachine = { [weak self] session in self?.bots.bot(forSession: session)?.machine }
         // One machine at two addresses: the one added later is one of the other's addresses, and
@@ -152,12 +156,16 @@ extension AppModel {
                 MainActor.assumeIsolated { self?.wakeMachines() }
             }
         }
-        for engine in machines.engines.values { connect(engine) }
+        return machines.engines.values.filter { !$0.isDisconnected }.map { connect($0) }
     }
 
-    private func wakeMachines() {
+    /// What waking does: each machine that couldn't connect is tried again, a failure that won't
+    /// pass by itself too, once (a key in an agent, refused while it was locked, may work now).
+    func wakeMachines() {
         for engine in machines.engines.values where !engine.isRetrying {
-            if case .failed = engine.state { Task { await reconnect(engine) } }
+            guard case .failed = engine.state else { continue }
+            engine.isRetrying = true
+            Task { await reconnect(engine) }
         }
     }
 
@@ -216,7 +224,7 @@ extension AppModel {
         default: break
         }
         engine.disconnect()
-        workspace.forget(engine.machine.id)
+        connectionClosed(engine.machine.id)
         // COMPAT(0.7 engine-stop): Connect Now starts an engine an older Mac stopped. Goes 3 months after 0.8.0.
         if engine.isStopped { engine.startWanted = true }
         return connect(engine)
@@ -281,7 +289,7 @@ extension AppModel {
     /// Starts a machine's engine stopped on purpose (Start), and connects to it.
     func startEngine(_ engine: MachineEngine) {
         engine.disconnect()
-        workspace.forget(engine.machine.id)
+        connectionClosed(engine.machine.id)
         engine.startWanted = true
         connect(engine)
     }
@@ -290,7 +298,7 @@ extension AppModel {
     @discardableResult
     func restartEngine(_ engine: MachineEngine) -> Task<Void, Never> {
         engine.disconnect()
-        workspace.forget(engine.machine.id)
+        connectionClosed(engine.machine.id)
         return Task {
             _ = try? await RemoteServer.restartEngine(on: engine.machine.connection)
             await connect(engine).value
@@ -323,7 +331,7 @@ extension AppModel {
         engine.movingHomeFrom = engine.otherMac ?? .init()
         defer { engine.movingHomeFrom = nil }
         engine.disconnect()
-        workspace.forget(engine.machine.id)
+        connectionClosed(engine.machine.id)
         engine.takingHome = true
         await connect(engine).value
         engine.takingHome = false
@@ -337,6 +345,7 @@ extension AppModel {
     @discardableResult
     func connect(_ engine: MachineEngine) -> Task<Void, Never> {
         let machine = engine.machine.id
+        engine.isDisconnected = false
         // Its pages are the panel's browser tabs while a session there is in view.
         engine.browser.onPages = { [weak self] pages in self?.utilities.syncMachinePages(machine, pages) }
         engine.browser.onActive = { [weak self] page, byAgent, session in self?.utilities.machinePageActive(machine, page: page, byAgent: byAgent, session: session) }
@@ -346,6 +355,10 @@ extension AppModel {
             self?.browserAsks.add(ask) { answer in browser?.answer(ask.id, answer) }
         }
         engine.browser.onAskClosed = { [weak self] id in self?.browserAsks.closed(id) }
+        engine.browser.onPasskeyAsked = { [weak self, weak browser = engine.browser] host in
+            guard let browser else { return }
+            self?.browserAsks.passkeyAsked(host: host, machine: browser.machine.id)
+        }
         engine.onEvent = { [weak self] event in
             self?.workspace.handle(event, machine: machine)
             // It signed in again, or a sign-in ran out and was renewed there: here too.
@@ -390,14 +403,20 @@ extension AppModel {
             self.connect(engine)
         }
         engine.onExit = { [weak self] in
-            self?.workspace.forget(machine)
-            self?.boxGroups.disconnected(machine)
+            self?.connectionClosed(machine)
             // One way back at a time: a connection lost while one is tried is that one's to retry.
             guard !engine.isRetrying else { return }
             engine.isRetrying = true
             Task { await self?.reconnect(engine) }
         }
-        return Task { await start(engine) }
+        return Task {
+            await start(engine)
+            // Not reached the first time (the app opened before the network was up): tried again
+            // as a dropped connection is, while what waited for this goes on.
+            guard case .failed = engine.state, engine.failureMayPass, !engine.isRetrying else { return }
+            engine.isRetrying = true
+            Task { await reconnect(engine) }
+        }
     }
 
     /// After a dropped connection (the Mac slept, the machine restarted): tries further apart
@@ -409,7 +428,8 @@ extension AppModel {
             // Connected again some other way (Try Again), or removed (which disconnects it).
             guard case .failed = engine.state else { return true }
             await start(engine)
-            return engine.isReady
+            // Done, or failed in a way trying again won't change: that's said now, with Try Again.
+            return engine.isReady || !engine.failureMayPass
         }
     }
 
@@ -486,12 +506,20 @@ extension AppModel {
     /// test copy's stops, unless a session there is working.)
     func disconnect(_ engine: MachineEngine) {
         engine.startWanted = false
+        engine.isDisconnected = true
         engine.browser.reset()
         utilities.closeMachineBrowser(engine.machine.id)
         // What runs for its connection ends now, a test copy's too, whose engine stops after.
         engine.endConnection()
         if leavesMachinesRunning || workspace.isRunning(on: engine.machine.id) { engine.disconnect() } else { Task { await engine.shutDown() } }
-        workspace.forget(engine.machine.id)
+        connectionClosed(engine.machine.id)
+    }
+
+    /// Its connection closed here, lost or on purpose: its sessions' live state goes, and its group
+    /// chats show as last seen, nothing talking, until it's back.
+    private func connectionClosed(_ machine: String) {
+        workspace.forget(machine)
+        boxGroups.disconnected(machine)
     }
 
     /// Stops a machine's engine and forgets the machine, and its sessions' tabs with it. Its

@@ -70,6 +70,7 @@ nonisolated enum GroupMentions {
             if faces {
                 var face = AttributedString("\u{FFFC}", attributes: text[lower..<name].runs.first?.attributes ?? AttributeContainer())
                 face.textual.attachment = AnyAttachment(MentionFace(look: bot.look))
+                face[FindReadsAs.self] = text.characters[lower]
                 text.replaceSubrange(lower..<name, with: face)
             } else {
                 text[lower..<name].swiftUI.foregroundColor = ink(bot.look)

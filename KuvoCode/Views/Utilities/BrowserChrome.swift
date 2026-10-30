@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientText
 import SwiftUI
 
 // What's around a page in the panel's browser, the same for this Mac's pages and a machine's:
@@ -160,6 +161,37 @@ struct BrowserBar<Content: View>: View {
             .background(Surface.well(scheme), in: .rect(cornerRadius: 10))
             .padding(.horizontal, 10)
             .padding(.bottom, 8)
+    }
+}
+
+/// The page asked for a passkey, which this browser can't use yet: what to do instead. You close
+/// it, or it goes when you leave the site.
+struct PasskeyBar: View {
+    let close: () -> Void
+
+    var body: some View {
+        BrowserBar {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+                Text(PasskeyWords.note)
+                    .font(.system(size: 12.5))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button(action: close) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .frame(width: 18, height: 18)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .clickablePointer()
+                .foregroundStyle(.secondary)
+                .help("Close")
+                .accessibilityLabel("Close")
+            }
+            .accessibilityElement(children: .contain)
+        }
     }
 }
 

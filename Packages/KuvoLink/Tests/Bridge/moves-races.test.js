@@ -545,7 +545,7 @@ test("a computer with a Kuvo Code from before moves says it needs a newer one, a
   fs.writeFileSync(file, JSON.stringify({ [peerKey]: { at: Date.now(), kind: "machine", list: [], features: ["sessions", "bots"] } }));
   try {
     const places = (await ask("GET", "kuvo/moves/places?kind=chat&id=ses_old2")).json.places;
-    assert.deepEqual(places.find(place => place.key === peerKey), { key: peerKey, name: "lab", kind: "machine", ok: false, why: "lab needs a newer Kuvo Code before things can move to or from it." });
+    assert.deepEqual(places.find(place => place.key === peerKey), { key: peerKey, name: "lab", kind: "machine", ok: false, why: "lab needs a newer Kuvo Code before things can move to or from it.", note: "Needs a newer Kuvo Code" });
     assert.equal(places.find(place => place.key === studio.key)?.ok, true, "one that hasn't said what it answers is tried");
     const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_old2", to: peerKey });
     assert.equal(moved.status, 409);
@@ -681,4 +681,32 @@ test("a copy whose setting up gets stuck (its engine not answering) is given up 
     engine.hold = null;
     engine.holding = false;
   }
+});
+
+test("one over 1 GB is refused, saying so plainly, and nothing of it comes", async () => {
+  script = () => {};
+  const id = "mov_big1";
+  await say({ op: "offer", id, kind: "chat", thing: "ses_big1", name: "“Videos”", size: 2 * 1024 ** 3, hash: "a".repeat(64), wasPaused: false, from: peerKey });
+  const answer = told.find(move => move.id === id);
+  assert.equal(answer.op, "refused");
+  assert.equal(answer.message, "“Videos” is more than 1 GB, too big to move to another computer, so it stays where it is.");
+  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+});
+
+test("what's moving says which computer it's going to by name, as your computers call it", async () => {
+  chat("ses_named1");
+  // Lab gets ready, and then nothing more: it stays on its way.
+  script = move => { if (move.op === "offer") say({ op: "ready", id: move.id }); };
+  const before = told.length;
+  const asked = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_named1", to: peerKey });
+  await until(() => told.slice(before).some(move => move.op === "part"));
+  const listed = (await ask("GET", "kuvo/moves")).json.moves.find(move => move.thing === "ses_named1");
+  assert.equal(listed.place, "lab");
+  assert.equal(listed.stage, "copying");
+  assert.ok(listed.size > 0 && listed.sent <= listed.size, "how much of it went");
+  // Taken back (lab quiet for long enough), its copy there let go.
+  script = move => { if (move.op === "drop") say({ op: "dropped", id: move.id }); };
+  link.keepMoving(Date.now() + 11 * 60_000);
+  assert.equal((await asked).status, 503);
+  await asItWas("ses_named1");
 });

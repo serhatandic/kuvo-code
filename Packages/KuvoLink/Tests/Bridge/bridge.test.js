@@ -772,6 +772,21 @@ test("a relay that isn't there ends the attempt, so the bridge tries again", asy
   assert.ok(Date.now() - started < 5000);
 });
 
+test("a box whose relay connection drops right after its welcome waits longer each time, as one that never came up; one that held a minute tries again soon", () => {
+  // Another copy on the same address replacing it each time, say: it doesn't come back each second.
+  let attempt = 0;
+  const waits = [];
+  for (let i = 0; i < 4; i++) {
+    const next = link.nextTry(attempt, true, 2_000);
+    attempt = next.attempt;
+    waits.push(next.wait);
+  }
+  assert.deepEqual(waits, [2_000, 4_000, 8_000, 16_000]);
+  assert.deepEqual(link.nextTry(attempt, false, 0), { attempt: 5, wait: 32_000 }, "never came up: the same");
+  assert.deepEqual(link.nextTry(attempt, true, 60_000), { attempt: 0, wait: 1_000 }, "held a minute: well again");
+  assert.equal(link.nextTry(20, false, 0).wait, 60_000, "a minute at most");
+});
+
 test("a session the host doesn't know is closed, and tampering ends one", async () => {
   const hostKey = link.newKey();
   const host = new link.LinkHost({ key: hostKey, hello: { v: 1, kind: "machine", name: "m", app: "0" }, authorize: () => true, handle: async function* () {} });
@@ -1405,7 +1420,8 @@ test("a phone answers what an agent asks for while it browses on a machine, with
   fs.mkdirSync(run, { recursive: true });
   const asks = [
     { id: "ask-1", kind: "signIn", host: "github.com", targetId: "T1", username: true, password: true, session: "ses_sub" },
-    { id: "ask-2", kind: "code", host: "github.com", targetId: "T1", prompt: "The code GitHub sent", session: "ses_1" },
+    // Its site asked for a passkey, which the browser can't use: you're told to sign in another way.
+    { id: "ask-2", kind: "code", host: "github.com", targetId: "T1", prompt: "The code GitHub sent", session: "ses_1", passkey: true },
   ];
   fs.writeFileSync(path.join(run, "browser-asks.json"), JSON.stringify({ asks }));
   // The engine: a subagent's session, and the conversation it works for.
@@ -1445,6 +1461,7 @@ test("a phone answers what an agent asks for while it browses on a machine, with
     // A subagent's, in the conversation it works for, by that one's name.
     assert.deepEqual(listed.json.asks[0], { id: "ask-1", kind: "signIn", host: "github.com", machine: "Lokum", session: "ses_1", asker: "Fixer", username: true, password: true, saved: [], offersToSave: false });
     assert.equal(listed.json.asks[1].prompt, "The code GitHub sent");
+    assert.equal(listed.json.asks[1].passkey, true);
 
     assert.equal((await answer(handle, "POST", "kuvo/asks/ask-1", JSON.stringify({ answer: "signIn", saved: "me" }))).status, 400, "saved passwords are the Mac's");
     assert.equal((await answer(handle, "POST", "kuvo/asks/ask-1", JSON.stringify({ answer: "code", code: "1" }))).status, 400, "not what it asks");

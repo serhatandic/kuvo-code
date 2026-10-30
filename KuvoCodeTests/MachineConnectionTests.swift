@@ -132,6 +132,73 @@ import Testing
         #expect(Array(ssh.scripts(to: one).dropFirst(sent)) == [], "nothing went to the one disconnected")
     }
 
+    /// A group chat there talking when you disconnect: it shows as last seen, nothing talking (no Stop that can't reach it), as when the connection is lost.
+    @Test func disconnectedItsGroupChatsStopShowingTalk() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        let group: [String: Any] = ["id": "grp_conn000001", "name": "Crew", "members": ["bot_pal"], "seats": [:], "heard": [:], "created": "2026-10-21T09:00:00Z"]
+        app.boxGroups.handle(try machine.event("kuvo.group.updated", ["id": "grp_conn000001", "group": group, "status": "active",
+                                                                      "state": ["speaking": "bot_pal", "discussing": true, "paused": false]]), machine: id)
+        #expect(app.chats.speaking["grp_conn000001"] == "bot_pal")
+        app.disconnect(engine)
+        #expect(app.chats.speaking["grp_conn000001"] == nil)
+        #expect(!app.chats.discussing.contains("grp_conn000001"))
+    }
+
+    /// A session's wake-up there, canceled from a phone (straight to the machine) while it's
+    /// connected: its mark goes from the sidebar at the next look, not at the next launch.
+    @Test func aMachinesWakeUpCanceledThereLeavesTheSidebar() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        let session = try #require(sessions(on: id).first)
+        // Its box answers each route with this: the list of sessions with wake-ups, and the
+        // session's own (each read takes what it knows of it).
+        let answer = WakesThere()
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            if script.contains(" box route") { return answer.routed }
+            return script.contains("timezone") ? "" : nil
+        }
+        let due = Wakes.name(due: .now.addingTimeInterval(7200), every: nil)
+        answer.set(["sessions": [["session": session.id, "next": 1, "watching": false]], "wakes": [["id": due, "note": "Check the deploy"]], "watches": [], "paused": false])
+        await app.wakeUps.share(with: engine)
+        #expect(app.wakeUps.wakes[session.id]?.map(\.note) == ["Check the deploy"])
+
+        answer.set(["sessions": [], "wakes": [], "watches": [], "paused": false])
+        await app.wakeUps.share(with: engine)
+        #expect(app.wakeUps.wakes[session.id]?.isEmpty != false)
+    }
+
+    /// A machine's sessions with wake-ups, looked at each minute while it's connected: one call
+    /// there for all of them, not one more for each session.
+    @Test func aMachinesWakeUpsAreReadInOneCall() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        let session = try #require(sessions(on: id).first)
+        let answer = WakesThere()
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            if script.contains(" box route") { return answer.routed }
+            return script.contains("timezone") ? "" : nil
+        }
+        await app.wakeUps.share(with: engine)
+        let due = Wakes.name(due: .now.addingTimeInterval(7200), every: nil)
+        answer.set(["sessions": [["session": session.id, "next": 1, "watching": false,
+                                  "wakes": [["id": due, "due": 1, "note": "Check the deploy"]], "watches": [], "paused": false]]])
+        let before = ssh.scripts(to: id).count
+
+        await app.wakeUps.share(with: engine)
+
+        #expect(app.wakeUps.wakes[session.id]?.map(\.note) == ["Check the deploy"])
+        #expect(ssh.scripts(to: id).dropFirst(before).filter { $0.contains(" box route") }.count == 1)
+    }
+
     /// Removed while its engine starts over (its Settings › Engine), before it connects again: it
     /// doesn't connect again, and nothing more goes there.
     @Test func removedWhileItsEngineStartsOverItDoesntConnectAgain() async throws {
@@ -298,6 +365,114 @@ import Testing
         #expect(link.machineHosts[id] == nil, "named to your phones and other computers again")
     }
 
+    /// Disconnected, it stays so when this Mac's engine starts again (after a restart, or a
+    /// change to your accounts), until you connect it.
+    @Test func disconnectedItStaysSoWhenThisMacsEngineStartsAgain() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        app.disconnect(engine)
+        #expect(!engine.isReady)
+
+        // What this Mac's engine starting again begins for machines.
+        for start in app.startMachines() { await start.value }
+        #expect(!engine.isReady, "it didn't connect by itself")
+
+        await app.connect(engine).value
+        #expect(engine.isReady, "Connect connects it")
+    }
+
+    /// Unreachable when it's first connected (the app opened before the network was up): it's
+    /// tried again by itself, as a dropped connection is, and connects once it answers.
+    @Test func unreachableAtFirstItsTriedAgainByItself() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        let api = reachable.apis[id]
+        reachable.apis[id] = nil
+        await app.connect(engine).value
+        guard case .failed = engine.state else { Issue.record("it reached a machine that doesn't answer"); return }
+
+        try await until { clock.waits == [3] }
+        #expect(clock.waits == [3], "it's tried again in a moment")
+        reachable.apis[id] = api
+        clock.pass(3)
+        try await until { engine.isReady }
+        #expect(engine.isReady)
+    }
+
+    /// A machine that answers but can't run the engine (an unsupported system; its key refused, a
+    /// changed host key) says why at once, with Try Again, rather than "Reconnecting…" for half an
+    /// hour while trying again won't change it.
+    @Test func aMachineThatCantBeSetUpSaysWhyRatherThanTryingAgain() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        // Over SSH for real (as far as the stand-in goes), where it answers as nothing the engine
+        // runs on.
+        MachineEngine.standIn = nil
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            return ""
+        }
+        await app.connect(engine).value
+        guard case .failed(let reason) = engine.state else { Issue.record("it connected"); return }
+        #expect(reason.contains("Linux"), "it says what it runs on")
+        #expect(!engine.isRetrying, "not tried again: it shows why, with Try Again")
+        #expect(clock.waits == [])
+    }
+
+    /// One that couldn't be set up for a reason that won't pass by itself is still tried once more
+    /// when the Mac wakes: a key in an agent (1Password, Secretive, a YubiKey) is refused while
+    /// it's locked, and works once it's unlocked.
+    @Test func aMachineThatCouldntBeSetUpIsTriedAgainWhenTheMacWakes() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        MachineEngine.standIn = nil
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            return ""
+        }
+        await app.connect(engine).value
+        #expect(!engine.isRetrying)
+
+        app.wakeMachines()
+        #expect(engine.isRetrying, "tried again")
+        try await until { clock.waits == [3] }
+        clock.pass(3)
+        // Still the same: it says why again, with Try Again, rather than trying on.
+        try await until { !engine.isRetrying }
+        guard case .failed = engine.state else { Issue.record("it connected"); return }
+        #expect(clock.waits == [])
+    }
+
+    /// Uninstalled, its sign-outs went but its engine wouldn't stop (the connection dropped just
+    /// then): what's tried there next stops it, rather than only tidying away how it starts again,
+    /// which would leave it running with nothing to ever stop it.
+    @Test func uninstalledWhenItsEngineWouldntStopItsStoppedNextTime() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        #expect(engine.isReady)
+        // The sign-outs go; then it's away: the stop, and what's tried after, don't reach it.
+        let stop = String(RemoteServer.stopCommand.dropFirst(2).dropLast(2))
+        let removal = Machines.removalMark
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            return script == stop || script.hasPrefix(removal) ? nil : ""
+        }
+        app.removeMachine(id, uninstall: true)
+        await app.machines.waitForRemoval(of: id)
+        // How it starts again isn't tidied away before it's stopped: what's tried there first, and
+        // waits for it, stops it.
+        try await until { ssh.scripts(to: id).contains { $0.hasPrefix(removal) } }
+        let tried = ssh.scripts(to: id).filter { $0.hasPrefix(removal) }
+        #expect(tried.first?.contains(RemoteServer.stopCommand) == true, "what waits for it stops its engine first")
+    }
+
     /// A new session in a machine's project that has other folders works in them there from its
     /// start: its rules and what its agent is told name the machine's own paths.
     @Test func aNewSessionInAMachinesProjectWorksInItsOtherFoldersThere() async throws {
@@ -379,6 +554,21 @@ import Testing
 @MainActor
 final class Reachable {
     var apis: [String: OpenCodeAPI] = [:]
+}
+
+/// What a machine's box answers its routes, as `kuvo-link.js box route` prints it.
+nonisolated final class WakesThere: @unchecked Sendable {
+    private let lock = NSLock()
+    private var body = "{}"
+
+    func set(_ json: [String: Any]) {
+        let text = String(decoding: try! JSONSerialization.data(withJSONObject: json), as: UTF8.self)
+        lock.withLock { body = text }
+    }
+
+    var routed: String {
+        lock.withLock { String(decoding: try! JSONSerialization.data(withJSONObject: ["status": 200, "body": body]), as: UTF8.self) }
+    }
 }
 
 /// What went to machines over SSH, by the address it went to.

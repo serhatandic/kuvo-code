@@ -77,6 +77,27 @@ import WebKit
         #expect(said == "Signed in as Ada", "the page itself: \(said ?? "nil")")
     }
 
+    /// A site that asks for a passkey, which this browser can't use: the agent's next look at the
+    /// page says so, to sign in another way, and stops saying it once it's on another site.
+    @Test func theAgentIsToldWhenTheSiteAskedForAPasskey() async throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let start = try write("passkey.html", """
+            <html><head><title>Sign in</title></head><body>
+            <button onclick="navigator.credentials.get({ publicKey: { challenge: new Uint8Array(32) } }).catch(() => {})">Sign in with a passkey</button>
+            </body></html>
+            """)
+        let agent = BrowserAgent(utilities: utilities, asks: BrowserAsks())
+        let page = await agent.navigate(start)
+        #expect(!page.contains(BrowserAgent.passkeyNote))
+        _ = await agent.click(try #require(number(of: "Sign in with a passkey", in: page), "\(page)"))
+        let tab = try #require(utilities.browserTabs(of: utilities.panelKey).first?.browser)
+        try await until { tab.passkeySite != nil }
+        #expect(await agent.snapshot().contains(BrowserAgent.passkeyNote))
+        // Closing the note in the browser is yours: the agent is still told.
+        tab.passkeyNoteClosed = true
+        #expect(await agent.snapshot().contains(BrowserAgent.passkeyNote))
+    }
+
     @Test func aLongTableIsReadWhole() async throws {
         defer { try? FileManager.default.removeItem(at: folder) }
         let rows = (1...400).map { "<tr><td>Ship \($0)</td><td>\($0 * 3) t</td></tr>" }.joined()

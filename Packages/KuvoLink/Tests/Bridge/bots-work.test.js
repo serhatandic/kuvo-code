@@ -46,7 +46,14 @@ function setBots({ pixelWork } = {}) {
 // The engine: the bots' conversations, a session of the user's own, the models there are accounts
 // for; the sessions made, what each was sent, what each asks, and how each ask was answered.
 let sessions, prompts, made, asked, replied, interrupted, active, busy;
+// Sessions given a task stay at work (`staysAtWork`); none is made until the sessions at work were
+// looked at `holdMaking` times, so starts asked for at once all look before any is made.
+let staysAtWork, holdMaking, activeLooks, held;
 const noTokens = () => ({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } });
+// When a session's made: after the next midnight, so it's "today" to the box however late the run,
+// even one that goes past midnight (the box takes the day from its own clock). Later ones later.
+const dayAfter = new Date().setHours(24, 0, 0, 0);
+const madeAt = () => dayAfter + made.length;
 function resetEngine() {
   sessions = new Map([
     ["ses_pixel", { id: "ses_pixel", title: "Pixel", location: { directory: path.join(pixelFolder, "workspace") }, model: { providerID: "anthropic", id: "claude-opus-5-5" }, permissions: [], time: { created: 1, updated: 5 }, cost: 0, tokens: noTokens() }],
@@ -60,6 +67,10 @@ function resetEngine() {
   interrupted = [];
   active = new Set();
   busy = new Map();
+  staysAtWork = false;
+  holdMaking = 0;
+  activeLooks = 0;
+  held = [];
 }
 resetEngine();
 // An ask names the tool call it's for, as the engine's do.
@@ -92,13 +103,20 @@ const standIn = onBridge => (request, response) => {
       return reply({ data: listed });
     }
     if (url.pathname === "/api/session" && request.method === "POST") {
-      const given = JSON.parse(body);
-      const id = `ses_new${made.length + 1}`;
-      made.push({ id, ...given });
-      sessions.set(id, { id, title: given.title, agent: given.agent, model: given.model, permissions: given.permissions, location: given.location, time: { created: Date.now(), updated: Date.now() }, cost: 0, tokens: noTokens() });
-      return reply({ data: { id } });
+      const make = () => {
+        const given = JSON.parse(body);
+        const id = `ses_new${made.length + 1}`;
+        made.push({ id, ...given });
+        sessions.set(id, { id, title: given.title, agent: given.agent, model: given.model, permissions: given.permissions, location: given.location, time: { created: madeAt(), updated: madeAt() }, cost: 0, tokens: noTokens() });
+        reply({ data: { id } });
+      };
+      if (activeLooks < holdMaking) held.push(make);
+      else make();
+      return;
     }
     if (url.pathname === "/api/session/active") {
+      activeLooks += 1;
+      if (activeLooks >= holdMaking) for (const go of held.splice(0)) go();
       // A session given a task is at work for one look, then answers.
       const looking = [...busy.entries()].filter(([, looks]) => looks > 0).map(([id]) => id);
       for (const id of looking) busy.set(id, busy.get(id) - 1);
@@ -116,6 +134,7 @@ const standIn = onBridge => (request, response) => {
     if (one?.[2] === "/prompt") {
       prompts.push({ to: id, ...JSON.parse(body) });
       busy.set(id, 1);
+      if (staysAtWork) active.add(id);
       return reply({});
     }
     if (one?.[2] === "/message") {
@@ -242,6 +261,32 @@ test("limits you set are kept: sessions at once and depth", async () => {
   const deeper = await tool("start_session", { task: "Deeper.", project: "Tidepool" }, first);
   assert.equal(deeper.isError, true);
   assert.match(deeper.text, /one level deep/);
+  assert.equal(made.length, 2);
+});
+
+test("limits you set are kept when the bot starts several sessions at once", async () => {
+  staysAtWork = true;
+  setBots({ pixelWork: { limits: { atOnce: 2 } } });
+  holdMaking = 4;
+  const four = await Promise.all(["One.", "Two.", "Three.", "Four."].map(task => tool("start_session", { task, project: "Tidepool" }, "ses_pixel")));
+  assert.equal(four.filter(said => !said.isError).length, 2, four.map(said => said.text).join("\n"));
+  assert.equal(made.length, 2);
+  for (const refused of four.filter(said => said.isError)) assert.match(refused.text, /2 sessions at once/);
+
+  // A day's: two started today already, so one more of four.
+  active = new Set();
+  setBots({ pixelWork: { limits: { perDay: 3 } } });
+  activeLooks = 0;
+  const more = await Promise.all(["Five.", "Six.", "Seven.", "Eight."].map(task => tool("start_session", { task, project: "Tidepool" }, "ses_pixel")));
+  assert.equal(more.filter(said => !said.isError).length, 1, more.map(said => said.text).join("\n"));
+  assert.equal(made.length, 3);
+});
+
+test("a bot set to one session at once starts the next once the last has finished", async () => {
+  setBots({ pixelWork: { limits: { atOnce: 1 } } });
+  startedAddress(await tool("start_session", { task: "One.", project: "Tidepool", wait: true }, "ses_pixel"));
+  const next = await tool("start_session", { task: "Two.", project: "Tidepool" }, "ses_pixel");
+  assert.equal(next.isError, false, next.text);
   assert.equal(made.length, 2);
 });
 

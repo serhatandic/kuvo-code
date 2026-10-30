@@ -192,6 +192,9 @@ final class BrowserAgent {
         }.joined(separator: "\n")
     }
 
+    /// What the agent's look at a page says when its site asked for a passkey (as a machine's).
+    static let passkeyNote = "This site asked for a passkey, which this browser can't use. Don't choose its passkey option again: sign in another way (a password, a code or an email link), or ask the user."
+
     /// The page as text: title, address, scroll position, and its numbered elements.
     func snapshot() async -> String {
         let browser = browser()
@@ -208,10 +211,11 @@ final class BrowserAgent {
         let text = result["text"] as? String ?? ""
         let above = result["above"] as? Int ?? 0, below = result["below"] as? Int ?? 0
         let body = text.count > 18_000 ? String(text.prefix(18_000)) + "\n… (cut; scroll or use browser_text for more)" : text
+        let passkey = browser.passkeySite != nil && browser.passkeySite == Self.site(of: browser.url) ? "\n" + Self.passkeyNote : ""
         return """
         Page: \(result["title"] as? String ?? "")
         URL: \(result["url"] as? String ?? "")
-        Scroll: \(above) px above, \(below) px below\(below > 1200 ? " (browser_text reads all of it at once)" : "")
+        Scroll: \(above) px above, \(below) px below\(below > 1200 ? " (browser_text reads all of it at once)" : "")\(passkey)
         Interactive elements are numbered like [3]; use the number with browser_click, browser_type and browser_select.
 
         \(body.isEmpty ? "(no visible content)" : body)

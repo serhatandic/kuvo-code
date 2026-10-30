@@ -15,12 +15,14 @@ import Testing
     let chats = AppInfo.testRoot.appending(path: "move-chats").path(percentEncoded: false)
 
     /// A move as this Mac's box keeps it while it's under way (`run/moves`).
-    private func underWay(_ id: String, thing: String, role: String, sessions: [String]) throws {
-        let record: [String: Any] = [
-            "id": id, "kind": "chat", "thing": thing, "name": "“Trip plans”", "from": "mac-key", "to": "lab-key", "role": role,
-            "stage": "copying", "sessions": sessions, "peer": role == "from" ? "lab-key" : "mac-key", "wasPaused": true, "tries": 0,
+    private func underWay(_ id: String, thing: String, role: String, sessions: [String], to: String = "lab-key", sent: Int? = nil, size: Int? = nil) throws {
+        var record: [String: Any] = [
+            "id": id, "kind": "chat", "thing": thing, "name": "“Trip plans”", "from": "mac-key", "to": to, "role": role,
+            "stage": "copying", "sessions": sessions, "peer": role == "from" ? to : "mac-key", "wasPaused": true, "tries": 0,
             "started": Date.now.timeIntervalSince1970 * 1000,
         ]
+        record["sent"] = sent
+        record["size"] = size
         let folder = BoxProcess.run.appending(path: "moves")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: record).write(to: folder.appending(path: "\(id).json"), options: .atomic)
@@ -71,5 +73,73 @@ import Testing
         // The copy's this Mac's now, though a phone asked for the move: listed.
         try await until { app.workspace.session("ses_copy") != nil }
         #expect(!app.moves.isPending("ses_trip"))
+    }
+
+    /// Your machine "lab", as this Mac's box knows it among your computers (`run/link.json`).
+    private static let lab = String(repeating: "L", count: 43)
+    private func labIsAPeer() throws {
+        let file = BoxProcess.run.appending(path: "link.json")
+        var link = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file))) as? [String: Any] ?? [:]
+        link["phones"] = link["phones"] ?? []
+        link["macPeers"] = [["key": Self.lab, "sign": String(repeating: "S", count: 43), "address": String(repeating: "A", count: 22), "name": "lab", "id": "lab", "kind": "machine"]]
+        try FileManager.default.createDirectory(at: BoxProcess.run, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: link).write(to: file, options: .atomic)
+    }
+
+    @Test func itsMenuListsWhereTheBoxSaysItCanGoAndItsRowSaysHowFarItIs() async throws {
+        defer { engine.stop() }
+        let box = try await TestBox(engine: engine.url, environment: ["KUVO_TEST_NO_PEERS": "1"])
+        defer { box.stop() }
+        try labIsAPeer()
+        let app = AppModel()
+        app.moves.app = app
+        app.workspace.api = engine.api
+        app.moves.boxes = { _ in box.client(engine: engine.url) }
+        // A chat of this Mac's, where its box keeps them.
+        let chat = StubEngine.session("ses_trip", title: "Trip plans", directory: AppInfo.supportDirectory.appending(path: "Chats").path(percentEncoded: false))
+        engine.list([chat])
+        engine.on("GET", "/api/session/ses_trip", json: chat)
+        let following = Task { await app.moves.follow() }
+        defer { following.cancel() }
+
+        // Read ahead as Kuvo Code starts, so its menu opens with them (an open menu isn't drawn again).
+        await app.workspace.refresh()
+        await app.moves.reloadAll()
+        try await until { app.moves.places(of: "ses_trip", from: nil) != nil }
+        // Its menu: lab, as this Mac's box says, and kept a while.
+        let places = try #require(await app.moves.loadPlaces("chat", "ses_trip", from: nil))
+        #expect(places.map(\.name) == ["lab"])
+        #expect(places.first?.ok == true && places.first?.why == nil)
+        #expect(app.moves.places(of: "ses_trip", from: nil) == places)
+        #expect(app.moves.places(of: "ses_trip", from: "lab") == nil, "only as the box it lives on said")
+        // Read again with nothing changed (ahead, as the panel slides in, say): the sidebar's menus
+        // aren't drawn again.
+        nonisolated final class Heard: @unchecked Sendable { var changed = false }
+        let same = Heard()
+        withObservationTracking { _ = app.moves.places(of: "ses_trip", from: nil) } onChange: { same.changed = true }
+        await app.moves.loadPlaces("chat", "ses_trip", from: nil, fresh: true)
+        await app.moves.loadPlaces("chat", "ses_trip", from: nil, fresh: true)
+        #expect(!same.changed, "the same places, read twice")
+        let changed = Heard()
+        withObservationTracking { _ = app.moves.places(of: "ses_trip", from: nil) } onChange: { changed.changed = true }
+
+        // Moving to lab (asked from a phone, say): its row says where to and how far its copy is.
+        try underWay("mov_out2", thing: "ses_trip", role: "from", sessions: ["ses_trip"], to: Self.lab, sent: 12_400_000, size: 30_000_000)
+        try await until { app.moves.isMoving("ses_trip") }
+        #expect(app.moves.underWay["ses_trip"]?.words == "Moving to lab… 12 of 30 MB")
+        // And its menu, opened now, says why it can't go anywhere: asked again, not as it was kept.
+        let now = try #require(await app.moves.loadPlaces("chat", "ses_trip", from: nil))
+        #expect(now.first?.ok == false)
+        #expect(now.first?.why == "It’s moving to another computer. Try again once it’s there.")
+        #expect(now.first?.note == "Moving already", "short, beside lab's name")
+        #expect(changed.changed, "places that did change are drawn")
+        #expect(app.moves.places(of: "ses_trip", from: nil) == now, "and kept for its menu")
+        // Asked to move again meanwhile, it says why rather than nothing.
+        let again = Moves.Place(key: Self.lab, name: "lab", kind: "machine", ok: true)
+        await #expect(throws: Moves.Failure.self) { try await app.moves.move("chat", "ses_trip", from: nil, to: again) }
+        try over("mov_out2")
+        try await until { !app.moves.isMoving("ses_trip") }
+        // Over: what its menu was told before isn't shown as now (it may live elsewhere now).
+        #expect(app.moves.places(of: "ses_trip", from: nil) == nil)
     }
 }

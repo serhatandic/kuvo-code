@@ -242,7 +242,8 @@ connection.
 - **Letters**: `{"letter": {id, from, to, text, wait, at, answers?, read?}}` goes to the box that
   listed `to`.
   - **Checks**: the receiver drops a letter older than a day. It delivers each `id` once (ids
-    remembered two days, noted once delivered), at most 20 in ten minutes from a box, and only
+    remembered two days, noted once delivered), at most 20 in ten minutes from a box (one answered
+    `retry` isn't counted, so one tried again and again leaves room for the rest), and only
     to a conversation an agent could be. A subagent's, a group chat's seat or one put away doesn't
     take letters. One it can't look up now (its engine starting) is answered `retry`, and so is one
     for a conversation moving to or from another computer now, or that lives on another one now
@@ -255,13 +256,15 @@ connection.
     now (an engine restarting, too many lately), so the sender tries again. `answer: false`: there,
     but no answer will come (its sender couldn't be verified, or its machine is away).
   - **`wait`**: the receiver watches for an answer for ten minutes and sends it back as a letter
-    of its own, with `answers` naming the first. If a tool still waits for it, it goes to that
+    of its own, with `answers` naming the first. The answer is what the agent wrote after the
+    letter, up to the next message someone else gave it once it had answered. If a tool still waits for it, it goes to that
     tool; otherwise it reaches the sender's conversation as a message.
   - **Sender side**: a sender takes `delivered` only from the box it sent to, and an answer for a
-    waiting tool only from that box. Until `delivered` comes, it sends again each minute, for two
+    waiting tool only from that box; an answer from it stands for `delivered` should that be lost. Until `delivered` comes, it sends again each minute, for two
     days, oldest first, and a letter whose agent no box lists now waits. One for a conversation that
     moved (`moved`) goes where it lives now, whichever box it was left for. Before a
-    letter goes, its sender is told of to that box, if it wasn't. Its words are cut on a character's
+    letter goes, its sender is told of to that box, if it wasn't: it waits until that's sent (or
+    couldn't be), a minute at most. Its words are cut on a character's
     boundary.
   - **`read`** `{query?}` (bridge 0.9.100, to a peer whose `features` say `letters-read`): the
     letter asks for `to`'s conversation instead of saying something (`read_conversation` from
@@ -380,12 +383,14 @@ Move to Computer (bridge 0.9.108, feature `moves`): a bot, a chat or a group cha
 another of your computers, the boxes doing it between themselves over peer mail ("Peers", `move`).
 A client asks the box it lives on once, and watches; the move goes on with no client there.
 
-- `GET kuvo/moves/places?kind=bot|chat|group&id=…` → `200 {places: [{key, name, kind, ok, why?}]}`:
-  each of your other computers (its box's key, its name, `mac` or `machine`), and whether it can go
-  there now, with why not in words to show (it works in a project, talks with a coding agent, is in
-  a group chat that lives here with its bots, is moving already; that computer's box is from before
-  moves, as the `features` its agents' mail last gave say). `404 {message}` when it isn't here.
-  A group chat's places say `ok` for every computer: the one it goes to checks its bots live there.
+- `GET kuvo/moves/places?kind=bot|chat|group&id=…` → `200 {places: [{key, name, kind, ok, why?,
+  note?}]}`: each of your other computers (its box's key, its name, `mac` or `machine`), and whether
+  it can go there now, with why not in words to show (it works in a project, talks with a coding
+  agent, is in a group chat that lives here with its bots, is moving already; that computer's box is
+  from before moves, as the `features` its agents' mail last gave say; a group chat's bots don't all
+  live on that machine, as its agents' mail says, none of them here) and `note`, the same in a few
+  words for beside the computer's name in a menu. `404 {message}` when it isn't here. A group chat
+  can go to any Mac (its bots stay where they are); the machine it goes to checks again.
 - `POST kuvo/moves {kind, id, to}` (`to`: the box's key, as `places` gives it) answers once the move
   ends: `200 {move}` (it lives there now); `409 {message}` refused or taken back, as it was (working,
   messages still on their way, kept getting messages while it moved, too big, refused there);
@@ -393,10 +398,11 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   of your computers. A client that goes doesn't stop it.
 - `GET kuvo/moves` → `200 {moves: [Move], away: [session]}`, and `GET kuvo/moves/events`, the same
   as a line now and each time it changes. `Move = {id, kind, thing, name, from, to, role, stage,
-  sessions, sent?, size?}`: `from` and `to` are boxes' keys; `role`, whether this box is where it
-  was (`from`) or where it's going (`to`); `stage`: `holding`, `copying`, `switching`,
-  `finishing`; `sessions`, its conversations, root first; `sent` and `size`, bytes, while its copy
-  is on its way. `away`: conversations this box's engine lists that don't live here (a copy not
+  sessions, place?, sent?, size?}`: `from` and `to` are boxes' keys; `role`, whether this box is
+  where it was (`from`) or where it's going (`to`); `stage`: `holding`, `copying`, `switching`,
+  `finishing`; `sessions`, its conversations, root first; `place`, the other computer's name, as
+  your computers call it (when this box knows it); `sent` and `size`, bytes, while its copy is on
+  its way, for a client to show how far it is. `away`: conversations this box's engine lists that don't live here (a copy not
   switched to yet, an original still going): clients leave them out.
 - While it moves, nothing reaches it: a prompt to one of its conversations through the link answers
   `409 {message}`, a letter `retry`, its wake-ups and watches are held (`paused` says `moving`), and
@@ -624,7 +630,9 @@ client shows it from the same routes.
 - **Limits you set** (Edit Bot › Work; `PATCH kuvo/bots/<id>` `{work: {limits}}`, null for none;
   `limits` in `kuvo/bots`): `atOnce` (its sessions working at once), `perDay` (started since
   midnight, archived ones too), `depth`, `tokensPerDay` (of the sessions started today). None until you set one; past one, `start_session` refuses
-  with words saying which.
+  with words saying which. Starts asked for at once count each other: each is noted in
+  `run/tool-limits.json` before the limits are looked at, and counts those before it the engine
+  doesn't show as the bot's yet.
 - **`GET kuvo/work?bot=<id>`** → `{bot, sessions: [{session, title, folder, project?, startedBy,
   depth, model?, mode?, state, asks?, started, tokens, cost?, lastReply?}], answered: [answer with
   its session], today: {started, working, tokens, cost?}, limits}`: its sessions the latest first,
@@ -1646,9 +1654,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   alike, with the Mac closed too: ask the box a conversation lives on (one that keeps none answers
   an empty list). A wake-up reaches the conversation as a
   message starting with `[Wake-up] `. `GET kuvo/wakes` lists every session with a wake-up or a
-  watch at once, for the marks beside them in a list: `{"sessions": [{session, next, watching}]}`
-  (`next`, the soonest, in seconds since 1970, left out when it has none). Bots' come with
-  `kuvo/bots`. Each box lists its own.
+  watch at once, for the marks beside them in a list: `{"sessions": [{session, next, watching,
+  wakes, watches, paused}]}` (`next`, the soonest, in seconds since 1970, left out when it has
+  none; `wakes`, `watches` and `paused` as `GET kuvo/wakes/<session>` says them, so a client reads
+  them all in one call, and left out by an older box). Bots' come with `kuvo/bots`. Each box
+  lists its own.
 - `POST kuvo/wakes/<session>/watch` with `{"every", "check", "note"}` makes a watch, as its agent
   makes one with `kuvo-wake watch`: `every` 5m or more, 2h or 1d, `check` a shell command run on
   that computer, `note` what to do when its output changes. It answers the list as it is then;
@@ -1666,7 +1676,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `POST kuvo/asks/<id>` answers one: `{"answer": "signIn", "username", "password", "save"}`
   (or `"saved": "<account>"`, which the Mac fills in from Passwords itself), `{"answer":
   "code", "code"}`, `{"answer": "done"}` or `{"answer": "declined"}`. What's typed goes into
-  the page, never to the agent.
+  the page, never to the agent. An ask has `"passkey": true` once its site asked for a passkey
+  (then, or in the ten minutes before): the browsers can't use passkeys yet, so a client tells
+  you to sign in another way.
 - A machine's bridge answers the same three for what's asked in that machine's
   browser, with the Mac closed too: `saved` is empty and `offersToSave` false (saved passwords
   are the Mac's), and a `saved` answer gets `400 {"message"}`. A Mac connected to the machine
