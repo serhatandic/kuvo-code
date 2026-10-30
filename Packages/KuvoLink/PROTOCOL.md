@@ -614,7 +614,9 @@ client shows it from the same routes.
 - **Limits you set** (Edit Bot › Work; `PATCH kuvo/bots/<id>` `{work: {limits}}`, null for none;
   `limits` in `kuvo/bots`): `atOnce` (its sessions working at once), `perDay` (started since
   midnight, archived ones too), `depth`, `tokensPerDay` (of the sessions started today). None until you set one; past one, `start_session` refuses
-  with words saying which.
+  with words saying which. Starts asked for at once count each other: each is noted in
+  `run/tool-limits.json` before the limits are looked at, and counts those before it the engine
+  doesn't show as the bot's yet.
 - **`GET kuvo/work?bot=<id>`** → `{bot, sessions: [{session, title, folder, project?, startedBy,
   depth, model?, mode?, state, asks?, started, tokens, cost?, lastReply?}], answered: [answer with
   its session], today: {started, working, tokens, cost?}, limits}`: its sessions the latest first,
