@@ -21,6 +21,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { plainName } from "../shared/text";
 import { sleep } from "../shared/wait";
 import { joinPath, loginPath, saveLoginPath, savedLoginPath } from "../shared/platform";
 import { watchAsks } from "./areas/asks";
@@ -599,6 +600,8 @@ interface SetupInput {
   name?: string;
   mac?: string;
   macSign?: string;
+  /** The Mac's own name, for who else uses this box. */
+  macName?: string;
   docs?: SignedDoc[];
   id?: string;
   macID?: string;
@@ -636,6 +639,7 @@ async function setup(): Promise<void> {
       next.mac = mac;
       next.macs = [...new Set([...macsOf(next), mac])];
       forgetOldMacs(next, mac);
+      if (typeof input.macName === "string" && plainName(input.macName)) next.macNames = { ...(next.macNames ?? {}), [mac]: plainName(input.macName).slice(0, 100) };
       // The key its documents are signed with (over SSH, so this box knows it's that Mac's), which
       // takes the place of a list it gave before it signed them.
       if (typeof input.macSign === "string" && SIGN.test(input.macSign)) {

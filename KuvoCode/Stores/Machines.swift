@@ -1,3 +1,4 @@
+import ClientDesign
 import CryptoKit
 import Foundation
 import OpenCodeKit
@@ -54,7 +55,16 @@ nonisolated struct Machine: Codable, Hashable, Identifiable {
 @Observable
 final class MachineEngine {
     private(set) var machine: Machine
-    private(set) var state = AppModel.EngineState.preparing
+    private(set) var state = AppModel.EngineState.preparing {
+        didSet {
+            switch state {
+            case .preparing, .failed: step = nil
+            default: break
+            }
+        }
+    }
+    /// Where a connection under way is: what the loaders that show it say, with how far.
+    private(set) var step: Step?
     private(set) var api: OpenCodeAPI?
     /// False while the live event feed is down.
     private(set) var isLive = false
@@ -205,9 +215,9 @@ final class MachineEngine {
     var connection: Connection {
         switch state {
         case .preparing: isStopped ? .stopped : .notConnected
-        // At 0 it's only checking the engine it has.
+        // At 0 it's only checking the engine it has, until it downloads or copies one.
         case .downloading(let progress) where progress > 0: .installing
-        case .downloading, .starting: isRetrying ? .reconnecting : .connecting
+        case .downloading, .starting: step?.isInstalling == true ? .installing : isRetrying ? .reconnecting : .connecting
         // Up, with its feed down for a moment.
         case .ready: isLive ? .connected : .reconnecting
         case .failed: isRetrying ? .reconnecting : .failed
@@ -220,7 +230,7 @@ final class MachineEngine {
         case .notConnected: "Not connected"
         case .connecting: "Connecting…"
         case .reconnecting: "Reconnecting…"
-        case .installing: "Installing the engine…"
+        case .installing: (step?.words ?? "Installing the engine") + "…"
         case .connected: "Connected"
         case .failed: "Couldn’t connect"
         case .stopped: "Stopped"
@@ -237,10 +247,84 @@ final class MachineEngine {
         case .notConnected: "\(name) isn’t connected"
         case .connecting: "Connecting to \(name)…"
         case .reconnecting: "Reconnecting to \(name)…"
-        case .installing: "Installing the engine on \(name)…"
+        case .installing: step?.isCopying == true ? "Copying the engine to \(name)…" : "Installing the engine on \(name)…"
         case .connected: "Connected to \(name)"
         case .failed: "Couldn’t connect to \(name)"
         case .stopped: "\(name)’s engine is stopped"
+        }
+    }
+
+    /// A connection under way, step by step: what it's doing and how far, for its loaders (and a
+    /// phone's, `kuvo/machines`).
+    enum Step: Equatable {
+        case checking
+        /// The engine's package, to this Mac (kept for the next machine), a share of it.
+        case downloading(fraction: Double)
+        /// The package, to the machine, bytes of its size.
+        case copying(sent: Int64, total: Int64)
+        /// Its engine (and what starts with it) set up there and started.
+        case starting
+        /// Up: its sessions being read.
+        case reading
+
+        /// As `kuvo/machines` names it.
+        var name: String {
+            switch self {
+            case .checking: "checking"
+            case .downloading: "downloading"
+            case .copying: "copying"
+            case .starting: "starting"
+            case .reading: "reading"
+            }
+        }
+
+        /// In a few words, for a row: "Copying the engine", as a phone says it too.
+        var words: String { MachineWords.step(name) ?? "Connecting" }
+
+        /// Under a heading that names the machine: "Copying the engine to lokum".
+        func line(_ name: String) -> String {
+            switch self {
+            case .checking: "Checking \(name)"
+            case .copying: "Copying the engine to \(name)"
+            case .starting: "Starting the engine on \(name)"
+            default: words
+            }
+        }
+
+        /// How far, where it can say.
+        var fraction: Double? {
+            switch self {
+            case .downloading(let fraction): fraction
+            case .copying(let sent, let total) where total > 0: Double(sent) / Double(total)
+            default: nil
+            }
+        }
+
+        var isInstalling: Bool {
+            switch self {
+            case .downloading, .copying: true
+            default: false
+            }
+        }
+
+        var isCopying: Bool {
+            if case .copying = self { return true }
+            return false
+        }
+    }
+
+    /// How far its engine's copy to it has come, while it's being copied there: what its ring
+    /// fills to (one bar, the copy's; a download to this Mac first only turns).
+    var installProgress: Double? { connection == .installing && step?.isCopying == true ? step?.fraction : nil }
+
+    /// Its status in a row, with how far where there's a number to tell ("Copying the engine · 41
+    /// of 98 MB").
+    var statusDetail: String {
+        guard connection == .installing, let step else { return statusText }
+        return switch step {
+        case .copying(let sent, let total): MachineWords.installing(step: step.name, sent: sent, total: total) ?? statusText
+        case .downloading(let fraction): MachineWords.installing(step: step.name, fraction: fraction) ?? statusText
+        default: statusText
         }
     }
 
@@ -336,6 +420,15 @@ final class MachineEngine {
     /// Another Mac, which runs the engine there: by the name its start noted, where it did.
     struct OtherMac: Equatable { var name: String? }
 
+    /// Who else uses it, as its box last said: your other Macs (by name) and how many phones
+    /// reach it. What Uninstall would stop it for. Nil until read.
+    struct AlsoUsedBy: Equatable {
+        var macs: [String]
+        var phones: Int
+        var isEmpty: Bool { macs.isEmpty && phones == 0 }
+    }
+    var alsoUsedBy: AlsoUsedBy?
+
     /// The Mac that runs the engine there, when it's another one.
     var otherMac: OtherMac? { isAnotherMacsEngine ? OtherMac(name: server?.engine.notes["macName"]) : nil }
 
@@ -387,6 +480,7 @@ final class MachineEngine {
         var attached: RemoteServer?
         do {
             state = .starting
+            step = .checking
             // At whichever of its addresses answers.
             await reach()
             try check()
@@ -446,12 +540,20 @@ final class MachineEngine {
                 state = .downloading(progress: 0)
                 try await RemoteEngineInstaller(connection: connection, cache: cache).install { progress in
                     Task { @MainActor in
-                        if case .downloading = self.state { self.state = .downloading(progress: progress) }
+                        guard case .downloading = self.state else { return }
+                        switch progress {
+                        case .downloading(let fraction):
+                            self.state = .downloading(progress: fraction)
+                            self.step = .downloading(fraction: fraction)
+                        case .copying(let sent, let total):
+                            self.step = .copying(sent: sent, total: total)
+                        }
                     }
                 }
                 try check()
                 state = .starting
             }
+            step = .starting
             // Its own settings, a box of its own: made so once (from what it runs with, or this
             // Mac's on one with none), then read, for what its engine starts with.
             try await MachineBox.install(on: connection)
@@ -551,7 +653,13 @@ final class MachineEngine {
         let connection = MachineConnection()
         activeConnection = connection
         state = .ready
+        step = .reading
         return connection
+    }
+
+    /// Its sessions have been read: its connection is all the way there.
+    func sessionsRead() {
+        if step == .reading { step = nil }
     }
 
     /// Ends what runs for the connection (`MachineConnection`), leaving it open.
@@ -1351,14 +1459,16 @@ nonisolated extension RemoteFolder {
 }
 
 nonisolated extension RemoteShell {
-    /// A folder's entries on a machine, or nil when it can't be read.
-    static func list(_ url: URL) -> [(name: String, isDirectory: Bool)]? {
-        guard let (machine, path) = RemoteFolder.parse(url),
-              let data = run("cd \(SSHConnection.quoted(path)) && find . -mindepth 1 -maxdepth 1 -printf '%Y\\t%P\\0'", on: machine) else { return nil }
-        return String(decoding: data, as: UTF8.self).split(separator: "\0").compactMap { line in
-            let parts = line.split(separator: "\t", maxSplits: 1)
-            guard parts.count == 2 else { return nil }
-            return (String(parts[1]), parts[0] == "d")
+    /// A folder's entries on a machine, or why they couldn't be read.
+    static func list(_ url: URL) -> Result<[(name: String, isDirectory: Bool)], FolderFailure> {
+        guard let (machine, path) = RemoteFolder.parse(url) else { return .failure(.missing) }
+        let script = FolderFailure.checking(path, then: "find . -mindepth 1 -maxdepth 1 -printf '%Y\\t%P\\0'")
+        return FolderFailure.checked(run(script, on: machine), machine: machine).map { data in
+            String(decoding: data, as: UTF8.self).split(separator: "\0").compactMap { line in
+                let parts = line.split(separator: "\t", maxSplits: 1)
+                guard parts.count == 2 else { return nil }
+                return (String(parts[1]), parts[0] == "d")
+            }
         }
     }
 
@@ -1377,12 +1487,14 @@ nonisolated extension RemoteShell {
         return String(decoding: data, as: UTF8.self).hasPrefix("yes")
     }
 
-    /// The files under a folder on a machine, relative to it, skipping the usual heavy folders.
-    static func files(in url: URL, skipping skip: Set<String>, limit: Int) -> [String]? {
-        guard let (machine, path) = RemoteFolder.parse(url) else { return nil }
+    /// The files under a folder on a machine, relative to it, skipping the usual heavy folders, or
+    /// why they couldn't be read.
+    static func files(in url: URL, skipping skip: Set<String>, limit: Int) -> Result<[String], FolderFailure> {
+        guard let (machine, path) = RemoteFolder.parse(url) else { return .failure(.missing) }
         let pruned = skip.sorted().map { "-name \(SSHConnection.quoted($0))" }.joined(separator: " -o ")
-        let script = "cd \(SSHConnection.quoted(path)) && find . \\( \(pruned) \\) -prune -o -type f -printf '%P\\0' | head -z -n \(limit)"
-        guard let data = run(script, on: machine) else { return nil }
-        return String(decoding: data, as: UTF8.self).split(separator: "\0").map(String.init)
+        let script = FolderFailure.checking(path, then: "find . \\( \(pruned) \\) -prune -o -type f -printf '%P\\0' | head -z -n \(limit)")
+        return FolderFailure.checked(run(script, on: machine), machine: machine).map { data in
+            String(decoding: data, as: UTF8.self).split(separator: "\0").map(String.init)
+        }
     }
 }

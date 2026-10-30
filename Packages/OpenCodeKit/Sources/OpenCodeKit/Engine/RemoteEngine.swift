@@ -99,16 +99,19 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     /// has gone away (`options`). It isn't stopped when the task is cancelled, so a change there
     /// is never left half done; one that only reads (`cancellable`) is, so nothing waits on what
     /// nobody wants any more (a search typed over).
+    /// `sent`, given an `input`, hears how much of it has gone, as it goes.
     @discardableResult
-    public func run(_ script: String, input: URL? = nil, cancellable: Bool = false) async throws -> String {
+    public func run(_ script: String, input: URL? = nil, cancellable: Bool = false, sent: (@Sendable (Int64) -> Void)? = nil) async throws -> String {
         #if DEBUG
         if let standIn = Self.standIn {
             guard let output = standIn(address, script) else { throw RemoteEngineError.ssh(status: 255, message: "Couldn't reach \(address)") }
+            // All of it, at once.
+            if let input, let sent, let size = (try? input.resourceValues(forKeys: [.fileSizeKey]))?.fileSize { sent(Int64(size)) }
             return output
         }
         #endif
-        let result = try await ChildProcess.run("/usr/bin/ssh", arguments(running: script), input: input.map { .file($0) } ?? .nothing,
-                                                cancellable: cancellable)
+        let stdin: ChildProcess.Input = input.map { url in sent.map { .reported(url, read: $0) } ?? .file(url) } ?? .nothing
+        let result = try await ChildProcess.run("/usr/bin/ssh", arguments(running: script), input: stdin, cancellable: cancellable)
         guard result.succeeded else { throw RemoteEngineError.ssh(status: result.status, message: result.errorText) }
         return result.outputText
     }
@@ -256,11 +259,21 @@ public struct RemoteEngineInstaller: Sendable {
         return (release, lines.count > 2 && lines[2].hasSuffix(OpenCodeEngine.version))
     }
 
-    /// Makes sure the engine is on the machine. `progress` gets the fraction downloaded, when it is.
-    public func install(progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws {
+    /// How far an install has come: the package downloading to this Mac (a share of it), then
+    /// copying to the machine (bytes sent of its size).
+    public enum Progress: Sendable, Equatable {
+        case downloading(fraction: Double)
+        case copying(sent: Int64, total: Int64)
+    }
+
+    /// Makes sure the engine is on the machine. `progress` hears how far it's come: the download,
+    /// when there is one (this Mac keeps the package for the next machine), then the copy.
+    public func install(progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws {
         let (release, isInstalled) = try await check()
         if isInstalled { return }
-        let package = try await checkedPackage(release, progress: progress)
+        let package = try await checkedPackage(release) { progress(.downloading(fraction: $0)) }
+        let total = Int64((try? package.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        progress(.copying(sent: 0, total: total))
         let folder = "$HOME/\(Self.root)/engine"
         try await connection.run("""
             set -e
@@ -272,8 +285,7 @@ public struct RemoteEngineInstaller: Sendable {
             chmod +x "\(folder)/\(release.version)/opencode"
             rm -rf "\(folder)/.staging"
             find "\(folder)" -mindepth 1 -maxdepth 1 ! -name "\(release.version)" -exec rm -rf {} +
-            """, input: package)
-        progress(1)
+            """, input: package, sent: { progress(.copying(sent: min($0, total), total: total)) })
     }
 
     /// The release's tarball, from this Mac's cache when it's there and still matches its checksum.

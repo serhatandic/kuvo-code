@@ -35,6 +35,9 @@ final class Catalog {
     /// Commands by project folder, with the project's own.
     private(set) var projectCommands: [String: [Command]] = [:]
     private(set) var isLoaded = false
+    /// When the engine last said which accounts it has: what a machine's Accounts page shows
+    /// while it's away is as of then (nil: never, so there's nothing to show).
+    private(set) var integrationsRead: Date?
     /// The coding agents' accounts and models have been read (or their bridge couldn't start):
     /// until then, theirs and Auto's aren't known.
     private(set) var areAgentsLoaded = false
@@ -314,7 +317,10 @@ final class Catalog {
         async let agents = api.agents()
         async let commands = api.commands()
         async let plugins = api.plugins()
-        do { engineIntegrations = try await integrations } catch { log.error("integrations: \(String(describing: error), privacy: .public)") }
+        do {
+            engineIntegrations = try await integrations
+            integrationsRead = .now
+        } catch { log.error("integrations: \(String(describing: error), privacy: .public)") }
         var starting = false
         var modelsRead = false
         do {
