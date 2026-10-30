@@ -710,12 +710,14 @@ public struct Transcript: Sendable, Equatable {
         if !found { isStale = true }
     }
 
-    /// A new step or the end of a run closes any step still marked open.
+    /// A new step or the end of a run closes any step still marked open, and a retry it waited on
+    /// goes with it (as the engine's own reading has it).
     private mutating func closeOpenSteps(at time: Milliseconds) {
         for index in messages.indices.reversed() {
             guard case .assistant(var message) = messages[index] else { continue }
             guard message.time.completed == nil else { break }
             message.time.completed = time
+            message.retry = nil
             messages[index] = .assistant(message)
         }
     }

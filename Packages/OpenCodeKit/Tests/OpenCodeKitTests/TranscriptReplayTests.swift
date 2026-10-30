@@ -94,6 +94,37 @@ struct TranscriptReplayTests {
         #expect(!transcript.isStale)
     }
 
+    /// "Retrying (attempt 2)…" goes once the step it was for is over: stopped during the wait, or
+    /// the engine going on in a new step, as the engine's own reading of the conversation has it.
+    @Test func aRetryGoesWithItsStep() throws {
+        func event(_ number: Int, _ type: String, _ fields: String) throws -> ServerEvent {
+            try ServerEvent(json: Data(#"""
+            {"id":"evt_\#(number)","created":\#(number),"type":"\#(type)","data":{"sessionID":"ses_1",\#(fields)}}
+            """#.utf8))
+        }
+        func retries(_ transcript: Transcript) -> [String: Int] {
+            Dictionary(uniqueKeysWithValues: transcript.messages.compactMap { message in
+                if case .assistant(let step) = message, let retry = step.retry { (step.id, retry.attempt) } else { nil }
+            })
+        }
+        let waiting = try [
+            event(1, "session.execution.started", #""inputID":"in_1""#),
+            event(2, "session.step.started", #""assistantMessageID":"msg_1","agent":"build","model":{"id":"m","providerID":"p"}"#),
+            event(3, "session.retry.scheduled", #""assistantMessageID":"msg_1","attempt":2,"at":9000,"error":{"type":"overloaded","message":"Overloaded"}"#),
+        ]
+
+        var stopped = Transcript(sessionID: "ses_1")
+        for event in waiting { stopped.apply(event) }
+        #expect(retries(stopped) == ["msg_1": 2])
+        stopped.apply(try event(4, "session.execution.interrupted", #""reason":"user""#))
+        #expect(retries(stopped) == [:])
+
+        var goneOn = Transcript(sessionID: "ses_1")
+        for event in waiting { goneOn.apply(event) }
+        goneOn.apply(try event(4, "session.step.started", #""assistantMessageID":"msg_2","agent":"build","model":{"id":"m","providerID":"p"}"#))
+        #expect(retries(goneOn) == [:])
+    }
+
     /// The engine's own notice (a background command finished) waiting to go in when the
     /// conversation was read: it shows when it goes in, once, as one that waited while it was open does.
     @Test func aNoticeWaitingWhenReadShowsWhenItGoesIn() throws {
