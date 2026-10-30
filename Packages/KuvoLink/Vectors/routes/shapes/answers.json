@@ -6267,7 +6267,8 @@
          "need?": "string",
          "why?": "string",
          "site?": "string",
-         "machine?": "string"
+         "machine?": "string",
+         "group?": "string"
         }
        }
       }

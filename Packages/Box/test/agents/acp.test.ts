@@ -165,9 +165,10 @@ process.stdin.on("data", (chunk) => {
   return path
 }
 
-/** The script as a program, run with what it's given (Grok's `grok`, Antigravity's server). */
+/** The script as a program, run with what it's given (Grok's `grok`, Antigravity's server). As Bun
+ * whatever runs the tests: on a machine that's its engine, Bun by `BUN_BE_BUN`, which the sandbox doesn't pass on. */
 function program(script: string, path: string): string {
-  writeFileSync(path, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`)
+  writeFileSync(path, `#!/bin/sh\nexport BUN_BE_BUN=1\nexec "${process.execPath}" "${script}" "$@"\n`)
   chmodSync(path, 0o755)
   return path
 }

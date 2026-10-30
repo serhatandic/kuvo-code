@@ -65,4 +65,13 @@ import Testing
         #expect(VaultAsk(id: "q_1", kind: .use, botName: "Ship", itemName: "App Store Connect key").title == "Ship wants to use App Store Connect key")
         #expect(VaultAsk(id: "q_2", kind: .item, sessionName: "Fix checkout", need: "a GitHub token").title == "Fix checkout needs a GitHub token")
     }
+
+    /// A bot's seat in a group chat asks each time: its card offers no Always, as the box sends it.
+    @Test func aSeatsAskIsAnsweredOnlyOnce() throws {
+        let decode = { (json: String) in try JSONDecoder().decode(VaultAsk.self, from: Data(json.utf8)) }
+        let seat = try decode(#"{"id":"q_3","kind":"use","at":1,"session":"ses_seat","botName":"Ship","itemName":"Deploy key","group":"grp_release"}"#)
+        #expect(!seat.mayAllowAlways)
+        #expect(seat.title == "Ship wants to use Deploy key")
+        #expect(try decode(#"{"id":"q_4","kind":"use","at":1,"botName":"Ship","itemName":"Deploy key"}"#).mayAllowAlways)
+    }
 }

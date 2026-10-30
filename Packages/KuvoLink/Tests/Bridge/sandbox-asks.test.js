@@ -17,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { script } from "./bot-keys-scenarios.js";
+import { NO_BUN, testBun } from "./bun-for-tests.js";
 
 // In the folder tests keep in your home (not the temporary folders, which commands may write), so
 // what a command mustn't write is somewhere it otherwise couldn't. (Short: the vault's socket,
@@ -50,8 +51,8 @@ let engine;
 before(async () => {
   for (const folder of [shop, blog, outside, path.join(home, "run")]) fs.mkdirSync(folder, { recursive: true });
   if (linux) {
-    const bun = process.versions.bun ? process.execPath : spawnSync("sh", ["-c", "command -v bun"], { encoding: "utf8" }).stdout.trim();
-    assert.ok(bun, "the sandbox runs on Bun on Linux: run this with the engine (BUN_BE_BUN=1) or with Bun on the PATH");
+    const bun = testBun();
+    assert.ok(bun, NO_BUN);
     fs.mkdirSync(path.join(home, "engine", "test"), { recursive: true });
     fs.symlinkSync(bun, path.join(home, "engine", "test", "opencode"));
   }
@@ -110,6 +111,9 @@ async function engineRuns(folder, command, session) {
   let hook;
   await loaded.setup({ location: { directory: folder }, shell: { hook: async (_, take) => { hook = take; } } });
   hook(input);
+  // (The plugin names the engine's runtime, its own: here that's this test's, so on Linux, without
+  // Bun, the Bun this box's engine is.)
+  if (linux && !process.versions.bun) input.env.KUVO_FENCE_RUNTIME = path.join(home, "engine", "test", "opencode");
   if (session) input.env.OPENCODE_SESSION_ID = session;
   const run = spawnSync(input.shell, ["-c", input.command], { cwd: input.cwd, env: input.env, encoding: "utf8" });
   return { status: run.status, out: run.stdout + run.stderr };

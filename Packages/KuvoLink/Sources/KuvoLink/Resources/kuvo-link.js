@@ -12317,7 +12317,8 @@ var VAULT_ASK = object({
   "need?": string,
   "why?": string,
   "site?": string,
-  "machine?": string
+  "machine?": string,
+  "group?": string
 });
 var VAULT_ASKS = object({ asks: list(VAULT_ASK) });
 var VAULT_KEY = object({ key: string });
@@ -17517,7 +17518,7 @@ import fs67 from "node:fs";
 import path69 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.123";
+var BRIDGE_VERSION = "0.9.125";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -18467,10 +18468,10 @@ function vaultAskNotice(asked) {
   return {
     title,
     subtitle: asked.machine,
-    body: asked.why || (asked.kind === "use" ? "Allow it once, always, or say no." : "Give it an item from your vault, or say no."),
+    body: asked.why || (asked.kind === "use" ? asked.group ? "Allow it once, or say no." : "Allow it once, always, or say no." : "Give it an item from your vault, or say no."),
     category: "ask",
-    thread: asked.session ?? asked.id,
-    data: { ...asked.session ? { session: asked.session } : {}, vaultAsk: asked.id }
+    thread: asked.group ?? asked.session ?? asked.id,
+    data: { ...asked.group ? { group: asked.group } : asked.session ? { session: asked.session } : {}, vaultAsk: asked.id }
   };
 }
 function watchVaultAsks(tell, answered = () => {}, after = 2000) {
@@ -18505,7 +18506,10 @@ async function callerOf(session, readEngine, readBridge) {
   for (let step = 0;step < 5 && current?.parentID; step++)
     current = await sessionAt(targets, current.parentID) ?? current;
   const root = current?.id ?? session;
-  const bot = listBots().find((each) => each.session === root);
+  const unsure = !!current?.parentID;
+  const seat = current?.metadata?.kuvo?.seat;
+  const bots = listBots();
+  const bot = seat ? bots.find((each) => typeof seat.bot === "string" && each.id === seat.bot) : bots.find((each) => each.session === root);
   const folder = current?.location?.directory ?? current?.directory;
   return {
     session,
@@ -18513,7 +18517,7 @@ async function callerOf(session, readEngine, readBridge) {
     ...current?.title ? { sessionName: current.title } : {},
     ...folder ? { folder: path73.resolve(folder) } : {},
     ...bot ? { bot: bot.id, botName: bot.name } : {},
-    ...current?.metadata?.kuvo?.seat ? { seat: true } : {}
+    ...seat || unsure ? { seat: true, ...typeof seat?.group === "string" && seat.group ? { group: seat.group } : {} } : {}
   };
 }
 var ordered = (value) => Array.isArray(value) ? value.map(ordered) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, ordered(value[key])])) : value;
@@ -18557,7 +18561,7 @@ function grantFor(item, caller, grants = readGrants()) {
     const fits = grant.who.everyone || grant.who.bot && grant.who.bot === caller.bot || grant.who.project && caller.folder && (caller.folder === grant.who.project || caller.folder.startsWith(grant.who.project + path73.sep));
     if (!fits)
       continue;
-    if (grant.how === "own")
+    if (grant.how === "own" && !caller.seat)
       return "own";
     how = "ask";
   }
@@ -18595,6 +18599,8 @@ function hasOnce(caller, item, take = false) {
   return true;
 }
 function alwaysFor2(caller) {
+  if (caller.seat)
+    return null;
   if (caller.bot)
     return { bot: caller.bot };
   if (caller.folder && caller.folder !== "/" && caller.folder !== homeFolder())
@@ -18618,7 +18624,7 @@ async function mayUse(item, caller, use) {
     return { ok: false, message: `You may not use “${item.name}”. Ask the user for it with vault_ask.` };
   }
   note2({ what: "asked", ...itemOf(item), ...whoOf(caller), ...where });
-  const answered = await ask({ kind: "use", ...whoOf(caller), item: item.id, itemName: item.name, ...use.site ? { site: use.site } : {}, ...use.why ? { why: use.why } : {}, ...machineName() ? { machine: machineName() } : {} }, use.signal);
+  const answered = await ask({ kind: "use", ...whoOf(caller), ...caller.group ? { group: caller.group } : {}, item: item.id, itemName: item.name, ...use.site ? { site: use.site } : {}, ...use.why ? { why: use.why } : {}, ...machineName() ? { machine: machineName() } : {} }, use.signal);
   if (answered.answer === "no") {
     note2({ what: "declined", ...itemOf(item), ...whoOf(caller), ...where, ...answered.client ? { client: answered.client } : {} });
     return { ok: false, message: `The user didn't let you use “${item.name}”.` };
@@ -19898,7 +19904,7 @@ async function fill(given, caller, signal) {
   } else {
     if (purpose === "field")
       return refused3(400, "Name the item to fill from.");
-    const own = readItems().filter((each) => each.kind === "login" && usableOn(each, site) && (grantFor(each, caller) === "own" || hasOnce(caller, each.id)));
+    const own = readItems().filter((each) => each.kind === "login" && usableOn(each, site) && (grantFor(each, { ...caller, seat: false }) === "own" || hasOnce(caller, each.id)));
     if (own.length !== 1)
       return refused3(404, own.length ? "More than one sign-in fits this site." : "No sign-in in the vault is yours to use on this site.");
     item = own[0];
@@ -20071,6 +20077,7 @@ async function askForItem(caller, args, signal) {
     kind: "item",
     need,
     why,
+    ...caller.group ? { group: caller.group } : {},
     ...site ? { site } : {},
     ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {},
     ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {},

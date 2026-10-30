@@ -21,8 +21,12 @@ export interface Caller {
   folder?: string;
   bot?: string;
   botName?: string;
-  /** A bot's seat in a group chat, which nobody's there to answer for for good. */
+  /** A bot's seat in a group chat, which nobody's there to answer for for good: it asks you each
+   * time, whatever its grants (`grantFor`), and never for good (`alwaysFor`). So does a
+   * conversation whose root the engine didn't say. */
   seat?: boolean;
+  /** That seat's group chat, where its asks show. */
+  group?: string;
 }
 
 async function sessionAt(targets: Target[], id: string): Promise<EngineSession | null> {
@@ -48,7 +52,12 @@ export async function callerOf(session: unknown, readEngine: () => EngineRecord,
   let current = await sessionAt(targets, session);
   for (let step = 0; step < 5 && current?.parentID; step++) current = (await sessionAt(targets, current.parentID)) ?? current;
   const root = current?.id ?? session;
-  const bot = listBots().find(each => each.session === root);
+  // (A conversation whose root the engine didn't say may be a seat's: it asks you, as one does.)
+  const unsure = !!current?.parentID;
+  // (A seat is its bot's, by the chat's mark on it: its asks name the bot, and its pause holds.)
+  const seat = current?.metadata?.kuvo?.seat as { bot?: unknown; group?: unknown } | undefined;
+  const bots = listBots();
+  const bot = seat ? bots.find(each => typeof seat.bot === "string" && each.id === seat.bot) : bots.find(each => each.session === root);
   const folder = current?.location?.directory ?? current?.directory;
   return {
     session,
@@ -56,7 +65,7 @@ export async function callerOf(session: unknown, readEngine: () => EngineRecord,
     ...(current?.title ? { sessionName: current.title } : {}),
     ...(folder ? { folder: path.resolve(folder) } : {}),
     ...(bot ? { bot: bot.id, botName: bot.name } : {}),
-    ...(current?.metadata?.kuvo?.seat ? { seat: true } : {}),
+    ...(seat || unsure ? { seat: true, ...(typeof seat?.group === "string" && seat.group ? { group: seat.group } : {}) } : {}),
   };
 }
 
@@ -104,7 +113,7 @@ export async function callingNow(session: string | undefined, tools: string[], a
 }
 
 /** How `caller` may use `item`: on its own, by asking you, or not at all (null). The most a grant
- * gives wins: a bot's, its project's or everyone's. */
+ * gives wins: a bot's, its project's or everyone's; a seat in a group chat asks you, whatever it's given. */
 export function grantFor(item: VaultItem, caller: Caller, grants: VaultGrant[] = readGrants()): VaultGrant["how"] | null {
   let how: VaultGrant["how"] | null = null;
   for (const grant of grants) {
@@ -113,7 +122,7 @@ export function grantFor(item: VaultItem, caller: Caller, grants: VaultGrant[] =
       || (grant.who.bot && grant.who.bot === caller.bot)
       || (grant.who.project && caller.folder && (caller.folder === grant.who.project || caller.folder.startsWith(grant.who.project + path.sep)));
     if (!fits) continue;
-    if (grant.how === "own") return "own";
+    if (grant.how === "own" && !caller.seat) return "own";
     how = "ask";
   }
   return how;

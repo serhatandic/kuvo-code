@@ -15,6 +15,7 @@ import path from "node:path";
 import { after, beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { runningAs } from "./running-as.js";
+import { NO_BUN, testBun } from "./bun-for-tests.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-bots-work-")));
 after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -668,11 +669,13 @@ test("where its sessions' commands run in the sandbox, a bot allows them beyond 
   // The sandbox, set up as the box's own process sets it up as it starts (on Linux, run by the
   // engine's Bun), and loaded by the engine.
   if (process.platform === "linux") {
-    const bun = process.versions.bun ? process.execPath : spawnSync("sh", ["-c", "command -v bun"], { encoding: "utf8" }).stdout.trim();
-    assert.ok(bun, "the sandbox runs on Bun on Linux: run this with the engine (BUN_BE_BUN=1) or with Bun on the PATH");
-    fs.mkdirSync(path.join(home, "engine", "test"), { recursive: true });
-    fs.rmSync(path.join(home, "engine", "test", "opencode"), { force: true });
-    fs.symlinkSync(bun, path.join(home, "engine", "test", "opencode"));
+    const bun = testBun();
+    assert.ok(bun, NO_BUN);
+    // (Where the box looks for its engine: the version its record names.)
+    const engineAt = path.join(home, "engine", JSON.parse(fs.readFileSync(path.join(home, "run", "engine.json"), "utf8")).version);
+    fs.mkdirSync(engineAt, { recursive: true });
+    fs.rmSync(path.join(engineAt, "opencode"), { force: true });
+    fs.symlinkSync(bun, path.join(engineAt, "opencode"));
   }
   const env = { ...process.env, KUVO_HOME: home, HOME: home, TMPDIR: home, OPENCODE_PASSWORD: "box-pw" };
   delete env.KUVO_SANDBOX;
