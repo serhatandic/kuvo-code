@@ -33,3 +33,26 @@ test("two answers kept at once on a session are both kept, without holding up th
     rmSync(home, { recursive: true, force: true })
   }
 })
+
+// However long the engine takes over one (past the lock's wait, `wait: 0` here), a second change in
+// this process waits its turn, rather than going ahead and writing over the first.
+test("a session's notes changed twice at once in this process are changed one after the other, however long the first takes", async () => {
+  const home = mkdtempSync(join(tmpdir(), "kuvo-answers-"))
+  try {
+    const { lockedWhile } = await import("../src/link/files")
+    const lock = join(home, ".notes.lock")
+    const order: string[] = []
+    let release = () => {}
+    const engine = new Promise<void>(resolve => { release = resolve })
+    const first = lockedWhile(lock, async () => { order.push("first starts"); await engine; order.push("first ends") }, { wait: 0 })
+    const second = lockedWhile(lock, async () => { order.push("second starts") }, { wait: 0 })
+    // Everything this process has to do now, done: the second hasn't started.
+    await new Promise(resolve => setImmediate(resolve))
+    expect(order).toEqual(["first starts"])
+    release()
+    await Promise.all([first, second])
+    expect(order).toEqual(["first starts", "first ends", "second starts"])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})

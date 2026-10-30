@@ -76,12 +76,26 @@ export function locked<T>(lock: string, work: () => T, { stale = 10_000, wait = 
   }
 }
 
-// The same for work that awaits: held until it's done.
+// Each lock's work in this process, in turn: the last one's end.
+const turns = new Map<string, Promise<void>>();
+
+// The same for work that awaits: held until it's done. In this process, each waits its turn however
+// long the one before takes; the lock's folder keeps other processes out.
 export async function lockedWhile<T>(lock: string, work: () => Promise<T>, { stale = 10_000, wait = 3_000 } = {}): Promise<T> {
-  const held = await holdAwaiting(lock, stale, wait);
+  const before = turns.get(lock) ?? Promise.resolve();
+  let done = () => {};
+  const mine = before.then(() => new Promise<void>(resolve => { done = resolve; }));
+  turns.set(lock, mine);
+  await before;
   try {
-    return await work();
+    const held = await holdAwaiting(lock, stale, wait);
+    try {
+      return await work();
+    } finally {
+      if (held) try { fs.rmdirSync(lock); } catch {}
+    }
   } finally {
-    if (held) try { fs.rmdirSync(lock); } catch {}
+    done();
+    if (turns.get(lock) === mine) turns.delete(lock);
   }
 }

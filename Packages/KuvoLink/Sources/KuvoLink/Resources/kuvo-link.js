@@ -653,15 +653,29 @@ function locked(lock, work, { stale = 1e4, wait = 3000 } = {}) {
       } catch {}
   }
 }
+var turns = new Map;
 async function lockedWhile(lock, work, { stale = 1e4, wait = 3000 } = {}) {
-  const held = await holdAwaiting(lock, stale, wait);
+  const before = turns.get(lock) ?? Promise.resolve();
+  let done = () => {};
+  const mine = before.then(() => new Promise((resolve) => {
+    done = resolve;
+  }));
+  turns.set(lock, mine);
+  await before;
   try {
-    return await work();
+    const held = await holdAwaiting(lock, stale, wait);
+    try {
+      return await work();
+    } finally {
+      if (held)
+        try {
+          fs5.rmdirSync(lock);
+        } catch {}
+    }
   } finally {
-    if (held)
-      try {
-        fs5.rmdirSync(lock);
-      } catch {}
+    done();
+    if (turns.get(lock) === mine)
+      turns.delete(lock);
   }
 }
 
