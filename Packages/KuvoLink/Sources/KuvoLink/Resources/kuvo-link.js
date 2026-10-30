@@ -2178,7 +2178,10 @@ async function integrationsAnswer(method, requestPath, body, engine, signal, fil
         newKeys = true;
       }
     }
-    const value = valueAt(readSettings().settings ?? {}, [...SERVERS, entry.id]) ?? entry.settings;
+    const now = valueAt(readSettings().settings ?? {}, [...SERVERS, entry.id]);
+    if (added && now === undefined)
+      return { status: 409, value: { message: `${entry.title} was removed meanwhile.` } };
+    const value = now ?? entry.settings;
     const changed = changeSettings([{ path: [...SERVERS, entry.id], value }]);
     if (changed.status !== 200)
       return { status: changed.status, value: { message: changed.message } };
