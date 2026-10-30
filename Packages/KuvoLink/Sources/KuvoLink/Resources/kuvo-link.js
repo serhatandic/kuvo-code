@@ -5,7 +5,7 @@ import { spawn as spawn9 } from "node:child_process";
 import crypto33 from "node:crypto";
 import fs78 from "node:fs";
 import os13 from "node:os";
-import path77 from "node:path";
+import path78 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // Packages/Box/src/shared/text.ts
@@ -16268,6 +16268,7 @@ import { spawn as spawn8 } from "node:child_process";
 import crypto26 from "node:crypto";
 import fs69 from "node:fs";
 import os8 from "node:os";
+import path70 from "node:path";
 
 // Packages/Box/src/link/notices/asking.ts
 var PATIENCE = 15 * 60000;
@@ -16522,7 +16523,14 @@ function alwaysFor(stops) {
   const writes = [...new Set(stops.filter((stop) => stop.kind === "write" && stop.path).map((stop) => stop.path))];
   if (writes.length !== 1 || !stops.every((stop) => stop.kind === "write"))
     return;
-  const where = writeRuleWouldBe(writes[0]);
+  const isFolder = (() => {
+    try {
+      return fs69.statSync(writes[0]).isDirectory();
+    } catch {
+      return false;
+    }
+  })();
+  const where = (isFolder ? null : writeRuleWouldBe(path70.dirname(writes[0]))) ?? writeRuleWouldBe(writes[0]);
   return where ? { kind: "write", path: where } : undefined;
 }
 function sandboxAskNotice(asked) {
@@ -16606,12 +16614,12 @@ async function callSandboxTool(name, args, caller, signal) {
 import crypto29 from "node:crypto";
 import fs73 from "node:fs";
 import net3 from "node:net";
-import path73 from "node:path";
+import path74 from "node:path";
 
 // Packages/Box/src/link/vault/ssh.ts
 import crypto28 from "node:crypto";
 import fs72 from "node:fs";
-import path72 from "node:path";
+import path73 from "node:path";
 
 // Packages/Box/src/link/vault/ssh-agent.ts
 import crypto27 from "node:crypto";
@@ -16883,8 +16891,8 @@ import os9 from "node:os";
 
 // Packages/Box/src/link/vault/activity.ts
 import fs71 from "node:fs";
-import path70 from "node:path";
-var ACTIVITY = path70.join(VAULT_FOLDER, "activity.jsonl");
+import path71 from "node:path";
+var ACTIVITY = path71.join(VAULT_FOLDER, "activity.jsonl");
 var DAY2 = 86400000;
 var prunedAt = 0;
 function note2(what, now = Date.now()) {
@@ -16964,7 +16972,7 @@ function watchVaultAsks(tell, answered = () => {}, after = 2000) {
 }
 
 // Packages/Box/src/link/vault/who.ts
-import path71 from "node:path";
+import path72 from "node:path";
 async function sessionAt(targets, id) {
   for (const target of targets) {
     try {
@@ -16997,7 +17005,7 @@ async function callerOf(session, readEngine, readBridge) {
     session,
     root,
     ...current?.title ? { sessionName: current.title } : {},
-    ...folder ? { folder: path71.resolve(folder) } : {},
+    ...folder ? { folder: path72.resolve(folder) } : {},
     ...bot ? { bot: bot.id, botName: bot.name } : {},
     ...current?.metadata?.kuvo?.seat ? { seat: true } : {}
   };
@@ -17040,7 +17048,7 @@ function grantFor(item, caller, grants = readGrants()) {
   for (const grant of grants) {
     if (grant.item !== item.id)
       continue;
-    const fits = grant.who.everyone || grant.who.bot && grant.who.bot === caller.bot || grant.who.project && caller.folder && (caller.folder === grant.who.project || caller.folder.startsWith(grant.who.project + path71.sep));
+    const fits = grant.who.everyone || grant.who.bot && grant.who.bot === caller.bot || grant.who.project && caller.folder && (caller.folder === grant.who.project || caller.folder.startsWith(grant.who.project + path72.sep));
     if (!fits)
       continue;
     if (grant.how === "own")
@@ -17140,7 +17148,7 @@ var IDLE = 60 * 60000;
 function safeFolder() {
   if (process.platform !== "darwin")
     return true;
-  const parent = path72.dirname(SSH_AGENTS);
+  const parent = path73.dirname(SSH_AGENTS);
   try {
     const seen = fs72.lstatSync(parent);
     return seen.isDirectory() && seen.uid === process.getuid?.() && (seen.mode & 63) === 0;
@@ -17154,7 +17162,7 @@ var real = (where) => {
   try {
     return fs72.realpathSync(where);
   } catch {
-    return path72.resolve(where);
+    return path73.resolve(where);
   }
 };
 function callerFor(note, folder) {
@@ -17164,7 +17172,7 @@ function callerFor(note, folder) {
       return who.folder && real(who.folder) === real(folder) ? who : null;
     };
   return async () => {
-    const bot = listBots().find((each) => each.folder && (folder === each.folder || folder.startsWith(each.folder + path72.sep)));
+    const bot = listBots().find((each) => each.folder && (folder === each.folder || folder.startsWith(each.folder + path73.sep)));
     return { folder, ...bot ? { bot: bot.id, botName: bot.name, ...bot.session ? { session: bot.session, root: bot.session } : {} } : {} };
   };
 }
@@ -17260,7 +17268,7 @@ function keepSshAgents() {
       if (Date.now() - agent.used < IDLE)
         continue;
       close(note);
-      fs72.rmSync(path72.join(SSH_FOR, note), { force: true });
+      fs72.rmSync(path73.join(SSH_FOR, note), { force: true });
     }
     let notes = [];
     try {
@@ -17269,11 +17277,11 @@ function keepSshAgents() {
     for (const note of notes) {
       let folder = "";
       try {
-        folder = fs72.readFileSync(path72.join(SSH_FOR, note), "utf8");
+        folder = fs72.readFileSync(path73.join(SSH_FOR, note), "utf8");
       } catch {
         continue;
       }
-      if (!path72.isAbsolute(folder) || note.startsWith("dir-") && note !== `dir-${sumOf(folder)}`)
+      if (!path73.isAbsolute(folder) || note.startsWith("dir-") && note !== `dir-${sumOf(folder)}`)
         continue;
       if (agents.get(note)?.folder === folder)
         continue;
@@ -17281,8 +17289,8 @@ function keepSshAgents() {
       const prefix = sumOf(note).slice(0, 16);
       for (const old of fs72.readdirSync(SSH_AGENTS))
         if (old.startsWith(prefix))
-          fs72.rmSync(path72.join(SSH_AGENTS, old), { force: true });
-      const socket = path72.join(SSH_AGENTS, `${prefix}${crypto28.randomBytes(9).toString("base64url")}.sock`);
+          fs72.rmSync(path73.join(SSH_AGENTS, old), { force: true });
+      const socket = path73.join(SSH_AGENTS, `${prefix}${crypto28.randomBytes(9).toString("base64url")}.sock`);
       const agent = { folder, server: serveAgent(socket, sourceFor(callerFor(note, folder))), used: Date.now() };
       agent.server.on("connection", () => {
         agent.used = Date.now();
@@ -17299,8 +17307,8 @@ function keepSshAgents() {
       fs72.rmSync(SSH_AGENTS, { recursive: true, force: true });
     for (const note of fs72.readdirSync(SSH_FOR)) {
       try {
-        if (Date.now() - fs72.statSync(path72.join(SSH_FOR, note)).mtimeMs > NOTE_KEPT)
-          fs72.rmSync(path72.join(SSH_FOR, note), { force: true });
+        if (Date.now() - fs72.statSync(path73.join(SSH_FOR, note)).mtimeMs > NOTE_KEPT)
+          fs72.rmSync(path73.join(SSH_FOR, note), { force: true });
       } catch {}
     }
   } catch {}
@@ -17327,7 +17335,7 @@ function keepSshAgents() {
 }
 
 // Packages/Box/src/link/vault/holder.ts
-var VAULT_SOCKET = path73.join(RUN, "vault.sock");
+var VAULT_SOCKET = path74.join(RUN, "vault.sock");
 var holding = false;
 var holdsVault = () => holding;
 var heldHere = (route) => /^kuvo\/(vault|sandbox\/(asks|tools|allowed))(\/|\?|$)/.test(route);
@@ -17340,7 +17348,7 @@ function holdVault(handle) {
   holding = true;
   fs73.mkdirSync(RUN, { recursive: true, mode: 448 });
   try {
-    fs73.rmSync(path73.join(RUN, "vault-run"), { recursive: true, force: true });
+    fs73.rmSync(path74.join(RUN, "vault-run"), { recursive: true, force: true });
   } catch {}
   try {
     fs73.rmSync(VAULT_SOCKET, { force: true });
@@ -17722,7 +17730,7 @@ import fs75 from "node:fs";
 
 // Packages/Box/src/link/areas/mcp-catalog.ts
 import fs74 from "node:fs";
-import path74 from "node:path";
+import path75 from "node:path";
 
 // Packages/Box/src/shared/routes/settings.ts
 var CONFIG = map(any);
@@ -17755,7 +17763,7 @@ var accessOf = (server) => {
   return MCP_ACCESS.includes(access) ? access : null;
 };
 var offered = (server, mac) => typeof server?.id === "string" && (mac || !server.macOnly) && accessOf(server) !== null;
-var CATALOG_FILE = path74.join(K, "bin", "mcp-catalog.json");
+var CATALOG_FILE = path75.join(K, "bin", "mcp-catalog.json");
 function mcpCatalog(settings, file = CATALOG_FILE, mac = IS_MAC) {
   let servers = [];
   try {
@@ -18129,7 +18137,7 @@ async function* newProjectRoute(context) {
 
 // Packages/Box/src/link/mac/routes.ts
 import fs76 from "node:fs";
-import path75 from "node:path";
+import path76 from "node:path";
 var macPhones = () => {
   const link = readLink();
   return {
@@ -18290,7 +18298,7 @@ async function* macLinkRoute(route, request, signal) {
             peer: letter.peer,
             ...typeof letter.answers === "string" ? { answers: letter.answers } : {}
           };
-          writePrivate(path75.join(SENDING, `${letter.id}.json`), JSON.stringify(kept));
+          writePrivate(path76.join(SENDING, `${letter.id}.json`), JSON.stringify(kept));
         }
         if (isObject(given.seen)) {
           locked(PEER_LOCK, () => {
@@ -18405,7 +18413,7 @@ async function fill(given, caller, signal) {
 import crypto30 from "node:crypto";
 import fs77 from "node:fs";
 import os10 from "node:os";
-import path76 from "node:path";
+import path77 from "node:path";
 
 // Packages/Box/src/link/vault/mask.ts
 var SHORTEST = 4;
@@ -18564,7 +18572,7 @@ async function askForItem(caller, args, signal) {
 var MOST_OUTPUT3 = 64 * 1024;
 var CALL_BUDGET2 = 15.5 * 60000;
 var VARIABLE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
-var RUN_FOLDER = path76.join(RUN, "vault-run");
+var RUN_FOLDER = path77.join(RUN, "vault-run");
 function namedValue(named) {
   const whole = itemNamed(named);
   if (whole)
@@ -18593,7 +18601,7 @@ async function runWith(caller, args, signal) {
   if (!isObject(args.variables) || !Object.keys(args.variables).length)
     return failed2("Name at least one variable and the item it gets.");
   const started = Date.now();
-  const program = path76.basename(command.split(/\s+/)[0] ?? "");
+  const program = path77.basename(command.split(/\s+/)[0] ?? "");
   const folder = caller.folder && fs77.existsSync(caller.folder) ? caller.folder : homeFolder();
   const wanted = [];
   for (const [variable, named] of Object.entries(args.variables)) {
@@ -18620,7 +18628,7 @@ async function runWith(caller, args, signal) {
       return failed2(may.message);
     allowed.set(item.id, may.how);
   }
-  const scratch = path76.join(RUN_FOLDER, crypto30.randomBytes(8).toString("hex"));
+  const scratch = path77.join(RUN_FOLDER, crypto30.randomBytes(8).toString("hex"));
   const env = commandEnv();
   const hidden = [];
   try {
@@ -18630,9 +18638,9 @@ async function runWith(caller, args, signal) {
       if (value === undefined)
         return failed2(`“${item.name}” has no ${field} kept.`);
       if (item.kind === "file" && field === "file") {
-        const name = path76.basename(item.fileName ?? "");
-        const file = path76.join(scratch, variable, name && name !== "." && name !== ".." ? name : variable.toLowerCase());
-        fs77.mkdirSync(path76.dirname(file), { recursive: true, mode: 448 });
+        const name = path77.basename(item.fileName ?? "");
+        const file = path77.join(scratch, variable, name && name !== "." && name !== ".." ? name : variable.toLowerCase());
+        fs77.mkdirSync(path77.dirname(file), { recursive: true, mode: 448 });
         const bytes = Buffer.from(value, "base64");
         fs77.writeFileSync(file, bytes, { mode: 384 });
         env[variable] = file;
@@ -19298,9 +19306,9 @@ async function run2() {
   fs78.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 384 });
   const saved = savedLoginPath(K);
   if (saved)
-    process.env.PATH = joinPath(path77.join(K, "bin"), saved);
+    process.env.PATH = joinPath(path78.join(K, "bin"), saved);
   for (const folder of ["present", "connected"])
-    fs78.rmSync(path77.join(RUN, folder), { recursive: true, force: true });
+    fs78.rmSync(path78.join(RUN, folder), { recursive: true, force: true });
   try {
     keepJobs();
   } catch {}

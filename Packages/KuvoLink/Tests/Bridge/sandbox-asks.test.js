@@ -228,8 +228,8 @@ test("a command the sandbox stopped runs outside it once you allow it once; the 
   // On a Mac, what the sandbox refused, from its own log.
   else {
     assert.deepEqual(ask.stopped?.find(each => each.path === target), { kind: "write", path: target }, JSON.stringify(ask));
-    // Always would let the project's commands write that file in the sandbox.
-    assert.deepEqual(ask.always, { kind: "write", path: target });
+    // Always would let the project's commands write in the folder it was stopped writing in.
+    assert.deepEqual(ask.always, { kind: "write", path: path.dirname(target) });
   }
   // The Mac answers it over SSH as a phone would through the relay.
   assert.equal((await fromMac("POST", `kuvo/sandbox/asks/${ask.id}`, { answer: "once" })).status, 200);
@@ -282,14 +282,17 @@ test("a command is never let out of the sandbox for good: Always is only the fol
   assert.notEqual((await engineRuns(shop, write, "ses_shop2")).status, 0, "the sandbox stops it");
   const wrote = sandboxAsk(box, "ses_shop2", { command: write, why: "To keep the build's log." });
   const [writeAsk] = await asked(box, wrote);
-  assert.deepEqual(writeAsk.always, { kind: "write", path: path.join(logs, "build.log") });
+  assert.deepEqual(writeAsk.always, { kind: "write", path: logs });
   assert.equal((await box.ask("POST", `kuvo/sandbox/asks/${writeAsk.id}`, { answer: "always" })).status, 200);
   assert.match((await wrote).value.text, /^Ran outside the sandbox · Always for this: from now on your commands can write in /);
   const rules = (await box.ask("GET", `kuvo/sandbox/allowed?project=${encodeURIComponent(shop)}`)).value.allowed;
-  assert.deepEqual(rules.map(({ kind, path: where }) => ({ kind, path: where })), [{ kind: "write", path: path.join(logs, "build.log") }]);
+  assert.deepEqual(rules.map(({ kind, path: where }) => ({ kind, path: where })), [{ kind: "write", path: logs }]);
   const ran = await engineRuns(shop, write, "ses_shop2");
   assert.equal(ran.status, 0, ran.out);
   assert.equal(fs.readFileSync(path.join(logs, "build.log"), "utf8"), "line\nline\n");
+  // And another file there, as the next build writes.
+  const other = await engineRuns(shop, `echo next > ${JSON.stringify(path.join(logs, "next.log"))}`, "ses_shop2");
+  assert.equal(other.status, 0, other.out);
   assert.equal((await fromMac("DELETE", `kuvo/sandbox/allowed/${rules[0].id}`)).status, 200);
 });
 
