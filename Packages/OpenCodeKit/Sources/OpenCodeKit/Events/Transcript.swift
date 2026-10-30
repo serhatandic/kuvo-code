@@ -85,6 +85,127 @@ public struct Transcript: Sendable, Equatable {
         isStale = false
     }
 
+    /// After `load`, the events that came while the read was on its way. A block still being
+    /// written takes the words `shown` (the copy on screen, which had each piece as it came) has
+    /// for it, when they go on from the read's: the engine keeps a block's words only once it
+    /// ends, so its read has none of them, and the coding agents' bridge keeps them as they come,
+    /// so its read has some of these pieces already. Those pieces are left out for such a block.
+    /// For one `shown` hasn't (it was opened meanwhile), so are the first pieces the read ends with.
+    public mutating func catchUp(on events: [ServerEvent], shown: Transcript) {
+        var caughtUp: Set<Block> = []
+        for index in messages.indices {
+            guard case .assistant(var step) = messages[index],
+                  let at = shown.assistantIndex(step.id), case .assistant(let shownStep) = shown.messages[at] else { continue }
+            for block in Self.blocks(in: step) {
+                guard let words = Self.words(of: block, in: step), let shownWords = Self.words(of: block, in: shownStep),
+                      shownWords.hasPrefix(words) else { continue }
+                caughtUp.insert(block)
+                if shownWords.count > words.count { Self.write(shownWords, to: block, in: &step) }
+            }
+            messages[index] = .assistant(step)
+        }
+        var pieces: [Block: [(index: Int, words: String)]] = [:]
+        for (index, event) in events.enumerated() {
+            if let piece = piece(of: event), !caughtUp.contains(piece.block) { pieces[piece.block, default: []].append((index, piece.words)) }
+        }
+        var again: Set<Int> = []
+        for (block, each) in pieces {
+            guard let read = Self.words(of: block, in: messages), !read.isEmpty else { continue }
+            // The most of them, from the first, that the read ends with.
+            for count in stride(from: each.count, through: 1, by: -1) where read.hasSuffix(each.prefix(count).map(\.words).joined()) {
+                again.formUnion(each.prefix(count).map(\.index))
+                break
+            }
+        }
+        for (index, event) in events.enumerated() {
+            if again.contains(index) { continue }
+            if let piece = piece(of: event), caughtUp.contains(piece.block) { continue }
+            apply(event)
+        }
+    }
+
+    /// A block a step's pieces go to: its words or thinking (the `ordinal`th of its kind), or a
+    /// tool call's input.
+    private enum Block: Hashable {
+        case text(message: String, ordinal: Int)
+        case reasoning(message: String, ordinal: Int)
+        case toolInput(message: String, tool: String)
+    }
+
+    private static func blocks(in step: Message.Assistant) -> [Block] {
+        var texts = 0, thoughts = 0
+        return step.content.compactMap { content in
+            switch content {
+            case .text:
+                defer { texts += 1 }
+                return .text(message: step.id, ordinal: texts)
+            case .reasoning:
+                defer { thoughts += 1 }
+                return .reasoning(message: step.id, ordinal: thoughts)
+            case .tool(let call):
+                return .toolInput(message: step.id, tool: call.id)
+            default:
+                return nil
+            }
+        }
+    }
+
+    /// What a block has so far, while it's being written: none for thinking or a tool's input done.
+    private static func words(of block: Block, in step: Message.Assistant) -> String? {
+        guard let index = contentIndex(of: block, in: step) else { return nil }
+        switch step.content[index] {
+        case .text(let text): return text.text
+        case .reasoning(let text): return text.isComplete ? nil : text.text
+        case .tool(let call): if case .streaming(let input) = call.state { return input } else { return nil }
+        default: return nil
+        }
+    }
+
+    private static func words(of block: Block, in messages: [Message]) -> String? {
+        let id = switch block { case .text(let message, _), .reasoning(let message, _), .toolInput(let message, _): message }
+        guard let index = messages.lastIndex(where: { $0.id == id }), case .assistant(let step) = messages[index] else { return nil }
+        return words(of: block, in: step)
+    }
+
+    private static func write(_ words: String, to block: Block, in step: inout Message.Assistant) {
+        guard let index = contentIndex(of: block, in: step) else { return }
+        switch step.content[index] {
+        case .text(var text): text.text = words; step.content[index] = .text(text)
+        case .reasoning(var text): text.text = words; step.content[index] = .reasoning(text)
+        case .tool(var call): call.state = .streaming(input: words); step.content[index] = .tool(call)
+        default: break
+        }
+    }
+
+    private static func contentIndex(of block: Block, in step: Message.Assistant) -> Int? {
+        switch block {
+        case .text(_, let ordinal): blockIndex(ordinal, kind: \.isText, in: step.content)
+        case .reasoning(_, let ordinal): blockIndex(ordinal, kind: \.isReasoning, in: step.content)
+        case .toolInput(_, let tool): step.content.lastIndex { $0.isTool(tool) }
+        }
+    }
+
+    /// The block a piece of words, thinking or a tool's input goes to, and the piece.
+    private func piece(of event: ServerEvent) -> (block: Block, words: String)? {
+        guard event.sessionID == sessionID else { return nil }
+        switch event.type {
+        case "session.text.delta", "session.reasoning.delta":
+            guard let delta = try? event.payload(as: EventPayload.Delta.self) else { return nil }
+            let text = event.type == "session.text.delta"
+            let ordinal = delta.ordinal ?? assistantIndex(delta.assistantMessageID).flatMap { index -> Int? in
+                guard case .assistant(let step) = messages[index] else { return nil }
+                return step.content.count(where: text ? \.isText : \.isReasoning) - 1
+            }
+            guard let ordinal else { return nil }
+            return (text ? .text(message: delta.assistantMessageID, ordinal: ordinal) : .reasoning(message: delta.assistantMessageID, ordinal: ordinal), delta.delta)
+        case "session.tool.input.delta":
+            guard let delta = try? event.payload(as: EventPayload.ToolInputDelta.self) else { return nil }
+            return (.toolInput(message: delta.assistantMessageID, tool: delta.id), delta.delta)
+        default:
+            return nil
+        }
+    }
+
     /// Whether a local copy's files stand for the engine's: files picked on this Mac, or ones the
     /// engine's copy doesn't name at all.
     private static func keepsLocalFiles(_ local: [URL], over item: Pending) -> Bool {

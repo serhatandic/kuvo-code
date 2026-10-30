@@ -93,4 +93,70 @@ struct TranscriptReplayTests {
         #expect(texts(transcript) == ["First.", "Second."])
         #expect(!transcript.isStale)
     }
+
+    /// A conversation read again while the agent writes: what shows has every word once, whether
+    /// the read has none of the words so far (the engine's) or some (the coding agents' bridge),
+    /// and whether the conversation was showing already or is opened now.
+    @Test func aReadMadeMidReplyShowsEveryWordOnce() throws {
+        func event(_ number: Int, _ type: String, _ fields: String) throws -> ServerEvent {
+            try ServerEvent(json: Data(#"""
+            {"id":"evt_\#(number)","created":\#(number),"type":"\#(type)","data":{"sessionID":"ses_1","assistantMessageID":"msg_1",\#(fields)}}
+            """#.utf8))
+        }
+        func step(text: String, thinking: String, input: String) -> [Message] {
+            [.assistant(Message.Assistant(id: "msg_1", time: Message.Time(created: 1), agent: "build", model: ModelRef(id: "m", providerID: "p"), content: [
+                .reasoning(Message.Content.Text(text: thinking, time: Message.Time(created: 1))),
+                .text(Message.Content.Text(text: text)),
+                .tool(Message.ToolCall(id: "call_1", name: "read", state: .streaming(input: input))),
+            ]))]
+        }
+        func shown(_ transcript: Transcript) -> [String] {
+            guard case .assistant(let step)? = transcript.messages.last else { return [] }
+            return step.content.compactMap {
+                switch $0 {
+                case .text(let block), .reasoning(let block): block.text
+                case .tool(let call): if case .streaming(let input) = call.state { input } else { nil }
+                default: nil
+                }
+            }
+        }
+        // Before the read began, then while it was on its way.
+        let before = try [
+            event(2, "session.reasoning.delta", #""ordinal":0,"delta":"Look at ""#),
+            event(3, "session.text.delta", #""ordinal":0,"delta":"Hello ""#),
+            event(4, "session.tool.input.delta", #""id":"call_1","delta":"{\"pa""#),
+        ]
+        let during = try [
+            event(5, "session.reasoning.delta", #""ordinal":0,"delta":"it""#),
+            event(6, "session.text.delta", #""ordinal":0,"delta":"wor""#),
+            event(7, "session.text.delta", #""ordinal":0,"delta":"ld""#),
+            event(8, "session.tool.input.delta", #""id":"call_1","delta":"th\"""#),
+        ]
+        let whole = ["Look at it", "Hello world", #"{"path""#]
+
+        var showing = Transcript(sessionID: "ses_1")
+        showing.load(messages: step(text: "", thinking: "", input: ""), inbox: [], permissions: [], forms: [], isRunning: true)
+        for event in before + during { showing.apply(event) }
+        #expect(shown(showing) == whole)
+
+        let reads = [
+            ("the engine's, none of the words", step(text: "", thinking: "", input: "")),
+            ("the bridge's, some of the pieces since", step(text: "Hello wor", thinking: "Look at ", input: #"{"pa"#)),
+            ("the bridge's, all of them", step(text: "Hello world", thinking: "Look at it", input: #"{"path""#)),
+        ]
+        for (what, read) in reads {
+            var fresh = showing
+            fresh.load(messages: read, inbox: [], permissions: [], forms: [], isRunning: true)
+            fresh.catchUp(on: during, shown: showing)
+            #expect(shown(fresh) == whole, "read again: \(what)")
+        }
+
+        // Opened while it writes, over the bridge: the pieces its read has already go once.
+        for (what, read) in reads.dropFirst() {
+            var opened = Transcript(sessionID: "ses_1")
+            opened.load(messages: read, inbox: [], permissions: [], forms: [], isRunning: true)
+            opened.catchUp(on: during, shown: Transcript(sessionID: "ses_1"))
+            #expect(shown(opened) == whole, "opened: \(what)")
+        }
+    }
 }

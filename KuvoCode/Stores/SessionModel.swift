@@ -697,7 +697,7 @@ final class SessionModel {
             fresh.helpers.formUnion(helpers)
             // Unknown (the engine didn't answer): as it was, not stopped.
             fresh.load(messages: kept + page.data, inbox: waiting, permissions: asked, forms: open, isRunning: running ?? transcript.isRunning)
-            for event in cameDuringRead[read] ?? [] { fresh.apply(event) }
+            fresh.catchUp(on: cameDuringRead[read] ?? [], shown: live ?? transcript)
             // It has what streamed in so far.
             discardLive()
             transcript = fresh
