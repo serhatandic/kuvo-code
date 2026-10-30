@@ -492,6 +492,25 @@ describe("a group chat on a machine", () => {
     expect(runner().groups.talk("grp_team000001").paused).toBe(false)
   }, 20_000)
 
+  test("written to just as a bot ends its turn: what you said doesn't wait unanswered in its seat, its turn goes on to answer it", async () => {
+    const { groups } = runner()
+    engine.lines = { Ada: ["First.", "Yes, the docs too."], Ben: [] }
+    engine.held.add("Ada")
+    engine.lateSteers.add("Ada")
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Go")
+    await until(() => engine.prompts().length === 1)
+    groups.send("grp_team000001", "And the docs?")
+    await until(() => engine.prompts().some((request) => request.body.delivery === "steer"))
+    engine.release("Ada")
+    const said = () => groups.get("grp_team000001")!.messages.filter((message) => message.author === "bot_ada").map((message) => message.text)
+    await until(() => said().length > 0 && !groups.talk("grp_team000001").discussing)
+    expect(said()).toEqual(["First.\n\nYes, the docs too."])
+    // What you wrote went to it again, as its turn went on, and once.
+    const seat = groups.get("grp_team000001")!.group.seats.bot_ada
+    expect(engine.prompts(seat).filter((request) => String(request.body.text).includes("And the docs?")).map((request) => request.body.delivery)).toEqual(["steer", "queue"])
+  })
+
   test("a bot answering as the bridge started over: its answer still reaches the chat, once, and the chat waits for Keep Going", async () => {
     // The bridge that goes: from then on, nothing it asks of the engine comes back.
     let gone = false

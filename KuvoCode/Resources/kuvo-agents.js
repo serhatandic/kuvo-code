@@ -17328,6 +17328,7 @@ class Seats {
   context;
   seatBase = new Map;
   declined = new Set;
+  steered = new Map;
   seatsChecked = new Set;
   seatTexts = new Map;
   constructor(context) {
@@ -17579,14 +17580,23 @@ class Seats {
           await api.prompt(seat, promptID, text, "queue");
         }
         report({ phase: "started" });
-        const asked = promptID;
-        await this.waitForRun(seat, asked, sent, api, signal, bot.directory, nudge, ownConversation ? undefined : (messages) => {
-          const now = activity(messages, asked, sent);
+        const watch = (asked, at) => ownConversation ? undefined : (messages) => {
+          const now = activity(messages, asked, at);
           if (now.length === 0 || JSON.stringify(now) === JSON.stringify(shown) || Date.now() - streamedAt < 3000)
             return;
           shown = now;
           report({ phase: "activity", activity: now });
-        });
+        };
+        await this.waitForRun(seat, promptID, sent, api, signal, bot.directory, nudge, watch(promptID, sent));
+        for (let late = ownConversation ? [] : await this.unsteered(seat, api);late.length > 0; late = await this.unsteered(seat, api)) {
+          going();
+          const again = newID("msg");
+          const at = Date.now();
+          await api.prompt(seat, again, late.join(`
+
+`), "queue");
+          await this.waitForRun(seat, again, at, api, signal, bot.directory, nudge, watch(again, at));
+        }
       } finally {
         unlisten?.();
       }
@@ -17743,12 +17753,35 @@ class Seats {
     const api = this.apiFor(agents);
     if (!api || !(await api.active().catch(() => new Set)).has(seat))
       return false;
+    const id = newID("msg");
+    const sent = this.steered.get(seat) ?? new Map;
+    this.steered.set(seat, sent.set(id, text));
     try {
-      await api.prompt(seat, newID("msg"), text, "steer");
-      return true;
+      await api.prompt(seat, id, text, "steer");
     } catch {
+      sent.delete(id);
       return false;
     }
+    if (this.steered.get(seat) !== sent) {
+      await api.cancelInbox(seat, id).catch(() => {});
+      return false;
+    }
+    return true;
+  }
+  async unsteered(seat, api) {
+    const sent = this.steered.get(seat);
+    this.steered.delete(seat);
+    if (!sent?.size)
+      return [];
+    const late = [];
+    for (const item of await api.inbox(seat).catch(() => [])) {
+      const text = sent.get(item.id);
+      if (text === undefined)
+        continue;
+      await api.cancelInbox(seat, item.id).catch(() => {});
+      late.push(text);
+    }
+    return late;
   }
   async waitForRun(seat, promptID, sent, api, signal, directory, nudge, seen) {
     const pace = this.context.pace ?? 1;
@@ -20700,4 +20733,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents c8f3400b83692d4a53e58f7f677e135f98675f35ae828292647c7c8bd83308bf
+// Built from Packages/Box/src/agents c9ea99b3e4a0c29eb83d0f6cd2c7476993c5ded729d5f0685bbfb643f72ba605

@@ -21,6 +21,8 @@ export class Engine {
   held = new Set<string>()
   private releases = new Map<string, (() => void)[]>()
   stuck = new Set<string>()
+  /** Bots whose seats take a message steered in too late for the run under way: it waits in the inbox once the run ends. */
+  lateSteers = new Set<string>()
   /** Seats being made wait until `letMake`: so a turn can be stopped while its seat is made. */
   holdMaking = false
   private making: (() => void)[] = []
@@ -135,7 +137,10 @@ export class Engine {
       return ok()
     }
     // Steered into a run under way: it hears it at its next step, and its run goes on.
-    if (what === "prompt" && body.delivery === "steer" && this.busy.has(session)) return ok()
+    if (what === "prompt" && body.delivery === "steer" && this.busy.has(session)) {
+      if (this.lateSteers.has(this.seats.get(session) ?? "")) this.queued.set(session, [...(this.queued.get(session) ?? []), { id: body.id }])
+      return ok()
+    }
     if (what === "prompt" && this.stuck.has(this.seats.get(session) ?? "")) {
       this.queued.set(session, [...(this.queued.get(session) ?? []), { id: body.id }])
       return ok()

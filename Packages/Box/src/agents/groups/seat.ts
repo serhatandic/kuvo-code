@@ -178,6 +178,8 @@ export class Seats implements SeatHome {
   private seatBase = new Map<string, number>()
   /** Requests from seats already turned down. */
   private declined = new Set<string>()
+  /** Messages of yours steered into each seat's run under way: what each says, by its id there. */
+  private steered = new Map<string, Map<string, string>>()
   /** Seats whose rules were brought up to date since this started, and what each was last told. */
   private seatsChecked = new Set<string>()
   private seatTexts = new Map<string, string>()
@@ -451,13 +453,25 @@ export class Seats implements SeatHome {
           await api.prompt(seat, promptID, text, "queue")
         }
         report({ phase: "started" })
-        const asked = promptID as string
-        await this.waitForRun(seat, asked, sent, api, signal, bot.directory, nudge, ownConversation ? undefined : (messages) => {
-          const now = activityOf(messages, asked, sent)
-          if (now.length === 0 || JSON.stringify(now) === JSON.stringify(shown) || Date.now() - streamedAt < 3000) return
-          shown = now
-          report({ phase: "activity", activity: now })
-        })
+        const watch = (asked: string, at: number) =>
+          ownConversation
+            ? undefined
+            : (messages: any[]) => {
+                const now = activityOf(messages, asked, at)
+                if (now.length === 0 || JSON.stringify(now) === JSON.stringify(shown) || Date.now() - streamedAt < 3000) return
+                shown = now
+                report({ phase: "activity", activity: now })
+              }
+        await this.waitForRun(seat, promptID as string, sent, api, signal, bot.directory, nudge, watch(promptID as string, sent))
+        // What you wrote that reached it too late for its run: it'd wait there for a run nobody
+        // reads, so it goes again now, and the turn goes on until it's answered that too.
+        for (let late = ownConversation ? [] : await this.unsteered(seat, api); late.length > 0; late = await this.unsteered(seat, api)) {
+          going()
+          const again = newID("msg")
+          const at = Date.now()
+          await api.prompt(seat, again, late.join("\n\n"), "queue")
+          await this.waitForRun(seat, again, at, api, signal, bot.directory, nudge, watch(again, at))
+        }
       } finally {
         unlisten?.()
       }
@@ -608,12 +622,39 @@ export class Seats implements SeatHome {
   async steer(seat: string, agents: boolean, text: string, _message?: string): Promise<boolean> {
     const api = this.apiFor(agents)
     if (!api || !(await api.active().catch(() => new Set<string>())).has(seat)) return false
+    const id = newID("msg")
+    const sent = this.steered.get(seat) ?? new Map<string, string>()
+    this.steered.set(seat, sent.set(id, text))
     try {
-      await api.prompt(seat, newID("msg"), text, "steer")
-      return true
+      await api.prompt(seat, id, text, "steer")
     } catch {
+      sent.delete(id)
       return false
     }
+    // Its turn ended as it went: it'd wait there for a run nobody reads, so it's taken back, unheard.
+    if (this.steered.get(seat) !== sent) {
+      await api.cancelInbox(seat, id).catch(() => {})
+      return false
+    }
+    return true
+  }
+
+  /**
+   * What was steered into a seat's run too late for it (still waiting there once the run ended,
+   * where a run nobody reads would take it): taken back, and what it said.
+   */
+  private async unsteered(seat: string, api: SeatAPI): Promise<string[]> {
+    const sent = this.steered.get(seat)
+    this.steered.delete(seat)
+    if (!sent?.size) return []
+    const late: string[] = []
+    for (const item of await api.inbox(seat).catch(() => [])) {
+      const text = sent.get(item.id)
+      if (text === undefined) continue
+      await api.cancelInbox(seat, item.id).catch(() => {})
+      late.push(text)
+    }
+    return late
   }
 
   /**
