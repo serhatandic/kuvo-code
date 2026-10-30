@@ -160,6 +160,29 @@ import Testing
         #expect(app.workspace.model(for: "ses_older") !== model)
     }
 
+    /// This Mac's engine back (after the Mac slept, say) while a machine is slow to answer: this
+    /// Mac's conversations are read again and its feed goes on, rather than waiting on the
+    /// machine's, which its own connection reads again when it's back.
+    @Test func thisMacsEngineBackDoesntWaitOnAMachine() async throws {
+        defer { done() }
+        let id = Self.name()
+        machine.list([StubEngine.session("ses_far", title: "Far", directory: "/home/tests/project")])
+        machine.conversation("ses_far", [])
+        await app.connect(add(id, at: machine)).value
+        try await until { app.workspace.session("ses_far") != nil }
+        let far = try #require(app.workspace.model(for: "ses_far"))
+        await far.load()
+
+        let gate = Gate()
+        defer { gate.open() }
+        machine.on("GET", "/api/session/ses_far/message") { _ in
+            gate.wait()
+            return StubWeb.json(["data": []])
+        }
+        await app.workspace.resync()
+        #expect(!gate.isOpen, "done without the machine's answer")
+    }
+
     /// Your personalities changed, so each connected machine's round begins a moment later:
     /// one disconnected meanwhile gets nothing; another still connected gets its round.
     @Test func disconnectStopsAPersonalitiesRoundAboutToBegin() async throws {

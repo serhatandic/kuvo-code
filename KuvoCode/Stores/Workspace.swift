@@ -2011,10 +2011,12 @@ final class Workspace {
         await refresh()
         let before = asking
         asking = [:]
-        for directory in Set(models.values.map(\.session.location.directory)) { await readShellJobs(in: directory) }
+        // A machine's are read again by its own connection when that's back (see `refresh(_ engine:)`):
+        // its feed is its own, and waiting on it here would hold up this Mac's.
+        let here = models.values.filter { !RemoteFolder.isRemote($0.session.location.directory) }
+        for directory in Set(here.map(\.session.location.directory)) { await readShellJobs(in: directory) }
         for model in models.values {
-            // A machine's are read when it's connected (see `refresh(_ engine:)`).
-            if RemoteFolder.machine(of: model.session.location.directory).map(connectedMachines.contains) ?? true { await model.load() }
+            if !RemoteFolder.isRemote(model.session.location.directory) { await model.load() }
             for request in model.permissions { asking[request.id] = request.sessionID }
             for form in model.forms { note(form, in: model) }
         }
@@ -2024,9 +2026,9 @@ final class Workspace {
                 asking[request] = session
                 continue
             }
-            // On a machine not connected now: as it was, read again when it is (and not told
-            // again then as news).
-            guard sessionMachines[session].map(connectedMachines.contains) ?? true else {
+            // On a machine: as it was, read again by its own connection when that's back (and not
+            // told again then as news).
+            guard sessionMachines[session] == nil else {
                 asking[request] = session
                 continue
             }
