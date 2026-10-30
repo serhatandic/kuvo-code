@@ -463,6 +463,16 @@ extension AppModel {
         // Removed, or disconnected, while it started (or since): its connection ended, and nothing
         // of yours goes there.
         guard let connection = await engine.start(machineLaunch(engine), cache: AppInfo.supportDirectory.appending(path: "engine-linux")) else { return }
+        #if DEBUG
+        // KUVO_DEMO_AWAY=<machine>: once it's connected and its accounts read, disconnected as
+        // Disconnect does, so its pages show it away, as last seen.
+        if ProcessInfo.processInfo.environment["KUVO_DEMO_AWAY"] == engine.machine.id {
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                self?.disconnect(engine)
+            }
+        }
+        #endif
         await connection.run("connected") { [weak self] in await self?.connected(engine, connection) }.value
     }
 

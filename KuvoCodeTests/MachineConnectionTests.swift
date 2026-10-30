@@ -394,7 +394,8 @@ import Testing
         let engine = add(id, at: machine)
         #expect(engine.catalog.integrationsRead == nil, "never read: nothing to show as last seen")
         await app.connect(engine).value
-        try await until { engine.catalog.integrationsRead != nil }
+        // Read as a real connection reads it once it's up (the stand-in connects without it).
+        await engine.catalog.refresh()
         let read = try #require(engine.catalog.integrationsRead)
 
         app.disconnect(engine)
