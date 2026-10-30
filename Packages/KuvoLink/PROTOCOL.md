@@ -246,6 +246,8 @@ connection.
     `retry` isn't counted, so one tried again and again leaves room for the rest), and only
     to a conversation an agent could be. A subagent's, a group chat's seat or one put away doesn't
     take letters. One it can't look up now (its engine starting) is answered `retry`, and so is one
+    for a conversation the engine doesn't have while the coding agents' bridge isn't running (it may
+    be a Claude Code or Codex one; bridge 0.9.118, before which it was refused), and one
     for a conversation moving to or from another computer now, or that lives on another one now
     (`moved`): it reaches it where it lives once the move is over (bridge 0.9.63). A box knows by
     its own moves (`kuvo/moves`; bridge 0.9.108, before which this Mac's box asked its app).
@@ -2002,9 +2004,9 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `sign-in.return` | `POST kuvo/sign-in/return` |
 | `skills` | `kuvo/skills…` and `kuvo/skill-library…` |
 | `skills.trash` | `kuvo/skill-trash…`: Recently Deleted, and restoring from it |
-| `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.113) |
+| `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.118) |
 | `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
-| `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.114) |
+| `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.118) |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
@@ -2608,7 +2610,7 @@ and as a box starts.
 
 ### Sandbox
 
-Each box runs its agents' commands in a sandbox (`sandbox` in `features`, bridge 0.9.113; its asks, `sandbox.asks`, 0.9.114) wherever
+Each box runs its agents' commands in a sandbox (`sandbox` in `features` and its asks, `sandbox.asks`, bridge 0.9.118) wherever
 it can, with no switch: the way out is per command (the card that asks you about one it refused).
 On, each command the engine runs (an agent's shell tool, and yours with `!`)
 writes only in its conversation's folder, that folder's git repository (a real one: a `.git` that's

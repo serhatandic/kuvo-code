@@ -44,7 +44,7 @@ import { docsNoted, noteDocsChanged, onDocsChanged } from "./documents/changed";
 import { docsChanged, macDocsChanged } from "./documents/exchange";
 import { newSigningSeed, ownSign, SIGN } from "./documents/format";
 import { docsWork, ownDocs, pruneDocs } from "./documents/work";
-import { peerTargets, readBridgeFile, readEngineFile } from "./engine/client";
+import { peerPlaces, readBridgeFile, readEngineFile } from "./engine/client";
 import { engineConfigContent } from "./engine/compatibility";
 import { watchBox } from "./engine/watch";
 import { watchMoves } from "./moves/move";
@@ -154,6 +154,7 @@ export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeSeat, t
 export { announce, ownAgents, refreshOwn, writeAgents } from "./peers/agents";
 export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
 export { takeLetter } from "./letters/take";
+export { peerPlaces } from "./engine/client";
 export { answerPersonalities, retellBots, takePersonalities, takePersonalitiesDocument } from "./personalities/take";
 export { docsChanged, macDocsChanged, receiveDocs } from "./documents/exchange";
 export { peerMail, receiveMail } from "./peers/mail";
@@ -361,7 +362,7 @@ async function run(): Promise<void> {
       hello: { v: 1, kind: "machine", name: link!.name || os.hostname(), app: BRIDGE_VERSION, engine: engine.version ?? null },
       authorize: authorizePhone,
       confirmed: confirmPhone,
-      mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerTargets), (mac, given, at) => hold.attend(`mac:${mac}`, given, at)),
+      mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerPlaces), (mac, given, at) => hold.attend(`mac:${mac}`, given, at)),
       handle: engineHandler(readEngineFile, { name: link!.name || os.hostname() }, readBridgeFile, changed => host.keepOnly(new Set((changed.phones ?? []).map(phone => phone.key))), hold),
       connect: engineConnect(readEngineFile),
       send: () => {},

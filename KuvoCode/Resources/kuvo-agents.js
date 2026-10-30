@@ -457,9 +457,119 @@ import { existsSync, statfsSync } from "fs";
 import { basename as basename2, dirname, relative, sep as sep2 } from "path";
 
 // Packages/Box/src/agents/proc.ts
-import { spawn } from "child_process";
+import { spawn as spawn2 } from "child_process";
 import { accessSync, constants } from "fs";
 import { delimiter, join as join3 } from "path";
+
+// Packages/Box/src/shared/platform.ts
+import { execFileSync, spawn } from "child_process";
+import fs from "fs";
+import path from "path";
+function loginShell(env = process.env, platform = process.platform) {
+  const given = env.SHELL && path.isAbsolute(env.SHELL) ? env.SHELL : undefined;
+  if (platform === "darwin")
+    return given ?? "/bin/zsh";
+  if (given && given !== "/bin/sh")
+    return given;
+  const own = accountShell();
+  return own ?? given ?? "/bin/sh";
+}
+function accountShell() {
+  const uid = String(process.getuid?.() ?? "");
+  const shellOf = (entries) => entries.split(`
+`).map((line) => line.split(":")).find((fields) => fields[2] === uid)?.[6]?.trim();
+  let shell;
+  try {
+    shell = shellOf(fs.readFileSync("/etc/passwd", "utf8"));
+  } catch {}
+  if (!shell) {
+    try {
+      shell = shellOf(execFileSync("getent", ["passwd", uid], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] }));
+    } catch {}
+  }
+  return shell && path.isAbsolute(shell) ? shell : undefined;
+}
+var LOGIN_PATH_MARKERS = ["__KUVO_PATH__", "__KUVO_END__"];
+function joinPath(...folders) {
+  return [...new Set(folders.flatMap((list) => (list ?? "").split(":")).filter(Boolean))].join(":");
+}
+async function loginPath(env = process.env, wait = { interactive: 6000, login: 2000 }) {
+  const shell = loginShell(env);
+  if (/\/(nu|csh|tcsh)$/.test(shell))
+    return;
+  const kept = Object.entries(env).filter(([name, value]) => value !== undefined && /^(HOME|USER|LOGNAME|LANG|LC_[A-Z_]+|TERM|TMPDIR|PATH|SSH_AUTH_SOCK)$/.test(name));
+  const login = { ...Object.fromEntries(kept), SHELL: shell, DISABLE_AUTO_UPDATE: "true" };
+  for (const [flags, timeout] of [["-ilc", wait.interactive], ["-lc", wait.login]]) {
+    const found = await new Promise((resolve) => {
+      let output = "";
+      let child;
+      try {
+        child = spawn(shell, [flags, `printf '%s%s%s' ${LOGIN_PATH_MARKERS[0]} "$PATH" ${LOGIN_PATH_MARKERS[1]}`], { cwd: login.HOME, env: login, detached: true, stdio: ["ignore", "pipe", "ignore"] });
+      } catch {
+        return resolve(undefined);
+      }
+      let settled = false;
+      let gone;
+      const done = (value) => {
+        if (settled)
+          return;
+        settled = true;
+        clearTimeout(timer);
+        clearTimeout(gone);
+        try {
+          if (child.pid)
+            process.kill(-child.pid, "SIGKILL");
+        } catch {}
+        child.stdout?.destroy();
+        child.unref();
+        resolve(value);
+      };
+      const timer = setTimeout(() => done(undefined), timeout);
+      child.stdout?.on("data", (chunk) => {
+        output += chunk;
+        const at = output.indexOf(LOGIN_PATH_MARKERS[0]);
+        const end = at < 0 ? -1 : output.indexOf(LOGIN_PATH_MARKERS[1], at);
+        if (end >= 0)
+          done(joinPath(output.slice(at + LOGIN_PATH_MARKERS[0].length, end).trim()) || undefined);
+      });
+      child.on("error", () => done(undefined));
+      child.on("close", () => done(undefined));
+      child.on("exit", () => {
+        if (!settled)
+          gone = setTimeout(() => done(undefined), 300);
+      });
+    });
+    if (found)
+      return joinPath(found, env.PATH);
+  }
+  return;
+}
+var savedPathFile = (home) => path.join(home, "run", "login-path");
+function savedLoginPath(home) {
+  try {
+    const saved = fs.readFileSync(savedPathFile(home), "utf8").trim();
+    return saved.startsWith("/") ? saved : undefined;
+  } catch {
+    return;
+  }
+}
+function saveLoginPath(home, value) {
+  try {
+    fs.mkdirSync(path.dirname(savedPathFile(home)), { recursive: true, mode: 448 });
+    fs.writeFileSync(savedPathFile(home) + ".new", value + `
+`, { mode: 384 });
+    fs.renameSync(savedPathFile(home) + ".new", savedPathFile(home));
+  } catch {}
+}
+function sandboxGeneration(on) {
+  try {
+    return fs.readFileSync(on, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+// Packages/Box/src/agents/proc.ts
 function which(name, extra = []) {
   const folders = [...(process.env.PATH ?? "").split(delimiter), ...extra].filter(Boolean);
   for (const folder of folders) {
@@ -507,7 +617,7 @@ function runGroup(command, args, options = {}) {
     if (env[name] === undefined)
       delete env[name];
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd: options.cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn2(command, args, { cwd: options.cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout?.on("data", (chunk) => stdout += chunk);
@@ -537,32 +647,38 @@ function runGroup(command, args, options = {}) {
 var startPath = process.env.PATH ?? "";
 var pathRead = 0;
 var reading;
+function useSavedLoginPath() {
+  const saved = machineHome ? savedLoginPath(machineHome) : undefined;
+  if (saved)
+    process.env.PATH = joinPath(process.env.KUVO_BIN, join3(machineHome, "bin"), saved);
+}
 async function refreshLoginPath(now = false) {
-  if (reading) {
-    await reading;
-    if (!now)
-      return;
-  }
-  if (!now && Date.now() - pathRead < 5000)
+  if (onMachine && !now)
     return;
-  reading = readLoginPath().finally(() => {
+  if (reading) {
+    if (!now)
+      return answerSoon(reading);
+    await reading;
+  } else if (!now && Date.now() - pathRead < 5000)
+    return;
+  const read = reading = readLoginPath().finally(() => {
     pathRead = Date.now();
     reading = undefined;
   });
-  await reading;
+  await (now ? read : answerSoon(read));
+}
+async function answerSoon(read) {
+  let timer;
+  await Promise.race([read, new Promise((resolve) => timer = setTimeout(resolve, 1000))]);
+  clearTimeout(timer);
 }
 async function readLoginPath() {
-  const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
-  for (const flags of onMachine ? ["-lc"] : ["-ilc", "-lc"]) {
-    try {
-      const ran = await run(shell, [flags, 'printf "__KUVO_PATH__%s__KUVO_END__" "$PATH"'], { timeout: 8000, env: { ...ownEnvironment(), PATH: startPath, DISABLE_AUTO_UPDATE: "true" } });
-      const found = ran.stdout.match(/__KUVO_PATH__([\s\S]*?)__KUVO_END__/)?.[1];
-      if (found?.trim()) {
-        process.env.PATH = [...new Set([process.env.KUVO_BIN, ...found.trim().split(":")].filter(Boolean))].join(":");
-        return;
-      }
-    } catch {}
-  }
+  const found = await loginPath({ ...process.env, PATH: startPath });
+  if (!found)
+    return;
+  process.env.PATH = joinPath(process.env.KUVO_BIN, found);
+  if (onMachine && machineHome)
+    saveLoginPath(machineHome, found);
 }
 function firstURL(text) {
   return text.match(/https?:\/\/[^\s"'<>]+/)?.[0];
@@ -5544,7 +5660,7 @@ async function voiceRoutes(voice, method, parts) {
 }
 
 // Packages/Box/src/agents/kuvotools.ts
-import { spawn as spawn2 } from "child_process";
+import { spawn as spawn3 } from "child_process";
 var server;
 var program;
 function setToolServer(value) {
@@ -5603,7 +5719,7 @@ async function listOverHTTP(tools) {
 }
 function listFromProgram(tools) {
   return new Promise((resolve, reject) => {
-    const child = spawn2(tools.command, tools.args, { env: { ...process.env, ...tools.env }, stdio: ["pipe", "pipe", "ignore"] });
+    const child = spawn3(tools.command, tools.args, { env: { ...process.env, ...tools.env }, stdio: ["pipe", "pipe", "ignore"] });
     const timer = setTimeout(() => finish(new Error("Kuvo Code's tools didn't answer.")), 15000);
     let buffered = "";
     let done = false;
@@ -6070,18 +6186,6 @@ class RPC {
 import { createHash as createHash3, randomBytes as randomBytes3 } from "crypto";
 import { constants as constants2, copyFileSync, existsSync as existsSync7, lstatSync as lstatSync3, mkdirSync as mkdirSync8, readdirSync as readdirSync9, readFileSync as readFileSync13, realpathSync as realpathSync3, renameSync as renameSync7, rmSync as rmSync6, statSync as statSync5, unlinkSync, writeFileSync as writeFileSync10 } from "fs";
 import { basename as basename5, dirname as dirname6, join as join14, resolve as resolve3 } from "path";
-
-// Packages/Box/src/shared/platform.ts
-import fs from "fs";
-function sandboxGeneration(on) {
-  try {
-    return fs.readFileSync(on, "utf8").trim();
-  } catch {
-    return "";
-  }
-}
-
-// Packages/Box/src/agents/fence.ts
 var folder = () => process.env.KUVO_FENCE ?? (machineHome ? join14(machineHome, "run", "fence") : undefined);
 function noteToolServer(url) {
   const where = folder();
@@ -6300,7 +6404,7 @@ function fenceCopy(directory, file) {
 
 // Packages/Box/src/agents/toolrelay.ts
 import { randomBytes as randomBytes4 } from "crypto";
-import { spawn as spawn3 } from "child_process";
+import { spawn as spawn4 } from "child_process";
 var server2;
 var keys = new Map;
 var sessionsByKey = new Map;
@@ -6400,7 +6504,7 @@ class Program {
   ours = new Map;
   constructor(tools) {
     this.key = tools.key;
-    this.child = spawn3(tools.command, tools.args, { env: { ...process.env, ...tools.env }, stdio: ["pipe", "pipe", "ignore"] });
+    this.child = spawn4(tools.command, tools.args, { env: { ...process.env, ...tools.env }, stdio: ["pipe", "pipe", "ignore"] });
     this.child.on("error", () => this.stop());
     this.child.on("exit", () => this.stop());
     let buffered = "";
@@ -17159,6 +17263,9 @@ function seatRules(folder, askFirst, denies) {
 import { existsSync as existsSync16, mkdirSync as mkdirSync16, readdirSync as readdirSync13, readFileSync as readFileSync24, renameSync as renameSync11, rmSync as rmSync12, writeFileSync as writeFileSync17 } from "fs";
 import { join as join25 } from "path";
 var version2 = 1;
+function isTurning(value) {
+  return value && typeof value.bot === "string" && typeof value.seat === "string" && typeof value.agents === "boolean" && typeof value.prompt === "string" && typeof value.sent === "number" && (value.wrapUp === undefined || typeof value.wrapUp === "boolean");
+}
 var strings = (value) => Array.isArray(value) && value.every((item) => typeof item === "string");
 var stringMap = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.values(value).every((item) => typeof item === "string");
 var isDate = (value) => typeof value === "string" && !Number.isNaN(Date.parse(value));
@@ -17248,11 +17355,11 @@ class GroupStore {
     const messages = read(join25(this.folder(id), "messages.json")) ?? [];
     if (!isMessages(messages))
       return;
-    return { group: record.group, status: record.status === "held" ? "held" : "active", talking: record.talking === true, messages };
+    return { group: record.group, status: record.status === "held" ? "held" : "active", talking: record.talking === true, paused: record.paused === true, ...isTurning(record.turning) ? { turning: record.turning } : {}, messages };
   }
   saveGroup(kept) {
     mkdirSync16(this.folder(kept.group.id), { recursive: true, mode: 448 });
-    write(join25(this.folder(kept.group.id), "group.json"), { kuvo: version2, status: kept.status, ...kept.talking ? { talking: true } : {}, group: kept.group });
+    write(join25(this.folder(kept.group.id), "group.json"), { kuvo: version2, status: kept.status, ...kept.talking ? { talking: true } : {}, ...kept.paused ? { paused: true } : {}, ...kept.turning ? { turning: kept.turning } : {}, group: kept.group });
   }
   saveMessages(kept) {
     mkdirSync16(this.folder(kept.group.id), { recursive: true, mode: 448 });
@@ -17799,28 +17906,28 @@ function list2(runner, store) {
   }));
   return { groups };
 }
-function chat(runner, id) {
+function chat(runner, id, withMessages = true) {
   const found = runner.get(id);
   if (!found || found.status !== "active")
     return;
   const { messages, state } = found;
   return {
-    messages: messages.slice(-300).map((each) => clientMessage(each)),
+    ...withMessages ? { messages: messages.slice(-300).map((each) => clientMessage(each)) } : {},
     speaking: state.speaking,
     discussing: Boolean(state.discussing),
     paused: Boolean(state.paused),
     ...state.activity?.length ? { activity: state.activity } : {}
   };
 }
-function following(read, oneChat, signal) {
+function following(read, chat, signal) {
   const encoder = new TextEncoder;
   let stop = () => {};
   const stream = new ReadableStream({
     start(controller) {
-      let last = "";
+      let lastState = "";
       let lastMessages;
-      const look = () => {
-        const now = read();
+      const look = (withMessages) => {
+        const now = read(withMessages || lastMessages === undefined);
         if (!now) {
           stop();
           try {
@@ -17828,23 +17935,25 @@ function following(read, oneChat, signal) {
           } catch {}
           return;
         }
-        const line = JSON.stringify(now);
-        if (line === last)
+        const { messages, ...state } = now;
+        const stateLine = JSON.stringify(state);
+        const messagesLine = messages === undefined ? lastMessages : JSON.stringify(messages);
+        if (stateLine === lastState && messagesLine === lastMessages)
           return;
-        const messages = oneChat ? JSON.stringify(now.messages) : undefined;
-        const { messages: _messages, ...state } = now;
-        last = line;
+        const line = chat && messagesLine === lastMessages ? stateLine : JSON.stringify(now);
+        lastState = stateLine;
+        lastMessages = messagesLine;
         try {
-          controller.enqueue(encoder.encode((oneChat && messages === lastMessages ? JSON.stringify(state) : line) + `
+          controller.enqueue(encoder.encode(line + `
 `));
         } catch {
           stop();
         }
-        lastMessages = messages;
       };
       const unsubscribe = subscribe((event) => {
-        if (event.type.startsWith("kuvo.group."))
-          look();
+        if (!event.type.startsWith("kuvo.group.") || chat !== undefined && event.data?.id !== chat)
+          return;
+        look(event.type !== "kuvo.group.updated");
       });
       const onAbort = () => stop();
       stop = () => {
@@ -17852,7 +17961,7 @@ function following(read, oneChat, signal) {
         signal?.removeEventListener("abort", onAbort);
       };
       signal?.addEventListener("abort", onAbort, { once: true });
-      look();
+      look(true);
     },
     cancel() {
       stop();
@@ -17879,7 +17988,7 @@ async function linkRoutes(runner, store, method, parts, body, signal) {
   };
   if (!id || id === "events") {
     if (method === "GET")
-      return id ? following(() => list2(runner, store), false, signal) : json9(list2(runner, store));
+      return id ? following(() => list2(runner, store), undefined, signal) : json9(list2(runner, store));
     if (method === "POST" && !id)
       return await make(runner, store, await body().catch(() => {
         return;
@@ -17893,7 +18002,7 @@ async function linkRoutes(runner, store, method, parts, body, signal) {
   if (method === "GET" && (!action || action === "events")) {
     if (!chat(runner, id))
       return json9({}, 404);
-    return action ? following(() => chat(runner, id), true, signal) : json9(chat(runner, id));
+    return action ? following((withMessages) => chat(runner, id, withMessages), id, signal) : json9(chat(runner, id));
   }
   if (method === "PATCH" && !action) {
     const given = await body().catch(() => {
@@ -18200,6 +18309,9 @@ class Seats {
   context;
   seatBase = new Map;
   declined = new Set;
+  steered = new Map;
+  sending = new Set;
+  resent = new Set;
   seatsChecked = new Set;
   seatTexts = new Map;
   constructor(context) {
@@ -18360,7 +18472,7 @@ class Seats {
         if (!resumed)
           throw new Error("the coding agents aren\u2019t running");
         if (!await this.seatThere(resume.seat, resumed)) {
-          if (!ownConversation && turn.seat && turn.fresh === undefined)
+          if (options.followOnly || !ownConversation && turn.seat && turn.fresh === undefined)
             throw new SeatGone;
           resume = undefined;
         }
@@ -18443,25 +18555,38 @@ class Seats {
         const there = promptID ? await this.sentAlready(seat, promptID, sent, api) : false;
         going();
         if (!promptID || !there) {
+          if (options.followOnly)
+            throw new SeatGone;
           promptID ??= newID("msg");
           sent = Date.now();
           progress?.({ seat, agents, prompt: promptID, sent });
           await api.prompt(seat, promptID, text, "queue");
         }
         report({ phase: "started" });
-        const asked = promptID;
-        await this.waitForRun(seat, asked, sent, api, signal, bot.directory, nudge, ownConversation ? undefined : (messages) => {
-          const now = activity(messages, asked, sent);
+        const watch = (asked, at) => ownConversation ? undefined : (messages) => {
+          const now = activity(messages, asked, at);
           if (now.length === 0 || JSON.stringify(now) === JSON.stringify(shown) || Date.now() - streamedAt < 3000)
             return;
           shown = now;
           report({ phase: "activity", activity: now });
-        });
+        };
+        await this.waitForRun(seat, promptID, sent, api, signal, bot.directory, nudge, watch(promptID, sent));
+        for (let late = ownConversation ? [] : await this.unsteered(seat, api);late.length > 0; late = await this.unsteered(seat, api)) {
+          going();
+          const again = newID("msg");
+          const at = Date.now();
+          await api.prompt(seat, again, late.join(`
+
+`), "queue");
+          await this.waitForRun(seat, again, at, api, signal, bot.directory, nudge, watch(again, at));
+        }
       } finally {
         unlisten?.();
       }
       const reply = await this.reply(seat, promptID, sent, api);
       going();
+      if (options.followOnly && reply.cutShort)
+        return { ok: false, why: "its answer was cut off as Kuvo Code started over" };
       let outgrown = false;
       if (!ownConversation && reply.size !== undefined) {
         const base = this.seatBase.get(seat) ?? reply.size;
@@ -18613,12 +18738,43 @@ class Seats {
     const api = this.apiFor(agents);
     if (!api || !(await api.active().catch(() => new Set)).has(seat))
       return false;
+    const id = newID("msg");
+    const sent = this.steered.get(seat) ?? new Map;
+    this.steered.set(seat, sent.set(id, text));
+    this.sending.add(id);
     try {
-      await api.prompt(seat, newID("msg"), text, "steer");
-      return true;
+      await api.prompt(seat, id, text, "steer");
     } catch {
+      sent.delete(id);
+      this.resent.delete(id);
+      return false;
+    } finally {
+      this.sending.delete(id);
+    }
+    if (this.steered.get(seat) !== sent) {
+      if (this.resent.delete(id))
+        return true;
+      await api.cancelInbox(seat, id).catch(() => {});
       return false;
     }
+    return true;
+  }
+  async unsteered(seat, api) {
+    const sent = this.steered.get(seat);
+    this.steered.delete(seat);
+    if (!sent?.size)
+      return [];
+    const late = [];
+    for (const item of await api.inbox(seat).catch(() => [])) {
+      const text = sent.get(item.id);
+      if (text === undefined)
+        continue;
+      await api.cancelInbox(seat, item.id).catch(() => {});
+      if (this.sending.has(item.id))
+        this.resent.add(item.id);
+      late.push(text);
+    }
+    return late;
   }
   async waitForRun(seat, promptID, sent, api, signal, directory, nudge, seen) {
     const pace = this.context.pace ?? 1;
@@ -18718,7 +18874,9 @@ class Seats {
     const since = sent - 2000;
     const tokens = [...data].reverse().find((message) => message?.type === "assistant" && message.tokens)?.tokens;
     const size = tokens ? (tokens.input ?? 0) + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0) : undefined;
-    return { ...said2(start >= 0 ? data.slice(start + 1) : data.filter((message) => (message?.time?.created ?? 0) >= since)), size };
+    const after = start >= 0 ? data.slice(start + 1) : data.filter((message) => (message?.time?.created ?? 0) >= since);
+    const cutShort = after.findLast((message) => message?.type === "idle")?.outcome === "interrupted";
+    return { ...said2(after), size, cutShort };
   }
 }
 
@@ -18753,6 +18911,7 @@ class GroupRunner {
   live = new Map;
   runs = 0;
   following = new Set;
+  answering = new Map;
   seats;
   rulesChanged() {
     this.seats.rulesChanged();
@@ -18770,8 +18929,9 @@ class GroupRunner {
     this.seats = new Seats(context);
     this.chats = context.store.load();
     for (const [id, kept] of this.chats) {
-      if (kept.talking) {
+      if (kept.talking || kept.paused) {
         kept.talking = false;
+        kept.paused = true;
         this.state(id).paused = true;
         context.store.saveGroup(kept);
       }
@@ -18784,6 +18944,7 @@ class GroupRunner {
   }
   start() {
     this.resumeWork();
+    this.followTurns();
     this.scheduleMeetings(1e4);
     this.dropLeftScratch();
   }
@@ -18887,7 +19048,7 @@ class GroupRunner {
     if (!kept)
       return;
     const working = kept.messages.some((message) => message.tasks?.some((task) => task.state === "working" || task.state === "waiting"));
-    this.context.store.setAwake(id, kept.status === "active" && (kept.group.meeting !== undefined || this.state(id).abort !== undefined || working));
+    this.context.store.setAwake(id, kept.status === "active" && (kept.group.meeting !== undefined || this.state(id).abort !== undefined || this.answering.has(id) || working));
   }
   put(group, messages, status, replace) {
     const existing = this.chats.get(group.id);
@@ -18899,6 +19060,8 @@ class GroupRunner {
     this.chats.set(group.id, kept);
     this.context.store.saveMessages(kept);
     this.changed(group.id);
+    if (existing)
+      emit("kuvo.group.reset", { id: group.id });
     if (status === "active")
       this.began(group.id);
     return true;
@@ -19011,8 +19174,11 @@ class GroupRunner {
     this.append(message, id);
     const live = this.state(id);
     live.asked++;
+    live.since ??= message.id;
     live.splitStop?.();
-    live.paused = false;
+    if (live.paused)
+      live.resumed = true;
+    this.setPaused(id, false);
     if (live.speaking)
       this.steer(live.speaking, id, message);
     if (!live.abort)
@@ -19026,8 +19192,9 @@ class GroupRunner {
     const message = this.append({ id: groupMessageID(), text: topic, time: stamp3(), kind: "meeting" }, id);
     const live = this.state(id);
     live.asked++;
+    live.since ??= message.id;
     live.splitStop?.();
-    live.paused = false;
+    this.setPaused(id, false);
     live.meeting = message.id;
     if (live.speaking)
       this.steer(live.speaking, id, message);
@@ -19084,7 +19251,9 @@ class GroupRunner {
     live.abort?.abort();
     live.abort = undefined;
     live.run = undefined;
-    live.paused = false;
+    live.since = undefined;
+    this.answering.get(id)?.abort.abort();
+    this.setPaused(id, false);
     live.speaking = undefined;
     live.activity = undefined;
     live.splitting = undefined;
@@ -19095,10 +19264,19 @@ class GroupRunner {
     const live = this.state(id);
     if (live.abort || !this.chat(id))
       return;
-    live.paused = false;
+    this.setPaused(id, false);
     live.asked++;
+    live.resumed = true;
     this.begin(id);
     this.told(id);
+  }
+  setPaused(id, paused) {
+    this.state(id).paused = paused;
+    const kept = this.chats.get(id);
+    if (!kept || (kept.paused ?? false) === paused)
+      return;
+    kept.paused = paused;
+    this.context.store.saveGroup(kept);
   }
   setTalking(id, talking) {
     const kept = this.chats.get(id);
@@ -19108,6 +19286,64 @@ class GroupRunner {
     this.context.store.saveGroup(kept);
     this.keepAwake(id);
   }
+  setTurning(id, turning) {
+    const kept = this.chats.get(id);
+    if (!kept)
+      return;
+    if (turning)
+      kept.turning = turning;
+    else
+      delete kept.turning;
+    this.context.store.saveGroup(kept);
+  }
+  followTurns() {
+    for (const id of this.chats.keys())
+      this.followTurn(id);
+  }
+  followTurn(id) {
+    const under = this.answering.get(id);
+    if (under)
+      return under.done;
+    const kept = this.chats.get(id);
+    const turning = kept?.turning;
+    if (!kept || !turning)
+      return Promise.resolve();
+    const bot = this.member(turning.bot);
+    if (!bot || bot.box || kept.status !== "active" || !kept.group.members.includes(turning.bot)) {
+      this.setTurning(id, undefined);
+      return Promise.resolve();
+    }
+    const abort = new AbortController;
+    const live = this.state(id);
+    live.speaking = turning.bot;
+    const { seat, agents, prompt, sent } = turning;
+    const done = this.seats.turn({ id: turnID(), chat: this.context_(kept.group), bot: turning.bot, seat, agentsSeat: agents, kind: turning.wrapUp ? "wrapUp" : "turn", text: "" }, () => {}, abort.signal, { resume: { seat, agents, prompt, sent }, followOnly: true }).then((result) => {
+      if (abort.signal.aborted || !this.chat(id)?.group.members.includes(turning.bot))
+        return;
+      if (result.ok)
+        this.answered(id, turning.bot, result, turning.wrapUp ?? false);
+      else
+        this.note(`${bot.name} couldn\u2019t answer: ${result.why}`, id);
+    }).catch((error) => {
+      if (!(error instanceof Cancelled) && !(error instanceof SeatGone))
+        console.error(`${turning.bot}'s answer in ${id} couldn't be read:`, reason3(error));
+    }).finally(() => {
+      if (this.answering.get(id)?.abort === abort)
+        this.answering.delete(id);
+      if (this.chats.get(id)?.turning?.prompt === prompt)
+        this.setTurning(id, undefined);
+      if (live.speaking === turning.bot) {
+        live.speaking = undefined;
+        live.activity = undefined;
+      }
+      this.keepAwake(id);
+      this.told(id);
+    });
+    this.answering.set(id, { abort, done });
+    this.keepAwake(id);
+    this.told(id);
+    return done;
+  }
   begin(id) {
     const live = this.state(id);
     const run = ++this.runs;
@@ -19116,6 +19352,7 @@ class GroupRunner {
     live.abort = abort;
     this.setTalking(id, true);
     (async () => {
+      await this.followTurn(id);
       let epoch;
       do {
         epoch = await this.discuss(id, abort.signal);
@@ -19138,9 +19375,15 @@ class GroupRunner {
     let quiet = new Set;
     let absent = new Set;
     let saidCount = 0;
+    let resumed = live.resumed ?? false;
+    live.resumed = undefined;
+    let paused = false;
     const guested = new Set;
-    const begun = Math.max(0, (this.chat(id)?.messages ?? []).findLastIndex((message) => message.kind !== "note"));
+    const all = this.chat(id)?.messages ?? [];
+    const since = live.since ? all.findIndex((message) => message.id === live.since) : -1;
+    const begun = since >= 0 ? since : Math.max(0, all.findLastIndex((message) => message.kind !== "note"));
     while (!signal.aborted) {
+      live.since = undefined;
       const kept = this.chat(id);
       if (!kept)
         return epoch;
@@ -19150,6 +19393,7 @@ class GroupRunner {
         quiet = new Set;
         absent = new Set;
         saidCount = 0;
+        resumed = false;
       }
       const names = new Map;
       for (const member of kept.group.members) {
@@ -19172,7 +19416,8 @@ class GroupRunner {
         const { message, guest } = named;
         guested.add(message.id + "/" + guest);
         if (turns >= limit(kept.group.members.length)) {
-          live.paused = true;
+          this.setPaused(id, true);
+          paused = true;
           break;
         }
         const outcome = await this.turn(guest, id, signal, false, message);
@@ -19189,7 +19434,8 @@ class GroupRunner {
       if (!speaker)
         break;
       if (turns >= limit(kept.group.members.length)) {
-        live.paused = true;
+        this.setPaused(id, true);
+        paused = true;
         break;
       }
       const outcome = await this.turn(speaker, id, signal);
@@ -19207,9 +19453,9 @@ class GroupRunner {
     }
     const kept = this.chat(id);
     const lead = kept?.group.members[0];
-    if (signal.aborted || saidCount === 0 || live.asked !== epoch || !kept || !lead || !this.member(lead) || absent.has(lead))
+    if (paused && live.meeting === undefined || signal.aborted || saidCount === 0 && !resumed || live.asked !== epoch || !kept || !lead || !this.member(lead) || absent.has(lead))
       return epoch;
-    if (saidCount >= (live.meeting !== undefined ? 2 : 3) && kept.group.members.length >= 2) {
+    if ((resumed || saidCount >= (live.meeting !== undefined ? 2 : 3)) && kept.group.members.length >= 2) {
       const before = kept.messages.at(-1)?.id;
       await this.turn(lead, id, signal, true);
       const wrapUp = this.chat(id)?.messages.at(-1);
@@ -19234,6 +19480,7 @@ class GroupRunner {
     const left = () => !guest && !this.chat(id)?.group.members.includes(botID);
     const own = new AbortController;
     const stopped = either(signal, own.signal);
+    let turning;
     try {
       const kept = this.chat(id);
       if (!kept)
@@ -19277,37 +19524,22 @@ class GroupRunner {
         kind: guest ? "guest" : wrapUp ? "wrapUp" : "turn",
         text,
         ...guest ? {} : { chatSize: new TextEncoder().encode(chatText(botID, kept.group, all, name)).length }
-      }, (state) => this.heardOf(state, { id, botID, box: bot.box, guest, run, last: last?.id, retracted, own }), stopped.signal, { shorter: seat ? () => turnText(botID, kept.group, unheard, wrapUp, name, named2(unheard), chatBudget) : undefined });
+      }, (state) => this.heardOf(state, { id, botID, box: bot.box, guest, run, last: last?.id, retracted, own }), stopped.signal, {
+        shorter: seat ? () => turnText(botID, kept.group, unheard, wrapUp, name, named2(unheard), chatBudget) : undefined,
+        progress: (now) => {
+          if (guest || bot.box || now.prompt === undefined || now.sent === undefined || stopped.signal.aborted)
+            return;
+          turning = now.prompt;
+          this.setTurning(id, { bot: botID, seat: now.seat, agents: now.agents, prompt: now.prompt, sent: now.sent, ...wrapUp ? { wrapUp: true } : {} });
+        }
+      });
       if (left())
         return "absent";
       if (!result.ok) {
         this.note(result.moving ? `${bot.name} is moving to another computer, so it sat this out.` : result.away && bot.box && peers ? `${bot.name} is on ${peers.name(bot.box)}, which can\u2019t be reached now, so it sat this out.` : `${bot.name} couldn\u2019t answer: ${result.why}`, id);
         return "absent";
       }
-      if (result.outgrown) {
-        const now = this.chat(id);
-        const went = now?.group.seats[botID];
-        if (now && went) {
-          delete now.group.seats[botID];
-          delete now.group.heard[botID];
-          if (now.group.agentSeats?.includes(went))
-            now.group.agentSeats = now.group.agentSeats.filter((each) => each !== went);
-          this.changed(id);
-        }
-      }
-      if (!result.text)
-        return "passed";
-      if (!wrapUp && isPass(result.text))
-        return "passed";
-      this.append({
-        id: groupMessageID(),
-        author: botID,
-        text: ampersands(result.text, this.everyone().map((each) => each.name)),
-        time: stamp3(),
-        kind: wrapUp ? "wrapUp" : "message",
-        ...result.steps.length ? { steps: result.steps.map(trimmed) } : {}
-      }, id);
-      return "said";
+      return this.answered(id, botID, result, wrapUp);
     } catch (error) {
       if (signal.aborted || own.signal.aborted || error instanceof Cancelled || left())
         return "absent";
@@ -19316,12 +19548,40 @@ class GroupRunner {
       return "absent";
     } finally {
       stopped.done();
+      if (turning && this.chats.get(id)?.turning?.prompt === turning)
+        this.setTurning(id, undefined);
       if (live.speaking === botID && live.run === run) {
         live.speaking = undefined;
         live.activity = undefined;
       }
       this.told(id);
     }
+  }
+  answered(id, botID, result, wrapUp) {
+    if (result.outgrown) {
+      const now = this.chat(id);
+      const went = now?.group.seats[botID];
+      if (now && went) {
+        delete now.group.seats[botID];
+        delete now.group.heard[botID];
+        if (now.group.agentSeats?.includes(went))
+          now.group.agentSeats = now.group.agentSeats.filter((each) => each !== went);
+        this.changed(id);
+      }
+    }
+    if (!result.text)
+      return "passed";
+    if (!wrapUp && isPass(result.text))
+      return "passed";
+    this.append({
+      id: groupMessageID(),
+      author: botID,
+      text: ampersands(result.text, this.everyone().map((each) => each.name)),
+      time: stamp3(),
+      kind: wrapUp ? "wrapUp" : "message",
+      ...result.steps.length ? { steps: result.steps.map(trimmed) } : {}
+    }, id);
+    return "said";
   }
   context_(group) {
     return {
@@ -19356,6 +19616,12 @@ class GroupRunner {
       const now = this.chat(id);
       if (!now || !now.group.members.includes(botID)) {
         this.home(turn.box).drop(state.seat, state.agents, { bot: botID, chat: id });
+        turn.own.abort();
+        return;
+      }
+      if (live.run !== turn.run) {
+        if (now.group.seats[botID] !== state.seat)
+          this.home(turn.box).drop(state.seat, state.agents, { bot: botID, chat: id });
         turn.own.abort();
         return;
       }
@@ -19900,6 +20166,8 @@ _Earlier messages aren\u2019t here: this is the latest of the chat._
       const kept = this.chat(id);
       if (!kept)
         return;
+      if (this.state(id).abort)
+        return this.rememberSoon(id);
       (async () => {
         for (const bot of kept.group.members)
           await this.remember(bot, { changed: id });
@@ -20012,6 +20280,7 @@ function fitTurn(turn, shorter) {
 var fitReport = (result) => result.ok ? { ...result, text: cut(result.text, reportBytes), steps: [] } : { ...result, why: cut(result.why, 2000) };
 var askAgainAfter = 15000;
 var awayAfter = 45000;
+var awayKept = 5 * 60000;
 var longestTurn = turnLimit2 + 60000;
 var realClock = { setTimeout: (work, ms) => setTimeout(work, ms), clearTimeout: (timer) => clearTimeout(timer), now: () => Date.now() };
 
@@ -20021,6 +20290,7 @@ class RemoteHome {
   place;
   clock;
   pending = new Map;
+  awaySince;
   constructor(box, transport, place, clock = realClock) {
     this.box = box;
     this.transport = transport;
@@ -20034,6 +20304,8 @@ class RemoteHome {
       const turn = fitTurn(asked, options.shorter);
       if (!turn)
         return resolve({ ok: false, why: `the chat is too big to send to ${this.place()}.` });
+      if (this.awaySince !== undefined && this.now() - this.awaySince < awayKept)
+        return resolve({ ok: false, away: true, why: `${this.place()} can\u2019t be reached now.` });
       const pending = { turn, report, done: resolve, seat: turn.seat, started: false, told: new Set };
       const end = () => {
         for (const timer of [pending.asking, pending.silent, pending.limit])
@@ -20058,6 +20330,9 @@ class RemoteHome {
       pending.limit = this.clock.setTimeout(() => this.away(pending), longestTurn);
     });
   }
+  now() {
+    return this.clock.now?.() ?? Date.now();
+  }
   listen(pending) {
     if (pending.asking !== undefined)
       this.clock.clearTimeout(pending.asking);
@@ -20074,11 +20349,19 @@ class RemoteHome {
     pending.silent = this.clock.setTimeout(() => this.away(pending), awayAfter);
   }
   away(pending) {
+    this.awaySince = this.now();
     this.transport.send(this.box, { kind: "stop", id: pending.turn.id }, false);
     pending.done({ ok: false, away: true, why: `${this.place()} can\u2019t be reached now.` });
   }
+  heardFrom(from) {
+    if (from === this.box)
+      this.awaySince = undefined;
+  }
   take(from, mail) {
-    if (from !== this.box || mail.kind !== "state" && mail.kind !== "result")
+    if (from !== this.box)
+      return;
+    this.heardFrom(from);
+    if (mail.kind !== "state" && mail.kind !== "result")
       return;
     const pending = this.pending.get(mail.id);
     if (!pending)
@@ -20546,6 +20829,7 @@ class PeerPost {
   }
 }
 function receive(parts, from, mail) {
+  parts.directory.existing(from)?.heardFrom(from);
   if (mail.kind === "state" || mail.kind === "result")
     parts.directory.existing(from)?.take(from, mail);
   else if (mail.kind === "report")
@@ -21294,7 +21578,7 @@ process.on("uncaughtException", (error) => {
 var deps = new Deps(join27(home2, "runtime"), join27(home2, "cache"));
 if (onMachine) {
   dropOwnPrograms(join27(home2, "runtime"));
-  refreshLoginPath();
+  useSavedLoginPath();
 }
 rmSync14(join27(home2, "cache", "install"), { recursive: true, force: true });
 var context = { home: home2, temporary, deps };
@@ -21488,4 +21772,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 8440035bd842d7bf143530fbc1fc35130f30054e84832509ef60a7b264cf9e8b
+// Built from Packages/Box/src/agents 4394daf2ce9c0a603da04d4c28b057540086c48abcee3b54435cdd95b1bce623

@@ -11,16 +11,30 @@ export const readEngineFile = (): EngineRecord => JSON.parse(fs.readFileSync(ENG
 // The coding agents' bridge beside the engine, when it runs: its port and password.
 export const readBridgeFile = (): BridgeRecord => JSON.parse(fs.readFileSync(BRIDGE_FILE, "utf8"));
 
-// Where a letter's agent can be here: the engine, and the coding agents' bridge while it runs.
-export function peerTargets(): Target[] {
+/** Where a letter's agent can be here (`targets`): the engine, and the coding agents' bridge while
+ * it runs; and whether it runs now (`bridge`), so one for a conversation the engine doesn't know may
+ * be the bridge's, kept to try again. */
+export interface PeerPlaces {
+  targets: Target[];
+  bridge: boolean;
+}
+
+export function peerPlaces(): PeerPlaces {
   const targets: Target[] = [];
+  let bridge = false;
   try { targets.push(readEngineFile()); } catch {}
   try {
-    const bridge = readBridgeFile();
-    if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) targets.push(bridge);
+    const record = readBridgeFile();
+    if (record?.port && record?.password && runs(record.pid, "kuvo-agents")) {
+      targets.push(record);
+      bridge = true;
+    }
   } catch {}
-  return targets;
+  return { targets, bridge };
 }
+
+// Where a letter's agent can be here: the engine, and the coding agents' bridge while it runs.
+export const peerTargets = (): Target[] => peerPlaces().targets;
 
 /** An answer of the engine's (or the coding agents' bridge's) as their APIs always give one, with
  * what was asked for under `data`, before that's checked: whatever came there (unknown), or null
