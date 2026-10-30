@@ -495,25 +495,26 @@ public enum Wakes {
     }
 
     # Runs a command for at most a minute, where the system lets one say so: sh -c with the
-    # arguments given. Its status is the command's, as `timeout` gives it: 124 when out of time,
-    # 128 and the signal when killed. One that ignores the minute's TERM is killed 5 s later:
-    # left running, it held up every wake-up after it.
+    # arguments given (or the sandbox's shell, $l_shell). Its status is the command's, as `timeout`
+    # gives it: 124 when out of time, 128 and the signal when killed. One that ignores the minute's
+    # TERM is killed 5 s later: left running, it held up every wake-up after it.
     limited() {
+      l_shell=${l_shell:-sh}
       if command -v timeout >/dev/null 2>&1; then
         # An older busybox's timeout has no -k: the minute alone there.
-        if timeout -k 1 1 true 2>/dev/null; then timeout -k 5 60 sh -c "$@"; else timeout 60 sh -c "$@"; fi
+        if timeout -k 1 1 true 2>/dev/null; then timeout -k 5 60 "$l_shell" -c "$@"; else timeout 60 "$l_shell" -c "$@"; fi
       elif command -v perl >/dev/null 2>&1; then
         # In a group of its own, so the minute's end stops the whole pipeline, not just sh.
-        perl -e 'my $p = fork; if (!$p) { setpgrp; exec @ARGV; exit 127 } $SIG{ALRM} = sub { kill "TERM", -$p; sleep 1; kill "KILL", -$p; exit 124 }; alarm 60; waitpid $p, 0; exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' sh -c "$@"
-      else sh -c "$@"; fi
+        perl -e 'my $p = fork; if (!$p) { setpgrp; exec @ARGV; exit 127 } $SIG{ALRM} = sub { kill "TERM", -$p; sleep 1; kill "KILL", -$p; exit 124 }; alarm 60; waitpid $p, 0; exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' "$l_shell" -c "$@"
+      else "$l_shell" -c "$@"; fi
     }
 
-    # Goes before a watch's check: its curl, wget and gh write to the file named by $1 (then
-    # shifted away) when they fail, but not for an error page (curl's 22, wget's 8), checks still
-    # pending (gh's 8) or what reads them stopping early (curl's 23, wget's 3, 141). A curl that
-    # writes out its own result (-w '%{http_code}' is 000 when it can't connect) never does.
-    noting='kuvo_noted=$1; shift
-    kuvo_ran() { case $1 in 0|141|$3|$4) ;; *) echo "$2 $1" >>"$kuvo_noted" ;; esac; return $1; }
+    # Goes before a watch's check: its curl, wget and gh say on descriptor 3 (which `run` opens,
+    # outside any sandbox the check runs in) when they fail, but not for an error page (curl's 22,
+    # wget's 8), checks still pending (gh's 8) or what reads them stopping early (curl's 23, wget's
+    # 3, 141). A curl that writes out its own result (-w '%{http_code}' is 000 when it can't
+    # connect) never does.
+    noting='kuvo_ran() { case $1 in 0|141|$3|$4) ;; *) echo "$2 $1" >&3 ;; esac; return $1; }
     curl() { command curl "$@"; kuvo_s=$?; for kuvo_a; do case $kuvo_a in --write-out*|-w*|-[!-]*w*) return $kuvo_s ;; esac; done; kuvo_ran $kuvo_s curl 22 23; }
     wget() { command wget "$@"; kuvo_ran $? wget 3 8; }
     gh() { command gh "$@"; kuvo_ran $? gh 8 8; }
@@ -533,13 +534,30 @@ public enum Wakes {
     # Printing nothing and exiting 0 or 1, as grep finding nothing does, is a reading: what it
     # looks for isn't there.
     run() {
-      t_dir=$(cat "$2/directory" 2>/dev/null); [ -d "$t_dir" ] || t_dir=$2
-      t_tmp=$1$3; rm -f "${t_tmp}status" "${t_tmp}failed"
-      t_out=$(cd "$t_dir" && { limited "$noting$(cat "${1}check")" sh "${t_tmp}failed" 2>/dev/null </dev/null; echo "$?" >"${t_tmp}status"; } | head -c 4000)
+      t_out= t_why=
+      # While the box runs agents' commands in its sandbox, a check (which an agent's command may
+      # have written) runs in it too, as its conversation's commands do (`sandbox`), in the folder
+      # its conversation works in, never a folder of its own instead. One the sandbox is wanted for
+      # but can't take yet waits.
+      [ -z "$unready" ] || { t_why="the sandbox isn't ready yet"; return; }
+      t_dir=$(cat "$2/directory" 2>/dev/null)
+      if [ ! -d "$t_dir" ]; then
+        [ -z "$fenced" ] || { t_why="its conversation's folder isn't there"; return; }
+        t_dir=$2
+      fi
+      t_tmp=$1$3; rm -f "${t_tmp}status" "${t_tmp}failed" "${t_tmp}out"
+      # What it prints goes to a file, not a pipe: something it leaves running that holds the pipe
+      # open would hold the watches' round up with it.
+      (cd "$t_dir" && {
+        if [ -n "$fenced" ]; then
+          l_shell=$fenced KUVO_FENCE_WORK=$t_dir KUVO_FENCE_SHELL=/bin/sh OPENCODE_SESSION_ID=$(cat "$2/session" 2>/dev/null)
+          export KUVO_FENCE_WORK KUVO_FENCE_SHELL OPENCODE_SESSION_ID
+        fi
+        limited "$noting$(cat "${1}check")" sh >"${t_tmp}out" 3>"${t_tmp}failed" 2>/dev/null </dev/null; echo "$?" >"${t_tmp}status"; })
+      t_out=$(head -c 4000 "${t_tmp}out" 2>/dev/null)
       t_status=$(cat "${t_tmp}status" 2>/dev/null)
       t_failed=$(head -n 1 "${t_tmp}failed" 2>/dev/null); t_lost=$(grep -v '^gh ' "${t_tmp}failed" 2>/dev/null | head -n 1)
-      rm -f "${t_tmp}status" "${t_tmp}failed"
-      t_why=
+      rm -f "${t_tmp}status" "${t_tmp}failed" "${t_tmp}out"
       case "$t_status" in
         ''|*[!0-9]*) t_why="the check didn't finish" ;;
         124) t_why="the check ran out of time (a minute)" ;;
@@ -635,8 +653,89 @@ public enum Wakes {
       esac
     }
 
+    # The box's sandbox, while it's on (`fenced`, its launcher): its folder is the first of those
+    # given that has a `run` folder (beside the engine's record; this Mac's box keeps its own in
+    # `box`, beside the bots' folder). Set up and checked (`ready`) but not on yet, or its launcher
+    # missing, `unready`: checks wait rather than run without it. One the box can't set up here
+    # leaves commands as they were, and checks with them.
+    fenced= l_shell= unready=
+    sandbox() {
+      for s_k in "$@"; do
+        [ -d "$s_k/run" ] || continue
+        fenced="$s_k/bin/kuvo-fence"
+        [ -f "$s_k/run/fence/on" ] && [ -x "$fenced" ] && return 0
+        fenced=
+        [ -f "$s_k/run/fence/ready" ] && unready=1
+        return 0
+      done
+    }
+
+    # A file a command in the sandbox left that's its own: a plain one (not a link, nor another name
+    # for a file it can't read), and small.
+    plain() {
+      [ -f "$1" ] && [ ! -L "$1" ] && [ "$( (stat -c %h "$1" || stat -f %l "$1") 2>/dev/null)" = 1 ] \
+        && [ "$(( $(wc -c <"$1") ))" -le 65536 ]
+    }
+
+    # What a conversation's commands asked for in the sandbox ($1, its folder ending in /): its
+    # `inbox`, the one folder of it they write (kuvo-wake's own wake-ups, watches and cancels go
+    # there). Moved out of their reach before anything in it is read, as a link moves as the link,
+    # never what it names; then only plain files, by names kuvo-wake gives them. On macOS the
+    # sandbox goes by paths, and a command may put a link where the inbox was: the inbox itself is
+    # moved. Linux's goes with the folder, which a command can't move (nor make again).
+    take() {
+      k_in=${1}inbox k=${1}.took
+      [ -e "$k_in" ] || [ -L "$k_in" ] || return 0
+      # Nothing asked, or something being written there now (kuvo-wake builds each in a `.new-` of
+      # its own, then puts it in place): left for the next round.
+      if [ ! -L "$k_in" ]; then
+        [ -n "$(ls -A "$k_in" 2>/dev/null)" ] || return 0
+        [ -z "$(find "$k_in" -mindepth 1 -maxdepth 1 -name '.new-*' -mmin -1 2>/dev/null)" ] || return 0
+      fi
+      rm -rf "$k" "${1}.taking"
+      if [ "$(uname)" = Darwin ]; then mv -f "$k_in" "${1}.taking" 2>/dev/null || return 0; k_in=${1}.taking; fi
+      if [ -d "$k_in" ] && [ ! -L "$k_in" ] && (umask 077; mkdir "$k") 2>/dev/null; then
+        for k_part in wakes watches cancel; do
+          { [ -e "$k_in/$k_part" ] || [ -L "$k_in/$k_part" ]; } && mv -f "$k_in/$k_part" "$k/$k_part" 2>/dev/null
+        done
+        # And whatever else was left there, moved out of their reach before it goes (a command could
+        # put a link in place of a folder being cleared where it is).
+        mkdir "$k/rest" && find "$k_in" -mindepth 1 -maxdepth 1 -exec mv -f {} "$k/rest/" \; 2>/dev/null
+        mkdir -p "${1}wakes" "${1}watches"
+        if [ -d "$k/cancel" ] && [ ! -L "$k/cancel" ]; then
+          for f in "$k"/cancel/*; do
+            l=${f##*/}; case $l in ''|*[!A-Za-z0-9]*) continue ;; esac
+            for x in "${1}wakes/"*-"$l" "${1}wakes/"*-"$l"-*; do [ -f "$x" ] && rm -f "$x"; done
+            [ -d "${1}watches/$l" ] && rm -rf "${1}watches/$l"
+          done
+        fi
+        if [ -d "$k/wakes" ] && [ ! -L "$k/wakes" ]; then
+          for f in "$k"/wakes/*; do
+            n=${f##*/}; case $n in [0-9]*-*) ;; *) continue ;; esac; case $n in *[!A-Za-z0-9@-]*) continue ;; esac
+            plain "$f" || continue
+            [ "$(ls "${1}wakes" | wc -l)" -lt 50 ] || break
+            # A copy: what a command still has open of it, it can't change once it's taken in.
+            { (umask 077; head -c 65536 "$f" >"${1}wakes/.new-$n") && mv -f "${1}wakes/.new-$n" "${1}wakes/$n"; } 2>/dev/null || rm -f "${1}wakes/.new-$n"
+          done
+        fi
+        if [ -d "$k/watches" ] && [ ! -L "$k/watches" ]; then
+          for d in "$k"/watches/*; do
+            n=${d##*/}; case $n in ''|*[!A-Za-z0-9]*) continue ;; esac
+            [ -d "$d" ] && [ ! -L "$d" ] && [ ! -e "${1}watches/$n" ] || continue
+            plain "$d/every" && plain "$d/check" && plain "$d/note" || continue
+            [ "$(ls "${1}watches" | wc -l)" -lt 20 ] || break
+            # Copies, as wake-ups are, and no bigger than they were checked to be.
+            { mkdir "${1}watches/$n" && head -c 65536 "$d/every" >"${1}watches/$n/every" && head -c 65536 "$d/check" >"${1}watches/$n/check" \
+              && head -c 65536 "$d/note" >"${1}watches/$n/note" && printf '%s' "$now" >"${1}watches/$n/next"; } 2>/dev/null || rm -rf "${1}watches/$n"
+          done
+        fi
+      fi
+      rm -rf "$k" "${1}.taking"
+    }
+
     if [ "$1" = fire ]; then
       record=$3; botsroot=$2
+      sandbox "${record%/*/*}"
       # Gone sessions' wake-ups (`settle`) are kept a month, then go for good.
       find "${botsroot%/*}/trash" -mindepth 1 -maxdepth 1 -name 'wakes-*' -mtime +30 -exec rm -rf {} + 2>/dev/null
       [ -f "$record" ] || exit 0
@@ -792,6 +891,9 @@ public enum Wakes {
         [ -f "${bot}.retry" ] && read -r r_at r_wait <"${bot}.retry"
         case "$r_at" in ''|*[!0-9]*) r_at=0;; esac
         [ "$r_at" -le "$now" ] || continue
+        take "$bot"
+        # Nothing kept (a conversation that only ran commands): nothing to ask its engine.
+        [ -n "$(ls -A "${bot}wakes" "${bot}watches" 2>/dev/null | grep -v ':$' | grep .)" ] || continue
         tools=
         session=$(cat "$bot/session" 2>/dev/null) || continue
         [ -n "$session" ] || continue
@@ -865,14 +967,19 @@ public enum Wakes {
 
     # Whose: left out, the conversation running this (as the engine names it), its bot's if it's
     # a bot's; then how to name it again in what this says (as it was written).
-    shown=kuvo-wake
+    shown=kuvo-wake queued=
     case "$1" in
       add|list|cancel|watch)
         me=$OPENCODE_SESSION_ID
         case "$me" in ses_?*) ;; *) echo "Name whose wake-ups these are: kuvo-wake <bot or session> $1 ..., as this doesn't run in a conversation of its own." >&2; exit 2 ;; esac
-        for b in "${KUVO_BOTS:-$HOME/.kuvo-code/bots}"/*/; do
-          [ "$(cat "${b}session" 2>/dev/null)" = "$me" ] && me=${b%/} && break
-        done
+        # In the sandbox, which hides the other bots' folders, the sandbox names its own; there it
+        # writes only the folder's inbox, which the box takes in (`take`) within a minute.
+        if [ -n "$KUVO_WAKE_FOLDER" ] && [ "$(cat "$KUVO_WAKE_FOLDER/session" 2>/dev/null)" = "$me" ]; then me=$KUVO_WAKE_FOLDER queued=1
+        else
+          for b in "${KUVO_BOTS:-$HOME/.kuvo-code/bots}"/*/; do
+            [ "$(cat "${b}session" 2>/dev/null)" = "$me" ] && me=${b%/} && break
+          done
+        fi
         set -- "$me" "$@" ;;
       *) shown="kuvo-wake $1" ;;
     esac
@@ -900,6 +1007,10 @@ public enum Wakes {
     fi
     if [ -z "$bot" ] || { [ ! -d "$bot" ] && [ -z "$fresh" ]; }; then usage >&2; exit 2; fi
     [ -n "$fresh" ] || bot=$(CDPATH= cd -- "$bot" && pwd) || exit 2
+    # Where what's asked goes: the folder, or its inbox in the sandbox.
+    into=$bot; [ -z "$queued" ] || into=$bot/inbox
+    # A watch's check run by hand, in the sandbox while it's on (see `sandbox`).
+    case "$command" in try|check) b_root=${KUVO_BOTS:-$HOME/.kuvo-code/bots}; sandbox "${b_root%/*}/box" "${b_root%/*}" ;; esac
     made() {
       [ -n "$fresh" ] || return 0
       (umask 077; mkdir -p "$bot") && printf '%s' "$session" >"$bot/session" && printf '%s' "$PWD" >"$bot/directory" \
@@ -925,11 +1036,13 @@ public enum Wakes {
         [ -n "$note" ] || { echo "Add a note for yourself: what to do when you wake up." >&2; exit 2; }
         [ "$due" -gt $((now + 30)) ] || { echo "That's not in the future. Wake-ups are for later; do it now instead." >&2; exit 2; }
         made
-        mkdir -p "$bot/wakes"
-        count=$(ls "$bot/wakes" 2>/dev/null | wc -l)
+        mkdir -p "$into" 2>/dev/null || { echo "Couldn't keep it in $bot." >&2; exit 2; }
+        count=$(find "$bot/wakes" "$bot/inbox/wakes" -type f 2>/dev/null | wc -l)
         [ "$count" -lt 50 ] || { echo "You already have 50 wake-ups waiting. Cancel some first." >&2; exit 2; }
         id=$(name "$due" "${every:+$(kept "$due" "$every")}")
-        printf '%s' "$note" >"$bot/wakes/$id"
+        # Whole before it's in place (the box may take the inbox in meanwhile).
+        { printf '%s' "$note" >"$into/.new-$id" && mkdir -p "$into/wakes" && mv -f "$into/.new-$id" "$into/wakes/$id"; } 2>/dev/null \
+          || { rm -f "$into/.new-$id" 2>/dev/null; echo "Couldn't keep it in $bot." >&2; exit 2; }
         echo "Scheduled $id for $(readable "$due")${every:+, then every $every until canceled}." ;;
       watch)
         every=$3; check=$4
@@ -937,11 +1050,13 @@ public enum Wakes {
         [ -n "$check" ] || { echo "Give the check: a shell command that prints what you watch, and prints something else when it changes." >&2; exit 2; }
         shift 4; note="$*"
         [ -n "$note" ] || { echo "Add a note for yourself: what to do when it changes." >&2; exit 2; }
-        count=$(ls "$bot/watches" 2>/dev/null | wc -l)
+        count=$(find "$bot/watches" "$bot/inbox/watches" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
         [ "$count" -lt 20 ] || { echo "You already have 20 watches. Cancel some first." >&2; exit 2; }
         made
-        letters=$(random 6); w="$bot/watches/$letters"
-        mkdir -p "$w" && printf '%s' "$every" >"$w/every" && printf '%s' "$check" >"$w/check" && printf '%s' "$note" >"$w/note" && printf '%s' "$now" >"$w/next"
+        letters=$(random 6); w="$into/.new-$letters"
+        { mkdir -p "$w" && printf '%s' "$every" >"$w/every" && printf '%s' "$check" >"$w/check" && printf '%s' "$note" >"$w/note" && printf '%s' "$now" >"$w/next" \
+          && mkdir -p "$into/watches" && mv "$w" "$into/watches/$letters"; } 2>/dev/null \
+          || { rm -rf "$w" 2>/dev/null; echo "Couldn't keep it in $bot." >&2; exit 2; }
         echo "Watching ($letters): every $every the check runs, without you, and when what it prints changes (not the first time), you wake up with the new output. Cancel it with: $cancelling $letters" ;;
       check)
         # For the Mac's app: the watches that are due, run now.
@@ -955,15 +1070,19 @@ public enum Wakes {
         printf 'KUVO-TRY %s\n%s' "$t_why" "$t_out" ;;
       list)
         found=
-        for wake in "$bot"/wakes/*; do
+        for wake in "$bot"/wakes/* "$bot"/inbox/wakes/*; do
           [ -f "$wake" ] || continue
-          found=1; id=${wake##*/}
+          id=${wake##*/}; l=${id#*-}; l=${l%%-*}
+          [ ! -e "$bot/inbox/cancel/$l" ] || continue
+          found=1
           every=${id#*-}; case "$every" in *-*) every=${every#*-}; every=" (every ${every%@*})";; *) every=;; esac
           echo "$id  $(readable "${id%%-*}")$every  $(head -n 1 "$wake")"
         done
-        for w in "$bot"/watches/*/; do
+        for w in "$bot"/watches/*/ "$bot"/inbox/watches/*/; do
           [ -f "${w}check" ] || continue
-          found=1; l=${w%/}; l=${l##*/}
+          l=${w%/}; l=${l##*/}
+          [ ! -e "$bot/inbox/cancel/$l" ] || continue
+          found=1
           echo "$l  watch every $(cat "${w}every"): $(head -n 1 "${w}check")  ->  $(head -n 1 "${w}note")"
         done
         [ -n "$found" ] || echo "No wake-ups scheduled." ;;
@@ -974,9 +1093,19 @@ public enum Wakes {
         case "$3" in -*|*[!A-Za-z0-9@-]*) letters= ;; esac
         case "$letters" in *[!A-Za-z0-9]*) letters= ;; esac
         if [ -n "$letters" ]; then
-          for f in "$bot"/wakes/*-"$letters" "$bot"/wakes/*-"$letters"-*; do [ -f "$f" ] && rm -f "$f" && found=1; done
+          for f in "$into"/wakes/*-"$letters" "$into"/wakes/*-"$letters"-*; do [ -f "$f" ] && rm -f "$f" && found=1; done
           # Or a watch, by its letters alone.
-          [ "$letters" = "$3" ] && [ -d "$bot/watches/$letters" ] && rm -rf "$bot/watches/$letters" && found=1
+          [ "$letters" = "$3" ] && [ -d "$into/watches/$letters" ] && rm -rf "$into/watches/$letters" && found=1
+          # In the sandbox, one the box already took in is canceled as it takes the inbox in.
+          if [ -n "$queued" ]; then
+            c_box=
+            for f in "$bot"/wakes/*-"$letters" "$bot"/wakes/*-"$letters"-*; do [ -f "$f" ] && c_box=1; done
+            [ "$letters" = "$3" ] && [ -d "$bot/watches/$letters" ] && c_box=1
+            if [ -n "$c_box" ]; then
+              { mkdir -p "$into/cancel" && : >"$into/cancel/$letters"; } 2>/dev/null || { echo "Couldn't keep it in $bot." >&2; exit 2; }
+              found=1
+            fi
+          fi
         fi
         [ -n "$found" ] || { echo "No wake-up \"$3\". See $listing." >&2; exit 2; }
         echo "Canceled $3." ;;

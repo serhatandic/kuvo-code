@@ -114,8 +114,8 @@ final class BrowserToolServer {
         case "ping":
             return reply([:])
         case "tools/list":
-            // With the vault's, in this Mac's box's own words.
-            return reply(["tools": BrowserTools.definitions(vault: await BrowserTools.vaultDefinitions())])
+            // With the vault's and the sandbox's, in this Mac's box's own words.
+            return reply(["tools": BrowserTools.definitions(vault: await BrowserTools.vaultDefinitions()) + (await BrowserTools.sandboxDefinitions())])
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
@@ -130,10 +130,11 @@ final class BrowserToolServer {
             if name == BrowserTools.showWidget { return reply(BrowserTools.showWidgetCall(arguments)) }
             let key = Self.key(id, client: client)
             let call: Task<CallResult, Never>
-            if BrowserTools.mailTools.contains(name) || BrowserTools.wakeTools.contains(name) || name == BrowserTools.setJob || BrowserTools.isVault(name) {
+            if BrowserTools.mailTools.contains(name) || BrowserTools.wakeTools.contains(name) || name == BrowserTools.setJob || BrowserTools.isVault(name) || BrowserTools.isSandbox(name) {
                 // Stopped as the others are: one waiting for an answer stops waiting.
                 call = Task {
                     let result = BrowserTools.isVault(name) ? await BrowserTools.vault(name, arguments, caller)
+                        : BrowserTools.isSandbox(name) ? await BrowserTools.sandbox(name, arguments, caller)
                         : name == BrowserTools.setJob ? await BrowserTools.job(arguments, caller)
                         : BrowserTools.wakeTools.contains(name) ? await BrowserTools.wake(name, arguments, caller) : await BrowserTools.mail(name, arguments, caller)
                     return CallResult(value: ["content": [["type": "text", "text": result.text]], "isError": result.isError])
@@ -254,7 +255,7 @@ enum BrowserTools {
         tool("stop_session", "Stop one of the sessions you started, by its address from list_sessions; with archive, also put it away once its work is reported. Only your own: for another, ask the user.",
              ["session": ["type": "string", "description": "Its address."],
               "archive": ["type": "boolean", "description": "Also archive it."]], required: ["session"]),
-        tool("answer_ask", "Answer what one of your sessions asks: a permission (allow or deny), or a question (answer, in words). You may allow only what you could do yourself without asking, and for now only edits to files in the project and a few commands that read (ls, cat, head, tail, wc, git status, diff and log); everything else (building, testing, installing, pushing, anything outside the project or the plan they approved) comes to the user: tell them in a line, and they answer it on the session. You can always deny, saying why. Your answer and reason are shown to the user on the session.",
+        tool("answer_ask", "Answer what one of your sessions asks: a permission (allow or deny), or a question (answer, in words). You may allow only what you could do yourself without asking: edits to files in the project, and commands: where this computer runs your sessions' commands in its sandbox, any that stay on this computer (never pushing, publishing, deploying or reaching another computer), and elsewhere only a few that read (ls, cat, head, tail, wc, git status, diff and log). Everything else (anything outside the project or the plan they approved) comes to the user, as answer_ask tells you: tell them in a line, and they answer it on the session. You can always deny, saying why. Your answer and reason are shown to the user on the session.",
              ["session": ["type": "string", "description": "The session's address."],
               "ask": ["type": "string", "description": "The ask's id, from the [Session asks] message or list_sessions."],
               "decision": ["type": "string", "enum": ["allow", "deny"], "description": "For a permission."],
@@ -336,6 +337,11 @@ enum BrowserTools {
     /// What the vault fills on a page for a conversation (`kuvo/vault/fill`): its status and answer,
     /// or nil when this Mac's box can't be reached.
     static var vaultFill: (_ body: [String: Any]) async -> (status: Int, value: [String: Any])? = { _ in nil }
+    /// The sandbox's way out (`sandbox_ask`): this Mac's box lists it while its commands run in the
+    /// sandbox, and asks you, and runs the command (KuvoLink's PROTOCOL.md, "Sandbox").
+    nonisolated static func isSandbox(_ name: String) -> Bool { name.hasPrefix("sandbox_") }
+    static var sandboxDefinitions: () async -> [[String: Any]] = { [] }
+    static var sandbox: (_ name: String, _ arguments: [String: Any], _ caller: String?) async -> (text: String, isError: Bool) = { _, _, _ in ("Not available.", true) }
     /// The tool a bot keeps its job with, in its box's record (`PATCH kuvo/bots/<id>` with `job`).
     nonisolated static let setJob = "set_job"
     /// Carries out its calls from this Mac's conversations.

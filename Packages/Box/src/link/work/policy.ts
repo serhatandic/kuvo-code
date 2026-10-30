@@ -1,8 +1,11 @@
-// What a bot may allow its sessions (answer_ask, PROTOCOL.md "Work"): the policy until the sandbox.
-// Reading a command can't be made airtight, so until sessions run in the sandbox a bot answers
-// only edits inside the session's folder (never what a later command runs) and a handful of
-// commands that read, with literal paths inside the folder. Everything else goes to the user,
-// however it's phrased.
+// What a bot may allow its sessions (answer_ask, PROTOCOL.md "Work"). Where the session's commands
+// run in the sandbox, which holds what they can write and read, a bot may allow its commands, but
+// never one that acts beyond this computer with your accounts (pushing, publishing, deploying,
+// reaching another computer). Elsewhere, the policy until the sandbox: reading a command can't be
+// made airtight, so a bot answers only a handful of commands that read, with literal paths inside
+// the folder. Either way, edits only inside the session's folder (never what a later command runs),
+// as the engine makes them itself, outside the sandbox. Everything else goes to the user, however
+// it's phrased.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -18,8 +21,9 @@ interface Line {
 }
 
 /** Why a line can't be read as plain programs (something a shell expands or runs besides), or
- * the line. */
-export function readLine(line: string): Line | { unreadable: string } {
+ * the line. `redirects`: where its output goes or its input comes from is read too (in the sandbox,
+ * which holds what's written), rather than refused. */
+export function readLine(line: string, redirects = false): Line | { unreadable: string } {
   const parts: Line["parts"] = [];
   let words: string[] = [], writes: string[] = [], word = "", has = false, quote: string | null = null, start = 0;
   let redirect: "write" | "read" | null = null;
@@ -96,7 +100,12 @@ export function readLine(line: string): Line | { unreadable: string } {
       start = i + 1;
     } else if (char === ">" || char === "<") {
       // Until the sandbox: where a command reads or writes is only what its words name.
-      return no("input or output sent elsewhere");
+      if (!redirects) return no("input or output sent elsewhere");
+      if (char === "<" && line[i + 1] === "<") return no("a here-document");
+      // (A stream's number, `2>`, is no word of its own.)
+      if (has && /^[0-9]+$/.test(word)) { word = ""; has = false; } else endWord();
+      if (line[i + 1] === char) i++;
+      redirect = char === ">" ? "write" : "read";
     } else {
       word += char;
       has = true;
@@ -294,6 +303,63 @@ const NAMED: Record<string, string> = {
   swift: "building, testing or installing", xcodebuild: "building, testing or installing", pytest: "building, testing or installing", pod: "installing", bundle: "installing", brew: "installing",
 };
 
+// Programs that run the one after them, which counts as the command's.
+const WRAPPERS = new Set(["sudo", "doas", "env", "nohup", "time", "exec", "command", "nice", "xargs", "timeout", "npx", "bunx", "pnpx", "uvx"]);
+// What acts beyond this computer with your accounts, whatever the sandbox holds here.
+const OUTWARD: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(NAMED).filter(([, what]) => ["deploying", "sending to a store", "your keys and sign-ins", "reaching another computer"].includes(what))),
+  sftp: "reaching another computer", ftp: "reaching another computer", gh: "using your GitHub account", glab: "using your GitLab account",
+};
+
+// Programs that run code given on their command line (`sh -c`, `node -e`), which can't be read for
+// what it does: with that, the user's to answer.
+const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
+const INLINE: Record<string, string[]> = {
+  node: ["-e", "--eval", "-p", "--print"], bun: ["-e", "--eval", "-p", "--print"], deno: ["eval"], python: ["-c"], python3: ["-c"],
+  ruby: ["-e"], perl: ["-e", "-E"], php: ["-r"], osascript: ["-e"], lua: ["-e"],
+};
+// Package managers whose `run <script>` (or, for some, the script's name alone) runs a script of the
+// project's: read by the script's name.
+const RUNS_SCRIPTS = new Set(["npm", "pnpm", "yarn", "bun"]);
+const LOCAL_URL = /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])([:/]|$)/i;
+// curl's and wget's options that send something, rather than fetch.
+const SENDS = /^(-[a-zA-Z]*[TFd]|--upload-file|--form.*|--data.*|--json|--post-(data|file)|--body-(data|file)|-X|--request|--method)$/;
+
+/** Why a bot can't allow a command even in the sandbox: it pushes, publishes, deploys, uploads or
+ * reaches another computer, or runs code that can't be read (a shell's `-c`, `node -e`), or can't be
+ * read plainly at all; or null. */
+export function outwardRefusal(line: string): string | null {
+  const read = readLine(line, true);
+  if ("unreadable" in read) return `${CANT} (${read.unreadable})`;
+  for (const part of read.parts) {
+    let words = part.words;
+    while (words.length && (WRAPPERS.has(path.basename(words[0])) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]) || /^[-0-9]/.test(words[0]))) words = words.slice(1);
+    const [program, ...rest] = words;
+    if (!program) continue;
+    const name = path.basename(program);
+    if (OUTWARD[name]) return OUTWARD[name];
+    if (name === "eval") return "running a command it can't read";
+    if (SHELLS.has(name) && (rest.length === 0 || rest.some(word => /^-[a-zA-Z]*c/.test(word)))) return "running a command it can't read";
+    if (INLINE[name] && rest.some(word => INLINE[name].includes(word))) return "running code it can't read";
+    // A program or script named for releasing (`./deploy.sh`, `node scripts/release.js`).
+    if ([program, ...rest].some(word => !word.startsWith("-") && /(deploy|release|publish)/i.test(path.basename(word)) && (word === program || /\.[a-z]+$/i.test(word)))) return "releasing or deploying";
+    // Its subcommand: the first word that isn't an option (nor an option's value, for git's -C and -c).
+    const subs = rest.filter((word, at) => !word.startsWith("-") && !(name === "git" && ["-C", "-c"].includes(rest[at - 1] ?? "")));
+    const sub = subs[0];
+    if (name === "git" && sub === "push") return "pushing";
+    if (sub === "publish" || sub === "deploy" || (sub === "release" && name !== "git")) return sub === "publish" ? "publishing" : "releasing or deploying";
+    if (sub === "push" || sub === "upload") return "sending it beyond this computer";
+    if (name === "xcrun" && (sub === "altool" || sub === "notarytool")) return "sending to a store";
+    if (RUNS_SCRIPTS.has(name) && ["run", "run-script"].includes(sub ?? "") && /(deploy|release|publish|push|upload)/i.test(subs[1] ?? "")) return "releasing or deploying";
+    // (To this computer's own servers, as a test does, it may.)
+    if ((name === "curl" || name === "wget") && rest.some(word => SENDS.test(word))) {
+      const targets = rest.filter(word => /^[a-z][a-z0-9+.-]*:\/\//i.test(word) || LOCAL_URL.test(word) || /^[\w-]+(\.[\w-]+)+(:\d+)?(\/|$)/.test(word));
+      if (!targets.length || !targets.every(word => LOCAL_URL.test(word))) return "sending something beyond this computer";
+    }
+  }
+  return null;
+}
+
 /** The parts of a command line as the engine's rules match each: its own text, part by part. */
 export function partsOf(line: string): string[] {
   const read = readLine(line);
@@ -314,13 +380,22 @@ const EDIT_TOOLS = new Set(["edit", "write", "patch", "multiedit", "apply_patch"
  * extension, never a hidden path, a link, a folder, nor a file a later command runs or reads as
  * settings), and the few commands `commandRefusal` reads as safe, run in the session's folder.
  * Everything else, reading included, goes to the user. */
-export function allowRefusal(action: string, resources: readonly string[], folders: readonly string[], rules: readonly KitRule[], ruleFor: (rules: readonly KitRule[], action: string, resource: string) => KitRule["effect"], seen: ToolCallSeen | null): string | null {
+export function allowRefusal(action: string, resources: readonly string[], folders: readonly string[], rules: readonly KitRule[], ruleFor: (rules: readonly KitRule[], action: string, resource: string) => KitRule["effect"], seen: ToolCallSeen | null, sandboxed = false): string | null {
   const asked = resources.length ? resources : ["*"];
   if (!folders.length) return "working outside the project";
   if (action === "shell" || action === "bash") {
     // The command as it would run, whole, and where.
     const command = typeof seen?.input.command === "string" ? seen.input.command : null;
     if (!command) return `${CANT} (it can't see the whole command)`;
+    // In the sandbox (which writes only in the session's folder, wherever it runs): anything but
+    // what acts beyond this computer, within the engine's rules.
+    if (sandboxed) {
+      for (const line of [command, ...asked.filter(each => each !== "*")]) {
+        const why = outwardRefusal(line);
+        if (why) return why;
+      }
+      return [...partsOf(command), ...asked].every(part => ruleFor(rules, action, part) === "allow") ? null : "above";
+    }
     const where = [seen!.input.workdir, seen!.input.cwd, seen!.input.directory].find(each => each !== undefined && each !== null && each !== "");
     if (where !== undefined && (typeof where !== "string" || realOf(path.resolve(realOf(folders[0]), where)) !== realOf(folders[0]))) return "a command run somewhere other than the project";
     for (const line of [command, ...asked.filter(each => each !== "*")]) {

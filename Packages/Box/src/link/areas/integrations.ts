@@ -10,7 +10,7 @@ import type { Integration, IntegrationAdded, IntegrationHealth, Integrations } f
 import { soon } from "../../shared/wait";
 import { call } from "../engine/client";
 import { listOf, writePrivate } from "../files";
-import { BOTS, INTEGRATION_DATA, IS_MAC, K, SCRIPT } from "../home";
+import { BOTS, INTEGRATION_DATA, IS_MAC, K, OWN_RUNTIME, SCRIPT } from "../home";
 import { KeysUnavailable, siteSignIns } from "../host-interface";
 import { deleteKey, keyNames, keyWork, STORED_KEY, writeKey } from "../keys";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
@@ -152,7 +152,7 @@ export function answerOnce(): void {
 function reconnectLater(engine: EngineRecord | null, id: string, later: typeof soon): void {
   if (!engine) return;
   if (answersOnce && later === soon) {
-    spawn(process.execPath, [SCRIPT, "box", "reconnect", id], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+    spawn(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "reconnect", id], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
     return;
   }
   later(() => reconnectEverywhere(engine, id), 2_000);

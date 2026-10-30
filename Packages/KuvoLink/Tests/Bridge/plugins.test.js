@@ -124,3 +124,17 @@ test("a provider of your own's models, as its service lists them to this box", a
   assert.deepEqual((await link.providerModels({ url: `http://127.0.0.1:${port}/v1` })).value, { reached: false, message: "Nothing answers at this address." });
   assert.equal((await link.providerModels({ url: "ftp://x" })).status, 400);
 });
+
+test("this Mac's real box asks npm itself, whatever its environment names instead (only a test's own box takes a stand-in)", async () => {
+  const { spawn } = await import("node:child_process");
+  const app = path.join(home, "run.kuvo.code");
+  fs.mkdirSync(path.join(app, "box"), { recursive: true });
+  const before = searched.length;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", `
+    const link = await import(${JSON.stringify(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url).href)});
+    await link.searchPlugins("waka").catch(() => {});
+    process.exit(0);
+  `], { env: { ...process.env, KUVO_HOME: path.join(app, "box"), KUVO_BOX: "mac", KUVO_ENGINE_CONFIG: path.join(app, "config") }, stdio: "ignore" });
+  await new Promise(resolve => child.once("exit", resolve));
+  assert.equal(searched.length, before, "the stand-in was asked");
+});

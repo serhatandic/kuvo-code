@@ -36,7 +36,8 @@ export const VAULT_GRANT = object({ item: string, who: VAULT_WHO, how: words(...
  * bot's (by root session), with why, where its values are kept (this Mac's Keychain, or a
  * machine's encrypted store), how long activity is kept, and whether its files were changed
  * outside Kuvo Code (then it uses none of them). `agents`: whether agents may use it here (only
- * where their commands are fenced; until then it's yours alone, and agents sign in through you). */
+ * where their commands are fenced; until then it's yours alone, and agents sign in through you);
+ * `agentsWaiting`: the sandbox is on, and agents started before it came on still run. */
 export const VAULT_STATE = object({
   made: bool,
   locked: bool,
@@ -45,6 +46,7 @@ export const VAULT_STATE = object({
   store: words("keychain", "encrypted"),
   keptDays: number,
   "agents?": bool,
+  "agentsWaiting?": bool,
   "tampered?": bool,
   "generations?": map(number),
 });

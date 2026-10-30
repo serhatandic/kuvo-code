@@ -180,11 +180,13 @@ final class Workspace {
     var askingInBrowser: Set<String> = []
     /// Conversations asking you before they do something (a bot making a project).
     var askingForWork: Set<String> = []
+    /// Conversations asking to run a command outside their computer's sandbox.
+    var askingOutsideSandbox: Set<String> = []
 
     /// Sessions that finished while you were elsewhere, or wait for your answer: the
     /// number on the Dock icon. A subagent's ask is its session's.
     var waitingCount: Int {
-        let askers = Set(asking.values.map(root(of:))).union(askingInBrowser.map(root(of:))).union(askingForWork).subtracting(seats)
+        let askers = Set(asking.values.map(root(of:))).union(askingInBrowser.map(root(of:))).union(askingForWork).union(askingOutsideSandbox).subtracting(seats)
         return Set(sessions.filter { $0.isUnread && !Self.isArchived($0) }.map(\.id)).union(askers).count
     }
 
@@ -669,7 +671,7 @@ final class Workspace {
     /// Waiting on you: a permission, a question or a sign-in, in a conversation you have open or
     /// not (a bot's work in a session of its own, say).
     func needsAttention(_ id: String) -> Bool {
-        if askingInBrowser.contains(id) || askingForWork.contains(id) || asking.values.contains(where: { $0 == id || root(of: $0) == id }) { return true }
+        if askingInBrowser.contains(id) || askingForWork.contains(id) || askingOutsideSandbox.contains(id) || asking.values.contains(where: { $0 == id || root(of: $0) == id }) { return true }
         guard let model = models[id] else { return false }
         return !model.permissions.isEmpty || !model.forms.isEmpty
     }

@@ -35,14 +35,23 @@ import Testing
         // The engine: says it's listening, notes how it was started, and runs until stopped. Run
         // with the phone link's script, it's the phone link: it notes its process, as that does;
         // asked for the engine's settings layer (`engine-config`), it gives one, around what it was
-        // given.
+        // given; asked for your login shell's PATH (`login-path`), it adds a folder to the one it has.
         let engine = root.appending(path: "engine/\(OpenCodeEngine.version)/opencode")
         try FileManager.default.createDirectory(at: engine.deletingLastPathComponent(), withIntermediateDirectories: true)
         try write(engine, """
             #!/bin/sh
+            # As Bun (BUN_BE_BUN): a .env in the folder it starts in is loaded, unless it's told not to.
+            if [ "$BUN_BE_BUN" = 1 ]; then
+              [ "$1" = --config=/dev/null ] && shift
+              if [ "$1" = --no-env-file ]; then shift; elif [ -f .env ]; then set -a; . ./.env; set +a; fi
+            fi
             case "$1 ${2-}" in *"kuvo-link.js engine-config")
               [ -f "$KUVO_HOME/bin/.old-link" ] && { echo "Usage: kuvo-link.js run | serve" >&2; exit 2; }
+              env | sort >"$HOME/engine-config.env"
               printf '{"learned":"%s","given":%s}' "$KUVO_HOME" "${OPENCODE_CONFIG_CONTENT:-null}"; exit 0 ;;
+            *"kuvo-link.js login-path")
+              [ -f "$KUVO_HOME/bin/.old-link" ] && { echo "Usage: kuvo-link.js run | serve" >&2; exit 2; }
+              printf '%s' "$HOME/.nvm/bin:$PATH"; exit 0 ;;
             esac
             case "$1" in *kuvo-link.js) env | sort >"$HOME/link.env"; echo $$ >"$KUVO_HOME/run/link.pid"; while :; do /bin/sleep 1; done ;; esac
             env | sort >"$HOME/engine-$$.env"
@@ -306,6 +315,27 @@ import Testing
         let environment = try String(contentsOf: home.appending(path: "link.env"), encoding: .utf8)
         #expect(environment.contains("XDG_CACHE_HOME=\(root.path)/cache") && environment.contains("TMPDIR=\(root.path)/tmp"))
         #expect(environment.contains("LANG=tr_TR.UTF-8"), "as Kuvo Code last started it")
+    }
+
+    /// A `.env` in the box's folders (which an agent's command can write) sets nothing for its
+    /// phone link or what it asks before the engine starts: the engine's Bun would load one before
+    /// the link's code runs.
+    @Test func aDotEnvInTheBoxsFoldersSetsNothingForIt() throws {
+        defer { cleanUp() }
+        try write(root.appending(path: "bin/kuvo-link.js"), "// the phone link\n")
+        try write(run.appending(path: "link.needed"), "")
+        let workspace = root.appending(path: "workspace")
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        for folder in [root, workspace] {
+            try write(folder.appending(path: ".env"), "KUVO_VAULT_FILE_KEY=forged\nKUVO_TEST_GITHUB=http://127.0.0.1:9\n")
+        }
+        #expect(try start() == 0)
+        until { pid("link.pid").map(alive) ?? false }
+        let link = try String(contentsOf: home.appending(path: "link.env"), encoding: .utf8)
+        #expect(link.contains("KUVO_HOME="), "the link started")
+        #expect(!link.contains("forged") && !link.contains("KUVO_TEST_GITHUB"))
+        let asked = try String(contentsOf: home.appending(path: "engine-config.env"), encoding: .utf8)
+        #expect(!asked.contains("forged") && !asked.contains("KUVO_TEST_GITHUB"))
     }
 
     /// Wake-ups run in the box's own folders, as the engine does, and beside the keeper's rounds:
@@ -591,6 +621,26 @@ import Testing
         until { (try? started().count) == 2 }
         let environment = try #require(try started().first { $0.contains("learned") })
         #expect(environment.contains(#"OPENCODE_CONFIG_CONTENT={"learned":"\#(root.path)","given":{"mcp":{}}}"#))
+    }
+
+    /// The engine finds what you installed there (nvm's node, `~/.local/bin`): it starts with the
+    /// PATH your login shell sets up, as its box reads it (`login-path`), after a restart with no
+    /// Mac there too; a box too old to know it starts with the PATH it had.
+    @Test func itStartsWithYourLoginShellsPath() throws {
+        defer { cleanUp() }
+        try write(root.appending(path: "bin/kuvo-link.js"), "")
+        try write(root.appending(path: "bin/.old-link"), "")
+        #expect(try start() == 0)
+        until { running() != nil }
+        let before = try #require(try started().first)
+        #expect(before.contains("\nPATH=\(root.path)/bin:\(tools.path):/usr/bin:/bin\n"), "a link too old to say: the PATH it had")
+        try start("stop")
+
+        try FileManager.default.removeItem(at: root.appending(path: "bin/.old-link"))
+        #expect(try start("start") == 0)
+        until { (try? started().count) == 2 }
+        let environment = try #require(try started().first { $0.contains(".nvm") })
+        #expect(environment.contains("\nPATH=\(root.path)/bin:\(home.path)/.nvm/bin:\(tools.path):/usr/bin:/bin\n"))
     }
 
     @Test func aStartFromTheMacKeepsAStoppedEngineStoppedUnlessItsStart() throws {

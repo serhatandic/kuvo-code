@@ -14,7 +14,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { deepMerged } from "../areas/config";
 import { writePrivate } from "../files";
-import { RUN } from "../home";
+import { RUN, SANDBOX_NOTE } from "../home";
 import { engineGet } from "./client";
 import type { Target } from "../../shared/records";
 
@@ -61,12 +61,17 @@ export async function learnCompatibility(engine: Target, file = COMPATIBILITY_FI
 }
 
 /** `content` (an `OPENCODE_CONFIG_CONTENT`, or none) with the layer on top: what `engine-config`
- * prints for a machine's start scripts. Content that isn't JSON is left as it is. */
+ * prints for a machine's start scripts. Content that isn't JSON is left as it is. With the
+ * sandbox's note for agents among its instructions, which the engine reads again as the box
+ * changes it: what commands can do here while they run in the sandbox, nothing while they don't. */
 export function engineConfigContent(content: string | undefined, file = COMPATIBILITY_FILE): string {
   const layer = readCompatibility(file);
   let given: unknown = {};
   if (content?.trim()) {
     try { given = JSON.parse(content); } catch { return content; }
   }
-  return JSON.stringify(deepMerged(given, layer));
+  const merged = deepMerged(given, layer);
+  if (!isObject(merged)) return JSON.stringify(merged);
+  const instructions = Array.isArray(merged.instructions) ? merged.instructions : [];
+  return JSON.stringify({ ...merged, instructions: [...new Set([...instructions, SANDBOX_NOTE])] });
 }

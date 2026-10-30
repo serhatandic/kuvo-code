@@ -404,9 +404,10 @@ import Testing
         #expect(!next.showsPanel, "what a version that kept less didn't keep is as it starts")
     }
 
-    /// New Project open with something typed in it stays, when a shortcut or a notification asks
-    /// for the popup again; once it's closed, the next one opens.
-    @Test func anOpenProjectPopupIsntReplaced() {
+    /// The window's store keeps the project popup (it outlives the window's views): New Project
+    /// open with something typed in it stays when a shortcut or a notification asks for the popup
+    /// again, and once it's closed, the next one opens.
+    @Test func theWindowKeepsTheProjectPopupBeingTypedIn() {
         defer { done() }
         let typing = ProjectEditorRequest(project: nil, folders: ["/tmp/kuvo-tests-typed"])
         tabs.openProjectEditor(typing)

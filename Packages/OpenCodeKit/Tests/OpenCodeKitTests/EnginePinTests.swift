@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import OpenCodeKit
@@ -24,7 +25,11 @@ struct EnginePinTests {
         #expect(installer.installed() == nil)
         #expect(!FileManager.default.fileExists(atPath: installer.executable.path), "moved aside, so it's downloaded again")
     }
+}
 
+/// What the engine's check holds in memory, on its own: the process's footprint is measured around
+/// it, so nothing else in this suite runs meanwhile.
+@Suite(.serialized) struct EngineHashMemoryTests {
     /// Each start hashes the 200 MB binary. It's read a megabyte at a time, and only a megabyte at
     /// a time stays in memory: holding every chunk read made the app's memory jump by the binary's
     /// size at launch.
@@ -36,10 +41,13 @@ struct EnginePinTests {
         for _ in 0..<(size >> 20) { try handle.write(contentsOf: Data(repeating: 7, count: 1 << 20)) }
         try handle.close()
 
+        var expected = SHA256()
+        for _ in 0..<(size >> 20) { expected.update(data: Data(repeating: 7, count: 1 << 20)) }
+
         let before = try #require(footprint())
         let hash = try EngineInstaller.sha256(of: file)
         let grew = try #require(footprint()) - before
-        #expect(hash.count == 64)
+        #expect(hash == expected.finalize().map { String(format: "%02x", $0) }.joined())
         // Holding every chunk grows it by the whole file; a chunk at a time, by about a megabyte.
         #expect(grew < size / 2, "memory grew \(grew >> 20) MB hashing a \(size >> 20) MB file")
     }

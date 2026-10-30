@@ -99,16 +99,19 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     /// has gone away (`options`). It isn't stopped when the task is cancelled, so a change there
     /// is never left half done; one that only reads (`cancellable`) is, so nothing waits on what
     /// nobody wants any more (a search typed over).
+    /// `sent`, given an `input`, hears how much of it has gone, as it goes.
     @discardableResult
-    public func run(_ script: String, input: URL? = nil, cancellable: Bool = false) async throws -> String {
+    public func run(_ script: String, input: URL? = nil, cancellable: Bool = false, sent: (@Sendable (Int64) -> Void)? = nil) async throws -> String {
         #if DEBUG
         if let standIn = Self.standIn {
             guard let output = standIn(address, script) else { throw RemoteEngineError.ssh(status: 255, message: "Couldn't reach \(address)") }
+            // All of it, at once.
+            if let input, let sent, let size = (try? input.resourceValues(forKeys: [.fileSizeKey]))?.fileSize { sent(Int64(size)) }
             return output
         }
         #endif
-        let result = try await ChildProcess.run("/usr/bin/ssh", arguments(running: script), input: input.map { .file($0) } ?? .nothing,
-                                                cancellable: cancellable)
+        let stdin: ChildProcess.Input = input.map { url in sent.map { .reported(url, read: $0) } ?? .file(url) } ?? .nothing
+        let result = try await ChildProcess.run("/usr/bin/ssh", arguments(running: script), input: stdin, cancellable: cancellable)
         guard result.succeeded else { throw RemoteEngineError.ssh(status: result.status, message: result.errorText) }
         return result.outputText
     }
@@ -256,11 +259,21 @@ public struct RemoteEngineInstaller: Sendable {
         return (release, lines.count > 2 && lines[2].hasSuffix(OpenCodeEngine.version))
     }
 
-    /// Makes sure the engine is on the machine. `progress` gets the fraction downloaded, when it is.
-    public func install(progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws {
+    /// How far an install has come: the package downloading to this Mac (a share of it), then
+    /// copying to the machine (bytes sent of its size).
+    public enum Progress: Sendable, Equatable {
+        case downloading(fraction: Double)
+        case copying(sent: Int64, total: Int64)
+    }
+
+    /// Makes sure the engine is on the machine. `progress` hears how far it's come: the download,
+    /// when there is one (this Mac keeps the package for the next machine), then the copy.
+    public func install(progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws {
         let (release, isInstalled) = try await check()
         if isInstalled { return }
-        let package = try await checkedPackage(release, progress: progress)
+        let package = try await checkedPackage(release) { progress(.downloading(fraction: $0)) }
+        let total = Int64((try? package.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        progress(.copying(sent: 0, total: total))
         let folder = "$HOME/\(Self.root)/engine"
         try await connection.run("""
             set -e
@@ -272,8 +285,7 @@ public struct RemoteEngineInstaller: Sendable {
             chmod +x "\(folder)/\(release.version)/opencode"
             rm -rf "\(folder)/.staging"
             find "\(folder)" -mindepth 1 -maxdepth 1 ! -name "\(release.version)" -exec rm -rf {} +
-            """, input: package)
-        progress(1)
+            """, input: package, sent: { progress(.copying(sent: min($0, total), total: total)) })
     }
 
     /// The release's tarball, from this Mac's cache when it's there and still matches its checksum.
@@ -836,7 +848,7 @@ public final class RemoteServer: @unchecked Sendable {
             fi
             # The phone link, while a phone is paired with it or a pairing's open.
             if [ -f "$R/link.needed" ] && [ -f "$K/bin/kuvo-link.js" ] && [ -n "$V" ] && ! is "$(cat "$R/link.pid" 2>/dev/null)" kuvo-link; then
-              (environment; cd "$K/workspace" 2>/dev/null || cd "$K"; KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 setsid "$K/engine/$V/opencode" "$K/bin/kuvo-link.js" run >"$R/link.log" 2>&1 </dev/null &)
+              (environment; cd "$K/workspace" 2>/dev/null || cd "$K"; KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 setsid "$K/engine/$V/opencode" --config=/dev/null --no-env-file "$K/bin/kuvo-link.js" run >"$R/link.log" 2>&1 </dev/null &)
             fi
             # Wake-ups that are due, each minute, while the engine's up, as the engine was started:
             # beside this loop, which a slow watch never holds up, one round at a time.
@@ -1007,11 +1019,17 @@ public final class RemoteServer: @unchecked Sendable {
         # starts with, as its box learned it from the engine (its link's `engine-config`): after a
         # restart with no Mac there too. A box too old to know it starts as before.
         if [ -f "$K/bin/kuvo-link.js" ]; then
-          c=$(cd "$K" && KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$K/engine/$V/opencode" "$K/bin/kuvo-link.js" engine-config 2>/dev/null) && case "$c" in "{"*"}") export OPENCODE_CONFIG_CONTENT="$c" ;; esac
+          c=$(cd "$K" && KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$K/engine/$V/opencode" --config=/dev/null --no-env-file "$K/bin/kuvo-link.js" engine-config 2>/dev/null) && case "$c" in "{"*"}") export OPENCODE_CONFIG_CONTENT="$c" ;; esac
         fi
         \(boot ? "" : Wakes.installScript)
         \(boot ? "" : Launcher.installScript)
         \(boot ? "" : CommandEnvironment.installScript)
+        # The PATH your login shell sets up there (`~/.local/bin`, nvm's node), which a start over
+        # SSH or from cron doesn't get, for the engine and what it starts, as the box reads it (its
+        # link's `login-path`). Without it (a box too old to know it), the PATH it has.
+        if [ -f "$K/bin/kuvo-link.js" ]; then
+          p=$(cd "$K" && KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$K/engine/$V/opencode" "$K/bin/kuvo-link.js" login-path 2>/dev/null </dev/null) && case "$p" in /*) PATH=$p ;; esac
+        fi
         export PATH="$K/bin:$PATH"
         # Bots' and sessions' folders under this root, for `kuvo-wake` (its default is the app's own root).
         export KUVO_BOTS="$K/bots" KUVO_WAKES="$K/wakes"
@@ -1166,7 +1184,7 @@ public final class RemoteServer: @unchecked Sendable {
           try=0
           while :; do
             : >"$R/agents.log"
-            KUVO_AGENTS_REMOTE=1 KUVO_AGENTS_HOME="$K/agents" KUVO_HOME="$K" KUVO_AGENTS_PORT="$aport" KUVO_ENGINE_PORT="$port" KUVO_ENGINE_PID="$pid" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 setsid sh -c 'n=0; while kill -0 "$1" 2>/dev/null && [ $n -lt 5 ]; do s=$(date +%s); "$2" "$3" >>"$4" 2>&1 </dev/null; e=$?; [ $e -eq 98 ] && exit 98; [ $(($(date +%s) - s)) -ge 600 ] && n=0; n=$((n + 1)); sleep 5; done' kuvo-agents "$pid" "$K/engine/$V/opencode" "$K/bin/kuvo-agents.js" "$R/agents.log" </dev/null >/dev/null 2>&1 &
+            KUVO_AGENTS_REMOTE=1 KUVO_AGENTS_HOME="$K/agents" KUVO_HOME="$K" KUVO_AGENTS_PORT="$aport" KUVO_ENGINE_PORT="$port" KUVO_ENGINE_PID="$pid" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 setsid sh -c 'n=0; while kill -0 "$1" 2>/dev/null && [ $n -lt 5 ]; do s=$(date +%s); "$2" --config=/dev/null --no-env-file "$3" >>"$4" 2>&1 </dev/null; e=$?; [ $e -eq 98 ] && exit 98; [ $(($(date +%s) - s)) -ge 600 ] && n=0; n=$((n + 1)); sleep 5; done' kuvo-agents "$pid" "$K/engine/$V/opencode" "$K/bin/kuvo-agents.js" "$R/agents.log" </dev/null >/dev/null 2>&1 &
             apid=$!
             echo "$apid" >"$R/agents.pid"
             i=0; until grep -q '"url"' "$R/agents.log" 2>/dev/null || ! kill -0 "$apid" 2>/dev/null || [ $i -ge 100 ]; do sleep 0.1; i=$((i + 1)); done

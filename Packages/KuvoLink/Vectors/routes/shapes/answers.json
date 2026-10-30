@@ -2213,6 +2213,9 @@
             "literal": "folders"
            },
            {
+            "literal": "folders.files"
+           },
+           {
             "literal": "git"
            },
            {
@@ -2352,6 +2355,15 @@
            },
            {
             "literal": "vault"
+           },
+           {
+            "literal": "sandbox"
+           },
+           {
+            "literal": "sandbox.check"
+           },
+           {
+            "literal": "sandbox.asks"
            },
            {
             "literal": "accounts.ended"
@@ -2464,6 +2476,9 @@
             "literal": "folders"
            },
            {
+            "literal": "folders.files"
+           },
+           {
             "literal": "git"
            },
            {
@@ -2603,6 +2618,15 @@
            },
            {
             "literal": "vault"
+           },
+           {
+            "literal": "sandbox"
+           },
+           {
+            "literal": "sandbox.check"
+           },
+           {
+            "literal": "sandbox.asks"
            }
           ]
          }
@@ -2622,7 +2646,17 @@
           "mac": "string",
           "name?": "string"
          }
-        }
+        },
+        "macs?": {
+         "list": {
+          "object": {
+           "key": "string",
+           "name?": "string",
+           "seen": "number"
+          }
+         }
+        },
+        "phones?": "number"
        }
       }
      ]
@@ -4426,7 +4460,28 @@
          "repository?": "bool"
         }
        }
+      },
+      "files?": {
+       "list": "string"
       }
+     }
+    },
+    "403": {
+     "object": {
+      "message": "string",
+      "reason?": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string",
+      "reason?": "string"
+     }
+    },
+    "500": {
+     "object": {
+      "message": "string",
+      "reason?": "string"
      }
     }
    }
@@ -4692,6 +4747,355 @@
       "message": "string",
       "archived": "number",
       "kept": "number"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sandbox",
+   "answers": {
+    "200": {
+     "object": {
+      "on": "bool",
+      "why?": "string",
+      "able": "bool",
+      "agents": "bool",
+      "reason?": {
+       "oneOf": [
+        {
+         "literal": "kernel"
+        },
+        {
+         "literal": "macos"
+        },
+        {
+         "literal": "engineMissing"
+        },
+        {
+         "literal": "checking"
+        },
+        {
+         "literal": "checkFailed"
+        },
+        {
+         "literal": "plugin"
+        },
+        {
+         "literal": "engineDown"
+        },
+        {
+         "literal": "waiting"
+        }
+       ]
+      },
+      "action?": {
+       "oneOf": [
+        {
+         "literal": "help"
+        },
+        {
+         "literal": "softwareUpdate"
+        },
+        {
+         "literal": "retry"
+        },
+        {
+         "literal": "fix"
+        },
+        {
+         "literal": "restartEngine"
+        }
+       ]
+      },
+      "route?": "string",
+      "needs?": "string",
+      "check?": {
+       "oneOf": [
+        {
+         "literal": "folder"
+        },
+        {
+         "literal": "tempFiles"
+        },
+        {
+         "literal": "readsOwn"
+        },
+        {
+         "literal": "writesOwn"
+        },
+        {
+         "literal": "didntRun"
+        },
+        {
+         "literal": "setup"
+        }
+       ]
+      },
+      "failures?": "number"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sandbox/check",
+   "answers": {
+    "200": {
+     "object": {
+      "on": "bool",
+      "why?": "string",
+      "able": "bool",
+      "agents": "bool",
+      "reason?": {
+       "oneOf": [
+        {
+         "literal": "kernel"
+        },
+        {
+         "literal": "macos"
+        },
+        {
+         "literal": "engineMissing"
+        },
+        {
+         "literal": "checking"
+        },
+        {
+         "literal": "checkFailed"
+        },
+        {
+         "literal": "plugin"
+        },
+        {
+         "literal": "engineDown"
+        },
+        {
+         "literal": "waiting"
+        }
+       ]
+      },
+      "action?": {
+       "oneOf": [
+        {
+         "literal": "help"
+        },
+        {
+         "literal": "softwareUpdate"
+        },
+        {
+         "literal": "retry"
+        },
+        {
+         "literal": "fix"
+        },
+        {
+         "literal": "restartEngine"
+        }
+       ]
+      },
+      "route?": "string",
+      "needs?": "string",
+      "check?": {
+       "oneOf": [
+        {
+         "literal": "folder"
+        },
+        {
+         "literal": "tempFiles"
+        },
+        {
+         "literal": "readsOwn"
+        },
+        {
+         "literal": "writesOwn"
+        },
+        {
+         "literal": "didntRun"
+        },
+        {
+         "literal": "setup"
+        }
+       ]
+      },
+      "failures?": "number"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sandbox/asks",
+   "answers": {
+    "200": {
+     "object": {
+      "asks": {
+       "list": {
+        "object": {
+         "id": "string",
+         "at": "number",
+         "session?": "string",
+         "sessionName?": "string",
+         "bot?": "string",
+         "botName?": "string",
+         "project": "string",
+         "command": "string",
+         "why": "string",
+         "stopped?": {
+          "list": {
+           "object": {
+            "kind": {
+             "oneOf": [
+              {
+               "literal": "write"
+              },
+              {
+               "literal": "read"
+              },
+              {
+               "literal": "connect"
+              },
+              {
+               "literal": "job"
+              },
+              {
+               "literal": "app"
+              },
+              {
+               "literal": "other"
+              }
+             ]
+            },
+            "path?": "string"
+           }
+          }
+         },
+         "error?": "string",
+         "always?": {
+          "object": {
+           "kind": {
+            "oneOf": [
+             {
+              "literal": "write"
+             }
+            ]
+           },
+           "path": "string"
+          }
+         },
+         "machine?": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sandbox/asks/:id",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sandbox/allowed",
+   "answers": {
+    "200": {
+     "object": {
+      "allowed": {
+       "list": {
+        "object": {
+         "id": "string",
+         "project": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "write"
+           }
+          ]
+         },
+         "path": "string",
+         "at": "number",
+         "by?": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sandbox/allowed",
+   "answers": {
+    "200": {
+     "object": {
+      "allowed": {
+       "list": {
+        "object": {
+         "id": "string",
+         "project": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "write"
+           }
+          ]
+         },
+         "path": "string",
+         "at": "number",
+         "by?": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/sandbox/allowed/:id",
+   "answers": {
+    "200": {
+     "object": {
+      "allowed": {
+       "list": {
+        "object": {
+         "id": "string",
+         "project": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "write"
+           }
+          ]
+         },
+         "path": "string",
+         "at": "number",
+         "by?": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sandbox/tools",
+   "answers": {
+    "200": {
+     "object": {
+      "tools": {
+       "list": "any"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sandbox/tools",
+   "answers": {
+    "200": {
+     "object": {
+      "text": "string",
+      "isError": "bool"
      }
     }
    }
@@ -5416,6 +5820,7 @@
         },
         "keptDays": "number",
         "agents?": "bool",
+        "agentsWaiting?": "bool",
         "tampered?": "bool",
         "generations?": {
          "map": "number"
@@ -5776,6 +6181,7 @@
       },
       "keptDays": "number",
       "agents?": "bool",
+      "agentsWaiting?": "bool",
       "tampered?": "bool",
       "generations?": {
        "map": "number"
@@ -5817,6 +6223,7 @@
       },
       "keptDays": "number",
       "agents?": "bool",
+      "agentsWaiting?": "bool",
       "tampered?": "bool",
       "generations?": {
        "map": "number"
