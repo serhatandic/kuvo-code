@@ -642,6 +642,38 @@ test("each conversation's temporary files are its own", async () => {
   }
 });
 
+test("a command's own socket in its temporary folder works, as a server's tests or Python's multiprocessing make one", async () => {
+  // This Mac's box as the app starts it, its temporary files in the app's temporary folder (named
+  // as long as the app's own), its folder as deep as `~/Library/Application Support/<bundle>`.
+  const bundle = "kuvo.sock.tst";
+  const box = boxAt(path.join("Library", "Application Support", bundle), !linux);
+  const temporary = path.join(os.tmpdir(), bundle);
+  fs.rmSync(temporary, { recursive: true, force: true });
+  if (!linux) box.env.TMPDIR = path.join(temporary, "box") + "/";
+  const project = path.join(root, "sockets");
+  fs.mkdirSync(project);
+  const python = [
+    "import os, socket",
+    "from multiprocessing.managers import BaseManager",
+    "if __name__ == '__main__':",
+    "    where = os.path.join(os.environ['TMPDIR'], 'server.sock')",
+    "    server = socket.socket(socket.AF_UNIX); server.bind(where); server.listen(1)",
+    "    client = socket.socket(socket.AF_UNIX); client.connect(where); print('connected')",
+    "    manager = BaseManager(authkey=b'k'); manager.start(); manager.shutdown(); print('managed')",
+  ].join("\n");
+  fs.writeFileSync(path.join(project, "sockets.py"), python + "\n");
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const ran = await engineRuns(box, project, "python3 sockets.py");
+    assert.equal(ran.status, 0, ran.out);
+    assert.match(ran.out, /connected\nmanaged/);
+  } finally {
+    await running.stop();
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
 test("turned off and on again, it isn't on until the engine has loaded it again", async () => {
   const box = boxAt("again");
   const project = path.join(root, "again-project");

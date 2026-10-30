@@ -6304,6 +6304,20 @@ function repositoryOf2(folder) {
   }
   return "";
 }
+function temporaryFolder(where, work) {
+  const [root, key] = (() => {
+    try {
+      return readFileSync13(join14(where, "temporary"), "utf8").split(`
+`);
+    } catch {
+      return [];
+    }
+  })();
+  if (!root?.startsWith("/") || !/^[0-9a-f]{64}$/.test(key ?? ""))
+    return join14(where, "tmp", sum(work));
+  return join14(root, createHash3("sha256").update(`${key}
+${work}`).digest("hex").slice(0, 8));
+}
 function fenceShell(directory) {
   const where = folder();
   if (!where || !fenceRules())
@@ -6313,7 +6327,7 @@ function fenceShell(directory) {
   if (!shell)
     return;
   const work = real(directory);
-  const temporary = join14(where, "tmp", sum(work));
+  const temporary = temporaryFolder(where, work);
   mkdirSync8(temporary, { recursive: true, mode: 448 });
   return { shell, work, git: repositoryOf2(work), temporary };
 }
@@ -21777,4 +21791,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents b2e0a64ab249e1edcb165fafe7c67e5ef4f8ff20a7760461a695854e88d2ccc7
+// Built from Packages/Box/src/agents 81c38ffbbcf6dc240369ca6435e5e4d0adb2f7799b09e374ed328828efcd4fe2

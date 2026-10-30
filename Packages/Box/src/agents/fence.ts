@@ -160,6 +160,15 @@ export function repositoryOf(folder: string): string {
   return ""
 }
 
+/** A conversation's folder's temporary folder, as the launcher names it: on this Mac, in the app's
+ * own temporary folder by a name made with the box's key (`temporary`, link/fence/state.ts); else
+ * the sandbox's `tmp`. */
+function temporaryFolder(where: string, work: string): string {
+  const [root, key] = (() => { try { return readFileSync(join(where, "temporary"), "utf8").split("\n") } catch { return [] } })()
+  if (!root?.startsWith("/") || !/^[0-9a-f]{64}$/.test(key ?? "")) return join(where, "tmp", sum(work))
+  return join(root, createHash("sha256").update(`${key}\n${work}`).digest("hex").slice(0, 8))
+}
+
 /**
  * For an agent whose commands run through a shell it's given (Claude Code): the box's shell that
  * runs them in the sandbox (the user's own, zsh or bash, by name), what the launcher's told (the
@@ -173,7 +182,7 @@ export function fenceShell(directory: string): { shell: string; work: string; gi
   const shell = [mine, "zsh", "bash"].filter((name) => name === "zsh" || name === "bash").map((name) => join(where, "shell", name)).find((place) => existsSync(place))
   if (!shell) return undefined
   const work = real(directory)
-  const temporary = join(where, "tmp", sum(work))
+  const temporary = temporaryFolder(where, work)
   mkdirSync(temporary, { recursive: true, mode: 0o700 })
   return { shell, work, git: repositoryOf(work), temporary }
 }

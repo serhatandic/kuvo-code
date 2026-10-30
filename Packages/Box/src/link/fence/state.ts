@@ -19,7 +19,7 @@ import { BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SANDBOX_N
 import { tellLauncher } from "./allowed";
 import { agentShellScript, agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
 import { LANDLOCK_RUNNER, landlockPolicy } from "./landlock";
-import { fencePolicy, realish } from "./policy";
+import { appTemporary, fencePolicy, realish } from "./policy";
 import { seatbeltProfile } from "./seatbelt";
 
 export interface FenceState {
@@ -288,6 +288,22 @@ function withdraw(): void {
 }
 
 /**
+ * On this Mac's box, where commands' temporary folders go (`temporary`, which the launcher and the
+ * agents' bridge read): the app's own temporary folder, and the key their names are made from,
+ * kept while it's the same folder so a conversation keeps its own. Elsewhere, none: `tmp`.
+ */
+function writeTemporary(): void {
+  const file = path.join(FOLDER, "temporary");
+  const root = platform === "darwin" ? appTemporary() : null;
+  if (!root) return fs.rmSync(file, { force: true });
+  const [had, key] = (textOf(file) ?? "").split("\n");
+  if (had === root && /^[0-9a-f]{64}$/.test(key ?? "")) return;
+  writePrivate(file, `${root}\n${crypto.randomBytes(32).toString("hex")}\n`);
+  // Those from before, in the box's own folder, go.
+  for (const name of listOf(path.join(FOLDER, "tmp"))) fs.rmSync(path.join(FOLDER, "tmp", name), { recursive: true, force: true });
+}
+
+/**
  * Sets the sandbox up: its files written and checked, then its plugin given to the engine; where it
  * can't run or the check fails (or with the kill switch), the plugin taken away, so commands run as
  * before rather than not at all.
@@ -307,6 +323,7 @@ export function setUpFence(): FenceState {
   }
   try {
     fs.mkdirSync(path.join(FOLDER, "tmp"), { recursive: true, mode: 0o700 });
+    writeTemporary();
     writeExecutable(places.launcher, launcherScript(places));
     if (platform === "linux") writeExecutable(places.runner, LANDLOCK_RUNNER);
     // The shells Claude Code's commands run with (the coding agents' bridge picks one).

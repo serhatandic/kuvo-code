@@ -97,16 +97,24 @@ function ghHosts(home: string): string[] {
   try { return /oauth_token\s*:/.test(fs.readFileSync(file, "utf8")) ? [file] : []; } catch { return []; }
 }
 
+/** This Mac's app's temporary folder (`…/T/<bundle>`), where its box's own is (`…/T/<bundle>/box`),
+ * as the app names it (`/var/folders/…`, not through its link): null for a box that isn't the app's. */
+export function appTemporary(): string | null {
+  if (!IS_MAC) return null;
+  const tmp = path.dirname(path.resolve(os.tmpdir()));
+  return path.basename(tmp) === path.basename(path.dirname(path.resolve(K))) ? tmp : null;
+}
+
 /** This Mac's app's folders, around its box's (`…/Application Support/<bundle>/box`). */
 function macFolders(home: string): { kuvo: string[]; readable: string[] } {
   const app = path.dirname(path.resolve(K));
   const bundle = path.basename(app);
   // The app's temporary folder: the box's own is in it (`…/T/<bundle>/box`).
-  const tmp = path.dirname(path.resolve(os.tmpdir()));
+  const tmp = appTemporary();
   const kuvo = [app, path.join(home, "Library", "Caches", bundle), path.join(home, "Library", "Logs", "Kuvo Code"),
     path.join(home, "Library", "WebKit", bundle), path.join(home, "Library", "HTTPStorages", bundle),
     path.join(home, "Library", "Preferences", `${bundle}.plist`), `/private/tmp/kuvo-ssh-${os.userInfo().uid}`];
-  if (path.basename(tmp) === bundle) kuvo.push(tmp);
+  if (tmp) kuvo.push(tmp);
   return { kuvo, readable: [path.join(app, "bin")] };
 }
 

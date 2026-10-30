@@ -10445,10 +10445,16 @@ function ghHosts(home) {
     return [];
   }
 }
+function appTemporary() {
+  if (!IS_MAC)
+    return null;
+  const tmp = path49.dirname(path49.resolve(os5.tmpdir()));
+  return path49.basename(tmp) === path49.basename(path49.dirname(path49.resolve(K))) ? tmp : null;
+}
 function macFolders(home) {
   const app = path49.dirname(path49.resolve(K));
   const bundle = path49.basename(app);
-  const tmp = path49.dirname(path49.resolve(os5.tmpdir()));
+  const tmp = appTemporary();
   const kuvo = [
     app,
     path49.join(home, "Library", "Caches", bundle),
@@ -10458,7 +10464,7 @@ function macFolders(home) {
     path49.join(home, "Library", "Preferences", `${bundle}.plist`),
     `/private/tmp/kuvo-ssh-${os5.userInfo().uid}`
   ];
-  if (path49.basename(tmp) === bundle)
+  if (tmp)
     kuvo.push(tmp);
   return { kuvo, readable: [path49.join(app, "bin")] };
 }
@@ -10706,6 +10712,7 @@ function seatbeltProfile(policy, options) {
   deny("network-outbound", ...policy.kuvo.map((folder) => `(remote unix-socket ${subpath(folder)})`), ...policy.kuvoPatterns.map((pattern) => `(remote unix-socket ${regex(pattern)})`));
   out.push(";; other apps' sockets that run what they're asked outside it");
   deny("network-outbound", ...(policy.sockets ?? []).map((folder) => `(remote unix-socket ${subpath(folder)})`));
+  allow("network-outbound", `(remote unix-socket ${param("TMP")})`);
   allow("network-outbound", `(remote unix-socket (literal (param "SSH")))`);
   out.push(";; what would run outside the sandbox: launchd jobs, apps opened (LaunchServices), Apple Events");
   denyAll("job-creation");
@@ -10761,6 +10768,14 @@ function launcherScript(places) {
     `sum=$( (printf '%s' "$work" | sha256sum || printf '%s' "$work" | shasum -a 256) 2>/dev/null | cut -c 1-32)`,
     `case $sum in ????????????????????????????????) ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
     `tmp=$F/tmp/$sum`,
+    ...places.platform === "darwin" ? [
+      `if [ -f "$F/temporary" ]; then`,
+      `  { IFS= read -r t_root; IFS= read -r t_key; } <"$F/temporary"`,
+      `  t_name=$( (printf '%s
+%s' "$t_key" "$work" | shasum -a 256) 2>/dev/null | cut -c 1-8)`,
+      `  case $t_root:$t_key:$t_name in /*:????????????????????????????????????????????????????????????????:????????) tmp=$t_root/$t_name ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
+      `fi`
+    ] : [],
     `allowed=$F/allowed/$sum`,
     ...places.platform === "darwin" ? [
       `escaped() { printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\\\&/g'; }`,
@@ -10773,6 +10788,7 @@ function launcherScript(places) {
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => `a${at}=$F/none r${at}=-`),
     `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; ${places.platform === "darwin" ? `eval "r$i=\\$(escaped \\"\\$line\\")"; ` : ""}i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
+    ...places.platform === "darwin" ? [`tmp=$(cd "$tmp" 2>/dev/null && pwd -P) || { echo "This command can't run: its temporary folder isn't there." >&2; exit 126; }`] : [],
     `own=$F/none`,
     `case \${OPENCODE_SESSION_ID-} in`,
     `  ses_*[!A-Za-z0-9_]*|ses_) ;;`,
@@ -11247,6 +11263,21 @@ function withdraw() {
   fs50.rmSync(READY, { force: true });
   fs50.rmSync(NOTE, { force: true });
 }
+function writeTemporary() {
+  const file = path51.join(FOLDER, "temporary");
+  const root = platform === "darwin" ? appTemporary() : null;
+  if (!root)
+    return fs50.rmSync(file, { force: true });
+  const [had, key] = (textOf(file) ?? "").split(`
+`);
+  if (had === root && /^[0-9a-f]{64}$/.test(key ?? ""))
+    return;
+  writePrivate(file, `${root}
+${crypto21.randomBytes(32).toString("hex")}
+`);
+  for (const name of listOf(path51.join(FOLDER, "tmp")))
+    fs50.rmSync(path51.join(FOLDER, "tmp", name), { recursive: true, force: true });
+}
 function setUpFence() {
   const can = able();
   if (!fenceWanted()) {
@@ -11261,6 +11292,7 @@ function setUpFence() {
   }
   try {
     fs50.mkdirSync(path51.join(FOLDER, "tmp"), { recursive: true, mode: 448 });
+    writeTemporary();
     writeExecutable(places.launcher, launcherScript(places));
     if (platform === "linux")
       writeExecutable(places.runner, LANDLOCK_RUNNER);

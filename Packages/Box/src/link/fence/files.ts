@@ -99,6 +99,17 @@ export function launcherScript(places: FencePlaces): string {
     `sum=$( (printf '%s' "$work" | sha256sum || printf '%s' "$work" | shasum -a 256) 2>/dev/null | cut -c 1-32)`,
     `case $sum in ????????????????????????????????) ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
     `tmp=$F/tmp/$sum`,
+    // On this Mac, in the app's own temporary folder instead (`temporary`: it, and a key commands
+    // can't read), by a short name: a socket's path is at most 103 letters on macOS, and a server's
+    // tests or Python's multiprocessing make theirs in it. (Named from the key, so a command still
+    // can't pick a folder whose name another conversation's has.)
+    ...(places.platform === "darwin" ? [
+      `if [ -f "$F/temporary" ]; then`,
+      `  { IFS= read -r t_root; IFS= read -r t_key; } <"$F/temporary"`,
+      `  t_name=$( (printf '%s\n%s' "$t_key" "$work" | shasum -a 256) 2>/dev/null | cut -c 1-8)`,
+      `  case $t_root:$t_key:$t_name in /*:????????????????????????????????????????????????????????????????:????????) tmp=$t_root/$t_name ;; *) echo "This command can't run in the sandbox here: it can't name its temporary folder." >&2; exit 126 ;; esac`,
+      `fi`,
+    ] : []),
     // What Also Allowed gives this project's commands to write (fence/allowed.ts): the box's file
     // for it, by the same sum, one folder a line; each that isn't given stays where nothing is.
     `allowed=$F/allowed/$sum`,
@@ -114,6 +125,8 @@ export function launcherScript(places: FencePlaces): string {
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => `a${at}=$F/none r${at}=-`),
     `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; ${places.platform === "darwin" ? `eval "r$i=\\$(escaped \\"\\$line\\")"; ` : ""}i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
+    // (As the sandbox compares paths: through links, `/var` being `/private/var`.)
+    ...(places.platform === "darwin" ? [`tmp=$(cd "$tmp" 2>/dev/null && pwd -P) || { echo "This command can't run: its temporary folder isn't there." >&2; exit 126; }`] : []),
     // Its conversation's wake-ups and watches (kuvo-wake): its bot's folder, or its own in the
     // box's wakes folder, which this makes with the folder it works in (never the command's: a
     // watch's check runs there). The engine names the conversation; your ! commands have none, and
