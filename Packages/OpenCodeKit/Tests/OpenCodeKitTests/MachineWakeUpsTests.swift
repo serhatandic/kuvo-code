@@ -35,7 +35,8 @@ import Testing
               case "$1" in
                 --data-binary) method=POST; body=$2; shift ;;
                 -w) write=$2; shift ;;
-                -H|-K|-m|--noproxy) shift ;;
+                -H) case "$2" in x-opencode-directory:*) printf '%s\n' "${2#*: }" >>"$K/folders" ;; esac; shift ;;
+                -K|-m|--noproxy) shift ;;
                 -*f*) fail=1 ;;
                 http://*) url=$1 ;;
               esac
@@ -48,6 +49,9 @@ import Testing
             code=404; out=
             case "$method $path" in "POST "*/prompt) code=200; out='{}' ;; esac
             if [ -f "$K/answers/$key" ]; then out=$(cat "$K/answers/$key"); code=$(cat "$K/answers/$key.code" 2>/dev/null || echo 200); fi
+            # Answers given in turn, one a request, before the one that stays.
+            next=$(ls "$K/answers/$key.turns" 2>/dev/null | sort -n | head -1)
+            if [ -n "$next" ]; then out=$(cat "$K/answers/$key.turns/$next"); code=200; rm "$K/answers/$key.turns/$next"; fi
             if [ -n "$fail" ] && [ "$code" -ge 400 ]; then exit 22; fi
             printf '%s' "$out"
             case "$write" in *http_code*) printf '\n%s' "$code" ;; esac
@@ -89,6 +93,18 @@ import Testing
         let key = "\(port) \(method) \(path)".map { "/ ?".contains($0) ? "_" : String($0) }.joined()
         try write(k.appending(path: "answers/\(key)"), body)
         try write(k.appending(path: "answers/\(key).code"), "\(code)")
+    }
+
+    /// What `port` answers `method path` with, in turn (one a request), before what `answer` says.
+    private func answers(_ port: Int, _ method: String, _ path: String, _ bodies: [String]) throws {
+        let key = "\(port) \(method) \(path)".map { "/ ?".contains($0) ? "_" : String($0) }.joined()
+        for (index, body) in bodies.enumerated() { try write(k.appending(path: "answers/\(key).turns/\(index + 1)"), body) }
+    }
+
+    /// The requests made, as `port method path`, in order.
+    private func requests() -> [String] {
+        let log = (try? String(contentsOf: k.appending(path: "requests"), encoding: .utf8)) ?? ""
+        return log.split(separator: "\n").map { $0.split(separator: " ").prefix(3).joined(separator: " ") }
     }
 
     /// The prompts sent, as `port session text`.
@@ -191,6 +207,25 @@ import Testing
         try fire()
         #expect(prompts().count == 1, "not queued a second time")
         #expect(wakes(of: bot).count == 1 && Int(wakes(of: bot)[0].split(separator: "-")[0])! > Int(Date.now.timeIntervalSince1970))
+    }
+
+    @Test(arguments: WakesTests.shells)
+    func aWakeUpWaitsForItsFoldersToolsThoughTheEngineHasOnlyJustOpenedIt(_ shell: String) throws {
+        defer { cleanUp() }
+        let bot = try folder("bot_a", session: "ses_a", wake: "Morning report")
+        try write(bot.appending(path: "directory"), "/home/me/Çalışma notes")
+        // Just opened: none listed yet, then its browser connecting, then connected.
+        let none = "{}", pending = #"{"browser":{"status":"pending"}}"#, connected = #"{"browser":{"status":"connected"}}"#
+        try answers(Self.enginePort, "GET", "api/mcp", [none, none, pending, connected])
+        try answer(Self.enginePort, "GET", "api/mcp", connected)
+        try fire(shell: shell)
+        let asked = requests()
+        let sent = asked.firstIndex(of: "\(Self.enginePort) POST api/session/ses_a/prompt")
+        #expect(sent != nil)
+        #expect(asked.prefix(sent ?? 0).filter { $0.hasSuffix("api/mcp") }.count == 4, "\(asked)")
+        // Its folder named as the engine reads it (encodeURIComponent).
+        let folders = (try? String(contentsOf: k.appending(path: "folders"), encoding: .utf8)) ?? ""
+        #expect(folders.split(separator: "\n").first.map(String.init) == "/home/me/Çalışma notes".addingPercentEncoding(withAllowedCharacters: .init(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*'()")))
     }
 
     @Test func aPausedBotsWakeUpsWait() throws {

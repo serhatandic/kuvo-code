@@ -599,6 +599,16 @@ public enum Wakes {
     delivered() { [ -f "$1/pending" ] && mv -f "$1/pending" "$1/last"; rm -f "$1/message"; }
 
     random() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c "$1"; }
+    # A folder's path as a header carries it, as encodeURIComponent does: each byte but letters,
+    # digits and -_.!~*'() as %XX (UTF-8 names too).
+    encoded() {
+      for h in $(printf '%s' "$1" | od -An -v -tx1); do
+        case $h in
+          2[1d-e]|27|28|29|2a|3[0-9]|4[1-9a-f]|5[0-9a]|5f|6[1-9a-f]|7[0-9a]|7e) printf "\\$(printf '%03o' "0x$h")" ;;
+          *) printf '%%%s' "$h" | tr 'a-f' 'A-F' ;;
+        esac
+      done
+    }
 
     # The time zone a bot's times are in ($1, its folder, ending in /): its timezone file's, from
     # the computer's own zone files, or from the copy of your Mac's beside it, on a machine that
@@ -692,17 +702,23 @@ public enum Wakes {
       # Sends a wake-up's text to the bot's session; true once it's gone.
       deliver() {
         # The bot's folder's tools (its browser, integrations) first: the engine connects them
-        # after it opens the folder, and a wake-up sent sooner goes without them. Twenty seconds
-        # at most, as an integration's server can take a while the first time.
+        # after it opens the folder, and a wake-up sent sooner goes without them. A folder it has
+        # only just opened lists none for a moment before they're pending. Twenty seconds at most,
+        # as an integration's server can take a while the first time.
         if [ -f "${bot}directory" ] && command -v curl >/dev/null 2>&1 && [ -z "$tools" ]; then
-          tools=1; waited=; tries=0
-          folder=$(sed -e 's/%/%25/g' -e 's/ /%20/g' "${bot}directory")
-          while [ "$tries" -lt 80 ]; do
-            tries=$((tries + 1))
-            printf 'user = "opencode:%s"\n' "$password" | curl -q -sf -m 5 --noproxy '*' -K - -H "x-opencode-directory: $folder" "http://127.0.0.1:$port/api/mcp" | grep -q '"pending"' || break
-            waited=1; sleep 0.25
+          tools=1; pended=; began=$(date +%s)
+          folder=$(encoded "$(cat "${bot}directory")")
+          while listed=$(printf 'user = "opencode:%s"\n' "$password" | curl -q -sf -m 5 --noproxy '*' -K - -H "x-opencode-directory: $folder" "http://127.0.0.1:$port/api/mcp"); do
+            waited=$(($(date +%s) - began))
+            [ "$waited" -ge 20 ] && break
+            case "$listed" in
+              *'"pending"'*) pended=1 ;;
+              *'"status"'*) break ;;
+              *) [ "$waited" -ge 3 ] && break ;;
+            esac
+            sleep 0.25
           done
-          [ -n "$waited" ] && sleep 1.5
+          [ -n "$pended" ] && sleep 1.5
         fi
         ms=$(date +%s%3N 2>/dev/null); case "$ms" in *[!0-9]*|'') ms=$((now * 1000));; esac
         id=msg_$(printf '%012x' $(((ms * 4096 + 1) & 0xFFFFFFFFFFFF)))$(random 14)
