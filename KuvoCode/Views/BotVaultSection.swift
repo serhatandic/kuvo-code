@@ -138,6 +138,7 @@ struct VaultAskCards: View {
             }
             .padding(14)
             .modifier(ComposerSurface())
+            .transition(.opacity.combined(with: .offset(y: 6)))
         }
     }
 }

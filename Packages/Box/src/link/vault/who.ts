@@ -22,7 +22,8 @@ export interface Caller {
   bot?: string;
   botName?: string;
   /** A bot's seat in a group chat, which nobody's there to answer for for good: it asks you each
-   * time, whatever its grants (`grantFor`), and never for good (`alwaysFor`). */
+   * time, whatever its grants (`grantFor`), and never for good (`alwaysFor`). So does a
+   * conversation whose root the engine didn't say. */
   seat?: boolean;
   /** That seat's group chat, where its asks show. */
   group?: string;
@@ -51,6 +52,8 @@ export async function callerOf(session: unknown, readEngine: () => EngineRecord,
   let current = await sessionAt(targets, session);
   for (let step = 0; step < 5 && current?.parentID; step++) current = (await sessionAt(targets, current.parentID)) ?? current;
   const root = current?.id ?? session;
+  // (A conversation whose root the engine didn't say may be a seat's: it asks you, as one does.)
+  const unsure = !!current?.parentID;
   // (A seat is its bot's, by the chat's mark on it: its asks name the bot, and its pause holds.)
   const seat = current?.metadata?.kuvo?.seat as { bot?: unknown; group?: unknown } | undefined;
   const bots = listBots();
@@ -62,7 +65,7 @@ export async function callerOf(session: unknown, readEngine: () => EngineRecord,
     ...(current?.title ? { sessionName: current.title } : {}),
     ...(folder ? { folder: path.resolve(folder) } : {}),
     ...(bot ? { bot: bot.id, botName: bot.name } : {}),
-    ...(seat ? { seat: true, ...(typeof seat.group === "string" ? { group: seat.group } : {}) } : {}),
+    ...(seat || unsure ? { seat: true, ...(typeof seat?.group === "string" && seat.group ? { group: seat.group } : {}) } : {}),
   };
 }
 

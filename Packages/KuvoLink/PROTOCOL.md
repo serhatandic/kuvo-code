@@ -2567,12 +2567,15 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
   session?, sessionName?, bot?, botName?, item?, itemName?, need?, why?, site?, machine?, group?}`.
   `use`: an item it may use only by asking (or has no grant for); `item`: something it needs
   (`need`). `group`: asked from a bot's seat in that group chat (`session` the seat, `bot` its
-  bot), which a client shows in the chat, since no one opens a seat. A seat asks each time, whatever
-  it may use on its own, and is answered only once: no Always.
+  bot), which a client shows in the chat, since no one opens a seat. The seat is on its bot's own
+  computer, so a chat follows the asks of each of its members' boxes as well as its own. A seat asks
+  each time, whatever it may use on its own, and is answered only once: no Always. So does a
+  conversation whose root the engine can't say just then, without a `group`.
   `POST kuvo/vault/asks/<id> {answer: "once" | "always" | "no", item?}` → `{}` (`item`, for an
   `item` ask, the one you give; `always` grants it on its own, to the bot or, for another session,
   its project; for a seat's, it's once). An agent waits 15 minutes, then takes it as no. Your phones hear of one still open
-  after two seconds (`category: "ask"`, `data: {session?, vaultAsk}`).
+  after two seconds (`category: "ask"`, `data: {session?, vaultAsk}`, or a seat's `{group, vaultAsk}`,
+  which opens its group chat).
 
 **The agents' own.** Both tool servers pass these on as they come, with the calling conversation.
 Each is answered only while that conversation is making the call: its engine (or the coding agents'

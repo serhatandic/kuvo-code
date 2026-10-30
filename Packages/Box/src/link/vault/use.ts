@@ -86,7 +86,7 @@ export async function mayUse(item: VaultItem, caller: Caller, use: Use): Promise
     return { ok: false, message: `You may not use “${item.name}”. Ask the user for it with vault_ask.` };
   }
   note({ what: "asked", ...itemOf(item), ...whoOf(caller), ...where });
-  const answered = await ask({ kind: "use", ...whoOf(caller), ...(caller.seat ? { group: caller.group ?? "" } : {}), item: item.id, itemName: item.name, ...(use.site ? { site: use.site } : {}), ...(use.why ? { why: use.why } : {}), ...(machineName() ? { machine: machineName() } : {}) }, use.signal);
+  const answered = await ask({ kind: "use", ...whoOf(caller), ...(caller.group ? { group: caller.group } : {}), item: item.id, itemName: item.name, ...(use.site ? { site: use.site } : {}), ...(use.why ? { why: use.why } : {}), ...(machineName() ? { machine: machineName() } : {}) }, use.signal);
   if (answered.answer === "no") {
     note({ what: "declined", ...itemOf(item), ...whoOf(caller), ...where, ...(answered.client ? { client: answered.client } : {}) });
     return { ok: false, message: `The user didn't let you use “${item.name}”.` };
