@@ -66,7 +66,7 @@ import { setVaultTell } from "./vault/use";
 import { HELD_FILE, NoticeHold } from "./notices/hold";
 import { noticeJSON, pushTo } from "./notices/notice";
 import { announce, forgetMacsAgents, refreshOwn } from "./peers/agents";
-import { countAway, forgetOldMacs, KEY, leaveMac, macsOf, peersOf, takeLegacyPeers } from "./peers/known";
+import { forgetOldMacs, KEY, leaveMac, macsOf, noteOnline, peersOf, takeLegacyPeers } from "./peers/known";
 import { peerMail, receiveMail } from "./peers/mail";
 import { watchSeats } from "./peers/seats";
 import { changePersonalities, mergePersonalities, readPersonalities } from "./personalities/library";
@@ -145,7 +145,7 @@ export { ASK_HOLD, LONGEST_LEASE, NEWS_HOLD, NoticeHold, RESTORED_WAIT, SHOWN_WI
 export { describeForm, describePermission, groupNotice, noticeFor, projectNameOf, settleHeld } from "./notices/news";
 export { STEER_AFTER, steering, watchBox, watchEvents } from "./engine/watch";
 export { answerBotKeys, refreshBotsKeys } from "./areas/bot-keys";
-export { forgetOldMacs, leaveMac, macsOf, mailFor, movedOf, openMail, peersOf, takeLegacyPeers } from "./peers/known";
+export { forgetOldMacs, leaveMac, macsOf, mailFor, movedOf, noteOnline, openMail, peersOf, takeLegacyPeers } from "./peers/known";
 export { noteDocsChanged } from "./documents/changed";
 export { authorizePhone, confirmPhone, foldPhones, newPairing, pairPhone, removeAsMac, removePhones } from "./phones";
 export { noLongerNeeded } from "./keeper";
@@ -345,8 +345,8 @@ async function run(): Promise<void> {
   setInterval(() => {
     if (current?.welcomed) announce(current, readEngineFile).catch(() => {});
     else refreshOwn(readEngineFile).catch(() => {});
-    // Online: its Macs' 30 days go on (`countAway`); time without the relay doesn't count.
-    if (current?.welcomed) try { updateLink(link => (link && macsOf(link).length ? (countAway(link), link) : null)); } catch {}
+    // Running: its Macs' 30 days go on, the relay there or not (time off doesn't count).
+    try { noteOnline(); } catch {}
   }, 60_000);
   setInterval(() => {
     if (current?.welcomed && docsNoted()) try { docsChanged(current, { tell: true }); } catch {}

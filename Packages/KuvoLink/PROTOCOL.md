@@ -1116,7 +1116,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   or a phone), and `home`, the Mac that started its engine (`{"mac", "name"?}`, its name where
   its start noted one). It also says who uses it, for an uninstall to name whom it would stop it
   for: `macs`, the Macs that set it up (`[{key, name?, seen}]`: each one's key, its name where its
-  setup gave one, `macName`, and when it was last heard from, in ms), and `phones`, how many phones
+  setup gave one, `macName`, and when it was last heard from, in ms, moved on by the time the
+  machine was off since), and `phones`, how many phones
   reach it. A Mac also names `integrations`, each integration's name by its MCP
   server's (`{"microsoft-365": "Outlook and Microsoft 365", …}`), for a card when one asks something.
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
@@ -2198,7 +2199,7 @@ On a machine the bridge keeps its state in `~/.kuvo-code/run/link.json` (mode 60
 
 ```json
 {"relay": "wss://…", "secret": "…", "key": "<static private key>", "sign": "<signing key's seed>", "mac": "<the last Mac's static key>",
- "macs": ["<each Mac that set it up>"], "macSigns": {"<Mac>": "<its signing key>"}, "macSeen": {"<Mac>": <when it came, here, moved on by time away since>}, "online": <its last moment online>, "macNames": {"<Mac>": "<its name>"},
+ "macs": ["<each Mac that set it up>"], "macSigns": {"<Mac>": "<its signing key>"}, "macSeen": {"<Mac>": <when it came, here, moved on by time off since>}, "macNames": {"<Mac>": "<its name>"},
  "docs": {"<origin> <kind>": {"d": "…", "s": "…"}}, "own": {"<kind>": {"n", "h", "b"}}, "views": {"<origin>": {"n", "h"}},
  "phones": [{"key": "…", "name": "…", "added": 1760000000, "from": "mac", "mac": "<the Mac that listed it>", "address": "…", "pairing": "…"}],
  "removed": [{"key": "…", "pairing": "…"}]}
@@ -3068,8 +3069,9 @@ machine's bridge, held to `Vectors/link.json` (`phoneBooks`):
   stay. A removal in any phones document a box takes is noted there too, so one removed anywhere
   is removed everywhere, reached or not. One from before Macs were named (no `mac`) stays until a
   Mac signs its phones. A Mac the machine hasn't heard from in 30 days (setup or any mail) of its
-  own time online (noted each minute while its relay is up; time off, or without the relay, doesn't
-  count) no longer counts, and its phones go; it counts again once it sets the machine up.
+  box running (noted every few minutes in `run/online`; time off doesn't count, and a clock set
+  wrong and then right moves no Mac on) no longer counts, and its phones go; it counts again once
+  it sets the machine up.
 
 On both, for a paired phone:
 

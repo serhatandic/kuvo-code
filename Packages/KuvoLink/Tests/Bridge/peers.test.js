@@ -58,19 +58,43 @@ test("a Mac that signs no documents yet (Kuvo Code 0.8.0-beta.1): its peers come
   assert.deepEqual(heard, [mac.pub]);
 });
 
-test("a machine that was off for weeks keeps both its Macs when one writes first: only time it was online counts toward a Mac's 30 days", () => {
+test("a machine that was off for weeks keeps both its Macs when one writes first: only time its box ran counts toward a Mac's 30 days", () => {
   const other = box("mac"), phone = { key: k(crypto.randomBytes(32)), name: "Other iPhone", added: 1, from: "mac", mac: other.pub, pairing: "" };
-  const then = Date.now() - 35 * 24 * 3600 * 1000;
-  // Last online five weeks ago, when both Macs had just written.
-  fresh({ macs: [mac.pub, other.pub], macSeen: { [mac.pub]: then, [other.pub]: then }, online: then, phones: [phone] });
+  const day = 24 * 3600 * 1000, now = Date.now(), then = now - 35 * day;
+  const macs = () => link.macsOf(link.readLink());
+  // Last running five weeks ago, when both Macs had just written; and the same from a box that
+  // noted no time running yet (its Macs' last words stand for it).
+  for (const noted of [true, false]) {
+    fresh({ macs: [mac.pub, other.pub], macSeen: { [mac.pub]: then, [other.pub]: then }, phones: [phone] });
+    if (noted) link.noteOnline(then);
+    link.receiveMail(mailFrom(mac, { agents: { at: 1, list: [] } }));
+    assert.deepEqual(macs(), [mac.pub, other.pub], noted ? "noted" : "not noted");
+    assert.deepEqual(link.readLink().phones.map(each => each.name), ["Other iPhone"]);
+  }
+  // Running all that time, the relay there or not, and not a word from the other Mac: it no longer
+  // counts, nor its phones.
+  fresh({ macs: [mac.pub, other.pub], macSeen: { [mac.pub]: then, [other.pub]: then }, phones: [phone] });
+  for (let at = then; at < now; at += 60_000 * 4) link.noteOnline(at);
+  assert.deepEqual(macs(), [mac.pub, other.pub], "only heard from as a Mac writes");
   link.receiveMail(mailFrom(mac, { agents: { at: 1, list: [] } }));
-  assert.deepEqual(link.macsOf(link.readLink()), [mac.pub, other.pub]);
-  assert.deepEqual(link.readLink().phones.map(each => each.name), ["Other iPhone"]);
-  // Online all that time, and not a word from the other Mac: it no longer counts, nor its phones.
-  fresh({ macs: [mac.pub, other.pub], macSeen: { [mac.pub]: then, [other.pub]: then }, online: Date.now() - 60_000, phones: [phone] });
-  link.receiveMail(mailFrom(mac, { agents: { at: 1, list: [] } }));
-  assert.deepEqual(link.macsOf(link.readLink()), [mac.pub]);
+  assert.deepEqual(macs(), [mac.pub]);
   assert.deepEqual(link.readLink().phones, []);
+});
+
+test("a machine's clock set wrong and then right (a board without a clock battery) moves no Mac nearer its 30 days, or past them", () => {
+  const other = box("mac"), day = 24 * 3600 * 1000, now = Date.now();
+  const seen = { [mac.pub]: now - 10 * day, [other.pub]: now - 20 * day };
+  for (const wrong of [now - 56 * 365 * day, now + 40 * day]) {
+    fresh({ macs: [mac.pub, other.pub], macSeen: { ...seen } });
+    link.noteOnline(now);
+    const before = link.readLink().macSeen;
+    link.noteOnline(wrong);
+    link.noteOnline(now + 60_000);
+    const after = link.readLink().macSeen;
+    for (const key of [mac.pub, other.pub]) assert.ok(Math.abs(after[key] - before[key]) <= 60_000, `moved ${after[key] - before[key]} ms`);
+    link.receiveMail(mailFrom(mac, { agents: { at: 1, list: [] } }));
+    assert.deepEqual(link.macsOf(link.readLink()), [mac.pub, other.pub]);
+  }
 });
 
 test("each box's agents: a newer list kept, and list_agents here names each by where it is", () => {
