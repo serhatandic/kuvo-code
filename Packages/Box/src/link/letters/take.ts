@@ -44,6 +44,9 @@ export interface TakeLetterOptions {
   now?: number;
   wait?: number;
   moving?: (session: string) => Promise<boolean>;
+  /** Whether the coding agents' bridge runs here now, among `targets`: while it doesn't, a
+   * conversation the engine doesn't know may be one of its, so a letter for it comes again. */
+  bridge?: boolean;
 }
 
 /** A message in a session, as far as an answer is read from it: its id, whose it is, its blocks of text. */
@@ -119,6 +122,10 @@ export async function answerTo(target: Target, session: string, id: string, { wa
   return null;
 }
 
+// Not known to the engine while the coding agents' bridge isn't running (it's starting, or starting
+// over): maybe a Claude Code or Codex conversation, so asked again later, as for any other retry.
+const BRIDGE_AWAY = "Its coding agents aren't running here now: it comes again once they are.";
+
 // A letter from a peer: delivered once, said to be there (or why not, and whether to try again),
 // and with `wait`, answered by a letter back. Who it's from is the sending box's own agent, by the
 // name that box gave it, only when that box alone lists it and it isn't one of this box's own;
@@ -129,7 +136,7 @@ export async function answerTo(target: Target, session: string, id: string, { wa
 // lives on another now, comes again, and reaches it where it lives then. `send(peer, payload)`
 // mails the peer; `answer(letter)` sends this box's answer back.
 // (`send` and `targets` are always given: the `{}` is only there as the default.)
-export async function takeLetter(sender: LetterSender, letter: unknown, { send, targets, answer = () => {}, told = readPeerAgents(), peers = peersOf(readLink()), moved = movedOf(readLink()), now = Date.now(), wait, moving = async () => false }: TakeLetterOptions = {} as TakeLetterOptions): Promise<void> {
+export async function takeLetter(sender: LetterSender, letter: unknown, { send, targets, answer = () => {}, told = readPeerAgents(), peers = peersOf(readLink()), moved = movedOf(readLink()), now = Date.now(), wait, moving = async () => false, bridge = true }: TakeLetterOptions = {} as TakeLetterOptions): Promise<void> {
   if (!isObject(letter) || typeof letter.id !== "string" || !LETTER_ID.test(letter.id)) return;
   const { id } = letter;
   const no = (why: string, again = false) => send(sender, { delivered: { id, ok: false, why, ...(again ? { retry: true } : {}) } });
@@ -143,7 +150,7 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     noteSeen(id, now);
     return send(sender, { delivered: { id, ok: true } });
   }
-  if (isObject(letter.read)) return readFor(sender, letter as ReadLetter, { send, targets, answer, now, moved, moving });
+  if (isObject(letter.read)) return readFor(sender, letter as ReadLetter, { send, targets, answer, now, moved, moving, bridge });
   // Letters from each peer lately, a few at a time, as a conversation's messages are counted: not
   // one that can't be delivered yet, so one tried again and again leaves room for the rest.
   let counted: number | null = allowed("messages", `peer:${sender.key}`, now);
@@ -159,7 +166,7 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     const lives = moved.get(letter.to);
     if ((lives && lives !== ownKey(readLink() ?? {})) || (await moving(letter.to))) return notDelivered("It's moving to another computer: it comes again once it's there.", true);
     place = await placeOfSession(letter.to, targets);
-    if (!place) return notDelivered("There's no such conversation here.");
+    if (!place) return bridge ? notDelivered("There's no such conversation here.") : notDelivered(BRIDGE_AWAY, true);
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return notDelivered("That conversation doesn't take messages.");
     // Its sender: that box's own agent, as it named it; one of this box's own claimed from there isn't.
@@ -190,7 +197,7 @@ type ReadLetter = { id: string; to: string; from?: unknown; read: { query?: unkn
 // then its words go back as the letter's answer, as much as fits in one. Any agent of your other
 // computers may read one here, as on this one, but only one an agent could be (not a subagent's, a
 // group chat's seat, nor one put away). Reading isn't writing to it: it isn't counted.
-async function readFor(sender: LetterSender, letter: ReadLetter, { send, targets, answer = () => {}, now = Date.now(), moved = new Map(), moving = async () => false }: Pick<TakeLetterOptions, "send" | "targets" | "answer" | "now" | "moved" | "moving">): Promise<void> {
+async function readFor(sender: LetterSender, letter: ReadLetter, { send, targets, answer = () => {}, now = Date.now(), moved = new Map(), moving = async () => false, bridge = true }: Pick<TakeLetterOptions, "send" | "targets" | "answer" | "now" | "moved" | "moving" | "bridge">): Promise<void> {
   const { id } = letter;
   const no = (why: string, again = false) => send(sender, { delivered: { id, ok: false, why, ...(again ? { retry: true } : {}) } });
   if (typeof letter.from !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(letter.from)) return no("Its answer has nowhere to go.");
@@ -202,7 +209,7 @@ async function readFor(sender: LetterSender, letter: ReadLetter, { send, targets
     const lives = moved.get(letter.to);
     if ((lives && lives !== ownKey(readLink() ?? {})) || (await moving(letter.to))) return no("It's moving to another computer: it's read once it's there.", true);
     const place = await placeOfSession(letter.to, targets);
-    if (!place) return no("There's no such conversation here.");
+    if (!place) return bridge ? no("There's no such conversation here.") : no(BRIDGE_AWAY, true);
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return no("That conversation can't be read.");
     const markdown = await readConversation(place.target, letter.to, place.data ?? {}, String(place.data?.title || "New session"));

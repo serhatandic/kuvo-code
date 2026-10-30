@@ -133,18 +133,22 @@ var scriptIs = (file) => {
 // Packages/Box/src/link/engine/client.ts
 var readEngineFile = () => JSON.parse(fs2.readFileSync(ENGINE_FILE, "utf8"));
 var readBridgeFile = () => JSON.parse(fs2.readFileSync(BRIDGE_FILE, "utf8"));
-function peerTargets() {
+function peerPlaces() {
   const targets = [];
+  let bridge = false;
   try {
     targets.push(readEngineFile());
   } catch {}
   try {
-    const bridge = readBridgeFile();
-    if (bridge?.port && bridge?.password && processRuns(bridge.pid, "kuvo-agents"))
-      targets.push(bridge);
+    const record = readBridgeFile();
+    if (record?.port && record?.password && processRuns(record.pid, "kuvo-agents")) {
+      targets.push(record);
+      bridge = true;
+    }
   } catch {}
-  return targets;
+  return { targets, bridge };
 }
+var peerTargets = () => peerPlaces().targets;
 function engineGet(engine, route) {
   return fetch(`http://127.0.0.1:${engine.port}/${route}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` }, signal: AbortSignal.timeout(1e4) }).then((response) => response.ok ? response.json() : Promise.reject(new Error(`${response.status}`)));
 }
@@ -11750,7 +11754,8 @@ async function answerTo(target, session, id, { wait = 2000, signal } = {}) {
   }
   return null;
 }
-async function takeLetter(sender, letter, { send, targets, answer = () => {}, told = readPeerAgents(), peers = peersOf(readLink()), moved = movedOf(readLink()), now = Date.now(), wait, moving = async () => false } = {}) {
+var BRIDGE_AWAY = "Its coding agents aren't running here now: it comes again once they are.";
+async function takeLetter(sender, letter, { send, targets, answer = () => {}, told = readPeerAgents(), peers = peersOf(readLink()), moved = movedOf(readLink()), now = Date.now(), wait, moving = async () => false, bridge = true } = {}) {
   if (!isObject(letter) || typeof letter.id !== "string" || !LETTER_ID.test(letter.id))
     return;
   const { id } = letter;
@@ -11768,7 +11773,7 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
     return send(sender, { delivered: { id, ok: true } });
   }
   if (isObject(letter.read))
-    return readFor(sender, letter, { send, targets, answer, now, moved, moving });
+    return readFor(sender, letter, { send, targets, answer, now, moved, moving, bridge });
   let counted = allowed2("messages", `peer:${sender.key}`, now);
   if (counted === null)
     return no("It's sent a lot of messages in the last few minutes.", true);
@@ -11786,7 +11791,7 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
       return notDelivered("It's moving to another computer: it comes again once it's there.", true);
     place = await placeOfSession(letter.to, targets);
     if (!place)
-      return notDelivered("There's no such conversation here.");
+      return bridge ? notDelivered("There's no such conversation here.") : notDelivered(BRIDGE_AWAY, true);
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
       return notDelivered("That conversation doesn't take messages.");
@@ -11812,7 +11817,7 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
   if (text)
     answer({ from: letter.to, to: letter.from, text, answers: id, peer: sender.key });
 }
-async function readFor(sender, letter, { send, targets, answer = () => {}, now = Date.now(), moved = new Map, moving = async () => false }) {
+async function readFor(sender, letter, { send, targets, answer = () => {}, now = Date.now(), moved = new Map, moving = async () => false, bridge = true }) {
   const { id } = letter;
   const no = (why, again = false) => send(sender, { delivered: { id, ok: false, why, ...again ? { retry: true } : {} } });
   if (typeof letter.from !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(letter.from))
@@ -11827,7 +11832,7 @@ async function readFor(sender, letter, { send, targets, answer = () => {}, now =
       return no("It's moving to another computer: it's read once it's there.", true);
     const place = await placeOfSession(letter.to, targets);
     if (!place)
-      return no("There's no such conversation here.");
+      return bridge ? no("There's no such conversation here.") : no(BRIDGE_AWAY, true);
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
       return no("That conversation can't be read.");
@@ -11847,7 +11852,7 @@ async function readFor(sender, letter, { send, targets, answer = () => {}, now =
 // Packages/Box/src/link/peers/mail.ts
 var answeringAsk = null;
 var asksFrom = new Map;
-function peerMail(sender, payload, host, targets = () => []) {
+function peerMail(sender, payload, host, places = () => ({ targets: [], bridge: true })) {
   const send = (peer, message) => {
     const link = readLink();
     const bytes = link && mailFor(peer, { ...message, at: Date.now() }, link);
@@ -11873,7 +11878,7 @@ function peerMail(sender, payload, host, targets = () => []) {
     }
   }
   if (isObject(payload.letter))
-    takeLetter(sender, payload.letter, { send, targets: targets(), answer: leaveAnswer, moving: async (session) => frozen().has(session) }).catch(() => {});
+    takeLetter(sender, payload.letter, { send, ...places(), answer: leaveAnswer, moving: async (session) => frozen().has(session) }).catch(() => {});
   if (isObject(payload.move))
     takeMoveMail(sender, payload.move).catch(() => {});
   if (isObject(payload.seat) || isObject(payload.seatPart))
@@ -16936,7 +16941,7 @@ async function runMacLink() {
         hello: { v: 1, kind: "mac", name: config.name, app: config.app, engine: engine.version ?? null },
         authorize: (key, hello, address) => Boolean(macLink.config?.phones) && authorizePhone(key, hello, address),
         confirmed: confirmPhone,
-        mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerTargets)),
+        mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerPlaces)),
         handle: macFront(engineHandler(readEngineFile, { name: config.name }, readBridgeFile, (changed) => host.keepOnly(new Set((changed.phones ?? []).map((phone) => phone.key))), macLink.hold)),
         connect: engineConnect(readEngineFile),
         send: () => {}
@@ -17211,7 +17216,7 @@ async function run3() {
       hello: { v: 1, kind: "machine", name: link.name || os11.hostname(), app: BRIDGE_VERSION, engine: engine.version ?? null },
       authorize: authorizePhone,
       confirmed: confirmPhone,
-      mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerTargets), (mac, given, at) => hold.attend(`mac:${mac}`, given, at)),
+      mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerPlaces), (mac, given, at) => hold.attend(`mac:${mac}`, given, at)),
       handle: engineHandler(readEngineFile, { name: link.name || os11.hostname() }, readBridgeFile, (changed) => host.keepOnly(new Set((changed.phones ?? []).map((phone) => phone.key))), hold),
       connect: engineConnect(readEngineFile),
       send: () => {}
@@ -17776,6 +17781,7 @@ export {
   pairingLink,
   peerMail,
   peerOf,
+  peerPlaces,
   peersOf,
   personalitiesDocument,
   phoneSeenLately,

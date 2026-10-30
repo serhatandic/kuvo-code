@@ -246,6 +246,8 @@ connection.
     `retry` isn't counted, so one tried again and again leaves room for the rest), and only
     to a conversation an agent could be. A subagent's, a group chat's seat or one put away doesn't
     take letters. One it can't look up now (its engine starting) is answered `retry`, and so is one
+    for a conversation the engine doesn't have while the coding agents' bridge isn't running (it may
+    be a Claude Code or Codex one; bridge 0.9.117, before which it was refused), and one
     for a conversation moving to or from another computer now, or that lives on another one now
     (`moved`): it reaches it where it lives once the move is over (bridge 0.9.63). A box knows by
     its own moves (`kuvo/moves`; bridge 0.9.108, before which this Mac's box asked its app).

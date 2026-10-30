@@ -12,7 +12,7 @@ import os from "node:os";
 import { engineConnect } from "../areas/engine";
 import { EMPTY } from "../crypto/keys";
 import { docsChanged } from "../documents/exchange";
-import { peerTargets, readBridgeFile, readEngineFile } from "../engine/client";
+import { peerPlaces, readBridgeFile, readEngineFile } from "../engine/client";
 import { appHost, forgetHostProof, proveHost } from "../host-interface";
 import { announce } from "../peers/agents";
 import { peerMail, receiveMail } from "../peers/mail";
@@ -135,7 +135,7 @@ export async function runMacLink(): Promise<void> {
         authorize: (key, hello, address) => Boolean(macLink.config?.phones) && authorizePhone(key, hello, address),
         confirmed: confirmPhone,
         // Mail from your machines, taken here as a machine takes it (`peerMail`).
-        mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerTargets)),
+        mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerPlaces)),
         handle: macFront(engineHandler(readEngineFile, { name: config!.name }, readBridgeFile, changed => host.keepOnly(new Set((changed.phones ?? []).map(phone => phone.key))), macLink.hold)),
         connect: engineConnect(readEngineFile),
         send: () => {},

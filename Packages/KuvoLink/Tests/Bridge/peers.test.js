@@ -7,6 +7,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
+import { runningAs } from "./running-as.js";
 
 // The bridge keeps its state in KUVO_HOME, so give it a folder of its own before loading it.
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-peers-"));
@@ -204,6 +205,54 @@ test("a letter from a peer: delivered once, said to be there, by its sender's ow
   assert.equal(prompts.length, prompted);
   await take(stranger.peer, moving);
   assert.equal(prompts.length, prompted + 1, "once it's there");
+});
+
+test("a letter for a coding agent's conversation that comes while their bridge isn't running is kept to try again, and reaches it once it runs; one no one here knows, with the bridge running, is refused", async t => {
+  fresh();
+  const { target } = await engine(t);
+  fs.writeFileSync(path.join(run, "engine.json"), JSON.stringify(target));
+  // The coding agents' bridge, with a Claude Code conversation of its own.
+  const prompts = [];
+  const bridge = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => body += chunk);
+    request.on("end", () => {
+      const json = value => { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+      if (request.url === "/api/session/ses_claude") return json({ data: { id: "ses_claude" } });
+      if (request.url === "/api/session/ses_claude/prompt" && request.method === "POST") {
+        prompts.push(JSON.parse(body));
+        return json({});
+      }
+      response.writeHead(404);
+      response.end();
+    });
+  });
+  await new Promise(resolve => bridge.listen(0, "127.0.0.1", resolve));
+  t.after(() => bridge.close());
+  const said = [];
+  // As mail from a peer is taken: where this box's conversations run, as its records say now.
+  const take = letter => link.takeLetter(second.peer, letter, { send: (peer, message) => said.push(message), ...link.peerPlaces(), peers: [mac.peer, second.peer], told: {}, wait: 10 });
+  const letter = extra => ({ id: "ltr_" + crypto.randomBytes(6).toString("hex"), from: "ses_sender", to: "ses_claude", text: "Can you check the build?", at: Date.now(), ...extra });
+
+  // The bridge isn't up (starting, or starting over): the letter, and a read, come again.
+  const waiting = letter(), read = letter({ read: {} });
+  await take(waiting);
+  await take(read);
+  assert.deepEqual(said.map(each => [each.delivered.ok, each.delivered.retry]), [[false, true], [false, true]], said.map(each => each.delivered.why).join("; "));
+  assert.equal(prompts.length, 0);
+
+  // Up now: the letter tried again reaches its conversation.
+  said.length = 0;
+  fs.writeFileSync(path.join(run, "bridge.json"), JSON.stringify({ pid: await runningAs("kuvo-agents", t), port: bridge.address().port, password: "pw" }));
+  await take(waiting);
+  assert.deepEqual(said, [{ delivered: { id: waiting.id, ok: true } }]);
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0].text, /Can you check the build\?/);
+
+  // With the bridge up, one for a conversation neither knows: refused for good.
+  said.length = 0;
+  await take(letter({ to: "ses_nowhere" }));
+  assert.deepEqual(said.map(each => [each.delivered.ok, each.delivered.retry, each.delivered.why]), [[false, undefined, "There's no such conversation here."]]);
 });
 
 test("a letter that can't be delivered yet, tried again and again, leaves its box's twenty in ten minutes for the ones that can", async t => {
