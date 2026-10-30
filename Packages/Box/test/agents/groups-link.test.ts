@@ -135,6 +135,19 @@ describe("a computer's group chats, as a client reads them", () => {
     expect(got.some((line) => line.discussing && !("messages" in line))).toBe(true)
   })
 
+  test("followed: what's said there comes with its messages, after lines where only the talk changed", async () => {
+    let sent = false
+    const got = await lines(`${group.id}/events`, (each) => each.some((line) => line.messages?.some((message: any) => message.text === "Again?")), (each) => {
+      if (each.length === 1) runner.keepGoing(group.id)
+      if (!sent && each.some((line) => line.discussing && !("messages" in line))) {
+        sent = true
+        runner.send(group.id, "Again?")
+      }
+    })
+    expect(got[0].messages.length).toBe(4)
+    expect(got.some((line) => line.discussing && !("messages" in line))).toBe(true)
+  })
+
   test("the list followed: a line as the chats change, as the runner says (no polling)", async () => {
     const got = await lines("events", (each) => each.length >= 2, (each) => {
       if (each.length === 1) void ask("PATCH", group.id, { name: "Daily" })

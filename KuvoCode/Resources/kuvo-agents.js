@@ -16927,28 +16927,28 @@ function list2(runner, store) {
   }));
   return { groups };
 }
-function chat(runner, id) {
+function chat(runner, id, withMessages = true) {
   const found = runner.get(id);
   if (!found || found.status !== "active")
     return;
   const { messages, state } = found;
   return {
-    messages: messages.slice(-300).map((each) => clientMessage(each)),
+    ...withMessages ? { messages: messages.slice(-300).map((each) => clientMessage(each)) } : {},
     speaking: state.speaking,
     discussing: Boolean(state.discussing),
     paused: Boolean(state.paused),
     ...state.activity?.length ? { activity: state.activity } : {}
   };
 }
-function following(read, oneChat, signal) {
+function following(read, chat, signal) {
   const encoder = new TextEncoder;
   let stop = () => {};
   const stream = new ReadableStream({
     start(controller) {
-      let last = "";
+      let lastState = "";
       let lastMessages;
-      const look = () => {
-        const now = read();
+      const look = (withMessages) => {
+        const now = read(withMessages || lastMessages === undefined);
         if (!now) {
           stop();
           try {
@@ -16956,23 +16956,25 @@ function following(read, oneChat, signal) {
           } catch {}
           return;
         }
-        const line = JSON.stringify(now);
-        if (line === last)
+        const { messages, ...state } = now;
+        const stateLine = JSON.stringify(state);
+        const messagesLine = messages === undefined ? lastMessages : JSON.stringify(messages);
+        if (stateLine === lastState && messagesLine === lastMessages)
           return;
-        const messages = oneChat ? JSON.stringify(now.messages) : undefined;
-        const { messages: _messages, ...state } = now;
-        last = line;
+        const line = chat && messagesLine === lastMessages ? stateLine : JSON.stringify(now);
+        lastState = stateLine;
+        lastMessages = messagesLine;
         try {
-          controller.enqueue(encoder.encode((oneChat && messages === lastMessages ? JSON.stringify(state) : line) + `
+          controller.enqueue(encoder.encode(line + `
 `));
         } catch {
           stop();
         }
-        lastMessages = messages;
       };
       const unsubscribe = subscribe((event) => {
-        if (event.type.startsWith("kuvo.group."))
-          look();
+        if (!event.type.startsWith("kuvo.group.") || chat !== undefined && event.data?.id !== chat)
+          return;
+        look(event.type !== "kuvo.group.updated");
       });
       const onAbort = () => stop();
       stop = () => {
@@ -16980,7 +16982,7 @@ function following(read, oneChat, signal) {
         signal?.removeEventListener("abort", onAbort);
       };
       signal?.addEventListener("abort", onAbort, { once: true });
-      look();
+      look(true);
     },
     cancel() {
       stop();
@@ -17007,7 +17009,7 @@ async function linkRoutes(runner, store, method, parts, body, signal) {
   };
   if (!id || id === "events") {
     if (method === "GET")
-      return id ? following(() => list2(runner, store), false, signal) : json9(list2(runner, store));
+      return id ? following(() => list2(runner, store), undefined, signal) : json9(list2(runner, store));
     if (method === "POST" && !id)
       return await make(runner, store, await body().catch(() => {
         return;
@@ -17021,7 +17023,7 @@ async function linkRoutes(runner, store, method, parts, body, signal) {
   if (method === "GET" && (!action || action === "events")) {
     if (!chat(runner, id))
       return json9({}, 404);
-    return action ? following(() => chat(runner, id), true, signal) : json9(chat(runner, id));
+    return action ? following((withMessages) => chat(runner, id, withMessages), id, signal) : json9(chat(runner, id));
   }
   if (method === "PATCH" && !action) {
     const given = await body().catch(() => {
@@ -20739,4 +20741,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents fe27b2dfcc9166baafff06a58d2cd139aa85b47be1347afec66a58fb473acd5f
+// Built from Packages/Box/src/agents 4a0e584e9f1d33a3c172c1a7f63b78bba9df98ac754e6cc232d91d4f61ece610

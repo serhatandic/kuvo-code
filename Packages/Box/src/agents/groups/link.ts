@@ -121,13 +121,13 @@ function list(runner: GroupRunner, store: GroupStore) {
   return { groups }
 }
 
-/** One chat as a client follows it: its latest messages and its talk; undefined while it isn't here (gone, or moving). */
-function chat(runner: GroupRunner, id: string) {
+/** One chat as a client follows it: its latest messages (unless `withMessages` says not) and its talk; undefined while it isn't here (gone, or moving). */
+function chat(runner: GroupRunner, id: string, withMessages = true) {
   const found = runner.get(id)
   if (!found || found.status !== "active") return undefined
   const { messages, state } = found
   return {
-    messages: messages.slice(-300).map((each) => clientMessage(each)),
+    ...(withMessages ? { messages: messages.slice(-300).map((each) => clientMessage(each)) } : {}),
     speaking: state.speaking,
     discussing: Boolean(state.discussing),
     paused: Boolean(state.paused),
@@ -137,17 +137,19 @@ function chat(runner: GroupRunner, id: string) {
 
 /**
  * A line of JSON now, and another each time it changes, as the runner says what changed (no
- * polling): for one chat, a line whose messages are as they were leaves them out.
+ * polling): for one chat (`chat`, its id), a line whose messages are as they were leaves them out,
+ * and only what's said of that chat is looked at. Its messages are read again only when they may
+ * have changed, not as its talk does (what a bot is doing changes a few times a second).
  */
-function following(read: () => Record<string, unknown> | undefined, oneChat: boolean, signal?: AbortSignal): Response {
+function following(read: (withMessages: boolean) => Record<string, unknown> | undefined, chat: string | undefined, signal?: AbortSignal): Response {
   const encoder = new TextEncoder()
   let stop = () => {}
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      let last = ""
+      let lastState = ""
       let lastMessages: string | undefined
-      const look = () => {
-        const now = read()
+      const look = (withMessages: boolean) => {
+        const now = read(withMessages || lastMessages === undefined)
         if (!now) {
           stop()
           try {
@@ -155,20 +157,23 @@ function following(read: () => Record<string, unknown> | undefined, oneChat: boo
           } catch {}
           return
         }
-        const line = JSON.stringify(now)
-        if (line === last) return
-        const messages = oneChat ? JSON.stringify(now.messages) : undefined
-        const { messages: _messages, ...state } = now
-        last = line
+        const { messages, ...state } = now
+        const stateLine = JSON.stringify(state)
+        const messagesLine = messages === undefined ? lastMessages : JSON.stringify(messages)
+        if (stateLine === lastState && messagesLine === lastMessages) return
+        const line = chat && messagesLine === lastMessages ? stateLine : JSON.stringify(now)
+        lastState = stateLine
+        lastMessages = messagesLine
         try {
-          controller.enqueue(encoder.encode((oneChat && messages === lastMessages ? JSON.stringify(state) : line) + "\n"))
+          controller.enqueue(encoder.encode(line + "\n"))
         } catch {
           stop()
         }
-        lastMessages = messages
       }
       const unsubscribe = subscribe((event) => {
-        if (event.type.startsWith("kuvo.group.")) look()
+        if (!event.type.startsWith("kuvo.group.") || (chat !== undefined && event.data?.id !== chat)) return
+        // (Its talk, or its record, changed: not its messages.)
+        look(event.type !== "kuvo.group.updated")
       })
       const onAbort = () => stop()
       stop = () => {
@@ -176,7 +181,7 @@ function following(read: () => Record<string, unknown> | undefined, oneChat: boo
         signal?.removeEventListener("abort", onAbort)
       }
       signal?.addEventListener("abort", onAbort, { once: true })
-      look()
+      look(true)
     },
     cancel() {
       stop()
@@ -212,7 +217,7 @@ export async function linkRoutes(runner: GroupRunner | undefined, store: GroupSt
   }
 
   if (!id || id === "events") {
-    if (method === "GET") return id ? following(() => list(runner, store), false, signal) : json(list(runner, store))
+    if (method === "GET") return id ? following(() => list(runner, store), undefined, signal) : json(list(runner, store))
     if (method === "POST" && !id) return await make(runner, store, await body().catch(() => undefined), here())
     return json({}, 405)
   }
@@ -221,7 +226,7 @@ export async function linkRoutes(runner: GroupRunner | undefined, store: GroupSt
 
   if (method === "GET" && (!action || action === "events")) {
     if (!chat(runner, id)) return json({}, 404)
-    return action ? following(() => chat(runner, id), true, signal) : json(chat(runner, id))
+    return action ? following((withMessages) => chat(runner, id, withMessages), id, signal) : json(chat(runner, id))
   }
   // Its name, purpose, bots or meeting, as Edit Group Chat changes them: a meeting as you set it up,
   // worked out here, on your clock.
