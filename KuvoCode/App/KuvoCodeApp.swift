@@ -49,6 +49,9 @@ enum Launch {
             // prompt fails at once instead (see `AppInfo.neverPrompts`).
             if AppInfo.neverPrompts { Keychain.neverAsk() }
             #endif
+            // This Mac's keeper, as launchd starts it (`Keeper`), and a command to the one running.
+            if CommandLine.arguments.contains("--box") { Keeper.main() }
+            if let index = CommandLine.arguments.firstIndex(of: "--box-control") { Keeper.control(Array(CommandLine.arguments[(index + 1)...])) }
             KuvoCodeApp.main()
         }
     }
@@ -90,6 +93,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Opened from the disk image, it can't update itself: it offers to move to Applications.
         AppLocation.offerMove()
+        // Opened again after an update installed from the background: there again, without
+        // showing in the Dock on the way.
+        if InBackground.shared.relaunchesInBackground { NSApp.setActivationPolicy(.accessory) }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -97,10 +103,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // which goes as soon as it's there (it opens with the app); opening Kuvo Code brings it.
         model.startedAtLogin = Self.launchedAtLogin
         Task { [model] in await model.start() }
-        if model.startedAtLogin {
+        InBackground.shared.keepsWorking = { [weak model] in model?.keepsWorkingAfterQuit ?? false }
+        // Relaunched after an update installed from the background (`InBackground`): the same,
+        // unless you opened it meanwhile.
+        let intoBackground = InBackground.shared.relaunchesInBackground
+        if model.startedAtLogin || intoBackground {
             for delay in [0.0, 0.2, 0.6, 1.5] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    for window in NSApp.windows where window.identifier?.rawValue == "main" && window.isVisible { window.close() }
+                    if intoBackground, !InBackground.shared.isOn { return }
+                    for window in NSApp.windows where InBackground.isMainWindow(window) && window.isVisible { window.close() }
                 }
             }
         }
@@ -129,10 +140,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // KUVO_DEMO_USAGE=off leaves the usage tracker out, so a second copy of the app
         // (for screenshots) never renews the logins the first one is using; `sample` too, and
         // phones get sample numbers (see PhoneLink).
-        if ["off", "sample"].contains(ProcessInfo.processInfo.environment["KUVO_DEMO_USAGE"]) { return }
+        if ["off", "sample"].contains(ProcessInfo.processInfo.environment["KUVO_DEMO_USAGE"]) {
+            if intoBackground { InBackground.shared.enterAtLaunch(model, usageStarting: false) }
+            return
+        }
         #endif
         // Plan limits and spend in the menu bar (UsageKit).
-        model.startUsage()
+        let usageStarts = model.startUsage()
+        if intoBackground { InBackground.shared.enterAtLaunch(model, usageStarting: usageStarts) }
         #if DEBUG
         // KUVO_DEMO_USAGE=dashboard|customize|settings opens the usage panel, for screenshots.
         // (Asked for by name, it starts in a copy that never prompts too: see `AppInfo.demoUsageScreen`.)
@@ -165,11 +180,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.boxGroups.flush()
         // Closing the engine's stdin shuts it down cleanly (it would also exit with us).
         model.stop()
-        // This Mac's box, and its record of the agents bridge, which goes with the app too.
-        model.box.stop()
-        BoxProcess.agentsChanged(nil, pid: nil)
+        // This Mac's box: the keeper's goes on; the app's own goes with it.
+        model.stopBox()
         model.stopMachines()
-        IntegrationKeys.removeFiles()
         Analytics.shared.flushBeforeQuit()
     }
 
@@ -208,6 +221,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
+
+    /// Quit, while this Mac's keeper runs its box: the work goes on, and Kuvo Code goes to the menu
+    /// bar (`InBackground`). It quits for real for Stop Background Work, an update, and macOS
+    /// logging out, restarting or shutting down. An update waiting to install on Quit installs
+    /// then, and Kuvo Code opens again in the background.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // As macOS has it now: switched off in Login Items since, Quit quits.
+        BackgroundWork.shared.refresh()
+        guard model.keepsWorkingAfterQuit, !InBackground.shared.quitsForReal, !InBackground.systemIsQuitting else { return .terminateNow }
+        // ⌥⌘Q is Stop Background Work, but AppKit gives Quit an Option alternate of its own (Quit
+        // and Keep Windows), which can be the one that matches it, and Quit with ⌥ held in the
+        // menu is that too: any Quit with ⌥ held stops the work, whichever item it came from.
+        if NSApp.currentEvent?.modifierFlags.contains(.option) == true {
+            Task { [model] in await InBackground.shared.stop(model) }
+            return .terminateCancel
+        }
+        InBackground.shared.enter(model)
+        return .terminateCancel
+    }
+
+    /// Opened again (the Finder, Spotlight) while in the background: back with its window.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        guard InBackground.shared.isOn else { return true }
+        InBackground.shared.leave()
+        return false
+    }
 }
 
 /// Menu commands. They act on whatever the focused window exposes.
@@ -219,6 +258,13 @@ struct AppCommands: Commands {
     @AppStorage(TabBar.showsKey) private var showsTabBar = TabBar.showsByDefault
 
     var body: some Commands {
+        CommandGroup(after: .appTermination) {
+            // Quit leaves the work going (`InBackground`); this stops it too.
+            if model.keepsWorkingAfterQuit {
+                Button("Stop Background Work…") { Task { await InBackground.shared.stop(model) } }
+                    .keyboardShortcut("q", modifiers: [.command, .option])
+            }
+        }
         CommandGroup(after: .appInfo) {
             if updates.isAvailable {
                 Button("Check for Updates…") { updates.check() }

@@ -101,8 +101,9 @@ struct HeaderView: View {
         Button { UsageMenuBar.openHostApp() } label: {
             Label("Open \(HostApp.name)", systemImage: "macwindow")
         }
-        Button(role: .destructive) { NSApplication.shared.terminate(nil) } label: {
-            Label("Quit \(HostApp.name)", systemImage: "power")
+        // Fork change: the host's own Quit while it set one (`HostCard.quitItem`).
+        Button(role: .destructive) { HostCard.quit() } label: {
+            Label(HostCard.quitTitle, systemImage: "power")
         }
         .keyboardShortcut("q") // ⌘Q — unowned elsewhere, so safe to register on the item.
     }

@@ -1,0 +1,282 @@
+import Darwin
+import Foundation
+import os
+
+nonisolated private let log = Logger(subsystem: "run.kuvo.code", category: "keeper")
+
+/// This Mac's keeper: Kuvo Code's own executable, started by launchd with `--box` from the launch
+/// agent in the app (`BackgroundWork`), with no window, menu or Dock icon. It keeps this Mac's box
+/// running whether or not the app is open, as a machine's keeper does there: you quit the app, and
+/// your bots, goals, wake-ups and sessions go on. The app (and later another Mac) is a client: it
+/// finds what runs by the records in the box's `run` folder (`KeeperRecord`, `run/engine.json`,
+/// `run/bridge.json`), and asks the keeper for what only it does (`KeeperControl`).
+///
+/// It's the app's own executable so that what you allowed Kuvo Code stays allowed: the Keychain's
+/// items trust the app's signature, and the folders and network macOS asked you about were allowed
+/// to the app.
+@MainActor
+final class Keeper {
+    /// How it exits: Stop Background Work ends it for good (launchd leaves a keeper that exited
+    /// cleanly down, until you log in or open the app), and making way for a newer app's keeper
+    /// ends it to be started again (launchd starts one that exited with anything else).
+    enum Exit: Int32 {
+        case stopped = 0
+        case again = 75
+    }
+
+    private let password = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+    private lazy var server = LoopbackServer { [weak self] request in await self?.respond(to: request) ?? .init(status: 503) }
+    private let started = Date.now
+    /// The box it keeps: the box itself, the engine and the coding agents' bridge.
+    private let box = MacBoxRunner(box: BoxProcess(), agents: OutsideAgents(), host: HostInterface())
+    /// This Mac's link, for its keys alone (the box's relay asks for them through the host
+    /// interface); the app's own follows the phones.
+    private let link = PhoneLink()
+    /// The browser's tools, for the engine and the agents: the open app's, or saying it isn't.
+    private let tools = KeeperTools()
+    /// Making way for a newer app's keeper, once nothing is under way.
+    private var updating: Task<Void, Never>?
+
+    /// `--box`: runs until launchd stops it, or it's told to stop. Never returns.
+    nonisolated static func main() -> Never {
+        try? FileManager.default.createDirectory(at: KeeperRecord.run, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        // One keeper at a time: one started while another runs (the app starting it while launchd
+        // already has) goes at once, and cleanly, so launchd doesn't start it again.
+        let lock = open(KeeperRecord.lock.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard lock >= 0, flock(lock, LOCK_EX | LOCK_NB) == 0 else {
+            log.info("Another keeper runs already")
+            exit(Exit.stopped.rawValue)
+        }
+        let keeper = MainActor.assumeIsolated { Keeper() }
+        // launchd stopping it (you log out, or its launch agent was taken away): what runs stops
+        // first, cleanly.
+        signal(SIGTERM, SIG_IGN)
+        let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        terminate.setEventHandler { MainActor.assumeIsolated { keeper.finish(.stopped) } }
+        terminate.resume()
+        MainActor.assumeIsolated { keeper.terminate = terminate }
+        Task { @MainActor in await keeper.start() }
+        dispatchMain()
+    }
+
+    private var terminate: DispatchSourceSignal?
+
+    private func start() async {
+        do {
+            let port = try await server.start()
+            try KeeperRecord(pid: getpid(), version: AppInfo.version, build: AppInfo.build, url: "http://127.0.0.1:\(port)",
+                             password: password, started: started.timeIntervalSince1970 * 1000).write()
+            Self.writeStart()
+            // Its process, as a machine's keeper records its own.
+            FileManager.default.createFile(atPath: KeeperRecord.run.appending(path: "box.pid").path, contents: Data("\(getpid())".utf8), attributes: [.posixPermissions: 0o600])
+            log.info("Keeper \(AppInfo.version, privacy: .public) (\(AppInfo.build, privacy: .public)) started")
+            link.hasMachines = { Machines.anySaved }
+            box.host.phoneLink = link
+            box.host.appAnswers = false
+            // kuvo-wake run for the wake-up tools gets your shell's environment, as the engine does.
+            tools.boxTools.shell = { [box] in box.shell }
+            do {
+                box.tools = try await tools.start()
+            } catch {
+                log.error("The browser's tools didn't start: \(error.localizedDescription, privacy: .public)")
+            }
+            // An app that runs this Mac's box itself (it did while the keeper wasn't allowed) keeps
+            // it until it quits: then it's the keeper's.
+            while !box.claim() {
+                try? await Task.sleep(for: .seconds(5))
+            }
+            watchForUpdate()
+            await box.start()
+        } catch {
+            // Nothing could reach it: gone, to be started again by launchd.
+            log.error("The keeper couldn't start: \(error.localizedDescription, privacy: .public)")
+            finish(.again)
+        }
+    }
+
+    /// Everything it started stopped, its record taken away, and gone.
+    func finish(_ how: Exit) {
+        box.stop()
+        tools.stop()
+        server.stop()
+        KeeperRecord.forget(pid: getpid())
+        if (try? String(contentsOf: KeeperRecord.run.appending(path: "box.pid"), encoding: .utf8)) == "\(getpid())" {
+            try? FileManager.default.removeItem(at: KeeperRecord.run.appending(path: "box.pid"))
+        }
+        log.info("Keeper stopped (\(how.rawValue))")
+        exit(how.rawValue)
+    }
+
+    // MARK: Control
+
+    private func respond(to request: HTTPRequest) async -> HTTPResponse {
+        guard let authorization = request.headers["authorization"], authorization.hasPrefix("Bearer "),
+              samePassword(String(authorization.dropFirst(7)), password) else { return .init(status: 401) }
+        guard let command = KeeperControl.Command(rawValue: String(request.path.dropFirst())) else { return .init(status: 404) }
+        guard request.method == (command == .status ? "GET" : "POST") else { return .init(status: 405) }
+        switch command {
+        case .status:
+            return .json(await status)
+        case .stop:
+            // Said first, then done: the client hears it was taken before it goes.
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(300))
+                self.finish(.stopped)
+            }
+            return .json([:])
+        case .restartEngine:
+            box.restartEngine()
+            return .json([:])
+        case .restartAgents:
+            Task {
+                box.agents.stop()
+                await box.agents.startAgain()
+            }
+            return .json([:])
+        case .restartBox:
+            Task { await box.box.startAgain() }
+            return .json([:])
+        case .update:
+            update(within: (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["within"] as? Double ?? Self.updateWait)
+            return .json([:])
+        case .app:
+            let given = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any]) ?? [:]
+            tools.use(given["tools"] as? [String: Any] ?? [:])
+            box.host.useApp(given["host"] as? [String: Any] ?? [:])
+            return .json([:])
+        }
+    }
+
+    /// What runs, and how: the engine, the box and the bridge, and whether anything is under way.
+    private var status: [String: Any] {
+        get async {
+            var engine: [String: Any] = [:]
+            switch box.engine {
+            case .starting: engine["state"] = "starting"
+            case .downloading(let progress): engine = ["state": "downloading", "progress": progress]
+            case .ready: engine["state"] = "ready"
+            case .failed(let reason): engine = ["state": "failed", "reason": reason]
+            }
+            var answer: [String: Any] = [
+                "pid": Int(getpid()), "version": AppInfo.version, "build": AppInfo.build,
+                "started": started.timeIntervalSince1970 * 1000, "engine": engine, "busy": await box.isBusy(),
+                "updating": updating != nil,
+            ]
+            if let failure = box.box.failure { answer["box"] = ["failure": failure] }
+            if let failure = box.agents.failure { answer["agents"] = ["failure": failure] }
+            return answer
+        }
+    }
+
+    // MARK: Updates
+
+    /// How long a keeper making way for a newer app's waits for what's under way, at most: past
+    /// that, it stops it (a session's queue pauses, as when the engine stops).
+    static let updateWait: Double = 30 * 60
+
+    /// Gone once nothing is under way, or `within` seconds have passed, to be started again from
+    /// the app now installed (launchd starts it from there).
+    private func update(within limit: Double) {
+        guard updating == nil else { return }
+        log.info("Making way for a newer keeper, within \(Int(limit))s")
+        updating = Task { @MainActor in
+            await Self.makeWay(within: limit, busy: box.isBusy)
+            finish(.again)
+        }
+    }
+
+    /// The app installed over this one (an update installed as you quit, with no app open to say
+    /// so): it makes way for the new one's keeper, as when the app asks.
+    private func watchForUpdate() {
+        Task { @MainActor in
+            while updating == nil {
+                try? await Task.sleep(for: .seconds(60))
+                if let installed = Self.installedVersion(), installed != "\(AppInfo.version) (\(AppInfo.build))" {
+                    log.info("Kuvo Code \(installed, privacy: .public) is installed now")
+                    update(within: Self.updateWait)
+                }
+            }
+        }
+    }
+
+    /// The version of the app now at this one's place, as "0.9.0 (123)": read from its file, as the
+    /// running one's own is kept from when it started.
+    nonisolated static func installedVersion(of app: URL = Bundle.main.bundleURL) -> String? {
+        guard let data = try? Data(contentsOf: app.appending(path: "Contents/Info.plist")),
+              let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let version = info["CFBundleShortVersionString"] as? String, let build = info["CFBundleVersion"] as? String else { return nil }
+        return "\(version) (\(build))"
+    }
+
+    /// Waits until `busy` says nothing is under way, asking every `every`, or until `limit` seconds
+    /// have passed: whether it ended with nothing under way.
+    @discardableResult
+    static func makeWay(within limit: Double, every: Duration = .seconds(10), busy: () async -> Bool) async -> Bool {
+        let deadline = Date.now.addingTimeInterval(limit)
+        while await busy() {
+            guard Date.now < deadline else { return false }
+            try? await Task.sleep(for: every)
+        }
+        return true
+    }
+
+    // MARK: Asked as a machine's keeper is
+
+    /// `bin/kuvo-start`, as a machine has it (`kuvo-start restart`, which its box runs for
+    /// `kuvo/engine/restart`): here it asks this keeper (`--box-control`), from wherever the app
+    /// is now.
+    private static func writeStart() {
+        guard let executable = Bundle.main.executablePath else { return }
+        let bin = KeeperRecord.run.deletingLastPathComponent().appending(path: "bin")
+        let quoted = "'" + executable.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let script = """
+        #!/bin/sh
+        # This Mac's keeper, asked as a machine's is: kuvo-start start | restart | keep | stop | status.
+        exec \(quoted) --box-control "$@"
+
+        """
+        let file = bin.appending(path: "kuvo-start")
+        guard (try? String(contentsOf: file, encoding: .utf8)) != script else { return }
+        try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        FileManager.default.createFile(atPath: file.path, contents: Data(script.utf8), attributes: [.posixPermissions: 0o700])
+    }
+
+    /// `--box-control <command>`: one command to the keeper running now, what it answered printed;
+    /// exits 0 once it's done. A machine's keeper's words are taken as they are there (its box runs
+    /// `kuvo-start restart` for `kuvo/engine/restart`): `restart` the engine, `start` it if it isn't
+    /// running, `keep` (launchd keeps the keeper here, so there's nothing to do).
+    nonisolated static func control(_ arguments: [String]) -> Never {
+        let name = arguments.first ?? "status"
+        if name == "keep" { exit(0) }
+        let aliases = ["restart": KeeperControl.Command.restartEngine.rawValue, "start": KeeperControl.Command.status.rawValue]
+        guard let command = KeeperControl.Command(rawValue: aliases[name] ?? name) else {
+            FileHandle.standardError.write(Data("Usage: --box-control start|restart|keep|\(KeeperControl.Command.allCases.map(\.rawValue).joined(separator: "|"))\n".utf8))
+            exit(64)
+        }
+        Task {
+            do {
+                if name == "start" {
+                    // Started if it isn't running: the engine, by the keeper, or the keeper by launchd.
+                    guard let status = try? await KeeperControl.send(.status) else {
+                        let launchctl = Process()
+                        launchctl.executableURL = URL(filePath: "/bin/launchctl")
+                        launchctl.arguments = ["kickstart", "gui/\(getuid())/\(BackgroundWork.label)"]
+                        try launchctl.run()
+                        launchctl.waitUntilExit()
+                        exit(launchctl.terminationStatus)
+                    }
+                    if (status["engine"] as? [String: Any])?["state"] as? String != "ready" { try await KeeperControl.send(.restartEngine) }
+                    exit(0)
+                }
+                let answer = try await KeeperControl.send(command)
+                let data = (try? JSONSerialization.data(withJSONObject: answer, options: [.sortedKeys])) ?? Data()
+                FileHandle.standardOutput.write(data + Data("\n".utf8))
+                exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
+                exit(1)
+            }
+        }
+        dispatchMain()
+    }
+}

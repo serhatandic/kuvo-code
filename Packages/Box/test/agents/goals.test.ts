@@ -218,10 +218,70 @@ describe("a goal", () => {
   })
 
   test("pauses on a turn that failed, with the error", async () => {
-    engine.turns = [{ outcome: "failed", error: "Rate limited by the provider" }]
+    engine.turns = [{ outcome: "failed", error: "The model refused the request" }]
     await goals.set("ses_work", "the build is green")
     await until(() => goal()?.state === "paused")
-    expect(goal()).toMatchObject({ pausedBy: "error", note: "The turn failed: Rate limited by the provider." })
+    expect(goal()).toMatchObject({ pausedBy: "error", note: "The turn failed: The model refused the request." })
+  })
+
+  test("waits at a model's limit until it resets, and carries on by itself then, a restart in between too, without checking the turn that failed", async () => {
+    let clock = Date.parse("2026-10-29T12:00:00Z")
+    goals.stopAll()
+    const timed = (now: () => number) => {
+      const made = new Goals(join(root, "goals.json"), places(), now)
+      made.onSettled = () => {
+        if (goals === made) settled += 1
+        beat()
+      }
+      return made
+    }
+    goals = timed(() => clock)
+    engine.turns = [{ outcome: "failed", error: "You've hit your usage limit. Try again in 2h 30m." }, { tool: true, text: "Carrying on." }]
+    await goals.set("ses_work", "the site is live")
+    await until(() => goal()?.state === "paused")
+    const resumesAt = goal()!.resumesAt!
+    expect(goal()!.pausedBy).toBe("limit")
+    // From when the turn ended, not when the box noticed.
+    expect(Math.abs(resumesAt - (Date.now() + 2.5 * 3_600_000))).toBeLessThan(10_000)
+    expect(goal()!.note).toStartWith("Paused until ")
+    expect(told()).toMatchObject({ pausedBy: "limit", resumesAt })
+    // The box stops while it waits, and starts again once the reset has come: it carries on.
+    goals.stopAll()
+    clock = resumesAt + 60_000
+    goals = timed(() => clock)
+    goals.start()
+    await until(() => goal()?.state === "working" && engine.synthetic.some((message) => message.description === "The limit has reset"))
+    expect(goal()!.resumesAt).toBeUndefined()
+    expect(engine.synthetic.at(-1)!.text).toContain("The model's limit has reset: carry on where you stopped.")
+  })
+
+  test("a check that meets a model's limit waits for the reset too, rather than stopping the goal", async () => {
+    engine.verdictError = "429 Too Many Requests: rate limit reached"
+    await goals.set("ses_work", "the site is live")
+    await until(() => goal()?.state === "paused")
+    expect(goal()!.pausedBy).toBe("limit")
+    expect(goal()!.resumesAt).toBeGreaterThan(Date.now())
+  })
+
+  test("a limit that doesn't say when it resets is tried again in a while, and pausing it yourself holds it", async () => {
+    engine.turns = [{ outcome: "failed", error: "429 Too Many Requests" }]
+    await goals.set("ses_work", "the site is live")
+    await until(() => goal()?.state === "paused")
+    expect(goal()!.pausedBy).toBe("limit")
+    expect(goal()!.resumesAt! - Date.now()).toBeGreaterThan(25 * 60_000)
+    expect(goals.pauseByYou("ses_work")).toMatchObject({ pausedBy: "you" })
+    expect(goal()!.resumesAt).toBeUndefined()
+  })
+
+  test("a bot's long goal is only kept, its plan telling the bot what's next: its turns aren't checked, nudged or paused for being quiet, and it isn't briefed twice", async () => {
+    engine.turns = Array.from({ length: quietLimit + 1 }, () => ({ tool: false, text: "Waiting on the sessions." }))
+    await goals.set("ses_work", "the site is live", { long: true })
+    expect(engine.synthetic).toHaveLength(0)
+    for (let turn = 0; turn < quietLimit + 1; turn++) engine.write("ses_work", `[Session finished] ${turn}`)
+    await until(() => settled >= quietLimit + 1)
+    expect(nudges()).toHaveLength(0)
+    expect(engine.checks).toHaveLength(0)
+    expect(goal()).toMatchObject({ state: "working", long: true, turns: 0 })
   })
 
   test(`pauses once the agent does nothing for ${quietLimit} turns in a row`, async () => {

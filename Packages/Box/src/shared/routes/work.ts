@@ -92,6 +92,96 @@ export const WORK = object({
  * work again when its time moves. */
 export const WORK_CHANGED = object({ changed: map(number) });
 
+/** A step of a goal's plan, a track of its own: where it stands, how far along where the bot can
+ * measure it (0 to 1; left out where it can't, never guessed), a word on it, the phase it's in, the
+ * service it's done at (`site`, its address, for its icon), the steps it comes after (by id), the sessions working on it, while it waits for a limit to reset
+ * until when, and when it began and ended (ms), for a time axis. */
+export const GOAL_STEP = object({
+  id: string,
+  text: string,
+  state: words("todo", "doing", "done", "waiting", "paused", "skipped"),
+  "progress?": number,
+  "note?": string,
+  "phase?": string,
+  "site?": string,
+  "after?": list(string),
+  "sessions?": list(string),
+  "resumes?": number,
+  "began?": number,
+  "ended?": number,
+});
+
+/** What a goal needs, checked before you start it: by the bot (its tools, keys, services) or by
+ * the box (whether it may work on its own here, on power, where new projects go). `needs` is yours to
+ * do, with what you'd press (a page to open, or the projects folder to pick); `failed` can't be done
+ * here (the goal can still run with you there). */
+export const GOAL_CHECK = object({
+  id: string,
+  text: string,
+  "detail?": string,
+  state: words("ok", "needs", "failed"),
+  by: words("bot", "box"),
+  "site?": string,
+  "action?": object({ kind: words("open", "projectsFolder"), label: string, "url?": string }),
+});
+
+/** What waits for you: what only you can fix, a judgment call before anything public, something
+ * outside the plan, or an ask (a permission or a question one of its sessions has, waiting for you).
+ * A page to open for it, and the session it's in. */
+export const GOAL_WAITING = object({
+  id: string,
+  kind: words("you", "judgment", "outside", "ask"),
+  text: string,
+  "detail?": string,
+  "url?": string,
+  "site?": string,
+  "session?": string,
+  at: number,
+});
+
+/** What it may spend, each with a cap for a period (a day, a week, a month, or the whole goal), what
+ * it spent in the period now, and, once the cap's reached, until when what spends waits (ms). */
+export const GOAL_SPEND = object({ what: string, cap: number, currency: string, per: words("day", "week", "month", "goal"), spent: number, "until?": number });
+
+/** A bot's goal (PROTOCOL.md, "Work › Goals"): the goal in your words and its plan, kept on the box
+ * beside the conversation's own goal (`kuvo/agents/api/kuvo/goals`), which keeps the bot at it. The
+ * steps (one track each), what it checked, what it may spend, its public steps with your switch for
+ * each (off until you turn it on), the projects it may make, whether what needs you wakes you, how
+ * often you hear how it goes (`digest`), when it ends if you set an end, where it stands, what waits
+ * for you, what's paused at a limit and until when, how long it has waited at limits (ms), what's
+ * still watched, the last digest and the final report. Proposed by the bot; only you start it,
+ * decline it or stop it. `alone`: whether this box may work on it on its own (else it runs with you
+ * there). Times in ms since 1970. */
+export const GOAL_PLAN = object({
+  id: string,
+  bot: string,
+  name: string,
+  session: string,
+  goal: string,
+  "title?": string,
+  state: words("proposed", "running", "done", "stopped", "declined"),
+  steps: list(GOAL_STEP),
+  checks: list(GOAL_CHECK),
+  spend: list(GOAL_SPEND),
+  public: list(object({ id: string, text: string, on: bool })),
+  projects: list(string),
+  wake: bool,
+  digest: words("day", "week", "milestones", "none"),
+  "ends?": number,
+  proposed: number,
+  "started?": number,
+  "ended?": number,
+  waiting: list(GOAL_WAITING),
+  paused: list(object({ why: string, "until?": number, "session?": string })),
+  waited: number,
+  watching: list(string),
+  "lastDigest?": object({ at: number, text: string }),
+  "report?": string,
+  alone: bool,
+});
+/** The goals here: each bot's latest, while it's proposed or running, or ended in the last day. */
+export const GOAL_PLANS = object({ goals: list(GOAL_PLAN) });
+
 const REFUSED = object({ message: string });
 
 export type WorkLimits = Infer<typeof LIMITS>;
@@ -100,6 +190,10 @@ export type WorkAnswer = Infer<typeof ANSWER>;
 export type WorkSession = Infer<typeof WORK_SESSION>;
 export type BotWork = Infer<typeof WORK>;
 export type WorkAskShape = Infer<typeof WORK_ASK>;
+export type GoalPlanShape = Infer<typeof GOAL_PLAN>;
+export type GoalWaitingShape = Infer<typeof GOAL_WAITING>;
+export type GoalCheckShape = Infer<typeof GOAL_CHECK>;
+export type GoalStepShape = Infer<typeof GOAL_STEP>;
 
 export const WORK_ROUTES: RouteShape[] = [
   { route: "GET kuvo/work", answers: { 200: WORK, 400: REFUSED, 404: REFUSED, 503: REFUSED } },
@@ -110,5 +204,9 @@ export const WORK_ROUTES: RouteShape[] = [
   { route: "POST kuvo/work/asks/:id", answers: { 200: WORK_ASK_ANSWERED, 400: REFUSED, 404: REFUSED } },
   { route: "GET kuvo/work/settings", answers: { 200: WORK_SETTINGS } },
   { route: "PATCH kuvo/work/settings", answers: { 200: WORK_SETTINGS, 400: REFUSED } },
+  { route: "GET kuvo/work/goals", answers: { 200: GOAL_PLANS } },
+  { route: "GET kuvo/work/goals/events", answers: { 200: GOAL_PLANS } },
+  { route: "POST kuvo/work/goals/ask", answers: { 200: object({ text: string }), 400: REFUSED, 404: REFUSED } },
+  { route: "POST kuvo/work/goals/:id", answers: { 200: object({ goal: GOAL_PLAN }), 400: REFUSED, 404: REFUSED } },
   { route: "POST kuvo/projects/new", answers: { 201: object({ project: PROJECT, text: string }), 400: REFUSED, 403: object({ message: string, needs: string }), 409: REFUSED, 502: REFUSED } },
 ];
