@@ -67,6 +67,9 @@ public enum EventPayload {
         public var assistantMessageID: String
         public var ordinal: Int?
         public var delta: String
+        /// Where it goes: the block's length before it, in UTF-16 units (the coding agents' bridge
+        /// says; the engine doesn't).
+        public var at: Int?
     }
 
     public struct BlockEnded: Decodable, Sendable {
@@ -91,6 +94,8 @@ public enum EventPayload {
         public var assistantMessageID: String
         public var id: String
         public var delta: String
+        /// Where it goes, as `Delta.at`.
+        public var at: Int?
     }
 
     public struct ToolInputEnded: Decodable, Sendable {

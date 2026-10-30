@@ -2209,7 +2209,7 @@ function integrationHealth(entry, server, off, signedIn) {
   if (off)
     return "disabled";
   let health = { connected: "connected", needs_auth: "needsSignIn", failed: "failed" }[server?.status?.status] ?? "starting";
-  if (health === "connected" && server?.integrationID && !signedIn.has(server.integrationID) && ["official", "app"].includes(entry.way))
+  if (health === "connected" && server?.integrationID && signedIn && !signedIn.has(server.integrationID) && ["official", "app"].includes(entry.way))
     health = "needsSignIn";
   if (health === "connected" && typeof entry.signInFile === "string" && !fs18.existsSync(path17.join(INTEGRATION_DATA, entry.id, path17.basename(entry.signInFile))))
     health = "waitsForCode";
@@ -2222,9 +2222,9 @@ async function integrationEntries(catalog, engine, signal) {
   let hadSignIn = new Set;
   if (engine) {
     servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => null);
-    const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
+    const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => null);
     const oauth = (Array.isArray(credentials) ? credentials : []).filter((each) => each?.value?.type === "oauth");
-    signedIn = new Set(oauth.filter((each) => each.active).map((each) => each.integrationID));
+    signedIn = Array.isArray(credentials) ? new Set(oauth.filter((each) => each.active).map((each) => each.integrationID)) : null;
     hadSignIn = new Set(oauth.map((each) => each.integrationID));
   }
   const engineDown = !Array.isArray(servers);
@@ -2362,18 +2362,23 @@ async function integrationsAnswer(method, requestPath, body, engine, signal, fil
     }
     let newKeys = false;
     if (names.length) {
-      if (names.every((name) => typeof given[name] === "string" && given[name].trim())) {
-        await keyWork(async () => {
-          for (const name of names)
-            await writeKey(variables[name], given[name].trim());
-        });
-        newKeys = true;
-      } else if (!await keepsAll(names.map((name) => variables[name]))) {
+      const sent = names.filter((name) => typeof given[name] === "string" && given[name].trim());
+      if (sent.length < names.length && !await keepsAll(names.filter((name) => !sent.includes(name)).map((name) => variables[name]))) {
         const labels = (entry.keys ?? []).map((key) => key.label).join(" and ");
         return { status: 400, value: { message: `${entry.title} needs ${labels}: send them as {"keys": {"${names[0]}": …}}.` } };
       }
+      if (sent.length) {
+        await keyWork(async () => {
+          for (const name of sent)
+            await writeKey(variables[name], given[name].trim());
+        });
+        newKeys = true;
+      }
     }
-    const value = added ? valueAt(settings, [...SERVERS, entry.id]) : entry.settings;
+    const now = valueAt(readSettings().settings ?? {}, [...SERVERS, entry.id]);
+    if (added && now === undefined)
+      return { status: 409, value: { message: `${entry.title} was removed meanwhile.` } };
+    const value = now ?? entry.settings;
     const changed = changeSettings([{ path: [...SERVERS, entry.id], value }]);
     if (changed.status !== 200)
       return { status: changed.status, value: { message: changed.message } };
@@ -15442,7 +15447,7 @@ async function* fileAt(requestPath, json) {
 
 // Packages/Box/src/link/areas/changes.ts
 var EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-var HASHED = 500;
+var HASHED_AT_ONCE = 500;
 var AUTHOR = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"];
 var SCOPES = ["uncommitted", "unstaged", "staged", "branch"];
 var STATUSES = ["added", "deleted", "modified", "renamed"];
@@ -15518,17 +15523,20 @@ async function changesIn(directory, scope, base) {
   const hashes = {};
   if (scope !== "staged") {
     untracked = (await text(root, ["-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard", "-z", "--", limit]) ?? "").split("\x00").filter(Boolean);
-    const files = untracked.filter((name) => !name.endsWith("/")).slice(0, HASHED);
-    const all = files.length ? (await text(root, ["hash-object", "--no-filters", "--", ...files]))?.trim().split(`
-`) : [];
-    if (all && all.length === files.length)
-      files.forEach((name, at) => hashes[name] = all[at]);
-    else
-      for (const name of files) {
-        const one = (await text(root, ["hash-object", "--no-filters", "--", name]))?.trim();
-        if (one)
-          hashes[name] = one;
-      }
+    const files = untracked.filter((name) => !name.endsWith("/"));
+    for (let start = 0;start < files.length; start += HASHED_AT_ONCE) {
+      const some = files.slice(start, start + HASHED_AT_ONCE);
+      const all = (await text(root, ["hash-object", "--no-filters", "--", ...some]))?.trim().split(`
+`);
+      if (all && all.length === some.length)
+        some.forEach((name, at) => hashes[name] = all[at]);
+      else
+        for (const name of some) {
+          const one = (await text(root, ["hash-object", "--no-filters", "--", name]))?.trim();
+          if (one)
+            hashes[name] = one;
+        }
+    }
   }
   const status = scope === "branch" ? await text(root, ["status", "--porcelain", "--untracked-files=normal"]) : "x";
   return { repository: true, root, against, patch, untracked, hashes, uncommitted: status === null || status.length > 0 };

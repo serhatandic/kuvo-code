@@ -1215,12 +1215,13 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     set aside in Accounts (Settings says Sign In Again, not Sign In). `problem`: the settings
     file can't be changed.
   - `POST kuvo/integrations/<id>` with `{"keys"?: {"<name>": "<value>"}}` adds it, as Connect
-    (or Add Key…) does: with the keys given, or those the computer has; one added already is
-    written again (the engine reads its keys again), and with new keys its server connects again a
+    (or Add Key…) does: with the keys given, and those not given as the computer has them (Change
+    Key may send only the one you changed); one added already is written again as it is then,
+    with what another client changed meanwhile (the engine reads its keys again), and with new keys its server connects again a
     moment later, in the engine's own copy and in every folder it has open (`api/debug/location`;
     over `box route`, in a process of its own, `kuvo-link.js box reconnect <id>`). `200 {"integration"}`, as listed; `400 {"message"}` without the keys it needs;
-    `404` for none; `409 {"message"}` for one used on its site, or a settings file that can't be
-    changed; `503 {"message"}` when its keys can't be kept (this Mac's Keychain, through its app).
+    `404` for none; `409 {"message"}` for one used on its site, a settings file that can't be
+    changed, or one removed while its keys were saved; `503 {"message"}` when its keys can't be kept (this Mac's Keychain, through its app).
   - `DELETE kuvo/integrations/<id>` removes it, as Remove… does: bots' own keys for it there first
     (each computer keeps its bots' keys itself: "Bots' own keys"), then it, its sign-in, what its
     server kept and its keys. `200 {}`; for one not added, `200 {}` when keys of it were left (a

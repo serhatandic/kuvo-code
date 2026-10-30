@@ -784,6 +784,17 @@ final class Utilities {
         kept[owner] = nil
     }
 
+    /// Ends a conversation's terminals, Run's too: it was archived. Its other tabs stay for when
+    /// it comes back.
+    func closeTerminals(of owner: String) {
+        for tab in tabs where tab.owner == owner && tab.kind == .terminal { close(tab.id) }
+    }
+
+    /// Ends the terminals on a machine, in every panel: it was removed.
+    func closeTerminals(on machine: String) {
+        for tab in tabs where terminals[tab.id]?.machine == machine { close(tab.id) }
+    }
+
     /// Takes a tab out of the strip; the tab beside it takes its place. A panel that's going
     /// (its conversation was deleted) isn't refilled.
     private func remove(_ id: UUID, refills: Bool = true) {
