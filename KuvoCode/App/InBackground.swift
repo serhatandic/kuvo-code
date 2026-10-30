@@ -74,7 +74,8 @@ final class InBackground {
     /// quits for real.
     func stop(_ app: AppModel) async {
         let working = app.workspace.runningHere.count
-        if working > 0 || (await BackgroundWork.shared.isBusy()) {
+        let busy = working > 0 ? true : await BackgroundWork.shared.isBusy()
+        if busy {
             NSApp.activate()
             let alert = NSAlert()
             alert.messageText = "Stop the work in the background?"
