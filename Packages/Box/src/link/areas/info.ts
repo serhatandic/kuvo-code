@@ -8,6 +8,8 @@ import { processRuns as runs } from "../../shared/platform";
 import type { EngineRecord } from "../../shared/records";
 import type { MachineInfo } from "../../shared/routes/box";
 import { ENGINE_FILE, K, RUN } from "../home";
+import { macsOf } from "../peers/known";
+import { readLink } from "../state";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { BRIDGE_VERSION } from "../version";
 
@@ -30,7 +32,13 @@ export async function* infoRoute(context: RouteContext): AsyncGenerator<AnswerPi
   // The Mac that started it, as its start noted (and its name, from a Mac that notes it).
   const notes = engine.notes ?? {};
   const home = typeof notes.mac === "string" ? { mac: notes.mac, ...(typeof notes.macName === "string" ? { name: notes.macName } : {}) } : undefined;
+  // Who else uses it: the Macs that set it up, and the phones that reach it, which an uninstall
+  // would stop it for.
+  let link = null as ReturnType<typeof readLink>;
+  try { link = readLink(); } catch {}
+  const macs = macsOf(link).map(key => ({ key, ...(link?.macNames?.[key] ? { name: link.macNames[key] } : {}), seen: link?.macSeen?.[key] ?? 0 }));
+  const phones = new Set((link?.phones ?? []).map(phone => phone.key)).size;
   yield { head: { status: 200, headers: { "content-type": "application/json" } } };
-  yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...(home ? { home } : {}), ...info } satisfies MachineInfo)) };
+  yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...(home ? { home } : {}), macs, phones, ...info } satisfies MachineInfo)) };
   return;
 }

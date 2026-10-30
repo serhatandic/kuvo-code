@@ -26,6 +26,11 @@ final class BoxProcess {
     private(set) var endpoint: ServerEndpoint?
     /// Why it isn't running, when it stopped and didn't start again.
     private(set) var failure: String?
+    /// Whether its last start was refused because what it runs isn't what it was (`BoxIntegrity`):
+    /// then nothing else runs the box's script with the engine's Bun either.
+    @ObservationIgnored private(set) var refused = false
+    /// When what it runs was last found to be what it was.
+    @ObservationIgnored private var checkedAt: Date?
 
     @ObservationIgnored private var server: ServerProcess?
     /// Its process, while it runs.
@@ -55,9 +60,16 @@ final class BoxProcess {
     /// need from the engine on top, as this Mac's box last learned it from its engine, or Kuvo Code
     /// knows them before it has (`kuvo-link.js engine-config`, as a machine's start adds it); as it
     /// is when that can't be run, or doesn't answer within `timeout` seconds (the engine's start never
-    /// waits on it longer).
-    static func engineConfig(engine: URL, content: String?, environment: [String: String], timeout: TimeInterval = 10) async -> String? {
-        guard let script else { return content }
+    /// waits on it longer), or the box's start was refused (what it would run isn't what it was), or
+    /// it isn't any more (checked again here when the box's own check is over a minute old: the
+    /// engine restarts under a box that keeps running).
+    func engineConfig(engine: URL, content: String?, environment: [String: String], timeout: TimeInterval = 10) async -> String? {
+        guard !refused, let script = Self.script else { return content }
+        if checksRuntime, checkedAt.map({ -$0.timeIntervalSinceNow > 60 }) ?? true {
+            guard await Task.detached(operation: { BoxIntegrity.trouble(engine: engine) }).value == nil else { return content }
+            checkedAt = Date()
+        }
+        let home = Self.home
         var env = environment
         // As the box starts (`launch`): nothing from your shell that runs before its code.
         for name in env.keys where name.hasPrefix("DYLD_") || name.hasPrefix("BUN_") || name == "NODE_OPTIONS" { env[name] = nil }
@@ -69,8 +81,10 @@ final class BoxProcess {
         return await Task.detached {
             let process = Process()
             process.executableURL = engine
-            process.arguments = ["run", "--config=/dev/null", script.path, "engine-config"]
+            process.arguments = ["run", "--config=/dev/null", "--no-env-file", script.path, "engine-config"]
             process.environment = given
+            // In its folder, as the box starts.
+            process.currentDirectoryURL = home
             let output = Pipe()
             process.standardOutput = output
             process.standardError = FileHandle.nullDevice
@@ -99,16 +113,16 @@ final class BoxProcess {
         checksRuntime = checked
         runsEngine = true
         var env = environment
-        // GitHub's stand-in, and a box kept from your other computers, are for the tests' box only
-        // (`TestBox`), never the app's.
-        env["KUVO_TEST_GITHUB"] = nil
-        env["KUVO_TEST_NO_PEERS"] = nil
+        // The tests' stand-ins (GitHub's, npm's, a box kept from your other computers) are for the
+        // tests' box only (`TestBox`), never the app's.
+        for name in env.keys where name.hasPrefix("KUVO_TEST_") { env[name] = nil }
         env["BUN_BE_BUN"] = "1"
         // Bun would otherwise keep a copy of the script, compiled, in ~/Library/Caches/bun.
         env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
-        // Bun's settings only from nowhere: a `bunfig.toml` in its folder (which an agent's command
-        // can write) could load a script of its own first, before the box reads its secrets.
-        await launch(engine, environment: env) { ["run", "--config=/dev/null", $0.path, "serve"] }
+        // Bun's settings only from nowhere, and no `.env` from its folder: either (which an agent's
+        // command can write) could load a script of its own first, or set what the box reads
+        // (a stand-in's address, the vault's key) before it reads its secrets.
+        await launch(engine, environment: env) { ["run", "--config=/dev/null", "--no-env-file", $0.path, "serve"] }
     }
 
     #if DEBUG
@@ -145,8 +159,11 @@ final class BoxProcess {
             let engine = runtime
             if let trouble = await Task.detached(operation: { BoxIntegrity.trouble(engine: engine) }).value {
                 failure = trouble
+                refused = true
                 return
             }
+            refused = false
+            checkedAt = Date()
         }
         env["KUVO_HOME"] = Self.home.path
         // A Mac's box: its bots are this Mac's own, made with the kit the app gives it.

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { subscribe } from "../../src/agents/events"
 import { server } from "../../src/agents/groups/api"
-import { SeatServer, activityEvery, aliveEvery, askAgainAfter, awayAfter, reportBytes, type Clock, type PeerBot, type SeatMail } from "../../src/agents/groups/peer"
+import { SeatServer, activityEvery, aliveEvery, askAgainAfter, awayAfter, awayKept, reportBytes, type Clock, type PeerBot, type SeatMail } from "../../src/agents/groups/peer"
 import { clientMessage, joinable } from "../../src/agents/groups/link"
 import { LinkDirectory, PeerPost, gaveUp, peerRoutes, receive, type PeerParts } from "../../src/agents/groups/post"
 import { GroupRunner, transcriptMailBytes } from "../../src/agents/groups/runner"
@@ -405,6 +405,54 @@ describe("a group chat with a bot on another of your computers", () => {
     clock.advance(awayAfter - askAgainAfter)
     await over(host, () => said(host).some((message) => message.author === "bot_ada"))
     expect(said(host).filter((message) => message.kind === "note").map((message) => message.text)).toEqual(["Ben is on lokum, which can’t be reached now, so it sat this out."])
+  })
+
+  test("its computer away: its bots sit out at once while it stays away, not after a wait at every message; a while on it's asked again", async () => {
+    const clock = hostOnClock()
+    relay.away.add("key_lokum")
+    host.engine.lines = { Ada: ["Hello.", "Again.", "Third."] }
+    host.runner.put(team(["bot_ben", "bot_ada"]), [], "active", false)
+    host.runner.send(id, "Anyone?")
+    await until(() => turns().length === 1)
+    clock.advance(askAgainAfter)
+    await until(() => turns().length === 2)
+    clock.advance(awayAfter - askAgainAfter)
+    await over(host, () => said(host).some((message) => message.text === "Hello."))
+    const asked = turns().length
+    const notes = () => said(host).filter((message) => message.kind === "note").length
+
+    // Another message while it's still away: Ben sits it out at once, the clock never moving.
+    host.runner.send(id, "Still there?")
+    await over(host, () => said(host).some((message) => message.text === "Again."))
+    expect(turns().length).toBe(asked)
+    expect(notes()).toBe(2)
+
+    // A while on, it's back: asked again.
+    relay.back("key_lokum")
+    clock.advance(awayKept)
+    host.runner.send(id, "Back?")
+    await until(() => turns().length > asked)
+  })
+
+  test("its computer away, then heard from again (any mail of its, not only about a turn): its bots are asked at once, not after the five minutes", async () => {
+    const clock = hostOnClock()
+    relay.away.add("key_lokum")
+    host.engine.lines = { Ada: ["Hello.", "Again."] }
+    host.runner.put(team(["bot_ben", "bot_ada"]), [], "active", false)
+    host.runner.send(id, "Anyone?")
+    await until(() => turns().length === 1)
+    clock.advance(askAgainAfter)
+    await until(() => turns().length === 2)
+    clock.advance(awayAfter - askAgainAfter)
+    await over(host, () => said(host).some((message) => message.text === "Hello."))
+    const asked = turns().length
+
+    // Back, and it says something of a chat of its own (it stops a turn it gave this Mac), the clock not moving.
+    relay.back("key_lokum")
+    host.receive("key_lokum", { kind: "stop", id: "turn_elsewhere" })
+    host.runner.send(id, "Back?")
+    await until(() => turns().length > asked || said(host).some((message) => message.text === "Again."))
+    expect(turns().length).toBeGreaterThan(asked)
   })
 
   test("its words lost on the way after its computer took the turn: asked again, they're said again, and reach the chat", async () => {

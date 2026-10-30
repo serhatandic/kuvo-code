@@ -85,7 +85,9 @@ struct MachinesSettings: View {
             }
             if let id = ProcessInfo.processInfo.environment["KUVO_DEMO_REMOVE_MACHINE"] {
                 try? await Task.sleep(for: .seconds(1))
-                removing = app.machines.list.first { $0.id == id }
+                // Once it's up, as you'd open it (it says who else uses it then), or after a while.
+                for _ in 0..<60 where app.machines.engine(id)?.isReady == false { try? await Task.sleep(for: .seconds(1)) }
+                if let machine = app.machines.list.first(where: { $0.id == id }) { askToRemove(machine) }
             }
         }
         #endif
@@ -106,11 +108,47 @@ struct MachinesSettings: View {
             Text(failedHome?.homeFailure ?? "")
         }
         .confirmationDialog("Remove \(removing?.name ?? "")?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { machine in
-            Button("Remove", role: .destructive) { app.removeMachine(machine.id) }
-            Button("Uninstall from \(machine.name)", role: .destructive) { app.removeMachine(machine.id, uninstall: true) }
+            let words = Self.removal(of: machine.name, engine: app.machines.engine(machine.id), phones: PhoneLink.isEnabled)
+            Button("Remove") { app.removeMachine(machine.id) }
+                .keyboardShortcut(.defaultAction)
+            if let uninstall = words.uninstall {
+                Button(uninstall, role: .destructive) { app.removeMachine(machine.id, uninstall: true) }
+            }
         } message: { machine in
-            Text("Remove takes it off this Mac; it keeps running, with its sessions, bots, sign-ins and keys\(PhoneLink.isEnabled ? ", and your phones keep it" : ""). Uninstall also stops it there and deletes its sign-ins and keys.")
+            Text(Self.removal(of: machine.name, engine: app.machines.engine(machine.id), phones: PhoneLink.isEnabled).message)
         }
+    }
+
+    /// Remove's dialog, once who else uses it is read afresh (a dialog doesn't change once it's
+    /// up): a moment at most, then with what was read last, or saying Uninstall would stop it for
+    /// anyone. One that isn't connected opens at once.
+    private func askToRemove(_ machine: Machine) {
+        guard let engine = app.machines.engine(machine.id), engine.isReady else {
+            removing = machine
+            return
+        }
+        let app = app
+        Task {
+            // (The read is let go when the moment's up: it only reads.)
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { await app.readAlsoUsedBy(engine) }
+                group.addTask { try? await Task.sleep(for: .seconds(1.5)) }
+                await group.next()
+                group.cancelAll()
+            }
+            removing = machine
+        }
+    }
+
+    /// What Remove's dialog says, and Uninstall's button (nil: not offered). Uninstall stops it
+    /// for whoever else uses it too, so they're named first; one another Mac runs is uninstalled
+    /// from there. `device`: where Remove takes it off ("this Mac", or a Mac's name on a phone).
+    static func removal(of name: String, engine: MachineEngine?, phones: Bool, device: String = "this Mac") -> (message: String, uninstall: String?) {
+        removal(of: name, home: engine.flatMap(otherMac).map { $0.name ?? "Another Mac" }, alsoUsedBy: engine?.alsoUsedBy, phones: phones, device: device)
+    }
+
+    static func removal(of name: String, home: String?, alsoUsedBy: MachineEngine.AlsoUsedBy?, phones: Bool, device: String = "this Mac") -> (message: String, uninstall: String?) {
+        MachineWords.removal(of: name, home: home, otherMacs: alsoUsedBy?.macs, phones: alsoUsedBy?.phones ?? 0, phonesKeepIt: phones, device: device)
     }
 
     /// The Mac that runs it, when it's not this one.
@@ -210,7 +248,7 @@ struct MachinesSettings: View {
                 case nil:
                     EmptyView()
                 }
-                Button("Remove…") { removing = engine.machine }
+                Button("Remove…") { askToRemove(engine.machine) }
             }
         }
         .contextMenu {

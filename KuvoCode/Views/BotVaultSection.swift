@@ -36,9 +36,9 @@ struct BotVaultSection: View {
                 .padding(10)
                 .background(.orange.opacity(0.08), in: .rect(cornerRadius: 10))
             }
-            if vault?.state.agents == false {
-                // Its computer's commands don't run sandboxed yet (VaultSettings says the same).
-                Label("For now it only fills sign-ins set to On Its Own. It can’t use keys, files or notes yet.", systemImage: "lock")
+            if let note = vault?.state.botAgentsNote {
+                // Its computer's commands don't all run sandboxed yet (VaultSettings says the same).
+                Label(note, systemImage: "lock")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

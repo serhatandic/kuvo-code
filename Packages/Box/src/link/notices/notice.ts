@@ -22,6 +22,8 @@ export interface NoticeData {
   ask?: string;
   /** What an agent asks of the vault (`kuvo/vault/asks`). */
   vaultAsk?: string;
+  /** A command an agent wants to run outside the sandbox (`kuvo/sandbox/asks`). */
+  sandboxAsk?: string;
 }
 
 /** A notice for your phones, as the box words it, before it's masked and cut. */

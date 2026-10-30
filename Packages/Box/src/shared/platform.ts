@@ -161,3 +161,15 @@ export function saveLoginPath(home: string, value: string): void {
     fs.renameSync(savedPathFile(home) + ".new", savedPathFile(home));
   } catch {}
 }
+
+/**
+ * Which setup of the box's sandbox its `on` file is (a token written as it's set up, a new one each
+ * time): what the agents bridge's note that its agents all run in it is for. "" when it isn't set up.
+ */
+export function sandboxGeneration(on: string): string {
+  try {
+    return fs.readFileSync(on, "utf8").trim();
+  } catch {
+    return "";
+  }
+}

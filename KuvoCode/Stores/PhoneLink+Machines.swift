@@ -99,6 +99,18 @@ extension PhoneLink {
         if let offer = engine.offer { entry["action"] = offer.rawValue }
         // Another Mac runs it: that Mac (its name where its start noted one), as `kuvo/info`'s `home`.
         if let other = engine.otherMac { entry["home"] = other.name.map { ["name": $0] } ?? [:] }
+        // A connection under way: its step, and how far where it can say.
+        if let step = engine.step, engine.connection.isUnderWay {
+            var said: [String: Any] = ["name": step.name]
+            switch step {
+            case .copying(let sent, let total): said["sent"] = sent; said["total"] = total
+            case .downloading(let fraction): said["fraction"] = fraction
+            default: break
+            }
+            entry["step"] = said
+        }
+        // Who else uses it, as its box last said: what Uninstall would stop it for.
+        if let others = engine.alsoUsedBy { entry["alsoUsedBy"] = ["macs": others.macs, "phones": others.phones] }
         return entry
     }
 

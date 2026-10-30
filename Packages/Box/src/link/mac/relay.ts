@@ -12,7 +12,7 @@ import os from "node:os";
 import { engineConnect } from "../areas/engine";
 import { EMPTY } from "../crypto/keys";
 import { docsChanged } from "../documents/exchange";
-import { peerTargets, readBridgeFile, readEngineFile } from "../engine/client";
+import { peerPlaces, readBridgeFile, readEngineFile } from "../engine/client";
 import { appHost, forgetHostProof, proveHost } from "../host-interface";
 import { announce } from "../peers/agents";
 import { peerMail, receiveMail } from "../peers/mail";
@@ -32,7 +32,7 @@ import type { LinkState } from "../state";
 // `boxRoutes`), and its phones. The rest the app answers, through the host.
 export const MAC_BOX_ROUTES = ["kuvo/artifacts", "kuvo/projects", "kuvo/worktrees", "kuvo/plugins", "kuvo/folders", "kuvo/programs", "kuvo/providers", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library",
   "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities", "kuvo/phones", "kuvo/attention", "kuvo/accounts/ended",
-  "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/agent-tools", "kuvo/moves", "kuvo/work", "kuvo/vault"];
+  "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/agent-tools", "kuvo/moves", "kuvo/work", "kuvo/vault", "kuvo/sandbox"];
 // (A plan signed out from a phone, `kuvo/accounts/<id>/forget`, a command stopped,
 // `kuvo/shell/<id>/stop`, a session started with a task and a session's queue: the box's too.)
 const macAnswersAlso = (route: string): boolean => /^kuvo\/accounts\/[^/]+\/forget$/.test(route) || /^kuvo\/shell\/[^/]+\/stop$/.test(route)
@@ -135,7 +135,7 @@ export async function runMacLink(): Promise<void> {
         authorize: (key, hello, address) => Boolean(macLink.config?.phones) && authorizePhone(key, hello, address),
         confirmed: confirmPhone,
         // Mail from your machines, taken here as a machine takes it (`peerMail`).
-        mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerTargets)),
+        mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerPlaces)),
         handle: macFront(engineHandler(readEngineFile, { name: config!.name }, readBridgeFile, changed => host.keepOnly(new Set((changed.phones ?? []).map(phone => phone.key))), macLink.hold)),
         connect: engineConnect(readEngineFile),
         send: () => {},

@@ -246,6 +246,8 @@ connection.
     `retry` isn't counted, so one tried again and again leaves room for the rest), and only
     to a conversation an agent could be. A subagent's, a group chat's seat or one put away doesn't
     take letters. One it can't look up now (its engine starting) is answered `retry`, and so is one
+    for a conversation the engine doesn't have while the coding agents' bridge isn't running (it may
+    be a Claude Code or Codex one; bridge 0.9.118, before which it was refused), and one
     for a conversation moving to or from another computer now, or that lives on another one now
     (`moved`): it reaches it where it lives once the move is over (bridge 0.9.63). A box knows by
     its own moves (`kuvo/moves`; bridge 0.9.108, before which this Mac's box asked its app).
@@ -608,6 +610,22 @@ client shows it from the same routes.
       allowing a build or a test run allows the project's code as it is then.
     - A file can change between the check and the run, and a hard link looks like any file.
     - git follows the diff, textconv and LFS settings the user already has.
+- **Answering asks in the sandbox** (`work/policy.ts`): where the session's commands run in the
+  sandbox ("Sandbox": the engine's, while it's `on`; a coding agent's, when the agents bridge marks
+  its ask `sandboxed`, its program having started in it, and while it's still set up), which holds what they write and read, a bot may allow any of its commands, wherever it
+  runs, within the engine's rules as above; but never one that acts beyond this computer with your
+  accounts, read as plainly as the line allows (any part, past `sudo`, `env`, `npx` and the like):
+  `git push`, any `push` or `upload` (`docker push`, `twine upload`), publishing (`npm publish`,
+  `cargo publish`…), deploying or releasing (`vercel`, `netlify`, `firebase`, `fastlane`, `xcrun
+  altool`, a program or script named for it, a package script so named: `npm run deploy`), sending
+  with `curl` or `wget` anywhere but this computer, reaching another computer (`ssh`, `scp`,
+  `rsync`, `sftp`), `gh` and `glab`, and `security`; nor code it can't read (`sh -c`, `eval`,
+  `node -e`, `python -c`…), nor a line it can't read plainly (`$…`, a here-document). This reads
+  the line, not what a script it runs does: the sandbox can't hold the network. Those, and every
+  edit (which the engine
+  makes itself, outside the sandbox: as above), go to the user. A command a bot allows still can't
+  get out of the sandbox: only you can let one out (`sandbox_ask`, "Asks"), and no tool answers
+  that.
   Each answer is kept on the session, `kuvo.answers: [{ask, call?, what, decision, reason, by:
   {bot?, name}, at}]` (the latest 40), where clients show it on the ask's tool call ("Allowed by
   Pixel") and in the bot's work.
@@ -687,6 +705,8 @@ app's version, written by a Mac after it sets the box up, or by the box when it 
 - **Setup** also sends the Mac's ID (`macID`, as its engine launches name it). The bridge keeps
   `tolerantIDs[macID]`, set again at each setup, and notes in `run/launchers.json` which Mac
   started the engine (from `run/engine.json`'s `notes.mac`).
+- **Setup** also sends the Mac's name (`macName`), which the bridge keeps by the Mac's key
+  (`macNames`), dropped with that Mac, for `kuvo/info`'s `macs`.
 
 A Mac with Kuvo Code 0.7 or before still connects, and puts its own files there as it always
 did: the box keeps working as itself ("For released Macs").
@@ -957,7 +977,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   one there through the engine, as for a project). A machine's bridge also says whether its engine
   is `running`, and whether it's `stopped` on purpose (it stays down until it's started, from a Mac
   or a phone), and `home`, the Mac that started its engine (`{"mac", "name"?}`, its name where
-  its start noted one); a Mac also names `integrations`, each integration's name by its MCP
+  its start noted one). It also says who uses it, for an uninstall to name whom it would stop it
+  for: `macs`, the Macs that set it up (`[{key, name?, seen}]`: each one's key, its name where its
+  setup gave one, `macName`, and when it was last heard from, in ms), and `phones`, how many phones
+  reach it. A Mac also names `integrations`, each integration's name by its MCP
   server's (`{"microsoft-365": "Outlook and Microsoft 365", …}`), for a card when one asks something.
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
   Antigravity), through the agents bridge beside the host's engine, which answers the same paths
@@ -972,6 +995,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `api/kuvo/engine` (where the engine is), `api/kuvo/groups` (group chats' own steps, which a
   phone takes through `kuvo/groups`) and `api/kuvo/artifacts` (what its browser downloaded; the
   record is read through `kuvo/artifacts`). The same on both (`Vectors/link.json`, `agentRoutes`).
+  - A permission it lists (`…/session/<id>/permission`) has `sandboxed: true` when the agent asking
+    runs in the box's sandbox now (its whole program started in it), which a bot answering it reads
+    ("Work"); the engine's never have it.
   - Accounts: besides each agent's own sign-in, ones you added, each its own provider
     `<agent's provider>@<id>` (`claude-code@1f2e3d4c`), named `Claude Code · Work` in
     `kuvo/agents/api/integration` (`metadata.accountID`, `metadata.accountLabel`). Their models
@@ -1306,6 +1332,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     sessions, bots, sign-ins and keys, and still in `kuvo/hosts`: `200 {}`. `POST
     kuvo/machines/<id>/uninstall` does as Uninstall from <machine> does: also stops its engine
     there and deletes the sign-ins and keys it keeps, and it leaves `kuvo/hosts`: `200 {}`.
+  - A machine connecting has `step` (`{name, sent?, total?, fraction?}`): `name` is `checking`,
+    `downloading` (the engine's package to the Mac, `fraction` of it), `copying` (it, to the
+    machine over SSH: `sent` bytes of `total`), `starting` or `reading` (its sessions), for a
+    client to show how far. One whose box said who else uses it has `alsoUsedBy` (`{macs: [name],
+    phones}`, this Mac left out), for Remove's dialog to name whom Uninstall would stop it for.
   - A machine another Mac runs has `home` (`{"name"?}`, that Mac's name where its start noted
     one, as `kuvo/info`'s `home` says it); one this Mac runs has none. `POST kuvo/machines/<id>/home` makes this Mac its home, as Make This Mac Its Home does:
     the engine starts again there as this Mac's, with this Mac's accounts; its sessions, bots and
@@ -1393,7 +1424,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   "home", "parent", "folders": [{name, repository?}]}`, ordered as Finder orders names, without
   hidden ones unless `hidden=1`. No `path`, or `~`: the home folder; `~/` starts there. `parent` is
   null at `/`; `repository`, a git repository's own checkout. `404 {"message"}` for no folder there,
-  `403` for one it can't read, `400` for a path that isn't a full one.
+  `403` for one it can't read, `400` for a path that isn't a full one; each refusal with `reason`,
+  why as the computer says it (`Permission denied`, `No such folder`, `Not a folder`), so a client
+  never shows a folder it couldn't read as empty. With `files=1` (`folders.files`), its files too,
+  as a Files panel lists a folder: `files`, their names in the same order (with `hidden=1`, hidden
+  ones too; `.DS_Store` left out).
   `POST kuvo/folders {"path"}` makes a new folder in one that's there, as a folder panel's New
   Folder does → `{"path"}`; `409 {"message"}` for something there already, `404` when the folder
   it's in isn't there, `403` when one can't be made there, `400` for a path that isn't a full one.
@@ -1934,6 +1969,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `engine.restart` | `POST kuvo/engine/restart` |
 | `file` | `kuvo/file` |
 | `folders` | `kuvo/folders` |
+| `folders.files` | `kuvo/folders?files=1`: a folder's files too, and `reason` on a refusal |
 | `git` | `kuvo/git/…`: Changes (bridge 0.9.94) |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
@@ -1969,6 +2005,9 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `sign-in.return` | `POST kuvo/sign-in/return` |
 | `skills` | `kuvo/skills…` and `kuvo/skill-library…` |
 | `skills.trash` | `kuvo/skill-trash…`: Recently Deleted, and restoring from it |
+| `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.118) |
+| `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
+| `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.118) |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
@@ -2013,7 +2052,7 @@ On a machine the bridge keeps its state in `~/.kuvo-code/run/link.json` (mode 60
 
 ```json
 {"relay": "wss://…", "secret": "…", "key": "<static private key>", "sign": "<signing key's seed>", "mac": "<the last Mac's static key>",
- "macs": ["<each Mac that set it up>"], "macSigns": {"<Mac>": "<its signing key>"}, "macSeen": {"<Mac>": <when it came, here>},
+ "macs": ["<each Mac that set it up>"], "macSigns": {"<Mac>": "<its signing key>"}, "macSeen": {"<Mac>": <when it came, here>}, "macNames": {"<Mac>": "<its name>"},
  "docs": {"<origin> <kind>": {"d": "…", "s": "…"}}, "own": {"<kind>": {"n", "h", "b"}}, "views": {"<origin>": {"n", "h"}},
  "phones": [{"key": "…", "name": "…", "added": 1760000000, "from": "mac", "mac": "<the Mac that listed it>", "address": "…", "pairing": "…"}],
  "removed": [{"key": "…", "pairing": "…"}]}
@@ -2462,7 +2501,9 @@ then pauses everyone, and so does its being gone. The state says `tampered`. Val
 
 **The process that holds it.** The box's long-running process (`run` on a machine, `serve` on a
 Mac) holds the vault. A `box route` passes `kuvo/vault…` to it over `run/vault.sock` (`0600`, owned
-by the user, which the route checks first), one request a connection: `{"hello": <nonce>}`, answered
+by the user, which the route checks first), one request a connection: `{"hello": <nonce>, "key"}`
+(`key`, the box's socket key: the text of `run/socket.key`, `0600`, made by whichever of the box's
+processes needs it first; a connection without it gets nothing and is closed), answered
 `{"nonce", "proof"?}` (`proof`, while the holder has the unlock key: HMAC-SHA256 with it of
 `kuvo-vault-holder\0<the route's nonce>`, base64url); then a line of `{"method", "path", "headers",
 "body"}` (base64) there, `{"status", "type", "body"}` back. A request with the unlock key sends, to
@@ -2495,8 +2536,9 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
   one without making it.
 - `GET kuvo/vault` → `{state, items, grants}`. `state` is `{made, locked, paused, pausedBots:
   {<bot, or a conversation that isn't a bot's>: why}, store: "keychain" | "encrypted", keptDays,
-  agents, tampered?, generations: {items, grants, paused}}` (`agents`: whether agents may use it
-  on this box, below); an item is `{id, kind: "login" |
+  agents, agentsWaiting?, tampered?, generations: {items, grants, paused}}` (`agents`: whether agents may use it
+  on this box, below; `agentsWaiting`: its sandbox is on, and they may once the coding agents
+  started before it came on have finished); an item is `{id, kind: "login" |
   "key" | "file" | "note", name, sites, username?, fields, fileName?, readable?, signInOnly?,
   created, changed, used?}` (`sites`: hosts, a site's own and those under it; `fields`: the names of the values it
   holds, a sign-in's `password`, a file's `file` (base64), a note's `text`, a key's own); a grant
@@ -2531,13 +2573,12 @@ bridge) has a tool call of that name running in it (`api/session/<id>/message`, 
 `running` or `pending`; for `tools`, with the same arguments; for `fill`, `browser_sign_in` or
 `browser_fill`, and one fill for each such call). Any program on the computer could name a session;
 only the conversation's own call uses its grants. (On a machine its browser, and anything that runs
-as you there, can still reach a value a fill puts in a page: until agents' commands are fenced off,
-that's what a machine can't keep from them.)
+as you there outside the sandbox, can still reach a value a fill puts in a page.)
 
-Agents use the vault only on a box whose agents' commands are fenced (not yet on any box; the
-tests open it with `KUVO_VAULT_AGENTS=1`, which a Mac's app never passes its box, and which a box
+Agents use the vault only on a box whose agents' commands are all in the sandbox (below: its state's
+`on` and `agents`; the tests open it with `KUVO_VAULT_AGENTS=1`, which a Mac's app never passes its box, and which a box
 takes only in a test's own folder, never the account's own `~/.kuvo-code` or a Mac's
-`run.kuvo.code…/box`). Until then `GET kuvo/vault/tools` lists no tools, and a call says the vault
+`run.kuvo.code…/box`). Elsewhere `GET kuvo/vault/tools` lists no tools, and a call says the vault
 isn't open to agents. A fill does only what Kuvo Code did before the vault: for `browser_sign_in`
 with no item, the one sign-in for the page's site the conversation may use on its own (else `404`,
 and the browser asks you); an item named, or a field, is `404`. The browser tools leave out
@@ -2567,6 +2608,248 @@ named) asks you and waits. An item you give through `vault_ask` "always" is gran
 (to the bot, or the conversation's project, never a home folder); "once", its next use within
 half an hour goes ahead. A command's copies (`run/vault-run/`) go when it ends, when the box ends,
 and as a box starts.
+
+### Sandbox
+
+Each box runs its agents' commands in a sandbox (`sandbox` in `features` and its asks, `sandbox.asks`, bridge 0.9.118) wherever
+it can, with no switch: the way out is per command (the card that asks you about one it refused).
+On, each command the engine runs (an agent's shell tool, and yours with `!`)
+writes only in its conversation's folder, that folder's git repository (a real one: a `.git` that's
+a link, or names a folder that isn't a repository or a worktree the repository doesn't name back,
+counts for nothing; on macOS never its hooks or config, its submodules' or its worktrees', nor the
+engine's settings in the folder: `.opencode/`, `opencode.json`, nor the coding agents' settings
+files, whose hooks and servers they run as they start there: `.claude/settings.json` and
+`settings.local.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and `mcp.json`,
+`.gemini/settings.json`, `.grok/settings.json`, and the scripts in `.claude/hooks` and
+`.cursor/hooks`; a folder moved or linked into place is checked only by its own name, so the folders
+that hold those, `.git`, a submodule's or a worktree's repository in it and the agents' `.claude`,
+`.codex`, `.cursor`, `.gemini` and `.grok`, can't be made, moved or removed, only written in), its conversation's own temporary
+folder (`TMPDIR`), its conversation's wake-ups' inbox (below), the system's temporary folders, devices and tools'
+caches, but not what in them runs later outside the sandbox (installed programs like
+`~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, npx's packages). It can't read
+Kuvo Code's own folders (on a machine `~/.kuvo-code`; on this Mac the app's folders under `Library`,
+any `run.kuvo.code…` copy's, its temporary folder and `/tmp/kuvo-ssh-<uid>`) but its `bin`, nor your
+secrets (cloud, package and git tokens, browsers' and password managers' data, private SSH keys:
+every file in `~/.ssh` but its config, known hosts and public keys; gh's `hosts.yml` when it holds
+the token). A bot's or a chat's command gets its own folder back, and not its neighbours'. Its
+environment has none of the engine's `OPENCODE_…` (but `OPENCODE_SESSION_ID`), no `KUVO_…` password,
+secret, token or key, and no `SSH_AUTH_SOCK` but its own SSH agent's (below).
+On macOS your Keychain stays readable, as gh and git's Keychain helper read their sign-ins from it in
+their own process (each item keeps its own access list, Kuvo Code's too, though one that trusts
+`security` reads without asking, and the file itself can be copied), but not the system's own
+keychain in its folder (`Library/Keychains/<UUID>`), which only its daemons read.
+On macOS it also can't reach Kuvo Code's own servers on `127.0.0.1` (the engine's, the bridge's,
+the box's, the host interface) or sockets in its folders, start launchd jobs, open apps
+(LaunchServices) or send Apple Events; on Linux the servers' passwords are in files it can't read,
+and its sockets (the vault's `run/vault.sock`, the browser keeper's `run/browser.sock`), which a
+command can still connect to there, serve only a connection that gives the box's socket key first
+(`run/socket.key`, which it can't read): the vault's in its hello, above; the keeper's as
+`{"method": "Kuvo.key", "params": {"key"}}`, before it says its own hello. Any other hears nothing
+from the vault, and from the keeper (within a few seconds and a short first line) only a
+`Kuvo.error` saying to update Kuvo Code, which is what an older Kuvo Code on a Mac shows; then it's
+closed.
+The engine's plugin makes a new key as that engine first sends commands through the sandbox (before
+any of them runs), so one a command read before opens nothing after. (A process a command started
+while the sandbox was off, or before the engine took it in, still runs outside it.)
+So neither a command nor what it starts can route a request to the vault (`box route` included),
+take a sign-in's fill, or drive, stop or answer the browser.
+
+**Wake-ups.** A command schedules its own conversation's (`kuvo-wake add` and `watch`, the
+conversation as the engine names it in `OPENCODE_SESSION_ID`), never another's: it reads its
+conversation's wake folder (its bot's, or its own in the box's `wakes`, which the launcher makes
+with its `session` and `directory` before the command runs, and which goes a day after it was last
+used if it never got a wake-up or a watch, or its conversation's archived) and writes only its
+`inbox/`. The launcher names that folder to kuvo-wake in `KUVO_WAKE_FOLDER`, and kuvo-wake puts what's
+asked there (wake-ups in `inbox/wakes`, watches in `inbox/watches`, cancels in `inbox/cancel`), each
+written whole under a `.new-` name first and then put in place, and lists them with what's kept. The
+box's round of wake-ups (`kuvo-wake fire`, each minute) takes the inbox in, unless it's empty or a
+`.new-` there is under a minute old: it moves it out of the commands' reach first (a link moves as the
+link), then keeps copies of only plain files (no link, no second name for a file, 64 KB at most)
+under the names kuvo-wake gives them, and clears the rest; what it keeps (`wakes/`, `watches/`, a
+watch's readings) no command writes. While the sandbox is on (`run/fence/on`), each watch's check
+runs in the sandbox, in its conversation's folder (none when that's gone), whether at its time or by
+Check Now (`kuvo-wake try`), what it prints going to a file; set up and checked (`run/fence/ready`)
+but not on, or its launcher missing, checks wait. Where the box can't set it up, checks run as
+commands do.
+
+**SSH keys.** Your own keys and agent stay hidden; a command signs with the SSH keys you keep in the
+vault for its conversation (a `key` item with a `private_key`, OpenSSH's own format or PEM, without
+a passphrase; for its bot, its project or everyone, as the vault's grants say, asking you when one
+says to) through Kuvo Code's own SSH agent, which `ssh`, git over SSH and `ssh-add` use as
+`SSH_AUTH_SOCK`. While agents may use the vault, the launcher notes each conversation before its
+command runs (`run/ssh-for/<session>`, or `dir-<sum>` with its folder for one of yours with none),
+and the process that holds the vault opens that conversation's agent: a socket of its own, named
+from the note's sum and random bytes, in `/tmp/kuvo-ssh-<uid>/agents-<sum>` on a Mac (a socket's
+path is short there) and `run/ssh-agents` on a machine, which the launcher hands the command.
+Each lists only the keys its conversation may use, signs inside that process (a key never reaches
+the command), answers one request at a time per connection, asks you once for a key whichever of
+the conversation's commands signs, and after you say no, says no for a little while without asking.
+Pause, a locked vault or a key removed: none offered. They go when the box does (cleared as it starts,
+too). On macOS a command reaches its own agent and no other's, nor the app's own SSH connections
+beside them; on Linux, which can't refuse a socket and shows every folder's names, any
+conversation's commands could reach another's agent, so there an agent offers only the keys you
+keep for everyone, until it can tell which conversation a connection comes from.
+
+**How.** The box writes, before it says where it is as it starts: `bin/kuvo-fence` (the shell the
+engine runs a command with) and, on Linux, `bin/kuvo-fence.js`; the rules in `run/fence/`
+(`project.sb` and `inside.sb` for macOS's `sandbox-exec`, `policy.json` for Linux's Landlock, which
+the engine's own Bun sets up through `bun:ffi`, Linux 5.13 or later); and the engine's plugin,
+`kuvo-sandbox.js` in its settings' `opencode/plugins`. The plugin names, for each folder the engine
+opens, that folder (the engine's own, never the command's) and its repository, and sends each
+command's shell through `bin/kuvo-fence`, which refuses to run one without a folder (exit `126`). The
+box first runs a command through it and checks that it can't read or write what's hidden; only then
+does it give the engine the plugin, and it takes it away (with what the engine noted of it, so
+it's `on` again only once the engine has loaded it again) when a check fails, so commands run as
+before rather than not at all. (Kuvo Code's own kill switch, for a rollout, does the same: the box
+started with `KUVO_SANDBOX=off`. No client shows a reason for it.) It puts it back if it goes, and keeps
+Kuvo Code's own ports in the macOS rules as they change: the engine's, the agents bridge's, the
+app's (`run/host.json`) and its server for Kuvo Code's tools (`run/tools.json`, `{"port"}`, which
+the agents bridge writes as the app tells it where that is, `PUT kuvo/tools`, and removes when it
+says it's gone; only an agent's relay reaches it).
+Agents are told: each box starts its engine with `run/fence/agents.md` among its instructions
+(`engine-config`, beside what it's given), which the engine reads again as it changes. While it's
+`on` (the engine has loaded the plugin) it says what commands can't do, and how builds and tools that would fail run (on a
+Mac: `swift … --disable-sandbox`, xcodebuild's package flags, `pgrep` rather than `ps`); otherwise
+it's empty.
+
+- `GET kuvo/sandbox` → `{on, why?, able, agents}`. `on`: every command the engine runs here
+  goes through the sandbox, checked (the engine loaded this box's plugin). `why`, when it isn't, in
+  words for Settings: why this computer can't (`able: false`: no Landlock, no engine
+  yet), a failed check, `Its plugin for the engine was changed or removed.`, `The engine isn't
+  running.`, `Waiting for the engine to load it.`. `agents`: the coding agents' own
+  programs (Claude Code, Codex, Cursor, Grok and Antigravity, whose commands don't go through the
+  engine) run in it too: each starts its next turn in it once it's set up and checked here, and
+  `agents` is true once no agent process the bridge started before it was on still runs (the
+  agents bridge notes it, `{pid, on}`, in `run/fence/agents`, for the sandbox as it is: `on` is the
+  token each setup writes in `run/fence/on`; with no bridge running, it's true). It counts the
+  agents' own processes, from their start: a command one of them started outside the sandbox that
+  outlives it isn't followed, as with the engine's. How each does: Claude Code runs its commands through the
+  box's shell for it (`run/fence/shell/zsh` or `bash`); Codex runs whole in the sandbox
+  (`run/fence/shell/run`), an app-server for each session in that session's folder (and your
+  account's in its `sessions` folder), its own sandbox off, asking as it does, and Kuvo Code's tools
+  through the agents bridge's relay on 127.0.0.1, a key for each session. Of its home it writes, on
+  a Mac, only what's named as its state (its sign-in, its databases, its conversations, logs and
+  caches), and in those never settings (`*.toml`, `.env`, `hooks.json`, `rules`); nothing else
+  there (its settings, plugins, skills, helpers, shell snapshots, models' instructions, the ChatGPT
+  app's state), and it can't reach the ChatGPT app's socket (`ipc`); on Linux, a machine's Codex
+  home (Kuvo Code's own copy) whole. In its state a command makes only files and folders, never a
+  link (your own agent would write through it, elsewhere); a link carried in inside a folder the
+  bridge takes away as the agent starts and stops (the agents make none there). Its memories'
+  database it opens as it starts, so a command can write it (what your Codex is told later, never
+  what it runs; so can a conversation of its, when you take it up). Files you attach are copied for
+  it to `run/fence/attachments`, which it only reads.
+  Grok runs whole the same way, as Antigravity does: its process per
+  session through `run/fence/shell/run`, its own sandbox off (`GROK_SANDBOX=off`), its memories
+  off (`GROK_MEMORY=0`), never in a shared leader (`--no-leader`; on a Mac its socket in `~/.grok`
+  is refused), Kuvo Code's tools through the relay; of its home, on a Mac, only what's named as its
+  state (`sessions`, `logs`, `memtrace`, `debug`, `crash`, its sign-in, locks and databases), and
+  in those never settings (`*.toml`, `hooks-paths`, `disabled-hooks`, `*.sh`, so a project's
+  always-allowed commands too); nothing else there (its settings, hooks, status line, language
+  servers, the settings xAI sends, its models' list, which names where each model's requests go,
+  its program, plugins, skills or memories). In a project, `.grok`'s settings, language servers,
+  hooks, plugins, agents and workflows are kept as the other agents' are.
+  Cursor, whose SDK runs its tools in the process that runs it (the bridge's, otherwise), runs whole
+  the same way: its SDK in a process of its own for each session (the engine's runtime run as Bun:
+  `KUVO_FENCE_BUN=1`, which commands don't get), which the bridge asks over its stdin and stdout,
+  Cursor's own sandbox off, stopped once it's been done 15 minutes. Your sign-in stays with the
+  bridge, which hands it the key it runs with, out of its reach: of Cursor's folders it reads and
+  writes only its conversations and a folder of its own for its notes, sandbox policies and computer
+  use's (`cursor/in-sandbox`, never what Cursor keeps run in the bridge), and it reads its SDK.
+  Antigravity runs whole too, for its sessions and its sign-in alike: its home (`GEMINI_HOME`, Kuvo
+  Code's own, never yours) and its temporary folder, where it unpacks itself, written whole; its
+  program and the bridge's browser catcher only read; Kuvo Code's tools through the relay. It
+  writes and reads files with its own tools then: the bridge offers none (`fs` false in
+  `initialize`), since it would write outside the sandbox.
+  When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
+  you can do (`action`) and the box's route that does it (`route`, where there is one):
+
+  | `reason` | when | `action` | `route` |
+  | --- | --- | --- | --- |
+  | `kernel` | Linux without Landlock; `needs`: `"Linux 5.13"` | `help` | |
+  | `macos` | this macOS has no sandbox | `softwareUpdate` | |
+  | `engineMissing` | a machine without its engine yet | `retry` | `POST kuvo/sandbox/check` |
+  | `checking` | not checked yet | `retry` | `POST kuvo/sandbox/check` |
+  | `checkFailed` | its check failed; `check`: `folder`, `tempFiles`, `readsOwn`, `writesOwn`, `didntRun` or `setup` | `retry` | `POST kuvo/sandbox/check` |
+  | `plugin` | its plugin for the engine was changed or removed | `fix` | `POST kuvo/sandbox/check` |
+  | `engineDown` | the engine isn't running | `restartEngine` | `POST kuvo/engine/restart` |
+  | `waiting` | the engine hasn't loaded it yet | `restartEngine` | `POST kuvo/engine/restart` |
+
+  `failures`, with
+  `checking` and `checkFailed`: checks failed in a row (the box tries again each minute). A box
+  without `sandbox.check` in its features gives none of these; without `sandbox`, it has no sandbox
+  (an older Kuvo Code, to update).
+- `POST kuvo/sandbox/check` → the state, after setting it up and checking it again.
+
+#### Asks
+
+When the sandbox stops a command a task needs, the agent asks with its tool `sandbox_ask` (`command`,
+`why`, and what it printed, `error`; `timeout`, how long it may run, 300 seconds unless it says, at
+most 600). Every client is asked; on Allow Once or Always for This, **the box runs that one command
+itself**, outside the sandbox: with your login shell (`-lc`), in the conversation's folder (the
+engine's record of it, never the command's), with the box's environment but without the passwords
+and secrets of Kuvo Code's own processes, and hands back what it printed (the last 64 KB) and how it ended. The
+agent's text starts `Ran outside the sandbox · Allowed once` or `· Always for this: …` (with the
+folder its commands now write in); on Don't Allow,
+`The user said no: …`, and nothing runs. An ask nobody answers in 15 minutes runs nothing either, and
+the text starts `Nobody answered in time` (a client shows it as no answer, not as your no). The agent
+never lets a command out itself, and no tool answers an ask (a bot neither): only a client. A bot's
+seat in a group chat is asked once only, never with Always.
+
+The tool is the box's, so an agent has it on every box (`sandbox.asks`): this Mac's tool server and a
+machine's (`kuvo-browser.js mcp`, through `box route`) list what `GET kuvo/sandbox/tools` gives (only
+while the sandbox is `on`) and pass a call to `POST kuvo/sandbox/tools` `{session, name, arguments}`
+→ `{text, isError}`, which, as the vault's, the box carries out only while that conversation is
+making that call. The asks, the tool and the answers live in the box's long-running process, as the
+vault does (`run/vault.sock`); another passes them on.
+
+- `GET kuvo/sandbox/asks` → `{asks: [ask]}`, oldest first; `kuvo/sandbox/asks/events`, NDJSON, the
+  same at once and on every change. An ask: `{id, at, session?, sessionName?, bot?, botName?,
+  project, command, why, stopped?, error?, always?, machine?}`. `session` is the conversation's root
+  (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
+  that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,
+  `job`, `app` or `other`; `path`, the file, folder or address). `always`: what Always for This would
+  keep besides running it, `{kind: "write", path}`, the one place the sandbox stopped it writing,
+  when that's all it stopped and it's one that may be given (below); without it, the command can
+  only be allowed once. A command itself is never let out for good: what it runs (its scripts, its
+  project's settings, `package.json`, a `Makefile`) is what the sandbox writes, so the same command
+  asks again each time. `machine`: the machine's name, on a machine.
+- `POST kuvo/sandbox/asks/<id>` `{answer: "once" | "always" | "no"}` → `200`, `404` for one that
+  isn't open, `400` for another answer. `always` without `always` in the ask counts as once.
+- Each open ask is also a notice to your phones (as the vault's are): `<who> wants to run a command
+  outside the sandbox`, the command and why, `category` `ask`, `data.sandboxAsk` its id.
+
+On macOS the launcher tags each command's refusals in the system's log
+(`kuvo-sandbox <session> <first 16 hex of the command's SHA-256>`, as `sandbox-exec`'s message), and
+the box reads them for `stopped` (`log show`, the last 3 minutes). Linux's Landlock logs nothing, so
+there an ask has only what the agent says (`error`) and never `always`: a folder is added to Also
+Allowed by hand. Reading the log doesn't hold up the box: the ask waits on it.
+
+#### Also Allowed
+
+What you let a project's commands do beyond the sandbox, from Always for This or added in Settings:
+a folder (or file) they write in the sandbox, at most 8 a project. Kept in the box's own
+`box/sandbox-allowed.json`, which no command can write, and changed only in the box's long-running
+process (another passes the routes on). A rule: `{id, project, kind: "write", path, at, by?}`
+(`project`, `path`: real paths; `by`: `Mac` or the phone's name).
+
+The launcher reads a project's as each command starts, from `run/fence/allowed/<sum>` (one path a
+line; `sum`, the first 32 hex of the SHA-256 of the project's real path, as the launcher names its
+temporary folder); a folder that's become a link since isn't given. Inside one, what's kept from a
+project's commands is kept there too on macOS (git's hooks and config, the engine's and the coding
+agents' settings: Linux's Landlock grants a folder whole, as it does the project).
+
+What can't be given (`400`, and only allowed once): your home folder or the whole disk; a folder of
+Kuvo Code's; a secret or a folder that holds one; and what runs later outside the sandbox: anything in
+your home folder's hidden folders, `Library`, `bin` or `Applications`; the system's folders (`/usr`,
+`/opt`, `/etc`, `/Library`, `/Applications`, `/nix`…); a folder on the box's `PATH` or one that holds
+one; a repository's own folder (`.git`) or a settings folder of the engine's or an agent's; and the
+places the sandbox already keeps read-only. Your home folder is your account's own, whatever `HOME`
+says.
+
+- `GET kuvo/sandbox/allowed[?project=<folder>]` → `{allowed: [rule]}`, every project's without one.
+- `POST kuvo/sandbox/allowed` `{project, kind: "write", path}` → `{allowed}`, that project's; `400` with `message` for one that can't be given. The same rule again
+  is the one there.
+- `DELETE kuvo/sandbox/allowed/<id>` → `{allowed}`, that project's; `404` for one that isn't there.
 
 ### Paired phones
 

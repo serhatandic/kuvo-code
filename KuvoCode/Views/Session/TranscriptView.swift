@@ -83,6 +83,10 @@ struct TranscriptView: View {
         // What the bot that runs it answered for it, on the steps that asked; a subagent's are kept
         // on the session it works for.
         .environment(\.workAnswers, workAnswers)
+        // The commands its agent asks to run outside the sandbox, whose rows say they were stopped
+        // (by the conversation they ask as: the one at the top of its chain).
+        .environment(\.sandboxStopped, Sandboxes.shared.stoppedCommands(for: workspace.root(of: model.id), on: Workspace.box(of: model.session.location.directory)))
+        .environment(\.sandboxReleased, Sandboxes.shared.releasedCommands(for: workspace.root(of: model.id), on: Workspace.box(of: model.session.location.directory)))
         .overlay {
             if model.isLoaded && rows.isEmpty {
                 EmptyConversationView(directory: model.session.location.directory) { text in

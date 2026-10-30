@@ -16,6 +16,7 @@
 		4B0A000000000000000000F2 /* ClientSessions in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A000000000000000000F3 /* ClientSessions */; };
 		4B0A000000000000000000F4 /* ClientChanges in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A000000000000000000F5 /* ClientChanges */; };
 		4B0A000000000000000000F7 /* ClientVault in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A000000000000000000F8 /* ClientVault */; };
+		4B0A000000000000000000F9 /* ClientSandbox in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A000000000000000000FA /* ClientSandbox */; };
 		4B0A0000000000000000009E /* ClientDesign in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A0000000000000000009F /* ClientDesign */; };
 		4B0A00000000000000000060 /* SwiftUIMath in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000061 /* SwiftUIMath */; };
 		4B0A00000000000000000018 /* UsageKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000019 /* UsageKit */; };
@@ -70,6 +71,7 @@
 				4B0A000000000000000000F2 /* ClientSessions in Frameworks */,
 				4B0A000000000000000000F4 /* ClientChanges in Frameworks */,
 				4B0A000000000000000000F7 /* ClientVault in Frameworks */,
+				4B0A000000000000000000F9 /* ClientSandbox in Frameworks */,
 				4B0A0000000000000000009E /* ClientDesign in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -149,6 +151,7 @@
 				4B0A000000000000000000F3 /* ClientSessions */,
 				4B0A000000000000000000F5 /* ClientChanges */,
 				4B0A000000000000000000F8 /* ClientVault */,
+				4B0A000000000000000000FA /* ClientSandbox */,
 				4B0A0000000000000000009F /* ClientDesign */,
 			);
 			productName = KuvoCode;
@@ -637,6 +640,10 @@
 		4B0A000000000000000000F8 /* ClientVault */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = ClientVault;
+		};
+		4B0A000000000000000000FA /* ClientSandbox */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ClientSandbox;
 		};
 		4B0A0000000000000000009F /* ClientDesign */ = {
 			isa = XCSwiftPackageProductDependency;

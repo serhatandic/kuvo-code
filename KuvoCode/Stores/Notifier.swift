@@ -93,9 +93,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
         var title: String {
             switch self {
-            case .once: "Allow"
-            case .always: "Always Allow"
-            case .reject: "Deny"
+            case .once: "Allow Once"
+            case .always: "Always for This"
+            case .reject: "Don’t Allow"
             }
         }
     }
@@ -154,9 +154,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// `replies` gets Reply, to write back to the session from the notification; a `question`, its
     /// choices. With `push`, the news your phones get too (made by the box it happened on, or for an
     /// ask from the panel's browser, sent from here whether the Mac shows it or not): shown here,
-    /// the boxes count it as seen while you're at this Mac.
+    /// the boxes count it as seen while you're at this Mac. An `ask` the box tells your phones itself
+    /// (a sandbox's): cleared here as it's answered anywhere.
     func notify(session: String, title: String, subtitle: String? = nil, body: String, permission: (session: String, request: String)? = nil,
-                question: Question? = nil, replies: Bool = false, push: Push? = nil) {
+                question: Question? = nil, replies: Bool = false, push: Push? = nil, ask: String? = nil) {
         // What looks like a secret in a command or reply (a token, a key) isn't shown: these stay
         // in Notification Center, and a phone's lock screen.
         let body = Self.masked(body)
@@ -177,7 +178,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             content.threadIdentifier = session
             content.userInfo = Self.info(session: session, permission: permission, question: question)
             // A browser's ask: cleared as it's answered, or goes unanswered.
-            if let ask = push?.ask { content.userInfo["ask"] = ask }
+            if let ask = push?.ask ?? ask { content.userInfo["ask"] = ask }
             if permission != nil {
                 content.categoryIdentifier = Self.permissionCategory
             } else if let question {
