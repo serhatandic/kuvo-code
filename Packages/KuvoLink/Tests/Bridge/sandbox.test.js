@@ -642,6 +642,29 @@ test("each conversation's temporary files are its own", async () => {
   }
 });
 
+test("a commit runs pre-commit's hooks, which set themselves up as they first run, and your own pre-commit's are left as they are", async () => {
+  const box = boxAt("pre-commit");
+  const project = path.join(root, "hooked");
+  fs.mkdirSync(project);
+  assert.equal(spawnSync("git", ["init", "-q", project]).status, 0);
+  // As `pre-commit install` leaves it, outside the sandbox: a hook that sets up its tools in
+  // pre-commit's own folder (as pre-commit finds it) the first time, then runs them.
+  fs.writeFileSync(path.join(project, ".git", "hooks", "pre-commit"), [
+    "#!/bin/sh",
+    'store=${PRE_COMMIT_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/pre-commit}',
+    'mkdir -p "$store/repo-lint" && echo set up > "$store/repo-lint/env" && echo linted',
+  ].join("\n") + "\n", { mode: 0o755 });
+  const running = await start(box);
+  try {
+    const ran = await engineRuns(box, project, "echo ok > made.txt && git add made.txt && git -c user.name=t -c user.email=t@t commit -qm made");
+    assert.equal(ran.status, 0, ran.out);
+    assert.match(ran.out, /linted/);
+    assert.equal(fs.existsSync(path.join(root, ".cache", "pre-commit")), false, "your own pre-commit's tools, which run outside it, aren't what it set up");
+  } finally {
+    await running.stop();
+  }
+});
+
 test("a command's own socket in its temporary folder works, as a server's tests or Python's multiprocessing make one", async () => {
   // This Mac's box as the app starts it, its temporary files in the app's temporary folder (named
   // as long as the app's own), its folder as deep as `~/Library/Application Support/<bundle>`.

@@ -127,6 +127,9 @@ export function launcherScript(places: FencePlaces): string {
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => `a${at}=$F/none r${at}=-`),
     `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; ${places.platform === "darwin" ? `eval "r$i=\\$(escaped \\"\\$line\\")"; ` : ""}i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
+    // pre-commit's hooks set their tools up in its own folder as they first run, which runs later
+    // outside the sandbox, so commands only read it: theirs go in their temporary folder instead.
+    `export PRE_COMMIT_HOME="$TMPDIR"pre-commit`,
     // (As the sandbox compares paths: through links, `/var` being `/private/var`.)
     ...(places.platform === "darwin" ? [`tmp=$(cd "$tmp" 2>/dev/null && pwd -P) || { echo "This command can't run: its temporary folder isn't there." >&2; exit 126; }`] : []),
     // Its conversation's wake-ups and watches (kuvo-wake): its bot's folder, or its own in the
