@@ -89,6 +89,7 @@ struct SubscriptionsStep: View {
         // KUVO_DEMO_SHOW_KEYS: the API keys found, open in place.
         .onAppear { if ProcessInfo.processInfo.environment["KUVO_DEMO_SHOW_KEYS"] != nil { showsKeys = true } }
         #endif
+        .modifier(InstallFailureAlert(isShown: signingIn == nil && adding == nil))
         .sheet(item: $signingIn) { signIn in
             ConnectView(integrationID: signIn.id, onDone: { finishedSigningIn() }, onCancel: { signingIn = nil })
                 .frame(width: 480)
@@ -228,8 +229,6 @@ struct OfferRow: View {
     let row: Offers.Row
     let isBusy: Bool
     let act: (Offers.Row.Action) -> Void
-    @Environment(AppModel.self) private var app
-    @Environment(Catalog.self) private var catalog
 
     var body: some View {
         OnboardingRow(title: row.name, detail: detail) {
@@ -237,24 +236,6 @@ struct OfferRow: View {
         } trailing: {
             trailing
         }
-        // As Settings › Accounts says it: the installer's words, and its command to run yourself.
-        .alert("Couldn't Install \(row.name)", isPresented: Binding(get: { installFailure != nil }, set: { if !$0 { app.onboarding.seenInstallFailure() } })) {
-            if let installCommand {
-                Button("Copy Command") { Clipboard.copy(installCommand) }
-            }
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(installFailure?.message ?? "")
-        }
-    }
-
-    /// This row's install that didn't work.
-    private var installFailure: Onboarding.InstallFailure? {
-        app.onboarding.installFailure.flatMap { $0.integrationID == row.integrationID ? $0 : nil }
-    }
-
-    private var installCommand: String? {
-        catalog.integrations.first { $0.id == row.integrationID }?.metadata?["install"]?.string
     }
 
     /// What it's doing, while it's busy.
@@ -275,6 +256,28 @@ struct OfferRow: View {
             case .signIn: Button("Sign In…") { act(row.action) }.buttonStyle(.glass)
             case .install: Button("Install") { act(row.action) }.buttonStyle(.glass).help("Runs its maker’s installer, then signs in")
             }
+        }
+    }
+}
+
+/// An agent's install from the step (or Add Another) that didn't work, as Settings › Accounts says
+/// it: the installer's words, and its command to run yourself. The step says it, or Add Another
+/// while it's open over the step, so it's said once, wherever you are, each in turn.
+struct InstallFailureAlert: ViewModifier {
+    /// Nothing is open over this view.
+    let isShown: Bool
+    @Environment(AppModel.self) private var app
+    @Environment(Catalog.self) private var catalog
+
+    func body(content: Content) -> some View {
+        let failure = isShown ? app.onboarding.installFailure : nil
+        content.alert("Couldn't Install \(failure?.name ?? "")", isPresented: Binding(get: { failure != nil }, set: { if !$0, let failure { app.onboarding.seenInstallFailure(failure.integrationID) } }), presenting: failure) { failure in
+            if let command = catalog.integrations.first(where: { $0.id == failure.integrationID })?.metadata?["install"]?.string {
+                Button("Copy Command") { Clipboard.copy(command) }
+            }
+            Button("OK", role: .cancel) {}
+        } message: { failure in
+            Text(failure.message)
         }
     }
 }

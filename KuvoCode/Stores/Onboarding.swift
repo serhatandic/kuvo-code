@@ -31,8 +31,10 @@ final class Onboarding {
     private(set) var used: Set<String> = []
     private(set) var using: Set<String> = []
     private(set) var useFailure: String?
-    /// An agent's install from this step that didn't work, until you've seen it.
-    private(set) var installFailure: InstallFailure?
+    /// Agents' installs from this step that didn't work, by integration, until you've seen them.
+    private(set) var installFailures: [String: InstallFailure] = [:]
+    /// The one to say next.
+    var installFailure: InstallFailure? { installFailures.values.min { $0.name < $1.name } }
 
     struct InstallFailure: Equatable {
         var integrationID: String
@@ -151,16 +153,16 @@ final class Onboarding {
     /// this step's to say, on its row, rather than Settings › Accounts' the next time it opens.
     func install(_ row: Offers.Row, with agents: OutsideAgents, then refresh: @escaping (Bool) async -> Void) {
         guard case .install(let id) = row.action else { return }
-        if installFailure?.integrationID == id { installFailure = nil }
+        installFailures[id] = nil
         agents.install(id) { [weak self] installed in
             if let message = agents.installFailures.removeValue(forKey: id) {
-                self?.installFailure = InstallFailure(integrationID: id, name: row.name, message: message)
+                self?.installFailures[id] = InstallFailure(integrationID: id, name: row.name, message: message)
             }
             await refresh(installed)
         }
     }
 
-    func seenInstallFailure() { installFailure = nil }
+    func seenInstallFailure(_ integrationID: String) { installFailures[integrationID] = nil }
 
     /// Whether the usage panel's row shows: while it waits to be turned on, and once it's on.
     var offersUsage: Bool {

@@ -78,6 +78,7 @@ struct AddAnotherSheet: View {
                 let known = shown ?? []
                 shown = known + ids.filter { !known.contains($0) }
             }
+            .modifier(InstallFailureAlert(isShown: true))
         }
     }
 
