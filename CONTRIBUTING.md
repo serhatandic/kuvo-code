@@ -85,6 +85,11 @@ cd Packages/KuvoLink && swift test && node --test Tests/Bridge/*.test.js
 cd Packages/Box && bun install && bun run check && bun test
 ```
 
+The bridge's tests that run the box itself need a Bun: `bun` on your PATH, or
+`KUVO_TEST_BUN` naming one or an engine (a machine's `~/.kuvo-code/engine/<version>/opencode`,
+which they run as Bun). Run them on a Linux machine too, in a test folder of your own with
+`TMPDIR` inside it, before calling a box change done.
+
 `./scripts/test-app.sh` runs one at a time: a run started while another is going
 waits for it, since they share the test copy's settings and temporary folders.
 
