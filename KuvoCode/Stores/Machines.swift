@@ -60,6 +60,10 @@ final class MachineEngine {
     private(set) var isLive = false
     /// Waiting to try again by itself, after the connection dropped.
     var isRetrying = false
+    /// Its last failure may pass by itself (the network, the machine away), so trying again is
+    /// worth it; not one trying again won't change (its key refused, a changed host key, a system
+    /// the engine doesn't run on), which is said at once, with Try Again.
+    private(set) var failureMayPass = true
     /// Disconnect was pressed (here or from a phone): it isn't connected again by itself, as this
     /// Mac's engine starts again, until it's connected.
     var isDisconnected = false
@@ -370,6 +374,7 @@ final class MachineEngine {
             let api = await standIn(machine)
             guard connections == attempt else { return nil }
             guard let api else {
+                failureMayPass = true
                 state = .failed("Couldn’t reach \(machine.name).")
                 return nil
             }
@@ -534,6 +539,7 @@ final class MachineEngine {
             log.error("\(self.machine.destination, privacy: .public) didn't start: \(error.localizedDescription, privacy: .public)")
             server?.disconnect()
             server = nil
+            failureMayPass = Self.mayPass(error)
             state = .failed(error.localizedDescription)
         }
         return nil
@@ -757,8 +763,21 @@ final class MachineEngine {
     /// The connection is gone: say so, and let the app connect again.
     private func lost(_ reason: String) {
         disconnect()
+        failureMayPass = true
         state = .failed(reason)
         onExit()
+    }
+
+    /// Whether `error` may pass by itself: SSH not getting through (255), but for its key or
+    /// the machine's turned away; a download, or the engine taking too long.
+    static func mayPass(_ error: Error) -> Bool {
+        switch error {
+        case RemoteEngineError.ssh(let status, let message):
+            let refused = ["Host key verification failed", "Permission denied", "Too many authentication failures"]
+            return status == 255 && !refused.contains { message.localizedCaseInsensitiveContains($0) }
+        case RemoteEngineError.timedOut, is URLError: return true
+        default: return false
+        }
     }
 
     private func exited(status: Int32) {

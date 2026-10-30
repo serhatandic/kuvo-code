@@ -402,6 +402,27 @@ import Testing
         #expect(engine.isReady)
     }
 
+    /// A machine that answers but can't run the engine (an unsupported system; its key refused, a
+    /// changed host key) says why at once, with Try Again, rather than "Reconnecting…" for half an
+    /// hour while trying again won't change it.
+    @Test func aMachineThatCantBeSetUpSaysWhyRatherThanTryingAgain() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        // Over SSH for real (as far as the stand-in goes), where it answers as nothing the engine
+        // runs on.
+        MachineEngine.standIn = nil
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            return ""
+        }
+        await app.connect(engine).value
+        guard case .failed(let reason) = engine.state else { Issue.record("it connected"); return }
+        #expect(reason.contains("Linux"), "it says what it runs on")
+        #expect(!engine.isRetrying, "not tried again: it shows why, with Try Again")
+        #expect(clock.waits == [])
+    }
+
     /// Uninstalled, its sign-outs went but its engine wouldn't stop (the connection dropped just
     /// then): what's tried there next stops it, rather than only tidying away how it starts again,
     /// which would leave it running with nothing to ever stop it.

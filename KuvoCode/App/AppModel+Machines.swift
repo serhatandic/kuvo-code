@@ -159,7 +159,9 @@ extension AppModel {
 
     private func wakeMachines() {
         for engine in machines.engines.values where !engine.isRetrying {
-            if case .failed = engine.state { Task { await reconnect(engine) } }
+            guard case .failed = engine.state, engine.failureMayPass else { continue }
+            engine.isRetrying = true
+            Task { await reconnect(engine) }
         }
     }
 
@@ -403,7 +405,7 @@ extension AppModel {
             await start(engine)
             // Not reached the first time (the app opened before the network was up): tried again
             // as a dropped connection is, while what waited for this goes on.
-            guard case .failed = engine.state, !engine.isRetrying else { return }
+            guard case .failed = engine.state, engine.failureMayPass, !engine.isRetrying else { return }
             engine.isRetrying = true
             Task { await reconnect(engine) }
         }
@@ -418,7 +420,8 @@ extension AppModel {
             // Connected again some other way (Try Again), or removed (which disconnects it).
             guard case .failed = engine.state else { return true }
             await start(engine)
-            return engine.isReady
+            // Done, or failed in a way trying again won't change: that's said now, with Try Again.
+            return engine.isReady || !engine.failureMayPass
         }
     }
 
