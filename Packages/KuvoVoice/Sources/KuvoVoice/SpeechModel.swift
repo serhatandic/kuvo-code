@@ -428,7 +428,7 @@ public final class SpeechModel {
             let handle = try FileHandle(forReadingFrom: url)
             defer { try? handle.close() }
             var hash = SHA256()
-            while let chunk = try handle.read(upToCount: 4 << 20), !chunk.isEmpty { hash.update(data: chunk) }
+            while let chunk = try autoreleasepool(invoking: { try handle.read(upToCount: 4 << 20) }), !chunk.isEmpty { hash.update(data: chunk) }
             return hash.finalize().map { String(format: "%02x", $0) }.joined()
         }.value
     }
