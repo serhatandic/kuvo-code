@@ -214,16 +214,17 @@ export class Goals {
     emit("kuvo.goal.updated", { sessionID: session, goal: null })
   }
 
-  /** A session deleted: its goal goes with it. */
+  /** A session deleted: its goal goes with it (not once the box has stopped: a look that ends
+   * after it keeps and tells nothing, as the box started again does that). */
   forget(session: string) {
-    if (this.goals.has(session)) this.clear(session)
+    if (!this.stopped && this.goals.has(session)) this.clear(session)
   }
 
   /** A conversation deleted while the box was stopped, or its feed away: its goal goes (a working
    * one's look finds that itself). */
   private async forgetIfGone(session: string) {
     await this.place(session).api.request("GET", at(session)).catch((error: any) => {
-      if (error?.status === 404 && !this.stopped) this.forget(session)
+      if (error?.status === 404) this.forget(session)
     })
   }
 
