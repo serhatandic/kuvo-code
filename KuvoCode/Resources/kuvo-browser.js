@@ -865,7 +865,10 @@ async function host() {
     const refuse = () => {
       if (client.keyed || client.closed) return;
       client.closed = true;
-      socket.end(JSON.stringify({ method: "Kuvo.error", params: { kind: "failed", message: "This machine's browser needs a newer Kuvo Code. Update Kuvo Code on your Mac to use it." } }) + "\n", () => socket.destroy());
+      // Closed once it has read why and closed too: what it still sends is read and dropped (a
+      // socket closed with that unread is reset, and the reset can lose the words). Or soon after.
+      socket.end(JSON.stringify({ method: "Kuvo.error", params: { kind: "failed", message: "This machine's browser needs a newer Kuvo Code. Update Kuvo Code on your Mac to use it." } }) + "\n");
+      setTimeout(() => socket.destroy(), 5_000).unref?.();
     };
     const unkeyed = setTimeout(refuse, 10_000);
     socket.on("error", () => {});

@@ -98,6 +98,9 @@ test("a process without the box's socket key hears nothing from the machine's br
   refused(await sending({ method: "Kuvo.stop" }), "can't stop it");
   refused(await fromOutside("x".repeat(8192)), "a first line too long to be a key");
   refused(await fromOutside("\n" + "x".repeat(8192)), "nor after an empty line");
+  // One that goes on sending after it's refused still hears why (the keeper reads and drops the
+  // rest, rather than hanging up on it unread).
+  refused(await fromOutside("x".repeat(1 << 20)), "while it goes on sending");
   assert.ok(await reachable(), "it's still running");
   assert.equal((await liveView()).method, "Kuvo.hello", "and Kuvo Code's own still reach it");
 });
