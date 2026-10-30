@@ -22,13 +22,22 @@ import Testing
         try Data("x\n".utf8).write(to: file)
     }
 
+    /// The tree's files and folders, indented by depth.
     private func names(_ tree: FileTree) -> [String] {
-        tree.rows.map { String(repeating: "  ", count: $0.depth) + $0.entry.name }
+        tree.rows.compactMap { row in
+            guard case .entry(let entry, let depth) = row else { return nil }
+            return String(repeating: "  ", count: depth) + entry.name
+        }
+    }
+
+    private func entry(_ tree: FileTree, named name: String) -> FileTree.Entry? {
+        for row in tree.rows { if case .entry(let entry, _) = row, entry.name == name { return entry } }
+        return nil
     }
 
     @Test func filesTheAgentMakesAndRemovesShowInAnOpenTree() async throws {
         let tree = FileTree(roots: [folder])
-        tree.toggle(try #require(tree.rows.first { $0.entry.name == "src" }).entry.url)
+        tree.toggle(try #require(entry(tree, named: "src")).url)
         #expect(names(tree) == ["src", "  app.swift", "README.md"])
 
         try write("src/view.swift")
@@ -43,7 +52,7 @@ import Testing
         try write("packages/ui/index.ts")
         try FileManager.default.createSymbolicLink(at: folder.appending(path: "ui"), withDestinationURL: folder.appending(path: "packages/ui"))
         let tree = FileTree(roots: [folder])
-        let link = try #require(tree.rows.first { $0.entry.name == "ui" }?.entry)
+        let link = try #require(entry(tree, named: "ui"))
         #expect(link.isDirectory)
         tree.toggle(link.url)
         #expect(names(tree).contains("  index.ts"))
