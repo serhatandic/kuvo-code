@@ -281,6 +281,8 @@ extension AppModel {
     func archivedChanged(_ session: String) -> Task<Void, Never> {
         Task {
             guard let found = workspace.session(session) else { return }
+            // Out of sight in the archive, nothing of it goes on running in the panel.
+            if Workspace.isArchived(found) { utilities.closeTerminals(of: session) }
             await wakeUps.archived(found, Workspace.isArchived(found))
         }
     }
