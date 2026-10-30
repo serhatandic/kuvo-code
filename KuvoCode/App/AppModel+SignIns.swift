@@ -227,9 +227,13 @@ extension AppModel {
 
     /// Signs out of `integration` (a server's or an account's, which engines name alike) on one
     /// computer: this Mac, or a machine, in its tab in Settings. Each keeps its own.
-    /// Each goes that can: throws when that computer's engine can't be reached, or refused one.
+    /// Throws when that computer's engine can't be reached, or refused one.
     func forgetSignIn(_ integration: String, on box: SidebarBox = .mac) async throws {
-        let api = try reachableAPI(for: box)
+        try await Self.forgetSignIn(integration, in: reachableAPI(for: box))
+    }
+
+    /// Each of its keys and sign-ins that can go goes; then throws if the engine refused one.
+    static func forgetSignIn(_ integration: String, in api: OpenCodeAPI) async throws {
         var refused: (any Error)?
         for entry in try await api.credentialEntries() where entry.integrationID == integration {
             do { try await api.removeCredential(entry.id) } catch { refused = error }

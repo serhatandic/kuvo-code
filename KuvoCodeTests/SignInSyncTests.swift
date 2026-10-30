@@ -161,4 +161,21 @@ import Testing
         let agent = await #expect(throws: OutsideAgents.Failure.self) { try await OutsideAgents().signOut("cursor") }
         #expect(agent?.localizedDescription == "The coding agents are still starting. Try again in a moment.")
     }
+
+    /// Signing out of a provider with two keys, where the engine refuses to remove the first: the
+    /// other goes all the same, and it says one wouldn't. Another provider's key stays.
+    @Test func aRefusedKeyDoesntKeepTheOthers() async throws {
+        TestEnvironment.prepare()
+        StubWeb.start(hosts: ["127.0.0.1"])
+        defer { StubWeb.stop() }
+        let engine = FakeEngine(port: 47978, accounts: ["deepseek", "openai"])
+        let first = engine.store("deepseek", label: "Work", value: ["type": "key", "key": "sk-work"])
+        engine.store("deepseek", label: "Personal", value: ["type": "key", "key": "sk-personal"])
+        engine.store("openai", value: ["type": "key", "key": "sk-openai"])
+        engine.refuseRemoving(first)
+
+        await #expect(throws: (any Error).self) { try await AppModel.forgetSignIn("deepseek", in: engine.api) }
+        #expect(engine.stored("deepseek").map(\.secret) == ["sk-work"], "the one it refused stays; the other went")
+        #expect(engine.stored("openai").map(\.secret) == ["sk-openai"])
+    }
 }
