@@ -424,7 +424,10 @@ final class OutsideAgents {
     func loadSideQuestions(of session: String) async {
         guard let api, runsKeywords != false, let read = try? await api.sideQuestions(of: session) else { return }
         if read != sideQuestions[session] { sideQuestions[session] = read }
-        sideQuestionCounts[session] = read.isEmpty ? nil : read.count
+        // Each session opened loads its own: written only when it changes, as every sidebar row
+        // reads the counts, and a write that changes nothing works them all out again.
+        let count = read.isEmpty ? nil : read.count
+        if count != sideQuestionCounts[session] { sideQuestionCounts[session] = count }
     }
 
     /// One as its route answered, before its event comes.

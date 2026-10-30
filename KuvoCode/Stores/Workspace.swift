@@ -2587,8 +2587,10 @@ final class Workspace {
         guard let session = try? await api(forSession: id)?.session(id) else { return }
         // Only root sessions get a row; subagent sessions show inside their parent, and under it.
         if let parent = session.parentID {
-            if isHidden(session) { hiddenRuns.insert(session.id) }
-            parents[session.id] = parent
+            // Each written only when it changes (a subagent at work is read again on each update):
+            // the sidebar reads them, and a write that changes nothing works it out again.
+            if isHidden(session), !hiddenRuns.contains(session.id) { hiddenRuns.insert(session.id) }
+            if parents[session.id] != parent { parents[session.id] = parent }
             if !isHidden(session) { keepSubSession(session, of: parent) }
             // A subagent's subagent: whose that one is, up to the session with a row.
             if self.session(parent) == nil, parents[parent] == nil, depth < 8 { await reload(parent, depth: depth + 1) }
@@ -2679,7 +2681,8 @@ final class Workspace {
         var list = subSessions[parent] ?? []
         list.removeAll { $0.id == session.id }
         list.append(session)
-        subSessions[parent] = list.sorted { $0.time.created > $1.time.created }
+        list.sort { $0.time.created > $1.time.created }
+        if list != subSessions[parent] { subSessions[parent] = list }
         subSessionBoxes[parent] = subSessionBox(of: session)
     }
 
