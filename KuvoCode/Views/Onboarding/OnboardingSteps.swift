@@ -1,5 +1,6 @@
 import ClientAccounts
 import ClientDesign
+import OpenCodeKit
 import SwiftUI
 
 // MARK: Bring your subscriptions
@@ -168,7 +169,7 @@ struct SubscriptionsStep: View {
                 await app.usage.sync()
             }
         case .install(let id):
-            app.agents.install(id) { installed in
+            onboarding.install(row, with: app.agents) { installed in
                 await catalog.refreshAgents(fresh: true)
                 await onboarding.look(in: box, agentsUp: app.agents.api != nil)
                 if installed { signIn(id) }
@@ -227,6 +228,8 @@ struct OfferRow: View {
     let row: Offers.Row
     let isBusy: Bool
     let act: (Offers.Row.Action) -> Void
+    @Environment(AppModel.self) private var app
+    @Environment(Catalog.self) private var catalog
 
     var body: some View {
         OnboardingRow(title: row.name, detail: detail) {
@@ -234,6 +237,24 @@ struct OfferRow: View {
         } trailing: {
             trailing
         }
+        // As Settings › Accounts says it: the installer's words, and its command to run yourself.
+        .alert("Couldn't Install \(row.name)", isPresented: Binding(get: { installFailure != nil }, set: { if !$0 { app.onboarding.seenInstallFailure() } })) {
+            if let installCommand {
+                Button("Copy Command") { Clipboard.copy(installCommand) }
+            }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(installFailure?.message ?? "")
+        }
+    }
+
+    /// This row's install that didn't work.
+    private var installFailure: Onboarding.InstallFailure? {
+        app.onboarding.installFailure.flatMap { $0.integrationID == row.integrationID ? $0 : nil }
+    }
+
+    private var installCommand: String? {
+        catalog.integrations.first { $0.id == row.integrationID }?.metadata?["install"]?.string
     }
 
     /// What it's doing, while it's busy.

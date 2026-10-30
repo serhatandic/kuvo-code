@@ -1,5 +1,7 @@
+import ClientAccounts
 import Foundation
 import KuvoLink
+import OpenCodeKit
 import Testing
 import UsageKit
 @testable import KuvoCode
@@ -239,5 +241,51 @@ import UsageKit
         #expect(!updated.isActive)
         // And it stays that way.
         #expect(!Onboarding(defaults: defaults, launchedBefore: false, screen: ScreenAccess(source: Permissions().source)).isActive)
+    }
+}
+
+/// An agent installed from the first launch that doesn't get installed: the step says why, and
+/// Settings › Accounts doesn't raise it again the next time it opens. The agents' bridge is stubbed.
+@MainActor
+@Suite(.serialized) struct OnboardingInstallTests {
+    @Test func aFailedInstallSaysWhyThereAndNotLaterInSettings() async throws {
+        TestEnvironment.prepare()
+        StubWeb.start(hosts: ["127.0.0.1"])
+        defer { StubWeb.stop() }
+        let bridge = "http://127.0.0.1:47976"
+        let why = "Claude Code isn't installed after `curl -fsSL https://claude.ai/install.sh | bash`.\n\ncurl: (6) Could not resolve host: claude.ai"
+        StubWeb.handle(bridge + "/api/integration/claude-code/install") { _, _ in
+            StubWeb.json(["data": ["installed": false, "message": why]])
+        }
+        let agents = OutsideAgents()
+        agents.connect(ServerEndpoint(url: URL(string: bridge)!, password: "test"), folderPrefix: "")
+        defer { agents.disconnect() }
+
+        let suite = "onboarding-install-\(UUID().uuidString)"
+        defer { UserDefaults().removePersistentDomain(forName: suite) }
+        let onboarding = Onboarding(defaults: UserDefaults(suiteName: suite)!, launchedBefore: false, screen: ScreenAccess(source: OnboardingTests.Permissions().source))
+        // This Mac has neither Claude Code nor Codex.
+        let box = BoxClient(box: BoxClient.mac, transport: LocalBox { _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data(#"{"agents":[{"id":"claude-code","name":"Claude Code","installed":false,"signedIn":false},{"id":"codex-cli","name":"Codex","installed":false,"signedIn":false}],"opencode":[],"shell":[],"connected":[]}"#.utf8)))
+                continuation.finish()
+            }
+        })
+        await onboarding.look(in: box, agentsUp: true)
+        let claude = try #require(onboarding.offers.plans.first { $0.id == "claude-code" })
+        #expect(claude.action == .install(integrationID: "claude-code"))
+
+        // Install, as its row's button does.
+        let installed = await withCheckedContinuation { done in
+            onboarding.install(claude, with: agents) { done.resume(returning: $0) }
+        }
+        #expect(!installed)
+        #expect(onboarding.installFailure == Onboarding.InstallFailure(integrationID: "claude-code", name: "Claude Code", message: why),
+                "the step says why, in the installer's words")
+        #expect(agents.installFailures["claude-code"] == nil, "nothing left for Settings › Accounts to raise later")
+
+        onboarding.seenInstallFailure()
+        #expect(onboarding.installFailure == nil)
     }
 }

@@ -31,6 +31,15 @@ final class Onboarding {
     private(set) var used: Set<String> = []
     private(set) var using: Set<String> = []
     private(set) var useFailure: String?
+    /// An agent's install from this step that didn't work, until you've seen it.
+    private(set) var installFailure: InstallFailure?
+
+    struct InstallFailure: Equatable {
+        var integrationID: String
+        var name: String
+        /// What went wrong, in the installer's words.
+        var message: String
+    }
 
     /// The usage panel in the menu bar: off until it's turned on here (or by a click on it).
     private(set) var usage = Usage.off(nil)
@@ -137,6 +146,21 @@ final class Onboarding {
         }
         return false
     }
+
+    /// Runs an agent's installer from this step (`OutsideAgents.install`). Why one didn't work is
+    /// this step's to say, on its row, rather than Settings › Accounts' the next time it opens.
+    func install(_ row: Offers.Row, with agents: OutsideAgents, then refresh: @escaping (Bool) async -> Void) {
+        guard case .install(let id) = row.action else { return }
+        if installFailure?.integrationID == id { installFailure = nil }
+        agents.install(id) { [weak self] installed in
+            if let message = agents.installFailures.removeValue(forKey: id) {
+                self?.installFailure = InstallFailure(integrationID: id, name: row.name, message: message)
+            }
+            await refresh(installed)
+        }
+    }
+
+    func seenInstallFailure() { installFailure = nil }
 
     /// Whether the usage panel's row shows: while it waits to be turned on, and once it's on.
     var offersUsage: Bool {
