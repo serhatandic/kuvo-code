@@ -93,11 +93,28 @@ import Testing
         #expect(!app.workspace.needsAttention("ses_scout"))
     }
 
+    /// A step that asked is never said to be running outside the sandbox before you allowed it: not
+    /// while its box hasn't listed the ask yet (it checks what stopped the command first, and a
+    /// machine is read every few seconds), only once it was seen waiting and then answered.
+    @Test func anAskIsntSaidToRunUntilItWasSeenAndAnswered() async throws {
+        _ = box(answering: 200)
+        let input: [String: Any] = ["command": "./scripts/install-hooks.sh", "why": "Installing the repo’s hooks."]
+        let row = { try self.words(input, running: true, stopped: self.sandboxes.stoppedCommands(for: "ses_scout", on: BoxClient.mac),
+                                   released: self.sandboxes.releasedCommands(for: "ses_scout", on: BoxClient.mac)) }
+        sandboxes.take([], from: BoxClient.mac)
+        #expect(try row() == "Asking to run `./scripts/install-hooks.sh` outside the sandbox", "heard, but its ask not listed yet")
+        sandboxes.take([ask], from: BoxClient.mac)
+        #expect(try row() == "Asking to run `./scripts/install-hooks.sh` outside the sandbox")
+        try await sandboxes.answer(ask, .once, on: BoxClient.mac)
+        #expect(try row() == "Running `./scripts/install-hooks.sh` outside the sandbox")
+    }
+
     /// The `sandbox_ask` row says what's happening to its command: asked while its ask is open,
     /// running once you allowed it, then how it ran, and never "Ran" for one that didn't.
     @Test func theAskRowSaysWhatHappenedToItsCommand() throws {
         let input: [String: Any] = ["command": "npm run build:icons", "why": "Its renders cache."]
-        #expect(try words(input, running: true, stopped: []) == "Running `npm run build:icons` outside the sandbox", "allowed, it runs in the same call")
+        #expect(try words(input, running: true, stopped: [], released: ["npm run build:icons"]) == "Running `npm run build:icons` outside the sandbox", "allowed, it runs in the same call")
+        #expect(try words(input, running: true, stopped: []) == "Asking to run `npm run build:icons` outside the sandbox", "its ask not listed yet: still asking")
         #expect(try words(input, running: true, stopped: ["npm run build:icons"]) == "Asking to run `npm run build:icons` outside the sandbox")
         #expect(try words(input, running: true, stopped: nil) == "Asking to run `npm run build:icons` outside the sandbox", "its box not heard yet: never said to be running")
         #expect(try words(input, failed: "Ran outside the sandbox · Allowed once\n\nnpm ERR!\n\nIt ended with 1.") == "Ran `npm run build:icons`")
@@ -109,7 +126,7 @@ import Testing
         #expect(ToolCallView.sandboxOutcome("Nobody answered in time, so it didn't run.") == "No answer", "not “You said no”")
     }
 
-    private func words(_ input: [String: Any], running: Bool = false, stopped: Set<String>? = [], output: String = "", failed: String? = nil) throws -> String {
+    private func words(_ input: [String: Any], running: Bool = false, stopped: Set<String>? = [], released: Set<String> = [], output: String = "", failed: String? = nil) throws -> String {
         let state: [String: Any] = running ? ["status": "running", "input": input]
             : failed.map { ["status": "error", "input": input, "error": ["type": "tool", "message": $0]] }
             ?? ["status": "completed", "input": input, "content": [["type": "text", "text": output]], "metadata": [:]]
@@ -118,6 +135,6 @@ import Testing
         let decoded = try JSONDecoder().decode(Message.self, from: JSONSerialization.data(withJSONObject: message))
         guard case .assistant(let assistant) = decoded, case .tool(let call)? = assistant.content.first else { throw TestFailure("no tool call") }
         if let failed { guard case .failed = call.state else { throw TestFailure("not failed: \(failed)") } }
-        return ToolCallView.summary(of: call, in: "/Users/me/kuvo-ai", stopped: stopped)
+        return ToolCallView.summary(of: call, in: "/Users/me/kuvo-ai", stopped: stopped, released: released)
     }
 }

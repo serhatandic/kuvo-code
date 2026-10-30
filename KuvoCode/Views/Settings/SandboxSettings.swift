@@ -12,8 +12,8 @@ struct SandboxSettings: View {
     @Environment(Workspace.self) private var workspace
     @Environment(\.chooseBoxFolder) private var chooseBoxFolder
     @State private var picked: String?
-    /// The computer's home folder, for paths shown from `~`.
-    @State private var home: String?
+    /// The computer's home folder, for paths shown from `~`, by the box it's of.
+    @State private var home: (box: String, path: String?)?
     /// Why the last add or remove didn't go through.
     @State private var failure: String?
     @State private var confirmsRestart = false
@@ -24,7 +24,27 @@ struct SandboxSettings: View {
     var body: some View {
         if let state = sandboxes.states[id] {
             notice(state)
-            allowed
+            // (Nothing to allow where it can't sandbox commands at all.)
+            if state.able { allowed }
+        } else if !sandboxes.without.contains(id) {
+            // Not read yet, or it couldn't be: a line in its place, so the page doesn't jump.
+            Section {
+            } header: {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let failed = sandboxes.stateFailures[id] {
+                        Text("Couldn’t read the sandbox on \(app.name(of: box)). \(failed)").foregroundStyle(.red)
+                    } else {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.mini)
+                            Text("Reading the sandbox…")
+                        }
+                    }
+                }
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .settingsText()
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -49,6 +69,10 @@ struct SandboxSettings: View {
                     if let note = state.agentsNote {
                         Text(note).padding(.leading, 20)
                     }
+                    // What's shown may be out of date.
+                    if let failed = sandboxes.stateFailures[id] {
+                        Text(failed).foregroundStyle(.red).padding(.leading, 20)
+                    }
                 }
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
@@ -67,7 +91,7 @@ struct SandboxSettings: View {
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 3) {
                         if let title = notice.title {
-                            Text(title).font(.system(size: 13, weight: .medium))
+                            Text(title).font(.system(size: 13, weight: .medium)).accessibilityAddTraits(.isHeader)
                         }
                         Text(notice.detail)
                             .font(.system(size: 12))
@@ -92,6 +116,7 @@ struct SandboxSettings: View {
                 }
                 .settingsText()
                 .padding(.vertical, 4)
+                .accessibilityElement(children: .contain)
                 .confirmationDialog("Restart \(app.name(of: box))’s engine?", isPresented: $confirmsRestart) {
                     Button("Restart Engine") { restartEngine() }
                 } message: {
@@ -151,7 +176,11 @@ struct SandboxSettings: View {
                 .task(id: id + "\n" + project.path) {
                     failure = nil
                     do { try await sandboxes.readRules(for: project.path, on: id) } catch { failure = Self.words(error) }
-                    if home == nil { home = box.machine == nil ? NSHomeDirectory() : try? await app.box(id).folders(at: nil).home }
+                    if home?.box != id {
+                        let box = id
+                        let path = box == BoxClient.mac ? NSHomeDirectory() : try? await app.box(box).folders(at: nil).home
+                        home = (box, path)
+                    }
                 }
                 ForEach(rules) { rule in
                     row(rule, in: project.path)
@@ -176,19 +205,20 @@ struct SandboxSettings: View {
                         ForEach(projects, id: \.path) { Text($0.name).tag($0.path) }
                     }
                     .labelsHidden()
-                    .fixedSize()
+                    // A long name truncates, rather than pushing past a narrow window.
+                    .frame(maxWidth: 240)
                     .font(.system(size: 12))
                 } else if let project {
                     Text(project.name).font(.system(size: 12)).foregroundStyle(.secondary)
                 }
             }
         } footer: {
-            Text("What you allow for good on a stopped command’s card lands here. Kept on this computer, so nothing in a project’s folder can add to it.")
+            Text("What you allow for good on a stopped command’s card lands here. Kept on \(app.name(of: box)), so nothing in a project’s folder can add to it.")
         }
     }
 
     private func row(_ rule: SandboxRule, in project: String) -> some View {
-        let path = BoxPaths.display(rule.path, home: home)
+        let path = BoxPaths.display(rule.path, home: home?.box == id ? home?.path : nil)
         return HStack(spacing: 10) {
             Image(systemName: "folder").foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {

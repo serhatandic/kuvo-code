@@ -23,6 +23,9 @@ final class Sandboxes {
     /// Asks answered here: closed on their box, so a list it sent before the answer doesn't bring
     /// them back.
     @ObservationIgnored private var answered: Set<String> = []
+    /// Each conversation's commands whose asks were seen open and then closed (answered here or
+    /// elsewhere), by box and conversation: only those may be running outside the sandbox.
+    private(set) var released: [String: Set<String>] = [:]
 
     /// A conversation's open asks, on its box.
     func asks(for session: String, on box: String) -> [SandboxAsk] {
@@ -73,6 +76,13 @@ final class Sandboxes {
         return Set(asks(for: session, on: box).map(\.command))
     }
 
+    /// The commands a conversation's asks were seen open for and no longer are: allowed (or
+    /// refused) and so, while their step goes on, running. One whose ask hasn't been listed yet
+    /// isn't among them: its step still asks.
+    func releasedCommands(for session: String, on box: String) -> Set<String> {
+        released[Self.key(session, on: box)] ?? []
+    }
+
     private struct Nothing: Decodable {}
 
     private func ask<T: Decodable>(_ type: T.Type = T.self, _ method: String, _ path: String, body: [String: Any]? = nil, on box: String) async throws -> T {
@@ -115,6 +125,7 @@ final class Sandboxes {
         following[box] = nil
         asks[box] = nil
         heard.remove(box)
+        released = released.filter { !$0.key.hasPrefix(box + "\n") }
         changed()
     }
 
@@ -133,6 +144,7 @@ final class Sandboxes {
         for gone in before where !listed.contains(where: { $0.id == gone.id }) {
             Notifier.shared.clear(request: gone.id)
             failures[gone.id] = nil
+            if let session = gone.session { released[Self.key(session, on: box), default: []].insert(gone.command) }
         }
         changed()
     }
@@ -227,14 +239,25 @@ final class Sandboxes {
         }
     }
 
-    /// Reads it again while its page is open, as the box checks it on its own (each minute after a
-    /// check fails) and the engine comes and goes: often while it isn't on, rarely while it is.
+    /// Reads it again while its page is open, as the box checks it on its own and the engine comes
+    /// and goes: often while it's passing on its own (being checked, the engine coming back),
+    /// rarely otherwise; not at all on a box without it.
     func watchState(_ box: String) async {
         while !Task.isCancelled {
             await readState(box)
-            let on = states[box]?.on ?? false
+            if without.contains(box) { return }
             // A machine's goes over SSH: less often.
-            try? await Task.sleep(for: .seconds(on ? 30 : box == BoxClient.mac ? 4 : 10))
+            try? await Task.sleep(for: .seconds(Self.passes(states[box]) ? (box == BoxClient.mac ? 4 : 10) : 30))
+        }
+    }
+
+    /// Whether how it stands changes on its own soon (not read yet counts).
+    private static func passes(_ state: SandboxState?) -> Bool {
+        guard let state else { return true }
+        if state.on { return false }
+        switch state.reason {
+        case .checking, .waiting, .engineDown, .engineMissing: return true
+        default: return false
         }
     }
 
@@ -242,8 +265,14 @@ final class Sandboxes {
     func check(_ box: String) async throws {
         guard checking.insert(box).inserted else { return }
         defer { checking.remove(box) }
-        states[box] = try await ask(SandboxState.self, "POST", SandboxRoutes.check, body: [:], on: box)
-        stateFailures[box] = nil
+        do {
+            states[box] = try await ask(SandboxState.self, "POST", SandboxRoutes.check, body: [:], on: box)
+            stateFailures[box] = nil
+        } catch {
+            // Said on its page, under the button.
+            stateFailures[box] = (error as? BoxRefusal)?.message ?? error.localizedDescription
+            throw error
+        }
     }
 
     /// Reads a project's Also Allowed (its box finds where its folder really is).
