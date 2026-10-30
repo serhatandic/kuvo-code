@@ -1,5 +1,5 @@
 // A project's Changes on a box, as a Mac asks a machine's over SSH (`box route`) and a phone through
-// the relay: what's changed, new files with their hashes, staging and unstaging, Discard putting a
+// the relay: what's changed, new files with their stamps, staging and unstaging, Discard putting a
 // file back with anything in its way in Kuvo Code's trash, a picture's old side whole, and a commit.
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -53,7 +53,7 @@ async function route(method, routePath, body) {
 const changes = (scope = "uncommitted", directory = repo) => route("POST", "kuvo/git/changes", { directory, scope });
 const trashed = () => (fs.existsSync(trash) ? fs.readdirSync(trash, { recursive: true }).map(String) : []);
 
-test("what changed: an edit as git's diff with the whole file around it, and a new file with its hash", async () => {
+test("what changed: an edit as git's diff with the whole file around it, and a new file with its stamp", async () => {
   write("README.md", "Hello\nWorld\n");
   write("notes/todo.txt", "one\n");
   const { status: code, json } = await changes();
@@ -63,17 +63,29 @@ test("what changed: an edit as git's diff with the whole file around it, and a n
   assert.equal(json.against, "HEAD");
   assert.match(json.patch, /diff --git a\/README\.md b\/README\.md[\s\S]* Hello\n\+World/);
   assert.deepEqual(json.untracked, ["notes/todo.txt"]);
-  assert.equal(json.hashes["notes/todo.txt"], git("hash-object", "notes/todo.txt").trim());
+  assert.deepEqual(Object.keys(json.hashes), [], "just written: no stamp yet, read each look");
   assert.equal(json.uncommitted, true);
 });
 
-test("every new file comes with its hash, however many there are, so a client never reads one again unchanged", async () => {
-  // A project with many files git doesn't ignore yet (a build's output, say).
-  for (let n = 0; n < 1200; n++) write(`out/file-${n}.txt`, `${n}\n`);
-  const { json } = await changes();
-  assert.equal(json.untracked.length, 1200);
-  assert.equal(Object.keys(json.hashes).length, 1200);
-  assert.equal(json.hashes["out/file-1199.txt"], git("hash-object", "out/file-1199.txt").trim());
+test("every new file has a stamp, the same until it changes, also after an install with no .gitignore", async () => {
+  // Written a while ago: one changed in the last few seconds has no stamp yet, as git treats it.
+  const earlier = new Date(Date.now() - 3_600_000);
+  for (let at = 0; at < 600; at++) {
+    write(`node_modules/pkg${at}/index.js`, `module.exports = ${at}\n`);
+    fs.utimesSync(path.join(repo, `node_modules/pkg${at}/index.js`), earlier, earlier);
+  }
+  const first = (await changes()).json;
+  assert.equal(first.untracked.length, 600);
+  assert.equal(Object.keys(first.hashes).length, 600, "a client reads each only once");
+  const again = (await changes()).json;
+  assert.deepEqual(again.hashes, first.hashes);
+  write("node_modules/pkg7/index.js", "module.exports = 'seven'\n");
+  const after = (await changes()).json;
+  assert.equal(after.hashes["node_modules/pkg7/index.js"], undefined, "just changed: read each look for now");
+  fs.utimesSync(path.join(repo, "node_modules/pkg7/index.js"), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+  const settled = (await changes()).json;
+  assert.notEqual(settled.hashes["node_modules/pkg7/index.js"], first.hashes["node_modules/pkg7/index.js"]);
+  assert.equal(after.hashes["node_modules/pkg8/index.js"], first.hashes["node_modules/pkg8/index.js"]);
 });
 
 test("an unchanged blank line keeps its place in what changed, whatever your git settings say", async () => {
@@ -269,4 +281,22 @@ test("Commit and Push: the commit reaches the remote, a new branch pushed and tr
   assert.equal((await route("POST", "kuvo/git/commit", { directory: repo, message: "Pushed", push: true })).status, 200);
   assert.equal(execFileSync("git", ["--git-dir", remote, "log", "-1", "--format=%s", "feature"], { encoding: "utf8" }).trim(), "Pushed");
   assert.equal(git("rev-parse", "--abbrev-ref", "feature@{upstream}").trim(), "origin/feature");
+});
+
+test("Discard on a submodule with edits of its own says to discard them there, and leaves them", async () => {
+  const library = fs.mkdtempSync(path.join(root, "library-"));
+  const inLibrary = (...args) => execFileSync("git", args, { cwd: library, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+  inLibrary("init", "-q", "-b", "main");
+  inLibrary("config", "user.name", "Ada");
+  inLibrary("config", "user.email", "ada@example.com");
+  fs.writeFileSync(path.join(library, "lib.js"), "let lib = 1\n");
+  inLibrary("add", "-A");
+  inLibrary("commit", "-q", "-m", "Library");
+  git("-c", "protocol.file.allow=always", "submodule", "add", "-q", library, "lib");
+  git("commit", "-q", "-m", "Add the library");
+  write("lib/lib.js", "let lib = 2\n");
+  const { status: code, json } = await route("POST", "kuvo/git/discard", { root: repo, path: "lib", status: "modified" });
+  assert.equal(code, 422);
+  assert.equal(json.message, "lib is a submodule: its changes are in its own repository, so discard them there.");
+  assert.equal(read("lib/lib.js"), "let lib = 2\n");
 });

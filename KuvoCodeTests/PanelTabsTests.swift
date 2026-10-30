@@ -81,6 +81,18 @@ import Testing
         #expect(panel.selected?.kind == .file(a))
     }
 
+    /// A machine's file open in the panel isn't watched: clicking it again (in the tree, in a
+    /// reply) reads it again, so what the agent changed since shows.
+    @Test func aFileOpenedAgainIsReadAgain() {
+        panel.inView = .init(session: "ses_a")
+        let file = RemoteFolder.url("ssh://lab/home/ada/web/app.ts")
+        panel.open(file)
+        let read = panel.fileShown
+        panel.open(file)
+        #expect(panel.fileShown > read)
+        #expect(panel.visibleTabs.filter { $0.kind == .file(file) }.count == 1)
+    }
+
     /// Closing the tab you're on: the one that took its place is selected.
     @Test func closingTheSelectedTabSelectsItsNeighbor() throws {
         panel.inView = .init(session: "ses_a")

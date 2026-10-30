@@ -228,15 +228,39 @@ struct SkillsShown {
         return path.hasPrefix(folder + "/")
     }
 
+    /// The folder in the skills folder a skill is in, as the box names it (its name inside its
+    /// SKILL.md can differ); nil for one elsewhere.
+    func folder(of skill: Skill) -> String? {
+        guard isHere(skill.path), let folder, let path = skill.path else { return nil }
+        return path.dropFirst(folder.count + 1).split(separator: "/").first.map(String.init)
+    }
+
+    /// Where it came from on GitHub, for one added from there.
+    func gitHub(_ skill: Skill) -> SkillSource? {
+        folder(of: skill).flatMap { github[$0] }
+    }
+
     /// One you wrote there, rather than added from GitHub or found elsewhere.
     func isYours(_ skill: Skill) -> Bool {
-        github[skill.id] == nil && isHere(skill.path)
+        isHere(skill.path) && gitHub(skill) == nil
+    }
+
+    /// The engine's list as the box has the skills folder now: one whose folder it just took
+    /// away isn't there any more, though the engine lists it a moment longer.
+    func current(_ listed: [Skill]) -> [Skill] {
+        listed.filter { skill in folder(of: skill).map(folders.contains) ?? true }
+    }
+
+    /// The box's folders the engine doesn't list yet (one just added or written).
+    func unlisted(_ listed: [Skill]) -> [String] {
+        let named = Set(listed.compactMap(folder(of:)))
+        return folders.filter { !named.contains($0) && !$0.hasPrefix(".") }
     }
 
     /// Where a skill comes from, when that's short to say: built in, added there, or the GitHub
     /// repository it came from. One found in a folder (~/.claude/skills) goes without.
     func source(of skill: Skill) -> String? {
-        if let source = github[skill.id] { return source.repository }
+        if let source = gitHub(skill) { return source.repository }
         guard let path = skill.path else { return nil }
         if path.hasPrefix("/builtin/") { return "Built in" }
         if isHere(path) { return "Added here" }

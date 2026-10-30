@@ -18,19 +18,30 @@ struct ChangesPanel: View {
     @State private var expandedFolds: Set<String> = []
     /// The line a comment is being written for: file and line index.
     @State private var draft: DraftTarget?
+    /// The files' lines as comments were last moved with them (`follow`).
+    @State private var followed: (directory: String, scope: ProjectChanges.Scope, lines: [String: [DiffLine]])?
     /// Syntax colors, per file, worked out off the main thread.
     @State private var highlighting: [String: DiffHighlighting] = [:]
 
     /// The line a comment is being written on, as it read then: the list can change under it (the
-    /// agent edits the file), and the comment stays with that line, not its place (`CommentPlace`).
+    /// agent edits the file), and the comment stays with that line, not its place.
     struct DraftTarget: Equatable {
         var file: String
         var side: ReviewComment.Side
         var number: Int
         var text: String
-        /// What's typed so far, kept here: the editor moves with its line when the agent adds
-        /// lines above it.
-        var typed = ""
+        /// What's written so far, kept while the line moves (its row is made again then).
+        let typed = Typed()
+
+        final class Typed { var text = "" }
+
+        func isFor(_ line: DiffLine, in file: String) -> Bool {
+            self.file == file && side == (line.kind == .removed ? .old : .new) && number == line.number && text == line.text
+        }
+
+        static func == (a: Self, b: Self) -> Bool {
+            a.file == b.file && a.side == b.side && a.number == b.number && a.text == b.text && a.typed === b.typed
+        }
     }
     @Environment(AppModel.self) private var app
     @Environment(Workspace.self) private var workspace
@@ -71,6 +82,28 @@ struct ChangesPanel: View {
     /// as the agent knows the project's folders.
     private var commentPrefix: String { isPrimary ? "" : (changes.directory as NSString).lastPathComponent + "/" }
 
+    /// Moves the session's comments, and the one being written, to where their lines are in
+    /// `files` now, from where they were in the list before. Only where lines are the files on
+    /// disk, which is what the agent reads the numbers against (not Staged's, not the engine's).
+    private func follow(_ files: [ChangedFile]) {
+        let lines = Dictionary(files.map { ($0.path, $0.lines) }, uniquingKeysWith: { first, _ in first })
+        defer { followed = (changes.directory, changes.scope, lines) }
+        guard [.uncommitted, .unstaged, .branch].contains(changes.scope),
+              let before = followed, before.directory == changes.directory, before.scope == changes.scope else { return }
+        if let model {
+            func named(_ lines: [String: [DiffLine]]) -> [String: [DiffLine]] {
+                Dictionary(lines.map { (commentPrefix + $0.key, $0.value) }, uniquingKeysWith: { first, _ in first })
+            }
+            let moved = ReviewComment.following(model.reviewComments, from: named(before.lines), to: named(lines))
+            if moved != model.reviewComments { model.reviewComments = moved }
+        }
+        if let target = draft, let old = before.lines[target.file], let new = lines[target.file],
+           let line = ReviewComment.line(side: target.side, number: target.number, from: old, to: new),
+           line.text == target.text, line.number != target.number {
+            draft?.number = line.number
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -91,27 +124,17 @@ struct ChangesPanel: View {
                 try? await Task.sleep(for: .seconds(3))
             }
         }
+        // The agent edited above a commented line: the comment, and one being written, follow it.
+        .onChange(of: changes.files, initial: true) { follow(changes.files) }
         .task(id: changes.files) {
             for file in changes.files {
                 guard !Task.isCancelled else { return }
                 highlighting[file.id] = await DiffHighlighting.make(for: file)
             }
         }
-        // A comment half written is the session's it was begun in, and the folder's: not saved
-        // to another's.
+        // A comment half written is the session's it was begun in: not saved to another's.
         .onChange(of: model?.id) { draft = nil }
         .onChange(of: changes.directory) { draft = nil }
-        // Comments follow their lines as the agent adds lines above them, so the agent is told
-        // where they are now, and they're found there by number next time.
-        .onChange(of: changes.files) {
-            guard let model else { return }
-            let moved = CommentPlace.follow(model.reviewComments, prefix: commentPrefix, in: changes.files)
-            if moved != model.reviewComments { model.reviewComments = moved }
-            if let target = draft, let lines = changes.files.first(where: { $0.id == target.file })?.lines,
-               let at = CommentPlace.index(side: target.side, number: target.number, text: target.text, in: lines) {
-                draft?.number = lines[at].number
-            }
-        }
         .onChange(of: model?.isRunning) { Task { await changes.refresh(fallback: engineChanges, edits: editedFiles) } }
         .onChange(of: engineChanges) { Task { await changes.refresh(fallback: engineChanges, edits: editedFiles) } }
         .onChange(of: editedFiles) { Task { await changes.refresh(fallback: engineChanges, edits: editedFiles) } }
@@ -259,8 +282,20 @@ struct ChangesPanel: View {
 
     // MARK: Files
 
+    /// The machine the project is on, as the app names it.
+    private var machineName: String {
+        RemoteFolder.machine(of: changes.directory).map { app.machines.engine($0)?.machine.name ?? $0 } ?? "the Machine"
+    }
+
     @ViewBuilder private var content: some View {
-        if changes.files.isEmpty {
+        if changes.files.isEmpty, changes.isUnreachable {
+            ContentUnavailableView {
+                Label("Can’t Reach \(machineName)", systemImage: "network.slash")
+            } description: {
+                Text("Its changes show once it’s back.")
+            }
+            .frame(maxHeight: .infinity)
+        } else if changes.files.isEmpty {
             ContentUnavailableView {
                 Label(changes.isLoaded ? "No Changes" : "Reading Changes…", systemImage: "doc.text.magnifyingglass")
             } description: {
@@ -300,7 +335,9 @@ struct ChangesPanel: View {
                                 }
                             } perform: { action in
                                 Task {
-                                    if let failure = await changes.perform(action, on: file) { model?.failure = failure }
+                                    // In the session's bar; with none open, an alert.
+                                    guard let failure = await changes.perform(action, on: file) else { return }
+                                    if let model { model.failure = failure } else { Modal.show(GitFailure(message: failure)) }
                                 }
                             }
                         }
@@ -789,8 +826,6 @@ private struct FileBody: View {
                 .padding(14)
         } else {
             let gutter = DiffLineRow.gutterWidth(for: file.lines)
-            let placed = Dictionary(grouping: comments) { CommentPlace.index(side: $0.side, number: $0.line, text: $0.snippet, in: file.lines) }
-            let drafted = draft.flatMap { $0.file == file.id ? CommentPlace.index(side: $0.side, number: $0.number, text: $0.text, in: file.lines) : nil }
             ForEach(DiffFolding.rows(for: file.lines, expanded: expandedFolds, file: file.id)) { row in
                 switch row.kind {
                 case .fold(let range):
@@ -805,15 +840,14 @@ private struct FileBody: View {
                                 comment: addComment == nil ? nil : {
                                     draft = .init(file: file.id, side: line.kind == .removed ? .old : .new, number: line.number, text: line.text)
                                 })
-                    ForEach(placed[index] ?? []) { comment in
+                    ForEach(comments.filter { $0.matches(line) }) { comment in
                         CommentCard(comment: comment) { deleteComment(comment) }
                     }
-                    if let target = draft, drafted == index {
-                        CommentEditor(text: Binding { draft?.typed ?? "" } set: { draft?.typed = $0 }) {
+                    if let target = draft, target.isFor(line, in: file.id) {
+                        CommentEditor(typed: target.typed) {
                             draft = nil
                         } save: { text in
-                            // Where the line is now.
-                            addComment?(ReviewComment(file: file.path, line: line.number, side: target.side, snippet: line.text.trimmingCharacters(in: .whitespaces), text: text))
+                            addComment?(ReviewComment(file: file.path, line: target.number, side: target.side, snippet: target.text.trimmingCharacters(in: .whitespaces), text: text))
                             draft = nil
                         }
                     }
@@ -894,34 +928,16 @@ private struct ImageDiff: View {
     }
 }
 
-/// Which of a file's lines a comment is on: the one it was written on, by its number and its
-/// text; once the agent added or removed lines above it, the one line that still reads the same.
-/// None when that line is gone, or when several read the same and none is where it was: it never
-/// slides onto another line.
-enum CommentPlace {
-    static func index(side: ReviewComment.Side, number: Int, text: String, in lines: [DiffLine]) -> Int? {
-        let text = text.trimmingCharacters(in: .whitespaces)
-        let same = lines.indices.filter { at in
-            (lines[at].kind == .removed ? ReviewComment.Side.old : .new) == side && lines[at].text.trimmingCharacters(in: .whitespaces) == text
-        }
-        return same.first { lines[$0].number == number } ?? (same.count == 1 ? same[0] : nil)
-    }
-
-    /// `comments` with the line each of `files`' is on now (those named after `prefix`, the
-    /// folder's), where it's found; the rest as they are.
-    static func follow(_ comments: [ReviewComment], prefix: String, in files: [ChangedFile]) -> [ReviewComment] {
-        comments.map { comment in
-            guard comment.file.hasPrefix(prefix),
-                  let lines = files.first(where: { prefix + $0.path == comment.file })?.lines,
-                  let at = index(side: comment.side, number: comment.line, text: comment.snippet, in: lines) else { return comment }
-            var moved = comment
-            moved.line = lines[at].number
-            return moved
-        }
+extension ReviewComment {
+    /// The line it was written on: by its number (kept where its line is, `following`) and its
+    /// text, so it doesn't slide onto another line.
+    func matches(_ line: DiffLine) -> Bool {
+        side == (line.kind == .removed ? .old : .new) && self.line == line.number
+            && line.text.trimmingCharacters(in: .whitespaces) == snippet
     }
 }
 
-extension DiffLine {
+nonisolated extension DiffLine {
     /// The number shown in the gutter: the old one for a removed line, the new one otherwise.
     var number: Int { (kind == .removed ? oldNumber : newNumber) ?? 0 }
 }
@@ -1159,10 +1175,18 @@ struct CommentReference: View {
 /// Writing a comment: ⌘Return saves, Escape cancels. In the same accent glass as the comment
 /// it becomes.
 private struct CommentEditor: View {
-    @Binding var text: String
+    let typed: ChangesPanel.DraftTarget.Typed
     let cancel: () -> Void
     let save: (String) -> Void
+    @State private var text: String
     @FocusState private var focused: Bool
+
+    init(typed: ChangesPanel.DraftTarget.Typed, cancel: @escaping () -> Void, save: @escaping (String) -> Void) {
+        self.typed = typed
+        self.cancel = cancel
+        self.save = save
+        _text = State(initialValue: typed.text)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1204,6 +1228,7 @@ private struct CommentEditor: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .onAppear { focused = true }
+        .onChange(of: text) { typed.text = text }
     }
 
     private func submit() {

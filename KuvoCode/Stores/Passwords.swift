@@ -38,9 +38,11 @@ enum Passwords {
         Login(host: item.sites.first ?? "", account: item.username ?? "", modified: Date(timeIntervalSince1970: item.changed / 1000), item: item.id)
     }
 
-    /// Saved logins, every site's or one's, newest first.
+    /// Saved logins, every site's or those for a page on `host` (its site's own, and those for a
+    /// site it's under: example.com's on accounts.example.com), newest first.
     static func logins(for host: String? = nil) -> [Login] {
-        signIns.filter { host == nil || $0.sites.contains(host!) }.sorted { $0.changed > $1.changed }.map(login)
+        let found = host.map { vault?.signIns(for: $0) ?? [] } ?? signIns
+        return found.sorted { $0.changed > $1.changed }.map(login)
     }
 
     static func password(for login: Login) -> String? {
@@ -52,7 +54,7 @@ enum Passwords {
     /// as this Mac's vault has it now.
     static func setAgentSignIn(_ host: String, _ allowed: Bool, account: String? = nil) async {
         await Vaults.shared.refresh(BoxClient.mac)
-        for item in signIns where item.sites.contains(host) && (account == nil || (item.username ?? "") == account) {
+        for item in vault?.signIns(for: host) ?? [] where (account == nil || (item.username ?? "") == account) {
             try? await Vaults.shared.grant(item, to: .init(everyone: true), how: allowed ? .own : nil, on: BoxClient.mac)
         }
     }
@@ -71,7 +73,8 @@ enum Passwords {
         guard Vaults.shared[BoxClient.mac].vault != nil else { return nil }
         do {
             let item: VaultItem
-            if let existing = signIns.first(where: { $0.sites.contains(host) && ($0.username ?? "") == account }) {
+            // One saved for the site it's under (example.com's, signing in on www.example.com) too.
+            if let existing = Vaults.shared[BoxClient.mac].vault?.signIns(for: host).first(where: { ($0.username ?? "") == account }) {
                 item = try await Vaults.shared.change(existing, to: VaultDraft(kind: .login, name: existing.name, sites: existing.sites, username: existing.username, values: ["password": password]), on: BoxClient.mac)
             } else {
                 // Saved from the browser: for signing in there, never handed to a command.
@@ -173,16 +176,31 @@ enum Passwords {
       document.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' && event.target.matches && event.target.matches('input')) report(event.target.closest('form') || document);
       }, true);
+      // A sign-in form a page's script puts in after it loaded (or on going to /login without
+      // loading): told once it's there, for the toolbar's key.
+      let had = Boolean(document.querySelector('input[type=password], input[autocomplete~=username], input[type=email]'));
+      let looking = false;
+      new MutationObserver(() => {
+        if (had || looking) return;
+        looking = true;
+        setTimeout(() => {
+          looking = false;
+          had = Boolean(document.querySelector('input[type=password], input[autocomplete~=username], input[type=email]'));
+          if (had) window.webkit.messageHandlers.\(messageName).postMessage({ fields: true });
+        }, 200);
+      }).observe(document.documentElement, { childList: true, subtree: true });
     })();
     """
 
-    /// Fills the page's sign-in fields: the password field, and the username field before it (or,
-    /// on a page that asks for the username first, the first one there is).
+    /// Fills the page's sign-in fields: the password field you see, and the username field before
+    /// it (one marked as the username or an email first, so not a search box above the form); on a
+    /// page that asks for the username first, that.
     nonisolated static let fillScript = """
-    // Only on the site the login is for: the toolbar's list can be a page behind. And over https,
-    // where it was saved: over plain http it could be read on the way.
+    // Only on the page the login was offered for: the toolbar's list can be a page behind. And
+    // over https, where it was saved: over plain http it could be read on the way.
     if (location.hostname !== host || location.protocol !== 'https:') return false;
-    const fields = [...document.querySelectorAll('input')].filter((field) => !field.disabled && field.type !== 'hidden');
+    const shown = (field) => field.offsetParent !== null || field.getClientRects().length > 0;
+    const fields = [...document.querySelectorAll('input')].filter((field) => !field.disabled && field.type !== 'hidden' && shown(field));
     const set = (field, value) => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
       setter.call(field, value);
@@ -192,7 +210,8 @@ enum Passwords {
     const password = fields.find((field) => field.type === 'password');
     if (password) set(password, secret);
     const candidates = password ? fields.slice(0, fields.indexOf(password)).reverse() : fields;
-    const user = candidates.find((field) => ['text', 'email', 'tel'].includes(field.type));
+    const named = (field) => (field.autocomplete || '').split(/\\s+/).includes('username') || field.type === 'email';
+    const user = candidates.find(named) || candidates.find((field) => ['text', 'email', 'tel'].includes(field.type) && field.type !== 'search' && !/search|query/i.test(field.name + ' ' + field.id + ' ' + (field.getAttribute('role') || '')));
     if (user && username) set(user, username);
     return Boolean(password || user);
     """
@@ -288,6 +307,10 @@ final class PasswordCapture: NSObject, WKScriptMessageHandler {
     }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.frameInfo.isMainFrame, (message.body as? [String: Any])?["fields"] as? Bool == true {
+            sessions.allObjects.first { $0.webView === message.webView }?.refreshLogins()
+            return
+        }
         guard Passwords.offersToSave, message.frameInfo.isMainFrame,
               let body = message.body as? [String: Any], let password = body["password"] as? String, !password.isEmpty,
               let webView = message.webView,

@@ -145,15 +145,13 @@ struct UtilitiesPane: View {
         case .file(let url): .symbol(url == nil ? "folder" : "doc")
         case .terminal: .symbol("apple.terminal")
         case .browser:
-            if let browser = utilities.browsers[tab.id], let host = browser.url?.host()?.replacingOccurrences(of: "www.", with: ""),
-               let site = utilities.history.sites.first(where: { $0.host == host }), let image = utilities.history.icon(for: site) {
+            if let site = utilities.history.site(for: utilities.browsers[tab.id]?.url), let image = utilities.history.icon(for: site) {
                 .image(image)
             } else {
                 .symbol("globe")
             }
         case .machinePage(let machine, let page):
-            if let url = app.machines.engine(machine)?.browser.url(of: page), let host = url.host()?.replacingOccurrences(of: "www.", with: ""),
-               let site = utilities.history.sites.first(where: { $0.host == host }), let image = utilities.history.icon(for: site) {
+            if let site = utilities.history.site(for: app.machines.engine(machine)?.browser.url(of: page)), let image = utilities.history.icon(for: site) {
                 .image(image)
             } else {
                 .symbol("globe")

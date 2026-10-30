@@ -44,4 +44,13 @@ import Testing
         #expect(spans.map { String(reply[$0.range].characters) } == ["api/README.md", "src/App.swift:42"])
         #expect(spans.map { FileLinks.label(String(reply[$0.range].characters)) } == ["README.md", "App.swift:42"])
     }
+
+    /// In a project on a machine, a path in a reply is the machine's: never this Mac's file of
+    /// the same name (one that's here, as the test's own file is).
+    @Test func aMachinesPathNeverOpensThisMacsFile() {
+        let onMachine = [RemoteFolder.folder(project.path(percentEncoded: false), on: "lab")]
+        let here = project.appending(path: "src/App.swift").path(percentEncoded: false)
+        #expect(FileLinks.file(named: here, folders: onMachine) == nil)
+        #expect(FileLinks.file(named: "~/.zshrc", folders: onMachine) == nil)
+    }
 }

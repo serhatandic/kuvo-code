@@ -12,7 +12,13 @@ final class MemorySettings: RemoteSettings {
 
     func read() async throws -> [String: JSONValue] { settings }
 
-    func change(_ changes: [(path: [String], value: JSONValue?)]) async throws -> [String: JSONValue] {
+    struct ChangedMeanwhile: Error {}
+
+    func change(_ changes: [(path: [String], value: JSONValue?)], was: [JSONValue?]) async throws -> [String: JSONValue] {
+        // As the box checks: a list changed since it was read is refused.
+        for (change, was) in zip(changes, was) where was != nil {
+            if (EngineConfig.value(at: change.path, in: settings) ?? .null) != was { throw ChangedMeanwhile() }
+        }
         for change in changes { settings = Self.setting(change.value, at: change.path[...], in: settings) }
         return settings
     }

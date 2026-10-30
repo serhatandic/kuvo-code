@@ -39,6 +39,10 @@ nonisolated enum FileLinks {
     }()
 
     private static func find(_ path: String, folders: [String]) -> URL? {
+        // A project on a machine: its files aren't on this Mac's disk to be looked for, and a path
+        // like "/etc/hosts" or "~/.gitconfig" is the machine's, never this Mac's file of that name.
+        // (Linking them would need the machine asked about each name as a reply streams in.)
+        if folders.contains(where: RemoteFolder.isRemote) { return nil }
         var candidates: [String] = []
         if path.hasPrefix("/") {
             candidates = [path]

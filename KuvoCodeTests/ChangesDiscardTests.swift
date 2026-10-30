@@ -175,4 +175,19 @@ import Testing
         await changes.refresh()
         #expect(changes.files.isEmpty)
     }
+
+    /// A submodule with edits of its own: Discard says they're in its own repository, rather than
+    /// seeming to work and leaving them.
+    @Test func discardOnASubmoduleSaysToDiscardThere() async throws {
+        let library = try TestRepository()
+        try library.write("lib.swift", "let lib = 1\n")
+        try library.commitAll("Library")
+        try repo.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", library.path, "lib")
+        try repo.commitAll("Add the library")
+        try repo.write("lib/lib.swift", "let lib = 2\n")
+
+        let failure = await changes.perform(.discard, on: try await row("lib"))
+        #expect(failure == "lib is a submodule: its changes are in its own repository, so discard them there.")
+        #expect(repo.read("lib/lib.swift") == "let lib = 2\n", "its edits stay")
+    }
 }
