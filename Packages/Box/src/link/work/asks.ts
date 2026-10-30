@@ -10,6 +10,7 @@ import { isObject } from "../../shared/json";
 import { pause } from "../../shared/wait";
 import { botHere, changeDescription, noteBotsChanged } from "../bots/here";
 import { asked, peerPlaces } from "../engine/client";
+import { sendInto } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { locked, textOf, writePrivate } from "../files";
 import { HERE } from "../home";
@@ -249,7 +250,7 @@ async function tellLate(id: string, targets: () => Target[], file: string, bridg
   // Gone for sure: no one to tell.
   if (place !== null) {
     if (!place) return;
-    const sent = await asked(place.target, "POST", `api/session/${encodeURIComponent(ask.session)}/prompt`, { id: messageID(), text: `[The user answered] ${ask.answered.text}`, delivery: "queue" }).then(() => true, () => false);
+    const sent = await sendInto(place.target, ask.session, { id: messageID(), text: `[The user answered] ${ask.answered.text}`, delivery: "queue" }, { from: "Your answer", words: ask.answered.text }).then(() => true, () => false);
     if (!sent) return;
   }
   changeKept(asks => {

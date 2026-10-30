@@ -11,6 +11,7 @@ import { sleep } from "../../shared/wait";
 import { isMoving, MOVING } from "../bots/here";
 import { engineGet } from "../engine/client";
 import type { EngineAnswer } from "../engine/client";
+import { keepWaiting } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import type { EngineSession } from "../engine/sessions";
 import { listOf, textOf } from "../files";
@@ -409,18 +410,22 @@ export async function* answerWakes(session: string, action: WakeAction | undefin
     const authorization = `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`;
     const directory = textOf(path.join(folder, "directory"));
     if (!agents && directory) await waitForTools(target.port, authorization, directory, signal);
-    let response: Response;
-    try {
-      response = await fetch(`http://127.0.0.1:${target.port}/api/session/${encodeURIComponent(session)}/prompt`, {
-        method: "POST",
-        headers: { authorization, "content-type": "application/json" },
-        body: JSON.stringify({ id: messageID(), text: WAKE_MARKER + note, delivery: "queue" }),
-        signal,
-      });
-    } catch {
-      return yield* json(503, { message: "The wake-up couldn’t be sent." });
+    const message = { id: messageID(), text: WAKE_MARKER + note, delivery: "queue" as const };
+    // Its conversation stopped by you: it waits there with the queue, and goes once it goes on.
+    if (!keepWaiting(session, message, { from: "Wake-up", words: note })) {
+      let response: Response;
+      try {
+        response = await fetch(`http://127.0.0.1:${target.port}/api/session/${encodeURIComponent(session)}/prompt`, {
+          method: "POST",
+          headers: { authorization, "content-type": "application/json" },
+          body: JSON.stringify(message),
+          signal,
+        });
+      } catch {
+        return yield* json(503, { message: "The wake-up couldn’t be sent." });
+      }
+      if (!response.ok) return yield* json(503, { message: `The wake-up couldn’t be sent (${response.status}).` });
     }
-    if (!response.ok) return yield* json(503, { message: `The wake-up couldn’t be sent (${response.status}).` });
     if (!chosen.every) cancelWake(folder, chosen.letters);
     return yield* changed(200, {});
   } finally {

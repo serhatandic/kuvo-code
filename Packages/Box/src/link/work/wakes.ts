@@ -9,6 +9,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { cut } from "../../shared/text";
 import { asked, call, peerPlaces } from "../engine/client";
+import { sendInto } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { locked, writePrivate } from "../files";
 import { LETTER_LIFE, placeOfSession } from "../letters/letter";
@@ -193,7 +194,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
         if (Date.now() - waiting.since > ARCHIVED_FOR) return;
         throw new Error("Archived.");
       }
-      await asked(place.target, "POST", `api/session/${encodeURIComponent(starter)}/prompt`, { id: messageID(), text: wakeText(waiting.lines), delivery: waiting.asks ? "steer" : "queue" });
+      // Stopped by the user: it waits there with the queue, as theirs does.
+      await sendInto(place.target, starter, { id: messageID(), text: wakeText(waiting.lines), delivery: waiting.asks ? "steer" : "queue" }, { from: "Its sessions" });
       failures.delete(starter);
     } catch {
       putBack(starter, waiting);

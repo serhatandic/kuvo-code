@@ -176,6 +176,24 @@ test("what a conversation hears of its sessions waits while it's archived, as it
   assert.match(prompts[0].text, /^\[Session finished\] "Sign-in"/);
 });
 
+test("what a conversation the user stopped hears of its sessions waits there with its queue, shown as from its sessions, rather than starting it", async t => {
+  const queues = path.join(home, "run", "queues.json");
+  fs.writeFileSync(queues, JSON.stringify({ ses_pixel: { paused: true, held: [] } }));
+  t.after(() => {
+    fs.rmSync(queues, { force: true });
+    fs.rmSync(path.join(home, "run", "waiting"), { recursive: true, force: true });
+  });
+  const { schedule, runAll } = clock();
+  const watch = link.workWatcher(source, () => [source], { schedule });
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_signin" } });
+  await runAll();
+  assert.deepEqual(prompts, [], "the engine would run everything waiting with it");
+  const [waiting] = link.queueOf("ses_pixel").waiting;
+  assert.equal(waiting.from, "Its sessions");
+  assert.match(waiting.text, /^\[Session finished\] "Sign-in"/);
+  assert.ok(!fs.existsSync(wakesFile) || !JSON.parse(fs.readFileSync(wakesFile, "utf8")).ses_pixel, "it waits with the queue now, not to be sent again");
+});
+
 test("what a conversation archived for over a week would have heard of its sessions goes, rather than waiting for ever", async t => {
   sessions.ses_pixel.metadata = { "kuvo.archived": true };
   t.after(() => { delete sessions.ses_pixel.metadata; });

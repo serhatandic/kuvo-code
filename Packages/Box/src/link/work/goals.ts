@@ -20,6 +20,7 @@ import { isLimit, resetsIn, resetTime } from "../../shared/limits";
 import { pause } from "../../shared/wait";
 import { botHere } from "../bots/here";
 import { asked, bridgeTarget, call } from "../engine/client";
+import { changeQueue, sendInto } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { locked, textOf, writePrivate } from "../files";
 import { HERE } from "../home";
@@ -451,7 +452,7 @@ function startWords(goal: KeptGoal): string {
 async function tellBot(goal: Pick<KeptGoal, "session">, said: string, targets: () => Target[]): Promise<boolean> {
   const place = await placeOfSession(goal.session, targets()).catch(() => null);
   if (!place) return false;
-  return asked(place.target, "POST", `api/session/${encodeURIComponent(goal.session)}/prompt`, { id: messageID(), text: said, delivery: "queue" }).then(() => true, () => false);
+  return sendInto(place.target, goal.session, { id: messageID(), text: said, delivery: "queue" }, { from: "Goal" }).then(() => true, () => false);
 }
 
 /** /goal in a bot's chat: the bot asked to plan `words` as a goal and put it to you, now. */
@@ -460,6 +461,8 @@ export async function askGoal(session: string, words: string, targets: () => Tar
   if (!said) return { refused: { status: 400, message: "Say the goal (goal)." } };
   const place = await placeOfSession(session, targets()).catch(() => null);
   if (!place) return { refused: { status: 404, message: "There's no such conversation here." } };
+  // You asked for it now: as a message of yours to go now, the queue goes on.
+  changeQueue(session, state => ({ ...state, paused: false }));
   const sent = await asked(place.target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, {
     id: messageID(),
     text: `[Goal] ${said}\n\n(The user asked for this as a goal: plan it, check what it needs, and put it to them with propose_goal before doing any of the work.)`,
@@ -793,7 +796,7 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
           continue;
         }
         if (!paused.until || now < paused.until || !place) continue;
-        const carried = await asked(place.target, "POST", `api/session/${encodeURIComponent(paused.session)}/prompt`, { id: messageID(), text: `[Limit reset] ${paused.why} has reset. Carry on where you stopped.`, delivery: "queue" }).then(() => true, () => false);
+        const carried = await sendInto(place.target, paused.session, { id: messageID(), text: `[Limit reset] ${paused.why} has reset. Carry on where you stopped.`, delivery: "queue" }, { from: "Goal" }).then(() => true, () => false);
         if (carried) unpause(goal.id, paused.session, now, file);
         continue;
       }

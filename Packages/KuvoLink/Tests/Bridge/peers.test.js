@@ -223,6 +223,23 @@ test("a letter from a peer: delivered once, said to be there, by its sender's ow
   assert.equal(prompts.length, prompted + 1, "once it's there");
 });
 
+test("a letter from a peer for a conversation the user stopped waits there with its queue: delivered, and one waiting for its answer hears it's stopped", async t => {
+  fresh();
+  const { prompts, target } = await engine(t);
+  fs.writeFileSync(path.join(run, "queues.json"), JSON.stringify({ ses_target: { paused: true, held: [] } }));
+  const told = { [second.pub]: { at: 1, list: [{ session: "ses_sender", name: "API", kind: "session" }] } };
+  const said = [], answers = [];
+  const letter = { id: "ltr_" + crypto.randomBytes(6).toString("hex"), from: "ses_sender", to: "ses_target", text: "Can you check the build?", at: Date.now(), wait: true };
+  await link.takeLetter(second.peer, letter, { send: (peer, message) => said.push(message), targets: [target], answer: each => answers.push(each), told, peers: [mac.peer, second.peer], wait: 10 });
+  assert.deepEqual(prompts, [], "the engine would run everything waiting with it");
+  assert.deepEqual(said, [{ delivered: { id: letter.id, ok: true, answer: false, why: "That conversation is stopped: the user paused it. Your message waits there and goes once they resume it; its answer, if it writes one, comes to you as a message." } }]);
+  assert.deepEqual(answers, []);
+  const [waiting] = link.queueOf("ses_target").waiting;
+  assert.deepEqual([waiting.from, waiting.text], ["API", "Can you check the build?"]);
+  const kept = JSON.parse(fs.readFileSync(path.join(run, "waiting", `${waiting.id}.json`), "utf8"));
+  assert.equal(kept.text, link.composeLetter("API", "ses_sender", "Can you check the build?", false), "no one waits for its answer by then");
+});
+
 test("a letter for a coding agent's conversation that comes while their bridge isn't running is kept to try again, and reaches it once it runs; one no one here knows, with the bridge running, is refused", async t => {
   fresh();
   const { target } = await engine(t);

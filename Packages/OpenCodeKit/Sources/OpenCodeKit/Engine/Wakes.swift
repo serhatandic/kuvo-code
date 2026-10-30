@@ -759,6 +759,10 @@ public enum Wakes {
         [ "$bots" != "$botsroot" ] && command -v curl >/dev/null 2>&1 || return 1
         printf 'user = "opencode:%s"\n' "$password" | curl -q -sf -m 5 --noproxy '*' -K - "http://127.0.0.1:$port/api/session/$session" 2>/dev/null | grep -qE "$archived"
       }
+      # A conversation you stopped, its queue paused on the box (`run/queues.json`, beside the
+      # engine's record): its wake-ups and watches wait until you resume it, as what else arrives
+      # does.
+      stopped() { grep -qF "\"$session\":{\"paused\":true" "${record%/*}/queues.json" 2>/dev/null; }
       # A session's folder (not a bot's, in $botsroot) as its engine knows the
       # session now: one that's gone goes to the trash, rather than its wake-ups being tried for
       # ever; a subagent's goes to the conversation that started it (its bot's folder, if it's a
@@ -899,6 +903,7 @@ public enum Wakes {
         [ -n "$session" ] || continue
         reach || continue
         settle || continue
+        stopped && continue
         failed=
         for wake in "$bot"wakes/*; do
           stop
@@ -954,6 +959,7 @@ public enum Wakes {
         [ -n "$session" ] || continue
         reach || continue
         archivedNow && continue
+        stopped && continue
         tz=$(zone "$bot")
         for letters in $( ( [ -n "$tz" ] && export TZ="$tz"; checks "${bot%/}" ) | sed -n 's/^KUVO-WATCH //p'); do
           w="${bot}watches/$letters"

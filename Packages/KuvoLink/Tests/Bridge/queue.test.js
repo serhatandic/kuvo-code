@@ -19,7 +19,7 @@ const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // The engine: each session's inbox and whether it runs; what was asked of it, each time a test
 // waits on it looking again.
-let inboxes, running, asked, unsure = false, taken = new Set(), waiting = [], latest = {};
+let inboxes, running, asked, prompted, unsure = false, taken = new Set(), waiting = [], latest = {};
 const heard = () => new Promise(resolve => waiting.push(resolve));
 const engine = http.createServer((request, response) => {
   let body = "";
@@ -43,6 +43,12 @@ const engine = http.createServer((request, response) => {
       if (item) item.delivery = delivery;
       asked.push(`${session} ${item?.id} ${delivery}`);
       answer = {};
+    } else if (rest === "/prompt" && request.method === "POST") {
+      // A message for the session: what it says, as it went.
+      const given = JSON.parse(body);
+      prompted.push({ session, ...given });
+      asked.push(`${session} prompt ${given.id}`);
+      answer = {};
     } else if (rest === "/interrupt") {
       asked.push(`${session} ${url.searchParams.get("resume") === "true" ? "resume" : "stop"}`);
       answer = { data: true };
@@ -62,10 +68,12 @@ beforeEach(() => {
   inboxes = {};
   running = new Set();
   asked = [];
+  prompted = [];
   unsure = false;
   taken = new Set();
   latest = {};
   fs.rmSync(path.join(home, "run", "queues.json"), { force: true });
+  fs.rmSync(path.join(home, "run", "waiting"), { recursive: true, force: true });
 });
 
 // What the engine was asked, once it's been asked `count` things.
@@ -96,9 +104,9 @@ function box() {
 
 // The box's routes, as a client asks them.
 const handle = link.engineHandler(() => target, { name: "lab" }, () => { throw new Error("none"); });
-async function ask(method, route) {
+async function ask(method, route, body) {
   let status = 0, text = "";
-  for await (const part of handle({ method, path: route, headers: {}, body: Buffer.alloc(0) }, {}, undefined)) {
+  for await (const part of handle({ method, path: route, headers: {}, body: body === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(body)) }, {}, undefined)) {
     if (part.head) status = part.head.status;
     if (part.body) text += part.body.toString();
   }
@@ -296,4 +304,85 @@ test("a Stop as the agent takes a message for its next step holds only what's st
   taken.add("msg_s1");
   const stopped = await ask("POST", "kuvo/sessions/ses_1/queue/hold");
   assert.deepEqual(stopped.json, { paused: true, held: [] }, "nothing held that isn't there to hold");
+});
+
+test("Stop holds the conversation though nothing waits: what you queue meanwhile waits on the box, shown with the queue, and goes once you resume, after what Stop held, a run at a time", async () => {
+  inboxes.ses_1 = [];
+  running.add("ses_1");
+  assert.deepEqual((await ask("POST", "kuvo/sessions/ses_1/stop")).json, { paused: true, held: [] }, "paused with nothing waiting");
+  running.delete("ses_1");
+  // Undo of a removed message, and one sent after this run: to the box, not the engine.
+  const first = await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_back1", text: "Also update the docs." });
+  assert.equal(first.json.waits, true);
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_back2", text: "Then run the tests.", files: [{ uri: "file:///tmp/notes.txt", name: "notes.txt" }] });
+  assert.deepEqual(prompted, [], "nothing reached the engine, which would run it");
+  const shown = (await ask("GET", "kuvo/sessions/ses_1/queue")).json;
+  assert.deepEqual(shown.waiting.map(({ id, text, files }) => ({ id, text, files })), [
+    { id: "msg_back1", text: "Also update the docs.", files: undefined },
+    { id: "msg_back2", text: "Then run the tests.", files: ["notes.txt"] },
+  ]);
+  // A run ending meanwhile (the stopped one's end coming late) starts nothing.
+  const b = box();
+  b.hear("session.execution.succeeded");
+  b.wait(5000);
+  assert.deepEqual(prompted, []);
+  // Resume: the first goes now; the next once its run ends.
+  const resumed = await ask("POST", "kuvo/sessions/ses_1/queue/resume");
+  assert.deepEqual(prompted.map(each => [each.id, each.text, each.delivery]), [["msg_back1", "Also update the docs.", "steer"]]);
+  assert.deepEqual(resumed.json.waiting.map(each => each.id), ["msg_back2"]);
+  b.hear("session.execution.started");
+  b.hear("session.execution.succeeded");
+  b.wait(1500);
+  while (prompted.length < 2) await heard();
+  assert.deepEqual(prompted.map(each => each.id), ["msg_back1", "msg_back2"]);
+  assert.equal(link.queueOf("ses_1").waiting, undefined);
+  assert.deepEqual(prompted[1].files, [{ uri: "file:///tmp/notes.txt", name: "notes.txt" }], "whole, with its files");
+});
+
+test("a message added while the queue isn't paused goes straight to the engine, as asked", async () => {
+  inboxes.ses_1 = [];
+  const added = await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_q1", text: "After this, the docs." });
+  assert.equal(added.json.waits, false);
+  assert.deepEqual(prompted.map(each => [each.id, each.delivery]), [["msg_q1", "queue"]]);
+});
+
+test("paused, the queue stays so once what waited is taken away: what arrives after still waits for Resume", async () => {
+  inboxes.ses_1 = [{ id: "msg_q1", delivery: "queue" }];
+  assert.equal((await ask("POST", "kuvo/sessions/ses_1/stop")).json.paused, true);
+  inboxes.ses_1 = [];
+  const b = box();
+  b.hear("session.inbox.cancelled", { inboxID: "msg_q1" });
+  for (let turn = 0; turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(link.queueOf("ses_1").paused, true);
+  assert.equal((await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_late", text: "One more thing." })).json.waits, true);
+});
+
+test("Send Now sends one waiting on the box at once, the queue going again; one taken away doesn't go", async () => {
+  inboxes.ses_1 = [];
+  running.add("ses_1");
+  await ask("POST", "kuvo/sessions/ses_1/stop");
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w1", text: "First." });
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w2", text: "Second." });
+  const removed = await ask("DELETE", "kuvo/sessions/ses_1/queue/msg_w1");
+  assert.deepEqual(removed.json.waiting.map(each => each.id), ["msg_w2"]);
+  assert.equal((await ask("DELETE", "kuvo/sessions/ses_1/queue/msg_w1")).status, 404);
+  assert.ok(!fs.existsSync(path.join(home, "run", "waiting", "msg_w1.json")), "its contents go with it");
+  // Still at work (its stop not through yet): it gets it at once, the step stopped for it.
+  const sent = await ask("POST", "kuvo/sessions/ses_1/queue/msg_w2/now");
+  assert.deepEqual(sent.json, { paused: false, held: [] });
+  assert.deepEqual(prompted.map(each => [each.id, each.delivery]), [["msg_w2", "steer"]]);
+  assert.ok(asked.includes("ses_1 resume"));
+});
+
+test("what waits on the box outlives the box: one left as the queue went on goes once the box starts again", async () => {
+  inboxes.ses_1 = [];
+  await ask("POST", "kuvo/sessions/ses_1/stop");
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w1", text: "Carry on." });
+  // Resumed as the box stopped, before it went.
+  const file = path.join(home, "run", "queues.json");
+  const kept = JSON.parse(fs.readFileSync(file, "utf8"));
+  fs.writeFileSync(file, JSON.stringify({ ...kept, ses_1: { ...kept.ses_1, paused: false } }));
+  await link.scanQueues({ ...target, pid: 40 });
+  assert.deepEqual(prompted.map(each => each.id), ["msg_w1"]);
+  assert.equal(link.queueOf("ses_1").waiting, undefined);
 });

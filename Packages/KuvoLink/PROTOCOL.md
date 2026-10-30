@@ -551,15 +551,34 @@ the same for every client and with none connected, and keeps them in `run/queues
   what was for the next step in the queue, ahead of what was queued, the latest first: only what's
   still waiting once it's moved there. A message you write to go now (`steer`) unpauses it;
   another agent's letter, a wake-up or a note doesn't. A Resume or Send Now just after an interrupt
-  wins over the look at it. Once nothing waits, nothing's paused.
-- `GET kuvo/sessions/<id>/queue` → `{paused, held: [inboxID…]}`; `GET kuvo/sessions/queues/events`
-  follows them all (ndjson: `{"queues": {<session>: {paused, held}}}` now and at each change; a
-  session neither paused nor holding anything is left out).
+  wins over the look at it. The box's `stop` pauses it whether anything waits or not (a bot's
+  `stop_session` on its own work only when something does, as a failed run); once paused, it stays
+  so until Resume, Send Now or a message of yours to go now, though nothing is left waiting.
+- **What arrives waits** (bridge 0.9.125, `queue.waits`): the engine would run everything waiting
+  with the first thing to reach a stopped conversation, so while its queue is paused, what the box
+  sends it on its own waits on the box instead: another agent's letter (from here or another
+  computer; a sender waiting for the answer hears the conversation is stopped, and the answer comes
+  as a message), an answer to a letter, a wake-up sent now, a bot's work news, an ask's late answer
+  and a goal's notes. A scheduled wake-up or watch waits in its folder (`kuvo-wake fire` reads
+  `run/queues.json`). Each goes once the queue goes on, after what the engine holds, one at a time
+  as runs end; kept in `run/queues.json` (`waiting`) and, whole, in `run/waiting/<message id>.json`,
+  across a restart. Send Now sends one at once; `DELETE …/queue/<item>` takes one away.
+- `GET kuvo/sessions/<id>/queue` → `{paused, held: [inboxID…], waiting?: [{id, from?, text, files?,
+  at}]}`: `waiting`, left out when nothing waits on the box, first come first: who it's from (an
+  agent's name, `Wake-up`, `Its sessions`, `Your answer`, `Goal`; none for one of yours), what it
+  says, the names of its files, when it came (ms). `GET kuvo/sessions/queues/events` follows them
+  all (ndjson: `{"queues": {<session>: {paused, held, waiting?}}}` now and at each change; a session
+  neither paused nor holding anything is left out).
 - `POST kuvo/sessions/<id>/stop`: held and paused, then the run stopped. `POST …/queue/hold` (`{items?}`):
   held and paused without stopping (before an undo, or a move); `items`, messages a client held
   as they went to the engine, go first, in that order. `POST …/queue/resume`: unpaused, and the
-  next one goes now. `POST …/queue/<item>/now` (Send Now): unpaused, the item steered, and a run
-  under way stopped to go on with it; 404 when it isn't waiting. Each answers the queue as it is
+  next one goes now. `POST …/queue/<item>/now` (Send Now): unpaused, the item steered (one waiting
+  on the box sent), and a run under way stopped to go on with it; 404 when it isn't waiting.
+  `POST …/queue/add` (`{id?, text, files?, delivery?, from?}`, a prompt's body): a client's own
+  message for the queue (Undo, or one sent after this run), its files kept on the box as a
+  message's are; while it's paused it waits on the box (`from` names who it was from, for one put
+  back), else it goes to the engine as asked (`queue` by default); its answer says which,
+  `waits: true|false`. `DELETE …/queue/<item>`: one waiting on the box taken away; 404 if it isn't. Each answers the queue as it is
   now; 404 for no such session here, 503 with no engine, 502 when the engine refused.
 - Clients show what's held and whether it's paused from these; the in-flight record of a message
   still on its way (and that Stop held it) stays with the client that sends it, which waits for its
@@ -2135,6 +2154,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
+| `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.125) |
 | `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |
 | `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
 | `search` | `kuvo/search` |
