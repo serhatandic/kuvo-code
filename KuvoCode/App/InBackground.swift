@@ -78,15 +78,26 @@ final class InBackground {
         let usage = UsageMenuBar.shared
         if (usage.isRunning || usageStarting), !usage.isWaitingForFirstLaunch {
             if opensNote, usage.isRunning {
-                noteOpened = true
-                usage.open(.dashboard)
+                // Once the app has left the Dock (opened as it does, it would close at once), and
+                // active, so its buttons take clicks.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, isOn else { return }
+                    NSApp.activate()
+                    usage.open(.dashboard)
+                    noteOpened = true
+                }
             }
         } else {
             // No usage panel to show it in (never turned on): an item of its own, while it's here.
             let item = item ?? BackgroundWorkItem(app: app)
             self.item = item
-            item.show(opening: opensNote)
-            if opensNote { noteOpened = true }
+            item.show()
+            if opensNote {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, isOn else { return }
+                    if item.open() { noteOpened = true }
+                }
+            }
         }
         installWaitingUpdate()
     }
@@ -202,18 +213,16 @@ final class BackgroundWorkItem {
         popover.contentViewController = NSHostingController(rootView: BackgroundWorkCard(app: app).padding(12).frame(width: 300))
     }
 
-    func show(opening: Bool) {
-        if statusItem == nil {
-            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-            let image = NSImage(systemSymbolName: "chevron.left.forwardslash.chevron.right", accessibilityDescription: "Kuvo Code, working in the background")
-            image?.isTemplate = true
-            item.button?.image = image
-            item.button?.toolTip = "Kuvo Code is working in the background"
-            item.button?.target = self
-            item.button?.action = #selector(toggle)
-            statusItem = item
-        }
-        if opening { open() }
+    func show() {
+        guard statusItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        let image = NSImage(systemSymbolName: "chevron.left.forwardslash.chevron.right", accessibilityDescription: "Kuvo Code, in the background")
+        image?.isTemplate = true
+        item.button?.image = image
+        item.button?.toolTip = "Kuvo Code is in the background"
+        item.button?.target = self
+        item.button?.action = #selector(toggle)
+        statusItem = item
     }
 
     func hide() {
@@ -223,11 +232,22 @@ final class BackgroundWorkItem {
     }
 
     @objc private func toggle() {
-        popover.isShown ? popover.performClose(nil) : open()
+        if popover.isShown {
+            popover.performClose(nil)
+        } else {
+            open()
+        }
     }
 
-    private func open() {
-        guard let button = statusItem?.button else { return }
+    /// Its panel, shown: active, so its buttons take clicks, and in the app's own appearance.
+    /// Whether it shows.
+    @discardableResult
+    func open() -> Bool {
+        guard let button = statusItem?.button else { return false }
+        NSApp.activate()
+        popover.appearance = NSApp.appearance
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+        return popover.isShown
     }
 }

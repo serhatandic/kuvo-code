@@ -71,7 +71,7 @@ struct BackgroundWorkCard: View {
                     if working.count > 3 { line("and \(working.count - 3) more") }
                     if let next { line(next) }
                     if working.isEmpty, next == nil {
-                        Text("Nothing is running. A message or a wake-up starts it again.")
+                        Text("Nothing is running. A message or a wake-up starts the work again.")
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
