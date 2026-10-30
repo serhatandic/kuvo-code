@@ -118,7 +118,7 @@ process.stdin.on("data", (chunk) => {
 `,
   )
   const launcher = join(folder, "codex")
-  writeFileSync(launcher, `#!/bin/sh\nprintf '%s\\n' "$@" > "${join(folder, "argv.txt")}"\nexec "${process.execPath}" "${script}" "$@"\n`)
+  writeFileSync(launcher, `#!/bin/sh\nprintf '%s\\n' "$@" > "${join(folder, "argv.txt")}"\nexport BUN_BE_BUN=1\nexec "${process.execPath}" "${script}" "$@"\n`)
   chmodSync(launcher, 0o755)
   return launcher
 }
@@ -126,12 +126,13 @@ process.stdin.on("data", (chunk) => {
 /** What the fake Codex was started with. */
 const argv = () => readFileSync(join(root, "argv.txt"), "utf8").trim().split("\n")
 
+/** The messages a fake Codex has written whole to its `sent.jsonl` in `folder`: one it's still writing waits. */
+const sentIn = (folder: string): any[] => {
+  const text = readFileSync(join(folder, "sent.jsonl"), "utf8")
+  return text.slice(0, text.lastIndexOf("\n") + 1).split("\n").filter(Boolean).map((line) => JSON.parse(line))
+}
 /** What Kuvo Code sent the fake Codex, in order. */
-const sent = (): any[] =>
-  readFileSync(join(root, "sent.jsonl"), "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line))
+const sent = (): any[] => sentIn(root)
 /** Its answers to Codex's asks, in order. */
 const answers = () => sent().filter((message) => String(message.id).startsWith("ask-")).map((message) => message.result)
 /** What the turn was started with. */
@@ -220,7 +221,7 @@ process.stdin.on("data", (chunk) => {
 })
 `)
     const launcher = join(root, "codex")
-    writeFileSync(launcher, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`)
+    writeFileSync(launcher, `#!/bin/sh\nexport BUN_BE_BUN=1\nexec "${process.execPath}" "${script}" "$@"\n`)
     chmodSync(launcher, 0o755)
     codex = new TestCodex(launcher, root)
     for (let attempt = 0; attempt < 2; attempt++) await expect(codex.rpc()).rejects.toThrow()
@@ -257,7 +258,7 @@ process.stdin.on("data", (chunk) => {
 })
 `)
     const launcher = join(root, "codex")
-    writeFileSync(launcher, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`)
+    writeFileSync(launcher, `#!/bin/sh\nexport BUN_BE_BUN=1\nexec "${process.execPath}" "${script}" "$@"\n`)
     chmodSync(launcher, 0o755)
     delete process.env.KUVO_FENCE
     const agent = (codex = new TestCodex(launcher, root))
@@ -772,7 +773,7 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
     sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [], delivery: "steer" })
     await until(() => ended(id))
     // (The fake names its thread by its process.)
-    const there = readFileSync(join(other, "sent.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line))
+    const there = sentIn(other)
     const pid = Number(there.find((message) => message.method === "turn/start").params.threadId.slice(2))
     const running = () => {
       try {
@@ -823,7 +824,7 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
     await until(() => ended(second))
     expect(said(first)).toBe("Done.")
     // The second's Codex started in its folder, and it's the only one there.
-    const there = readFileSync(join(other, "sent.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line))
+    const there = sentIn(other)
     expect(there.filter((message) => message.method === "initialize")).toHaveLength(1)
     expect(sent().filter((message) => message.method === "initialize")).toHaveLength(1)
   })
@@ -924,7 +925,7 @@ process.stdin.on("data", (chunk) => {
 `,
   )
   const launcher = join(folder, "codex")
-  writeFileSync(launcher, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`)
+  writeFileSync(launcher, `#!/bin/sh\nexport BUN_BE_BUN=1\nexec "${process.execPath}" "${script}" "$@"\n`)
   chmodSync(launcher, 0o755)
   return launcher
 }
@@ -1030,7 +1031,7 @@ process.stdin.on("data", (chunk) => {
 `,
   )
   const launcher = join(folder, "codex")
-  writeFileSync(launcher, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`)
+  writeFileSync(launcher, `#!/bin/sh\nexport BUN_BE_BUN=1\nexec "${process.execPath}" "${script}" "$@"\n`)
   chmodSync(launcher, 0o755)
   return launcher
 }
