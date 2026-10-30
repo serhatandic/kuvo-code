@@ -1478,7 +1478,7 @@ export class GroupRunner {
     return head + (from > 0 ? left : "") + entries.slice(from).join("")
   }
 
-  /** After a chat moves on, its bots remember it, once it's been quiet for a moment. */
+  /** After a chat moves on, its bots remember it, once its talk is over and it's been quiet for a moment. */
   private rememberSoon(id: string) {
     const pending = this.syncs.get(id)
     if (pending) clearTimeout(pending)
@@ -1486,6 +1486,9 @@ export class GroupRunner {
       this.syncs.delete(id)
       const kept = this.chat(id)
       if (!kept) return
+      // Still talking (a turn takes longer than this): once it's over, not at every message, which
+      // to a bot on another computer is a letter each time.
+      if (this.state(id).abort) return this.rememberSoon(id)
       void (async () => {
         for (const bot of kept.group.members) await this.remember(bot, { changed: id })
       })().catch(() => {})

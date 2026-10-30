@@ -19146,6 +19146,8 @@ _Earlier messages aren\u2019t here: this is the latest of the chat._
       const kept = this.chat(id);
       if (!kept)
         return;
+      if (this.state(id).abort)
+        return this.rememberSoon(id);
       (async () => {
         for (const bot of kept.group.members)
           await this.remember(bot, { changed: id });
@@ -20741,4 +20743,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 4a0e584e9f1d33a3c172c1a7f63b78bba9df98ac754e6cc232d91d4f61ece610
+// Built from Packages/Box/src/agents 94cd99104f343726a64578d195651f0ddd731abba7801389d370522669fb6117
