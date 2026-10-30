@@ -204,15 +204,18 @@ async function integrationsAnswer(method: string, requestPath: string, body: Bod
     }
     let newKeys = false;
     if (names.length) {
-      if (names.every(name => typeof given[name] === "string" && given[name].trim())) {
-        // All of them, one change at a time with any other key work here.
-        await keyWork(async () => {
-          for (const name of names) await writeKey(variables[name], (given[name] as string).trim());
-        });
-        newKeys = true;
-      } else if (!(await keepsAll(names.map(name => variables[name])))) {
+      // Those sent saved (Change Key may send only the one you changed), the rest kept already.
+      const sent = names.filter(name => typeof given[name] === "string" && given[name].trim());
+      if (sent.length < names.length && !(await keepsAll(names.filter(name => !sent.includes(name)).map(name => variables[name])))) {
         const labels = (entry.keys ?? []).map(key => key.label).join(" and ");
         return { status: 400, value: { message: `${entry.title} needs ${labels}: send them as {"keys": {"${names[0]}": …}}.` } };
+      }
+      if (sent.length) {
+        // One change at a time with any other key work here.
+        await keyWork(async () => {
+          for (const name of sent) await writeKey(variables[name], (given[name] as string).trim());
+        });
+        newKeys = true;
       }
     }
     // One there already is written again as it is (the engine reads its keys again).

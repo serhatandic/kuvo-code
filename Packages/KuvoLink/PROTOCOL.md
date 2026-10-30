@@ -1189,8 +1189,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     set aside in Accounts (Settings says Sign In Again, not Sign In). `problem`: the settings
     file can't be changed.
   - `POST kuvo/integrations/<id>` with `{"keys"?: {"<name>": "<value>"}}` adds it, as Connect
-    (or Add Key…) does: with the keys given, or those the computer has; one added already is
-    written again (the engine reads its keys again), and with new keys its server connects again a
+    (or Add Key…) does: with the keys given, and those not given as the computer has them (Change
+    Key may send only the one you changed); one added already is written again (the engine reads
+    its keys again), and with new keys its server connects again a
     moment later, in the engine's own copy and in every folder it has open (`api/debug/location`;
     over `box route`, in a process of its own, `kuvo-link.js box reconnect <id>`). `200 {"integration"}`, as listed; `400 {"message"}` without the keys it needs;
     `404` for none; `409 {"message"}` for one used on its site, or a settings file that can't be

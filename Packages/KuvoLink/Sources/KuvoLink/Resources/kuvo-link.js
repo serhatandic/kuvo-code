@@ -2165,15 +2165,17 @@ async function integrationsAnswer(method, requestPath, body, engine, signal, fil
     }
     let newKeys = false;
     if (names.length) {
-      if (names.every((name) => typeof given[name] === "string" && given[name].trim())) {
+      const sent = names.filter((name) => typeof given[name] === "string" && given[name].trim());
+      if (sent.length < names.length && !await keepsAll(names.filter((name) => !sent.includes(name)).map((name) => variables[name]))) {
+        const labels = (entry.keys ?? []).map((key) => key.label).join(" and ");
+        return { status: 400, value: { message: `${entry.title} needs ${labels}: send them as {"keys": {"${names[0]}": …}}.` } };
+      }
+      if (sent.length) {
         await keyWork(async () => {
-          for (const name of names)
+          for (const name of sent)
             await writeKey(variables[name], given[name].trim());
         });
         newKeys = true;
-      } else if (!await keepsAll(names.map((name) => variables[name]))) {
-        const labels = (entry.keys ?? []).map((key) => key.label).join(" and ");
-        return { status: 400, value: { message: `${entry.title} needs ${labels}: send them as {"keys": {"${names[0]}": …}}.` } };
       }
     }
     const value = added ? valueAt(settings, [...SERVERS, entry.id]) : entry.settings;
