@@ -137,6 +137,22 @@ import Testing
         #expect(model.failure == nil)
     }
 
+    @Test func theBarsButtonsSayWhyWhileItsComputersBridgeIsntRunning() throws {
+        defer { clean() }
+        // A goal as last heard, its bridge gone since (restarting, say).
+        let agents = OutsideAgents()
+        agents.took(try JSONDecoder().decode(Goal.self, from: Data(#"{"session":"ses_goal","condition":"The build is green","state":"working","started":1,"turns":1,"checking":false}"#.utf8)))
+        let model = try session()
+        model.goalBridge = { agents }
+
+        model.changeGoal(.pause)
+        #expect(model.failure?.contains("isn’t running now") == true)
+        model.failure = nil
+        model.stopGoal()
+        #expect(model.failure?.contains("isn’t running now") == true)
+        #expect(model.goal?.state == .working)
+    }
+
     @Test func slashGoalAloneLeavesWhatToTypeAndAGoalThatCantBeSetComesBack() async throws {
         defer { clean() }
         serve(Conversation(verdicts: []))

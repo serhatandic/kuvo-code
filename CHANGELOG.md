@@ -170,6 +170,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A bot made or deleted from your phone while it loses its connection is made or deleted whole, rather than leaving a conversation without its bot or a group chat still listing it.
 - A machine's nightly update waits while its browser waits on you (a sign-in, a code), and **Start** or **Restart** for its engine during an update says it's updating.
 - A goal keeps going after a very long turn (hundreds of steps): it's checked and nudged as after any other, instead of showing it's working while nothing happens.
+- A goal waits while its session is archived, as its wake-ups do, and carries on when you bring the session back. Stopping a paused goal takes it away without stopping a turn you started yourself, and the goal bar's buttons say when its computer's agents bridge isn't running rather than doing nothing. A goal that's over or paused goes with its session when the session is deleted.
 - A command you type with **!** in a Claude Code, Codex, Cursor, Grok or Antigravity session on a machine runs as in your terminal there, with your `gh` sign-in and git settings; one still running stops when you delete its session.
 - Removing an account while one of its sessions works ends that turn as stopped, instead of leaving it working until you press Stop.
 - A link to a web page whose icon declares a nonsense size no longer crashes Kuvo Code each time the link shows, on the Mac and the iPhone.
