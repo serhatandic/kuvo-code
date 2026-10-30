@@ -4284,12 +4284,8 @@ function writeJob(here, job) {
   const file = path27.join(here.folder, JOB_FILE);
   fs28.writeFileSync(`${file}.new`, JSON.stringify({ line: job.line, details: job.details, updated: stamp() }, null, 2));
   fs28.renameSync(`${file}.new`, file);
-  if ((here.described.job ?? "") !== job.line) {
-    const described = path27.join(here.folder, "bot.json");
-    fs28.writeFileSync(`${described}.new`, JSON.stringify({ ...here.described, job: job.line }, null, 2));
-    fs28.renameSync(`${described}.new`, described);
-    here.described = { ...here.described, job: job.line };
-  }
+  if ((here.described.job ?? "") !== job.line)
+    here.described = changeDescription(here.folder, (now) => ({ ...now ?? here.described, job: job.line }));
 }
 function jobOf(here) {
   const kept = readJob(here.folder);
@@ -7258,6 +7254,21 @@ function keepAllowed(changed, now, names) {
     delete next.work;
   return next;
 }
+function onto(now, before, after) {
+  if (!now)
+    return after;
+  const next = { ...now };
+  const was = before, is = after;
+  for (const key of new Set([...Object.keys(was), ...Object.keys(is)])) {
+    if (JSON.stringify(was[key]) === JSON.stringify(is[key]))
+      continue;
+    if (is[key] === undefined)
+      delete next[key];
+    else
+      next[key] = is[key];
+  }
+  return next;
+}
 async function changeBot(id, given, readEngine, readBridge, machine, signal) {
   const no = (status, message) => ({ status, value: { message } });
   const here = botHere(id);
@@ -7357,7 +7368,7 @@ async function changeBot(id, given, readEngine, readBridge, machine, signal) {
   }
   if (limitsChanged && !Object.keys(given).some((key) => key !== "work")) {
     try {
-      changeDescription(here.folder, (now) => keepAllowed(changed, now, namesAllowed));
+      changeDescription(here.folder, (now) => keepAllowed(onto(now, described, changed), now, namesAllowed));
     } catch (error) {
       return no(503, `The bot couldn’t be changed: ${error?.message ?? error}`);
     }
@@ -7385,7 +7396,7 @@ async function changeBot(id, given, readEngine, readBridge, machine, signal) {
         writeJob(here, job);
         changed.job = job.line;
       }
-      here.described = changeDescription(here.folder, (now) => keepAllowed(changed, now, namesAllowed));
+      here.described = changeDescription(here.folder, (now) => keepAllowed(onto(now, described, changed), now, namesAllowed));
     } catch (error) {
       return no(503, `The bot couldn’t be changed: ${error?.message ?? error}`);
     }
