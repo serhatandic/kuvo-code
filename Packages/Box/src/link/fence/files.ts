@@ -113,6 +113,8 @@ export function launcherScript(places: FencePlaces): string {
     // What Also Allowed gives this project's commands to write (fence/allowed.ts): the box's file
     // for it, by the same sum, one folder a line; each that isn't given stays where nothing is.
     `allowed=$F/allowed/$sum`,
+    // A worktree of a repository (a session's branch) has its repository's folder's: the project's.
+    `if [ -f "$work/.git" ]; then case $git in */.git) p_sum=$( (printf '%s' "\${git%/.git}" | sha256sum || printf '%s' "\${git%/.git}" | shasum -a 256) 2>/dev/null | cut -c 1-32); case $p_sum in ????????????????????????????????) allowed=$F/allowed/$p_sum ;; esac ;; esac; fi`,
     // (On a Mac, each escaped too, for what's kept from its commands inside it; `-` matches no path.)
     ...(places.platform === "darwin" ? [`escaped() { printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\\\&/g'; }`,
       // An agent's homes, escaped too, and the names in them as one pattern (`-/` matches no name).

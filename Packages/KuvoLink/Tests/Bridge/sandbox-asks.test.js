@@ -41,6 +41,8 @@ const sessions = {
   ses_shop: { id: "ses_shop", title: "Fix checkout", location: { directory: shop } },
   ses_shop2: { id: "ses_shop2", title: "Install hooks", location: { directory: shop } },
   ses_blog: { id: "ses_blog", title: "Write a post", location: { directory: blog } },
+  // A worktree of the repository `kept`, for a branch of its own.
+  ses_branch: { id: "ses_branch", title: "Try a branch", location: { directory: path.join(root, "kept-branch") } },
   // A bot's seat in a group chat.
   ses_seat: { id: "ses_seat", title: "Standup", location: { directory: shop }, metadata: { kuvo: { seat: "seat_1" } } },
 };
@@ -337,6 +339,43 @@ test("a folder in Also Allowed is one a project's commands write in the sandbox,
   const rule = (await fromMac("GET", `kuvo/sandbox/allowed?project=${encodeURIComponent(shop)}`)).value.allowed.find(each => each.kind === "write");
   assert.equal((await fromMac("DELETE", `kuvo/sandbox/allowed/${rule.id}`)).status, 200);
   assert.notEqual((await engineRuns(shop, write.replace("made", "again"), "ses_shop")).status, 0);
+});
+
+test("a project's worktree writes in the folders Also Allowed gives the project, and Always there gives them to the project", async () => {
+  // A repository, with a worktree for a branch, as Kuvo Code makes one for a session.
+  const kept = path.join(root, "kept");
+  const branch = path.join(root, "kept-branch");
+  const git = (...args) => assert.equal(spawnSync("git", args, { cwd: kept, env: { ...env, GIT_CONFIG_GLOBAL: "/dev/null" } }).status, 0, args.join(" "));
+  fs.mkdirSync(kept);
+  git("init", "-q");
+  git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "first");
+  git("worktree", "add", "-q", "-b", "try", branch);
+  const shared = path.join(outside, "kept-cache");
+  fs.mkdirSync(shared);
+  const write = (name) => `echo hi > ${JSON.stringify(path.join(shared, name))}`;
+  assert.notEqual((await engineRuns(branch, write("before.txt"), "ses_branch")).status, 0, "stopped before");
+  // Added in Settings, for the project.
+  const added = await fromMac("POST", "kuvo/sandbox/allowed", { project: kept, kind: "write", path: shared });
+  assert.equal(added.status, 200, JSON.stringify(added.value));
+  const ran = await engineRuns(branch, write("made.txt"), "ses_branch");
+  assert.equal(ran.status, 0, ran.out);
+  for (const rule of added.value.allowed) assert.equal((await fromMac("DELETE", `kuvo/sandbox/allowed/${rule.id}`)).status, 200);
+
+  // On a Mac, where its log says which folder the sandbox stopped a command writing in: Always from
+  // the worktree's conversation keeps it for the project, where Settings shows it.
+  if (linux) return;
+  const command = write("always.txt");
+  assert.notEqual((await engineRuns(branch, command, "ses_branch")).status, 0, "stopped again");
+  const call = sandboxAsk(box, "ses_branch", { command, why: "To fill the shared cache." });
+  const [ask] = await asked(box, call);
+  assert.deepEqual(ask.always, { kind: "write", path: shared });
+  assert.equal((await box.ask("POST", `kuvo/sandbox/asks/${ask.id}`, { answer: "always" })).status, 200);
+  assert.match((await call).value.text, /^Ran outside the sandbox · Always for this/);
+  const rules = (await box.ask("GET", `kuvo/sandbox/allowed?project=${encodeURIComponent(kept)}`)).value.allowed;
+  assert.deepEqual(rules.map(rule => rule.path), [shared], "listed for the project");
+  assert.equal((await engineRuns(branch, write("again.txt"), "ses_branch")).status, 0);
+  assert.equal((await engineRuns(kept, write("main.txt"), "ses_branch")).status, 0, "and the project's own commands");
+  for (const rule of rules) await fromMac("DELETE", `kuvo/sandbox/allowed/${rule.id}`);
 });
 
 test("a group chat's seat is asked about once only: nobody's there to answer for it for good", async () => {

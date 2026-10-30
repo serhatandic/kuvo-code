@@ -10530,10 +10530,25 @@ var MOST_FOLDERS = 8;
 class RuleRefusal extends Error {
 }
 var realProject = (project) => {
+  let real;
   try {
-    return fs49.realpathSync(project);
+    real = fs49.realpathSync(project);
   } catch {
     return path50.resolve(project);
+  }
+  try {
+    const named = fs49.readFileSync(path50.join(real, ".git"), "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
+    if (!named)
+      return real;
+    const own = fs49.realpathSync(path50.resolve(real, named));
+    if (path50.basename(path50.dirname(own)) !== "worktrees")
+      return real;
+    if (fs49.realpathSync(fs49.readFileSync(path50.join(own, "gitdir"), "utf8").trim()) !== path50.join(real, ".git"))
+      return real;
+    const common = fs49.realpathSync(path50.resolve(own, fs49.readFileSync(path50.join(own, "commondir"), "utf8").trim()));
+    return path50.basename(common) === ".git" && common === path50.dirname(path50.dirname(own)) ? path50.dirname(common) : real;
+  } catch {
+    return real;
   }
 };
 var projectSum = (project) => crypto20.createHash("sha256").update(realProject(project)).digest("hex").slice(0, 32);
@@ -10777,6 +10792,7 @@ function launcherScript(places) {
       `fi`
     ] : [],
     `allowed=$F/allowed/$sum`,
+    `if [ -f "$work/.git" ]; then case $git in */.git) p_sum=$( (printf '%s' "\${git%/.git}" | sha256sum || printf '%s' "\${git%/.git}" | shasum -a 256) 2>/dev/null | cut -c 1-32); case $p_sum in ????????????????????????????????) allowed=$F/allowed/$p_sum ;; esac ;; esac; fi`,
     ...places.platform === "darwin" ? [
       `escaped() { printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\\\&/g'; }`,
       ...Array.from({ length: AGENT_FOLDERS }, (_, at) => `q${at}=$(escaped "$o${at}")`),
