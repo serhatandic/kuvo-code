@@ -8,6 +8,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { isObject } from "../../shared/json";
 import { locked, writePrivate } from "../files";
 import { RUN } from "../home";
 
@@ -24,7 +25,15 @@ export type LimitKind = keyof typeof LIMITS;
 export const LIMITS_FILE = path.join(RUN, "tool-limits.json");
 const LIMITS_LOCK = path.join(RUN, ".tool-limits.lock");
 
-type Counts = Partial<Record<LimitKind, Record<string, number[]>>>;
+/** A bot's session being started: when, the session once it's made, and whether it was given its
+ * task (from then on the engine says whether it's working). */
+interface Starting { at: number; session?: string; prompted?: boolean }
+
+type Counts = Partial<Record<LimitKind, Record<string, number[]>>> & { starting?: Record<string, Record<string, Starting>> };
+
+// How long a start is counted on its own: long after its session shows where it works (one cut off
+// before saying so isn't counted for ever).
+const STARTING_FOR = 120_000;
 
 // What's counted now, the old left out.
 function changeCounts<T>(now: number, change: (counts: Counts) => T, file: string): T {
@@ -40,6 +49,12 @@ function changeCounts<T>(now: number, change: (counts: Counts) => T, file: strin
       }
       counts[kind] = byKey;
     }
+    const starting: Record<string, Record<string, Starting>> = {};
+    for (const [bot, starts] of Object.entries(isObject(counts.starting) ? counts.starting : {})) {
+      const lately = Object.entries(isObject(starts) ? starts : {}).filter(([, start]) => isObject(start) && typeof start.at === "number" && now - start.at < STARTING_FOR);
+      if (lately.length) starting[bot] = Object.fromEntries(lately) as Record<string, Starting>;
+    }
+    counts.starting = starting;
     const value = change(counts);
     try { writePrivate(file, JSON.stringify(counts)); } catch {}
     return value;
@@ -66,5 +81,38 @@ export function takeBack(kind: LimitKind, key: string, at: number, file = LIMITS
     if (index >= 0) lately.splice(index, 1);
     if (lately.length) counts[kind]![key] = lately;
     else delete counts[kind]![key];
+  }, file);
+}
+
+/** A session `bot` starts, noted before its limits are looked at, so starts asked for at once each
+ * count the ones before them that the engine doesn't show yet: its token, and theirs. */
+export function noteStarting(bot: string, now = Date.now(), file = LIMITS_FILE): { token: string; before: string[] } {
+  const token = `${now}-${Math.random().toString(36).slice(2, 10)}`;
+  return changeCounts(now, counts => {
+    const starts = counts.starting![bot] ?? {};
+    counts.starting![bot] = { ...starts, [token]: { at: now } };
+    return { token, before: Object.keys(starts) };
+  }, file);
+}
+
+/** The starts noted `before` one, as they are now (their sessions may be made by then); those gone
+ * didn't start. */
+export function startsBefore(bot: string, before: string[], file = LIMITS_FILE): Starting[] {
+  return changeCounts(Date.now(), counts => {
+    const starts = counts.starting![bot] ?? {};
+    return before.flatMap(token => starts[token] ? [starts[token]] : []);
+  }, file);
+}
+
+/** How the start `token` went: its session (and whether it was given its task), kept a while so
+ * starts after it count it until the engine does; or null, it didn't start. */
+export function startedAs(bot: string, token: string, session: string | null, prompted = false, file = LIMITS_FILE): void {
+  changeCounts(Date.now(), counts => {
+    const starts = counts.starting![bot] ?? {};
+    if (!starts[token]) return;
+    if (session) starts[token] = { ...starts[token], session, ...(prompted ? { prompted } : {}) };
+    else delete starts[token];
+    if (Object.keys(starts).length) counts.starting![bot] = starts;
+    else delete counts.starting![bot];
   }, file);
 }

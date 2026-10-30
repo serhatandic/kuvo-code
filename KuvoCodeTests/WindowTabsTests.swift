@@ -404,6 +404,23 @@ import Testing
         #expect(!next.showsPanel, "what a version that kept less didn't keep is as it starts")
     }
 
+    /// The window's store keeps the project popup (it outlives the window's views): New Project
+    /// open with something typed in it stays when a shortcut or a notification asks for the popup
+    /// again, and once it's closed, the next one opens.
+    @Test func theWindowKeepsTheProjectPopupBeingTypedIn() {
+        defer { done() }
+        let typing = ProjectEditorRequest(project: nil, folders: ["/tmp/kuvo-tests-typed"])
+        tabs.openProjectEditor(typing)
+        tabs.openProjectEditor(ProjectEditorRequest(project: nil))
+        #expect(tabs.projectEditor?.id == typing.id, "the popup being typed in stays")
+        #expect(tabs.projectEditor?.folders == ["/tmp/kuvo-tests-typed"])
+
+        tabs.projectEditor = nil
+        let next = ProjectEditorRequest(project: nil, focusesRun: true)
+        tabs.openProjectEditor(next)
+        #expect(tabs.projectEditor?.id == next.id, "closed, the next one opens")
+    }
+
     /// Two new sessions written at once, and a terminal tab: what you open in the panel beside
     /// one stays beside it, and a terminal tab's panel closes with the tab.
     @Test func eachNewSessionAndTerminalTabHasAPanelOfItsOwn() throws {

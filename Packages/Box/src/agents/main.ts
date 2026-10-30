@@ -31,7 +31,7 @@ import { Snapshots } from "./snapshots"
 import { Roster } from "./roster"
 import { cancelSignIns, handler } from "./server"
 import { Sessions } from "./sessions"
-import { refreshLoginPath } from "./proc"
+import { useSavedLoginPath } from "./proc"
 import { setSkillSource } from "./skills"
 import { Store } from "./store"
 import { server as requester } from "./groups/api"
@@ -100,7 +100,7 @@ if (onMachine) {
   // The agents' programs are the machine's own now, found on its login shell's PATH (which a
   // command over SSH doesn't get), not copies of Kuvo Code's.
   dropOwnPrograms(join(home, "runtime"))
-  void refreshLoginPath()
+  useSavedLoginPath()
 }
 // COMPAT(0.7 agents-runtime): `cache/install`. Goes 3 months after 0.8.0.
 // What an earlier bridge left of its downloads (it kept them on this Mac): nothing installs yet.

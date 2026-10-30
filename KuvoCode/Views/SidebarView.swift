@@ -12,23 +12,10 @@ struct SidebarView: View {
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
 
-    @Binding var selection: String?
-    let newSession: (String?) -> Void
-    let newProject: () -> Void
-    let editProject: (Workspace.Project) -> Void
-    let showProviders: () -> Void
-    let newBot: () -> Void
-    let editBot: (Bot) -> Void
-    let newGroup: () -> Void
-    let editGroup: (BotGroup) -> Void
-    /// A conversation in the project, where its new sessions open a terminal instead.
-    let newConversation: (String) -> Void
-    /// Ends a terminal tab.
-    let closeTerminal: (String) -> Void
-    /// Bots moving in the main card; their rows hold still.
+    /// Bots moving in the main card; their rows hold still. The one thing the window hands in
+    /// (see `==`, below): the rest comes from the stores, which tell the sidebar when they change.
+    /// Anything else handed in has to be compared in `==` too, or the sidebar misses its changes.
     var stagedBots: Set<String> = []
-    /// Shows a session beside the one in view (split view).
-    var openBeside: ((String) -> Void)?
     @Environment(Bots.self) private var bots
     @Environment(GroupChats.self) private var groups
     /// The group chat waiting for the user to confirm its deletion.
@@ -86,6 +73,27 @@ struct SidebarView: View {
     private static let sessionsPerProject = 5
     private static let recentCount = 8
 
+    // What the rows do, through the window's stores rather than closures handed in, so the view
+    // the window makes is equal to the one before unless `stagedBots` changed (`==`, below).
+    private var tabs: WindowTabs { app.tabs }
+    /// The tab in view, by its tag; picking one opens its tab.
+    private var selection: String? {
+        get { tabs.selection?.text }
+        nonmutating set { if let newValue { tabs.open(TabKey(newValue)) } }
+    }
+    private func newSession(_ directory: String?) { tabs.newSession(in: directory) }
+    /// A conversation in the project, where its new sessions open a terminal instead.
+    private func newConversation(_ directory: String) { tabs.open(.draft(directory)) }
+    private func newProject() { tabs.openProjectEditor(ProjectEditorRequest(project: nil)) }
+    private func editProject(_ project: Workspace.Project) { tabs.openProjectEditor(ProjectEditorRequest(project: project)) }
+    private func showProviders() { app.openSettings(.accounts) }
+    private func newBot() { tabs.openBotEditor(bot: nil) }
+    private func editBot(_ bot: Bot) { tabs.openBotEditor(bot: bot) }
+    private func newGroup() { tabs.openGroupEditor(group: nil) }
+    private func editGroup(_ group: BotGroup) { tabs.openGroupEditor(group: group) }
+    /// Ends a terminal tab.
+    private func closeTerminal(_ key: String) { tabs.close(TabKey(key)) }
+
     /// The selection tag of a project's not-yet-sent new session.
     static func draftTag(_ directory: String) -> String { TabKey.draft(directory).text }
 
@@ -94,6 +102,9 @@ struct SidebarView: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = ScrollFrameMonitor.sidebarBodies += 1
+        #endif
         VStack(spacing: 0) {
             // Above the boxes' pages: a new session on the box in view, and a search of them all.
             VStack(alignment: .leading, spacing: 1) {
@@ -899,12 +910,15 @@ struct SidebarView: View {
         isUnfolded(id) ? [] : Branches.all(under: id, in: branches)
     }
 
+    /// KUVO_DEMO_UNFOLD: every session's branches shown, for a look at them.
+    #if DEBUG
+    private static let demoUnfolds = ProcessInfo.processInfo.environment["KUVO_DEMO_UNFOLD"] != nil
+    #else
+    private static let demoUnfolds = false
+    #endif
+
     private func isUnfolded(_ id: String) -> Bool {
-        #if DEBUG
-        // KUVO_DEMO_UNFOLD: every session's branches shown, for a look at them.
-        if ProcessInfo.processInfo.environment["KUVO_DEMO_UNFOLD"] != nil { return true }
-        #endif
-        return unfolded.contains(id)
+        Self.demoUnfolds || unfolded.contains(id)
     }
 
     private func toggleBranches(of id: String) {
@@ -1054,7 +1068,7 @@ struct SidebarView: View {
                 Button("Pin") { Task { await workspace.setPinned(session.id, true) } }
             }
         }
-        if let openBeside, session.id != selection {
+        if let openBeside = tabs.besideOpener, session.id != selection {
             Button("Open Beside") { openBeside(session.id) }
         }
         sideQuestionsMenu(for: session, in: place)
@@ -1248,6 +1262,9 @@ private struct SidebarRow<Icon: View, Title: View, Accessory: View>: View {
     @ViewBuilder var accessory: () -> Accessory
 
     var body: some View {
+        #if DEBUG
+        let _ = ScrollFrameMonitor.sidebarRowBodies += 1
+        #endif
         if isEditing {
             row
         } else {
@@ -2208,5 +2225,18 @@ private struct AccountsRow: View {
         case 1: catalog.connectedProviders[0].name
         case let count: "\(count) Accounts"
         }
+    }
+}
+
+/// The window makes the sidebar again whenever anything around it changes (the panel shown or
+/// hidden, the focus, a sheet), and SwiftUI took each one for a new sidebar, since its
+/// `@AppStorage` keeps a store of its own each time it's made: it worked the whole list out again,
+/// every row, at the start of the panel's slide. Equal while what's handed in is (`.equatable()`
+/// where it's made); what it reads from the stores and keeps itself still updates it as before.
+/// So `==` compares every property the window hands in: one left out here is a change the sidebar
+/// never shows.
+extension SidebarView: Equatable {
+    static func == (lhs: SidebarView, rhs: SidebarView) -> Bool {
+        lhs.stagedBots == rhs.stagedBots
     }
 }

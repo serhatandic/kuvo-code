@@ -16,7 +16,7 @@ import { readWorktrees } from "../areas/worktree-records";
 import { answerWorktrees, tellWorktree } from "../areas/worktrees";
 import { permissionsHere, refreshedRules } from "../bots/tell";
 import { composeLetter } from "./letter";
-import { allowed, takeBack } from "./limits";
+import { allowed, noteStarting, startedAs, startsBefore, takeBack } from "./limits";
 import { answerTo } from "./take";
 import { noteWorkChanged } from "../work/changes";
 import { botLimits, pastLimit } from "../work/limits";
@@ -224,18 +224,31 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   }
   if (given.mode === "plan") picked.push("Plan");
   if (!target) return no(503, `The engine on ${HERE} isn't running.`);
-  // The limits you set for its bot, if any.
-  if (bot) {
-    const limits = botLimits(bot.bot);
-    if (limits) {
-      const targets = [engine, bridge].filter((each): each is Target => Boolean(each));
-      const work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
-      const working = await workingNow(targets, place.signal);
-      const midnight = new Date().setHours(0, 0, 0, 0);
-      const today = work.filter(each => (each.data.time?.created ?? 0) >= midnight);
-      const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
-      const past = pastLimit(limits, { depth, working: work.filter(each => working.has(each.data.id)).length, started: today.length, tokens });
-      if (past) return no(429, past);
+  // The limits you set for its bot, if any. This start is noted before they're looked at, so ones
+  // asked for at once each count those before them that the engine doesn't show yet.
+  const limits = bot ? botLimits(bot.bot) : null;
+  const noted = bot && limits ? noteStarting(bot.bot) : null;
+  const went = (session: string | null, prompted = false) => { if (bot && noted) startedAs(bot.bot, noted.token, session, prompted); };
+  if (bot && limits && noted) {
+    const targets = [engine, bridge].filter((each): each is Target => Boolean(each));
+    const work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
+    const working = await workingNow(targets, place.signal);
+    const midnight = new Date().setHours(0, 0, 0, 0);
+    const today = work.filter(each => (each.data.time?.created ?? 0) >= midnight);
+    const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
+    const workIDs = new Set(work.map(each => each.data.id));
+    const todayIDs = new Set(today.map(each => each.data.id));
+    // One the engine shows as the bot's, given its task, is working or not as the engine says.
+    const earlier = startsBefore(bot.bot, noted.before);
+    const past = pastLimit(limits, {
+      depth,
+      working: work.filter(each => working.has(each.data.id)).length + earlier.filter(each => !each.session || !each.prompted || !workIDs.has(each.session)).length,
+      started: todayIDs.size + earlier.filter(each => !each.session || !todayIDs.has(each.session)).length,
+      tokens,
+    });
+    if (past) {
+      went(null);
+      return no(429, past);
     }
   }
   // A few at a time: an agent shouldn't fill the window with sessions unattended. A bot's work is
@@ -243,8 +256,14 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const kind = bot ? "botSessions" : "sessions";
   const key = by ? (bot ? `bot:${bot.bot}` : by.place ? by.session : "outside") : null;
   const counted = key ? allowed(kind, key) : null;
-  if (key && counted === null) return no(429, bot ? "You've started a great many sessions in the last few minutes, which looks like a loop. Stop, check on the ones you have (list_sessions), and tell the user." : "You've started several sessions in the last few minutes. Write to those (send_message), or ask the user before starting more.");
-  const giveBack = () => { if (key && counted !== null) takeBack(kind, key, counted); };
+  if (key && counted === null) {
+    went(null);
+    return no(429, bot ? "You've started a great many sessions in the last few minutes, which looks like a loop. Stop, check on the ones you have (list_sessions), and tell the user." : "You've started several sessions in the last few minutes. Write to those (send_message), or ask the user before starting more.");
+  }
+  const giveBack = () => {
+    if (key && counted !== null) takeBack(kind, key, counted);
+    went(null);
+  };
   // In a worktree of its project's, on a branch of its own (taken away again should the session not
   // start).
   let madeTree: string | null = null;
@@ -254,7 +273,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
       giveBack();
       return no(400, "A chat has no worktree: give a project.");
     }
-    const made = await answerWorktrees("POST", "kuvo/worktrees", { project }, engine, place.signal);
+    const made = await answerWorktrees("POST", "kuvo/worktrees", { project }, engine, place.signal).catch((error: unknown) => ({ status: 502, value: { message: String((error as Error | null)?.message ?? error) } }));
     const tree = made.value as { folder?: unknown; branch?: unknown; message?: unknown };
     if (made.status !== 200 || typeof tree.folder !== "string") {
       giveBack();
@@ -277,6 +296,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     const made = await call(target, "POST", "/api/session", { location: { directory: folder }, ...(title ? { title } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}), ...(rules ? { permissions: rules } : {}) }, place.signal);
     if (!isObject(made) || typeof made.id !== "string" || !made.id) throw new Error("No session was made.");
     session = made.id;
+    went(session);
   } catch (error) {
     giveBack();
     if (madeTree) await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true }, engine, place.signal).catch(() => {});
@@ -299,8 +319,10 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   try {
     await asked(target, "POST", `api/session/${address}/prompt`, { id, text, delivery: "steer" });
   } catch (error) {
+    went(session, true);
     return no(502, `Started a session (${session}), but the task didn't reach it: ${String((error as Error | null)?.message ?? error)}`, session);
   }
+  went(session, true);
   const started: Started = { session, title, folder, project: project?.name ?? null, ...(picked.length ? { picked: picked.join(" · ") } : {}), ...(askedFirst ? { askedFirst } : {}), ...(wakes.length ? { wakes } : {}) };
   if (!waits) return { started };
   // A new session: anything it says is its answer.

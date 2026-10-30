@@ -80,11 +80,14 @@ enum DemoPerf {
         }
         let panel = PerfMeter()
         panel.start()
+        // The sidebar has nothing to do with the panel: none of it should be worked out again.
+        let before = (ScrollFrameMonitor.sidebarBodies, ScrollFrameMonitor.sidebarRowBodies)
         for _ in 0..<(count * 2) {
             withAnimation(.ui) { app.tabs.showPanel(!app.tabs.showsPanel) }
             await DemoWait.pause(.step(.seconds(1)))
         }
-        log("toggle panel x\(count * 2): " + panel.stop() + "\n", environment)
+        let redrawn = "; sidebar worked out \(ScrollFrameMonitor.sidebarBodies - before.0) times, its rows \(ScrollFrameMonitor.sidebarRowBodies - before.1)"
+        log("toggle panel x\(count * 2): " + panel.stop() + redrawn + "\n", environment)
         if let file = environment["KUVO_PERF_STALLS"] { try? panel.stallReport().write(toFile: file + ".panel", atomically: true, encoding: .utf8) }
     }
 

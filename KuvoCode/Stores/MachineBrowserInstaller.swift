@@ -351,11 +351,9 @@ nonisolated enum MachineBrowserInstaller {
     }
 
     static func sha256(of file: URL) throws -> String {
-        var hasher = SHA256()
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
-        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return try handle.digest(SHA256.self).map { String(format: "%02x", $0) }.joined()
     }
 
     /// This Mac's unzip or tar, unpacking or packing the browser's downloads. Each takes seconds:

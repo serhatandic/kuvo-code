@@ -457,9 +457,112 @@ import { existsSync, statfsSync } from "fs";
 import { basename as basename2, dirname, relative, sep as sep2 } from "path";
 
 // Packages/Box/src/agents/proc.ts
-import { spawn } from "child_process";
+import { spawn as spawn2 } from "child_process";
 import { accessSync, constants } from "fs";
 import { delimiter, join as join3 } from "path";
+
+// Packages/Box/src/shared/platform.ts
+import { execFileSync, spawn } from "child_process";
+import fs from "fs";
+import path from "path";
+function loginShell(env = process.env, platform = process.platform) {
+  const given = env.SHELL && path.isAbsolute(env.SHELL) ? env.SHELL : undefined;
+  if (platform === "darwin")
+    return given ?? "/bin/zsh";
+  if (given && given !== "/bin/sh")
+    return given;
+  const own = accountShell();
+  return own ?? given ?? "/bin/sh";
+}
+function accountShell() {
+  const uid = String(process.getuid?.() ?? "");
+  const shellOf = (entries) => entries.split(`
+`).map((line) => line.split(":")).find((fields) => fields[2] === uid)?.[6]?.trim();
+  let shell;
+  try {
+    shell = shellOf(fs.readFileSync("/etc/passwd", "utf8"));
+  } catch {}
+  if (!shell) {
+    try {
+      shell = shellOf(execFileSync("getent", ["passwd", uid], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] }));
+    } catch {}
+  }
+  return shell && path.isAbsolute(shell) ? shell : undefined;
+}
+var LOGIN_PATH_MARKERS = ["__KUVO_PATH__", "__KUVO_END__"];
+function joinPath(...folders) {
+  return [...new Set(folders.flatMap((list) => (list ?? "").split(":")).filter(Boolean))].join(":");
+}
+async function loginPath(env = process.env, wait = { interactive: 6000, login: 2000 }) {
+  const shell = loginShell(env);
+  if (/\/(nu|csh|tcsh)$/.test(shell))
+    return;
+  const kept = Object.entries(env).filter(([name, value]) => value !== undefined && /^(HOME|USER|LOGNAME|LANG|LC_[A-Z_]+|TERM|TMPDIR|PATH|SSH_AUTH_SOCK)$/.test(name));
+  const login = { ...Object.fromEntries(kept), SHELL: shell, DISABLE_AUTO_UPDATE: "true" };
+  for (const [flags, timeout] of [["-ilc", wait.interactive], ["-lc", wait.login]]) {
+    const found = await new Promise((resolve) => {
+      let output = "";
+      let child;
+      try {
+        child = spawn(shell, [flags, `printf '%s%s%s' ${LOGIN_PATH_MARKERS[0]} "$PATH" ${LOGIN_PATH_MARKERS[1]}`], { cwd: login.HOME, env: login, detached: true, stdio: ["ignore", "pipe", "ignore"] });
+      } catch {
+        return resolve(undefined);
+      }
+      let settled = false;
+      let gone;
+      const done = (value) => {
+        if (settled)
+          return;
+        settled = true;
+        clearTimeout(timer);
+        clearTimeout(gone);
+        try {
+          if (child.pid)
+            process.kill(-child.pid, "SIGKILL");
+        } catch {}
+        child.stdout?.destroy();
+        child.unref();
+        resolve(value);
+      };
+      const timer = setTimeout(() => done(undefined), timeout);
+      child.stdout?.on("data", (chunk) => {
+        output += chunk;
+        const at = output.indexOf(LOGIN_PATH_MARKERS[0]);
+        const end = at < 0 ? -1 : output.indexOf(LOGIN_PATH_MARKERS[1], at);
+        if (end >= 0)
+          done(joinPath(output.slice(at + LOGIN_PATH_MARKERS[0].length, end).trim()) || undefined);
+      });
+      child.on("error", () => done(undefined));
+      child.on("close", () => done(undefined));
+      child.on("exit", () => {
+        if (!settled)
+          gone = setTimeout(() => done(undefined), 300);
+      });
+    });
+    if (found)
+      return joinPath(found, env.PATH);
+  }
+  return;
+}
+var savedPathFile = (home) => path.join(home, "run", "login-path");
+function savedLoginPath(home) {
+  try {
+    const saved = fs.readFileSync(savedPathFile(home), "utf8").trim();
+    return saved.startsWith("/") ? saved : undefined;
+  } catch {
+    return;
+  }
+}
+function saveLoginPath(home, value) {
+  try {
+    fs.mkdirSync(path.dirname(savedPathFile(home)), { recursive: true, mode: 448 });
+    fs.writeFileSync(savedPathFile(home) + ".new", value + `
+`, { mode: 384 });
+    fs.renameSync(savedPathFile(home) + ".new", savedPathFile(home));
+  } catch {}
+}
+
+// Packages/Box/src/agents/proc.ts
 function which(name, extra = []) {
   const folders = [...(process.env.PATH ?? "").split(delimiter), ...extra].filter(Boolean);
   for (const folder of folders) {
@@ -507,7 +610,7 @@ function runGroup(command, args, options = {}) {
     if (env[name] === undefined)
       delete env[name];
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd: options.cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn2(command, args, { cwd: options.cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout?.on("data", (chunk) => stdout += chunk);
@@ -537,32 +640,38 @@ function runGroup(command, args, options = {}) {
 var startPath = process.env.PATH ?? "";
 var pathRead = 0;
 var reading;
+function useSavedLoginPath() {
+  const saved = machineHome ? savedLoginPath(machineHome) : undefined;
+  if (saved)
+    process.env.PATH = joinPath(process.env.KUVO_BIN, join3(machineHome, "bin"), saved);
+}
 async function refreshLoginPath(now = false) {
-  if (reading) {
-    await reading;
-    if (!now)
-      return;
-  }
-  if (!now && Date.now() - pathRead < 5000)
+  if (onMachine && !now)
     return;
-  reading = readLoginPath().finally(() => {
+  if (reading) {
+    if (!now)
+      return answerSoon(reading);
+    await reading;
+  } else if (!now && Date.now() - pathRead < 5000)
+    return;
+  const read = reading = readLoginPath().finally(() => {
     pathRead = Date.now();
     reading = undefined;
   });
-  await reading;
+  await (now ? read : answerSoon(read));
+}
+async function answerSoon(read) {
+  let timer;
+  await Promise.race([read, new Promise((resolve) => timer = setTimeout(resolve, 1000))]);
+  clearTimeout(timer);
 }
 async function readLoginPath() {
-  const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
-  for (const flags of onMachine ? ["-lc"] : ["-ilc", "-lc"]) {
-    try {
-      const ran = await run(shell, [flags, 'printf "__KUVO_PATH__%s__KUVO_END__" "$PATH"'], { timeout: 8000, env: { ...ownEnvironment(), PATH: startPath, DISABLE_AUTO_UPDATE: "true" } });
-      const found = ran.stdout.match(/__KUVO_PATH__([\s\S]*?)__KUVO_END__/)?.[1];
-      if (found?.trim()) {
-        process.env.PATH = [...new Set([process.env.KUVO_BIN, ...found.trim().split(":")].filter(Boolean))].join(":");
-        return;
-      }
-    } catch {}
-  }
+  const found = await loginPath({ ...process.env, PATH: startPath });
+  if (!found)
+    return;
+  process.env.PATH = joinPath(process.env.KUVO_BIN, found);
+  if (onMachine && machineHome)
+    saveLoginPath(machineHome, found);
 }
 function firstURL(text) {
   return text.match(/https?:\/\/[^\s"'<>]+/)?.[0];
@@ -5544,7 +5653,7 @@ async function voiceRoutes(voice, method, parts) {
 }
 
 // Packages/Box/src/agents/kuvotools.ts
-import { spawn as spawn2 } from "child_process";
+import { spawn as spawn3 } from "child_process";
 var server;
 var program;
 function setToolServer(value) {
@@ -5603,7 +5712,7 @@ async function listOverHTTP(tools) {
 }
 function listFromProgram(tools) {
   return new Promise((resolve, reject) => {
-    const child = spawn2(tools.command, tools.args, { env: { ...process.env, ...tools.env }, stdio: ["pipe", "pipe", "ignore"] });
+    const child = spawn3(tools.command, tools.args, { env: { ...process.env, ...tools.env }, stdio: ["pipe", "pipe", "ignore"] });
     const timer = setTimeout(() => finish(new Error("Kuvo Code's tools didn't answer.")), 15000);
     let buffered = "";
     let done = false;
@@ -20418,7 +20527,7 @@ process.on("uncaughtException", (error) => {
 var deps = new Deps(join25(home2, "runtime"), join25(home2, "cache"));
 if (onMachine) {
   dropOwnPrograms(join25(home2, "runtime"));
-  refreshLoginPath();
+  useSavedLoginPath();
 }
 rmSync13(join25(home2, "cache", "install"), { recursive: true, force: true });
 var context = { home: home2, temporary, deps };
@@ -20609,4 +20718,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents b20517f47541ebe2b054df5956097219780434ef3200ae5e51fa37b2843c0ffd
+// Built from Packages/Box/src/agents 589829a2bde457651aa0edbdd0b479da2d55e086348f8e6e28819d5e721dc48b
