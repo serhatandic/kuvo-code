@@ -11707,7 +11707,6 @@ function noteSeen(id, now = Date.now()) {
   });
 }
 var delivering = new Set;
-var tooMany = (key, now = Date.now()) => allowed2("messages", `peer:${key}`, now) === null;
 async function answerTo(target, session, id, { wait = 2000, signal } = {}) {
   const began = Date.now();
   let started = false;
@@ -11752,20 +11751,25 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
   }
   if (isObject(letter.read))
     return readFor(sender, letter, { send, targets, answer, now, moved, moving });
-  if (tooMany(sender.key, now))
+  const counted = allowed2("messages", `peer:${sender.key}`, now);
+  if (counted === null)
     return no("It's sent a lot of messages in the last few minutes.", true);
+  const notDelivered = (why, again = false) => {
+    takeBack2("messages", `peer:${sender.key}`, counted);
+    return no(why, again);
+  };
   delivering.add(id);
   let place, prompt, fromAgent = null;
   try {
     const lives = moved.get(letter.to);
     if (lives && lives !== ownKey(readLink() ?? {}) || await moving(letter.to))
-      return no("It's moving to another computer: it comes again once it's there.", true);
+      return notDelivered("It's moving to another computer: it comes again once it's there.", true);
     place = await placeOfSession(letter.to, targets);
     if (!place)
-      return no("There's no such conversation here.");
+      return notDelivered("There's no such conversation here.");
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
-      return no("That conversation doesn't take messages.");
+      return notDelivered("That conversation doesn't take messages.");
     const listed = peerOf(letter.from, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find((agent) => agent.session === letter.from) : null;
     if (listed && !await placeOfSession(letter.from, targets).catch(() => ({})))
       fromAgent = listed;
@@ -11774,7 +11778,7 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
     const waits = letter.wait === true && Boolean(fromAgent);
     await asked(place.target, "POST", `api/session/${encodeURIComponent(letter.to)}/prompt`, { id: prompt, text: composeLetter(name, fromAgent ? letter.from : "unknown", cutText(letter.text), waits), delivery: "steer" });
   } catch (error) {
-    return no(`It didn't reach it: ${String(error?.message ?? error)}`, true);
+    return notDelivered(`It didn't reach it: ${String(error?.message ?? error)}`, true);
   } finally {
     delivering.delete(id);
   }

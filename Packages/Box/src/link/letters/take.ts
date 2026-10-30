@@ -13,7 +13,7 @@ import { movedOf, ownKey, peersOf } from "../peers/known";
 import { readLink } from "../state";
 import { LETTERS_SEEN, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, composeLetter, cutText, placeOfSession } from "./letter";
 import { READ_BY_MAIL, excerpt, readConversation } from "./conversation";
-import { allowed } from "./limits";
+import { allowed, takeBack } from "./limits";
 import { ANSWER_TEXT, answered } from "./outbox";
 import type { ListedAgent, Target, ToldAgents } from "../../shared/records";
 import type { EngineAnswer } from "../engine/client";
@@ -85,8 +85,6 @@ function noteSeen(id: string, now = Date.now()) {
 // Letters being delivered now: one that comes again meanwhile waits for that one's answer.
 const delivering = new Set<string>();
 
-// Letters from each peer lately, a few at a time, as a conversation's messages are counted.
-const tooMany = (key: string, now = Date.now()) => allowed("messages", `peer:${key}`, now) === null;
 
 /** How `answerTo` waits: between looks (ms), and until its asker goes (`signal`). */
 export interface AnswerWait {
@@ -142,16 +140,23 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     return send(sender, { delivered: { id, ok: true } });
   }
   if (isObject(letter.read)) return readFor(sender, letter as ReadLetter, { send, targets, answer, now, moved, moving });
-  if (tooMany(sender.key, now)) return no("It's sent a lot of messages in the last few minutes.", true);
+  // Letters from each peer lately, a few at a time, as a conversation's messages are counted: only
+  // those delivered, so one that can't be yet, tried again and again, leaves room for the rest.
+  const counted = allowed("messages", `peer:${sender.key}`, now);
+  if (counted === null) return no("It's sent a lot of messages in the last few minutes.", true);
+  const notDelivered = (why: string, again = false) => {
+    takeBack("messages", `peer:${sender.key}`, counted);
+    return no(why, again);
+  };
   delivering.add(id);
   let place: SessionPlace | null, prompt: string, fromAgent: ListedAgent | null = null;
   try {
     const lives = moved.get(letter.to);
-    if ((lives && lives !== ownKey(readLink() ?? {})) || (await moving(letter.to))) return no("It's moving to another computer: it comes again once it's there.", true);
+    if ((lives && lives !== ownKey(readLink() ?? {})) || (await moving(letter.to))) return notDelivered("It's moving to another computer: it comes again once it's there.", true);
     place = await placeOfSession(letter.to, targets);
-    if (!place) return no("There's no such conversation here.");
+    if (!place) return notDelivered("There's no such conversation here.");
     const kuvo = place.data?.metadata?.kuvo ?? {};
-    if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return no("That conversation doesn't take messages.");
+    if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return notDelivered("That conversation doesn't take messages.");
     // Its sender: that box's own agent, as it named it; one of this box's own claimed from there isn't.
     // (`from` isn't checked: one that's no session finds no agent.)
     const listed = peerOf(letter.from as string, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find(agent => agent.session === letter.from) : null;
@@ -161,7 +166,7 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     const waits = letter.wait === true && Boolean(fromAgent);
     await asked(place.target, "POST", `api/session/${encodeURIComponent(letter.to)}/prompt`, { id: prompt, text: composeLetter(name, fromAgent ? letter.from as string : "unknown", cutText(letter.text), waits), delivery: "steer" });
   } catch (error) {
-    return no(`It didn't reach it: ${String((error as Error | null)?.message ?? error)}`, true);
+    return notDelivered(`It didn't reach it: ${String((error as Error | null)?.message ?? error)}`, true);
   } finally {
     delivering.delete(id);
   }
