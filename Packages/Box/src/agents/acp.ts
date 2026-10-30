@@ -39,7 +39,11 @@ export interface AcpFlavor {
    * them (see skills.ts), or what stands for them (a different one starts it again).
    */
   skills?(directory: string, hooks: TurnHooks): Promise<string | undefined>
-  /** Whether the agent may read and write files through the bridge (it asks first itself). */
+  /**
+   * Whether the agent may read and write files through the bridge (it asks first itself). Never
+   * while it runs whole in the box's sandbox (`whole`): the bridge reads and writes outside it, so
+   * the agent does it itself then, in the sandbox.
+   */
   fileSystem: boolean
   /** `_meta` sent with `initialize`. */
   initializeMeta?: Record<string, unknown>
@@ -97,10 +101,10 @@ export interface AcpFlavor {
    * environment it starts with (its sign-in and state); in them, the folders of its state and what
    * it never writes (on a Mac: what runs outside the sandbox when you use it yourself, its settings,
    * plugins and the like); and what it's told to start with (its own sandbox off: one can't run
-   * inside another on a Mac). Kuvo Code's tools reach it through the agents bridge's relay. Never
-   * with `fileSystem`: the bridge reads and writes outside the sandbox.
+   * inside another on a Mac). Kuvo Code's tools reach it through the agents bridge's relay. `read`:
+   * folders it only reads, by the environment it starts with (its program, where Kuvo Code keeps it).
    */
-  whole?: { homes(env: Record<string, string | undefined>): string[]; state: string[]; kept: string[]; env?: Record<string, string> }
+  whole?: { homes(env: Record<string, string | undefined>): string[]; state: string[]; kept: string[]; read?(env: Record<string, string | undefined>): string[]; env?: Record<string, string> }
 }
 
 export interface AcpContext {
@@ -180,6 +184,13 @@ export class AcpThread implements Thread {
   private stale?: RPC
   /** Whether the process runs whole in the box's sandbox (`whole`). */
   private fenced = false
+  /** Whether it reads and writes files through the bridge: as its flavor says, but never run whole. */
+  private get files() {
+    return this.flavor.fileSystem && !this.fenced
+  }
+  get sandboxed() {
+    return this.fenced
+  }
   /** The conversation it had couldn't be picked up again: a new one took its place. */
   private startedOver = false
   onOwnTurn?: (note: OwnTurn) => boolean
@@ -279,7 +290,7 @@ export class AcpThread implements Thread {
         "initialize",
         {
           protocolVersion: 1,
-          clientCapabilities: { fs: { readTextFile: this.flavor.fileSystem, writeTextFile: this.flavor.fileSystem }, terminal: false },
+          clientCapabilities: { fs: { readTextFile: this.files, writeTextFile: this.files }, terminal: false },
           clientInfo: { name: "kuvo-code", title: "Kuvo Code", version: "1" },
           ...(this.flavor.initializeMeta ? { _meta: this.flavor.initializeMeta } : {}),
         },
@@ -350,7 +361,6 @@ export class AcpThread implements Thread {
   private wholeLaunch(argv: string[], env: Record<string, string | undefined> | undefined, cleanEnv: boolean | undefined, skills?: string) {
     const whole = this.flavor.whole
     if (!whole || !fenceRules()) return undefined
-    if (this.flavor.fileSystem) throw new Error(`${this.name} can't run in the sandbox here: it reads and writes files through Kuvo Code.`)
     const directory = this.session.location.directory
     const attached = fenceAttachments(directory)
     const relayed = relayedTools(this.session.id)
@@ -359,7 +369,7 @@ export class AcpThread implements Thread {
       homes: whole.homes(started),
       state: whole.state,
       kept: whole.kept,
-      read: [...(skills?.startsWith("/") ? [skills] : []), ...(attached ? [attached] : [])],
+      read: [...(skills?.startsWith("/") ? [skills] : []), ...(attached ? [attached] : []), ...(whole.read?.(started) ?? [])],
       port: relayed ? relayPort() : undefined,
     })
     if (!fence) throw new Error(`${this.name} runs in the sandbox here, and it isn't ready: restart Kuvo Code.`)
@@ -759,7 +769,7 @@ export class AcpThread implements Thread {
    * hasn't said the file of yet waits for it (`all`: not as the turn ends).
    */
   private settleReads(active: Active, all: boolean) {
-    if (!this.flavor.fileSystem) return
+    if (!this.files) return
     for (const [id, call] of active.tools) {
       if (!this.openRead(call) || call.settled) continue
       const path = this.readPath(call)
@@ -911,7 +921,7 @@ export class AcpThread implements Thread {
         return option ? { outcome: { outcome: "selected", optionId: option.optionId } } : { outcome: { outcome: "cancelled" } }
       }
       case "fs/read_text_file": {
-        if (!this.flavor.fileSystem) break
+        if (!this.files) break
         // It doesn't ask before reading: your rules for reading (and working outside the project) do.
         await this.allowFile(active, "read", resolve(this.session.location.directory, params.path))
         let content: string
@@ -930,7 +940,7 @@ export class AcpThread implements Thread {
         return { content }
       }
       case "fs/write_text_file": {
-        if (!this.flavor.fileSystem) break
+        if (!this.files) break
         const file = resolve(this.session.location.directory, params.path)
         // It asked before writing (as an edit): what your rules refuse still doesn't happen.
         if (active?.hooks.check({ action: "edit", resources: [file] }) === "deny") throw new RPCError(-32000, "Kuvo Code's settings don't allow this (Settings › Permissions, or this session's rules).")

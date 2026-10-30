@@ -757,3 +757,51 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
     expect(words(id)).toBe("sandbox=none leader=no elsewhere=yes")
   })
 })
+
+describe.skipIf(!canFence)("Antigravity in the box's sandbox", () => {
+  /** Kuvo Code's folder, the bridge's (where Antigravity's agent and home are), and a folder elsewhere. */
+  let kuvo: string, home: string, elsewhere: string
+  beforeEach(() => {
+    kuvo = realpathSync(mkdtempSync(join(base, "kuvo-")))
+    home = realpathSync(mkdtempSync(join(base, "agy-home-")))
+    elsewhere = realpathSync(mkdtempSync(join(base, "elsewhere-")))
+    writeFileSync(join(kuvo, "secret"), "s")
+    process.env.KUVO_FENCE = realFence(kuvo)
+  })
+  afterEach(() => {
+    delete process.env.KUVO_FENCE
+  })
+
+  /** Antigravity whose prompts try `tries` where it runs (`places`: its home and program, once made). */
+  const trying = (tries: (places: { profile: string; program: string }) => Record<string, [string, string]>) => {
+    const agent = new TestAntigravity(fakeAcp([], [], undefined, { tries: {} }), home)
+    const places = { profile: agent.profile, program: (agent as any).folder as string }
+    mkdirSync(join(places.profile, "conversations"), { recursive: true })
+    // (Made again, now with what it tries, in the same place.)
+    program(fakeAcp([], [], undefined, { tries: tries(places) }), join(places.program, "agy_acp_server.par"))
+    return agent
+  }
+
+  test("it runs whole in it: it writes the session's folder and its own home, never its program nor elsewhere, can't read Kuvo Code's folder, and writes files itself rather than through Kuvo Code", async () => {
+    const id = await run(trying(({ profile, program }) => ({
+      project: ["write", join(root, "made.txt")],
+      conversation: ["write", join(profile, "conversations", "c.json")],
+      signin: ["write", join(profile, "antigravity-acp", "acp_token.json")],
+      program: ["write", join(program, "agy_acp_server.par")],
+      elsewhere: ["write", join(elsewhere, "e.txt")],
+      kuvo: ["read", join(kuvo, "secret")],
+    })))
+    expect(words(id)).toBe("project=yes conversation=yes signin=yes program=no elsewhere=no kuvo=no")
+    // Kuvo Code would read and write outside the sandbox for it: it isn't offered to.
+    const initialize = received().find((message) => message.method === "initialize")
+    expect(initialize.params.clientCapabilities.fs).toEqual({ readTextFile: false, writeTextFile: false })
+  })
+
+  test("with the sandbox off, it runs as before, reading and writing files through Kuvo Code", async () => {
+    delete process.env.KUVO_FENCE
+    const id = await run(trying(() => ({ elsewhere: ["write", join(elsewhere, "e.txt")] })))
+    expect(words(id)).toBe("elsewhere=yes")
+    const initialize = received().find((message) => message.method === "initialize")
+    expect(initialize.params.clientCapabilities.fs).toEqual({ readTextFile: true, writeTextFile: true })
+  })
+})

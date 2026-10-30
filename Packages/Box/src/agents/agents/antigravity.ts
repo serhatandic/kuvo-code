@@ -1,15 +1,21 @@
 // Antigravity, as T3 Code runs it: Google's own Antigravity agent (`agy_acp_server`), downloaded
 // from Google the first time you sign in, signed in with your Google account, speaking ACP. All of
 // it (the agent, your sign-in, its conversations) stays in the bridge's `antigravity` folder.
+//
+// While the box's sandbox is on, it runs whole in it (acp.ts `whole`), for its sessions and its
+// sign-in alike, so nothing it does runs outside: its home (Kuvo Code's own, never one of yours)
+// and its temporary folder written whole, its program and the bridge's browser catcher only read.
+// It writes files itself then, with its own tools (the bridge's would write outside).
 
 import { createHash } from "node:crypto"
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { providerID, type AgentAccount } from "../accounts"
 import type { Agent, AgentContext, Account, SignInAttempt, SubagentRun, Thread, SubagentTask, TurnHooks } from "../agent"
 import { accountName, ContextWindows, failure, model } from "../agent"
 import { AcpThread } from "../acp"
+import { fenceAgent, fenceRules } from "../fence"
 import { emit } from "../events"
 import { withOwnFolders } from "../machine"
 import { newID } from "../ids"
@@ -471,6 +477,20 @@ export class AntigravityAgent implements Agent {
     return [join(this.profile, "antigravity-cli", "skills"), join(directory, ".agents", "skills"), join(directory, ".gemini", "skills")]
   }
 
+  /**
+   * Its places, run whole in the box's sandbox (by the environment it starts with): its home
+   * (GEMINI_HOME: your sign-in, its settings, conversations and skills, Kuvo Code's own) and its
+   * temporary folder (it unpacks itself there) written whole.
+   */
+  places(env: Record<string, string | undefined>) {
+    return { homes: [env.GEMINI_HOME, env.TMPDIR].filter((place): place is string => Boolean(place)), state: ["*"], kept: [] }
+  }
+
+  /** What it only reads there: its program, and what hands the bridge the pages it opens (`BROWSER`). */
+  reads(env: Record<string, string | undefined>): string[] {
+    return [env.ANTIGRAVITY_HARNESS_PATH, env.BROWSER].filter((place): place is string => Boolean(place)).map((place) => dirname(place))
+  }
+
   /** How it's started: its own home, its own temporary folder (it unpacks itself there, about 1 GB), and nothing of your other Google keys. */
   private launch(): { argv: string[]; env: Record<string, string | undefined>; cleanEnv: boolean; onExit: () => void; signInFile: string } {
     mkdirSync(join(this.profile, "antigravity-acp", "tmp"), { recursive: true, mode: 0o700 })
@@ -519,9 +539,13 @@ export class AntigravityAgent implements Agent {
       const launch = this.launch()
       const cwd = join(this.context.temporary, "antigravity", newID("att"))
       mkdirSync(cwd, { recursive: true })
-      rpc = new RPC(launch.argv, {
+      // In the box's sandbox while it's on, as its sessions run: what it reads as it starts
+      // (settings, skills, servers) runs there too, never outside.
+      const whole = fenceRules() ? fenceAgent(launch.argv[0], cwd, { ...this.places(launch.env), read: this.reads(launch.env) }) : undefined
+      if (fenceRules() && !whole) throw new Error("Antigravity runs in the sandbox here, and it isn't ready: restart Kuvo Code.")
+      rpc = new RPC(whole ? [whole.command, ...launch.argv.slice(1)] : launch.argv, {
         cwd,
-        env: launch.env,
+        env: { ...launch.env, ...whole?.env },
         cleanEnv: true,
         jsonrpc: true,
         firstID: 2 ** 30,
@@ -535,6 +559,7 @@ export class AntigravityAgent implements Agent {
         },
       })
       rpc.onExit = () => {
+        whole?.ended()
         launch.onExit()
         rmSync(cwd, { recursive: true, force: true })
       }
@@ -639,6 +664,7 @@ export class AntigravityAgent implements Agent {
           if (agent.windows.note(model, size)) emit("model.updated", {})
         },
         fileSystem: true,
+        whole: { homes: (env) => agent.places(env).homes, state: ["*"], kept: [], read: (env) => agent.reads(env) },
         authenticatesFirst: true,
         resumes: true,
         // Google's quotas are each model's own.
