@@ -320,6 +320,25 @@ import Testing
         #expect(trash.count == 1 && trash[0].hasPrefix("wakes-ses_gone-"), "kept, not lost")
     }
 
+    /// Held (archived, or paused by you) and then deleted, from a phone say: it goes to the trash
+    /// too, rather than waiting for ever. One on its way to another computer stays.
+    @Test func aHeldSessionTheEngineNoLongerHasGoesToTheTrash() throws {
+        defer { cleanUp() }
+        let archived = try folder("ses_gone", in: sessions, session: "ses_gone", wake: "Follow up")
+        try write(archived.appending(path: "paused"), "archived")
+        let paused = try folder("ses_left", in: sessions, session: "ses_left", wake: "Later")
+        try write(paused.appending(path: "paused"), "paused")
+        let moving = try folder("ses_away", in: sessions, session: "ses_away", wake: "Carry on")
+        try write(moving.appending(path: "paused"), "moving")
+        try fire()
+        #expect(prompts().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: archived.path))
+        #expect(!FileManager.default.fileExists(atPath: paused.path))
+        #expect(wakes(of: moving).count == 1, "kept for its move")
+        let trash = try FileManager.default.contentsOfDirectory(atPath: k.appending(path: "trash").path).map { String($0.prefix(16)) }.sorted()
+        #expect(trash == ["wakes-ses_gone-1", "wakes-ses_left-1"], "kept, not lost")
+    }
+
     @Test func aSessionTheBridgeHasIsWokenThereFromNowOn() throws {
         defer { cleanUp() }
         try write(k.appending(path: "run/bridge.json"), #"{"pid":2,"port":\#(Self.bridgePort),"password":"bridge-pass"}"#)

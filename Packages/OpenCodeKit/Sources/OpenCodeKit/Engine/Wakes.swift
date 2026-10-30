@@ -680,6 +680,8 @@ public enum Wakes {
           200) ;;
           *) return 0 ;;
         esac
+        # One held (`held`) is only let go once it's gone.
+        [ -z "$held" ] || return 1
         s_body=$(printf '%s' "$s_out" | sed '$d')
         # Archived, from any app (a Mac's, a phone's: they mark the session itself), wherever it
         # was done: its wake-ups wait, as when paused, until it's brought back.
@@ -758,9 +760,17 @@ public enum Wakes {
       mkdir "$lock" 2>/dev/null || continue
       trap 'rmdir "$lock" 2>/dev/null' EXIT
       trap 'rmdir "$lock" 2>/dev/null; exit 143' INT TERM HUP
+      held=
       for bot in "$bots"/*/; do
         # Paused by you (a session's, while it's archived: see `settle` too): its wake-ups wait.
-        [ -e "${bot}paused" ] && continue
+        # Though one whose session is gone (deleted while it was held) goes to the trash, as
+        # `settle` has one go; not one on its way to another computer.
+        if [ -e "${bot}paused" ]; then
+          if [ "$(cat "${bot}paused" 2>/dev/null)" != moving ] && session=$(cat "$bot/session" 2>/dev/null) && [ -n "$session" ] && reach; then
+            held=1; settle; held=
+          fi
+          continue
+        fi
         # One whose last wake-up couldn't go waits before it's tried again (`.retry`: when, and how
         # long it waited): a minute, then twice as long each time, up to half an hour.
         r_at=; r_wait=
