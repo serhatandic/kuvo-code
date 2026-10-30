@@ -363,6 +363,15 @@ test("a computer that can't take it now: it stays where it was, as it was", { ti
 
 test("a group chat goes to the machine its bots live on, held there until the switch; one whose bots don't all live there stays", { timeout: 60_000 }, async t => {
   signal = t.signal;
+  // Once the machine has said which bots live there, its place says so for each chat.
+  await eventually(() => {
+    try { return JSON.parse(fs.readFileSync(path.join(macHome, "run", "peer-agents.json"), "utf8"))[lab.key]?.list.some(agent => agent.kind === "bot" && agent.id === "bot_lin"); } catch { return false; }
+  });
+  assert.deepEqual((await ask("GET", "kuvo/moves/places?kind=group&id=grp_lab")).json.places, [{ key: lab.key, name: "lab", kind: "machine", ok: true }]);
+  assert.deepEqual((await ask("GET", "kuvo/moves/places?kind=group&id=grp_mix")).json.places, [{
+    key: lab.key, name: "lab", kind: "machine", ok: false,
+    why: "“Mixed”’s bots don’t all live on lab. Move them there first, then the chat can follow.", note: "Its bots don’t all live there",
+  }]);
   const moved = await ask("POST", "kuvo/moves", { kind: "group", id: "grp_lab", to: lab.key });
   assert.equal(moved.status, 200, JSON.stringify(moved.json));
   assert.equal(labBridge.groups.get("grp_lab")?.status, "active");

@@ -8842,7 +8842,7 @@ import { spawn as spawn3 } from "node:child_process";
 import crypto17 from "node:crypto";
 import fs45 from "node:fs";
 import path46 from "node:path";
-var MOST_BUNDLE = 1024 ** 3;
+var MOST_BUNDLE = 1e9;
 var CHATS2 = IS_MAC ? path46.join(path46.dirname(K), "Chats") : path46.join(K, "chats");
 var folderOf = (kind, thing) => kind === "bot" ? path46.join(BOTS, thing) : kind === "chat" ? path46.join(SESSION_WAKES, thing) : null;
 var directoryOf = (kind, thing) => kind === "bot" ? path46.join(BOTS, thing, "workspace") : CHATS2;
@@ -9053,11 +9053,20 @@ var say = {
   busy: (name) => `${name} kept getting messages while it moved, so it stayed where it is. Try again in a moment.`,
   botsElsewhere: (chat) => `${chat}’s bots live on different computers, so it can’t go there.`,
   inBoxGroup: (name, chat) => `${name} is in “${chat}”, which lives on ${HERE} with its bots. Move the chat to a Mac first, or take ${name} out of it.`,
-  tooBig: (name) => `${name} is too big to move over the internet (more than 1 GB).`,
+  tooBig: (name) => `${name} is more than 1 GB, too big to move to another computer, so it stays where it is.`,
   noGroups: (place) => `Group chats on ${place} aren’t running right now. Try again once they are.`,
   noEngine: (place) => `The engine on ${place} isn’t running. Try again once it is.`,
   needsUpdate: (place) => `${place} needs a newer Kuvo Code before things can move to or from it.`,
+  botsNotThere: (chat, place) => `${chat}’s bots don’t all live on ${place}. Move them there first, then the chat can follow.`,
   moving: MOVING
+};
+var note = {
+  inProject: "Works in a project",
+  withAgents: "Talks with a coding agent",
+  inBoxGroup: "In a group chat that lives here",
+  needsUpdate: "Needs a newer Kuvo Code",
+  botsNotThere: "Its bots don’t all live there",
+  moving: "Moving already"
 };
 var waiting = new Map;
 var outcomeFile = (id) => path47.join(MOVES, `${id}.outcome.json`);
@@ -9137,9 +9146,9 @@ async function movable(kind, thing, signal) {
       return null;
     const name = here.described.name;
     if (here.described.project)
-      return { name, why: say.inProject(name) };
+      return { name, why: say.inProject(name), note: note.inProject };
     if (here.agents)
-      return { name, why: say.withAgents(name) };
+      return { name, why: say.withAgents(name), note: note.withAgents };
     if (!IS_MAC) {
       let bridge = null;
       try {
@@ -9148,7 +9157,7 @@ async function movable(kind, thing, signal) {
       const listed = bridge ? await askGroups(bridge, "GET", "", undefined, signal).catch(() => null) : null;
       const chat = (listed?.status === 200 && Array.isArray(listed.value?.data) ? listed.value.data : []).find((each) => Array.isArray(each?.group?.members) && each.group.members.includes(thing));
       if (chat)
-        return { name, root: here.session, why: say.inBoxGroup(name, plainName(chat.group?.name ?? "") || "a group chat") };
+        return { name, root: here.session, why: say.inBoxGroup(name, plainName(chat.group?.name ?? "") || "a group chat"), note: note.inBoxGroup };
     }
     return { name, root: here.session };
   }
@@ -9167,7 +9176,7 @@ async function movable(kind, thing, signal) {
       return null;
     const kuvo = isObject(session.metadata) && isObject(session.metadata.kuvo) ? session.metadata.kuvo : {};
     if (kuvo.agents || kuvo.agent)
-      return { name: title, why: say.withAgents(title) };
+      return { name: title, why: say.withAgents(title), note: note.withAgents };
     return { name: title, root: thing };
   }
   let bridge;
@@ -9179,18 +9188,30 @@ async function movable(kind, thing, signal) {
   const listed = await askGroups(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, signal).catch(() => null);
   if (listed?.status !== 200)
     return null;
-  return { name: `“${plainName(listed.value?.data?.group?.name ?? "") || "Group chat"}”` };
+  const members = listed.value?.data?.group?.members;
+  return {
+    name: `“${plainName(listed.value?.data?.group?.name ?? "") || "Group chat"}”`,
+    members: Array.isArray(members) ? members.filter((member) => typeof member === "string") : []
+  };
+}
+function botsLiveOn(members, peer) {
+  if (members.some((member) => botHere(member)))
+    return false;
+  const list = readPeerAgents()[peer.key]?.list;
+  if (!Array.isArray(list))
+    return true;
+  return members.every((member) => list.some((agent) => agent.kind === "bot" && agent.id === member));
 }
 async function placesFor(kind, thing, signal) {
   const what = await movable(kind, thing, signal);
   if (!what)
     return null;
-  const why = moveOf(thing) ? say.moving : what.why;
+  const moving = moveOf(thing) !== null;
   const own = ownKey(readLink() ?? {});
   return peersOf(readLink()).filter((peer) => peer.key !== own).map((peer) => {
     const name = plainName(peer.name) || (peer.kind === "mac" ? "Mac" : "Machine");
-    const not = why ?? (olderThanMoves(peer.key) ? say.needsUpdate(name) : undefined);
-    return { key: peer.key, name, kind: peer.kind, ok: !not, ...not ? { why: not } : {} };
+    const not = moving ? [say.moving, note.moving] : what.why ? [what.why, what.note ?? what.why] : olderThanMoves(peer.key) ? [say.needsUpdate(name), note.needsUpdate] : kind === "group" && peer.kind === "machine" && !botsLiveOn(what.members ?? [], peer) ? [say.botsNotThere(what.name, name), note.botsNotThere] : null;
+    return { key: peer.key, name, kind: peer.kind, ok: !not, ...not ? { why: not[0], note: not[1] } : {} };
   });
 }
 function olderThanMoves(key) {
@@ -14498,7 +14519,7 @@ import fs62 from "node:fs";
 import path64 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.113";
+var BRIDGE_VERSION = "0.9.114";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -15031,7 +15052,16 @@ async function* settingsRoute(context) {
 
 // Packages/Box/src/link/areas/moves.ts
 var KINDS = ["bot", "chat", "group"];
-var movesNow = () => ({ moves: liveMoves().map(shownMove), away: awaySessions() });
+var movesNow = () => {
+  const peers = peersOf(readLink());
+  return {
+    moves: liveMoves().map((record) => {
+      const place = plainName(peers.find((peer) => peer.key === record.peer)?.name ?? "");
+      return { ...shownMove(record), ...place ? { place } : {} };
+    }),
+    away: awaySessions()
+  };
+};
 async function* movesRoute(context) {
   const { request, signal, json } = context;
   const method = request.method.toUpperCase();
@@ -15427,7 +15457,7 @@ import path69 from "node:path";
 var ACTIVITY = path69.join(VAULT_FOLDER, "activity.jsonl");
 var DAY2 = 86400000;
 var prunedAt = 0;
-function note(what, now = Date.now()) {
+function note2(what, now = Date.now()) {
   const entry = { id: newID("a_"), at: now, ...what };
   if (entry.why)
     entry.why = oneLine(entry.why, 300);
@@ -15691,7 +15721,7 @@ async function mayUse(item, caller, use) {
   const where = { ...use.site ? { site: use.site } : {}, ...use.program ? { program: use.program } : {}, ...use.why ? { why: use.why } : {} };
   const paused = pausedFor(caller.bot, caller.root ?? caller.session);
   if (paused) {
-    note({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: "paused" });
+    note2({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: "paused" });
     return { ok: false, message: paused };
   }
   const how = grantFor(item, caller);
@@ -15700,22 +15730,22 @@ async function mayUse(item, caller, use) {
   if (hasOnce(caller, item.id, true))
     return { ok: true, how: "once" };
   if (how === null && !use.askWithout) {
-    note({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: "no grant" });
+    note2({ what: "refused", ...itemOf(item), ...whoOf(caller), ...where, how: "no grant" });
     return { ok: false, message: `You may not use “${item.name}”. Ask the user for it with vault_ask.` };
   }
-  note({ what: "asked", ...itemOf(item), ...whoOf(caller), ...where });
+  note2({ what: "asked", ...itemOf(item), ...whoOf(caller), ...where });
   const answered = await ask({ kind: "use", ...whoOf(caller), item: item.id, itemName: item.name, ...use.site ? { site: use.site } : {}, ...use.why ? { why: use.why } : {}, ...machineName() ? { machine: machineName() } : {} }, use.signal);
   if (answered.answer === "no") {
-    note({ what: "declined", ...itemOf(item), ...whoOf(caller), ...where, ...answered.client ? { client: answered.client } : {} });
+    note2({ what: "declined", ...itemOf(item), ...whoOf(caller), ...where, ...answered.client ? { client: answered.client } : {} });
     return { ok: false, message: `The user didn't let you use “${item.name}”.` };
   }
   const always = answered.answer === "always" ? alwaysFor(caller) : null;
   if (always) {
     setGrant(item.id, always, "own");
-    note({ what: "granted", ...itemOf(item), ...whoOf(caller), how: "own", ...answered.client ? { client: answered.client } : {} });
+    note2({ what: "granted", ...itemOf(item), ...whoOf(caller), how: "own", ...answered.client ? { client: answered.client } : {} });
   }
   const allowed = always ? "always" : "once";
-  note({ what: "allowed", ...itemOf(item), ...whoOf(caller), ...where, how: allowed, ...answered.client ? { client: answered.client } : {} });
+  note2({ what: "allowed", ...itemOf(item), ...whoOf(caller), ...where, how: allowed, ...answered.client ? { client: answered.client } : {} });
   return { ok: true, how: allowed };
 }
 function tripwire(item, caller, site) {
@@ -15723,13 +15753,13 @@ function tripwire(item, caller, site) {
   const who = caller.bot ?? caller.root ?? caller.session;
   if (who)
     setPaused(true, who, why);
-  note({ what: "refused", ...itemOf(item), ...whoOf(caller), site, how: "wrong site" });
+  note2({ what: "refused", ...itemOf(item), ...whoOf(caller), site, how: "wrong site" });
   try {
     tell2({ title: caller.botName ? `${caller.botName} paused` : "A fill was refused", subtitle: machineName(), body: why, category: "message", thread: caller.root ?? "vault", data: caller.root ? { session: caller.root } : {} });
   } catch {}
   return `${why} Kuvo Code only fills it on ${item.sites.join(", ")}.${who ? ` The user has been told, and this ${caller.bot ? "bot" : "conversation"}'s use of the vault is paused until they look.` : ""}`;
 }
-var noteUse = (item, caller, use, how) => note({ what: "used", ...itemOf(item), ...whoOf(caller), ...use.site ? { site: use.site } : {}, ...use.program ? { program: use.program } : {}, ...use.why ? { why: use.why } : {}, how });
+var noteUse = (item, caller, use, how) => note2({ what: "used", ...itemOf(item), ...whoOf(caller), ...use.site ? { site: use.site } : {}, ...use.program ? { program: use.program } : {}, ...use.why ? { why: use.why } : {}, how });
 
 // Packages/Box/src/link/vault/fill.ts
 var refused3 = (status, message) => ({ status, value: { message } });
@@ -16128,7 +16158,7 @@ async function askForItem(caller, args, signal) {
   if (!need || !why)
     return failed("Say what you need and why.");
   const site = siteOf(args.site) ?? undefined;
-  note({ what: "asked", ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {}, ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}, why: `${need}: ${why}`, ...site ? { site } : {} });
+  note2({ what: "asked", ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {}, ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}, why: `${need}: ${why}`, ...site ? { site } : {} });
   const answered = await ask({
     kind: "item",
     need,
@@ -16146,7 +16176,7 @@ async function askForItem(caller, args, signal) {
     setGrant(item.id, always, "own");
   else
     allowOnce(caller, item.id);
-  note({ what: always ? "granted" : "allowed", item: item.id, itemName: item.name, kind: item.kind, ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {}, ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}, how: always ? "own" : "once", ...answered.client ? { client: answered.client } : {} });
+  note2({ what: always ? "granted" : "allowed", item: item.id, itemName: item.name, kind: item.kind, ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {}, ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}, how: always ? "own" : "once", ...answered.client ? { client: answered.client } : {} });
   const once = !always;
   return { text: `The user gave you “${item.name}” (a ${KIND_WORDS[item.kind]}${item.sites.length ? ` for ${item.sites.join(", ")}` : ""})${once ? ", for this once" : ""}. Use it by that name${item.kind === "login" ? " with browser_sign_in" : " with vault_run or browser_fill"}.`, isError: false };
 }
@@ -16506,7 +16536,7 @@ async function* answerVault(context) {
     const bot = typeof given.bot === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(given.bot) ? given.bot : undefined;
     const paused = given.paused === true;
     setPaused(paused, bot);
-    note({ what: paused ? "paused" : "resumed", client, ...bot ? { bot } : {} });
+    note2({ what: paused ? "paused" : "resumed", client, ...bot ? { bot } : {} });
     return yield* json(200, vaultState());
   }
   if (route === "kuvo/vault/activity") {
@@ -16531,7 +16561,7 @@ async function* answerVault(context) {
       return yield* json(400, { message: 'Send {"item", "who": {"bot"} or {"project"} or {"everyone": true}, "how": "own" | "ask" | null}.' });
     const grants = setGrant(given.item, who, given.how ?? null);
     const item = itemByID(given.item);
-    note({ what: given.how ? "granted" : "ungranted", client, ...item ? { item: item.id, itemName: item.name, kind: item.kind } : {}, ...who.bot ? { bot: who.bot } : {}, ...typeof given.how === "string" ? { how: given.how } : {} });
+    note2({ what: given.how ? "granted" : "ungranted", client, ...item ? { item: item.id, itemName: item.name, kind: item.kind } : {}, ...who.bot ? { bot: who.bot } : {}, ...typeof given.how === "string" ? { how: given.how } : {} });
     return yield* json(200, { grants });
   }
   if (route === "kuvo/vault/asks" || route === "kuvo/vault/asks/events") {
@@ -16576,7 +16606,7 @@ async function* answerVault(context) {
     if (isLocked())
       return yield* json(423, { message: LOCKED });
     const item = await addItem(given);
-    note({ what: "added", client, item: item.id, itemName: item.name, kind: item.kind });
+    note2({ what: "added", client, item: item.id, itemName: item.name, kind: item.kind });
     return yield* json(200, { item, ...key ? { key } : {} });
   }
   if (parts[2] === "items" && parts.length >= 4) {
@@ -16590,19 +16620,19 @@ async function* answerVault(context) {
       if (!item)
         return yield* json(404, { message: "That item isn't in this vault." });
       const values = await valuesOf(id);
-      note({ what: "shown", client, item: item.id, itemName: item.name, kind: item.kind });
+      note2({ what: "shown", client, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, { values });
     }
     if (parts.length !== 4)
       return yield* json(404, {});
     if (method === "PATCH") {
       const item = await changeItem(id, given);
-      note({ what: "changed", client, item: item.id, itemName: item.name, kind: item.kind });
+      note2({ what: "changed", client, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, { item });
     }
     if (method === "DELETE") {
       const item = await removeItem(id);
-      note({ what: "removed", client, item: item.id, itemName: item.name, kind: item.kind });
+      note2({ what: "removed", client, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, {});
     }
     return yield* json(405, {});
