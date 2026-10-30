@@ -361,7 +361,8 @@ public enum Wakes {
       case "$1" in
         +*[mhd])
           n=${1#+}; unit=${n#"${n%?}"}; n=${n%?}
-          case "$n" in ''|*[!0-9]*|???????*) return 1;; esac
+          # No leading zero, which is octal here: 08 an error, 010 eight.
+          case "$n" in ''|0*|*[!0-9]*|???????*) return 1;; esac
           case "$unit" in m) echo $((now + n * 60));; h) echo $((now + n * 3600));; d) echo $((now + n * 86400));; esac ;;
         *[!0-9]*)
           t=$(echo "$1" | sed 's/T/ /')
@@ -489,7 +490,7 @@ public enum Wakes {
 
     # Seconds in a watch's interval: 5m or more, 2h, 1d.
     period() {
-      p_n=${1%?}; case "$p_n" in ''|*[!0-9]*) return 1;; esac
+      p_n=${1%?}; case "$p_n" in ''|0*|*[!0-9]*|???????*) return 1;; esac
       case "$1" in *m) [ "$p_n" -ge 5 ] && echo $((p_n * 60));; *h) [ "$p_n" -ge 1 ] && echo $((p_n * 3600));; *d) [ "$p_n" -ge 1 ] && echo $((p_n * 86400));; *) return 1;; esac
     }
 
