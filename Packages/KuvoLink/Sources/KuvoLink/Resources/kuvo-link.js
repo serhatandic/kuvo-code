@@ -11671,13 +11671,13 @@ function startsBefore(bot, before, file = LIMITS_FILE) {
     return before.flatMap((token) => starts[token] ? [starts[token]] : []);
   }, file);
 }
-function startedAs(bot, token, session, file = LIMITS_FILE) {
+function startedAs(bot, token, session, prompted = false, file = LIMITS_FILE) {
   changeCounts(Date.now(), (counts) => {
     const starts = counts.starting[bot] ?? {};
     if (!starts[token])
       return;
     if (session)
-      starts[token] = { ...starts[token], session };
+      starts[token] = { ...starts[token], session, ...prompted ? { prompted } : {} };
     else
       delete starts[token];
     if (Object.keys(starts).length)
@@ -11766,11 +11766,13 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
   }
   if (isObject(letter.read))
     return readFor(sender, letter, { send, targets, answer, now, moved, moving });
-  const counted = allowed2("messages", `peer:${sender.key}`, now);
+  let counted = allowed2("messages", `peer:${sender.key}`, now);
   if (counted === null)
     return no("It's sent a lot of messages in the last few minutes.", true);
   const notDelivered = (why, again = false) => {
-    takeBack2("messages", `peer:${sender.key}`, counted);
+    if (again && counted !== null)
+      takeBack2("messages", `peer:${sender.key}`, counted);
+    counted = null;
     return no(why, again);
   };
   delivering.add(id);
@@ -12663,29 +12665,23 @@ async function startSession(given, by, place) {
     return no(503, `The engine on ${HERE} isn't running.`);
   const limits = bot ? botLimits(bot.bot) : null;
   const noted = bot && limits ? noteStarting(bot.bot) : null;
-  const went = (session) => {
+  const went = (session, prompted = false) => {
     if (bot && noted)
-      startedAs(bot.bot, noted.token, session);
+      startedAs(bot.bot, noted.token, session, prompted);
   };
   if (bot && limits && noted) {
     const targets = [engine, bridge].filter((each) => Boolean(each));
-    let work, working;
-    try {
-      work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
-      working = await workingNow(targets, place.signal);
-    } catch (error) {
-      went(null);
-      throw error;
-    }
+    const work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
+    const working = await workingNow(targets, place.signal);
     const midnight = new Date().setHours(0, 0, 0, 0);
     const today = work.filter((each) => (each.data.time?.created ?? 0) >= midnight);
     const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
-    const workingIDs = new Set(work.filter((each) => working.has(each.data.id)).map((each) => each.data.id));
+    const workIDs = new Set(work.map((each) => each.data.id));
     const todayIDs = new Set(today.map((each) => each.data.id));
     const earlier = startsBefore(bot.bot, noted.before);
     const past = pastLimit(limits, {
       depth,
-      working: workingIDs.size + earlier.filter((each) => !each.session || !workingIDs.has(each.session)).length,
+      working: work.filter((each) => working.has(each.data.id)).length + earlier.filter((each) => !each.session || !each.prompted || !workIDs.has(each.session)).length,
       started: todayIDs.size + earlier.filter((each) => !each.session || !todayIDs.has(each.session)).length,
       tokens
     });
@@ -12713,7 +12709,7 @@ async function startSession(given, by, place) {
       giveBack();
       return no(400, "A chat has no worktree: give a project.");
     }
-    const made = await answerWorktrees("POST", "kuvo/worktrees", { project }, engine, place.signal);
+    const made = await answerWorktrees("POST", "kuvo/worktrees", { project }, engine, place.signal).catch((error) => ({ status: 502, value: { message: String(error?.message ?? error) } }));
     const tree = made.value;
     if (made.status !== 200 || typeof tree.folder !== "string") {
       giveBack();
@@ -12763,8 +12759,10 @@ ${sessionNote(bot.name)}` : "") : task;
   try {
     await asked(target, "POST", `api/session/${address}/prompt`, { id, text, delivery: "steer" });
   } catch (error) {
+    went(session, true);
     return no(502, `Started a session (${session}), but the task didn't reach it: ${String(error?.message ?? error)}`, session);
   }
+  went(session, true);
   const started = { session, title, folder, project: project?.name ?? null, ...picked.length ? { picked: picked.join(" · ") } : {}, ...askedFirst ? { askedFirst } : {}, ...wakes.length ? { wakes } : {} };
   if (!waits)
     return { started };

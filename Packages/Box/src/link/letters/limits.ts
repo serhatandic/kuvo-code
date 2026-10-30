@@ -25,8 +25,9 @@ export type LimitKind = keyof typeof LIMITS;
 export const LIMITS_FILE = path.join(RUN, "tool-limits.json");
 const LIMITS_LOCK = path.join(RUN, ".tool-limits.lock");
 
-/** A bot's session being started: when, and the session once it's made. */
-interface Starting { at: number; session?: string }
+/** A bot's session being started: when, the session once it's made, and whether it was given its
+ * task (from then on the engine says whether it's working). */
+interface Starting { at: number; session?: string; prompted?: boolean }
 
 type Counts = Partial<Record<LimitKind, Record<string, number[]>>> & { starting?: Record<string, Record<string, Starting>> };
 
@@ -103,13 +104,13 @@ export function startsBefore(bot: string, before: string[], file = LIMITS_FILE):
   }, file);
 }
 
-/** How the start `token` went: its session, kept a while so starts after it count it until the
- * engine does; or null, it didn't start. */
-export function startedAs(bot: string, token: string, session: string | null, file = LIMITS_FILE): void {
+/** How the start `token` went: its session (and whether it was given its task), kept a while so
+ * starts after it count it until the engine does; or null, it didn't start. */
+export function startedAs(bot: string, token: string, session: string | null, prompted = false, file = LIMITS_FILE): void {
   changeCounts(Date.now(), counts => {
     const starts = counts.starting![bot] ?? {};
     if (!starts[token]) return;
-    if (session) starts[token] = { ...starts[token], session };
+    if (session) starts[token] = { ...starts[token], session, ...(prompted ? { prompted } : {}) };
     else delete starts[token];
     if (Object.keys(starts).length) counts.starting![bot] = starts;
     else delete counts.starting![bot];

@@ -140,12 +140,13 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     return send(sender, { delivered: { id, ok: true } });
   }
   if (isObject(letter.read)) return readFor(sender, letter as ReadLetter, { send, targets, answer, now, moved, moving });
-  // Letters from each peer lately, a few at a time, as a conversation's messages are counted: only
-  // those delivered, so one that can't be yet, tried again and again, leaves room for the rest.
-  const counted = allowed("messages", `peer:${sender.key}`, now);
+  // Letters from each peer lately, a few at a time, as a conversation's messages are counted: not
+  // one that can't be delivered yet, so one tried again and again leaves room for the rest.
+  let counted: number | null = allowed("messages", `peer:${sender.key}`, now);
   if (counted === null) return no("It's sent a lot of messages in the last few minutes.", true);
   const notDelivered = (why: string, again = false) => {
-    takeBack("messages", `peer:${sender.key}`, counted);
+    if (again && counted !== null) takeBack("messages", `peer:${sender.key}`, counted);
+    counted = null;
     return no(why, again);
   };
   delivering.add(id);

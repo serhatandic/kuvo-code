@@ -190,7 +190,7 @@ test("a letter from a peer: delivered once, said to be there, by its sender's ow
   // A few at a time from each box: the rest to try again later.
   said.length = 0;
   for (let i = 0; i < 18; i++) await take(second.peer, letter());
-  assert.equal(said.filter(each => each.delivered.ok).length, 16, "twenty in ten minutes, the four delivered before counted (not those refused or that failed)");
+  assert.equal(said.filter(each => each.delivered.ok).length, 14, "twenty in ten minutes: the six before counted, delivered or refused, but not the try that failed as the engine restarted");
   assert.equal(said.at(-1).delivered.retry, true);
 
   // For a conversation moving to or from another computer now, or that lives on another one now:
@@ -214,12 +214,11 @@ test("a letter that can't be delivered yet, tried again and again, leaves its bo
   const letter = extra => ({ id: "ltr_" + crypto.randomBytes(6).toString("hex"), from: "ses_sender", to: "ses_target", text: "Can you check the build?", at: Date.now(), ...extra });
 
   // One for a conversation moving to another computer, and one while the engine restarts, each
-  // tried a dozen times; and some for no conversation here.
+  // tried a dozen times.
   const moving = letter(), restarting = letter();
   for (let i = 0; i < 12; i++) {
     await take(moving, { moving: async () => true });
     await take(restarting, { targets: [{ port: 9, password: "pw" }] });
-    await take(letter({ to: "ses_not_here" }));
   }
   assert.ok(said.every(each => !each.delivered.ok));
   said.length = 0;

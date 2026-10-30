@@ -228,26 +228,21 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // asked for at once each count those before them that the engine doesn't show yet.
   const limits = bot ? botLimits(bot.bot) : null;
   const noted = bot && limits ? noteStarting(bot.bot) : null;
-  const went = (session: string | null) => { if (bot && noted) startedAs(bot.bot, noted.token, session); };
+  const went = (session: string | null, prompted = false) => { if (bot && noted) startedAs(bot.bot, noted.token, session, prompted); };
   if (bot && limits && noted) {
     const targets = [engine, bridge].filter((each): each is Target => Boolean(each));
-    let work: Awaited<ReturnType<typeof workSessions>>, working: Awaited<ReturnType<typeof workingNow>>;
-    try {
-      work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
-      working = await workingNow(targets, place.signal);
-    } catch (error) {
-      went(null);
-      throw error;
-    }
+    const work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
+    const working = await workingNow(targets, place.signal);
     const midnight = new Date().setHours(0, 0, 0, 0);
     const today = work.filter(each => (each.data.time?.created ?? 0) >= midnight);
     const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
-    const workingIDs = new Set(work.filter(each => working.has(each.data.id)).map(each => each.data.id));
+    const workIDs = new Set(work.map(each => each.data.id));
     const todayIDs = new Set(today.map(each => each.data.id));
+    // One the engine shows as the bot's, given its task, is working or not as the engine says.
     const earlier = startsBefore(bot.bot, noted.before);
     const past = pastLimit(limits, {
       depth,
-      working: workingIDs.size + earlier.filter(each => !each.session || !workingIDs.has(each.session)).length,
+      working: work.filter(each => working.has(each.data.id)).length + earlier.filter(each => !each.session || !each.prompted || !workIDs.has(each.session)).length,
       started: todayIDs.size + earlier.filter(each => !each.session || !todayIDs.has(each.session)).length,
       tokens,
     });
@@ -278,7 +273,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
       giveBack();
       return no(400, "A chat has no worktree: give a project.");
     }
-    const made = await answerWorktrees("POST", "kuvo/worktrees", { project }, engine, place.signal);
+    const made = await answerWorktrees("POST", "kuvo/worktrees", { project }, engine, place.signal).catch((error: unknown) => ({ status: 502, value: { message: String((error as Error | null)?.message ?? error) } }));
     const tree = made.value as { folder?: unknown; branch?: unknown; message?: unknown };
     if (made.status !== 200 || typeof tree.folder !== "string") {
       giveBack();
@@ -324,8 +319,10 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   try {
     await asked(target, "POST", `api/session/${address}/prompt`, { id, text, delivery: "steer" });
   } catch (error) {
+    went(session, true);
     return no(502, `Started a session (${session}), but the task didn't reach it: ${String((error as Error | null)?.message ?? error)}`, session);
   }
+  went(session, true);
   const started: Started = { session, title, folder, project: project?.name ?? null, ...(picked.length ? { picked: picked.join(" · ") } : {}), ...(askedFirst ? { askedFirst } : {}), ...(wakes.length ? { wakes } : {}) };
   if (!waits) return { started };
   // A new session: anything it says is its answer.

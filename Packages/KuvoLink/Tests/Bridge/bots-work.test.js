@@ -272,6 +272,14 @@ test("limits you set are kept when the bot starts several sessions at once", asy
   assert.equal(made.length, 3);
 });
 
+test("a bot set to one session at once starts the next once the last has finished", async () => {
+  setBots({ pixelWork: { limits: { atOnce: 1 } } });
+  startedAddress(await tool("start_session", { task: "One.", project: "Tidepool", wait: true }, "ses_pixel"));
+  const next = await tool("start_session", { task: "Two.", project: "Tidepool" }, "ses_pixel");
+  assert.equal(next.isError, false, next.text);
+  assert.equal(made.length, 2);
+});
+
 test("list_sessions shows a bot's work and where each stands; stop_session stops only its own", async () => {
   const first = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
   const second = startedAddress(await tool("start_session", { task: "Two.", title: "Onboarding", project: "Tidepool" }, "ses_pixel"));
