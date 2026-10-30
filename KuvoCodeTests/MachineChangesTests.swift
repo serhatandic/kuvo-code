@@ -132,6 +132,19 @@ import Testing
         return await Git.readNew(files, known: known) { _ in client }
     }
 
+    /// A machine out of reach when its Changes tab first opens (asleep, offline) isn't taken for a
+    /// folder with no git: the tab keeps its scopes, still to be read, rather than saying "Not a git
+    /// repository".
+    @Test func aMachineOutOfReachAtFirstIsntTakenForAFolderWithNoGit() async {
+        let away = BoxClient(box: "lab", transport: LocalBox { _ in AsyncThrowingStream { $0.finish(throwing: URLError(.networkConnectionLost)) } })
+        let changes = ProjectChanges(directory: root)
+        changes.box = { _ in away }
+        await changes.refresh()
+        #expect(changes.isRepository)
+        #expect(!changes.isLoaded)
+        #expect(changes.files.isEmpty)
+    }
+
     /// A machine whose box can't be reached for a moment isn't taken for a folder with no git: the
     /// list that showed stays.
     @Test func aMachineOutOfReachKeepsItsList() async throws {

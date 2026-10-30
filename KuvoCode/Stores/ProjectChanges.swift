@@ -90,6 +90,8 @@ final class ProjectChanges {
     /// A machine's new files as its box last sent them, by path and git's hash, so each poll
     /// reads only what changed.
     private var machineReads: [String: ChangedFile] = [:]
+    /// A machine's box, by the machine's ID.
+    @ObservationIgnored var box: @Sendable (String) -> BoxClient = BoxClient.machine
 
     init(directory: String) {
         self.directory = directory
@@ -111,12 +113,14 @@ final class ProjectChanges {
             isLoaded = true
             return
         }
-        let found = await Git.found(in: directory, scope: scope, base: base)
-        // A machine's box out of reach for a moment: what showed stays, rather than reading as no
-        // repository.
-        if case .unreachable = found, isLoaded { return }
+        let found = await Git.found(in: directory, scope: scope, base: base, box: box)
+        // A machine's box out of reach: what showed stays, and before anything showed, it's still
+        // to be read, rather than reading as no repository.
+        if case .unreachable = found { return }
+        // Gone to another scope, or a later refresh is under way: theirs shows.
+        guard mine == generation, !Task.isCancelled else { return }
         if case .listed(let result, let uncommitted) = found {
-            let read = await Git.readNew(result, known: machineReads)
+            let read = await Git.readNew(result, known: machineReads, box: box)
             // Kept whichever list shows: what was read is the file as it is.
             machineReads = Git.kept(read)
             // Gone to another scope, or a later refresh is under way: theirs shows.
