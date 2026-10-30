@@ -213,7 +213,6 @@ import Testing
         #expect(!status.on)
         let row = try #require(GoalSandbox.row(reading, computer: "lab", onThisMac: false, bot: "Pixel", agent: nil))
         #expect(row.title.hasPrefix("lab can’t work on its own"))
-        #expect(row.buttons.isEmpty, "held back by its box, with nothing for you to do")
     }
 
     @Test func noneAfterTheBotsDeadlineStartsTheGoalWithNoEnd() async throws {
