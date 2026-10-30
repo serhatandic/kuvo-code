@@ -163,30 +163,86 @@ test("on both: the folders the start had stay on it, after your login shell's, w
   expect(found.filter(folder => folder === "/usr/bin")).toHaveLength(1)
 })
 
-test("on both: a .bashrc that exits as it starts something in the background gives way to the profile's PATH at once", async () => {
-  const { folder, nvm, local } = home()
-  writeFileSync(join(folder, ".bashrc"), readFileSync(join(folder, ".bashrc"), "utf8") +
-    `perl -MPOSIX -e 'POSIX::setsid(); open(F, ">", "$ENV{HOME}/daemon.pid.new"); print F $$; close F; rename("$ENV{HOME}/daemon.pid.new", "$ENV{HOME}/daemon.pid"); sleep 30' &\n` +
-    `until [ -f "$HOME/daemon.pid" ]; do :; done\nexit 0\n`)
+/**
+ * A login shell of the test's own that does as it's told, on cue: `answer` runs the command with a
+ * folder of its own on PATH; `hang` answers so only once the test releases it; `exit` starts a program
+ * apart from it that holds what it prints to until the test lets it go, and exits without
+ * answering. It notes its process (`shell.pid`) as it starts.
+ */
+function shell(folder: string, interactive: "answer" | "hang" | "exit", login: "answer" | "hang") {
+  const step = (what: string, name: string) => ({
+    answer: `PATH="/${name}/bin:$PATH" exec /bin/sh -c "$2"`,
+    hang: `until [ -f "$HOME/released" ]; do sleep 0.05; done; PATH="/${name}/bin:$PATH" exec /bin/sh -c "$2"`,
+    exit: `perl -MPOSIX -e 'POSIX::setsid(); open(F, ">", "$ENV{HOME}/holder.pid.new"); print F $$; close F; rename("$ENV{HOME}/holder.pid.new", "$ENV{HOME}/holder.pid"); sleep 1 until -e "$ENV{HOME}/released"' &
+      until [ -f "$HOME/holder.pid" ]; do :; done
+      exit 0`,
+  })[what]
+  const file = join(folder, "fake-shell")
+  writeFileSync(file, `#!/bin/sh\necho $$ >"$HOME/shell.pid"\ncase "$1" in\n-ilc) ${step(interactive, "interactive")} ;;\n-lc) ${step(login, "login")} ;;\nesac\n`)
+  chmodSync(file, 0o755)
+  return file
+}
+
+/** Lets what the fake shell started go: a shell that's waiting, a program holding its output (stopped). */
+function release(folder: string) {
+  writeFileSync(join(folder, "released"), "")
+  try { process.kill(Number(readFileSync(join(folder, "holder.pid"), "utf8"))) } catch {}
+}
+
+const running = (pidFile: string) => {
   try {
-    const found = (await loginPath({ HOME: folder, SHELL: "/bin/bash", PATH: "/usr/bin:/bin" }))?.split(":")
-    expect(found).toContain(local)
-    expect(found).not.toContain(nvm)
+    process.kill(Number(readFileSync(pidFile, "utf8")), 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+test("on both: a shell that exits without answering, leaving something running that holds its output, gives way to the login one, not waiting for it", async () => {
+  const folder = join(root, "home")
+  mkdirSync(folder, { recursive: true })
+  const env = { HOME: folder, SHELL: shell(folder, "exit", "answer"), PATH: "/usr/bin:/bin" }
+  // The program lets go after a while anyway: a read that waited for it is over then, too late.
+  const later = setTimeout(() => release(folder), 3_000)
+  try {
+    // However long the interactive one may take: it's gone.
+    const found = await loginPath(env, { interactive: 600_000, login: 600_000 })
+    expect(running(join(folder, "holder.pid"))).toBe(true)
+    expect(found?.split(":")[0]).toBe("/login/bin")
   } finally {
-    try { process.kill(Number(readFileSync(join(folder, "daemon.pid"), "utf8"))) } catch {}
+    clearTimeout(later)
+    release(folder)
   }
 })
 
-test("on both: a .bashrc that never finishes gives way to the profile's PATH; with a profile that never finishes either, there's none, and the start keeps its own", async () => {
-  const { folder, nvm, local } = home()
-  writeFileSync(join(folder, ".bashrc"), readFileSync(join(folder, ".bashrc"), "utf8") + "while :; do :; done\n")
-  const env = { HOME: folder, SHELL: "/bin/bash", PATH: "/usr/bin:/bin" }
-  const found = (await loginPath(env, { interactive: 300, login: 2_000 }))?.split(":")
-  expect(found).toContain(local)
-  expect(found).not.toContain(nvm)
-  writeFileSync(join(folder, ".profile"), "while :; do :; done\n")
-  expect(await loginPath(env, { interactive: 300, login: 300 })).toBeUndefined()
+test("on both: an interactive shell that never answers gives way to the login one; with neither answering there's none, and the start keeps its own", async () => {
+  const folder = join(root, "home")
+  mkdirSync(folder, { recursive: true })
+  try {
+    let env = { HOME: folder, SHELL: shell(folder, "hang", "answer"), PATH: "/usr/bin:/bin" }
+    expect((await loginPath(env, { interactive: 100, login: 600_000 }))?.split(":")[0]).toBe("/login/bin")
+    env = { ...env, SHELL: shell(folder, "hang", "hang") }
+    expect(await loginPath(env, { interactive: 100, login: 100 })).toBeUndefined()
+  } finally {
+    release(folder)
+  }
 })
+
+test("this Mac: Settings › Accounts' refresh answers while a slow .zshrc is still being read, and the read carries on", () => {
+  const folder = join(root, "home")
+  mkdirSync(folder, { recursive: true })
+  // The refresh answers while the shell hangs; the shell then answers, and the next refresh has it.
+  const script = `import { refreshLoginPath } from "./src/agents/proc"; import { writeFileSync } from "node:fs"
+    await refreshLoginPath()
+    writeFileSync(process.env.HOME + "/released", "")
+    await refreshLoginPath()
+    process.stdout.write(process.env.PATH!.split(":")[0])`
+  try {
+    expect(ran(["-e", script], folder, { SHELL: shell(folder, "hang", "hang") })).toBe("/interactive/bin")
+  } finally {
+    release(folder)
+  }
+}, 30_000)
 
 const zsh = ["/bin/zsh", "/usr/bin/zsh"].find(existsSync)
 test.skipIf(!zsh)("zsh: nvm's node from .zshrc and ~/.local/bin from .zprofile", () => {

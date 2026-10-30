@@ -107,10 +107,12 @@ export async function loginPath(env: Record<string, string | undefined> = proces
         return resolve(undefined);
       }
       let settled = false;
+      let gone: ReturnType<typeof setTimeout> | undefined;
       const done = (value: string | undefined) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        clearTimeout(gone);
         try {
           if (child.pid) process.kill(-child.pid, "SIGKILL");
         } catch {}
@@ -131,7 +133,7 @@ export async function loginPath(env: Record<string, string | undefined> = proces
       child.on("close", () => done(undefined));
       // The shell gone without saying (it exec'd away, or exited) while something it started holds
       // its output: what it printed is read by a moment after.
-      child.on("exit", () => setTimeout(() => done(undefined), 300));
+      child.on("exit", () => { if (!settled) gone = setTimeout(() => done(undefined), 300); });
     });
     if (found) return joinPath(found, env.PATH);
   }

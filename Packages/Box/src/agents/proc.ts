@@ -102,7 +102,8 @@ export function useSavedLoginPath() {
 /**
  * Your login shell's PATH again, so a tool installed since the bridge started (`npm install -g`,
  * Homebrew, an installer that adds a folder to your profile) is found. On this Mac, asked when you
- * refresh, at most every few seconds (`now`: again, after an install), one read at a time. On a
+ * refresh, at most every few seconds, one read at a time, answering within a second while a slow
+ * one carries on (`now`: again, after an install, waiting for it). On a
  * machine, where a command over SSH gets less than its terminal does (`~/.local/bin` comes from the
  * profile, nvm's node from .bashrc), its engine's start read it once (`useSavedLoginPath`), and
  * only an install reads it again: there's no SSH agent there, and a .bashrc that starts one when
@@ -111,15 +112,21 @@ export function useSavedLoginPath() {
 export async function refreshLoginPath(now = false): Promise<void> {
   if (onMachine && !now) return
   if (reading) {
+    if (!now) return answerSoon(reading)
     await reading
-    if (!now) return
-  }
-  if (!now && Date.now() - pathRead < 5_000) return
-  reading = readLoginPath().finally(() => {
+  } else if (!now && Date.now() - pathRead < 5_000) return
+  const read = (reading = readLoginPath().finally(() => {
     pathRead = Date.now()
     reading = undefined
-  })
-  await reading
+  }))
+  await (now ? read : answerSoon(read))
+}
+
+/** A refresh answers within a second (Settings › Accounts waits on it): a slow .zshrc is read on in the background, for the next. */
+async function answerSoon(read: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([read, new Promise<void>((resolve) => (timer = setTimeout(resolve, 1_000)))])
+  clearTimeout(timer)
 }
 
 async function readLoginPath() {
