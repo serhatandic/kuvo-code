@@ -7017,7 +7017,7 @@ async function engineControl(command) {
   const start = path35.join(K, "bin", "kuvo-start");
   if (!fs32.existsSync(start))
     return { status: 409, message: "Kuvo Code hasn't set this machine up yet." };
-  if (![path35.join(K, "bin", "kuvo-launch"), path35.join(RUN, "launch.env")].every((file) => fs32.existsSync(file))) {
+  if (!IS_MAC && ![path35.join(K, "bin", "kuvo-launch"), path35.join(RUN, "launch.env")].every((file) => fs32.existsSync(file))) {
     return { status: 409, message: "Start it once from Kuvo Code on your Mac." };
   }
   if (isUpdating() && !ENGINE_UP_WHILE.includes(updateState().running)) {
@@ -15001,6 +15001,22 @@ async function answerTo(target, session, id, { wait = 2000, signal } = {}) {
   return null;
 }
 var BRIDGE_AWAY = "Its coding agents aren't running here now: it comes again once they are.";
+var BRIDGE_WAIT = 30 * 60000;
+var bridgeWaits = new Map;
+function noConversation(id, bridge, now) {
+  if (bridge) {
+    bridgeWaits.delete(id);
+    return ["There's no such conversation here.", false];
+  }
+  for (const [letter, since] of bridgeWaits)
+    if (now - since > LETTER_MEMORY)
+      bridgeWaits.delete(letter);
+  const since = bridgeWaits.get(id) ?? now;
+  bridgeWaits.set(id, since);
+  if (now - since < BRIDGE_WAIT)
+    return [BRIDGE_AWAY, true];
+  return ["There's no such conversation here, and its coding agents aren't running.", false];
+}
 async function takeLetter(sender, letter, { send, targets, answer = () => {}, told = readPeerAgents(), peers = peersOf(readLink()), moved = movedOf(readLink()), now = Date.now(), wait, moving = async () => false, bridge = true } = {}) {
   if (!isObject(letter) || typeof letter.id !== "string" || !LETTER_ID.test(letter.id))
     return;
@@ -15037,7 +15053,7 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
       return notDelivered("It's moving to another computer: it comes again once it's there.", true);
     place = await placeOfSession(letter.to, targets);
     if (!place)
-      return bridge ? notDelivered("There's no such conversation here.") : notDelivered(BRIDGE_AWAY, true);
+      return notDelivered(...noConversation(id, bridge, now));
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
       return notDelivered("That conversation doesn't take messages.");
@@ -15078,7 +15094,7 @@ async function readFor(sender, letter, { send, targets, answer = () => {}, now =
       return no("It's moving to another computer: it's read once it's there.", true);
     const place = await placeOfSession(letter.to, targets);
     if (!place)
-      return bridge ? no("There's no such conversation here.") : no(BRIDGE_AWAY, true);
+      return no(...noConversation(id, bridge, now));
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
       return no("That conversation can't be read.");
@@ -17501,7 +17517,7 @@ import fs67 from "node:fs";
 import path69 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.122";
+var BRIDGE_VERSION = "0.9.123";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

@@ -271,8 +271,9 @@ final class StatusItemController: NSObject {
             UsageMenuBar.openHostApp()
         })
         menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem(title: "Quit \(HostApp.name)", systemSymbol: "power", keyEquivalent: "q") {
-            NSApplication.shared.terminate(nil)
+        // Fork change: the host's own Quit while it set one (`HostCard.quitItem`).
+        menu.addItem(ClosureMenuItem(title: HostCard.quitTitle, systemSymbol: "power", keyEquivalent: "q") {
+            HostCard.quit()
         })
 
         statusItem.menu = menu
