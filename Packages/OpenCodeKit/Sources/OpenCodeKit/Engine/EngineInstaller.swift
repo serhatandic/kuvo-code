@@ -126,11 +126,18 @@ public struct EngineInstaller: Sendable {
     public static func isPinnedBuild(_ binary: URL, release: EngineRelease = .pinned) -> Bool {
         guard carriesSignature(binary, release: release) else { return false }
         guard let expected = release.binarySHA256 else { return true }
-        guard let handle = try? FileHandle(forReadingFrom: binary) else { return false }
+        return (try? sha256(of: binary)) == expected
+    }
+
+    /// The file's SHA-256, in hex, read a megabyte at a time.
+    public static func sha256(of file: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
         var hasher = SHA256()
-        while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined() == expected
+        // Each chunk read is autoreleased: without a pool of its own, all 200 MB of the binary
+        // stay in memory until the task that checks it ends.
+        while let chunk = try autoreleasepool(invoking: { try handle.read(upToCount: 1 << 20) }), !chunk.isEmpty { hasher.update(data: chunk) }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// Downloads, verifies and unpacks the pinned release. `progress` gets the fraction downloaded.
@@ -204,7 +211,7 @@ public struct EngineInstaller: Sendable {
         var hasher = SHA512()
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
-        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+        while let chunk = try autoreleasepool(invoking: { try handle.read(upToCount: 1 << 20) }), !chunk.isEmpty {
             hasher.update(data: chunk)
         }
         guard Data(hasher.finalize()) == expected else { throw EngineInstallError.integrityMismatch }

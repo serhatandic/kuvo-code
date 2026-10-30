@@ -14,6 +14,7 @@ struct SidebarView: View {
 
     /// Bots moving in the main card; their rows hold still. The one thing the window hands in
     /// (see `==`, below): the rest comes from the stores, which tell the sidebar when they change.
+    /// Anything else handed in has to be compared in `==` too, or the sidebar misses its changes.
     var stagedBots: Set<String> = []
     @Environment(Bots.self) private var bots
     @Environment(GroupChats.self) private var groups
@@ -92,12 +93,6 @@ struct SidebarView: View {
     private func editGroup(_ group: BotGroup) { tabs.openGroupEditor(group: group) }
     /// Ends a terminal tab.
     private func closeTerminal(_ key: String) { tabs.close(TabKey(key)) }
-    /// Open Beside, while a session can open beside the tab in view: it's a session's (not a
-    /// draft or a group chat).
-    private var openBeside: ((String) -> Void)? {
-        guard let id = tabs.sessionID, workspace.session(id) != nil else { return nil }
-        return { tabs.openBeside($0) }
-    }
 
     /// The selection tag of a project's not-yet-sent new session.
     static func draftTag(_ directory: String) -> String { TabKey.draft(directory).text }
@@ -1073,7 +1068,7 @@ struct SidebarView: View {
                 Button("Pin") { Task { await workspace.setPinned(session.id, true) } }
             }
         }
-        if let openBeside, session.id != selection {
+        if let openBeside = tabs.besideOpener, session.id != selection {
             Button("Open Beside") { openBeside(session.id) }
         }
         sideQuestionsMenu(for: session, in: place)
@@ -2238,6 +2233,8 @@ private struct AccountsRow: View {
 /// `@AppStorage` keeps a store of its own each time it's made: it worked the whole list out again,
 /// every row, at the start of the panel's slide. Equal while what's handed in is (`.equatable()`
 /// where it's made); what it reads from the stores and keeps itself still updates it as before.
+/// So `==` compares every property the window hands in: one left out here is a change the sidebar
+/// never shows.
 extension SidebarView: Equatable {
     static func == (lhs: SidebarView, rhs: SidebarView) -> Bool {
         lhs.stagedBots == rhs.stagedBots
