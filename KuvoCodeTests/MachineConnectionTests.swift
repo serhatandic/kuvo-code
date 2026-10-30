@@ -146,11 +146,16 @@ import Testing
         let model = try #require(app.workspace.model(for: "ses_older"))
         await model.load()
 
-        // Back, with newer ones listed and this one's own answer failing for a moment.
+        // Back, with newer ones listed and this one's own answer failing for a moment. Meanwhile
+        // the agent there answered.
         machine.list([StubEngine.session("ses_newer", title: "Newer", directory: "/home/tests/project", created: 2)])
         machine.on("GET", "/api/session/ses_older", json: ["error": "busy"], status: 500)
+        let answer: [String: Any] = ["id": "msg_02", "type": "assistant", "agent": "build", "time": ["created": 2, "completed": 3],
+                                     "model": ["id": "m", "providerID": "p"], "content": [["type": "text", "text": "Done: the tests pass."]]]
+        machine.conversation("ses_older", [answer])
         await app.reconnectNow(engine)?.value
         #expect(app.workspace.model(for: "ses_older") === model, "still the conversation on screen")
+        #expect(model.transcript.messages.map(\.id) == ["msg_02"], "what happened while it was away shows")
         app.workspace.handle(try machine.event("session.execution.started", session: "ses_older"), machine: id)
         #expect(model.isRunning, "it still follows the agent there")
 

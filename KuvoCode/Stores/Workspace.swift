@@ -1845,16 +1845,16 @@ final class Workspace {
                 let isAgents = OutsideAgents.isAgentSession(model.session)
                 guard let place = isAgents ? (bridgeListed == nil ? nil : bridge) : api else { continue }
                 if !model.isSubagent, !known.contains(id) {
-                    let session: Session
                     do {
-                        session = try await place.session(id)
+                        model.session = try await place.session(id)
                     } catch {
                         // Not there: it goes. Not answered (busy, or the connection still settling): it
-                        // stays, and goes on following the agent there.
-                        if (error as? ServerError)?.status == 404 { models[id] = nil }
-                        continue
+                        // stays, read again with the others, and goes on following the agent there.
+                        if (error as? ServerError)?.status == 404 {
+                            models[id] = nil
+                            continue
+                        }
                     }
-                    model.session = session
                 } else if let session = listed.first(where: { $0.id == id }) {
                     model.session = session
                 }
