@@ -479,7 +479,7 @@ struct MainView: View {
             .padding(.trailing, identityWidth == nil ? 16 : 0)
             if !tabItems.isEmpty {
                 TabStrip(tabs: tabItems, selection: tabSelection, close: { tabs.close(TabKey($0)) }, closeAll: { tabs.closeAll(except: $0.map(TabKey.init)) },
-                         openBeside: besideOpener, closeBeside: { tabs.closeBeside(TabKey($0)) }, closeBesideTab: { tabs.closeBesideTab(TabKey($0)) },
+                         openBeside: tabs.besideOpener, closeBeside: { tabs.closeBeside(TabKey($0)) }, closeBesideTab: { tabs.closeBesideTab(TabKey($0)) },
                          swapBeside: { tabs.swapBeside(TabKey($0)) }) { id in
                     guard let session = workspace.session(id) else { return }
                     // Renamed in its card's header: its tab comes forward for it.
@@ -654,13 +654,6 @@ struct MainView: View {
         .environment(catalog(for: directory))
         .id("split-" + id)
         .onCardClick(isOn: !overlayShown, keyboard: { keyboardReturn.remember($0, in: .split) }) { tabs.focus = .split }
-    }
-
-    /// Open Beside, while a session can open beside the tab in view: it's a session's (not a
-    /// draft or a group chat).
-    private var besideOpener: ((String) -> Void)? {
-        guard let sessionID, workspace.session(sessionID) != nil else { return nil }
-        return { tabs.openBeside($0) }
     }
 
     @ViewBuilder private var conversationCard: some View {

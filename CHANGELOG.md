@@ -28,6 +28,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - The sidebar's marks are one quiet family: a turning ring while a session works, an orange dot that ripples when it needs you, and an accent dot that settles when it's done, plus still marks for a failed run, a wake-up, a watch and a machine that isn't connected. Your tabs show the same marks. The open session is a soft grey fill that starts at its title, so the line of its branches stays in view, and section headings stand out more.
 - **/review** asks what to review: your uncommitted changes, this branch against main, the commits since one you pick, a folder or the whole project, each with how much it reads, or **Something else…**, where you write what to review in your own words (“the sign-in and its tests”, “what I changed today”) and the files that fit are found for you; then what to look for (security, performance, accessibility, or your own words); Return twice reviews your changes as before. A big one reads in parts with a bar that says how far along it is, shows what it found so far, and **Stop** ends it there, keeping what it found. Open its bar to see each part, with what it's reading now or what it found, and click one to watch its reviewer read, think and find, in the conversation's place. Whether findings show as a list or one at a time is in **Settings › Appearance**. On the Mac and the iPhone.
 - A wake-up's line starts with what it will do, not with the project's folder.
+- An agent waiting for another's answer gets its answer only, not what the other then said to you or to another agent; and one on another computer still gets its answer if word that its message arrived is lost on the way. Messages that can't be delivered yet no longer hold up the rest from that computer.
 - A machine you disconnect stays disconnected while Kuvo Code is open, rather than connecting again when your Mac's engine restarts, and one that can't be reached when Kuvo Code opens (before the network is up, say) is tried again by itself. One whose key is refused or whose host key changed says why at once.
 - A machine whose SSH settings run a command of their own, like `tmux`, or always ask for a terminal now connects, and one whose host key changed says so and how to clear the old key.
 - **Uninstall from** a machine stops its engine even when the connection drops partway, the next time it answers, rather than leaving it running.
@@ -198,6 +199,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Reload in the Files tab while you're filtering reads the files again, instead of leaving the filter loading.
 - Add to Message in a terminal tab of the window starts a new session in its folder with what you selected, instead of doing nothing.
 - Showing or hiding the side panel or the sidebar no longer catches at the start of its slide when you have many sessions: the sidebar isn't drawn again for it.
+- Kuvo Code takes about 200 MB less memory for the first seconds after it opens: checking the engine before it starts no longer keeps the whole engine in memory.
 
 ## 0.7.2
 

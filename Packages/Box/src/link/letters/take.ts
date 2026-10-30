@@ -13,7 +13,7 @@ import { movedOf, ownKey, peersOf } from "../peers/known";
 import { readLink } from "../state";
 import { LETTERS_SEEN, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, composeLetter, cutText, placeOfSession } from "./letter";
 import { READ_BY_MAIL, excerpt, readConversation } from "./conversation";
-import { allowed } from "./limits";
+import { allowed, takeBack } from "./limits";
 import { ANSWER_TEXT, answered } from "./outbox";
 import type { ListedAgent, Target, ToldAgents } from "../../shared/records";
 import type { EngineAnswer } from "../engine/client";
@@ -56,6 +56,24 @@ interface EngineMessage {
   content?: { type: string; text?: string }[];
 }
 
+// What it wrote after message `id`, oldest first: up to the next message someone else gave it once
+// it had answered (said something and gone on to no tool), whose answer is theirs. One that came
+// while it was still at it (before it answered, or as it ran a tool) it answers with this.
+function answerAfter(messages: EngineMessage[], id: string): string[] {
+  const replies: string[] = [];
+  let answered = false;
+  for (const message of messages) {
+    if (message.id <= id) continue;
+    if (message.type === "assistant") {
+      const parts = message.content ?? [];
+      const text = parts.filter(part => part.type === "text").map(part => part.text).join("\n");
+      if (text) replies.push(text);
+      answered = Boolean(text) && !parts.some(part => part.type === "tool");
+    } else if (message.type === "user" && answered) break;
+  }
+  return replies;
+}
+
 // Letters remembered, by id, with when: one seen again is said to be there, not delivered twice.
 export function lettersSeen(now: number): Record<string, number> {
   let seen: Record<string, number> = {};
@@ -74,8 +92,6 @@ function noteSeen(id: string, now = Date.now()) {
 // Letters being delivered now: one that comes again meanwhile waits for that one's answer.
 const delivering = new Set<string>();
 
-// Letters from each peer lately, a few at a time, as a conversation's messages are counted.
-const tooMany = (key: string, now = Date.now()) => allowed("messages", `peer:${key}`, now) === null;
 
 /** How `answerTo` waits: between looks (ms), and until its asker goes (`signal`). */
 export interface AnswerWait {
@@ -99,11 +115,7 @@ export async function answerTo(target: Target, session: string, id: string, { wa
     }
     if (!started && Date.now() - began < 3 * wait) continue;
     const page: { data?: EngineMessage[] } | null = await asked(target, "GET", `api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`).catch(() => null) as EngineAnswer<EngineMessage[]> | null;
-    const replies = (page?.data ?? [])
-      .filter(message => message.type === "assistant" && message.id > id)
-      .reverse()
-      .map(message => (message.content ?? []).filter(part => part.type === "text").map(part => part.text).join("\n"))
-      .filter(Boolean);
+    const replies = answerAfter((page?.data ?? []).slice().reverse(), id);
     if (replies.length) return cutText(replies.join("\n\n"), ANSWER_TEXT);
     if (started) break;
   }
@@ -157,16 +169,24 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     return send(sender, { delivered: { id, ok: true } });
   }
   if (isObject(letter.read)) return readFor(sender, letter as ReadLetter, { send, targets, answer, now, moved, moving, bridgeDown });
-  if (tooMany(sender.key, now)) return no("It's sent a lot of messages in the last few minutes.", true);
+  // Letters from each peer lately, a few at a time, as a conversation's messages are counted: not
+  // one that can't be delivered yet, so one tried again and again leaves room for the rest.
+  let counted: number | null = allowed("messages", `peer:${sender.key}`, now);
+  if (counted === null) return no("It's sent a lot of messages in the last few minutes.", true);
+  const notDelivered = (why: string, again = false) => {
+    if (again && counted !== null) takeBack("messages", `peer:${sender.key}`, counted);
+    counted = null;
+    return no(why, again);
+  };
   delivering.add(id);
   let place: SessionPlace | null, prompt: string, fromAgent: ListedAgent | null = null;
   try {
     const lives = moved.get(letter.to);
-    if ((lives && lives !== ownKey(readLink() ?? {})) || (await moving(letter.to))) return no("It's moving to another computer: it comes again once it's there.", true);
+    if ((lives && lives !== ownKey(readLink() ?? {})) || (await moving(letter.to))) return notDelivered("It's moving to another computer: it comes again once it's there.", true);
     place = await placeOfSession(letter.to, targets);
-    if (!place) return no(...noConversation(id, bridgeDown, now));
+    if (!place) return notDelivered(...noConversation(id, bridgeDown, now));
     const kuvo = place.data?.metadata?.kuvo ?? {};
-    if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return no("That conversation doesn't take messages.");
+    if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return notDelivered("That conversation doesn't take messages.");
     // Its sender: that box's own agent, as it named it; one of this box's own claimed from there isn't.
     // (`from` isn't checked: one that's no session finds no agent.)
     const listed = peerOf(letter.from as string, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find(agent => agent.session === letter.from) : null;
@@ -176,7 +196,7 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     const waits = letter.wait === true && Boolean(fromAgent);
     await asked(place.target, "POST", `api/session/${encodeURIComponent(letter.to)}/prompt`, { id: prompt, text: composeLetter(name, fromAgent ? letter.from as string : "unknown", cutText(letter.text), waits), delivery: "steer" });
   } catch (error) {
-    return no(`It didn't reach it: ${String((error as Error | null)?.message ?? error)}`, true);
+    return notDelivered(`It didn't reach it: ${String((error as Error | null)?.message ?? error)}`, true);
   } finally {
     delivering.delete(id);
   }

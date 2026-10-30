@@ -24,4 +24,32 @@ struct EnginePinTests {
         #expect(installer.installed() == nil)
         #expect(!FileManager.default.fileExists(atPath: installer.executable.path), "moved aside, so it's downloaded again")
     }
+
+    /// Each start hashes the 200 MB binary. It's read a megabyte at a time, and only a megabyte at
+    /// a time stays in memory: holding every chunk read made the app's memory jump by the binary's
+    /// size at launch.
+    @Test func checkingTheBinarysHashDoesntHoldTheWholeFile() throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "engine-hash-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let size = 128 << 20
+        let handle = try FileHandle(forWritingTo: { FileManager.default.createFile(atPath: file.path, contents: nil); return file }())
+        for _ in 0..<(size >> 20) { try handle.write(contentsOf: Data(repeating: 7, count: 1 << 20)) }
+        try handle.close()
+
+        let before = try #require(footprint())
+        let hash = try EngineInstaller.sha256(of: file)
+        let grew = try #require(footprint()) - before
+        #expect(hash.count == 64)
+        // Holding every chunk grows it by the whole file; a chunk at a time, by about a megabyte.
+        #expect(grew < size / 2, "memory grew \(grew >> 20) MB hashing a \(size >> 20) MB file")
+    }
+
+    private func footprint() -> Int? {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let status = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+        }
+        return status == KERN_SUCCESS ? Int(info.phys_footprint) : nil
+    }
 }
