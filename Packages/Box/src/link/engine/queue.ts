@@ -210,6 +210,18 @@ function takeWaiting(session: string, item?: string, resume = false): { shown: W
   return { shown, message };
 }
 
+/** `from`'s queue as `to`'s, its conversation going on in another session (carried on with the
+ * coding agents): stopped, it stays stopped, and what waited on the box goes with it. `renamed`:
+ * what the engine held, by its id where the conversation goes on. */
+export function carryQueue(from: string, to: string, renamed: Record<string, string>): void {
+  let was: QueueState = { paused: false, held: [] };
+  changeQueue(from, state => { was = state; return { paused: false, held: [] }; });
+  if (!showsQueue(was)) return;
+  const held = was.held.flatMap(id => renamed[id] ? [renamed[id]] : []);
+  changeQueue(to, state => ({ ...state, paused: state.paused || was.paused, held: [...state.held, ...held],
+    ...(was.waiting?.length ? { waiting: [...(state.waiting ?? []), ...was.waiting] } : {}) }));
+}
+
 /** `session`'s queue forgotten, and what waited on the box for it (its conversation is gone). */
 export function forgetQueue(session: string): void {
   let gone: Waiting[] = [];
@@ -335,7 +347,7 @@ export async function sendNow(target: Target, session: string, item: string): Pr
 /** An event, as far as the queue reads it. */
 export interface QueueEvent {
   type: string;
-  data?: { sessionID?: string; inboxID?: string; item?: { type?: string; delivery?: string; payload?: { text?: unknown } }; reason?: string };
+  data?: { sessionID?: string; inboxID?: string; item?: { type?: string; delivery?: string; payload?: { text?: unknown } }; reason?: string; metadata?: Record<string, unknown> };
 }
 
 // A message you wrote, not one Kuvo Code sent the agent for you or another (an agent's letter, a
@@ -410,6 +422,13 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
         if (event.data?.item?.delivery === "steer" && isYours(event.data.item)) changeQueue(session, state => ({ ...state, paused: false }));
         else if (!queueOf(session).paused) later(drains, session, () => drain(target, session));
         break;
+      case "session.metadata.updated": {
+        // Carried on in another session (moved to the coding agents, by a client or this box): its
+        // queue goes on there.
+        const to = event.data?.metadata?.["kuvo.carriedTo"];
+        if (typeof to === "string" && to.startsWith("ses_") && to !== session) carryQueue(session, to, {});
+        break;
+      }
       case "session.deleted":
         // Gone: its queue and what waited for it with it.
         forget(drains, session);

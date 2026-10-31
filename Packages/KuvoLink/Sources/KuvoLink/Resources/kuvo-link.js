@@ -870,6 +870,22 @@ function takeWaiting(session, item, resume = false) {
   const message = isObject(whole) && typeof whole.text === "string" && (whole.delivery === "steer" || whole.delivery === "queue") ? { id: shown.id, text: whole.text, delivery: whole.delivery, ...Array.isArray(whole.files) ? { files: whole.files } : {} } : null;
   return { shown, message };
 }
+function carryQueue(from, to, renamed) {
+  let was = { paused: false, held: [] };
+  changeQueue(from, (state) => {
+    was = state;
+    return { paused: false, held: [] };
+  });
+  if (!showsQueue(was))
+    return;
+  const held = was.held.flatMap((id) => renamed[id] ? [renamed[id]] : []);
+  changeQueue(to, (state) => ({
+    ...state,
+    paused: state.paused || was.paused,
+    held: [...state.held, ...held],
+    ...was.waiting?.length ? { waiting: [...state.waiting ?? [], ...was.waiting] } : {}
+  }));
+}
 function forgetQueue(session) {
   let gone = [];
   changeQueue(session, (state) => {
@@ -1030,6 +1046,12 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
         else if (!queueOf(session).paused)
           later(drains, session, () => drain(target, session));
         break;
+      case "session.metadata.updated": {
+        const to = event.data?.metadata?.["kuvo.carriedTo"];
+        if (typeof to === "string" && to.startsWith("ses_") && to !== session)
+          carryQueue(session, to, {});
+        break;
+      }
       case "session.deleted":
         forget(drains, session);
         forget(stops, session);
@@ -9031,6 +9053,7 @@ async function carryToAgents(id, model, readEngine, agents, signal) {
       if (!(id in still))
         break;
     }
+    const renamed = Object.fromEntries(waiting.map((item) => [item.id, messageID()]));
     const moved = await call(agents, "POST", "/api/session/import", {
       title: session.title,
       agent: session.agent,
@@ -9038,10 +9061,11 @@ async function carryToAgents(id, model, readEngine, agents, signal) {
       location: { directory },
       permissions: session.permissions,
       messages,
-      waiting: waiting.map((item) => ({ id: messageID(), text: item.text, files: promptFiles(item.payload) }))
+      waiting: waiting.map((item) => ({ id: renamed[item.id], text: item.text, files: promptFiles(item.payload) }))
     });
     if (typeof moved?.id !== "string")
       return no(502, "The coding agents didn’t take it.");
+    carryQueue(id, moved.id, renamed);
     for (const item of waiting)
       await call(engine, "DELETE", `/${route}/inbox/${encodeURIComponent(item.id)}`).catch(() => {});
     const entries = `/api/experimental/session/${encodeURIComponent(moved.id)}/instructions/entries`;

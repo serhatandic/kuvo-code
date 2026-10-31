@@ -1265,7 +1265,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   the Mac. A machine's bridge does the same for its own, with the Mac closed: a phone asks the
   computer the conversation lives on. There the session's wake-ups and watches go
   with it, the engine's is marked `kuvo.carriedTo` (the new one's id) as it's archived, and once
-  started it goes to its end, whatever becomes of the request. Changing a machine's bot's model there to
+  started it goes to its end, whatever becomes of the request. A client that carries one itself
+  marks it `kuvo.carriedTo` too: a session marked so takes its queue on the box with it (paused,
+  stopped by you, it stays so in the new one, with what waited on the box). Changing a machine's bot's model there to
   one of the agents' (`PATCH kuvo/bots/<id>`) carries its conversation on with them too; the Mac
   takes in its new conversation as it next connects.
 - `POST kuvo/sign-in/return` with `{"url"}`: where a sign-in's page sent the browser back to the
