@@ -12,7 +12,7 @@ import type { Limit } from "../auto"
 import { accountName, ContextWindows, failure, KnownAccount, model } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
 import { emit } from "../events"
-import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules } from "../fence"
+import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules, seatBot } from "../fence"
 import { kuvoTools, toolServerName } from "../kuvotools"
 import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
 import { computerServers } from "../servers"
@@ -266,7 +266,7 @@ export class CodexAgent implements Agent {
    * Its own places, as it runs whole in the box's sandbox: its home (an added account's, and your
    * Codex's, which it links to), and the skills it's given (only read).
    */
-  private fenced(directory: string, sessionID?: string) {
+  private fenced(directory: string, sessionID?: string, bot?: string) {
     const skills = skillsRoot()
     if (skills) mkdirSync(skills, { recursive: true, mode: 0o700 })
     const homes = [this.home, ...(this.instance.home && !onMachine ? [this.yourCodex] : [])]
@@ -278,6 +278,8 @@ export class CodexAgent implements Agent {
       kept: KEPT_IN_HOME,
       read: [...(skills ? [skills] : []), ...(attached ? [attached] : [])],
       port: relayPort(),
+      session: sessionID,
+      bot,
     })
   }
 
@@ -290,7 +292,7 @@ export class CodexAgent implements Agent {
     // While the box's sandbox is on, Codex runs whole in it: a session's in its folder, your
     // account's in its home.
     const directory = key === ACCOUNT ? this.accountFolder() : (thread?.session.location.directory ?? this.home)
-    const fence = key === SHARED ? undefined : this.fenced(directory, key === ACCOUNT ? undefined : key)
+    const fence = key === SHARED ? undefined : this.fenced(directory, key === ACCOUNT ? undefined : key, seatBot(thread?.session))
     if (key !== SHARED && !fence) throw new Error("Codex runs in the sandbox here, and it isn't ready: restart Kuvo Code.")
     const args = ["app-server", ...noComputerUse.flatMap((plugin) => ["-c", `plugins.${plugin}.enabled=false`])]
     const env = { ...(this.instance.home ? { CODEX_HOME: this.instance.home } : {}), ...(thread ? { OPENCODE_SESSION_ID: thread.session.id } : {}), ...fence?.env }

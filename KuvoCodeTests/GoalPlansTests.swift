@@ -119,46 +119,64 @@ import Testing
     /// Why a box can't work on a goal alone, on its card: the words and where its button goes, as
     /// the box names the reason.
     @Test func theSandboxRowSaysWhyAndItsButtonGoesWhereYouCanFixIt() throws {
-        let row = { (reading: GoalSandbox.Reading?, onThisMac: Bool, agent: String?) in
-            GoalSandbox.row(reading, computer: onThisMac ? "This Mac" : "lokum", onThisMac: onThisMac, bot: "Pixel", agent: agent)
+        let row = { (reading: GoalSandbox.Reading?, onThisMac: Bool, codingAgent: Bool) in
+            GoalSandbox.row(reading, computer: onThisMac ? "This Mac" : "lokum", onThisMac: onThisMac, bot: "Pixel", codingAgent: codingAgent)
         }
         let status = { (reason: String, route: String?) in GoalSandbox.Reading.status(.init(on: false, reason: reason, route: route)) }
 
-        #expect(row(.status(.init(on: true)), true, nil) == nil)
-        let notOn = try #require(row(.status(.init(on: false)), true, nil), "not on, with no reason (switched off for the rollout): it says so, with nothing to press")
+        #expect(row(.status(.init(on: true)), true, false) == nil)
+        let notOn = try #require(row(.status(.init(on: false)), true, false), "not on, with no reason (switched off for the rollout): it says so, with nothing to press")
         #expect(notOn.title == "This Mac can’t work on its own yet")
         #expect(notOn.buttons.isEmpty)
-        let unknown = try #require(row(status("somethingNew", "POST kuvo/sandbox/check"), false, nil), "a reason from a newer box still says it can't, and checks again")
+        let unknown = try #require(row(status("somethingNew", "POST kuvo/sandbox/check"), false, false), "a reason from a newer box still says it can't, and checks again")
         #expect(unknown.title == "lokum can’t work on its own yet")
         #expect(unknown.buttons == [.init(label: "Try Again", action: .route(method: "POST", path: "kuvo/sandbox/check"))])
 
-        let kernel = try #require(row(.status(.init(on: false, able: false, reason: "kernel", needs: "Linux 5.13")), false, nil))
+        let kernel = try #require(row(.status(.init(on: false, able: false, reason: "kernel", needs: "Linux 5.13")), false, false))
         #expect(kernel.text.contains("Linux 5.13 or later"))
         #expect(kernel.buttons.map(\.label) == ["How to Check…"])
-        #expect(row(status("macos", nil), true, nil)?.buttons == [.init(label: "Software Update…", action: .open(GoalSandbox.softwareUpdate))])
+        #expect(row(status("macos", nil), true, false)?.buttons == [.init(label: "Software Update…", action: .open(GoalSandbox.softwareUpdate))])
 
-        let failedOnce = try #require(row(.status(.init(on: false, reason: "checkFailed", route: "POST kuvo/sandbox/check", check: "readsOwn", failures: 1)), true, nil))
+        let failedOnce = try #require(row(.status(.init(on: false, reason: "checkFailed", route: "POST kuvo/sandbox/check", check: "readsOwn", failures: 1)), true, false))
         #expect(failedOnce.text == "Its check found that a command could still read Kuvo Code’s files, so commands run outside the sandbox for now. Try Again checks it again.")
         #expect(failedOnce.buttons == [.init(label: "Try Again", action: .route(method: "POST", path: "kuvo/sandbox/check"))])
-        let failedTwice = try #require(row(.status(.init(on: false, reason: "checkFailed", route: "POST kuvo/sandbox/check", check: "tempFiles", failures: 2)), true, nil))
+        let failedTwice = try #require(row(.status(.init(on: false, reason: "checkFailed", route: "POST kuvo/sandbox/check", check: "tempFiles", failures: 2)), true, false))
         #expect(failedTwice.text.hasPrefix("Its check failed again: a command couldn’t write its temporary files"))
         #expect(failedTwice.buttons.map(\.label) == ["Try Again", "Report a Problem…"], "Report a Problem joins once it fails again")
 
-        #expect(row(status("plugin", "POST kuvo/sandbox/check"), true, nil)?.buttons == [.init(label: "Fix It", action: .route(method: "POST", path: "kuvo/sandbox/check"))])
+        #expect(row(status("plugin", "POST kuvo/sandbox/check"), true, false)?.buttons == [.init(label: "Fix It", action: .route(method: "POST", path: "kuvo/sandbox/check"))])
         for reason in ["engineDown", "waiting"] {
-            #expect(row(status(reason, "POST kuvo/engine/restart"), true, nil)?.buttons == [.init(label: "Restart Engine", action: .route(method: "POST", path: "kuvo/engine/restart"))])
+            #expect(row(status(reason, "POST kuvo/engine/restart"), true, false)?.buttons == [.init(label: "Restart Sessions", action: .route(method: "POST", path: "kuvo/engine/restart"))])
         }
-        #expect(row(status("checking", "POST kuvo/sandbox/check"), false, nil)?.checking == true)
+        #expect(row(status("waiting", "POST kuvo/engine/restart"), false, false)?.text.hasPrefix("Sessions on lokum started before the sandbox was set up") == true)
+        #expect(row(status("checking", "POST kuvo/sandbox/check"), false, false)?.checking == true)
 
         // A box from before the sandbox: the machine is updated from Machines; this Mac, as an app.
-        #expect(row(.old, false, nil)?.buttons == [.init(label: "Update lokum…", action: .updateMachine)])
-        #expect(row(.old, true, nil)?.buttons == [.init(label: "Check for Updates…", action: .checkForUpdates)])
+        #expect(row(.old, false, false)?.buttons == [.init(label: "Update lokum…", action: .updateMachine)])
+        #expect(row(.old, true, false)?.buttons == [.init(label: "Check for Updates…", action: .checkForUpdates)])
 
-        // A bot on a coding agent: the sandbox doesn't cover its commands, whatever the box says.
-        let agents = try #require(row(.status(.init(on: true, agents: false)), true, "Claude Code"))
-        #expect(agents.title == "Pixel can’t work on its own yet")
-        #expect(agents.text.contains("runs on Claude Code"))
-        #expect(agents.buttons == [.init(label: "Use the Engine…", action: .editBot)])
+        // A bot on a coding agent: its commands are in the sandbox as the engine's are, so the row
+        // is the box's own. Only a coding agent's process started before the sandbox, still running
+        // outside it (any agent's: the box can't say whose), holds it back: restarted in it, as the
+        // box offers.
+        #expect(row(.status(.init(on: true, agents: true)), true, true) == nil, "all in it: nothing to fix")
+        #expect(row(status("engineDown", "POST kuvo/engine/restart"), true, true)?.buttons == [.init(label: "Restart Sessions", action: .route(method: "POST", path: "kuvo/engine/restart"))])
+        let outside = try #require(row(.status(.init(on: true, agents: false, outside: true)), true, true))
+        #expect(outside.title == "Agents started before the sandbox")
+        #expect(outside.text == "Some coding agents on this Mac still run outside it, so Pixel works while you’re here. Restart them in the sandbox, and Pixel works on its own.")
+        #expect(outside.buttons == [.init(label: "Restart Agents", action: .restartAgents)])
+        let restarting = try #require(GoalSandbox.row(.status(.init(on: true, agents: false, outside: true)), computer: "This Mac", onThisMac: true, bot: "Pixel", codingAgent: true, restarting: true))
+        #expect(restarting.checking && restarting.buttons.isEmpty, "restarting: it says so until the box has it in the sandbox")
+        #expect(row(.status(.init(on: true, agents: false)), true, true)?.checking == true, "the agents bridge hasn't said yet: still checking")
+        #expect(row(.status(.init(on: true, agents: false, restart: true)), true, true)?.buttons == [.init(label: "Restart Agents", action: .restartAgents)],
+                "a box from before `outside` says it only by asking to restart them")
+        #expect(row(.status(.init(on: true, agents: false, outside: true)), true, false) == nil, "a bot on the built-in models isn't held back by them")
+        // Plain words: nothing about a sandbox that doesn't cover agents yet, nor the engine.
+        let every = [outside, restarting, notOn, kernel] + ["engineMissing", "plugin", "engineDown", "waiting"].compactMap { row(status($0, "POST kuvo/sandbox/check"), false, false) }
+        for each in every {
+            let words = "\(each.title) \(each.text) \(each.buttons.map(\.label))"
+            #expect(!words.contains("doesn’t cover") && !words.localizedCaseInsensitiveContains("engine"), "\(words)")
+        }
     }
 
     @Test func startSendsTheCardsSwitchesDeadlineAndChangedLimits() throws {
@@ -211,7 +229,7 @@ import Testing
             return
         }
         #expect(!status.on)
-        let row = try #require(GoalSandbox.row(reading, computer: "lab", onThisMac: false, bot: "Pixel", agent: nil))
+        let row = try #require(GoalSandbox.row(reading, computer: "lab", onThisMac: false, bot: "Pixel", codingAgent: false))
         #expect(row.title.hasPrefix("lab can’t work on its own"))
     }
 

@@ -31,7 +31,7 @@ import { Snapshots } from "./snapshots"
 import { Roster } from "./roster"
 import { cancelSignIns, handler } from "./server"
 import { Sessions } from "./sessions"
-import { noteAgentsInside } from "./fence"
+import { noteAgentsInside, untilSandboxDecided } from "./fence"
 import { useSavedLoginPath } from "./proc"
 import { setSkillSource } from "./skills"
 import { setServerSource } from "./servers"
@@ -281,6 +281,10 @@ if (artifactsFolder) {
   }
 }
 
+// Nothing starts a coding agent before it listens (an app's first ask, a group chat, a goal), and it
+// listens once the box has set up its sandbox: on this Mac the app starts it before the box, so an
+// agent started then would run outside the sandbox until it stops.
+await untilSandboxDecided()
 let server: ReturnType<typeof Bun.serve>
 try {
   server = Bun.serve({

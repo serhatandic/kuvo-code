@@ -11,7 +11,7 @@ import { resetsIn, type Limit } from "./auto"
 import { fileDiff } from "./diff"
 import { newID } from "./ids"
 import { RPC, RPCError } from "./rpc"
-import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules } from "./fence"
+import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules, seatBot } from "./fence"
 import { isKuvoTool, kuvoToolName, kuvoTools, loadKuvoTools, toolServerName } from "./kuvotools"
 import { computerServers, type ComputerServers } from "./servers"
 import { dropRelayed, relayedServers, relayedTools, relayPort } from "./toolrelay"
@@ -381,6 +381,8 @@ export class AcpThread implements Thread {
       kept: whole.kept,
       read: [...(skills?.startsWith("/") ? [skills] : []), ...(attached ? [attached] : []), ...(whole.read?.(started) ?? [])],
       port: relayPort(),
+      session: this.session.id,
+      bot: seatBot(this.session),
     })
     if (!fence) throw new Error(`${this.name} runs in the sandbox here, and it isn't ready: restart Kuvo Code.`)
     return { argv: [fence.command, ...argv.slice(1)], env: { ...env, ...whole.env, ...fence.env }, ended: fence.ended }

@@ -1,7 +1,7 @@
 // The sandbox's policy in macOS's own terms: a Seatbelt profile for `sandbox-exec`, which the
 // launcher (`bin/kuvo-fence`) runs each command in, with the conversation's folder, its git
 // repository, the commands' temporary folder and where its wake-ups are kept as the profile's
-// parameters (WORK, GIT, TMP, WAKES), what Also Allowed gives its project (ALLOW0…, escaped for
+// parameters (WORK, GIT, TMP, WAKES, and MEMORY, its bot's memory file), what Also Allowed gives its project (ALLOW0…, escaped for
 // regexes as ALLOW0_RE…), and the tag
 // its refusals are logged with (TAG: `kuvo-sandbox <session>`). A coding agent run whole in it
 // (Codex; Grok, Cursor, Antigravity) has homes of its own too (OWN0…, escaped as OWN0_RE…), of
@@ -105,8 +105,14 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   // inbox written, which the box takes in, out of its reach (kuvo-wake's `take`).
   allow("file-read-data", param("WAKES"));
   allow(HIDDEN, `(subpath (string-append (param "WAKES") "/inbox"))`);
+  // Its bot's memory, which the launcher names (MEMORY): read and written in place, never made,
+  // moved or removed (so never a link, or another name for another file).
+  allow("file-read-data file-write-data", `(literal (param "MEMORY"))`);
 
   out.push(";; what runs outside the sandbox, or changes the engine");
+  // The conversation's folder and its repository's, themselves: never removed or made again, so
+  // never traded for a link to somewhere else (another bot's folder) the next command would work in.
+  deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`);
   deny("file-write*", under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED),
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
   deny("file-write*", ...homes.map(home => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));

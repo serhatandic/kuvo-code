@@ -76,8 +76,14 @@ async function start(box, env = {}) {
     return { status: response.status, value: await response.json().catch(() => ({})) };
   };
   const stop = async () => { child.stdin.end(); child.kill("SIGTERM"); await exited; };
-  return { url, ask, stop };
+  return { url, ask, stop, pid: child.pid };
 }
+
+// Whom the box's word to the agents bridge names, that it has set up its sandbox (or found it
+// can't run): the box as it runs now, before the bridge starts any coding agent.
+const decidedBy = box => {
+  try { return JSON.parse(fs.readFileSync(path.join(box.home, "run", "fence", "decided"), "utf8")).pid; } catch { return undefined; }
+};
 
 // The engine, opening `folder` and running `command` there as its shell tool does: through the
 // shell its plugins give it, with the environment they set, then the conversation's (`session`,
@@ -150,6 +156,7 @@ test("set up wherever it can run as the box starts, waiting only for the engine,
     assert.equal("wanted" in state, false);
     assert.equal(state.reason, "waiting", state.why);
     assert.equal(fs.existsSync(box.plugin), true, "the engine has its plugin as the box starts");
+    assert.equal(decidedBy(box), running.pid, "it tells the agents bridge, which starts no agent before");
     assert.equal((await running.ask("PATCH", "kuvo/sandbox", { on: false })).status, 405);
     assert.equal(fs.existsSync(box.plugin), true);
   } finally {
@@ -497,6 +504,57 @@ test("a bot's command writes in its own folder, and another bot's is hidden from
   }
 });
 
+test("a bot keeps its memory from the sandbox, in its own conversation and its seats in group chats, and nothing else of its folder or another bot's", async () => {
+  const box = boxAt("memory");
+  const bot = (id, session) => {
+    const folder = path.join(box.bots, id);
+    fs.mkdirSync(path.join(folder, "workspace"), { recursive: true });
+    fs.writeFileSync(path.join(folder, "MEMORY.md"), `# ${id}'s memory\n`);
+    fs.writeFileSync(path.join(folder, "bot.json"), "{}");
+    fs.writeFileSync(path.join(folder, "session"), session);
+    return folder;
+  };
+  const ship = bot("bot_ship", "ses_ship");
+  const scout = bot("bot_scout", "ses_scout");
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const attempts = tries([
+      ["read its memory", "cat ../MEMORY.md"],
+      ["write its memory", "echo '- likes tea' >> ../MEMORY.md"],
+      ["write its memory anew", "printf '# Ship\\n' > ../MEMORY.md"],
+      ["replace its memory", "echo x > ../MEMORY.new && mv ../MEMORY.new ../MEMORY.md"],
+      ["remove its memory", "rm ../MEMORY.md"],
+      ["link its memory elsewhere", "ln -sf ../bot.json ../MEMORY.md"],
+      ["change its settings", "echo x > ../bot.json"],
+      ["change its conversation", "echo ses_other > ../session"],
+      ["read another bot's memory", `cat ${JSON.stringify(path.join(scout, "MEMORY.md"))}`],
+      ["write another bot's memory", `echo x >> ${JSON.stringify(path.join(scout, "MEMORY.md"))}`],
+      // Last: its own folder traded for a link to another bot's, which the next command would work in.
+      ["trade its folder for another bot's", `d=$(pwd -P) && cd .. && rmdir "$d" && ln -s ${JSON.stringify(scout)} "$d"`],
+    ]);
+    const expected = {
+      "read its memory": "allowed", "write its memory": "allowed", "write its memory anew": "allowed",
+      "replace its memory": "refused", "remove its memory": "refused", "link its memory elsewhere": "refused",
+      "change its settings": "refused", "change its conversation": "refused",
+      "read another bot's memory": "refused", "write another bot's memory": "refused",
+      "trade its folder for another bot's": "refused",
+    };
+    // Its own conversation, and its seat in a group chat (another conversation, in its folder).
+    for (const session of ["ses_ship", "ses_seat"]) {
+      fs.writeFileSync(path.join(ship, "MEMORY.md"), "# Ship's memory\n");
+      const ran = await engineRuns(box, path.join(ship, "workspace"), attempts, session);
+      assert.deepEqual(outcome(ran.out), expected, `${session}: ${ran.out}`);
+      assert.equal(fs.readFileSync(path.join(ship, "MEMORY.md"), "utf8"), "# Ship\n");
+    }
+    assert.equal(fs.readFileSync(path.join(ship, "bot.json"), "utf8"), "{}");
+    assert.equal(fs.readFileSync(path.join(scout, "MEMORY.md"), "utf8"), "# bot_scout's memory\n");
+    assert.equal(fs.lstatSync(path.join(ship, "workspace")).isDirectory(), true, "its folder is still its own");
+  } finally {
+    await running.stop();
+  }
+});
+
 test("with Kuvo Code's own kill switch, the engine's plugin goes, and commands run as before", async () => {
   const box = boxAt("toggled");
   const project = path.join(root, "toggled-project");
@@ -510,6 +568,7 @@ test("with Kuvo Code's own kill switch, the engine's plugin goes, and commands r
     // Nothing a client offers: there's nothing you can do about it.
     assert.deepEqual([state.on, state.reason, state.action], [false, undefined, undefined]);
     assert.equal(fs.existsSync(box.plugin), false);
+    assert.equal(decidedBy(box), off.pid, "the agents bridge starts them, as before");
     assert.equal((await engineRuns(box, project, `cat ${JSON.stringify(path.join(box.home, "run", "engine.json"))}`)).status, 0);
   } finally {
     await off.stop();

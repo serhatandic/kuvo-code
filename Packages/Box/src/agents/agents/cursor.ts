@@ -11,7 +11,7 @@ import type { Agent, AgentContext, Account, RunInput, RunResult, SignInAttempt, 
 import { accountName, failure, KnownAccount, model, TookTooLong } from "../agent"
 import type { Limit } from "../auto"
 import { fileDiff, fromPatch } from "../diff"
-import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules } from "../fence"
+import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules, seatBot } from "../fence"
 import { kuvoTools } from "../kuvotools"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
@@ -631,6 +631,8 @@ class CursorThread implements Thread {
       kept: [],
       read: [runtime, dirname(process.execPath), ...(options.local?.dirs ?? []), ...(attached ? [attached] : [])],
       port: relayPort(),
+      session: this.session.id,
+      bot: seatBot(this.session),
     })
     if (!fence) throw new Error("Cursor runs in the sandbox here, and it isn't ready: restart Kuvo Code.")
     return new CursorWorker([fence.command, "--config=/dev/null", "--no-env-file", cursorWorker(runtime)], {

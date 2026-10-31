@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSandbox
 import ClientSessions
 import OpenCodeKit
 import SwiftUI
@@ -27,6 +28,8 @@ struct GoalCard: View {
     @State private var periods: [GoalPlan.Spend.Period] = []
     @State private var sandbox: GoalSandbox.Reading?
     @State private var sandboxBusy = false
+    /// You said to restart the agents started before the sandbox: they do between turns.
+    @State private var restartingAgents = false
     @State private var failure: String?
     @State private var sent: GoalPlanAnswer.Action?
     /// How tall what's between its header and its buttons can be before it scrolls.
@@ -77,11 +80,20 @@ struct GoalCard: View {
         .onChange(of: plan.id) { takeIn() }
         .task(id: "\(plan.id)|\(box)|\(plan.alone)|\(sandboxRound)") {
             guard !plan.alone else { return }
-            // Read again while it's being checked, less often each time.
+            // Read again while it's being checked (or the agents restart), less often each time.
             var wait = 2.0
+            var hadRow = false
             while !Task.isCancelled {
                 sandbox = await app.goalPlans.sandbox(on: box)
-                guard case .status(let status) = sandbox, status.reason == "checking" else { return }
+                // The agents restarted (or none is outside any more): nothing more to wait for.
+                if case .status(let status) = sandbox, status.outside != true { restartingAgents = false }
+                guard let row = sandboxRow else {
+                    // Fixed since: the plan may run alone now, which its box says.
+                    if hadRow { await app.goalPlans.read(box) }
+                    return
+                }
+                hadRow = true
+                guard row.checking else { return }
                 try? await Task.sleep(for: .seconds(wait))
                 wait = min(wait * 2, 60)
             }
@@ -174,7 +186,7 @@ struct GoalCard: View {
 
     private var sandboxRow: GoalSandbox.Row? {
         GoalSandbox.row(sandbox, computer: computer, onThisMac: onThisMac, bot: plan.name,
-                        agent: bot?.agents == true ? OutsideAgents.name(bot?.model?.providerID) : nil)
+                        codingAgent: bot?.agents == true, restarting: restartingAgents)
     }
 
     private func sandboxView(_ row: GoalSandbox.Row) -> some View {
@@ -222,12 +234,16 @@ struct GoalCard: View {
         case .reportProblem: app.reportProblem()
         case .updateMachine: app.openSettings(.machines)
         case .checkForUpdates: updates.check()
-        case .editBot: if let bot { app.tabs.openBotEditor(bot: bot) }
-        case .readAgain, .route:
+        case .readAgain, .route, .restartAgents:
             sandboxBusy = true
             Task {
                 defer { sandboxBusy = false }
-                if case .route(let method, let path) = action {
+                if action == .restartAgents {
+                    do {
+                        try await app.goalPlans.sandboxRoute("POST", SandboxRoutes.restart, body: ["restart": true], on: box)
+                        restartingAgents = true
+                    } catch { failure = error.localizedDescription }
+                } else if case .route(let method, let path) = action {
                     do { try await app.goalPlans.sandboxRoute(method, path, on: box) } catch { failure = error.localizedDescription }
                     // Fixed, the plan may run alone now: its box says.
                     await app.goalPlans.read(box)
@@ -368,6 +384,7 @@ struct GoalCard: View {
     // MARK: Answers
 
     private func takeIn() {
+        restartingAgents = false
         switches = Dictionary(uniqueKeysWithValues: plan.public.map { ($0.id, $0.on) })
         wake = plan.wake
         digest = plan.digest

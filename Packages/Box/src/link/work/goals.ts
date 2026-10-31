@@ -120,11 +120,14 @@ function changeKept<T>(change: (goals: KeptGoal[]) => T, file = GOALS_FILE): T {
 
 const Here = `${HERE[0].toUpperCase()}${HERE.slice(1)}`;
 
+/** Whether `goal` may go on alone here: its bot's commands in the sandbox, a coding agent's too. */
+const alone = (goal: Pick<KeptGoal, "bot">): boolean => sandboxOn(botHere(goal.bot)?.agents ?? false);
+
 /** The checks the box makes itself, as they stand now: whether it may work on its own here, on
  * power (a Mac), and where new projects go (when the plan makes one and none is picked). */
-export function boxChecks(goal: Pick<KeptGoal, "projects" | "name">): GoalCheckShape[] {
+export function boxChecks(goal: Pick<KeptGoal, "projects" | "name" | "bot">): GoalCheckShape[] {
   const checks: GoalCheckShape[] = [];
-  if (!sandboxOn()) checks.push({ id: "alone", text: `${Here} can't work on its own yet`, detail: `${goal.name} works on it with you here: what it asks waits for you`, state: "failed", by: "box" });
+  if (!alone(goal)) checks.push({ id: "alone", text: `${Here} can't work on its own yet`, detail: `${goal.name} works on it with you here: what it asks waits for you`, state: "failed", by: "box" });
   if (keepsAwake() && onPower() === false) checks.push({ id: "power", text: "Your Mac is on battery", detail: "If it sleeps, the goal carries on once it wakes", state: "needs", by: "box" });
   if (goal.projects.length && !projectsFolder()) {
     checks.push({ id: "projectsFolder", text: "Pick where new projects go", detail: `for ${goal.projects.join(", ")}`, state: "needs", by: "box", action: { kind: "projectsFolder", label: "Pick" } });
@@ -139,7 +142,7 @@ const shown = (goal: KeptGoal): GoalPlanShape => {
     const paused = goal.state === "running" && step.state !== "done" && step.state !== "skipped" ? goal.paused.find(each => each.session && step.sessions?.includes(each.session)) : undefined;
     return paused ? { ...step, state: "paused" as const, ...(paused.until ? { resumes: paused.until } : {}) } : step;
   });
-  return { ...rest, steps, checks: goal.state === "proposed" ? [...boxChecks(goal), ...goal.checks] : goal.checks, alone: sandboxOn() };
+  return { ...rest, steps, checks: goal.state === "proposed" ? [...boxChecks(goal), ...goal.checks] : goal.checks, alone: alone(goal) };
 };
 
 /** The goals here, as clients show them: each bot's latest while it's proposed or running, or

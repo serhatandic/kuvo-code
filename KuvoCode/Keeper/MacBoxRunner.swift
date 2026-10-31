@@ -121,9 +121,6 @@ final class MacBoxRunner {
             // into your Desktop, and macOS would ask whether the copy may read it.
             if AppInfo.neverPrompts { shell["OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"] = "1" }
             self.shell = shell
-            // The coding agents' bridge as soon as there's a Bun to run it: this Mac's group chats
-            // run there, and show (and meet) from now, while the engine starts.
-            startAgents(engine: binary)
             // Bots' wake-up command, by name, and where their folders are; and the launcher
             // integrations' servers run with.
             try? Launcher.install(in: Bots.command.deletingLastPathComponent(), engine: binary)
@@ -151,6 +148,10 @@ final class MacBoxRunner {
             // engine's restarts.
             await box.start(engine: binary, environment: await boxEnvironment(shell), checked: AppModel.engineOverride == nil)
             guard launch == self.launch else { return }
+            // The coding agents' bridge once the box has set up its sandbox (it waits for that, but no
+            // longer than a while): no coding agent runs outside it. This Mac's group chats run there,
+            // and show (and meet) from now, while the engine starts.
+            startAgents(engine: binary)
             // What some providers need until opencode handles it, on top, as the box learned it
             // from its engine (as a machine's start adds it).
             shell["OPENCODE_CONFIG_CONTENT"] = await box.engineConfig(engine: binary, content: shell["OPENCODE_CONFIG_CONTENT"], environment: shell)
