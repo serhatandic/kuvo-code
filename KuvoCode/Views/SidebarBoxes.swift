@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import OpenCodeKit
 import SwiftUI
 
@@ -180,10 +181,7 @@ private struct NameTrack: View {
             }
             .padding(.horizontal, 8)
             .frame(height: 22)
-            .background {
-                if lit { RoundedRectangle(cornerRadius: 6).fill(Pressable.hoverFill) }
-            }
-            .contentShape(.rect)
+            .pickHighlight(RoundedRectangle(cornerRadius: 6), isOn: lit)
         }
         .buttonStyle(.plain)
         .clickablePointer()
