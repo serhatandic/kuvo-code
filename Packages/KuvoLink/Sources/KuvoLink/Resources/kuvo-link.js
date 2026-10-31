@@ -12855,6 +12855,10 @@ function appTemporary() {
   const tmp = path53.dirname(path53.resolve(os5.tmpdir()));
   return path53.basename(tmp) === path53.basename(path53.dirname(path53.resolve(K))) ? tmp : null;
 }
+function sandboxNpmCache() {
+  const tmp = appTemporary();
+  return tmp ? path53.join(os5.userInfo().homedir, "Library", "Caches", path53.basename(tmp), "sandbox-npm") : path53.join(K, "cache", "sandbox-npm");
+}
 function macFolders(home) {
   const app = path53.dirname(path53.resolve(K));
   const bundle = path53.basename(app);
@@ -12879,6 +12883,7 @@ function fencePolicy(ports = []) {
   const kuvo = [...new Set(own.kuvo.map(realish))];
   const kuvoReadable = own.readable.map(realish);
   const readOnly = inHome(RUNS_LATER);
+  const commandCaches = [realish(sandboxNpmCache())];
   if (process.platform === "darwin") {
     return {
       home,
@@ -12886,6 +12891,7 @@ function fencePolicy(ports = []) {
       kuvoReadable,
       readOnly,
       ports,
+      commandCaches,
       kuvoPatterns: [
         `^${escapeRegex(home)}/Library/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
         `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`
@@ -12901,6 +12907,7 @@ function fencePolicy(ports = []) {
     kuvoReadable,
     readOnly,
     ports,
+    commandCaches,
     kuvoPatterns: [],
     writable: ["/tmp", "/var/tmp", "/dev", "/dev/shm", ...inHome([...CACHES, ...LINUX_CACHES])],
     secrets: [...inHome([...SECRETS, ...LINUX_SECRETS]), ...sshKeys(home), ...ghHosts(home)]
@@ -13115,6 +13122,7 @@ function seatbeltProfile(policy, options) {
   const inHome = (home, rest) => `(regex (string-append "^" (param ${quote2(`${home}_RE`)}) ${rest}))`;
   allow("file-write*", ...homes.flatMap((home) => ["$", "/"].flatMap((after) => ["REGULAR-FILE", "DIRECTORY"].map((type) => `(require-all ${inHome(home, `"/(" (param "STATE") ")${after}"`)} (vnode-type ${type}))`))));
   allow(HIDDEN, param("TMP"));
+  allow(HIDDEN, ...policy.commandCaches.map(subpath));
   if (options.inside)
     allow(HIDDEN, param("WORK"));
   allow("file-read-data", param("WAKES"));
@@ -13209,6 +13217,7 @@ function launcherScript(places) {
     `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; ${places.platform === "darwin" ? `eval "r$i=\\$(escaped \\"\\$line\\")"; ` : ""}i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
     `export PRE_COMMIT_HOME="$TMPDIR"pre-commit`,
+    `(umask 077; mkdir -p ${sh(places.npm)}) && export npm_config_cache=${sh(places.npm)}`,
     ...places.platform === "darwin" ? [`tmp=$(cd "$tmp" 2>/dev/null && pwd -P) || { echo "This command can't run: its temporary folder isn't there." >&2; exit 126; }`] : [],
     `own=$F/none`,
     `case \${OPENCODE_SESSION_ID-} in`,
@@ -13343,7 +13352,7 @@ function agentsNote(platform) {
       "- Commands can't open apps (`open`) or start launchd jobs."
     ] : [],
     "",
-    "`npx` can't fetch a package the project doesn't have (its packages there are only read, and npm says to `chown` its cache: don't). Run it with `npm exec --cache \"$TMPDIR/npm\" --yes -- <package>` instead, or add it to the project.",
+    "`npx` and `npm` use a cache of Kuvo Code's own here (`$npm_config_cache`): leave it as it is, and `npx -y <package>` fetches what it needs.",
     "",
     "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
     "",
@@ -13355,7 +13364,7 @@ function agentsNote(platform) {
 
 // Packages/Box/src/link/fence/landlock.ts
 function landlockPolicy(policy) {
-  return JSON.stringify({ hidden: [...policy.kuvo, ...policy.secrets], readable: policy.kuvoReadable, writable: policy.writable, readOnly: policy.readOnly }) + `
+  return JSON.stringify({ hidden: [...policy.kuvo, ...policy.secrets], readable: policy.kuvoReadable, writable: [...policy.writable, ...policy.commandCaches], readOnly: policy.readOnly }) + `
 `;
 }
 var LANDLOCK_RUNNER = String.raw`// Kuvo Code writes this each time its box starts: changes here don't last.
@@ -13482,6 +13491,7 @@ var places = {
   key: SOCKET_KEY_FILE,
   sshFor: SSH_FOR,
   sshAgents: SSH_AGENTS,
+  npm: realish(sandboxNpmCache()),
   platform
 };
 var VERSION = crypto22.createHash("sha256").update(launcherScript(places)).update(LANDLOCK_RUNNER).update(pluginScript(places, "")).digest("hex").slice(0, 16);
@@ -18004,7 +18014,7 @@ import fs68 from "node:fs";
 import path70 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.135";
+var BRIDGE_VERSION = "0.9.136";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
