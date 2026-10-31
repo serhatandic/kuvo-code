@@ -198,13 +198,15 @@ final class KeeperFollower {
         return BackgroundWork.shared.state != .on
     }
 
-    /// Why the engine stopped and isn't started again (`run/engine-stopped`): one from before the
-    /// last restart was asked for is the last engine's.
+    /// Why the engine stopped and isn't started again (`run/engine-stopped`), with what it wrote
+    /// last under it (`run/engine-output`), as the window shows its own engine's: one from before
+    /// the last restart was asked for is the last engine's.
     private func stoppedReason() -> String? {
         let file = KeeperRecord.run.appending(path: "engine-stopped")
         guard let reason = try? String(contentsOf: file, encoding: .utf8), !reason.isEmpty else { return nil }
         if let restartAsked, let written = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate, written < restartAsked { return nil }
-        return reason
+        let output = (try? String(contentsOf: KeeperRecord.run.appending(path: "engine-output"), encoding: .utf8)) ?? ""
+        return output.isEmpty ? reason : reason + "\n\n" + output
     }
 
     /// One of the box's records, while its process runs: where it answers.

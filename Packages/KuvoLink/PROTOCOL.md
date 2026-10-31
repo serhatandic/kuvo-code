@@ -2269,7 +2269,8 @@ machine's keeper does, so a client finds them there:
 - `run/keeper.json`: `{"pid", "version", "build", "url", "password", "started"}` (milliseconds).
   `run/keeper.lock` is held while it runs: one at a time.
 - `run/engine.json` and `run/bridge.json`, as on a machine; `run/engine-stopped` (its reason) when
-  the engine stopped and isn't started again until asked.
+  the engine stopped and isn't started again until asked, and beside it `run/engine-output`, what
+  the engine wrote last (when it wrote anything), which the app shows under the reason.
 - `run/serve.json`: `{"pid", "port", "password"}`, where the box answers.
 - `bin/kuvo-start`: as a machine's (`kuvo-start restart`), here calling the keeper
   (`--box-control`).
