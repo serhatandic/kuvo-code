@@ -38,7 +38,7 @@ integrationScenarios({ link, home, mac: false, store: {
 // there, as `~/…`, the same on macOS and Linux, whatever the home is called.
 test("a box in your home names its keys from your home, as ~/", async () => {
   const yours = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-home-")));
-  atEnd(() => fs.rmSync(yours, { recursive: true, force: true }));
+  removeAtEnd(yours);
   const box = path.join(yours, ".kuvo-code");
   fs.mkdirSync(path.join(box, "bin"), { recursive: true });
   fs.mkdirSync(path.join(box, "box"), { recursive: true });

@@ -11,14 +11,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { atEnd } from "./at-end.js";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const binary = process.env.OPENCODE_TEST_BINARY;
 const model = process.env.KUVO_TEST_FREE_MODEL ?? "big-pickle";
 
 test("Stop holds on the real engine: what arrives while stopped waits on the box, and Resume sends what Stop held, then what arrived, a run at a time", { skip: !binary && "OPENCODE_TEST_BINARY isn't set", timeout: 600_000 }, async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-queue-live-")));
-  atEnd(() => fs.rmSync(root, { recursive: true, force: true }));
+  removeAtEnd(root);
   for (const folder of ["home", "tmp", "work", "box/run", "xdg/config", "xdg/data", "xdg/state", "xdg/cache"]) fs.mkdirSync(path.join(root, folder), { recursive: true });
   const env = { PATH: process.env.PATH, HOME: `${root}/home`, TMPDIR: `${root}/tmp/`, XDG_CONFIG_HOME: `${root}/xdg/config`, XDG_DATA_HOME: `${root}/xdg/data`, XDG_STATE_HOME: `${root}/xdg/state`, XDG_CACHE_HOME: `${root}/xdg/cache`, OPENCODE_PASSWORD: "pw" };
   const engine = spawn(binary, ["serve", "--stdio", "--port", "0"], { env, cwd: `${root}/work`, stdio: ["pipe", "pipe", "pipe"] });

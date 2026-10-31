@@ -47,43 +47,42 @@ after(async () => {
 });
 
 // What the file still has open: the runner's own stdio aside, and what's on its way out let go
-// first (a process told to stop, until it has; its own connections out, closed; then what closes
-// with them, a few turns of the loop: a server's side of them). Each named, then stopped.
+// first (a process told to stop, until it has; then its pipes, which a process of its own may still
+// hold, and the file's own connections out, closed; then what closes with them, a few turns of the
+// loop: a server's side of them). Each named, then stopped.
 async function leftOpen() {
   const own = new Set([process.stdin, process.stdout, process.stderr]);
-  const open = () => process._getActiveHandles().filter(handle => !own.has(handle));
-  // (A process's own pipes go with it.)
-  const pipes = () => new Set(open().filter(handle => handle instanceof ChildProcess).flatMap(child => child.stdio));
-  const stopping = child => child.killed || child.exitCode !== null || child.signalCode !== null || child.stdin?.writableEnded;
-  await Promise.all(open().filter(handle => handle instanceof ChildProcess && stopping(handle)).map(closed));
-  const piped = pipes();
-  for (const handle of open()) if (handle instanceof net.Socket && !handle.server && !piped.has(handle)) handle.destroy();
-  for (let turn = 0; turn < 10 && open().length; turn++) await new Promise(resolve => setImmediate(resolve));
-  const children = open().filter(handle => handle instanceof ChildProcess);
-  const theirs = pipes();
+  // (A process that has exited is still listed while its handle closes.)
+  const open = () => process._getActiveHandles().filter(handle => !own.has(handle) && !(handle instanceof ChildProcess && ended(handle)));
+  const children = () => open().filter(handle => handle instanceof ChildProcess);
+  await Promise.all(children().filter(child => child.killed || child.stdin?.writableEnded).map(exited));
   const left = [];
-  for (const child of children) {
+  for (const child of children()) {
     left.push(`a process never stopped (${child.spawnargs.join(" ").slice(0, 200)})`);
     child.kill("SIGKILL");
-    await closed(child);
+    await exited(child);
   }
+  for (const handle of open()) if (handle instanceof net.Socket && !handle.server) handle.destroy();
+  for (let turn = 0; turn < 10 && open().length; turn++) await new Promise(resolve => setImmediate(resolve));
   for (const handle of open()) {
-    if (theirs.has(handle)) continue;
     if (handle instanceof net.Server) {
       const where = handle.address();
       left.push(`a server listening (${typeof where === "string" ? where : `port ${where?.port}`})`);
       handle.closeAllConnections?.();
       handle.close();
     } else if (handle instanceof net.Socket) {
-      if (handle.server && !(handle.server instanceof http.Server)) left.push(`a connection to one of its socket servers (${handle.remoteAddress ? `from ${handle.remoteAddress}:${handle.remotePort}` : "a local socket"}), whose other end still runs`);
+      if (!(handle.server instanceof http.Server)) left.push(`a connection to one of its socket servers (${handle.remoteAddress ? `from ${handle.remoteAddress}:${handle.remotePort}` : "a local socket"}), whose other end still runs`);
       handle.destroy();
     } else {
       left.push(`a ${handle.constructor?.name ?? "handle"}`);
+      handle.close?.();
     }
   }
   return left;
 }
 
-const closed = child => child.exitCode !== null || child.signalCode !== null
+// (Its exit, not its pipes' close: a process it started may hold those.)
+const ended = child => child.exitCode !== null || child.signalCode !== null;
+const exited = child => ended(child)
   ? Promise.resolve()
-  : new Promise(resolve => child.once("close", resolve));
+  : new Promise(resolve => child.once("exit", resolve));

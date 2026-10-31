@@ -10,6 +10,8 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 
 const folder = process.env.AT_END_FOLDER;
 const how = process.env.AT_END_FIXTURE;
+// Where a process the file doesn't stop itself writes its pid, outside its folder, for the test to stop.
+const strays = process.env.AT_END_STRAY;
 removeAtEnd(folder);
 const env = { ...process.env };
 delete env.NODE_TEST_CONTEXT;
@@ -35,10 +37,24 @@ if (how === "clean") {
   const socket = path.join(folder, "run", "keeper.sock");
   await new Promise(resolve => keeper.listen(socket, resolve));
   const connected = new Promise(resolve => keeper.once("connection", resolve));
-  const stray = spawn(process.execPath, ["-e", `require("fs").writeFileSync(${JSON.stringify(path.join(folder, "stray"))}, String(process.pid)); require("net").createConnection(${JSON.stringify(socket)})`], { env, detached: true, stdio: "ignore" });
+  const stray = spawn(process.execPath, ["-e", `require("fs").writeFileSync(${JSON.stringify(strays)}, String(process.pid)); require("net").createConnection(${JSON.stringify(socket)})`], { env, detached: true, stdio: "ignore" });
   stray.unref();
   await connected;
   atEnd(() => keeper.close());
+} else if (how === "a process of its own") {
+  // A process that starts one of its own (as an engine starts its servers, or a box its ssh-agent),
+  // which keeps the pipes they share open once the first has gone. Told to stop last, so it's still
+  // on its way out as the check begins.
+  const theirs = `require("fs").writeFileSync(${JSON.stringify(strays)}, String(process.pid)); setInterval(() => {}, 1e9)`;
+  const parent = spawn(process.execPath, ["-e", `require("child_process").spawn(process.execPath, ["-e", ${JSON.stringify(theirs)}], { stdio: "inherit", detached: true }).unref(); process.stdin.resume()`], { env, stdio: "pipe" });
+  while (!fs.existsSync(strays)) await new Promise(resolve => setImmediate(resolve));
+  atEnd(() => parent.kill());
+  atEnd(() => new Promise(resolve => { child.once("close", resolve); child.kill(); }));
+  atEnd(() => server.close());
+} else if (how === "watching") {
+  atEnd(() => new Promise(resolve => { child.once("close", resolve); child.kill(); }));
+  atEnd(() => server.close());
+  fs.watch(folder);
 }
 // "left": neither stopped.
 
