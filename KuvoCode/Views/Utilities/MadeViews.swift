@@ -209,6 +209,7 @@ struct MadePopover: View {
     private var list: some View {
         VStack(spacing: 0) {
             header
+            if case .bot = place { ModeTabs(selection: $things.mode) }
             content
             if place.isSession { changesNote }
         }
@@ -224,20 +225,16 @@ struct MadePopover: View {
                 .truncationMode(.tail)
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 8)
-            switch place {
-            case .bot:
-                PillPicker(options: [.init(value: MadeThings.Mode.shelf, title: "Shelf"), .init(value: .timeline, title: "Timeline")], selection: $things.mode)
-                    .fixedSize()
-            case .group(let group, _):
-                botFilter(group)
-            case .session:
-                EmptyView()
-            }
+            if case .group(let group, _) = place { botFilter(group) }
         }
         .padding(.leading, 16)
         .padding(.trailing, 10)
-        .frame(height: 40)
+        // A bot's title stays where every other one is, and its tabs sit close under it.
+        .padding(.top, hasTabs ? 12 : 0)
+        .frame(height: hasTabs ? 30 : 40, alignment: hasTabs ? .top : .center)
     }
+
+    private var hasTabs: Bool { if case .bot = place { true } else { false } }
 
     private var heading: String { place.title }
 
@@ -352,6 +349,77 @@ struct MadePopover: View {
 
     private func open(_ header: ArtifactHeader) {
         withAnimation(.ui) { opened = header }
+    }
+}
+
+// MARK: - Shelf or Timeline
+
+/// A bot's two ways to look at what it made, as quiet tabs under the title (the arrow over the
+/// popover points at its title, not at them): the one showing underlined.
+private struct ModeTabs: View {
+    @Binding var selection: MadeThings.Mode
+    @Namespace private var underline
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 18) {
+                ModeTab(title: "Shelf", isOn: selection == .shelf, underline: underline) { pick(.shelf) }
+                ModeTab(title: "Timeline", isOn: selection == .timeline, underline: underline) { pick(.timeline) }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .zIndex(1)
+            Divider()
+        }
+        // VoiceOver reads it as the segmented picker it is: "Shelf, selected, 1 of 2".
+        .accessibilityRepresentation {
+            Picker("Show", selection: $selection) {
+                Text("Shelf").tag(MadeThings.Mode.shelf)
+                Text("Timeline").tag(MadeThings.Mode.timeline)
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private func pick(_ mode: MadeThings.Mode) {
+        withAnimation(.ui) { selection = mode }
+    }
+}
+
+private struct ModeTab: View {
+    let title: String
+    let isOn: Bool
+    let underline: Namespace.ID
+    let pick: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: pick) {
+            // As wide as its bold self either way, so picking one never nudges the other.
+            Text(title)
+                .font(.system(size: 12.5, weight: .semibold))
+                .hidden()
+                .overlay(alignment: .leading) {
+                    Text(title)
+                        .font(.system(size: 12.5, weight: isOn ? .semibold : .regular))
+                        .foregroundStyle(isOn || isHovered ? .primary : .secondary)
+                }
+                .frame(height: 28)
+                .overlay(alignment: .bottom) {
+                    if isOn {
+                        Rectangle()
+                            .fill(.primary)
+                            .frame(height: 2)
+                            .matchedGeometryEffect(id: "underline", in: underline)
+                            // Over the hairline under the row, not stacked on it.
+                            .offset(y: 1)
+                    }
+                }
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .clickablePointer()
+        .onHover { isHovered = $0 }
     }
 }
 
