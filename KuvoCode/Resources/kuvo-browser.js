@@ -1502,10 +1502,12 @@ async function settle(p, expectNavigation) {
 async function settleAfterClick(p, before, pagesBefore) {
   const start = Date.now();
   while (Date.now() - start < 1000 && (await readyState(p)) !== "loading" && (await address(p)) === before) await sleep(100);
-  const opened = (await pages()).find((info) => !pagesBefore.has(info.targetId));
-  if (opened) {
-    // The page it opened (a sign-in window, say) is this conversation's to go on in.
-    if (caller) await (await browser()).send("Kuvo.claim", { targetId: opened.targetId, session: caller }).catch(() => {});
+  // The page it opened (a sign-in window, say) is this conversation's to go on in: one this page
+  // opened (Chrome names its opener, with noopener too), not one another conversation or you
+  // opened meanwhile, nor one another conversation's agent has.
+  const opened = (await pages()).find((info) => !pagesBefore.has(info.targetId) && info.openerId === p.target);
+  const ours = opened && (!caller || (await (await browser()).send("Kuvo.claim", { targetId: opened.targetId, session: caller }).catch(() => ({ ok: false }))).ok);
+  if (ours) {
     const next = await use(opened.targetId);
     await settle(next, true);
     return next;
