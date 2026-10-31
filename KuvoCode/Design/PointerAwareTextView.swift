@@ -62,12 +62,12 @@ class PointerAwareTextView: NSTextView {
 
     // Nor its scroll view's (the composer's, a file's): AppKit gives it the I-beam over all it
     // shows whenever the text is made selectable or editable in a window.
-    // (Nonisolated as NSText's; it's only ever set on the main thread, as any view's.)
+    // (Nonisolated as NSText's; a view is set up on the main thread, where its scroll view is.)
     nonisolated override var isSelectable: Bool {
         get { super.isSelectable }
         set {
             super.isSelectable = newValue
-            MainActor.assumeIsolated { clearScrollViewsCursor() }
+            if Thread.isMainThread { MainActor.assumeIsolated { clearScrollViewsCursor() } }
         }
     }
 
@@ -75,7 +75,7 @@ class PointerAwareTextView: NSTextView {
         get { super.isEditable }
         set {
             super.isEditable = newValue
-            MainActor.assumeIsolated { clearScrollViewsCursor() }
+            if Thread.isMainThread { MainActor.assumeIsolated { clearScrollViewsCursor() } }
         }
     }
 

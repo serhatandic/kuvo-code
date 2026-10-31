@@ -207,7 +207,8 @@ import Testing
         defer { done() }
         _ = await show(Composer(editable: true))
         // Voice input takes over and gives it back: editable set again, in the window.
-        _ = await show(Composer(editable: false))
+        let listening = try #require(await show(Composer(editable: false)).first)
+        #expect(!listening.isEditable)
         let text = try #require(await show(Composer(editable: true)).first)
         #expect(text.isEditable)
         let scroll = try #require(text.enclosingScrollView)

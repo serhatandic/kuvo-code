@@ -771,7 +771,13 @@ class ReplyChipButton: NSButton {
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         super.viewWillMove(toWindow: newWindow)
-        if newWindow == nil { claim.show(nil) }
+        guard newWindow == nil else { return }
+        claim.show(nil)
+        // No `mouseExited` comes: back without the hover's fill.
+        if isHovering {
+            isHovering = false
+            show(title: current)
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {

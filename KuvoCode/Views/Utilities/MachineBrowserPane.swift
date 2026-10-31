@@ -467,7 +467,7 @@ final class RemotePageView: NSView, @preconcurrency NSTextInputClient, PictureVi
             cursor = Self.cursor(named: name)
             // Only where the page is on top: off it, the last move let go already, and what's
             // there (Take Over's hand) keeps its pointer.
-            if let window, window.isKeyWindow {
+            if let window {
                 let location = window.mouseLocationOutsideOfEventStream
                 if PointerClaim.isTopmost(self, at: location) { claim.show(cursor) }
             }
