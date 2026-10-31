@@ -267,6 +267,8 @@ test("only you start the goal, with your switches, its end and its caps; the bot
   const [message] = prompts;
   assert.equal(message.to, "ses_pixel");
   assert.match(message.text, /^\[Goal started\]/);
+  // The box's own words to the bot, marked for what they are: a client shows a line, never your bubble.
+  assert.deepEqual(message.metadata, { kuvo: { note: { from: "Goal", line: "Goal started" } } });
   assert.match(message.text, /Switched on, so do them when they're ready: "Publish the site when it's ready"\./);
   assert.match(message.text, /Switched off, so prepare them as drafts for the user: "Turn on live payments"\./);
   assert.match(message.text, /ads, up to 20 USD a week/);
@@ -299,8 +301,11 @@ test("an end the bot proposed is taken away when you start with no end (ends: nu
 test("/goal in a bot's chat asks it for a plan at once, and Not Now tells it", async () => {
   const asked = await route("POST", "kuvo/work/goals/ask", { session: "ses_pixel", goal: "Ship the Driftwood site this week" });
   assert.equal(asked.status, 200);
-  assert.match(prompts[0].text, /^\[Goal\] Ship the Driftwood site this week/);
-  assert.match(prompts[0].text, /propose_goal before doing any of the work/);
+  // Your words as you wrote them, then what the bot's told in the block your bubble leaves out
+  // (KuvoClient's SentWithKeyword), so it reads as the composer showed it: /goal and your words.
+  const [words, block] = prompts[0].text.split("\n\n<sent-with>\n");
+  assert.equal(words, "Ship the Driftwood site this week");
+  assert.deepEqual(block.split("\n"), ["The user sent this as a goal, with Kuvo Code's /goal. Plan it, check what it needs, and put it to them with propose_goal before doing any of the work:", "/goal", "</sent-with>"]);
   assert.equal((await route("POST", "kuvo/work/goals/ask", { session: "ses_site", goal: "x" })).status, 400, "only a bot's chat");
 
   await tool("propose_goal", PLAN);
@@ -308,6 +313,7 @@ test("/goal in a bot's chat asks it for a plan at once, and Not Now tells it", a
   const declined = await route("POST", `kuvo/work/goals/${goal.id}`, { action: "decline" });
   assert.equal(declined.body.goal.state, "declined");
   assert.match(prompts.at(-1).text, /^\[Not now\]/);
+  assert.deepEqual(prompts.at(-1).metadata, { kuvo: { note: { from: "Goal", line: "You said not now" } } });
 });
 
 test("what its sessions ask waits for you: never said no to, listed once it settles, and gone once it's answered", async () => {
@@ -464,6 +470,91 @@ test("Stop ends the goal: its sessions and the bot's own turn stop", async () =>
   assert.ok(interrupted.includes("ses_site"));
   assert.ok(interrupted.includes("ses_pixel"));
   assert.equal((await tool("goal_progress", { step: 1, state: "done" })).isError, true);
+});
+
+// The conversation's goal as the agents' bridge says it changed (`kuvo.goal.updated`), which it
+// does whichever app pressed Pause or Resume.
+const goalEvent = (session, state, pausedBy, note = pausedBy === "you" ? "You paused it." : undefined) => ({ type: "kuvo.goal.updated", data: { sessionID: session, goal: { session, state, ...(pausedBy ? { pausedBy } : {}), ...(note ? { note } : {}) } } });
+
+test("Pause, from any app, stops the bot's turn and its goal's sessions at once, keeping what was said; nothing new starts, not even a reminder, until Resume, which has it carry on from its plan", async () => {
+  await startedGoal();
+  active.add("ses_site");
+  active.add("ses_pixel");
+  const before = prompts.length;
+  const holds = link.goalHolds(target);
+  await holds(goalEvent("ses_pixel", "paused", "you"));
+  assert.ok(interrupted.includes("ses_pixel"), "the bot's turn under way stops");
+  assert.ok(interrupted.includes("ses_site"), "and the goal's sessions");
+  assert.equal(link.queueOf("ses_pixel").paused, true, "its conversation shows it stopped, as Stop does");
+  // A long while with nothing at work: no reminder goes, nor waits to go.
+  const now = Date.now();
+  await look(now);
+  await look(now + 3 * 3_600_000);
+  assert.deepEqual(prompts.slice(before), []);
+  assert.deepEqual(link.queueOf("ses_pixel").waiting ?? [], []);
+  await holds(goalEvent("ses_pixel", "working"));
+  assert.equal(link.queueOf("ses_pixel").paused, false);
+  const sent = prompts.slice(before);
+  assert.deepEqual(sent.map(each => each.metadata?.kuvo?.note?.line), ["Goal resumed"], "told once to carry on from the plan, and nothing else");
+  assert.equal(sent[0].to, "ses_pixel");
+  assert.match(sent[0].text, /goal_progress/);
+});
+
+test("Pause on a conversation's own goal stops its turn and holds it until Resume", async () => {
+  active.add("ses_site");
+  const holds = link.goalHolds(target);
+  await holds(goalEvent("ses_site", "paused", "you"));
+  assert.deepEqual(interrupted, ["ses_site"]);
+  assert.equal(link.queueOf("ses_site").paused, true);
+  await holds(goalEvent("ses_site", "working"));
+  assert.equal(link.queueOf("ses_site").paused, false);
+  // A pause at a limit, or as a turn was stopped, isn't its Pause: nothing more is held.
+  await holds(goalEvent("ses_site", "paused", "limit"));
+  await holds(goalEvent("ses_site", "paused", "you", "The turn was stopped."));
+  assert.equal(link.queueOf("ses_site").paused, false);
+  assert.deepEqual(interrupted, ["ses_site"]);
+  assert.deepEqual(prompts, []);
+});
+
+// The box restarting (or its stream from the bridge dropping) while a goal is paused: what it held
+// stays held, and once it's found the bridge again, a goal resumed meanwhile goes on.
+test("a goal paused before the box restarted stays held, and goes on once it finds the goal resumed meanwhile", async () => {
+  await startedGoal();
+  active.add("ses_site");
+  active.add("ses_pixel");
+  const before = prompts.length;
+  await link.goalHolds(target)(goalEvent("ses_pixel", "paused", "you"));
+  const stops = interrupted.length;
+  // Started again: the bridge says it again, and nothing more is stopped.
+  await link.goalHolds(target)(goalEvent("ses_pixel", "paused", "you"));
+  assert.equal(interrupted.length, stops);
+  await look(Date.now() + 3 * 3_600_000);
+  assert.deepEqual(prompts.slice(before), [], "held through the restart: no reminder");
+  // Resumed while it was down.
+  loops.set("ses_pixel", goalEvent("ses_pixel", "working").data.goal);
+  const holds = link.goalHolds(target);
+  await link.settleGoalHolds({ port: bridge.address().port, password: "p" }, holds);
+  assert.equal(link.queueOf("ses_pixel").paused, false);
+  assert.deepEqual(prompts.slice(before).map(each => each.metadata?.kuvo?.note?.line), ["Goal resumed"]);
+});
+
+test("a conversation whose goal is taken away while paused stays stopped for you to Resume, from then on as any", async () => {
+  active.add("ses_site");
+  await link.goalHolds(target)(goalEvent("ses_site", "paused", "you"));
+  assert.equal(link.queueOf("ses_site").heldFor, "goal");
+  // Cleared as the box listened, or while it was down.
+  const holds = link.goalHolds(target);
+  await holds({ type: "kuvo.goal.updated", data: { sessionID: "ses_site", goal: null } });
+  assert.equal(link.queueOf("ses_site").paused, true);
+  assert.equal(link.queueOf("ses_site").heldFor, undefined);
+  await link.goalHolds(target)(goalEvent("ses_site", "paused", "you"));
+  await link.settleGoalHolds({ port: bridge.address().port, password: "p" }, holds);
+  assert.equal(link.queueOf("ses_site").heldFor, undefined, "no goal at the bridge: no longer held for it");
+  assert.equal(link.queueOf("ses_site").paused, true);
+  // A goal set on it later going on isn't what holds it.
+  await holds(goalEvent("ses_site", "working"));
+  assert.equal(link.queueOf("ses_site").paused, true);
+  assert.deepEqual(prompts, []);
 });
 
 test("for a goal, a session the bot starts is told no one may be watching, a project the plan names is made without asking, and publishing asks unless you switched a public step on", async () => {

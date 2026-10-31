@@ -360,7 +360,7 @@ export function handler(context: Context) {
             return json({ data: sessions.inbox(id) })
           case "prompt": {
             const input = await body()
-            sessions.prompt(id, { id: input.id ?? newID("msg"), text: String(input.text ?? ""), files: input.files ?? [], delivery: input.delivery ?? "steer" })
+            sessions.prompt(id, { id: input.id ?? newID("msg"), text: String(input.text ?? ""), files: input.files ?? [], delivery: input.delivery ?? "steer", metadata: input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata) ? input.metadata : undefined })
             return json({})
           }
           case "fork":

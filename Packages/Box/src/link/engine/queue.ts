@@ -17,7 +17,7 @@ import { RUN } from "../home";
 import { asked } from "./client";
 import { messageID } from "./sessions";
 import * as files from "../../shared/queues";
-import { showsQueue, type Outgoing, type QueueState, type Shown, type Waiting } from "../../shared/queues";
+import { isBoxNote, showsQueue, type Outgoing, type QueueState, type Shown, type Waiting } from "../../shared/queues";
 import type { Target } from "../../shared/records";
 
 export type { Outgoing, QueueState, Shown, Waiting } from "../../shared/queues";
@@ -38,7 +38,7 @@ interface InboxEntry {
   delivery: "steer" | "queue";
   type?: string;
   text?: unknown;
-  payload?: { text?: unknown; files?: unknown };
+  payload?: { text?: unknown; files?: unknown; metadata?: unknown };
 }
 
 /** A queue as a client reads it. */
@@ -146,7 +146,7 @@ function takeWaiting(session: string, item?: string, resume = false, inbox: Inbo
   try { whole = JSON.parse(fs.readFileSync(waitingFile(shown.id), "utf8")); } catch {}
   fs.rmSync(waitingFile(shown.id), { force: true });
   const message = isObject(whole) && typeof whole.text === "string" && (whole.delivery === "steer" || whole.delivery === "queue")
-    ? { id: shown.id, text: whole.text, delivery: whole.delivery, ...(Array.isArray(whole.files) ? { files: whole.files } : {}) } as Outgoing & { id: string }
+    ? { id: shown.id, text: whole.text, delivery: whole.delivery, ...(Array.isArray(whole.files) ? { files: whole.files } : {}), ...(isObject(whole.metadata) ? { metadata: whole.metadata } : {}) } as Outgoing & { id: string }
     : null;
   return { shown, message, held, ...(before ? { before } : {}) };
 }
@@ -272,7 +272,7 @@ export async function packQueues(target: Target, sessions: readonly string[]): P
       const { from, words } = shownOfHeld(text);
       return [{
         shown: { id: ownID, ...(from ? { from } : {}), text: words ?? text, ...(carried.length ? { files: fileNamesOf(carried) } : {}), at: Date.now() },
-        message: { id: ownID, text, delivery: "queue", ...(carried.length ? { files: carried } : {}) },
+        message: { id: ownID, text, delivery: "queue", ...(carried.length ? { files: carried } : {}), ...(isObject(held.payload?.metadata) ? { metadata: held.payload.metadata } : {}) },
       }];
     });
     const ids = new Set(waiting.map(each => each.shown.id));
@@ -449,14 +449,15 @@ export async function sendNow(target: Target, session: string, item: string): Pr
 /** An event, as far as the queue reads it. */
 export interface QueueEvent {
   type: string;
-  data?: { sessionID?: string; inboxID?: string; item?: { type?: string; delivery?: string; payload?: { text?: unknown } }; reason?: string; metadata?: Record<string, unknown> };
+  data?: { sessionID?: string; inboxID?: string; item?: { type?: string; delivery?: string; payload?: { text?: unknown; metadata?: unknown } }; reason?: string; metadata?: Record<string, unknown> };
 }
 
 // A message you wrote, not one Kuvo Code sent the agent for you or another (an agent's letter, a
 // wake-up, a group chat's work, a note).
-const NOT_YOURS = ["[Message from ", "[Wake-up]", "[Work from ", "[Session "];
+// (Those marked as the box's own, and the ones a box sent before it marked them.)
+const NOT_YOURS = ["[Message from ", "[Wake-up]", "[Work from ", "[Session ", "[Goal started]", "[Goal changed]", "[Goal's end]", "[Goal resumed]", "[Not now]", "[Limit reset]", "[The user answered]"];
 const isYours = (item: NonNullable<NonNullable<QueueEvent["data"]>["item"]>) =>
-  item.type === "user" && !NOT_YOURS.some(start => String(item.payload?.text ?? "").startsWith(start));
+  item.type === "user" && !isBoxNote(item.payload?.metadata) && !NOT_YOURS.some(start => String(item.payload?.text ?? "").startsWith(start));
 
 /** How the queue's watcher waits (a test's clock). */
 export interface QueueWatch {

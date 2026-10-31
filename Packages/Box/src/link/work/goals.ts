@@ -20,7 +20,9 @@ import { isLimit, resetsIn, resetTime } from "../../shared/limits";
 import { pause } from "../../shared/wait";
 import { botHere } from "../bots/here";
 import { asked, bridgeTarget, call } from "../engine/client";
-import { changeQueue, sendInto } from "../engine/queue";
+import { changeQueue, queueOf, readQueues, resumeQueue, sendInto, stopSession } from "../engine/queue";
+import { PAUSED_BY_YOU } from "../../shared/goals";
+import { boxNote } from "../../shared/queues";
 import { messageID } from "../engine/sessions";
 import { locked, textOf, writePrivate } from "../files";
 import { HERE } from "../home";
@@ -86,6 +88,9 @@ export interface KeptGoal extends Omit<GoalPlanShape, "alone" | "steps" | "spend
   nudges?: number;
   /** Its conversation's goal (the agents bridge's) is set: taken away once the plan ends. */
   loop?: boolean;
+  /** Since when you've had it paused (its conversation's goal, from any app): nothing of it goes
+   * on, not even at a limit's reset, until you resume it. */
+  heldByYou?: number;
 }
 
 /** Those following the goals here, in this process. */
@@ -136,7 +141,7 @@ export function boxChecks(goal: Pick<KeptGoal, "projects" | "name" | "bot">): Go
 }
 
 const shown = (goal: KeptGoal): GoalPlanShape => {
-  const { periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, ...rest } = goal;
+  const { periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, ...rest } = goal;
   // A step whose session waits for a limit to reset is paused, until then.
   const steps = goal.steps.map(step => {
     const paused = goal.state === "running" && step.state !== "done" && step.state !== "skipped" ? goal.paused.find(each => each.session && step.sessions?.includes(each.session)) : undefined;
@@ -365,10 +370,10 @@ export async function answerGoal(id: string, given: Record<string, unknown>, tar
     await stopBotWork(changed.bot, targets()).catch(() => 0);
     await setGoalLoop(changed, null, targets);
   } else if (action === "decline") {
-    await tellBot(changed, "[Not now] The user didn't start this goal. Don't start its work: ask them in a line what they'd like instead, if anything.", targets);
+    await tellBot(changed, "[Not now] The user didn't start this goal. Don't start its work: ask them in a line what they'd like instead, if anything.", "You said not now", targets);
   } else {
     await setGoalLoop(changed, loopCondition(changed), targets);
-    await tellBot(changed, startWords(changed), targets);
+    await tellBot(changed, startWords(changed), "Goal started", targets);
   }
   return { goal: shown(changed) };
 }
@@ -410,7 +415,7 @@ async function changeGoal(id: string, action: "change" | "clear", given: Record<
   }, file);
   if (!("id" in changed)) return { refused: changed };
   noteWorkChanged(changed.bot);
-  if (action === "change") await tellBot(changed, `[Goal changed] The user changed the goal's limits. ${changed.spend.length ? `What you may spend now: ${changed.spend.map(each => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}. ` : ""}Switched on: ${changed.public.filter(each => each.on).map(each => `"${each.text}"`).join(", ") || "nothing"}.${changed.ends ? ` It ends at ${resetTime(changed.ends)}.` : ""}`, targets);
+  if (action === "change") await tellBot(changed, `[Goal changed] The user changed the goal's limits. ${changed.spend.length ? `What you may spend now: ${changed.spend.map(each => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}. ` : ""}Switched on: ${changed.public.filter(each => each.on).map(each => `"${each.text}"`).join(", ") || "nothing"}.${changed.ends ? ` It ends at ${resetTime(changed.ends)}.` : ""}`, "You changed the goal's limits", targets);
   return { goal: shown(changed) };
 }
 
@@ -451,12 +456,121 @@ function startWords(goal: KeptGoal): string {
   return lines.filter(Boolean).join("\n");
 }
 
-// `said` to the goal's bot, as a message in its conversation.
-async function tellBot(goal: Pick<KeptGoal, "session">, said: string, targets: () => Target[]): Promise<boolean> {
+// Only what the bot started for a goal (once it started) is the goal's.
+const goalWork = (goal: KeptGoal, sessions: Listed[]) => ofBot(goal.bot, sessions).filter(each => (each.data.time?.created ?? 0) >= (goal.started ?? goal.proposed) - 60_000);
+
+/**
+ * A conversation's goal paused or resumed, from any app: those go to the agents' bridge, which
+ * keeps the goal and says so (`kuvo.goal.updated`, which this box follows). Paused by you, the turn
+ * under way stops at once, what's been said kept, and the conversation is held as Stop holds it
+ * (what reaches it meanwhile waits on the box); for a bot's goal, each of its sessions at work stops
+ * too, and nothing of it goes on, not even at a limit's reset. Resumed, the conversation goes on,
+ * and the bot is told to carry on from its plan. Cleared or ended while paused, it stays held for
+ * you to Resume, as after a Stop. (Paused at a limit, for an error, or as you stopped a turn isn't
+ * its Pause: left as it is.) The hold is kept on disk (its queue's `heldFor`, the bot's goal's
+ * `heldByYou`), so a box that restarts carries on with it (`settleGoalHolds`). One change at a
+ * time, in the order they came.
+ */
+export function goalHolds(targets: () => Target[], file = GOALS_FILE): (event: { type?: string; data?: any }) => Promise<void> {
+  let order: Promise<void> = Promise.resolve();
+  return event => {
+    const session = event.data?.sessionID;
+    if (event.type !== "kuvo.goal.updated" || typeof session !== "string") return order;
+    const goal = isObject(event.data?.goal) ? event.data.goal : null;
+    order = order.then(() => followGoal(session, goal, targets, file)).catch(() => {});
+    return order;
+  };
+}
+
+/** What the bridge says now of each conversation this box holds for its goal, read once it's
+ * found again (it, or this box, restarted, or the stream dropped and a change went by unheard). */
+export async function settleGoalHolds(bridge: Target, follow: (event: { type?: string; data?: any }) => Promise<void>, file = GOALS_FILE): Promise<void> {
+  const sessions = new Set([
+    ...Object.entries(readQueues()).filter(([, state]) => state.heldFor === "goal").map(([session]) => session),
+    ...readKept(file).filter(each => each.state === "running" && each.heldByYou).map(each => each.session),
+  ]);
+  for (const session of sessions) {
+    const goal = await asked(bridge, "GET", `api/kuvo/goals/${encodeURIComponent(session)}`).then(
+      answer => (isObject(answer) && isObject(answer.data) ? answer.data : null),
+      (error: Error) => (/\b404\b/.test(error.message) ? null : undefined),
+    );
+    if (goal !== undefined) await follow({ type: "kuvo.goal.updated", data: { sessionID: session, goal } });
+  }
+}
+
+const pausedByYou = (goal: Record<string, unknown> | null) => goal?.state === "paused" && goal.pausedBy === "you" && goal.note === PAUSED_BY_YOU;
+
+// Whether `session` is held for its goal: its queue says so, or, its queue let go with Resume on
+// its own, its bot's goal still does.
+const heldForGoal = (session: string, file: string) =>
+  queueOf(session).heldFor === "goal" || readKept(file).some(each => each.session === session && each.state === "running" && each.heldByYou);
+
+async function followGoal(session: string, goal: Record<string, unknown> | null, targets: () => Target[], file: string): Promise<void> {
+  const held = heldForGoal(session, file);
+  if (pausedByYou(goal)) {
+    if (!held) await holdForGoal(session, targets, file);
+  } else if (held && goal?.state === "working") {
+    await letGoForGoal(session, targets, file);
+  } else if (held && goal?.state !== "paused") {
+    forgetHold(session, file);
+  }
+}
+
+async function holdForGoal(session: string, targets: () => Target[], file: string): Promise<void> {
+  const place = await placeOfSession(session, targets()).catch(() => null);
+  if (place) {
+    await stopSession(place.target, session).catch(() => {});
+    changeQueue(session, current => ({ ...current, paused: true, heldFor: "goal" }));
+  }
+  const goal = changeKept(all => {
+    const kept = all.find(each => each.session === session && each.state === "running" && botHere(each.bot));
+    if (kept) kept.heldByYou = Date.now();
+    return kept ?? null;
+  }, file);
+  if (!goal) return;
+  const [sessions, working] = await Promise.all([workSessions(targets()).catch((): Listed[] => []), workingNow(targets()).catch(() => new Set<string>())]);
+  for (const each of goalWork(goal, sessions)) {
+    if (working.has(each.data.id)) await stopSession(each.target, each.data.id, false).catch(() => {});
+  }
+  noteWorkChanged(goal.bot);
+}
+
+async function letGoForGoal(session: string, targets: () => Target[], file: string): Promise<void> {
+  const place = await placeOfSession(session, targets()).catch(() => null);
+  if (place) await resumeQueue(place.target, session).catch(() => {});
+  const goal = forgetHold(session, file);
+  if (!goal) return;
+  await tellBot(goal, "[Goal resumed] The user resumed the goal you paused. Carry on from where it stopped: goal_progress shows the plan as it stands, and a session of it that stopped as it paused needs telling to carry on. Once it's all done, end with finish_goal.", "Goal resumed", targets);
+}
+
+// The hold's marks taken off, the conversation left as it is (still paused, unless it went on):
+// the bot's goal it held, if any.
+function forgetHold(session: string, file: string): KeptGoal | null {
+  changeQueue(session, ({ heldFor: _, ...rest }) => rest);
+  const goal = changeKept(all => {
+    const kept = all.find(each => each.session === session && each.state === "running" && each.heldByYou);
+    if (kept) delete kept.heldByYou;
+    return kept ?? null;
+  }, file);
+  if (goal) noteWorkChanged(goal.bot);
+  return goal;
+}
+
+// What a conversation shows as a limit it waited for resets: "The model's limit reset".
+const resetLine = (why: string) => `${why.charAt(0).toUpperCase()}${why.slice(1)} reset`;
+
+// `said` to the goal's bot, as a message in its conversation marked as the goal's, which a client
+// shows as `line`.
+async function tellBot(goal: Pick<KeptGoal, "session">, said: string, line: string, targets: () => Target[]): Promise<boolean> {
   const place = await placeOfSession(goal.session, targets()).catch(() => null);
   if (!place) return false;
-  return sendInto(place.target, goal.session, { id: messageID(), text: said, delivery: "queue" }, { from: "Goal" }).then(() => true, () => false);
+  return sendInto(place.target, goal.session, { id: messageID(), text: said, delivery: "queue", metadata: boxNote("Goal", line) }, { from: "Goal", words: line }).then(() => true, () => false);
 }
+
+// What the bot's told of a goal asked for with /goal, after your words, in the block your bubble
+// leaves out to show /goal in front of them, as the composer did (KuvoClient's
+// SentWithKeyword.goalHeading, in these words).
+const GOAL_ASKED = "The user sent this as a goal, with Kuvo Code's /goal. Plan it, check what it needs, and put it to them with propose_goal before doing any of the work:";
 
 /** /goal in a bot's chat: the bot asked to plan `words` as a goal and put it to you, now. */
 export async function askGoal(session: string, words: string, targets: () => Target[]): Promise<{ text: string } | { refused: GoalRefusal }> {
@@ -468,7 +582,7 @@ export async function askGoal(session: string, words: string, targets: () => Tar
   changeQueue(session, state => ({ ...state, paused: false }));
   const sent = await asked(place.target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, {
     id: messageID(),
-    text: `[Goal] ${said}\n\n(The user asked for this as a goal: plan it, check what it needs, and put it to them with propose_goal before doing any of the work.)`,
+    text: [said, "", "<sent-with>", GOAL_ASKED, "/goal", "</sent-with>"].join("\n"),
     delivery: "queue",
   }).then(() => true, () => false);
   return sent ? { text: "Asked for a plan." } : { refused: { status: 404, message: "The conversation can't be reached now." } };
@@ -727,7 +841,7 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
         const kept = all.find(each => each.id === goal.id);
         if (kept) kept.endTold = now;
       }, file);
-      await tellBot(goal, "[Goal's end] The end the user set has come. Finish the step under way, start nothing new, and end with finish_goal and your report.", targets);
+      await tellBot(goal, "[Goal's end] The end the user set has come. Finish the step under way, start nothing new, and end with finish_goal and your report.", "The goal's end came", targets);
     } else if (now - goal.endTold >= WRAP_UP) {
       const ended = changeKept(all => {
         const kept = all.find(each => each.id === goal.id && each.state === "running");
@@ -765,8 +879,7 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
   const running = readKept(file).filter(goal => goal.state === "running" && botHere(goal.bot));
   const sessions = running.length ? await workSessions(targets(), signal).catch((): Listed[] => []) : [];
   const working = running.length ? await workingNow(targets(), signal).catch(() => new Set<string>()) : new Set<string>();
-  // Only what the bot started for this goal (once it started) is the goal's.
-  const workOf = (goal: KeptGoal) => ofBot(goal.bot, sessions).filter(each => (each.data.time?.created ?? 0) >= (goal.started ?? goal.proposed) - 60_000);
+  const workOf = (goal: KeptGoal) => goalWork(goal, sessions);
   // Awake only while some goal's work is at it: the bot, or one of its sessions.
   keepAwake(running.some(goal => working.has(goal.session) || workOf(goal).some(each => working.has(each.data.id))));
   for (const goal of running) {
@@ -790,7 +903,8 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
     }
     // A pause whose time has come: carried on (a session that's gone, or put away, let go).
     const kept = readKept(file).find(each => each.id === goal.id);
-    for (const paused of kept?.paused ?? []) {
+    // (Not while you have it paused: once you resume it.)
+    for (const paused of kept?.heldByYou ? [] : kept?.paused ?? []) {
       if (paused.session === goal.session) continue;
       if (paused.session) {
         const place = await placeOfSession(paused.session, targets()).catch(() => undefined);
@@ -799,12 +913,12 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
           continue;
         }
         if (!paused.until || now < paused.until || !place) continue;
-        const carried = await sendInto(place.target, paused.session, { id: messageID(), text: `[Limit reset] ${paused.why} has reset. Carry on where you stopped.`, delivery: "queue" }, { from: "Goal" }).then(() => true, () => false);
+        const carried = await sendInto(place.target, paused.session, { id: messageID(), text: `[Limit reset] ${paused.why} has reset. Carry on where you stopped.`, delivery: "queue", metadata: boxNote("Goal", resetLine(paused.why)) }, { from: "Goal", words: resetLine(paused.why) }).then(() => true, () => false);
         if (carried) unpause(goal.id, paused.session, now, file);
         continue;
       }
       if (!paused.until || now < paused.until) continue;
-      if (await tellBot(goal, `[Limit reset] ${paused.why} has reset. Carry on with the goal.`, targets)) unpause(goal.id, undefined, now, file);
+      if (await tellBot(goal, `[Limit reset] ${paused.why} has reset. Carry on with the goal.`, resetLine(paused.why), targets)) unpause(goal.id, undefined, now, file);
     }
     // What its sessions, and the bot itself, ask that the bot hasn't answered: waiting for you,
     // never a no.
@@ -826,7 +940,7 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
     const atWork = working.has(goal.session) || work.some(each => working.has(each.data.id));
     const left = (live?.steps ?? []).filter(step => step.state !== "done" && step.state !== "skipped");
     const pausedSessions = new Set((live?.paused ?? []).map(each => each.session).filter(Boolean));
-    const canGoOn = !(live?.paused ?? []).some(each => !each.session || each.session === goal.session)
+    const canGoOn = !live?.heldByYou && !(live?.paused ?? []).some(each => !each.session || each.session === goal.session)
       && left.some(step => step.state !== "waiting" && !(step.sessions?.length && step.sessions.every(id => pausedSessions.has(id))));
     let nudge = false;
     changeKept(all => {
@@ -854,7 +968,7 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
       kept.nudges = (kept.nudges ?? 0) + 1;
       nudge = true;
     }, file);
-    if (nudge) await tellBot(goal, "[Goal] Nothing of the goal is at work now. Carry on with the next step that doesn't wait on the user (goal_progress shows the plan as it stands). If all that's left waits on them, say so in a line and stop until they answer. Once it's all done, end with finish_goal.", targets);
+    if (nudge) await tellBot(goal, "[Goal] Nothing of the goal is at work now. Carry on with the next step that doesn't wait on the user (goal_progress shows the plan as it stands). If all that's left waits on them, say so in a line and stop until they answer. Once it's all done, end with finish_goal.", "Reminded to carry on", targets);
   }
   // What's new, to your phones.
   for (const goal of readKept(file).filter(each => botHere(each.bot) && each.state !== "proposed" && each.state !== "declined")) {

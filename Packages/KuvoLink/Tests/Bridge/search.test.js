@@ -110,6 +110,11 @@ test("not a group chat seat's or a coding agent's turn, nor their subagents', no
     ses_here: [
       { id: "msg_1", type: "user", text: "Check the release notes\n\n<sent-with>\nThe user sent this with a keyword, which Kuvo Code ran as they typed it:\n/plan\n</sent-with>" },
       { id: "msg_2", type: "user", text: "Picked the second\n\n<from-widget>\nThe user sent this from a widget shown in this conversation (show_widget), titled:\nRelease checklist\n</from-widget>" },
+      // /goal as a box sent it before it went in the block.
+      { id: "msg_3", type: "user", text: "[Goal] Summarize the commits weekly\n\n(The user asked for this as a goal: plan it, check what it needs, and put it to them with propose_goal before doing any of the work.)" },
+      // What the box told the bot, marked, and as it was before it marked it.
+      { id: "msg_4", type: "user", text: "[Goal started] The user approved the plan. Work through it now: 1. Read 2. Write", metadata: { kuvo: { note: { from: "Goal", line: "Goal started" } } } },
+      { id: "msg_5", type: "user", text: "[Not now] The user didn't start this goal. Don't start its work: ask them in a line what they'd like instead, if anything." },
     ],
     ses_seat: conversation("seat", "release notes", "release notes"),
     ses_seat_sub: conversation("seatsub", "release notes", "release notes"),
@@ -119,6 +124,10 @@ test("not a group chat seat's or a coding agent's turn, nor their subagents', no
   assert.deepEqual((await box.search("keyword")).found, [], "the keyword's note isn't what was said");
   assert.deepEqual((await box.search("show_widget")).found, [], "nor a widget's");
   assert.deepEqual((await box.search("picked the second")).found, ["ses_here"]);
+  assert.deepEqual((await box.search("propose_goal")).found, [], "nor what a goal asked for told the bot");
+  assert.deepEqual((await box.search("summarize the commits")).found, ["ses_here"]);
+  assert.deepEqual((await box.search("approved the plan")).found, [], "nor what the box told the bot");
+  assert.deepEqual((await box.search("didn't start this goal")).found, [], "nor what it told it before it marked it");
 });
 
 test("a review's part, read in a session of its own under the conversation, is never found: its review shows it", async t => {

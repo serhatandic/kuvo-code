@@ -10,6 +10,7 @@ import { isObject } from "../../shared/json";
 import { cut } from "../../shared/text";
 import { asked, call, peerPlaces } from "../engine/client";
 import { sendInto } from "../engine/queue";
+import { boxNote } from "../../shared/queues";
 import { messageID } from "../engine/sessions";
 import { locked, writePrivate } from "../files";
 import { LETTER_LIFE, placeOfSession } from "../letters/letter";
@@ -108,6 +109,16 @@ export async function wakeLine(event: WorkEvent, session: Partial<EngineSession>
 /** What goes to a conversation, from the lines gathered for it. */
 export const wakeText = (lines: string[]) => lines.join("\n\n");
 
+/** What a conversation shows for the lines told it (`wakeLine`'s), in place of them: "“Sign-in”
+ * finished", or how many there are. */
+export function wakeLineShown(lines: string[]): string {
+  if (lines.length !== 1) return `${lines.length} updates from its sessions`;
+  const said = /^\[Session (finished|failed|asks)\] "([^"\n]*)"/.exec(lines[0]!);
+  if (!said) return "News from a session";
+  const what = said[1] === "finished" ? "finished" : said[1] === "failed" ? "stopped with an error" : "asks something";
+  return `“${said[2] || "New Session"}” ${what}`;
+}
+
 // How often answers given late that couldn't be told yet are tried again.
 const LATE_AGAIN = 300_000;
 
@@ -195,7 +206,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
         throw new Error("Archived.");
       }
       // Stopped by the user: it waits there with the queue, as theirs does.
-      await sendInto(place.target, starter, { id: messageID(), text: wakeText(waiting.lines), delivery: waiting.asks ? "steer" : "queue" }, { from: "Its sessions" });
+      const line = wakeLineShown(waiting.lines);
+      await sendInto(place.target, starter, { id: messageID(), text: wakeText(waiting.lines), delivery: waiting.asks ? "steer" : "queue", metadata: boxNote("Its sessions", line) }, { from: "Its sessions", words: line });
       failures.delete(starter);
     } catch {
       putBack(starter, waiting);

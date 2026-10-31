@@ -114,6 +114,7 @@ test("what a box had gathered as it stopped still reaches the bot", async () => 
   await runAll();
   assert.equal(prompts.length, 1);
   assert.equal(prompts[0].text, "[Session finished] \"Sign-in\" in tidepool (address ses_signin):\nDone.");
+  assert.deepEqual(prompts[0].metadata, { kuvo: { note: { from: "Its sessions", line: "“Sign-in” finished" } } });
   assert.deepEqual(JSON.parse(fs.readFileSync(wakesFile, "utf8")), {});
 });
 
@@ -191,7 +192,8 @@ test("what a conversation the user stopped hears of its sessions waits there wit
   assert.deepEqual(prompts, [], "the engine would run everything waiting with it");
   const [waiting] = link.queueOf("ses_pixel").waiting;
   assert.equal(waiting.from, "Its sessions");
-  assert.match(waiting.text, /^\[Session finished\] "Sign-in"/);
+  // Shown as the line a conversation shows for it, not what its agent is told.
+  assert.equal(waiting.text, "“Sign-in” finished");
   assert.ok(!fs.existsSync(wakesFile) || !JSON.parse(fs.readFileSync(wakesFile, "utf8")).ses_pixel, "it waits with the queue now, not to be sent again");
 });
 
@@ -296,6 +298,7 @@ test("an answer given after its bot stopped waiting reaches it as the box starts
   assert.equal(prompts.length, 1);
   assert.equal(prompts[0].to, "ses_pixel");
   assert.equal(prompts[0].text, "[The user answered] Made Tidepool at ~/Developer/tidepool.");
+  assert.deepEqual(prompts[0].metadata, { kuvo: { note: { from: "Your answer", line: "You answered: Made Tidepool at ~/Developer/tidepool." } } });
   // Told once.
   await link.workWatcher(source, () => [source], { schedule }).caughtUp;
   assert.equal(prompts.length, 1);

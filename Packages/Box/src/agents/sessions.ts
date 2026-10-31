@@ -40,6 +40,8 @@ interface Input {
   text: string
   files: { uri: string; name?: string }[]
   delivery: Delivery
+  /** What the sender keeps with it, as the engine does (the box marks what it writes to the agent with it). */
+  metadata?: Record<string, unknown>
   /** From the app, not you ("you switched the model while it worked"): the agent gets it as a note. */
   synthetic?: { description?: string; metadata?: Record<string, unknown> }
   /** A turn the agent on this model began on its own (a command it left running ended): it's taken, not sent. */
@@ -1378,7 +1380,7 @@ export class Sessions {
       id: input.id,
       sessionID: id,
       type: input.synthetic ? "synthetic" : "user",
-      payload: input.synthetic ? { text: input.text, description: input.synthetic.description } : { text: input.text, files: input.files },
+      payload: input.synthetic ? { text: input.text, description: input.synthetic.description } : { text: input.text, files: input.files, metadata: input.metadata },
       delivery: input.delivery,
     }))
   }
@@ -1416,7 +1418,7 @@ export class Sessions {
     const delivery: Delivery = into || (nothingRuns && (input.delivery !== "queue" || !queue.length)) ? "steer" : "queue"
     queue.push({ ...input, delivery })
     this.store.save(id, true)
-    const item = input.synthetic ? { type: "synthetic", payload: { text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata } } : { type: "user", payload: { text: input.text, files: input.files } }
+    const item = input.synthetic ? { type: "synthetic", payload: { text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata } } : { type: "user", payload: { text: input.text, files: input.files, metadata: input.metadata } }
     emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { ...item, delivery } }, record.session.location.directory)
     if (into) void this.steerNow(id, live, into, input)
     else if (delivery === "steer") this.wake(id)
@@ -1490,10 +1492,10 @@ export class Sessions {
   /** Your message, in a subagent's conversation as it's sent. */
   private showMessage(id: string, record: Record_, input: Input) {
     const directory = record.session.location.directory
-    emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "user", payload: { text: input.text, files: input.files }, delivery: "steer" } }, directory)
+    emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "user", payload: { text: input.text, files: input.files, metadata: input.metadata }, delivery: "steer" } }, directory)
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory)
     const attachments: Attachment[] = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }))
-    record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined })
+    record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined, metadata: input.metadata })
     record.session.time.updated = Date.now()
     this.store.save(id, true)
   }
@@ -1581,7 +1583,7 @@ export class Sessions {
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory)
     const attachments: Attachment[] = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }))
     if (input.synthetic) record.messages.push({ type: "synthetic", id: input.id, time: { created: Date.now() }, text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata })
-    else record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined })
+    else record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined, metadata: input.metadata })
     record.session.time.updated = Date.now()
     // Its own undo, while its turn is under way (what the turn changes from here on).
     // (One that couldn't be kept isn't noted: Undo from the message before covers it.)
@@ -1773,7 +1775,7 @@ export class Sessions {
     if (live.relays?.has(input.id)) (run.relayed ??= []).push(input.id)
     const attachments: Attachment[] = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }))
     if (input.synthetic) record.messages.push({ type: "synthetic", id: input.id, time: { created: Date.now() }, text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata })
-    else record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined })
+    else record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined, metadata: input.metadata })
     session.time.updated = Date.now()
     this.store.save(id, true)
     // Your first message: the session gets a title from it, as the engine's sessions do.

@@ -793,8 +793,11 @@ beside it.
   amount}`: whether it fits the line's cap in its period now); `finish_goal` (`{report, watching?}`).
   `start_session` takes `step` (its number or id), and that step's track lists the session.
 - **Asked for**: `POST kuvo/work/goals/ask` `{session, goal}` (`/goal` in a bot's chat, from a
-  client) has the bot plan it and propose it at once (`[Goal] …`) → `{text}`; 400 for a conversation
-  that isn't a bot's.
+  client) has the bot plan it and propose it at once → `{text}`; 400 for a conversation that isn't
+  a bot's. It goes as your message: your words, then a `<sent-with>` block (below) with the goal's
+  own heading (`SentWithKeyword.goalHeading`, which tells the bot to plan it) and `/goal`, so it
+  reads as you typed it. One a box sent before 0.9.143 is `[Goal] <words>` then a note in
+  parentheses; `SentWithKeyword.split` reads it the same way.
 - **Only you start it**: `POST kuvo/work/goals/<id>` from a client, `{action: start, public?: {<id>:
   bool}, wake?, digest?, ends?, spend?: [{cap?, per?}] (by line)}`, `{action: decline}` or `{action:
   stop}` → `{goal}` (`ends: null` starts it with no end, taking away the one the bot proposed; left
@@ -1861,13 +1864,27 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `- &<name> (<session>): <what it is>` lines) to a line `</named-agents>`, before the
   `<review-comments>` and `<attached-files>` blocks. Show each `&<name>` it lists in bold
   (a bot's in its color), opening that session.
-- A message a keyword sends (/plan's words, /loop's when it sends now) carries the keyword as
-  typed, right after its words and before every other block: a line `<sent-with>`, the heading in
-  `SentWithKeyword.swift`, the keyword on one line (`/plan`, `/loop every hour`), and a line
-  `</sent-with>`. The client sending it writes it. Show the keyword in front of the message's
-  words, drawn as the composer draws it (its mark for the "/", the rest in bold, in the accent;
-  Plan's in orange). Taken back (Undo, a failed send, editing a queued one), it's the words
-  alone, so sending them again sets no second loop.
+- A message a keyword sends (/plan's words, /loop's when it sends now, a bot's /goal) carries the
+  keyword as typed, right after its words and before every other block: a line `<sent-with>`, a
+  heading in `SentWithKeyword.swift`, the keyword on one line (`/plan`, `/loop every hour`,
+  `/goal`), and a line `</sent-with>`. The client sending it writes it (the box, for a bot's
+  /goal). Show the keyword in front of the message's words, drawn as the composer draws it (its
+  mark for the "/", the rest in bold, in the accent; Plan's in orange). Taken back (Undo, a failed
+  send, editing a queued one), it's the words alone, so sending them again sets no second loop.
+- A message the box writes to an agent in its conversation (a goal starting, changed, at its
+  end, declined or carrying on after a limit reset; its sessions' news to the bot that started
+  them; your answer told late) is a user message to the engine, marked in its `metadata`:
+  `{"kuvo": {"note": {"from": "Goal" | "Its sessions" | "Your answer", "line": "Goal started"}}}`
+  (bridge 0.9.143), on the message and on its inbox item while it waits, in the engine's and the
+  coding agents' bridge's conversations alike (a prompt's `metadata` is kept with it). Its text is for the
+  agent: show `line` in its place, as a line of what happened, never as your bubble, and leave it
+  out of Find, a copy, an export, search and the ↑ history. Those a box sent before it marked
+  them open with `[Goal started] The user approved the plan.`, `[Not now] The user didn't start
+  this goal.`, `[Goal changed] The user changed the goal's limits.`, `[Goal's end] The end the
+  user set has come.`, `[Goal] Nothing of the goal is at work now.`, `[Limit reset] <why> has
+  reset. Carry on`, `[Session finished|failed|asks] "<title>"` and `[The user answered] `: read
+  them the same way
+  (`BoxNote` in KuvoClient's ClientSessions does both).
 - A prompt a phone sends (`POST api/session/<id>/prompt`, and `kuvo/agents/api/…` alike) gets a
   block at the end of its text that tells the agent it's from the phone: a line `<from-phone>`,
   the words in `FromPhone.swift`, and a line `</from-phone>`. Every box adds it, in the same
@@ -2016,10 +2033,18 @@ Grok). With none to answer, the goal pauses and says so. A client reaches them a
   one too long, 404 for a conversation that isn't there, 409 for a subagent's (the conversation it
   works for has the goal), 503 when it can't be reached. A turn already under way counts only if
   the agent read the goal in it.
-- `POST …/goals/<session>/pause` holds it (the turn under way ends as it would, and no other
-  starts; a note already on its way to the agent still is); `…/resume` lets it go: its last turn
-  is checked (however it ended), and it carries on unless that met it. Both `{data: goal}`, 404 when it has none, 409 for one that's over (set it
-  again instead).
+- `POST …/goals/<session>/pause` holds it: no other turn starts, and the box, told of it
+  (`kuvo.goal.updated`, `pausedBy: "you"`, `note: "You paused it."`; one paused as you stopped a
+  turn holds nothing more), stops the turn under way, keeping what was said, and holds the
+  conversation as Stop does (its queue paused: what reaches it meanwhile waits on the box); for a
+  bot's goal, its sessions at work stop too, and nothing of it goes on, not even at a limit's reset
+  (bridge 0.9.143). The box keeps the hold through a restart and, finding the bridge again, reads
+  each goal it holds for: one resumed meanwhile goes on, one taken away leaves its conversation
+  paused for Resume. `…/resume` lets it go: the conversation's queue on this box goes on, its last
+  turn is checked (however it ended), and it carries on unless that met it; a bot is told to carry
+  on from its plan (a box note, "Goal resumed"). Resume on the queue alone lets the conversation
+  go but leaves the goal paused. Both `{data: goal}`, 404 when it has none,
+  409 for one that's over (set it again instead).
 - `DELETE …/goals/<session>` puts it away, over or not: `{}`, or 404.
 - A goal: `{session, condition, state, note?, pausedBy?, resumesAt?, long?, started, ended?, turns,
   checking, last?}`. A goal at a model's limit carries on with a word to its agent ("the limit has
