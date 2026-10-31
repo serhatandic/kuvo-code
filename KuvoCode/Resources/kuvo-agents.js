@@ -490,6 +490,7 @@ function accountShell() {
   return shell && path.isAbsolute(shell) ? shell : undefined;
 }
 var LOGIN_PATH_MARKERS = ["__KUVO_PATH__", "__KUVO_END__"];
+var WATCHED = 'exec 3<&0 </dev/null; "$0" "$@" 3<&- & s=$!; { read -r _ <&3; kill -9 -$s; kill -9 0; } >/dev/null 2>&1 & exec 3<&-; wait $s; kill -9 -$s 2>/dev/null; kill -9 0';
 function joinPath(...folders) {
   return [...new Set(folders.flatMap((list) => (list ?? "").split(":")).filter(Boolean))].join(":");
 }
@@ -504,7 +505,7 @@ async function loginPath(env = process.env, wait = { interactive: 6000, login: 2
       let output = "";
       let child;
       try {
-        child = spawn(shell, [flags, `printf '%s%s%s' ${LOGIN_PATH_MARKERS[0]} "$PATH" ${LOGIN_PATH_MARKERS[1]}`], { cwd: login.HOME, env: login, detached: true, stdio: ["ignore", "pipe", "ignore"] });
+        child = spawn("/bin/sh", ["-c", WATCHED, shell, flags, `printf '%s%s%s' ${LOGIN_PATH_MARKERS[0]} "$PATH" ${LOGIN_PATH_MARKERS[1]}`], { cwd: login.HOME, env: login, detached: true, stdio: ["pipe", "pipe", "ignore"] });
       } catch {
         return resolve(undefined);
       }
@@ -516,10 +517,13 @@ async function loginPath(env = process.env, wait = { interactive: 6000, login: 2
         settled = true;
         clearTimeout(timer);
         clearTimeout(gone);
-        try {
-          if (child.pid)
-            process.kill(-child.pid, "SIGKILL");
-        } catch {}
+        child.stdin?.destroy();
+        setTimeout(() => {
+          try {
+            if (child.pid)
+              process.kill(-child.pid, "SIGKILL");
+          } catch {}
+        }, 1000).unref();
         child.stdout?.destroy();
         child.unref();
         resolve(value);
@@ -598,17 +602,19 @@ async function run(command, args, options = {}) {
     child.stdin.end();
   }
   let timedOut = false;
+  let hard;
   const timer = options.timeout ? setTimeout(() => {
     timedOut = true;
     child.kill();
+    hard = setTimeout(() => child.kill("SIGKILL"), 3000);
   }, options.timeout) : undefined;
   let stdout = "";
   let stderr = "";
   const reads = Promise.all([new Response(child.stdout).text().then((text) => stdout = text), new Response(child.stderr).text().then((text) => stderr = text)]);
   const code = await child.exited;
+  clearTimeout(timer);
+  clearTimeout(hard);
   await Promise.race([reads, Bun.sleep(2000)]);
-  if (timer)
-    clearTimeout(timer);
   return { code, stdout, stderr, ...timedOut ? { timedOut } : {} };
 }
 function runGroup(command, args, options = {}) {
@@ -22431,4 +22437,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents a6e6718271b374065ba55799520b892ecb538f4e3a389be67f5e14e9671ced31
+// Built from Packages/Box/src/agents 70cd2a176ee0db10414c049bf394b991ad16955ca2a6256dcaea1da30bd0a3e8
