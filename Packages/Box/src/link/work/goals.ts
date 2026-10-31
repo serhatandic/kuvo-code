@@ -486,8 +486,9 @@ export function goalHolds(targets: () => Target[], file = GOALS_FILE): (event: {
   };
 }
 
-/** What the bridge says now of each conversation this box holds for its goal, read once it's
- * found again (it, or this box, restarted, or the stream dropped and a change went by unheard). */
+/** What the bridge says now of each conversation this box holds for its goal, and of each goal
+ * paused by you, read once it's found again (it, or this box, restarted, or the stream dropped and
+ * a change went by unheard). */
 export async function settleGoalHolds(bridge: Target, follow: (event: { type?: string; data?: any }) => Promise<void>, file = GOALS_FILE): Promise<void> {
   const sessions = new Set([
     ...Object.entries(readQueues()).filter(([, state]) => state.heldFor === "goal").map(([session]) => session),
@@ -499,6 +500,11 @@ export async function settleGoalHolds(bridge: Target, follow: (event: { type?: s
       (error: Error) => (/\b404\b/.test(error.message) ? null : undefined),
     );
     if (goal !== undefined) await follow({ type: "kuvo.goal.updated", data: { sessionID: session, goal } });
+  }
+  // And each one you paused meanwhile, which nothing here holds yet.
+  const listed = await asked(bridge, "GET", "api/kuvo/goals").then(answer => (isObject(answer) && Array.isArray(answer.data) ? answer.data.filter(isObject) : []), () => []);
+  for (const goal of listed) {
+    if (typeof goal.session === "string" && !sessions.has(goal.session) && pausedByYou(goal)) await follow({ type: "kuvo.goal.updated", data: { sessionID: goal.session, goal } });
   }
 }
 

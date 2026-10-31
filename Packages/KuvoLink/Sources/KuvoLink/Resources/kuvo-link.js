@@ -7759,6 +7759,11 @@ async function settleGoalHolds(bridge, follow, file = GOALS_FILE) {
     if (goal !== undefined)
       await follow({ type: "kuvo.goal.updated", data: { sessionID: session, goal } });
   }
+  const listed = await asked(bridge, "GET", "api/kuvo/goals").then((answer) => isObject(answer) && Array.isArray(answer.data) ? answer.data.filter(isObject) : [], () => []);
+  for (const goal of listed) {
+    if (typeof goal.session === "string" && !sessions.has(goal.session) && pausedByYou(goal))
+      await follow({ type: "kuvo.goal.updated", data: { sessionID: goal.session, goal } });
+  }
 }
 var pausedByYou = (goal) => goal?.state === "paused" && goal.pausedBy === "you" && goal.note === PAUSED_BY_YOU;
 var heldForGoal = (session, file) => queueOf(session).heldFor === "goal" || readKept2(file).some((each) => each.session === session && each.state === "running" && each.heldByYou);

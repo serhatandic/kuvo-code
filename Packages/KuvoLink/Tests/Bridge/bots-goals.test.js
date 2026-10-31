@@ -133,7 +133,9 @@ const bridge = http.createServer((request, response) => {
   request.on("data", chunk => { body += chunk; });
   request.on("end", () => {
     const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
-    const found = new URL(request.url, "http://x").pathname.match(/^\/api\/kuvo\/goals\/([^/]+)$/);
+    const pathname = new URL(request.url, "http://x").pathname;
+    if (pathname === "/api/kuvo/goals" && request.method === "GET") return reply({ data: [...loops.values()] });
+    const found = pathname.match(/^\/api\/kuvo\/goals\/([^/]+)$/);
     if (!found) return reply({ message: "Not here." }, 404);
     const session = decodeURIComponent(found[1]);
     if (request.method === "PUT") {
@@ -536,6 +538,23 @@ test("a goal paused before the box restarted stays held, and goes on once it fin
   await link.settleGoalHolds({ port: bridge.address().port, password: "p" }, holds);
   assert.equal(link.queueOf("ses_pixel").paused, false);
   assert.deepEqual(prompts.slice(before).map(each => each.metadata?.kuvo?.note?.line), ["Goal resumed"]);
+});
+
+// Paused from the Mac (straight to the bridge) while the box wasn't listening: it restarted, or its
+// stream dropped, and the bridge's word went by unheard.
+test("a goal paused while the box wasn't listening is held once it finds the bridge again: its turn stops, and no reminder goes", async () => {
+  await startedGoal();
+  active.add("ses_site");
+  active.add("ses_pixel");
+  const before = prompts.length;
+  loops.set("ses_pixel", goalEvent("ses_pixel", "paused", "you").data.goal);
+  await link.settleGoalHolds({ port: bridge.address().port, password: "p" }, link.goalHolds(target));
+  assert.ok(interrupted.includes("ses_pixel"), "the bot's turn under way stops");
+  assert.ok(interrupted.includes("ses_site"), "and the goal's sessions");
+  assert.equal(link.queueOf("ses_pixel").paused, true);
+  active.clear();
+  await look(Date.now() + 3 * 3_600_000);
+  assert.deepEqual(prompts.slice(before), [], "held: no reminder");
 });
 
 test("a conversation whose goal is taken away while paused stays stopped for you to Resume, from then on as any", async () => {
