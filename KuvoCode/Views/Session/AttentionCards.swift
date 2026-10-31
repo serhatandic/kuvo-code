@@ -487,8 +487,7 @@ private struct ChoiceRow: View {
             }
             .padding(.horizontal, Self.inset)
             .padding(.vertical, 8)
-            .contentShape(.rect(cornerRadius: 10))
-            .background(isSelected ? accent.opacity(0.14) : isHovering ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 10))
+            .pickHighlight(RoundedRectangle(cornerRadius: 10), isOn: isSelected)
         }
         .buttonStyle(.plain)
         .clickablePointer()

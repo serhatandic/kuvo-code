@@ -196,7 +196,8 @@ private struct OptionList: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 9)
-                    .background(isSelected ? AnyShapeStyle(.tint.opacity(0.12)) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 10))
+                    // Picked, it's lit as what you pick from a list is everywhere (`pickHighlight`).
+                    .accentGlass(RoundedRectangle(cornerRadius: 10), isOn: isSelected)
                 }
                 // An option lights up under the pointer, like the button it is.
                 .buttonStyle(FilledButtonStyle(shape: .rect(cornerRadius: 10), rest: isSelected ? 0 : 0.045))

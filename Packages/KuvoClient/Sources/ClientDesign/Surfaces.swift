@@ -330,6 +330,8 @@ private struct PickHighlight<S: InsettableShape>: ViewModifier {
             .contentShape(shape)
             .onHover { isHovering = $0 }
             .animation(.easeOut(duration: 0.12), value: isHovering)
+            // So VoiceOver says which one is open or picked, too.
+            .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }
 
