@@ -53,6 +53,18 @@ const executableName = "agy_acp_server.par"
 const harnessName = "localharness_external"
 /** What it says on stdout when it wants you to sign in (not ACP). */
 const signInLine = "Open the following link to authenticate the ACP server:"
+
+/** Google's agent stopped while signing in: why, in a line (what it said goes to the log). */
+class AgentStopped extends Error {
+  constructor(readonly said: string) {
+    super(
+      /PermissionError|Operation not permitted|Permission denied|EACCES|EPERM/i.test(said)
+        ? "Google's Antigravity agent stopped as it started: it wasn't allowed into a folder it needs."
+        : "Google's Antigravity agent stopped before you could sign in.",
+    )
+  }
+}
+
 /** Your other Google keys and settings, kept from it: it signs in its own way. */
 const scrubbed = [
   "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION",
@@ -492,7 +504,7 @@ export class AntigravityAgent implements Agent {
   }
 
   /** How it's started: its own home, its own temporary folder (it unpacks itself there, about 1 GB), and nothing of your other Google keys. */
-  private launch(): { argv: string[]; env: Record<string, string | undefined>; cleanEnv: boolean; onExit: () => void; signInFile: string } {
+  private launch(): { argv: string[]; env: Record<string, string | undefined>; cleanEnv: boolean; onExit: () => void; signInFile: string; temporary: string } {
     mkdirSync(join(this.profile, "antigravity-acp", "tmp"), { recursive: true, mode: 0o700 })
     const settings = join(this.profile, "antigravity-acp", "settings.json")
     if (!existsSync(settings)) writeFileSync(settings, JSON.stringify({ auth: { type: "oauth-personal" } }))
@@ -513,7 +525,7 @@ export class AntigravityAgent implements Agent {
     })
     // (Not its start-up syslog, which leaves a marker folder in /tmp, whatever TMPDIR says.)
     const argv = [join(this.folder, executableName), "--nosyslog_on_start", ...(process.platform === "linux" ? ["--uid="] : [])]
-    return { argv, env, cleanEnv: true, onExit: () => rmSync(temporary, { recursive: true, force: true }), signInFile: join(temporary, "url") }
+    return { argv, env, cleanEnv: true, onExit: () => rmSync(temporary, { recursive: true, force: true }), signInFile: join(temporary, "url"), temporary }
   }
 
   /**
@@ -537,8 +549,10 @@ export class AntigravityAgent implements Agent {
       await this.ensureInstalled()
       if (cancelled) return
       const launch = this.launch()
-      const cwd = join(this.context.temporary, "antigravity", newID("att"))
-      mkdirSync(cwd, { recursive: true })
+      // It starts in its own temporary folder, one of its own places in the sandbox: it reads the
+      // folder it starts in, and the bridge's temporary folder may be inside one the sandbox hides
+      // (on a Mac, the app's own temporary folder).
+      const cwd = launch.temporary
       // In the box's sandbox while it's on, as its sessions run: what it reads as it starts
       // (settings, skills, servers) runs there too, never outside.
       const whole = fenceRules() ? fenceAgent(launch.argv[0], cwd, { ...this.places(launch.env), read: this.reads(launch.env) }) : undefined
@@ -561,7 +575,6 @@ export class AntigravityAgent implements Agent {
       rpc.onExit = () => {
         whole?.ended()
         launch.onExit()
-        rmSync(cwd, { recursive: true, force: true })
       }
       // It hands the page to its "browser", which writes it down (or says it on a line of its own).
       const watch = setInterval(() => {
@@ -577,6 +590,13 @@ export class AntigravityAgent implements Agent {
         this.saveModels(setup)
         if (setup?.sessionId) this.removeSessionFiles(setup.sessionId)
         if (!cancelled) status = { status: "complete" }
+      } catch (error) {
+        // Stopped: what it said (a traceback, most often) is for the log, not the sheet.
+        if (rpc.isClosed && !cancelled) {
+          console.error(`Google's Antigravity agent stopped while signing in:\n${rpc.stderr.trim()}`)
+          throw new AgentStopped(rpc.stderr)
+        }
+        throw error
       } finally {
         clearInterval(watch)
         rpc.kill()
@@ -584,7 +604,8 @@ export class AntigravityAgent implements Agent {
     }
     flow().catch((error) => {
       if (status.status !== "pending") return
-      const message = String(error?.message ?? error)
+      // (Google's own refusals, by what it said, stopped or not.)
+      const message = String(error instanceof AgentStopped ? error.said : (error?.message ?? error))
       status = {
         status: "failed",
         message: cancelled
@@ -593,7 +614,9 @@ export class AntigravityAgent implements Agent {
             ? "Google says this account needs an Antigravity subscription."
             : /access_denied/i.test(message)
               ? "Google sign-in wasn't approved."
-              : failure(error).message,
+              : error instanceof AgentStopped
+                ? error.message
+                : failure(error).message,
       }
     })
     return {
