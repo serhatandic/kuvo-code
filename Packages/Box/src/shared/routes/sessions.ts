@@ -2,7 +2,7 @@
 // picking one of their models in it does; a session started with a task (`kuvo/sessions`), and the
 // agents' tools every box answers (`kuvo/agent-tools`; PROTOCOL.md, "Agents' tools").
 
-import { bool, type Infer, list, map, nullable, object, type RouteShape, string } from "../shape";
+import { any, bool, type Infer, list, literal, map, nullable, number, object, oneOf, type RouteShape, string } from "../shape";
 
 /** The coding agents' session it goes on in now. */
 export const CARRIED = object({ session: string });
@@ -20,8 +20,19 @@ export const TOOL_ANSWER = object({ text: string, isError: bool });
 
 const REFUSED = object({ message: string });
 
-/** A session's queue: whether it waits for Resume, and what Stop held, in the order it goes. */
-export const QUEUE = object({ paused: bool, held: list(string) });
+/** A message waiting on the box while its conversation is paused: who it's from (none for yours),
+ * what it says as shown, its files' names, and when it began to wait (ms). */
+export const WAITING = object({ id: string, "from?": string, text: string, "files?": list(string), at: number });
+
+/** A session's queue: whether it waits for Resume, what Stop held, in the order it goes, and what
+ * waits on the box (left out when nothing does). */
+export const QUEUE = object({ paused: bool, held: list(string), "waiting?": list(WAITING) });
+
+/** `queue/add`'s answer: the queue, and whether the message waits on the box (else it went on). */
+const ADDED = object({ paused: bool, held: list(string), "waiting?": list(WAITING), waits: bool });
+
+/** What `DELETE …/queue/<item>` took away, whole, for Undo to add back (`queue/add` with `kept`). */
+const REMOVED = object({ id: string, text: string, "files?": list(any), delivery: oneOf(literal("steer"), literal("queue")), "from?": string, words: string });
 
 export type SessionQueue = Infer<typeof QUEUE>;
 
@@ -35,4 +46,6 @@ export const SESSION_ROUTES: RouteShape[] = [
   { route: "POST kuvo/sessions/:id/queue/hold", answers: { 200: QUEUE, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions/:id/queue/resume", answers: { 200: QUEUE, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions/:id/queue/:item/now", answers: { 200: QUEUE, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
+  { route: "POST kuvo/sessions/:id/queue/add", answers: { 200: ADDED, 400: REFUSED, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
+  { route: "DELETE kuvo/sessions/:id/queue/:item", answers: { 200: object({ paused: bool, held: list(string), "waiting?": list(WAITING), "removed?": REMOVED }), 404: REFUSED } },
 ];

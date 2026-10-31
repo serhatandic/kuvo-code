@@ -47,7 +47,7 @@ struct QueueDock: View {
             if folds {
                 // No mark: "queued" says it, and the rows' marks under it say which are steered.
                 BarLine(mark: AnyView(Color.clear.frame(height: 1)),
-                        title: "\(items.count) queued", detail: items.first.map { Text(QueueRow.summary(of: $0)) },
+                        title: "\(items.count) queued", detail: items.first.map { first in Text((model.sender(of: first).map { "\($0): " } ?? "") + QueueRow.summary(of: first)) },
                         showHelp: "Show the messages waiting", hideHelp: "Fold them to this line",
                         isHidden: Binding(get: { !isOpen.wrappedValue }, set: { isOpen.wrappedValue = !$0 }))
             }
@@ -101,6 +101,11 @@ private struct QueueRow: View {
     @Environment(Catalog.self) private var catalog
 
     private var isQueued: Bool { item.delivery == .queue }
+    /// Waiting on the box (it came while the queue was paused), and who from: nil for one of yours.
+    private var isOnBox: Bool { model.isOnBox(item) }
+    private var sender: String? { model.sender(of: item) }
+    /// Yours to rewrite: not another agent's letter, a wake-up or a bot's news.
+    private var canEdit: Bool { sender == nil }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -108,9 +113,16 @@ private struct QueueRow: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.tertiary)
                 .frame(width: 18)
-                .help(isQueued ? "Sent after the current run, in this order" : "The agent gets this at its next step")
+                .help(isOnBox ? "Came while it was stopped: goes once you resume, in this order" : isQueued ? "Sent after the current run, in this order" : "The agent gets this at its next step")
             if let picture = item.files.first(where: { AttachmentItem.local($0).isImage }) {
                 QueuePicture(url: picture)
+            }
+            if let sender {
+                Text(sender)
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             MessageMentions.text(styledSummary, size: 14.5)
                 .font(.system(size: 13.5))
@@ -123,7 +135,16 @@ private struct QueueRow: View {
                     .padding(.trailing, 8)
                     .help("Sending…")
             } else {
-                if isQueued {
+                if isOnBox {
+                    Button {
+                        model.sendNow(item)
+                    } label: {
+                        Text(isRunning ? "Send Now" : "Send")
+                    }
+                    .buttonStyle(TextButtonStyle())
+                    .font(.system(size: 13))
+                    .help(isRunning ? "Send Now: stops the agent's current step and gives it this" : "Send it now")
+                } else if isQueued {
                     Button {
                         isRunning ? model.steer(item) : model.sendNow(item)
                     } label: {
@@ -153,34 +174,40 @@ private struct QueueRow: View {
                 Button("Remove", systemImage: "trash") { remove() }
                     .buttonStyle(CardActionStyle())
                     .help("Remove")
-                Menu {
-                    if isRunning && isQueued {
-                        Button("Send Now") { model.sendNow(item) }
+                // (Another's message has nothing more than Send and Remove, both shown.)
+                if canEdit {
+                    Menu {
+                        if isRunning && isQueued && !isOnBox {
+                            Button("Send Now") { model.sendNow(item) }
+                        }
+                        Button("Edit") { model.edit(item) }
+                        Divider()
+                        Button("Remove", role: .destructive) { remove() }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 13))
+                            .frame(width: 26, height: 24)
+                            .hoverHighlight(in: RoundedRectangle(cornerRadius: 6), mutesInk: true)
                     }
-                    Button("Edit") { model.edit(item) }
-                    Divider()
-                    Button("Remove", role: .destructive) { remove() }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 13))
-                        .frame(width: 26, height: 24)
-                        .hoverHighlight(in: RoundedRectangle(cornerRadius: 6), mutesInk: true)
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .clickablePointer()
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help(isRunning && isQueued && !isOnBox ? "Send Now (stops the current step), Edit, Remove" : "Edit, Remove")
+                } else {
+                    // Its buttons where the other rows' are.
+                    Color.clear.frame(width: 26, height: 24)
                 }
-                .menuStyle(.button)
-                .buttonStyle(.plain)
-                .clickablePointer()
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help(isRunning && isQueued ? "Send Now (stops the current step), Edit, Remove" : "Edit, Remove")
             }
         }
         .padding(.leading, 6)
         .contentShape(.rect)
-        .onTapGesture(count: 2) { model.edit(item) }
+        .onTapGesture(count: 2) { if canEdit { model.edit(item) } }
         .contextMenu {
-            if isQueued, isRunning { Button("Steer") { model.steer(item) } }
+            if isQueued, isRunning, !isOnBox { Button("Steer") { model.steer(item) } }
             Button("Send Now") { model.sendNow(item) }
-            Button("Edit") { model.edit(item) }
+            if canEdit { Button("Edit") { model.edit(item) } }
             Divider()
             Button("Remove", role: .destructive) { remove() }
         }

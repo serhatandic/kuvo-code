@@ -12,6 +12,7 @@ import { HERE, IS_MAC } from "../home";
 import { readKit } from "../bots/kit";
 import { listBots } from "../bots/list";
 import { asked } from "../engine/client";
+import { sendInto } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { keepOwn, ownAgents, ownAsLast } from "../peers/agents";
 import { composeAgents, isPutAway, peerOf, readPeerAgents } from "../peers/directory";
@@ -20,7 +21,7 @@ import { frozen } from "../moves/records";
 import { readLink } from "../state";
 import { excerpt, folded, READ_BY_MAIL, READ_LIMIT, readConversation } from "./conversation";
 import { letterAnswer, leaveLetter, offRelay } from "./leave";
-import { composeLetter, placeOfSession } from "./letter";
+import { composeLetter, pausedNote, placeOfSession } from "./letter";
 import { allowed, takeBack } from "./limits";
 import { OUTSIDE, seatRefusal, startedWords, startSession } from "./start";
 import { answerTo } from "./take";
@@ -182,11 +183,15 @@ async function sendMessage(args: Record<string, unknown>, caller: string | null,
   const here = await placeOfSession(target.session, targets).catch(() => null);
   if (here) {
     const id = messageID();
+    let went: "sent" | "waits";
     try {
-      await asked(here.target, "POST", `api/session/${encodeURIComponent(target.session)}/prompt`, { id, text: composeLetter(sender, caller ?? "unknown", text, waits), delivery: "steer" });
+      went = await sendInto(here.target, target.session, { id, text: composeLetter(sender, caller ?? "unknown", text, waits), delivery: "steer" },
+        { from: sender, words: text, kept: composeLetter(sender, caller ?? "unknown", text, false) });
     } catch (error) {
       return failed(`It didn't reach ${target.name}: ${why(error)}`);
     }
+    // Stopped by the user: it waits there for them, and nothing waits for its answer.
+    if (went === "waits") return said(pausedNote(target.name));
     if (!waits) return said(`Sent to ${target.name}. Its answer, if it writes one, comes to you as a message.`);
     const answer = await answerTo(here.target, target.session, id, { wait: place.step, signal: place.signal });
     return said(answer ? `${target.name} answered:\n\n${answer}` : `${target.name} hasn't answered yet. It may still write back with send_message.`);

@@ -92,7 +92,7 @@ export async function stopSessionTool(caller: Caller, args: Record<string, unkno
   if ("error" in found) return found.error;
   const { target, data } = found.listed;
   try {
-    await stopSession(target, data.id);
+    await stopSession(target, data.id, false);
   } catch (error) {
     return refused(`Couldn't stop "${data.title || "New Session"}": ${why(error)}`);
   }

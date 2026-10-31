@@ -451,13 +451,19 @@ enum DemoDirector {
             }
             // KUVO_DEMO_WAITING=<text>|<text>…: those as messages waiting in its queue (not sent);
             // a text of "<words>@<picture path>" has that picture attached.
-            if let waiting = environment["KUVO_DEMO_WAITING"] {
+            // KUVO_DEMO_WAITING_FROM=<from>|<from>…: after them, these as what came while it was
+            // stopped, waiting on its box (paused), each "<sender>:<words>" (no sender: yours).
+            if environment["KUVO_DEMO_WAITING"] != nil || environment["KUVO_DEMO_WAITING_FROM"] != nil {
+                let waiting = environment["KUVO_DEMO_WAITING"] ?? "", fromOthers = environment["KUVO_DEMO_WAITING_FROM"] ?? ""
                 Task {
                     guard await DemoWait.until("\(id) to load (KUVO_DEMO_WAITING)", limit: .seconds(30), { workspace.model(for: id)?.isLoaded == true }), let model = workspace.model(for: id) else { return }
                     model.showWaiting(waiting.split(separator: "|").enumerated().map { index, entry in
                         let parts = entry.split(separator: "@", maxSplits: 1).map(String.init)
                         return Transcript.Pending(id: "msg_demo_waiting_\(index)", text: parts[0], delivery: .queue, isLocal: false,
                                                   files: parts.count > 1 ? [URL(filePath: parts[1])] : [])
+                    }, onBox: fromOthers.split(separator: "|").enumerated().map { index, entry in
+                        let parts = entry.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+                        return SessionModel.BoxQueue.Waiting(id: "msg_demo_box_\(index)", from: parts.count > 1 && !parts[0].isEmpty ? parts[0] : nil, text: parts.last ?? "")
                     })
                 }
             }

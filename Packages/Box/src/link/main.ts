@@ -436,7 +436,8 @@ async function box(command: string): Promise<void> {
       answerOnce();
       let given: { method?: unknown; path?: unknown; body?: unknown; bodyText?: unknown; headers?: unknown } | null = {};
       try { given = JSON.parse(await input()); } catch {}
-      const handle = engineHandler(readEngineFile, { name: os.hostname() });
+      // (The coding agents' bridge's sessions too: a wake-up held for one, say.)
+      const handle = engineHandler(readEngineFile, { name: os.hostname() }, readBridgeFile);
       // With the folder it's asked about (`x-opencode-directory`), as a phone's request has it.
       const folder = (given?.headers as Record<string, unknown> | undefined)?.["x-opencode-directory"];
       // And the Mac's proof for a request to this machine's vault (or its unlock key, to unlock it),

@@ -6,12 +6,13 @@ import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
 import { pause } from "../../shared/wait";
 import { asked } from "../engine/client";
+import { sendInto } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { locked, writePrivate } from "../files";
 import { PEER_LOCK, isPutAway, peerOf, readPeerAgents } from "../peers/directory";
 import { movedOf, ownKey, peersOf } from "../peers/known";
 import { readLink } from "../state";
-import { LETTERS_SEEN, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, composeLetter, cutText, placeOfSession } from "./letter";
+import { LETTERS_SEEN, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, composeLetter, cutText, pausedNote, placeOfSession } from "./letter";
 import { READ_BY_MAIL, excerpt, readConversation } from "./conversation";
 import { allowed, takeBack } from "./limits";
 import { ANSWER_TEXT, answered } from "./outbox";
@@ -179,7 +180,7 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     return no(why, again);
   };
   delivering.add(id);
-  let place: SessionPlace | null, prompt: string, fromAgent: ListedAgent | null = null;
+  let place: SessionPlace | null, prompt: string, fromAgent: ListedAgent | null = null, went: "sent" | "waits";
   try {
     const lives = moved.get(letter.to);
     if ((lives && lives !== ownKey(readLink() ?? {})) || (await moving(letter.to))) return notDelivered("It's moving to another computer: it comes again once it's there.", true);
@@ -195,7 +196,9 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     const name = fromAgent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}`;
     prompt = messageID();
     const waits = letter.wait === true && Boolean(fromAgent);
-    await asked(place.target, "POST", `api/session/${encodeURIComponent(letter.to)}/prompt`, { id: prompt, text: composeLetter(name, fromAgent ? letter.from as string : "unknown", cutText(letter.text), waits), delivery: "steer" });
+    const by = fromAgent ? letter.from as string : "unknown";
+    went = await sendInto(place.target, letter.to, { id: prompt, text: composeLetter(name, by, cutText(letter.text), waits), delivery: "steer" },
+      { from: name, words: cutText(letter.text), kept: composeLetter(name, by, cutText(letter.text), false) });
   } catch (error) {
     return notDelivered(`It didn't reach it: ${String((error as Error | null)?.message ?? error)}`, true);
   } finally {
@@ -204,6 +207,8 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
   noteSeen(id, now);
   // Waiting for an answer it can't have (its sender couldn't be told): it hears no answer's coming.
   if (letter.wait === true && !fromAgent) return send(sender, { delivered: { id, ok: true, answer: false, why: "Its answer can't come back to you: it doesn't know who you are." } });
+  // Stopped by the user here: it waits for them, and its answer comes as a message.
+  if (went === "waits") return send(sender, { delivered: { id, ok: true, ...(letter.wait === true ? { answer: false, why: pausedNote() } : {}) } });
   send(sender, { delivered: { id, ok: true } });
   if (letter.wait !== true) return;
   const text = await answerTo(place.target, letter.to, prompt, { wait });

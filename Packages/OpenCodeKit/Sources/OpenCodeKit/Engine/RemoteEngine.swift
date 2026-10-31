@@ -858,7 +858,13 @@ public final class RemoteServer: @unchecked Sendable {
               # (Not beside the watchdog an older Mac's start brings, which would also stop the
               # engine after a day without that Mac.)
               pkill -f "watchdog [0-9]+ $R" 2>/dev/null
-              (environment; cd "$K/workspace" 2>/dev/null || cd "$K"; exec "$K/bin/kuvo-wake" fire "$K/bots" "$R/engine.json") >/dev/null 2>&1 </dev/null &
+              # (With the box's own command, which a wake-up due in a conversation you stopped is
+              # handed to, to wait there.)
+              (environment; cd "$K/workspace" 2>/dev/null || cd "$K"
+                if [ -f "$K/bin/kuvo-link.js" ] && [ -n "$V" ]; then
+                  export KUVO_LINK_RUNTIME="$K/engine/$V/opencode" KUVO_LINK_FLAGS="--config=/dev/null --no-env-file" KUVO_LINK_SCRIPT="$K/bin/kuvo-link.js"
+                fi
+                exec "$K/bin/kuvo-wake" fire "$K/bots" "$R/engine.json") >/dev/null 2>&1 </dev/null &
               waking=$!
             fi
             sleep 15

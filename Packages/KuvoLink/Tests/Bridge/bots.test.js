@@ -218,6 +218,22 @@ test("a wake-up or watch is cancelled by its letters; nothing else goes", async 
   assert.ok(fs.existsSync(path.join(scout, "MEMORY.md")), "its folder stays");
 });
 
+test("Wake Up Now for a conversation the user stopped: the wake-up waits there with its queue, rather than starting it", async t => {
+  const engine = await fakeEngine();
+  t.after(engine.close);
+  const scout = bot("bot_scout00001");
+  write(path.join(scout, "wakes", "1792000500-AbC123"), "check the\nbuild");
+  const queues = path.join(home, "run", "queues.json");
+  write(queues, JSON.stringify({ ses_bot_scout00001: { paused: true, held: [] } }));
+  t.after(() => fs.rmSync(queues, { force: true }));
+  const handle = link.engineHandler(() => ({ pid: process.pid, port: engine.port, password: "s3cret" }), {});
+  assert.equal((await ask(handle, "POST", "kuvo/wakes/ses_bot_scout00001/now", { wake: "AbC123" })).status, 200);
+  assert.ok(!engine.asked.some(each => each.url.endsWith("/prompt")), "the engine would run everything waiting with it");
+  const [waiting] = link.queueOf("ses_bot_scout00001").waiting;
+  assert.deepEqual([waiting.from, waiting.text], ["Wake-up", "check the\nbuild"]);
+  assert.deepEqual(fs.readdirSync(path.join(scout, "wakes")), [], "a one-off is done: it waits with the queue now");
+});
+
 test("Wake Up Now sends the whole note to its session, then a one-off is done and a repeating one stays", async t => {
   const engine = await fakeEngine();
   t.after(engine.close);

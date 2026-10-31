@@ -154,6 +154,25 @@ import Testing
         #expect(prompts().count == 1)
     }
 
+    /// Where the box can't take it to wait in the conversation's list (no box command named; the
+    /// box's own test, `wakes-mac.test.js`, has it taken there), it waits here.
+    @Test(arguments: WakesTests.shells)
+    func aConversationYouStoppedGetsItsWakeUpOnceYouResumeIt(_ shell: String) throws {
+        defer { cleanUp() }
+        let bot = try folder("bot_a", session: "ses_a", wake: "Check whether CI passed")
+        try folder("bot_b", session: "ses_b", wake: "Read the release notes")
+        // Stopped: its queue paused on the box, as `run/queues.json` keeps it.
+        try write(k.appending(path: "run/queues.json"), #"{"ses_a":{"paused":true,"held":[]},"ses_b":{"paused":false,"held":["msg_1"]}}"#)
+        try fire(shell: shell)
+        #expect(prompts() == ["\(Self.enginePort) ses_b [Wake-up] Read the release notes"], "\(shell): the stopped one's waits")
+        #expect(wakes(of: bot).count == 1, "kept")
+        // Resumed.
+        try write(k.appending(path: "run/queues.json"), #"{}"#)
+        try fire(shell: shell)
+        #expect(prompts().last == "\(Self.enginePort) ses_a [Wake-up] Check whether CI passed", "\(shell)")
+        #expect(wakes(of: bot).isEmpty)
+    }
+
     /// When a folder's next try is (`.retry`), and how long it waited, in seconds.
     private func retry(of folder: URL) -> (at: Int, wait: Int)? {
         guard let text = try? String(contentsOf: folder.appending(path: ".retry"), encoding: .utf8) else { return nil }

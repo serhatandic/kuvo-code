@@ -94,6 +94,9 @@ const engine = http.createServer((request, response) => {
       messages.set(id, [...(messages.get(id) ?? []), { id: given.id, type: "user", text: given.text }, ...answer]);
       return reply({});
     }
+    // (Its queue, as the box's Stop and Resume read it: nothing waiting.)
+    if (one?.[2] === "/inbox") return reply({ data: [] });
+    if (one?.[2] === "/interrupt") return reply({ data: true });
     if (one?.[2] === "/message") return reply({ data: [...(messages.get(id) ?? [])].reverse() });
     if (request.url.includes("/instructions/entries/")) {
       told.set(request.url.match(/session\/([^/]+)\//)[1] + " " + request.url.split("/").pop(), JSON.parse(body).value);
@@ -119,6 +122,8 @@ beforeEach(() => {
   busy = new Map();
   replaceAnswer = {};
   fs.rmSync(path.join(home, "run", "tool-limits.json"), { force: true });
+  fs.rmSync(path.join(home, "run", "queues.json"), { force: true });
+  fs.rmSync(path.join(home, "run", "waiting"), { recursive: true, force: true });
 });
 
 // The box's answer to one request, as a machine's tool asks it: a process of its own (`started`
@@ -154,6 +159,19 @@ test("send_message reaches the agent named (with & or not), saying who it's from
   assert.equal(prompts.length, 1);
   assert.equal(prompts[0].to, "ses_notes");
   assert.equal(prompts[0].delivery, "steer");
+  assert.equal(prompts[0].text, "[Message from Lead · ses_lead] (To answer, use send_message to ses_lead.)\n\nAdd the iPhone fixes.");
+});
+
+test("send_message to a conversation the user stopped waits there with its queue, says so, and goes once they resume it, as a letter no one waits for", async () => {
+  assert.equal((await route("POST", "kuvo/sessions/ses_notes/stop")).body.paused, true);
+  const said = await tool("send_message", { to: "Release notes", text: "Add the iPhone fixes.", wait: true }, "ses_helper");
+  assert.deepEqual(said, { text: "Release notes is stopped: the user paused its conversation. Your message waits there and goes once they resume it; its answer, if it writes one, comes to you as a message.", isError: false });
+  assert.deepEqual(prompts, [], "the engine would run everything waiting with it");
+  const queue = (await route("GET", "kuvo/sessions/ses_notes/queue")).body;
+  assert.deepEqual(queue.waiting.map(({ from, text }) => ({ from, text })), [{ from: "Lead", text: "Add the iPhone fixes." }]);
+  await route("POST", "kuvo/sessions/ses_notes/queue/resume");
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].to, "ses_notes");
   assert.equal(prompts[0].text, "[Message from Lead · ses_lead] (To answer, use send_message to ses_lead.)\n\nAdd the iPhone fixes.");
 });
 

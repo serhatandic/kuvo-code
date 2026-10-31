@@ -11,11 +11,12 @@ import { sleep } from "../../shared/wait";
 import { isMoving, MOVING } from "../bots/here";
 import { engineGet } from "../engine/client";
 import type { EngineAnswer } from "../engine/client";
+import { keepWaiting } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import type { EngineSession } from "../engine/sessions";
 import { listOf, textOf } from "../files";
 import { followed, watchFolders } from "../follow";
-import { BOTS, RUN, SESSION_WAKES, WAKE_COMMAND } from "../home";
+import { BOTS, OWN_RUNTIME, RUN, SCRIPT, SESSION_WAKES, WAKE_COMMAND } from "../home";
 import type { AnswerPiece, LinkRequest, RouteContext } from "../server/context";
 
 // What a wake-up's message starts with, as the Mac words it.
@@ -181,7 +182,10 @@ export function sendWakes(): () => Promise<void> {
     if (running) return void (again = true);
     running = true;
     started = Date.now() / 1000;
-    execFile(WAKE_COMMAND, ["fire", BOTS, path.join(RUN, "engine.json")], error => {
+    // (With this box's own command, which a wake-up due in a conversation you stopped is handed to,
+    // to wait there: `box route`.)
+    const env = { ...process.env, KUVO_LINK_RUNTIME: process.execPath, KUVO_LINK_FLAGS: OWN_RUNTIME.join(" "), KUVO_LINK_SCRIPT: SCRIPT };
+    execFile(WAKE_COMMAND, ["fire", BOTS, path.join(RUN, "engine.json")], { env }, error => {
       running = false;
       if (error?.code === "ENOENT" && !said) {
         said = true;
@@ -409,18 +413,22 @@ export async function* answerWakes(session: string, action: WakeAction | undefin
     const authorization = `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`;
     const directory = textOf(path.join(folder, "directory"));
     if (!agents && directory) await waitForTools(target.port, authorization, directory, signal);
-    let response: Response;
-    try {
-      response = await fetch(`http://127.0.0.1:${target.port}/api/session/${encodeURIComponent(session)}/prompt`, {
-        method: "POST",
-        headers: { authorization, "content-type": "application/json" },
-        body: JSON.stringify({ id: messageID(), text: WAKE_MARKER + note, delivery: "queue" }),
-        signal,
-      });
-    } catch {
-      return yield* json(503, { message: "The wake-up couldn’t be sent." });
+    const message = { id: messageID(), text: WAKE_MARKER + note, delivery: "queue" as const };
+    // Its conversation stopped by you: it waits there with the queue, and goes once it goes on.
+    if (!keepWaiting(session, message, { from: "Wake-up", words: note })) {
+      let response: Response;
+      try {
+        response = await fetch(`http://127.0.0.1:${target.port}/api/session/${encodeURIComponent(session)}/prompt`, {
+          method: "POST",
+          headers: { authorization, "content-type": "application/json" },
+          body: JSON.stringify(message),
+          signal,
+        });
+      } catch {
+        return yield* json(503, { message: "The wake-up couldn’t be sent." });
+      }
+      if (!response.ok) return yield* json(503, { message: `The wake-up couldn’t be sent (${response.status}).` });
     }
-    if (!response.ok) return yield* json(503, { message: `The wake-up couldn’t be sent (${response.status}).` });
     if (!chosen.every) cancelWake(folder, chosen.letters);
     return yield* changed(200, {});
   } finally {

@@ -206,6 +206,39 @@ test("this computer's box sends a wake-up when it's due, with kuvo-wake fire, as
   assert.deepEqual(fs.readdirSync(path.join(folder, "wakes")), [], "sent, so it's gone and never goes twice");
 });
 
+test("a wake-up due in a conversation you stopped waits on the box, shown as a wake-up, and one that repeats isn't kept twice", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const folder = conversation(t, "ses_stopped", { folder: true });
+  const queues = path.join(support, "box", "run", "queues.json");
+  t.after(() => fs.rmSync(queues, { force: true }));
+  // Stopped, as the box keeps it.
+  fs.writeFileSync(queues, JSON.stringify({ ses_stopped: { paused: true, held: [] } }));
+  fs.writeFileSync(path.join(folder, "wakes", `${now() - 5}-abcdef`), "Send the weekly summary");
+  fs.writeFileSync(path.join(folder, "wakes", `${now() - 5}-ghijkl-1d`), "Check the build");
+  const fire = async () => {
+    const stop = link.sendWakes();
+    try {
+      t.mock.timers.tick(500);
+    } finally {
+      await stop();
+    }
+  };
+  await fire();
+  assert.deepEqual(prompted.filter(each => each.session === "ses_stopped"), [], "nothing reaches the conversation while it's stopped");
+  const waiting = () => (link.queueOf("ses_stopped").waiting ?? []).map(each => [each.from, each.text]);
+  assert.deepEqual(waiting(), [["Wake-up", "Send the weekly summary"], ["Wake-up", "Check the build"]]);
+  const left = fs.readdirSync(path.join(folder, "wakes"));
+  assert.equal(left.length, 1, "the one that's done is gone");
+  assert.match(left[0], /^\d+-ghijkl-1d/);
+  assert.ok(Number(left[0].split("-")[0]) > now(), "the repeating one comes back at its next time");
+
+  // Its next time comes while it's still stopped: what waits isn't kept again.
+  fs.renameSync(path.join(folder, "wakes", left[0]), path.join(folder, "wakes", `${now() - 5}-${left[0].slice(left[0].indexOf("-") + 1)}`));
+  await fire();
+  assert.deepEqual(waiting(), [["Wake-up", "Send the weekly summary"], ["Wake-up", "Check the build"]]);
+  assert.deepEqual(prompted.filter(each => each.session === "ses_stopped"), []);
+});
+
 test("one an agent's kuvo-wake writes beside the box goes at its time, not at the next minute", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const folder = conversation(t, "ses_soon", { folder: true });

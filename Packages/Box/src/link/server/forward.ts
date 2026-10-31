@@ -35,7 +35,7 @@ export function fromPhone(body: Buffer | undefined): Buffer | undefined {
 
 // What the model of `session` takes as input, as the engine at `base` says (its own model, or the
 // engine's default): for the files a message carries (`attachedIn`).
-function modelInput(base: URL, headers: Record<string, string>, signal: AbortSignal | undefined): ModelInput {
+export function modelInput(base: URL, headers: Record<string, string>, signal: AbortSignal | undefined): ModelInput {
   const read = async (at: string): Promise<unknown> => {
     const response = await fetch(new URL(at, base), { headers, signal });
     return response.ok ? ((await response.json()) as { data?: unknown } | null)?.data ?? null : null;
