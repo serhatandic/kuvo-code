@@ -16,7 +16,7 @@ import { messageID } from "../engine/sessions";
 import type { EngineSession } from "../engine/sessions";
 import { listOf, textOf } from "../files";
 import { followed, watchFolders } from "../follow";
-import { BOTS, RUN, SESSION_WAKES, WAKE_COMMAND } from "../home";
+import { BOTS, OWN_RUNTIME, RUN, SCRIPT, SESSION_WAKES, WAKE_COMMAND } from "../home";
 import type { AnswerPiece, LinkRequest, RouteContext } from "../server/context";
 
 // What a wake-up's message starts with, as the Mac words it.
@@ -182,7 +182,10 @@ export function sendWakes(): () => Promise<void> {
     if (running) return void (again = true);
     running = true;
     started = Date.now() / 1000;
-    execFile(WAKE_COMMAND, ["fire", BOTS, path.join(RUN, "engine.json")], error => {
+    // (With this box's own command, which a wake-up due in a conversation you stopped is handed to,
+    // to wait there: `box route`.)
+    const env = { ...process.env, KUVO_LINK_RUNTIME: process.execPath, KUVO_LINK_FLAGS: OWN_RUNTIME.join(" "), KUVO_LINK_SCRIPT: SCRIPT };
+    execFile(WAKE_COMMAND, ["fire", BOTS, path.join(RUN, "engine.json")], { env }, error => {
       running = false;
       if (error?.code === "ENOENT" && !said) {
         said = true;

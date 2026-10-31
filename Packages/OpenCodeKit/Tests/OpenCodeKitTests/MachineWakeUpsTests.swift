@@ -154,6 +154,8 @@ import Testing
         #expect(prompts().count == 1)
     }
 
+    /// Where the box can't take it to wait in the conversation's list (no box command named; the
+    /// box's own test, `wakes-mac.test.js`, has it taken there), it waits here.
     @Test(arguments: WakesTests.shells)
     func aConversationYouStoppedGetsItsWakeUpOnceYouResumeIt(_ shell: String) throws {
         defer { cleanUp() }

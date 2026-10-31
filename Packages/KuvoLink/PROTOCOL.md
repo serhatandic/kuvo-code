@@ -559,8 +559,9 @@ the same for every client and with none connected, and keeps them in `run/queues
   sends it on its own waits on the box instead: another agent's letter (from here or another
   computer; a sender waiting for the answer hears the conversation is stopped, and the answer comes
   as a message), an answer to a letter, a wake-up sent now, a bot's work news, an ask's late answer
-  and a goal's notes. A scheduled wake-up or watch waits in its folder (`kuvo-wake fire` reads
-  `run/queues.json`). Each goes once the queue goes on, after what the engine holds, one at a time
+  and a goal's notes. A scheduled wake-up that comes due waits there too, as a `Wake-up` (`kuvo-wake
+  fire` reads `run/queues.json` and hands it over with `box route`, `queue/add`; one that repeats is
+  kept once); a watch waits in its folder. Each goes once the queue goes on, after what the engine holds, one at a time
   as runs end; kept in `run/queues.json` (`waiting`) and, whole, in `run/waiting/<message id>.json`,
   across a restart. Send Now sends one at once; `DELETE …/queue/<item>` takes one away.
 - `GET kuvo/sessions/<id>/queue` → `{paused, held: [inboxID…], waiting?: [{id, from?, text, files?,
