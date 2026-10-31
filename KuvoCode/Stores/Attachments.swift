@@ -58,10 +58,10 @@ nonisolated enum Attachments {
     nonisolated(unsafe) private static var routes: [String: Route] = [:]
     private static let routesLock = NSLock()
 
-    static func route(_ url: URL, for model: Model?) -> Route {
-        let key = url.path + "\n" + (model?.key ?? "")
+    static func route(_ url: URL, for model: Model?, onMachine: Bool = false) -> Route {
+        let key = url.path + "\n" + (model?.key ?? "") + (onMachine ? "\nmachine" : "")
         if let known = routesLock.withLock({ routes[key] }) { return known }
-        let route = findRoute(url, for: model)
+        let route = findRoute(url, for: model, onMachine: onMachine)
         routesLock.withLock {
             if routes.count > 200 { routes.removeAll() }
             routes[key] = route
@@ -69,17 +69,18 @@ nonisolated enum Attachments {
         return route
     }
 
-    private static func findRoute(_ url: URL, for model: Model?) -> Route {
+    private static func findRoute(_ url: URL, for model: Model?, onMachine: Bool) -> Route {
         let input = model?.capabilities.input
         let name = model?.name ?? "This model"
         let size = (try? target(of: url).resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
         let tooBig = Route.path(reason: "It's over 20 MB, so the agent gets its path and opens it with its tools.", isWarning: true)
         // The coding agents' bridge puts a text file in the message only up to its limit, and
-        // never a folder's listing: those go by path.
+        // never a folder's listing: those go by path (but a folder for a machine, which goes
+        // there as its listing).
         let agents = OutsideAgents.runsInBridge(model?.providerID)
         switch kind(of: url) {
         case .folder:
-            return agents ? .path(reason: "The agent gets the folder's path and looks inside with its tools.", isWarning: false) : .content
+            return agents && !onMachine ? .path(reason: "The agent gets the folder's path and looks inside with its tools.", isWarning: false) : .content
         case .text:
             if agents, size > agentsTextBytes { return .path(reason: "It's long, so the agent gets its path and opens it with its tools.", isWarning: false) }
             return size <= maxBytes ? .content : tooBig

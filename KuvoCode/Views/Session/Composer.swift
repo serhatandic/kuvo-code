@@ -192,7 +192,7 @@ struct Composer: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 8) {
                         ForEach(files, id: \.self) { file in
-                            ComposerAttachment(url: file, route: Attachments.route(file, for: currentModel),
+                            ComposerAttachment(url: file, route: Attachments.route(file, for: currentModel, onMachine: RemoteFolder.machine(of: folders.first ?? "") != nil),
                                                number: imageFiles.firstIndex(of: file).map { $0 + 1 }) { detach(file) }
                         }
                     }

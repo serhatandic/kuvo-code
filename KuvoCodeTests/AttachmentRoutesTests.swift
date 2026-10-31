@@ -75,6 +75,8 @@ import Testing
         guard case .path(let reason, let warns) = Attachments.route(log, for: agent) else { Issue.record("a long log went in a coding agent's message"); return }
         #expect(reason.contains("gets its path") && !warns)
         #expect(isContent("build.log", for: try model(input: ["text"])))
+        // On a machine, a folder goes there as its listing, and its chip doesn't say otherwise.
+        guard case .content = Attachments.route(url("src"), for: agent, onMachine: true) else { Issue.record("a folder for a machine was called a path"); return }
     }
 
     /// On a machine, which can't read this Mac's files: what the model reads goes inline, a
