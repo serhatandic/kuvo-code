@@ -275,14 +275,48 @@ import Testing
         #expect(model.isQueuePaused, "as the box says")
     }
 
+    /// Remove, Undo and Resume at once, as quick hands do: Resume waits for the one Undo brings
+    /// back, so the queue goes on one message at a time, the one brought back among them, rather
+    /// than going on without it and the one brought back going to the agent too as it arrives.
+    @Test func resumeRightAfterUndoGoesOnOneAtATime() async throws {
+        let (model, box, _) = try await open(running: true, inbox: [])
+        defer { box.stop(); engine.stop() }
+        let following = Task { await workspace.followQueues() }
+        defer { following.cancel() }
+        model.stop()
+        try await until { !engine.requests("POST", "/interrupt").isEmpty }
+        stopped()
+        model.apply(try engine.event("session.execution.interrupted", session: id, ["reason": "user"]))
+        try await until { model.isQueuePaused }
+
+        struct Letter: Encodable { var id: String; var text: String; var from: String }
+        struct Added: Decodable { var waits: Bool }
+        let added = try await box.client(engine: engine.url).value(Added.self, "POST", "kuvo/sessions/\(id)/queue/add", body: Letter(id: "msg_ada1", text: "The build is green on main.", from: "Ada"))
+        #expect(added.waits)
+        try await until { model.waiting.count == 1 }
+        model.send("Also run the tests", for: nil, queue: true)
+        try await until { model.waiting.map(\.text) == ["The build is green on main.", "Also run the tests"] && model.waiting.allSatisfy(model.isOnBox) }
+        let letter = try #require(model.waiting.first)
+
+        model.cancelPending(letter)
+        model.requeue(letter, for: nil, paused: true)
+        model.resumeQueue()
+        // One went; the other waits for it, or went too.
+        let prompts = { engine.requests("POST", "/prompt").compactMap { $0.body["text"] as? String } }
+        try await until { prompts().count > 1 || prompts().count == 1 && model.waiting.count == 1 && model.waiting[0].text != prompts()[0] }
+        #expect(prompts().count == 1, "one run at a time")
+        #expect(Set(prompts() + model.waiting.map(\.text)) == ["The build is green on main.", "Also run the tests"], "the one brought back still there")
+    }
+
     /// Resume its box can't take (it's not running now): the queue shows Paused again, and why.
     @Test func resumeTheBoxDidntTakeStaysPaused() async throws {
         let (model, box, _) = try await open(running: false, inbox: [queued("msg_02", "Then update the docs")], queues: #"{"ses_queue":{"paused":true,"held":[]}}"#)
         defer { engine.stop() }
         try await until { model.isQueuePaused }
         box.stop()
-        model.resumeQueue()
-        try await until { model.isQueuePaused && model.failure != nil }
+        // (Said, for what Resume was pressed under to show where it says why: a group chat's part.)
+        #expect(await model.resumeQueue().value == false)
+        #expect(model.isQueuePaused && model.failure != nil)
         #expect(deliveries(of: "msg_02").isEmpty)
     }
 

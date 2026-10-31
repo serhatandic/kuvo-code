@@ -261,8 +261,10 @@ test("two conversations you stopped, with the same wake-up (bots made from one t
   fs.writeFileSync(path.join(second, "wakes", `${now() - 5}-ghijkl-1d`), "Check the inbox");
   await fire();
   const waiting = session => (link.queueOf(session).waiting ?? []).map(each => [each.from, each.text]);
-  assert.deepEqual(waiting("ses_inbox1"), [["Wake-up", "Check the inbox"]]);
-  assert.deepEqual(waiting("ses_inbox2"), [["Wake-up", "Check the inbox"]], "the other's waiting isn't this one's");
+  // (What there is, said when it isn't so: once, under a whole suite's load, the second's came back empty.)
+  const found = () => JSON.stringify({ queues: fs.readFileSync(queues, "utf8"), second: fs.readdirSync(second, { recursive: true }), prompted: prompted.filter(each => each.session.startsWith("ses_inbox")) });
+  assert.deepEqual(waiting("ses_inbox1"), [["Wake-up", "Check the inbox"]], found());
+  assert.deepEqual(waiting("ses_inbox2"), [["Wake-up", "Check the inbox"]], `the other's waiting isn't this one's: ${found()}`);
   assert.deepEqual(prompted.filter(each => each.session.startsWith("ses_inbox")), []);
 });
 

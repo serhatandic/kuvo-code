@@ -45,6 +45,7 @@ struct GroupChatView: View {
                 GroupMessageRow(message: message, author: message.author.flatMap { bots.bot($0) }, members: members,
                                 reply: { reply(to: message) }, undo: { undo(from: message) },
                                 startWork: reachable && message.tasks?.contains { $0.state == .proposed } == true ? { groups.startWork(message.id, in: group.id) } : nil,
+                                stopped: message.tasks?.contains { $0.state == .working } == true ? groups.stopped(in: group.id) : [],
                                 isOffline: !reachable)
                     .equatable()
                     .environment(\.findHighlight, find.highlight(for: message.id))
@@ -209,7 +210,7 @@ private struct MeetingRow: View {
 private struct GroupMessageRow: View, Equatable {
     static func == (lhs: GroupMessageRow, rhs: GroupMessageRow) -> Bool {
         lhs.message == rhs.message && lhs.author == rhs.author && lhs.members == rhs.members && (lhs.reply == nil) == (rhs.reply == nil)
-            && (lhs.startWork == nil) == (rhs.startWork == nil) && lhs.isOffline == rhs.isOffline
+            && (lhs.startWork == nil) == (rhs.startWork == nil) && lhs.stopped == rhs.stopped && lhs.isOffline == rhs.isOffline
     }
 
     let message: GroupMessage
@@ -222,6 +223,8 @@ private struct GroupMessageRow: View, Equatable {
     let undo: () -> Void
     /// On a wrap-up whose work waits for you: hands each part to its bot.
     var startWork: (() -> Void)?
+    /// The bots whose part waits on their conversation, stopped by you.
+    var stopped: Set<String> = []
     /// Where the chat lives can't be reached now: undoing waits.
     var isOffline = false
     @State private var hovering = false
@@ -327,7 +330,7 @@ private struct GroupMessageRow: View, Equatable {
                         .padding(.top, 6)
                     }
                     if let tasks = message.tasks, !tasks.isEmpty {
-                        WorkList(tasks: tasks, members: members, start: startWork)
+                        WorkList(tasks: tasks, members: members, stopped: stopped, start: startWork)
                     }
                 }
             }
@@ -353,6 +356,8 @@ private struct GroupMessageRow: View, Equatable {
 private struct WorkList: View {
     let tasks: [GroupTask]
     let members: [Bot]
+    /// The bots whose part waits on their conversation, stopped by you.
+    var stopped: Set<String> = []
     let start: (() -> Void)?
     @Environment(AppModel.self) private var app
 
@@ -383,7 +388,8 @@ private struct WorkList: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         WorkState(state: task.state, after: (task.after ?? []).map { id in members.first { $0.id == id }?.name ?? app.bots.bot(id)?.name ?? "another bot" },
-                                  needsYou: task.state == .working && bot.map { Self.waits(on: $0, in: app.workspace) } == true)
+                                  needsYou: task.state == .working && bot.map { Self.waits(on: $0, in: app.workspace) } == true,
+                                  stopped: task.state == .working && stopped.contains(task.bot))
                         if opens {
                             Image(systemName: "chevron.right")
                                 .font(.caption.weight(.semibold))
@@ -400,6 +406,9 @@ private struct WorkList: View {
                 .clickablePointer()
                 .disabled(!opens)
                 .help(opens ? "Open \(bot?.name ?? "the bot")’s conversation, where it works on this" : "")
+                if task.state == .working, stopped.contains(task.bot), let bot {
+                    StoppedLine(bot: bot)
+                }
             }
             if let start {
                 HStack {
@@ -431,6 +440,37 @@ private struct WorkList: View {
     }
 }
 
+/// Under a part whose bot's conversation you stopped: it waits there, and Resume lets it go on.
+private struct StoppedLine: View {
+    let bot: Bot
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text("Waiting: \(bot.name)’s conversation is stopped")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Resume", action: resume)
+                .buttonStyle(TextButtonStyle())
+                .help("Resume \(bot.name)’s conversation: it goes on with this part")
+                .accessibilityLabel("Resume \(bot.name)’s Conversation")
+        }
+        .font(.caption.weight(.medium))
+        // Under the part's words, past its bot's face.
+        .padding(.leading, 40)
+        .padding(.trailing, 10)
+        .padding(.bottom, 8)
+    }
+
+    /// Its conversation's queue picked up again, where it lives; one this Mac can't reach now, or
+    /// whose computer didn't answer, is opened instead, where it says why.
+    private func resume() {
+        let (app, session) = (app, bot.sessionID)
+        guard let model = app.workspace.model(for: session), model.canReach else { return app.open(.session(session)) }
+        Task { if await !model.resumeQueue().value { app.open(.session(session)) } }
+    }
+}
+
 /// How a part of the work is going.
 private struct WorkState: View {
     let state: GroupTask.State
@@ -438,6 +478,8 @@ private struct WorkState: View {
     var after: [String] = []
     /// Under way, and waiting on you in the bot's conversation.
     var needsYou = false
+    /// Under way, and waiting on the bot's conversation, stopped by you.
+    var stopped = false
 
     var body: some View {
         Group {
@@ -451,6 +493,10 @@ private struct WorkState: View {
                 Label("After \(ListFormatter.localizedString(byJoining: after))", systemImage: "clock")
                     .foregroundStyle(.secondary)
                     .help("Starts once their parts are done, with what they report")
+            case .working where stopped:
+                Label("Stopped", systemImage: "pause.circle")
+                    .foregroundStyle(.secondary)
+                    .help("Waits until you resume the bot’s conversation")
             case .working where needsYou:
                 Label("Needs You", systemImage: "hand.raised.fill")
                     .foregroundStyle(.orange)

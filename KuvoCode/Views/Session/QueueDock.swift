@@ -56,7 +56,7 @@ struct QueueDock: View {
                     Text("Paused")
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 8)
-                    Button("Resume", action: model.resumeQueue)
+                    Button("Resume") { model.resumeQueue() }
                         .buttonStyle(TextButtonStyle())
                         .help("Send the waiting messages, one after another")
                 }

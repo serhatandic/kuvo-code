@@ -131,6 +131,7 @@ export function receive(parts: PeerParts, from: string, mail: SeatMail) {
   parts.directory.existing(from)?.heardFrom(from)
   if (mail.kind === "state" || mail.kind === "result") parts.directory.existing(from)?.take(from, mail)
   else if (mail.kind === "report") parts.runner.reported(from, mail)
+  else if (mail.kind === "held") parts.runner.held(from, mail)
   else parts.server.take(from, mail)
 }
 

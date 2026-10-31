@@ -31,6 +31,8 @@ final class GroupChats {
     func isPaused(_ id: String) -> Bool { boxes.isPaused(id) }
     /// What the bot talking is doing (see `GroupActivity`).
     func activity(in id: String) -> [GroupActivity] { boxes.activity(in: id) }
+    /// The bots whose part of the work waits on their conversation, stopped by you.
+    func stopped(in id: String) -> Set<String> { boxes.stopped(in: id) }
 
     func group(_ id: String?) -> BotGroup? { boxes.group(id) }
     func group(seat: String) -> BotGroup? { boxes.group(seat: seat) }

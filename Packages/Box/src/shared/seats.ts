@@ -7,7 +7,7 @@
 import type { BotLook } from "./routes/bots";
 
 /** The kinds of mail between two computers' bridges for their group chats. */
-export const SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "report", "memory"] as const;
+export const SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "held", "report", "memory"] as const;
 export type SeatMailKind = (typeof SEAT_MAIL_KINDS)[number];
 
 /** One line of what the bridge sends (`GET /api/kuvo/peers/mail`): its `mail` for the computer

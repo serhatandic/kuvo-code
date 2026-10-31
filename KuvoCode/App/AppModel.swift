@@ -102,6 +102,9 @@ final class AppModel {
     /// This Mac's worktrees and projects followed from its box, once started.
     @ObservationIgnored private var boxFollowed: Task<Void, Never>?
     @ObservationIgnored private var agentsActivation: (any NSObjectProtocol)?
+    /// This Mac's bridge connected before the stores were told of each other: its group chats
+    /// are read once they are.
+    @ObservationIgnored private var chatsWaitForStores = false
     /// Your time zone and how you write dates, followed for this Mac's group chats.
     @ObservationIgnored private var clockObservers: [any NSObjectProtocol] = []
     /// This Mac's engine settings, for Settings, as its box keeps them (in the engine's settings
@@ -313,6 +316,15 @@ final class AppModel {
         moves.app = self
         // What this Mac's box says is moving, as it changes.
         Task { [moves] in await moves.follow() }
+        // This Mac's bridge connected before now, when its group chats couldn't be read: read now,
+        // after what's moving there (a chat moving away isn't taken for gone).
+        if chatsWaitForStores {
+            chatsWaitForStores = false
+            Task { [moves, boxGroups] in
+                await moves.reload(BoxClient.mac)
+                await boxGroups.connected(nil)
+            }
+        }
         workspace.onMovedToAgents = { [weak self] from, to in await self?.movedToAgents(from: from, to: to) ?? false }
         workspace.onBotToAgents = { [weak self] id, model in try await self?.bots.moveToAgents(session: id, model: model) }
         workspace.runsOnAgents(bots.agentSessionIDs)
@@ -792,7 +804,7 @@ final class AppModel {
 
     /// The coding agents' bridge, as this Mac's box runs it (`MacBoxRunner`): what it says reaches the
     /// window's stores. Wired once; the bridge stays up through the engine's restarts.
-    private func followAgents() {
+    func followAgents() {
         workspace.agents = agents
         catalog.outsideAgents = agents
         usage.follow(catalog)
@@ -810,11 +822,14 @@ final class AppModel {
             self?.boxGroups.disconnected(nil)
         }
         agents.onConnected = { [weak self] in
-            Task {
-                // This Mac's group chats first: they're what shows from the cache meanwhile.
-                await self?.boxGroups.connected(nil)
-                await self?.catalog.refreshAgents()
-                await self?.workspace.refreshAgents()
+            Task { [weak self] in
+                guard let self else { return }
+                // This Mac's group chats first: they're what shows from the cache meanwhile. Up
+                // before this Mac's engine (it usually is), they're read once the stores are told
+                // of each other (`wireStores`).
+                if boxGroups.app == nil { chatsWaitForStores = true } else { await boxGroups.connected(nil) }
+                await catalog.refreshAgents()
+                await workspace.refreshAgents()
             }
         }
         // Your time zone or how you write dates changed: meetings go by the new ones.

@@ -9,22 +9,24 @@ import Testing
 /// Everything it keeps is in `folder`. Stop it with the test.
 @MainActor
 final class RealBridge {
-    let agents = OutsideAgents()
+    let agents: OutsideAgents
     let listener: StubListener
 
     var api: OpenCodeAPI? { agents.api }
 
-    private init(listener: StubListener) {
+    private init(listener: StubListener, agents: OutsideAgents) {
         self.listener = listener
+        self.agents = agents
     }
 
     /// `environment`: what the app would add to the bridge's (where group chats live, say).
-    static func start(engine: StubEngine, folder: URL, environment: [String: String] = [:]) async throws -> RealBridge {
+    /// `agents`: an app's own, to start it as that app's (`AppModel.agents`).
+    static func start(engine: StubEngine, folder: URL, environment: [String: String] = [:], agents: OutsideAgents = OutsideAgents()) async throws -> RealBridge {
         let bun = try #require(ProcessInfo.processInfo.environment["KUVO_TEST_BUN"].flatMap { $0.isEmpty ? nil : URL(filePath: $0) },
                                "No Bun for the agents bridge: run the app's tests with scripts/test-app.sh, which gives it")
         // The app's own requests to it go out as they are; the stand-in's keep their answers.
         StubWeb.letUnansweredThrough()
-        let bridge = RealBridge(listener: try await engine.listen())
+        let bridge = RealBridge(listener: try await engine.listen(), agents: agents)
         bridge.agents.home = folder.appending(path: "agents")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         await bridge.agents.start(engine: bun, environment: ["PATH": "/usr/bin:/bin", "HOME": folder.path].merging(environment) { $1 })
