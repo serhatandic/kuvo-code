@@ -141,5 +141,8 @@ import WebKit
         let step = await BrowserTools.call("browser_navigate", arguments: ["url": "http://127.0.0.1:1/orders"], agent: agent)
         #expect(step["isError"] as? Bool == true)
         #expect(((step["content"] as? [[String: Any]])?.first?["text"] as? String)?.hasPrefix("Couldn't open") == true)
+        let tab = await BrowserTools.call("browser_new_tab", arguments: ["url": "http://127.0.0.1:1/orders"], agent: agent)
+        #expect(tab["isError"] as? Bool == true)
+        #expect(((tab["content"] as? [[String: Any]])?.first?["text"] as? String)?.hasPrefix("Couldn't open") == true)
     }
 }

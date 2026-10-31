@@ -235,7 +235,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - The agent's browser on a machine opens a file's path, like /home/you/report.html or ~/site/index.html, as the file, as it does on your Mac, rather than as a broken web address.
 - In a session that asks before touching files outside its folder, the agent's browser no longer saves a PDF over a file elsewhere: it saves in the folder, or asks you first.
 - Kuvo Code no longer freezes when the agent saves a page as a PDF at a path that goes through a folder that isn't there yet and back up with `..`.
-- A page the agent's browser couldn't open shows as a failed step in the conversation, rather than as **Opened** that address.
+- A page the agent's browser couldn't open, in its tab or a new one, shows as a failed step in the conversation, rather than as **Opened** that address.
 - A long text file, like a log, attached to a Claude Code, Codex, Cursor, Grok or Antigravity session on a machine goes to the agent as a file to open, rather than whole in the message, where it could make the turn fail as too long.
 - In a Cursor session, a picture moved or deleted before its message went (one waiting in the queue) goes to the agent by its name, rather than failing the turn.
 - A reply the agent is still writing keeps its words when its conversation is read again, after the network or a machine comes back: they no longer vanish until the paragraph ends, or show twice in a coding agent's reply.

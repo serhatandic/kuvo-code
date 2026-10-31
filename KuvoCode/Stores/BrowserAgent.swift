@@ -108,7 +108,10 @@ final class BrowserAgent {
         Analytics.shared.trackOnce("browser_used", key: "agent.mac", ["by": "agent", "place": "mac"])
         // Brought forward, unless it's a bot's out of view, or another conversation's than the one in view.
         if shows { utilities.reveal(browser) }
-        if address != nil { await settle(browser, expectNavigation: true) }
+        if let address {
+            await settle(browser, expectNavigation: true)
+            if let failure = browser.loadFailure { return "Couldn't open \(address): \(failure)" }
+        }
         return await snapshot()
     }
 

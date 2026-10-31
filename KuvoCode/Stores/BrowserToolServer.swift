@@ -618,7 +618,8 @@ enum BrowserTools {
         case "browser_new_tab":
             if let url = string("url"), let note = fileNote(for: url, caller: caller) { return text(note, error: true) }
             if let url = string("url"), let note = integrationNote(for: url, caller: caller) { return text(note) }
-            return text(await agent.newTab(string("url")))
+            let said = await agent.newTab(string("url"))
+            return text(said, error: BrowserAgent.notOpened(said))
         case "browser_upload":
             guard let index = int("index"), let given = arguments["files"] as? [String], !given.isEmpty else { return text("Missing index or files.", error: true) }
             // Each file by its full path, checked and read as the same one.
