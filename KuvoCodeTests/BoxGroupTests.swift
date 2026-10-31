@@ -310,6 +310,19 @@ import Testing
         #expect(app.chats.stopped(in: "grp_box0000001").isEmpty)
     }
 
+    /// A chat moving: the copy held where it goes says nothing of what its parts wait on, so the
+    /// chat still says a part waits on its stopped conversation.
+    @Test func aCopyHeldWhileTheChatMovesLeavesWhatItsPartsWaitOn() async throws {
+        defer { Self.clean(); mac.stop() }
+        let app = app()
+        let group = Self.group("grp_box0000001", members: ["bot_pal"])
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+                                                                                 "state": ["discussing": false, "paused": false, "stopped": ["bot_pal"]]]), machine: "box")
+        app.boxGroups.handle(try macBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "held",
+                                                                             "state": ["discussing": false, "paused": false]]), machine: nil)
+        #expect(app.chats.stopped(in: "grp_box0000001") == ["bot_pal"])
+    }
+
     /// A chat that went on on this Mac's box while the window was closed: opened again, it shows as
     /// the box has it now (a part given again, waiting on its stopped conversation), not as last seen.
     @Test func aChatThatWentOnWhileClosedShowsAsItsBoxHasItNow() async throws {

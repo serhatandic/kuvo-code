@@ -569,7 +569,8 @@ final class BoxGroups {
             }
         }
         let chat = Chat(machine: machine, group: group, held: held, speaking: state.speaking, discussing: state.discussing, paused: state.paused)
-        setStopped(group.id, Set(state.stopped ?? []))
+        // (A copy held while it moves says nothing of the chat's parts: the chat says that.)
+        if !held { setStopped(group.id, Set(state.stopped ?? [])) }
         if let index {
             guard chats[index] != chat else { return }
             let wasUnread = isUnread(chats[index].group)
