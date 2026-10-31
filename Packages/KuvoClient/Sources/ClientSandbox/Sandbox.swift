@@ -27,6 +27,9 @@ public struct SandboxState: Codable, Equatable, Sendable {
     public var able: Bool
     /// The coding agents' own programs' commands are in it too.
     public var agents: Bool
+    /// One of their processes started before it was on, and still runs outside it (`agents` is
+    /// false then; false without this, the box hasn't heard from them yet).
+    public var outside: Bool?
     public var reason: Reason?
     public var action: Action?
     public var route: String?
@@ -38,12 +41,13 @@ public struct SandboxState: Codable, Equatable, Sendable {
     /// It asks you, once, to restart the agents started before it was on (`SandboxRoutes.restart`).
     public var restart: Bool?
 
-    public init(on: Bool, why: String? = nil, able: Bool = true, agents: Bool = false, reason: Reason? = nil, action: Action? = nil, route: String? = nil, needs: String? = nil, check: Check? = nil, failures: Int? = nil, restart: Bool? = nil) {
+    public init(on: Bool, why: String? = nil, able: Bool = true, agents: Bool = false, outside: Bool? = nil, reason: Reason? = nil, action: Action? = nil, route: String? = nil, needs: String? = nil, check: Check? = nil, failures: Int? = nil, restart: Bool? = nil) {
         self.restart = restart
         self.on = on
         self.why = why
         self.able = able
         self.agents = agents
+        self.outside = outside
         self.reason = reason
         self.action = action
         self.route = route
@@ -58,6 +62,7 @@ public struct SandboxState: Codable, Equatable, Sendable {
         why = try keys.decodeIfPresent(String.self, forKey: .why)
         able = try keys.decodeIfPresent(Bool.self, forKey: .able) ?? true
         agents = try keys.decodeIfPresent(Bool.self, forKey: .agents) ?? false
+        outside = try? keys.decodeIfPresent(Bool.self, forKey: .outside)
         reason = try? keys.decodeIfPresent(Reason.self, forKey: .reason)
         action = try? keys.decodeIfPresent(Action.self, forKey: .action)
         route = try keys.decodeIfPresent(String.self, forKey: .route)

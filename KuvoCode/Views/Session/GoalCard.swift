@@ -82,13 +82,17 @@ struct GoalCard: View {
             guard !plan.alone else { return }
             // Read again while it's being checked (or the agents restart), less often each time.
             var wait = 2.0
+            var hadRow = false
             while !Task.isCancelled {
                 sandbox = await app.goalPlans.sandbox(on: box)
+                // The agents restarted (or none is outside any more): nothing more to wait for.
+                if case .status(let status) = sandbox, status.outside != true { restartingAgents = false }
                 guard let row = sandboxRow else {
-                    // Nothing left to fix: the plan may run alone now, which its box says.
-                    if restartingAgents { await app.goalPlans.read(box) }
+                    // Fixed since: the plan may run alone now, which its box says.
+                    if hadRow { await app.goalPlans.read(box) }
                     return
                 }
+                hadRow = true
                 guard row.checking else { return }
                 try? await Task.sleep(for: .seconds(wait))
                 wait = min(wait * 2, 60)
@@ -182,7 +186,7 @@ struct GoalCard: View {
 
     private var sandboxRow: GoalSandbox.Row? {
         GoalSandbox.row(sandbox, computer: computer, onThisMac: onThisMac, bot: plan.name,
-                        agent: bot?.agents == true ? OutsideAgents.name(bot?.model?.providerID) : nil, restarting: restartingAgents)
+                        codingAgent: bot?.agents == true, restarting: restartingAgents)
     }
 
     private func sandboxView(_ row: GoalSandbox.Row) -> some View {
@@ -230,7 +234,6 @@ struct GoalCard: View {
         case .reportProblem: app.reportProblem()
         case .updateMachine: app.openSettings(.machines)
         case .checkForUpdates: updates.check()
-        case .editBot: if let bot { app.tabs.openBotEditor(bot: bot) }
         case .readAgain, .route, .restartAgents:
             sandboxBusy = true
             Task {
@@ -381,6 +384,7 @@ struct GoalCard: View {
     // MARK: Answers
 
     private func takeIn() {
+        restartingAgents = false
         switches = Dictionary(uniqueKeysWithValues: plan.public.map { ($0.id, $0.on) })
         wake = plan.wake
         digest = plan.digest
