@@ -234,7 +234,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Add to Message in a terminal tab of the window starts a new session in its folder with what you selected, instead of doing nothing.
 - Showing or hiding the side panel or the sidebar no longer catches at the start of its slide when you have many sessions: the sidebar isn't drawn again for it.
 - Kuvo Code takes about 200 MB less memory for the first seconds after it opens: checking the engine before it starts no longer keeps the whole engine in memory.
-- Switching tabs with many sessions in the sidebar is a little quicker: the sidebar draws again only the rows whose highlight moved.
+- Switching tabs is smoother, with half the work it took: the sidebar's highlight moves to the open session at once, as a Mac's sidebars do, rather than fading across while the whole sidebar was drawn again for each frame, and only the rows whose highlight moved are worked out again.
 - /review-quick, picked from the "/" list or typed, runs the engine's own review again, instead of going to the model as a message.
 - A message you send while a session moves to a coding agent stays in the composer and goes to the new session, instead of being lost in the archived one; what you write meanwhile goes too, and isn't also left behind.
 - A project's own "/" commands show once the engine is up, when you opened the project while it was starting.
@@ -245,6 +245,14 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A conversation you just read no longer turns bold again when the sessions are read again before the engine has the read.
 - Deleting a conversation closes the tab of its subagent you had open in its place.
 - Searching the sidebar again clears what the earlier search found in conversations, instead of leaving it under the new search until each computer answers.
+- Deleting a session that its engine refuses, or whose machine is away, says why, and the session stays with what you'd written in it, instead of vanishing and coming back later; its worktree stays too. Settings › Storage › Clean Up Old Sessions says which couldn't be deleted. One already deleted from your phone goes.
+- Settings › Storage shows this Mac's numbers right away, also while a machine you picked under What Agents Made is slow to answer or away.
+- Deleting the downloads for machines no longer stalls Settings, and waits while a machine is being set up with them.
+- Bring Over from opencode says when its settings couldn't be saved, and which API keys couldn't be copied, instead of counting them as brought over.
+- Searching Settings for "swipe", "awake", "opencode" or "beta" finds General, where those settings are.
+- After picking a preset accent color, or leaving Appearance, the color panel no longer changes the accent.
+- The first launch's screen access step says to quit and reopen Kuvo Code if you just allowed Screen Recording, which macOS needs before it counts.
+- An agent you install on the first launch that finishes after you've gone on opens its sign-in in Settings › Accounts, instead of being left installed but not signed in.
 
 ## 0.7.2
 

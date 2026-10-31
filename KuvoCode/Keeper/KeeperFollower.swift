@@ -38,6 +38,10 @@ final class KeeperFollower {
 
     private var watch: DispatchSourceFileSystemObject?
     private var tick: Task<Void, Never>?
+    /// Followed, from `start` until `stop`: a read still under way as it stops (one waiting on the
+    /// keeper, or one its folder's change set going) says nothing after, so an app that quit never
+    /// hears the keeper is gone and starts a box of its own.
+    private var following = false
     /// When the app last asked launchd to start the keeper, for how long it's given to come up.
     private var askedToStart: Date?
     /// When the engine was last asked to start over: a reason it stopped from before then is the
@@ -76,10 +80,13 @@ final class KeeperFollower {
     /// or asked to make way for this app's own if it came with another version (as it's read).
     /// Whether it's followed: not when launchd has no keeper to start (the app it was registered
     /// from is gone, say), and the app runs the box itself, never waiting on one.
+    @discardableResult
     func start() async -> Bool {
+        following = true
         if KeeperRecord.read() == nil {
             askedToStart = .now
             guard startKeeper() else {
+                following = false
                 log.error("launchd has no keeper to start: this Mac's box runs in the app")
                 BackgroundWork.shared.didntStart = true
                 return false
@@ -99,6 +106,7 @@ final class KeeperFollower {
     }
 
     func stop() {
+        following = false
         watch?.cancel()
         watch = nil
         tick?.cancel()
@@ -146,6 +154,7 @@ final class KeeperFollower {
 
     /// What the records say now.
     func read() async {
+        guard following else { return }
         if reading {
             readAgain = true
             return
@@ -154,7 +163,7 @@ final class KeeperFollower {
         repeat {
             readAgain = false
             await readOnce()
-        } while readAgain
+        } while readAgain && following
         reading = false
     }
 
@@ -176,6 +185,7 @@ final class KeeperFollower {
                 }
             }
         }
+        guard following else { return }
         makingWay = record != nil && keeperUpdates
         let engineRecord = Self.record("engine.json")
         let serve = Self.record("serve.json")
@@ -188,6 +198,8 @@ final class KeeperFollower {
             answered = said != nil
             status = said ?? [:]
         }
+        // Stopped while the keeper was asked (above too).
+        guard following else { return }
         // A keeper that runs but doesn't answer (hung): since when, for how long the window waits.
         if engineRecord != nil || answered || KeeperRecord.read() == nil {
             silentSince = nil
