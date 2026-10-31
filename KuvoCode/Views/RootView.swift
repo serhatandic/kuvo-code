@@ -45,7 +45,7 @@ struct RootView: View {
         .animation(.ui, value: app.engine == .ready)
         .animation(.ui, value: app.showsSettings)
         // What an agent asks you for while it browses, when no conversation shows it.
-        .overlay { BrowserAskOverlay() }
+        .overContentCard { BrowserAskOverlay() }
         // A picture you sent, looked at closer, over everything.
         .overlay { ImageViewerOverlay() }
         // The window closing ends the panel's terminals and pages, and the terminal tabs. (Not the

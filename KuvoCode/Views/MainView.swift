@@ -133,6 +133,8 @@ struct MainView: View {
                 // With the tab bar hidden and no sidebar, the window's buttons and the sidebar
                 // button sit over this card's header.
                 let controlsInset: CGFloat = !showsTabBar && layout.sessions == nil ? 124 : 0
+                // Which cards show, for what's centered on the conversation to slide with it.
+                let cardsShown = [layout.sessions != nil, layout.split != nil, layout.changes != nil, expands]
                 ZStack(alignment: .trailing) {
                     HStack(spacing: 0) {
                         conversationCard
@@ -144,6 +146,7 @@ struct MainView: View {
                             // With the tab bar hidden, the panel button sits over the rightmost card.
                             .environment(\.windowControlsTrailingInset, !showsTabBar && layout.changes == nil && layout.split == nil ? 36 : 0)
                             .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).minX }) { mainPaneX = $0 }
+                            .contentCard(layout: cardsShown)
                             // Under the expanded panel: out of reach, keys too (a card's Return
                             // or Esc), until it's back.
                             .disabled(expands)
@@ -159,6 +162,7 @@ struct MainView: View {
                             .allowsHitTesting(!expands)
                             splitCard(model)
                                 .frame(width: width)
+                                .contentCard(layout: cardsShown)
                                 .environment(\.windowControlsTrailingInset, !showsTabBar && layout.changes == nil ? 36 : 0)
                                 .transaction(value: showsPanel) { $0.animation = nil }
                                 .transaction(value: showsSidebar) { $0.animation = nil }
@@ -188,6 +192,7 @@ struct MainView: View {
                     if showsPanel, layout.changes != nil || expands {
                         utilitiesPane
                             .frame(width: expands ? mainAreaWidth : layout.changes ?? mainAreaWidth)
+                            .contentCard(expands ? .expandedPanel : nil, layout: cardsShown)
                             .environment(\.windowControlsInset, expands ? controlsInset : 0)
                             .environment(\.windowControlsTrailingInset, showsTabBar ? 0 : 36)
                             .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -300,15 +305,17 @@ struct MainView: View {
         .background(WindowStateReader { window = $0 })
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .iconOnlyToolbar()
-        .overlay(alignment: .top) {
+        .overContentCard {
             if catalog.isSlow {
                 SlowEngineNotice()
+                    .fixedSize()
+                    .centeredOnContentCard()
                     .padding(.top, 12)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         .animation(.ui, value: catalog.isSlow)
-        .overlay(alignment: .top) {
+        .overContentCard {
             if showsOpenQuickly, let directory = focusedDirectory {
                 ZStack(alignment: .top) {
                     // A click outside closes it.
@@ -321,13 +328,14 @@ struct MainView: View {
                     } dismiss: {
                         showsOpenQuickly = false
                     }
+                    .centeredOnContentCard()
                     .padding(.top, 80)
                 }
                 .transition(.opacity)
             }
         }
         .animation(.ui, value: showsOpenQuickly)
-        .overlay(alignment: .top) {
+        .overContentCard {
             if showsPalette {
                 ZStack(alignment: .top) {
                     Color.black.opacity(0.001)
@@ -340,6 +348,7 @@ struct MainView: View {
                         openFile: { url in showInPanel { utilities.show(url) } },
                         dismiss: { showsPalette = false }
                     )
+                    .centeredOnContentCard()
                     .padding(.top, 80)
                 }
                 .transition(.opacity)
