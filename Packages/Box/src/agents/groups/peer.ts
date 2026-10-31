@@ -127,6 +127,9 @@ export interface PeerDirectory {
 /** A turn there is asked again after this long without a word from its computer, and taken as away after `awayAfter`. */
 export const askAgainAfter = 15_000
 export const awayAfter = 45_000
+/** Found away, its bots sit out at once for this long (or until it's heard from), rather than each
+ * keeping the chat waiting at every message. */
+export const awayKept = 5 * 60_000
 /** Past its computer's own limit on a turn, with no result, it's taken as away. */
 export const longestTurn = turnLimit + 60_000
 
@@ -155,6 +158,8 @@ interface Pending {
 /** A bot's seats on another computer, as a chat here asks them. */
 export class RemoteHome implements SeatHome {
   private pending = new Map<string, Pending>()
+  /** When it was last found away, until it's heard from. */
+  private awaySince?: number
 
   constructor(
     readonly box: string,
@@ -174,6 +179,8 @@ export class RemoteHome implements SeatHome {
       // Too big for its computer to put together even cut to fit: said, rather than sent and never answered.
       const turn = fitTurn(asked, options.shorter)
       if (!turn) return resolve({ ok: false, why: `the chat is too big to send to ${this.place()}.` })
+      // Away a moment ago: it sits this out at once.
+      if (this.awaySince !== undefined && this.now() - this.awaySince < awayKept) return resolve({ ok: false, away: true, why: `${this.place()} can’t be reached now.` })
       const pending: Pending = { turn, report, done: resolve, seat: turn.seat, started: false, told: new Set() }
       const end = () => {
         for (const timer of [pending.asking, pending.silent, pending.limit]) if (timer !== undefined) this.clock.clearTimeout(timer)
@@ -197,6 +204,10 @@ export class RemoteHome implements SeatHome {
     })
   }
 
+  private now(): number {
+    return this.clock.now?.() ?? Date.now()
+  }
+
   /** From now on: asked again at each silence, and taken as away after a long one. */
   private listen(pending: Pending) {
     if (pending.asking !== undefined) this.clock.clearTimeout(pending.asking)
@@ -215,13 +226,21 @@ export class RemoteHome implements SeatHome {
 
   /** Its computer can't be reached now: the chat goes on without it, and a turn it still has stops there. */
   private away(pending: Pending) {
+    this.awaySince = this.now()
     this.transport.send(this.box, { kind: "stop", id: pending.turn.id }, false)
     pending.done({ ok: false, away: true, why: `${this.place()} can’t be reached now.` })
   }
 
+  /** Its computer (`from`) was heard from: it isn't away any more. */
+  heardFrom(from: string) {
+    if (from === this.box) this.awaySince = undefined
+  }
+
   /** What its computer says of a turn: only from the computer it was asked of (`from`), never another's. */
   take(from: string, mail: SeatMail) {
-    if (from !== this.box || (mail.kind !== "state" && mail.kind !== "result")) return
+    if (from !== this.box) return
+    this.heardFrom(from)
+    if (mail.kind !== "state" && mail.kind !== "result") return
     const pending = this.pending.get(mail.id)
     if (!pending) return
     this.listen(pending)

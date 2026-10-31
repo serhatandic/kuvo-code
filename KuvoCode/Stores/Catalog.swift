@@ -34,7 +34,12 @@ final class Catalog {
     private(set) var plugins: [PluginInfo]?
     /// Commands by project folder, with the project's own.
     private(set) var projectCommands: [String: [Command]] = [:]
+    /// The folders whose commands were asked for, read or not yet.
+    @ObservationIgnored private var commandFolders: Set<String> = []
     private(set) var isLoaded = false
+    /// When the engine last said which accounts it has: what a machine's Accounts page shows
+    /// while it's away is as of then (nil: never, so there's nothing to show).
+    private(set) var integrationsRead: Date?
     /// The coding agents' accounts and models have been read (or their bridge couldn't start):
     /// until then, theirs and Auto's aren't known.
     private(set) var areAgentsLoaded = false
@@ -314,7 +319,10 @@ final class Catalog {
         async let agents = api.agents()
         async let commands = api.commands()
         async let plugins = api.plugins()
-        do { engineIntegrations = try await integrations } catch { log.error("integrations: \(String(describing: error), privacy: .public)") }
+        do {
+            engineIntegrations = try await integrations
+            integrationsRead = .now
+        } catch { log.error("integrations: \(String(describing: error), privacy: .public)") }
         var starting = false
         var modelsRead = false
         do {
@@ -334,7 +342,7 @@ final class Catalog {
         merge()
         // Loaded once the models have been read: a new bot's model is checked against them.
         if modelsRead { isLoaded = true }
-        for directory in projectCommands.keys { await loadCommands(in: directory) }
+        for directory in commandFolders { await loadCommands(in: directory) }
         merge()
         if starting { waitForEngine() } else { unavailableSince = nil }
     }
@@ -428,6 +436,9 @@ final class Catalog {
     }
 
     func loadCommands(in directory: String) async {
+        // Read again with the rest (`refresh`), though this read can't be made or fails: one
+        // opened while the engine starts gets its commands once it's up.
+        commandFolders.insert(directory)
         guard let api else { return }
         do { projectCommands[directory] = try await api.commands(directory: directory) } catch { log.error("commands: \(String(describing: error), privacy: .public)") }
     }

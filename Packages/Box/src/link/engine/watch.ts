@@ -252,7 +252,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       const source = read();
       const steer = steers ? steering(session => backgroundTools(source, session).catch(() => {}), { after: steerAfter, signal: connection.signal }) : null;
       const queue = queues ? queueWatcher(source) : null;
-      const followWork = work ? workWatcher(source, peerTargets) : null;
+      const followWork = work ? workWatcher(source, peerTargets, { signal: connection.signal }) : null;
       const response = await fetch(`http://127.0.0.1:${source.port}/api/event`, {
         headers: { authorization: `Basic ${Buffer.from(`opencode:${source.password}`).toString("base64")}`, accept: "text/event-stream" },
         signal,

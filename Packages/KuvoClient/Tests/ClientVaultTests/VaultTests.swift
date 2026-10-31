@@ -27,6 +27,22 @@ import Testing
         #expect(vault.items(of: "bot_scout").map(\.item.name) == ["App Review contact"], "everyone's, and nothing of Ship's")
     }
 
+    @Test func whileAgentsCantUseItThePagesSayWhyAndUntilWhen() throws {
+        let state = { (json: String) in try JSONDecoder().decode(VaultState.self, from: Data(json.utf8)) }
+        let base = #""made":true,"locked":false,"paused":false,"pausedBots":{},"store":"encrypted","keptDays":365"#
+        // Its sandbox isn't on: not yet.
+        let off = try state("{\(base),\"agents\":false}")
+        #expect(off.agentsNote(computer: "lokum")?.contains("can’t use keys, files and notes from lokum’s vault yet") == true)
+        #expect(off.botAgentsNote?.contains("yet") == true)
+        // On, with agents from before it still at work: once they've finished.
+        let waiting = try state("{\(base),\"agents\":false,\"agentsWaiting\":true}")
+        #expect(waiting.agentsNote(computer: "lokum") == "Locked for now: some agents started before the sandbox was on. The vault opens when they finish.")
+        #expect(waiting.botAgentsNote == "Locked for now: some agents started before the sandbox was on. The vault opens when they finish.")
+        // Open to agents, or a box older than the sandbox: nothing to say.
+        #expect(try state("{\(base),\"agents\":true}").agentsNote(computer: "lokum") == nil)
+        #expect(try state("{\(base)}").botAgentsNote == nil)
+    }
+
     @Test func aPagesSignInsAreItsSitesAndThoseUnderIt() throws {
         let vault = try JSONDecoder().decode(Vault.self, from: answer)
         #expect(vault.signIns(for: "gist.github.com").map(\.name) == ["GitHub"])
@@ -48,5 +64,14 @@ import Testing
     @Test func anAsksTitleSaysWhoWantsWhat() {
         #expect(VaultAsk(id: "q_1", kind: .use, botName: "Ship", itemName: "App Store Connect key").title == "Ship wants to use App Store Connect key")
         #expect(VaultAsk(id: "q_2", kind: .item, sessionName: "Fix checkout", need: "a GitHub token").title == "Fix checkout needs a GitHub token")
+    }
+
+    /// A bot's seat in a group chat asks each time: its card offers no Always, as the box sends it.
+    @Test func aSeatsAskIsAnsweredOnlyOnce() throws {
+        let decode = { (json: String) in try JSONDecoder().decode(VaultAsk.self, from: Data(json.utf8)) }
+        let seat = try decode(#"{"id":"q_3","kind":"use","at":1,"session":"ses_seat","botName":"Ship","itemName":"Deploy key","group":"grp_release"}"#)
+        #expect(!seat.mayAllowAlways)
+        #expect(seat.title == "Ship wants to use Deploy key")
+        #expect(try decode(#"{"id":"q_4","kind":"use","at":1,"botName":"Ship","itemName":"Deploy key"}"#).mayAllowAlways)
     }
 }

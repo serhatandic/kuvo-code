@@ -11,23 +11,34 @@ export const readEngineFile = (): EngineRecord => JSON.parse(fs.readFileSync(ENG
 // The coding agents' bridge beside the engine, when it runs: its port and password.
 export const readBridgeFile = (): BridgeRecord => JSON.parse(fs.readFileSync(BRIDGE_FILE, "utf8"));
 
-// Where a letter's agent can be here: the engine, and the coding agents' bridge while it runs.
-export function peerTargets(): Target[] {
-  const targets: Target[] = [];
-  try { targets.push(readEngineFile()); } catch {}
-  const bridge = runningAgentsBridge();
-  if (bridge) targets.push(bridge);
-  return targets;
-}
-
-/** The coding agents' bridge here, while it runs (its record, and its process). */
-export function runningAgentsBridge(): Target | null {
+/** The coding agents' bridge beside the engine, while it runs; null otherwise. */
+export function bridgeTarget(): Target | null {
   try {
     const bridge = readBridgeFile();
-    if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) return bridge;
-  } catch {}
-  return null;
+    return bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents") ? bridge : null;
+  } catch {
+    return null;
+  }
 }
+
+/** Where a letter's agent can be here (`targets`): the engine, and the coding agents' bridge while
+ * it runs; and whether it runs now (`bridge`), so one for a conversation the engine doesn't know may
+ * be the bridge's, kept to try again. */
+export interface PeerPlaces {
+  targets: Target[];
+  bridge: boolean;
+}
+
+export function peerPlaces(): PeerPlaces {
+  const targets: Target[] = [];
+  try { targets.push(readEngineFile()); } catch {}
+  const bridge = bridgeTarget();
+  if (bridge) targets.push(bridge);
+  return { targets, bridge: bridge !== null };
+}
+
+// Where a letter's agent can be here: the engine, and the coding agents' bridge while it runs.
+export const peerTargets = (): Target[] => peerPlaces().targets;
 
 /** An answer of the engine's (or the coding agents' bridge's) as their APIs always give one, with
  * what was asked for under `data`, before that's checked: whatever came there (unknown), or null

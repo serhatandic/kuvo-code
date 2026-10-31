@@ -46,6 +46,8 @@ struct PermissionsSettings: View {
 
     var body: some View {
         ScrollingSettingsForm {
+            SandboxSettings()
+
             Section {
                 ActionChoices(path: Self.path)
             } header: {
@@ -121,9 +123,11 @@ struct PermissionsSettings: View {
         }
         // Again once its engine answers (a machine's, connecting as the page opened).
         .task(id: app.isReady(box)) { if app.isReady(box) { await loadSaved() } }
+        // Its sandbox, as it changes while the page is open.
+        .task(id: box) { await Sandboxes.shared.watchState(box.machine ?? BoxClient.mac) }
         // A machine's folder for a rule, from its own folders.
         .environment(\.chooseBoxFolder, box.machine == nil ? nil : { done in choosingFolder = done })
-        .settingsDetail(isPresented: Binding(get: { choosingFolder != nil }, set: { if !$0 { choosingFolder = nil } }), title: "Choose a Folder for the Rule") {
+        .settingsDetail(isPresented: Binding(get: { choosingFolder != nil }, set: { if !$0 { choosingFolder = nil } }), title: "Choose a Folder") {
             BoxFolderBrowser(box: box.machine ?? BoxClient.mac, start: nil, primary: "Choose") { path, home in
                 choosingFolder?(path, home)
                 choosingFolder = nil

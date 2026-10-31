@@ -187,10 +187,10 @@ import Testing
         #expect(!model.isQueuePaused)
     }
 
-    /// After Stop, a message removed and brought back with Undo: it waits for Resume, ahead of
-    /// what was queued, as it was, rather than going once the queue has nothing else; Resume sends
-    /// it first.
-    @Test func aMessagePutBackAfterStopWaitsForResumeAheadOfTheQueue() async throws {
+    /// After Stop, a message removed and brought back with Undo: it waits for Resume on the box, at
+    /// the queue's end, rather than reaching the engine, which would run all it holds at once;
+    /// Resume goes on with the queue.
+    @Test func aMessagePutBackAfterStopWaitsForResume() async throws {
         let (model, box, _) = try await open(running: false, inbox: [queued("msg_02", "Fix the docs"), queued("msg_03", "Then update the changelog")],
                                              queues: #"{"ses_queue":{"paused":true,"held":[]}}"#)
         defer { box.stop(); engine.stop() }
@@ -201,18 +201,76 @@ import Testing
         model.apply(try engine.event("session.inbox.cancelled", session: id, ["inboxID": "msg_02"]))
 
         model.requeue(item, for: nil, paused: true)
-        try await until { !engine.requests("POST", "/prompt").isEmpty }
-        let back = try #require(engine.requests("POST", "/prompt").first?.body["id"] as? String)
-        #expect(engine.requests("POST", "/prompt").first?.body["delivery"] as? String == "queue")
-        model.apply(try engine.event("session.inbox.enqueued", session: id, ["inboxID": back, "item": ["type": "user", "delivery": "queue", "payload": ["text": "Fix the docs"]]]))
-        try await until { model.waiting.first?.id == back && model.waiting.first?.isLocal == false }
+        try await until { model.waiting.map(\.text) == ["Then update the changelog", "Fix the docs"] && model.waiting.last.map(model.isOnBox) == true }
+        #expect(engine.requests("POST", "/prompt").isEmpty, "held on the box, not sent to the engine")
         #expect(model.isQueuePaused)
-        #expect(model.waiting.map(\.text) == ["Fix the docs", "Then update the changelog"])
+        #expect(model.sender(of: try #require(model.waiting.last)) == nil, "yours")
 
         model.resumeQueue()
-        try await until { !deliveries(of: back).isEmpty }
-        #expect(deliveries(of: back) == ["steer"], "what was put back goes first")
-        #expect(deliveries(of: "msg_03").isEmpty)
+        try await until { !deliveries(of: "msg_03").isEmpty }
+        #expect(deliveries(of: "msg_03") == ["steer"], "what the engine holds goes first")
+        #expect(engine.requests("POST", "/prompt").isEmpty, "what was put back waits its turn")
+    }
+
+    /// A stopped conversation stays stopped while others write to it: another agent's letter waits
+    /// on the box and shows in the queue with who it's from; a message you send for after this run
+    /// waits after it; Remove takes the letter away and Undo puts it back as it was, from the same
+    /// agent; Resume sends the first, and nothing went to the engine before.
+    @Test func whatArrivesWhileStoppedWaitsShownWithWhoItsFrom() async throws {
+        let (model, box, _) = try await open(running: true, inbox: [])
+        defer { box.stop(); engine.stop() }
+        let following = Task { await workspace.followQueues() }
+        defer { following.cancel() }
+        model.stop()
+        try await until { !engine.requests("POST", "/interrupt").isEmpty }
+        stopped()
+        model.apply(try engine.event("session.execution.interrupted", session: id, ["reason": "user"]))
+        try await until { model.isQueuePaused }
+
+        struct Letter: Encodable { var id: String; var text: String; var from: String }
+        struct Added: Decodable { var waits: Bool }
+        let added = try await box.client(engine: engine.url).value(Added.self, "POST", "kuvo/sessions/\(id)/queue/add", body: Letter(id: "msg_ada1", text: "The build is green on main.", from: "Ada"))
+        #expect(added.waits)
+        try await until { model.waiting.count == 1 }
+        let letter = try #require(model.waiting.first)
+        #expect(model.sender(of: letter) == "Ada")
+        #expect(letter.text == "The build is green on main.")
+        #expect(model.isQueuePaused, "still stopped")
+
+        model.send("Also run the tests", for: nil, queue: true)
+        try await until { model.waiting.map(\.text) == ["The build is green on main.", "Also run the tests"] && model.waiting.allSatisfy(model.isOnBox) }
+        #expect(model.sender(of: model.waiting[1]) == nil)
+
+        model.cancelPending(letter)
+        try await until { model.waiting.map(\.text) == ["Also run the tests"] }
+        model.requeue(letter, for: nil, paused: true)
+        try await until { model.waiting.map(\.text) == ["Also run the tests", "The build is green on main."] }
+        #expect(model.sender(of: model.waiting[1]) == "Ada", "back as it was")
+        #expect(engine.requests("POST", "/prompt").isEmpty, "nothing reached the engine while it was stopped")
+
+        model.resumeQueue()
+        try await until { !engine.requests("POST", "/prompt").isEmpty }
+        let sent = try #require(engine.requests("POST", "/prompt").first)
+        #expect(sent.body["text"] as? String == "Also run the tests")
+        #expect(sent.body["delivery"] as? String == "steer")
+        #expect(engine.requests("POST", "/prompt").count == 1, "one run at a time")
+    }
+
+    /// Stopped from another client a moment ago, before this Mac heard: a message sent for after
+    /// this run still waits on the box, which decides, rather than reaching the engine, which would
+    /// run all it holds.
+    @Test func aMessageQueuedBeforeThisMacHeardOfAStopStillWaits() async throws {
+        let (model, box, _) = try await open(running: true, inbox: [queued("msg_02", "Then update the docs")])
+        defer { box.stop(); engine.stop() }
+        // Stopped from the phone: its box paused it, and this Mac hasn't read that yet.
+        try Data(#"{"ses_queue":{"paused":true,"held":[]}}"#.utf8).write(to: BoxProcess.run.appending(path: "queues.json"))
+        #expect(!model.isQueuePaused)
+
+        model.send("Also run the tests", for: nil, queue: true)
+        try await until { model.waiting.last.map(model.isOnBox) == true }
+        #expect(engine.requests("POST", "/prompt").isEmpty, "held on the box, not sent to the engine")
+        #expect(model.waiting.map(\.text) == ["Then update the docs", "Also run the tests"])
+        #expect(model.isQueuePaused, "as the box says")
     }
 
     /// Resume its box can't take (it's not running now): the queue shows Paused again, and why.

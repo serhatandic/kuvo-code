@@ -24,6 +24,19 @@ struct ProvidersView: View {
     /// The machine whose accounts these are, on a machine's tab.
     private var machine: MachineEngine? { app.machines.engine(box.machine) }
 
+    /// A machine that isn't connected: what's shown is as last seen, and can't change until it's
+    /// back.
+    private var away: MachineEngine? { machine.flatMap { $0.isReady ? nil : $0 } }
+
+    /// Under the away bar: as of when, and that nothing changes meanwhile.
+    static func asLastSeen(_ read: Date?, now: Date = .now, locale: Locale = .current) -> String {
+        let ago = RelativeDateTimeFormatter()
+        ago.dateTimeStyle = .named
+        ago.locale = locale
+        let when = read.map { now.timeIntervalSince($0) < 60 ? ", a moment ago" : ", " + ago.localizedString(for: $0, relativeTo: now) } ?? ""
+        return "These are its accounts as last seen\(when). They can’t change until it’s back."
+    }
+
     /// A sign-in, open in the page's place, on the computer it's for.
     struct Connecting: Identifiable {
         let integration: Integration
@@ -32,7 +45,7 @@ struct ProvidersView: View {
     }
 
     var body: some View {
-        list
+        page
             // The page's way back is the way out, so no Cancel in the steps. (On a machine, its
             // own sign-in, finishing in this Mac's browser.)
             .settingsDetail(item: $connecting, title: { _ in nil }) { item in
@@ -87,69 +100,97 @@ struct ProvidersView: View {
         self.removal = nil
     }
 
+    /// The accounts; a machine's that isn't connected as last seen, under a bar that says so,
+    /// or, never read, waiting for it.
+    @ViewBuilder private var page: some View {
+        if let away, catalog.integrationsRead == nil {
+            MachineWaitingView(engine: away, note: "Its accounts show once it’s connected.")
+        } else {
+            list
+        }
+    }
+
     private var list: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
+                if let away {
+                    // "2 hours ago" kept true while the page stays open.
+                    TimelineView(.everyMinute) { context in
+                        MachineOfflineBar(engine: away, kept: Self.asLastSeen(catalog.integrationsRead, now: context.date))
+                    }
+                    .background(SettingsMetrics.groupFill(scheme), in: .rect(cornerRadius: SettingsMetrics.groupRadius))
+                }
+
                 SearchField(text: $search, prompt: "Search \(catalog.providers.count) providers")
 
-                if search.isEmpty {
-                    SubscriptionsSection(shows: .agents, machine: machine) { connecting = Connecting(integration: $0, machine: box.machine) }
-                    SubscriptionsSection(shows: .plans, machine: machine) { connecting = Connecting(integration: $0, machine: box.machine) }
-                }
-
-                if search.isEmpty, !connected.isEmpty {
-                    section("Connected") {
-                        VStack(spacing: 0) {
-                            ForEach(connected) { provider in
-                                ConnectedRow(provider: provider) { connecting = Connecting(integration: provider, machine: box.machine) }
-                                if provider.id != connected.last?.id {
-                                    Divider().padding(.leading, 56)
-                                }
-                            }
-                        }
-                        .background(SettingsMetrics.groupFill(scheme), in: .rect(cornerRadius: SettingsMetrics.groupRadius))
-                    }
-                }
-
-                if search.isEmpty, !featured.isEmpty {
-                    section("Popular") {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 12)], spacing: 12) {
-                            ForEach(featured) { provider in
-                                ProviderTile(provider: provider) { connecting = Connecting(integration: provider, machine: box.machine) }
-                            }
-                        }
-                    }
-                }
-
-                if search.isEmpty {
-                    CustomProvidersSection { connecting = Connecting(integration: $0, machine: box.machine) } edit: { id in editing = ProviderEdit(id: id) }
-                }
-
-                if others.isEmpty, !search.isEmpty {
-                    ContentUnavailableView {
-                        Label("No Results for “\(search.trimmingCharacters(in: .whitespaces))”", systemImage: "magnifyingglass")
-                    } description: {
-                        Text("Check the spelling, or search for the company that makes the model.")
-                    } actions: {
-                        Button("Clear Search") { search = "" }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 24)
-                } else {
-                    section(search.isEmpty ? "All Providers" : "Results") {
-                        LazyVStack(spacing: 0) {
-                            ForEach(others) { provider in
-                                ProviderRow(provider: provider) { connecting = Connecting(integration: provider, machine: box.machine) }
-                            }
-                        }
-                        .padding(4)
-                        .background(SettingsMetrics.groupFill(scheme), in: .rect(cornerRadius: SettingsMetrics.groupRadius))
-                    }
-                }
+                accounts
+                    // As last seen: nothing here acts until it's back.
+                    .disabled(away != nil)
+                    .opacity(away != nil ? 0.55 : 1)
+                    .accessibilityHint(away != nil ? "As last seen, while \(away?.machine.name ?? "it") isn’t connected" : "")
             }
             // Lined up with the page's title above it.
             .padding(.horizontal, inset)
             .padding(.vertical, 16)
+        }
+    }
+
+    @ViewBuilder private var accounts: some View {
+        VStack(alignment: .leading, spacing: 26) {
+            if search.isEmpty {
+                SubscriptionsSection(shows: .agents, machine: machine) { connecting = Connecting(integration: $0, machine: box.machine) }
+                SubscriptionsSection(shows: .plans, machine: machine) { connecting = Connecting(integration: $0, machine: box.machine) }
+            }
+
+            if search.isEmpty, !connected.isEmpty {
+                section("Connected") {
+                    VStack(spacing: 0) {
+                        ForEach(connected) { provider in
+                            ConnectedRow(provider: provider) { connecting = Connecting(integration: provider, machine: box.machine) }
+                            if provider.id != connected.last?.id {
+                                Divider().padding(.leading, 56)
+                            }
+                        }
+                    }
+                    .background(SettingsMetrics.groupFill(scheme), in: .rect(cornerRadius: SettingsMetrics.groupRadius))
+                }
+            }
+
+            if search.isEmpty, !featured.isEmpty {
+                section("Popular") {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 12)], spacing: 12) {
+                        ForEach(featured) { provider in
+                            ProviderTile(provider: provider) { connecting = Connecting(integration: provider, machine: box.machine) }
+                        }
+                    }
+                }
+            }
+
+            if search.isEmpty {
+                CustomProvidersSection { connecting = Connecting(integration: $0, machine: box.machine) } edit: { id in editing = ProviderEdit(id: id) }
+            }
+
+            if others.isEmpty, !search.isEmpty {
+                ContentUnavailableView {
+                    Label("No Results for “\(search.trimmingCharacters(in: .whitespaces))”", systemImage: "magnifyingglass")
+                } description: {
+                    Text("Check the spelling, or search for the company that makes the model.")
+                } actions: {
+                    Button("Clear Search") { search = "" }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 24)
+            } else {
+                section(search.isEmpty ? "All Providers" : "Results") {
+                    LazyVStack(spacing: 0) {
+                        ForEach(others) { provider in
+                            ProviderRow(provider: provider) { connecting = Connecting(integration: provider, machine: box.machine) }
+                        }
+                    }
+                    .padding(4)
+                    .background(SettingsMetrics.groupFill(scheme), in: .rect(cornerRadius: SettingsMetrics.groupRadius))
+                }
+            }
         }
     }
 

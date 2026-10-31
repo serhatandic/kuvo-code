@@ -81,9 +81,9 @@ struct MainView: View {
         sessionsInView.flatMap { id in [(workspace.session(id) ?? workspace.subSession(id))?.time.idle] + (workspace.subSessions[id] ?? []).map(\.time.idle) }
     }
 
-    /// The sessions on screen count as seen.
+    /// The sessions on screen count as seen (not those Settings or an editor covers).
     private func markViewed() {
-        for id in sessionsInView { workspace.markViewed(id) }
+        for id in tabs.sessionsSeen { workspace.markViewed(id) }
     }
 
     /// A bot's workspace: the folder of its own it works in when it has no project.
@@ -357,7 +357,7 @@ struct MainView: View {
         // Viewed only while you're here: finished while you're in another app, it waits for you
         // on the Dock icon, and counts as seen when you come back. The session beside the tab's
         // is in view too.
-        .onChange(of: sessionsInView) { if NSApp.isActive { markViewed() } }
+        .onChange(of: tabs.sessionsSeen) { if NSApp.isActive { markViewed() } }
         .onChange(of: idlesInView) { if NSApp.isActive { markViewed() } }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in markViewed() }
         // The panel follows what's in view, all at once: the conversations, the half you work in,
@@ -409,6 +409,8 @@ struct MainView: View {
         }
         .onChange(of: workspace.sessions.map(\.id)) { tabs.dropClosed() }
         .onChange(of: groups.list.map(\.id)) { tabs.dropClosed() }
+        // A terminal ended for you (its machine removed): its tab goes.
+        .onChange(of: terminals.entries.count) { tabs.dropClosed() }
         .onChange(of: workspace.isLoaded) {
             // The list arrives just before loading counts as done, so check it again here.
             tabs.dropClosed()

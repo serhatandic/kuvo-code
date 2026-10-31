@@ -15,6 +15,10 @@ process.env.KUVO_HOME = home;
 after(() => fs.rmSync(home, { recursive: true, force: true }));
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
+// A bot's rules as its box makes them: what always comes to you asked whatever its approval (PROTOCOL.md,
+// "What always comes to you"; bots-night.test.js holds what that does).
+const withAlways = rules => link.withAlwaysAsk(rules);
+
 const bots = path.join(home, "bots");
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -214,6 +218,22 @@ test("a wake-up or watch is cancelled by its letters; nothing else goes", async 
   assert.ok(fs.existsSync(path.join(scout, "MEMORY.md")), "its folder stays");
 });
 
+test("Wake Up Now for a conversation the user stopped: the wake-up waits there with its queue, rather than starting it", async t => {
+  const engine = await fakeEngine();
+  t.after(engine.close);
+  const scout = bot("bot_scout00001");
+  write(path.join(scout, "wakes", "1792000500-AbC123"), "check the\nbuild");
+  const queues = path.join(home, "run", "queues.json");
+  write(queues, JSON.stringify({ ses_bot_scout00001: { paused: true, held: [] } }));
+  t.after(() => fs.rmSync(queues, { force: true }));
+  const handle = link.engineHandler(() => ({ pid: process.pid, port: engine.port, password: "s3cret" }), {});
+  assert.equal((await ask(handle, "POST", "kuvo/wakes/ses_bot_scout00001/now", { wake: "AbC123" })).status, 200);
+  assert.ok(!engine.asked.some(each => each.url.endsWith("/prompt")), "the engine would run everything waiting with it");
+  const [waiting] = link.queueOf("ses_bot_scout00001").waiting;
+  assert.deepEqual([waiting.from, waiting.text], ["Wake-up", "check the\nbuild"]);
+  assert.deepEqual(fs.readdirSync(path.join(scout, "wakes")), [], "a one-off is done: it waits with the queue now");
+});
+
 test("Wake Up Now sends the whole note to its session, then a one-off is done and a repeating one stays", async t => {
   const engine = await fakeEngine();
   t.after(engine.close);
@@ -392,7 +412,7 @@ test("with the Mac closed, a bot is made here as New Bot makes it: its folder, c
     assert.deepEqual({ ...described, created: undefined, updated: undefined, look: undefined }, { created: undefined, updated: undefined, look: undefined, id: listed.id, job: "", kuvo: 1, model: kit.startingModel, name: "Inbox Helper", personality: "preset.straight", project: "/home/me/app" });
     const session = engine.asked.find(each => each.method === "POST" && each.url === "/api/session");
     assert.equal(session.body.location.directory, "/home/me/app");
-    assert.deepEqual(session.body.permissions, [...kit.rules, { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }]);
+    assert.deepEqual(session.body.permissions, [...withAlways(kit.rules), { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }]);
     const told = engine.asked.find(each => each.url === "/api/experimental/session/ses_made1/instructions/entries/kuvo.bot").body.value;
     assert.equal(told, `You are Inbox Helper, one of the user's bots.\n\nYour personality: Straight Shooter. Direct.\n\nMemory: the file "${folder}/MEMORY.md" is yours.\n\nYou work in one of the user's projects.\n\nWho sets what.`);
     assert.deepEqual(engine.asked.find(each => each.method === "PATCH").body, { metadata: { kuvo: { bot: listed.id } } });
@@ -590,6 +610,28 @@ test("a bot changed from a phone that leaves mid-way has its conversation told a
     const heard = told(engine.asked, "ses_bot_scout00001");
     assert.deepEqual(heard.model, { id: "opus", providerID: "anthropic" }, "its conversation runs on the new model");
     assert.match(heard.instructions ?? "", /^You are Scout Prime/, "and is told its new name");
+  } finally {
+    engine.close();
+  }
+});
+
+test("a change that waits on the engine (a new model's sign-in) keeps what another change saved meanwhile", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  const folder = bot("bot_scout00001");
+  const file = path.join(folder, "bot.json");
+  // As the engine is asked whether the new model is signed in, another client's change is saved.
+  const engine = await makingEngine(["opencode", "anthropic"], {}, request => {
+    if (request.method === "GET" && request.url === "/api/provider") write(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), look: { color: "mint", shape: "round", face: "happy" }, personality: "preset.straight" }));
+  });
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+    const changed = await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", { name: "Scout Prime", model: { id: "opus", providerID: "anthropic" } });
+    assert.equal(changed.status, 200, JSON.stringify(changed.json));
+    const described = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(described.name, "Scout Prime");
+    assert.deepEqual(described.model, { id: "opus", providerID: "anthropic" });
+    assert.deepEqual(described.look, { color: "mint", shape: "round", face: "happy" }, "the other change's look is kept");
+    assert.equal(described.personality, "preset.straight");
   } finally {
     engine.close();
   }
@@ -809,10 +851,12 @@ test("a bot brought here from your Mac is made this machine's: its folder there,
     assert.equal(fs.readFileSync(path.join(folder, "timezone"), "utf8"), "Europe/Istanbul", "your time zone, which its wake-ups go by");
     assert.equal(fs.readFileSync(path.join(folder, "zoneinfo"), "utf8"), "TZif Istanbul", "and its rules, for a machine without zone files");
     assert.deepEqual(engine.asked.filter(each => each.method === "PATCH" && each.body?.permissions).at(-1)?.body.permissions, [
-      ...askFirst,
-      { action: "shell", resource: "git push *", effect: "ask" },
-      { action: "edit", resource: "secrets/*", effect: "deny" },
-      { action: "external_directory", resource: "/Users/me/notes/*", effect: "allow" },
+      ...withAlways([
+        ...askFirst,
+        { action: "shell", resource: "git push *", effect: "ask" },
+        { action: "edit", resource: "secrets/*", effect: "deny" },
+        { action: "external_directory", resource: "/Users/me/notes/*", effect: "allow" },
+      ]),
       { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" },
     ]);
     assert.ok(engine.asked.some(each => each.method === "PUT" && each.url === "/api/experimental/session/ses_bot_moved00001/instructions/entries/kuvo.bot"));
@@ -832,9 +876,11 @@ test("a rule a newer engine set in this machine's Settings › Permissions (one 
     const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
     assert.equal((await ask(handle, "POST", "kuvo/bots/bot_moved00001/arrived", { timeZone: "Europe/Istanbul" })).status, 200);
     assert.deepEqual(engine.asked.filter(each => each.method === "PATCH" && each.body?.permissions).at(-1)?.body.permissions, [
-      ...askFirst,
-      { action: "shell", resource: "rm *", effect: "deny-forever" },
-      { action: "edit", resource: "secrets/*", effect: "deny" },
+      ...withAlways([
+        ...askFirst,
+        { action: "shell", resource: "rm *", effect: "deny-forever" },
+        { action: "edit", resource: "secrets/*", effect: "deny" },
+      ]),
       { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" },
     ]);
   } finally {
@@ -857,8 +903,7 @@ test("a bot brought here before this machine's settings are its own keeps the ru
     const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
     assert.equal((await ask(handle, "POST", "kuvo/bots/bot_moved00001/arrived")).status, 200);
     assert.deepEqual(engine.asked.filter(each => each.method === "PATCH" && each.body?.permissions).at(-1)?.body.permissions, [
-      ...askFirst,
-      { action: "shell", resource: "rm -rf *", effect: "deny" },
+      ...withAlways([...askFirst, { action: "shell", resource: "rm -rf *", effect: "deny" }]),
       { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" },
     ]);
   } finally {
@@ -895,7 +940,7 @@ test("a bot brought here while the engine isn't running is made this machine's a
   try {
     await link.freshenBot({ port: engine.port, password: "p" }, "ses_bot_moved00001");
     assert.match(engine.asked.find(each => each.method === "PUT" && each.url.endsWith("/instructions/entries/kuvo.bot"))?.body.value ?? "", /^You are Scout/);
-    assert.deepEqual(engine.asked.filter(each => each.method === "PATCH" && each.body?.permissions).at(-1)?.body.permissions, [{ action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }]);
+    assert.deepEqual(engine.asked.filter(each => each.method === "PATCH" && each.body?.permissions).at(-1)?.body.permissions, [...withAlways([]), { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }]);
   } finally {
     engine.close();
   }

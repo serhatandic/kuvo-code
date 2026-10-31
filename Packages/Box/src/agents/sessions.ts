@@ -2429,7 +2429,7 @@ export class Sessions {
       if (outside === "deny") return "reject"
       const own = strictest(rules, ask.action, parts) ?? "allow"
       if (outside === "ask" && own !== "deny" && (own === "allow" || this.allowedBefore(live, ask)) && !this.allowedBefore(live, outsideAsk(ask, away))) {
-        return this.askPermission(id, live, turn, { ...outsideAsk(ask, away), metadata: ask.metadata, message: ask.message }, plan)
+        return this.askPermission(id, live, turn, { ...outsideAsk(ask, away), metadata: ask.metadata, message: ask.message, sandboxed: ask.sandboxed }, plan)
       }
     }
     // The engine's asks were weighed by it already: without a rule of yours, they're yours to
@@ -2454,6 +2454,9 @@ export class Sessions {
       metadata: ask.metadata,
       message: ask.message,
     }
+    // Asked by an agent run in the box's sandbox: a bot may weigh its commands as such.
+    const running = live.doing.kind === "running" || live.doing.kind === "stopping" ? live.doing.run.agent?.thread : undefined
+    if (ask.sandboxed ?? running?.sandboxed) request.sandboxed = true
     const step = ask.toolCallID ? turn.toolStep(ask.toolCallID) : undefined
     if (ask.toolCallID && step) request.source = { type: "tool", messageID: step, id: ask.toolCallID }
     return new Promise<Decision>((resolve) => {
@@ -2473,6 +2476,34 @@ export class Sessions {
         emit("permission.replied", { sessionID: id, requestID: request.id }, session.location.directory)
       })
     })
+  }
+
+  /** Whether an agent's process here still runs outside the box's sandbox (started before it was on). */
+  outside(): boolean {
+    return [...this.live.values()].some((live) => [...live.threads.values()].some((thread) => thread.outside))
+  }
+
+  /**
+   * Restarts the agents' processes here that started before the box's sandbox was on (you said
+   * to): each closes once its session is between turns (what it left running stops with it), and
+   * starts again in the sandbox with its next turn, going on with its conversation. Whether one
+   * still waits for its turn to end.
+   */
+  restartOutside(): boolean {
+    let waiting = false
+    for (const live of this.live.values()) {
+      for (const [providerID, thread] of live.threads) {
+        if (!thread.outside) continue
+        // (Its turn, and what it left going, commands or subagents, as when it closes idle.)
+        if (isBusy(live.doing) || thread.keepsWorking) {
+          waiting = true
+          continue
+        }
+        thread.close()
+        live.threads.delete(providerID)
+      }
+    }
+    return waiting
   }
 
   permissions(id: string): PermissionRequest[] {

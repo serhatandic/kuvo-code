@@ -47,6 +47,9 @@ public struct VaultState: Codable, Equatable, Sendable {
     /// Whether agents may use it on this computer: only where their commands are fenced. (Absent
     /// from a box older than the fence: yes.)
     public var agents: Bool?
+    /// Its sandbox is on, and agents started before it came on still run: agents may use it once
+    /// they're done.
+    public var agentsWaiting: Bool?
     /// Its files were changed outside Kuvo Code, so it uses none of them.
     public var tampered: Bool?
     /// Each signed file's generation (`items`, `grants`, `paused`), for a client to remember and
@@ -62,6 +65,28 @@ public struct VaultState: Codable, Equatable, Sendable {
         self.keptDays = keptDays
         self.agents = agents
         self.tampered = tampered
+    }
+
+    /// While agents started before the sandbox was on still run: the same words everywhere.
+    public static let lockedForOlderAgents = "Locked for now: some agents started before the sandbox was on. The vault opens when they finish."
+
+    /// What its Vault page says while agents can't use its keys, files and notes; nil while they
+    /// can.
+    public func agentsNote(computer: String) -> String? {
+        guard agents == false else { return nil }
+        if agentsWaiting == true {
+            return Self.lockedForOlderAgents
+        }
+        return "Agents can’t use keys, files and notes from \(computer)’s vault yet. Sign-ins you let them use on their own still fill."
+    }
+
+    /// What a bot's own vault list says meanwhile; nil while agents can use it.
+    public var botAgentsNote: String? {
+        guard agents == false else { return nil }
+        if agentsWaiting == true {
+            return Self.lockedForOlderAgents
+        }
+        return "For now it only fills sign-ins set to On Its Own. It can’t use keys, files or notes yet."
     }
 }
 
@@ -183,8 +208,10 @@ public struct VaultAsk: Codable, Equatable, Identifiable, Sendable {
     public var why: String?
     public var site: String?
     public var machine: String?
+    /// From a bot's seat in this group chat, where it shows: you answer it this once, never for good.
+    public var group: String?
 
-    public init(id: String, kind: Kind, at: Double = 0, session: String? = nil, sessionName: String? = nil, bot: String? = nil, botName: String? = nil, item: String? = nil, itemName: String? = nil, need: String? = nil, why: String? = nil, site: String? = nil, machine: String? = nil) {
+    public init(id: String, kind: Kind, at: Double = 0, session: String? = nil, sessionName: String? = nil, bot: String? = nil, botName: String? = nil, item: String? = nil, itemName: String? = nil, need: String? = nil, why: String? = nil, site: String? = nil, machine: String? = nil, group: String? = nil) {
         self.id = id
         self.kind = kind
         self.at = at
@@ -198,7 +225,11 @@ public struct VaultAsk: Codable, Equatable, Identifiable, Sendable {
         self.why = why
         self.site = site
         self.machine = machine
+        self.group = group
     }
+
+    /// Whether you may answer it for good (Always Allow, From Now On).
+    public var mayAllowAlways: Bool { group == nil }
 
     /// Who's asking, by name.
     public var asker: String { botName ?? sessionName ?? "An agent" }

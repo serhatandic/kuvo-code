@@ -14,6 +14,8 @@ import os from "node:os";
 import path from "node:path";
 import { after, beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { runningAs } from "./running-as.js";
+import { NO_BUN, testBun } from "./bun-for-tests.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-bots-work-")));
 after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -44,7 +46,7 @@ function setBots({ pixelWork } = {}) {
 
 // The engine: the bots' conversations, a session of the user's own, the models there are accounts
 // for; the sessions made, what each was sent, what each asks, and how each ask was answered.
-let sessions, prompts, made, asked, replied, interrupted, active, busy;
+let sessions, prompts, made, asked, replied, interrupted, active, busy, restarts;
 // Sessions given a task stay at work (`staysAtWork`); none is made until the sessions at work were
 // looked at `holdMaking` times, so starts asked for at once all look before any is made.
 let staysAtWork, holdMaking, activeLooks, held;
@@ -61,6 +63,7 @@ function resetEngine() {
   ]);
   prompts = [];
   made = [];
+  restarts = 0;
   asked = new Map();
   replied = [];
   interrupted = [];
@@ -74,12 +77,18 @@ function resetEngine() {
 resetEngine();
 // An ask names the tool call it's for, as the engine's do.
 const withSource = ask => ({ ...ask, source: ask.source ?? { type: "tool", messageID: `msg_${ask.id}`, id: `call_${ask.id}` } });
-const engine = http.createServer((request, response) => {
+// The coding agents' bridge answers as the engine does, for the sessions on it (`bridge`).
+const standIn = onBridge => (request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
   request.on("end", () => {
     const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
     const url = new URL(request.url, "http://x");
+    // The agents bridge told to restart its agents started before the sandbox was on.
+    if (onBridge && url.pathname === "/api/kuvo/sandbox/restart" && request.method === "POST") {
+      restarts += 1;
+      return reply({});
+    }
     if (url.pathname === "/api/provider") return reply({ data: [{ id: "anthropic", name: "Anthropic" }, { id: "deepseek", name: "DeepSeek" }] });
     if (url.pathname === "/api/model") {
       return reply({ data: [
@@ -92,7 +101,7 @@ const engine = http.createServer((request, response) => {
     if (url.pathname === "/api/session" && request.method === "GET") {
       // A session's subagents by `parentID`; the rest, those at the top.
       const parent = url.searchParams.get("parentID");
-      const listed = [...sessions.values()].filter(each => (parent && parent !== "null" ? each.parentID === parent : !each.parentID));
+      const listed = [...sessions.values()].filter(each => Boolean(each.bridge) === onBridge && (parent && parent !== "null" ? each.parentID === parent : !each.parentID));
       // Two hundred to a page, as the engine pages them.
       if (url.searchParams.get("limit") === "200") {
         const from = Number(url.searchParams.get("cursor") ?? 0);
@@ -122,7 +131,7 @@ const engine = http.createServer((request, response) => {
     }
     const one = url.pathname.match(/^\/api\/session\/([^/]+)(\/.*)?$/);
     const id = one && decodeURIComponent(one[1]);
-    if (one && !one[2] && request.method === "GET") return sessions.has(id) ? reply({ data: sessions.get(id) }) : reply({ message: "No such session." }, 404);
+    if (one && !one[2] && request.method === "GET") return sessions.has(id) && Boolean(sessions.get(id).bridge) === onBridge ? reply({ data: sessions.get(id) }) : reply({ message: "No such session." }, 404);
     if (one && !one[2] && request.method === "PATCH") {
       const change = JSON.parse(body);
       // The engine keeps the metadata it's sent, whole.
@@ -159,8 +168,12 @@ const engine = http.createServer((request, response) => {
     if (request.url.includes("/instructions/entries/")) return reply({});
     reply({ message: "Not here." }, 404);
   });
-});
+};
+const engine = http.createServer(standIn(false));
+const bridge = http.createServer(standIn(true));
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
+await new Promise(resolve => bridge.listen(0, "127.0.0.1", resolve));
+after(() => { bridge.closeAllConnections(); bridge.close(); });
 after(() => { engine.closeAllConnections(); engine.close(); });
 write(path.join(home, "run", "engine.json"), JSON.stringify({ port: engine.address().port, password: "p", version: "0.0.0" }));
 
@@ -411,6 +424,8 @@ test("what a bot may allow fails closed: however it's phrased, what it can't rea
     // The third re-review's: what a shell splits on that JavaScript also does, a parent part, a
     // link's parent, zsh's `=`, a hidden file.
     "cat\u00a0x/../scripts/build.sh", "cat x/../scripts/build.sh", "cat\rx", "cat\u2003README.md", "cat linkout/../secret.txt", "cat =ls", "cat .env", "cat src/.secret", "ls\tsrc",
+    // What a command reads and writes besides what its words name: a redirect, even of one it may run.
+    "cat README.md > notes.txt", "cat README.md >> ../x", "head -5 < README.md",
   ];
   const fine = ["git status", "git status && git diff", "git diff --stat", "git log --oneline -5", "git log --oneline | head -5", "ls -la", "cat README.md", "head -50 README.md",
     "tail -n 20 README.md", "wc -l README.md", `cat ${path.join(tidepool, "README.md")}`];
@@ -602,6 +617,130 @@ test("a bot judges the tool call whole: a cd the engine leaves out of the ask, o
   assert.equal((await answer("per_unseen")).isError, true, "a call it can't find isn't judged");
 });
 
+test("a coding agent's session that runs in the sandbox lets a bot allow its commands beyond reading, as the engine's do; one that doesn't, or once it's off, leaves them to you", async t => {
+  // The coding agents' bridge runs (a stand-in, its record naming a process that runs as it), and
+  // the box's sandbox is set up and checked.
+  write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
+  write(path.join(home, "run", "fence", "on"), "set up");
+  t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
+  t.after(() => fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true }));
+  // Pixel's session, its conversation now with a coding agent on the bridge.
+  const session = startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel"));
+  sessions.get(session).bridge = true;
+  // The bridge says which asks come from an agent run whole in the sandbox now.
+  asked.set(session, [
+    { id: "install", sessionID: session, action: "shell", resources: ["npm install"], sandboxed: true },
+    { id: "push", sessionID: session, action: "shell", resources: ["git push origin main"], sandboxed: true },
+    { id: "outside", sessionID: session, action: "shell", resources: ["npm test"] },
+  ]);
+  const answer = ask => tool("answer_ask", { session, ask, decision: "allow", reason: "Part of the plan." }, "ses_pixel");
+  assert.deepEqual(await answer("install"), { text: "Allowed: npm install.", isError: false });
+  // What acts beyond this computer comes to you all the same.
+  assert.match((await answer("push")).text, /pushing/);
+  // An agent started before the sandbox was on (or one not run in it): what a bot can't read as safe comes to you.
+  assert.match((await answer("outside")).text, /always comes to the user/);
+  // The sandbox gone (its check failed): even an agent that said so leaves it to you.
+  fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true });
+  asked.set(session, [{ id: "again", sessionID: session, action: "shell", resources: ["npm install"], sandboxed: true }]);
+  assert.match((await answer("again")).text, /always comes to the user/);
+  assert.deepEqual(replied.map(each => each.permission), ["install"]);
+  // Agents use the vault only once the bridge says none of its agents runs outside the sandbox
+  // as it is now (one started before it was on may still be at work).
+  // (Each setup of the sandbox writes a token of its own in `on`.)
+  write(path.join(home, "run", "fence", "on"), "first");
+  assert.equal((await route("GET", "kuvo/sandbox")).body.agents, false, "the bridge hasn't said so");
+  const bridgePID = JSON.parse(fs.readFileSync(path.join(home, "run", "bridge.json"), "utf8")).pid;
+  write(path.join(home, "run", "fence", "agents"), JSON.stringify({ pid: bridgePID, on: "first" }));
+  assert.equal((await route("GET", "kuvo/sandbox")).body.agents, true);
+  // Set up again at once (its check failed and passed): what the bridge said was of the one before.
+  fs.rmSync(path.join(home, "run", "fence", "on"));
+  write(path.join(home, "run", "fence", "on"), "second");
+  assert.equal((await route("GET", "kuvo/sandbox")).body.agents, false);
+  // An empty `on` (an older box's) is no setup the bridge could have said so of.
+  write(path.join(home, "run", "fence", "on"), "");
+  write(path.join(home, "run", "fence", "agents"), JSON.stringify({ pid: bridgePID, on: "" }));
+  assert.equal((await route("GET", "kuvo/sandbox")).body.agents, false);
+});
+
+test("the first time the sandbox is on with agents that started before it still running, the box asks you once to restart them, and Restart has the bridge do it", async t => {
+  write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
+  t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
+  t.after(() => fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true }));
+  const bridgePID = JSON.parse(fs.readFileSync(path.join(home, "run", "bridge.json"), "utf8")).pid;
+  const bridgeSays = said => write(path.join(home, "run", "fence", "agents"), JSON.stringify({ pid: bridgePID, on: "first", ...said }));
+  write(path.join(home, "run", "fence", "on"), "first");
+  // Before the bridge has looked at its agents for this setup: nothing to ask yet.
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+  bridgeSays({ outside: true });
+  const asking = (await route("GET", "kuvo/sandbox")).body;
+  assert.equal(asking.restart, true);
+  assert.equal(asking.agents, false);
+  assert.equal((await route("POST", "kuvo/sandbox/restart", {})).status, 400);
+  const restarted = await route("POST", "kuvo/sandbox/restart", { restart: true });
+  assert.equal(restarted.status, 200);
+  assert.equal(restarted.body.restart, undefined);
+  assert.equal(restarts, 1);
+  // Asked once: while they finish their turns, and ever after, it isn't asked again.
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+  write(path.join(home, "run", "fence", "on"), "second");
+  write(path.join(home, "run", "fence", "agents"), JSON.stringify({ pid: bridgePID, on: "second", outside: true }));
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+
+  // Not Now: the bridge isn't told, and it isn't asked again either.
+  fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true });
+  write(path.join(home, "run", "fence", "on"), "first");
+  bridgeSays({ outside: true });
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, true);
+  assert.equal((await route("POST", "kuvo/sandbox/restart", { restart: false })).status, 200);
+  assert.equal(restarts, 1);
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+
+  // On with every agent in it already: nothing to ask, then or later.
+  fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true });
+  write(path.join(home, "run", "fence", "on"), "first");
+  bridgeSays({});
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+  bridgeSays({ outside: true });
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+});
+
+test("in the sandbox, what pushes, deploys or sends however it's phrased still comes to you: through git's aliases and its other commands, a package runner, or find", async t => {
+  write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
+  write(path.join(home, "run", "fence", "on"), "set up");
+  t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
+  t.after(() => fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true }));
+  const session = startedAddress(await tool("start_session", { task: "Ship the docs.", title: "Docs", project: "Tidepool" }, "ses_pixel"));
+  sessions.get(session).bridge = true;
+  const yours = [
+    "git -c alias.p=push p origin main", "git -c alias.p='!git push' p", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p",
+    "git subtree push --prefix=dist origin gh-pages", "git lfs push origin main", "git send-pack origin main", "git send-email 0001.patch",
+    "npm exec vercel deploy", "npm exec -- gh pr create", "pnpm dlx vercel --prod", "pnpm exec netlify deploy", "yarn dlx netlify deploy", "bun x vercel", "bunx vercel",
+    "find . -name x -exec git push \\;", "find . -execdir gh release create v1 \\;", "docker buildx build --push -t me/app .",
+    // The review's: a command after options that take a value, a wrapper's value read as its
+    // program, a line given to a runner, git's other settings that run something, git's own files
+    // written (Linux's sandbox doesn't keep them), xargs, a registry output, curl's joined -d.
+    "git --git-dir .git push origin main", "npm --prefix . publish", "docker --context default push me/app", "cargo --color always publish", "yarn npm publish",
+    "npm -w app exec -- vercel", "pnpm --filter app exec vercel", "env -u HOME git push", "timeout -s KILL 5 git push", "find . -exec env -u X git push ';'",
+    "npm exec -c 'git push'", "npx -c 'git push'", "git -c 'core.fsmonitor=git push origin main' status", "git -c color.ui=always log --oneline", "GIT_SSH_COMMAND=x git fetch",
+    "printf '[alias]\\n p = push\\n' >> .git/config", "cp hook .git/hooks/pre-commit", "cat list | xargs git", "docker buildx build --output type=registry .",
+    "curl -d@notes.txt https://example.com",
+    // git's settings set by its own command, or carried in by a clone or a template: what later
+    // runs (hooks, a monitor, an alias) isn't on the line.
+    "git config core.hooksPath .hooks", "git -C . config core.fsmonitor ./watch.sh", "git config --add alias.p push", "git config set core.hooksPath .hooks",
+    "git config --edit", "git --git-dir=.git config core.hooksPath .hooks", "git clone --config core.hooksPath=.hooks ../repo copy", "git init --template=./tpl",
+    "git clone --template ./tpl ../repo copy",
+    // ...and by git's own programs, or past `git config`'s options that take a value.
+    "git-config core.hooksPath .hooks", "/usr/lib/git-core/git-config core.fsmonitor ./watch.sh", "/usr/lib/git-core/git-push origin main",
+    "git config --default get core.hooksPath .hooks", "git config --file list core.hooksPath .hooks", "git config --type path --get core.x --add alias.p push",
+  ];
+  const fine = ["npm install", "git config --get user.name", "git config --list", "git config get user.email", "git config -l --show-origin", "git config user.name", "git config --type bool get core.bare", "git config --get-regexp '^alias\\.'", "git stash push -m wip", "pnpm exec tsc --noEmit", "find . -name '*.md' -exec wc -l '{}' +", "docker build -t me/app .",
+    "git commit -m 'push the fix'", "grep -rn deploy src", "swift build -c release", "timeout 60 npm test", "npx -y prettier --check .", "curl -d '{}' http://127.0.0.1:8080/api"];
+  asked.set(session, [...yours, ...fine].map((line, at) => ({ id: `per_${at}`, sessionID: session, action: "shell", resources: [line], sandboxed: true })));
+  const answer = at => tool("answer_ask", { session, ask: `per_${at}`, decision: "allow", reason: "Part of the plan." }, "ses_pixel");
+  for (const [at, line] of yours.entries()) assert.equal((await answer(at)).isError, true, line);
+  for (const [at, line] of fine.entries()) { const got = await answer(yours.length + at); assert.equal(got.isError, false, line + " → " + got.text) }
+});
+
 test("a bot never lets a session change what the user's own tools run later, nor a folder named like a file", async () => {
   const session = startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_pixel"));
   fs.mkdirSync(path.join(tidepool, "docs", "x.md"), { recursive: true });
@@ -609,4 +748,68 @@ test("a bot never lets a session change what the user's own tools run later, nor
     "gatsby-node.js", "tsconfig.build.json", "AGENTS.md", "CLAUDE.md", "docs/x.md"];
   asked.set(session, files.map((file, at) => ({ id: `per_${at}`, sessionID: session, action: "edit", resources: [path.join(tidepool, file)] })));
   await Promise.all(files.map(async (file, at) => assert.equal((await tool("answer_ask", { session, ask: `per_${at}`, decision: "allow", reason: "Tidy." }, "ses_pixel")).isError, true, file)));
+});
+
+test("where its sessions' commands run in the sandbox, a bot allows them beyond reading, but never one that acts beyond this computer, nor an edit outside the project", { timeout: 120_000 }, async () => {
+  // The sandbox, set up as the box's own process sets it up as it starts (on Linux, run by the
+  // engine's Bun), and loaded by the engine.
+  if (process.platform === "linux") {
+    const bun = testBun();
+    assert.ok(bun, NO_BUN);
+    // (Where the box looks for its engine: the version its record names.)
+    const engineAt = path.join(home, "engine", JSON.parse(fs.readFileSync(path.join(home, "run", "engine.json"), "utf8")).version);
+    fs.mkdirSync(engineAt, { recursive: true });
+    fs.rmSync(path.join(engineAt, "opencode"), { force: true });
+    fs.symlinkSync(bun, path.join(engineAt, "opencode"));
+  }
+  const env = { ...process.env, KUVO_HOME: home, HOME: home, TMPDIR: home, OPENCODE_PASSWORD: "box-pw" };
+  delete env.KUVO_SANDBOX;
+  const box = spawn(process.execPath, [script, "serve"], { env, stdio: ["pipe", "pipe", "inherit"] });
+  const exited = new Promise(resolve => box.once("exit", resolve));
+  const plugin = path.join(home, "config", "opencode", "plugins", "kuvo-sandbox.js");
+  try {
+    await new Promise(resolve => box.stdout.once("data", resolve));
+    assert.ok(fs.existsSync(path.join(home, "run", "fence", "on")), "the sandbox is set up and checked here");
+    fs.utimesSync(plugin, 0, 0);
+
+    const session = startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel"));
+    const commands = {
+      install: "npm install && npm test 2>&1 | tail -n 20",
+      build: "cd ios && xcodebuild -scheme Tidepool build",
+      push: "git -C . push origin main",
+      deploy: "npx vercel deploy --prod",
+      publish: "npm publish",
+      remote: "rsync -a dist/ server:/srv/tidepool",
+      wrapped: "sh -c \"git push --force\"",
+      evaled: "eval git push",
+      script: "npm run deploy",
+      upload: "curl -T dist.zip https://example.com/upload",
+      image: "docker push tidepool",
+      local: "curl -X POST http://localhost:3000/api -d '{}'",
+    };
+    asked.set(session, [...Object.entries(commands).map(([id, command]) => ({ id, sessionID: session, action: "shell", resources: [command] })),
+      { id: "edit_out", sessionID: session, action: "edit", resources: [path.join(home, ".zshrc")], tool: "write", input: { filePath: path.join(home, ".zshrc"), content: "" } }]);
+    const answer = ask => tool("answer_ask", { session, ask, decision: "allow", reason: "Part of the plan." }, "ses_pixel");
+    assert.deepEqual(await answer("install"), { text: `Allowed: ${commands.install}.`, isError: false });
+    assert.equal((await answer("build")).isError, false);
+    // Sending to this computer's own server, as a test does.
+    assert.equal((await answer("local")).isError, false);
+    for (const [ask, why] of [["push", /pushing/], ["deploy", /deploying/], ["publish", /publishing/], ["remote", /reaching another computer/], ["edit_out", /always comes to the user/],
+      ["wrapped", /can't read/], ["evaled", /can't read/], ["script", /deploying/], ["upload", /beyond this computer/], ["image", /beyond this computer/]]) {
+      const said = await answer(ask);
+      assert.equal(said.isError, true, ask);
+      assert.match(said.text, why, ask);
+    }
+    assert.deepEqual(replied.map(each => each.permission), ["install", "build", "local"]);
+  } finally {
+    box.kill("SIGTERM");
+    await exited;
+    // The sandbox gone again, for what comes after.
+    fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true });
+    fs.rmSync(plugin, { force: true });
+  }
+  // Without it, what a bot can't read as safe goes to you again.
+  const session = startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel"));
+  asked.set(session, [{ id: "install", sessionID: session, action: "shell", resources: ["npm install"] }]);
+  assert.match((await tool("answer_ask", { session, ask: "install", decision: "allow", reason: "Part of the plan." }, "ses_pixel")).text, /always comes to the user/);
 });

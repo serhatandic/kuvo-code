@@ -85,6 +85,11 @@ cd Packages/KuvoLink && swift test && node --test Tests/Bridge/*.test.js
 cd Packages/Box && bun install && bun run check && bun test
 ```
 
+The bridge's tests that run the box itself need a Bun: `bun` on your PATH, or
+`KUVO_TEST_BUN` naming one or an engine (a machine's `~/.kuvo-code/engine/<version>/opencode`,
+which they run as Bun). Run them on a Linux machine too, in a test folder of your own with
+`TMPDIR` inside it, before calling a box change done.
+
 `./scripts/test-app.sh` runs one at a time: a run started while another is going
 waits for it, since they share the test copy's settings and temporary folders.
 
@@ -218,8 +223,9 @@ A machine's browser is Chrome for Testing, the full browser run in Chrome's own 
 `KuvoCode/Resources/kuvo-browser.js`, runs with the engine's own runtime in three ways:
 
 - **host**, the keeper: it starts Chromium, holds it over a pipe, and serves the DevTools
-  protocol to everyone else on a Unix socket in `~/.kuvo-code/run`, with a few messages of its
-  own (`Kuvo.*`): the page in use, who's browsing where, what agents ask you for, and which
+  protocol to everyone else on a Unix socket in `~/.kuvo-code/run`, to each connection that
+  first gives the box's socket key (`run/socket.key`, which an agent's command in the sandbox
+  can't read; one that doesn't is told to update Kuvo Code and closed), with a few messages of its own (`Kuvo.*`): the page in use, who's browsing where, what agents ask you for, and which
   page each conversation works in. Only one runs at a time. When an update puts a newer build
   in `current`, it stops once nothing uses the browser, keeping the open pages, so the next
   start runs the new one.
@@ -304,6 +310,7 @@ when you're there to answer.
 | `KUVO_DEMO_REVIEW` | With `KUVO_DEMO_PROMPT`: `starting` (nothing found yet), `running`, `stopped` or `done`, a sample security review of the whole project in parts over the composer once the first turn ends (no model reads it) |
 | `KUVO_DEMO_SIDE_THREAD_HOVER` | The side thread's Copy shown as with the pointer over it |
 | `KUVO_DEMO_WAITING` | With `KUVO_DEMO_SESSION`: these messages shown waiting in its queue, separated by `\|`, without sending them; `<words>@<picture path>` attaches a picture |
+| `KUVO_DEMO_WAITING_FROM` | With `KUVO_DEMO_SESSION`: after those, these as what came while it was stopped, waiting on its box, separated by `\|`, each `<sender>:<words>` (no sender: yours); the queue shows Paused |
 | `KUVO_DEMO_NEW_PROJECT` | Open the New Project sheet with these comma-separated folders |
 | `KUVO_DEMO_BACKGROUND` | Don't bring the window forward, so it doesn't take the keyboard while you work elsewhere; it also asks nothing of macOS (above) |
 | `KUVO_DEMO_NO_PROMPTS` | `1`: never show a macOS prompt (above); `0`: a background copy may ask after all |
@@ -313,9 +320,10 @@ when you're there to answer.
 | `KUVO_DEMO_PROVIDERS` | Open Accounts (on a provider's sign-in if it names one) |
 | `KUVO_DEMO_APPEARANCE` | `light` or `dark` |
 | `KUVO_DEMO_CHANGES` | Show the side panel |
-| `KUVO_DEMO_PANEL` | Open tools in the panel, comma-separated: `terminal`, `browser=<address>`, `machine=<machine>` (its browser), `files`, `file=<path>`, `changes`, `run`, `expand`, `toggle=<seconds>` (expands and collapses it a few times) |
+| `KUVO_DEMO_PANEL` | Open tools in the panel, comma-separated: `terminal`, `browser=<address>`, `machine=<machine>` (its browser), `files`, `file=<path>`, `folder=<path>` (Files, open down to it), `changes`, `run`, `expand`, `toggle=<seconds>` (expands and collapses it a few times) |
 | `KUVO_DEMO_WINDOW` | Window size, as `WIDTHxHEIGHT`, moved onto the screen if it was past its edge |
 | `KUVO_DEMO_OFFSCREEN` | With `KUVO_DEMO_WINDOW`: the window past the screen's right edge, so the pointer can't hover over what you capture (`screencapture -l` still gets all of it) |
+| `KUVO_DEMO_ACTIVE` | The window drawn as the one in front while it's behind (a background copy), for captures |
 | `KUVO_DEMO_BOX` | The sidebar's box in view, `mac` or a machine's name, a few seconds after launch |
 | `KUVO_DEMO_BOXES` | Stand-in machines in the sidebar by name, comma-separated (`lokum,staging,gpu-01`): how the name strip looks with many and with long names; their pages are empty |
 | `KUVO_DEMO_UNFOLD` | Every session's branches (conversations branched or handed off from it) shown under it in the sidebar, for a look at them |
@@ -343,8 +351,9 @@ when you're there to answer.
 | `KUVO_DEMO_VAULT_ITEM` | With `KUVO_DEMO_SETTINGS=vault`: the sheet of the item with this name, open |
 | `KUVO_DEMO_SETTINGS_TABS` | With `KUVO_DEMO_SETTINGS` and the tab bar on: these pages too, comma-separated, each in a tab of its own (`page@<machine>` for a machine's) |
 | `KUVO_DEMO_DISCONNECT` | Don't connect to this machine, as after Disconnect, so this copy reaches it only through the relay (set it up in an earlier launch) |
+| `KUVO_DEMO_AWAY` | Disconnect this machine a few seconds after it connects, as Disconnect does, so its pages show it away, with what was last seen |
 | `KUVO_DEMO_ADD_MACHINE` | The Add Machine sheet, open, with `KUVO_DEMO_SETTINGS=machines` or over `KUVO_DEMO_NEW_PROJECT` |
-| `KUVO_DEMO_REMOVE_MACHINE` | With `KUVO_DEMO_SETTINGS=machines`: that machine's Remove dialog, open (nothing's removed unless you click) |
+| `KUVO_DEMO_REMOVE_MACHINE` | With `KUVO_DEMO_SETTINGS=machines`: that machine's Remove dialog, open once it's connected (nothing's removed unless you click) |
 | `KUVO_DEMO_ALSO_APPLY` | With `KUVO_DEMO_SETTINGS` and machines: the page's Also Apply to… bar, for a change noted but not made; `missing` applies one to an agent the machines don't have, `own` one to the shell (with Snapshots), once they're connected or couldn't be, for what the bar says stayed (nothing's written there) |
 | `KUVO_DEMO_MCP_SERVER` | With `KUVO_DEMO_SETTINGS=mcp`: that server's editor, open (added, off, if it isn't there); `<name>\|web` switches it to On the web |
 | `KUVO_DEMO_SETTINGS_SCROLL` | `bottom`: with `KUVO_DEMO_SETTINGS`, each page scrolled to its end a few seconds after it opens |
@@ -365,6 +374,7 @@ when you're there to answer.
 | `KUVO_DEMO_BOT_MODEL` | With `KUVO_DEMO_BOT`: the model a new bot gets, `<provider>/<model>` (a coding agent's, like `claude-code/haiku`, makes it run with the agents) |
 | `KUVO_DEMO_EDIT_BOT` | With `KUVO_DEMO_BOT`: that bot's editor, open (`bottom`: scrolled to its wake-ups and memory) |
 | `KUVO_DEMO_BOT_WORK` | A bot's name: its work, a sample (three sessions at work, one asking, two done, two asks answered), in the bar over its composer, and every session marked as its work counts as at work in the sidebar (`KUVO_DEMO_BOT_WORK_ALL`: its All list open too) |
+| `KUVO_DEMO_GOAL` (for a bot) | `<bot's name>:<kind>`: the bot's goal, a sample (Driftwood's landing page), its card (`proposed`; `cant`, from a box that can't work on it alone, with `KUVO_DEMO_SANDBOX=<reason>` naming why, `checkFailed` unless given, or `old`) or its lanes (`running`, a few hours in; `month`, with phases and a deadline; `done`) |
 | `KUVO_DEMO_BOT_ASK` | A bot's name: as its conversation opens, it asks to make a project, the first time on its computer (the asking card, with where projects go) |
 | `KUVO_DEMO_MADE_BY` | A bot's name: as its conversation opens, your first project shows as one it made (its face on the folder) |
 | `KUVO_DEMO_EDIT_BOT_SAVE` | With `KUVO_DEMO_EDIT_BOT`: its job in a few words changed to this, and saved, ten seconds on (with `KUVO_DEMO_BOX_FAILED`, to see what Save says while this Mac's box is down) |

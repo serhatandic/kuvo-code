@@ -153,7 +153,7 @@ final class MacBoxRunner {
             guard launch == self.launch else { return }
             // What some providers need until opencode handles it, on top, as the box learned it
             // from its engine (as a machine's start adds it).
-            shell["OPENCODE_CONFIG_CONTENT"] = await BoxProcess.engineConfig(engine: binary, content: shell["OPENCODE_CONFIG_CONTENT"], environment: shell)
+            shell["OPENCODE_CONFIG_CONTENT"] = await box.engineConfig(engine: binary, content: shell["OPENCODE_CONFIG_CONTENT"], environment: shell)
             #if DEBUG
             // KUVO_PERF_PROVIDER: the stand-in model a group chat's discussion is measured on (PerfGroups).
             if let perf = PerfGroups.providerConfig { shell["OPENCODE_CONFIG_CONTENT"] = AppModel.merged(perf, into: shell["OPENCODE_CONFIG_CONTENT"]) }
@@ -312,6 +312,9 @@ final class MacBoxRunner {
         environment["KUVO_BOTS"] = Bots.root.path
         environment["KUVO_WAKES"] = WakeUps.root.path
         environment["KUVO_BIN"] = bin
+        // The box's sandbox, which the coding agents run their commands in while it's on, as a
+        // machine's is in `~/.kuvo-code/run/fence`.
+        environment["KUVO_FENCE"] = BoxProcess.run.appending(path: "fence").path
         // This Mac's group chats, in its own folder, as a machine's are in `~/.kuvo-code`: their
         // bots are its bots, what they let go of goes to the box's trash (and on to the Finder's,
         // `kuvo.group.trashed`), and a bot remembers them under the key it always has.

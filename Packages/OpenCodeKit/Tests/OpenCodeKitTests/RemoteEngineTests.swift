@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import OpenCodeKit
 
@@ -241,6 +242,30 @@ struct LiveRemoteEngineTests {
         task.cancel()
         await #expect(throws: CancellationError.self) { try await task.value }
         _ = try await connection.run("pkill -f '\(marker)' || true; rm -f \(file)")
+    }
+
+    /// The engine copied to the machine for the first time says how far: the package to this Mac,
+    /// then each part of it over SSH, to all of it, so a first connection shows real progress.
+    @Test func theEngineCopiedThereSaysHowFar() async throws {
+        let cache = FileManager.default.temporaryDirectory.appending(path: "opencodekit-remote-cache")
+        defer { try? FileManager.default.removeItem(at: cache) }
+        _ = try await connection.run("rm -rf \"$HOME/\(RemoteEngineInstaller.root)/engine\"")
+        let heard = OSAllocatedUnfairLock(initialState: [RemoteEngineInstaller.Progress]())
+        try await RemoteEngineInstaller(connection: connection, cache: cache).install { progress in heard.withLock { $0.append(progress) } }
+        let copies = heard.withLock { $0 }.compactMap { progress -> (sent: Int64, total: Int64)? in
+            if case .copying(let sent, let total) = progress { return (sent, total) }
+            return nil
+        }
+        let total = try #require(copies.first?.total)
+        #expect(total > 10_000_000, "the package's size")
+        #expect(copies.first?.sent == 0)
+        #expect(copies.last?.sent == total, "all of it, by the end")
+        #expect(copies.map(\.sent) == copies.map(\.sent).sorted(), "only ever onward")
+        #expect(copies.count > 2, "parts of it on the way, not only the start and the end")
+        // Installed now: a second time copies nothing.
+        heard.withLock { $0 = [] }
+        try await RemoteEngineInstaller(connection: connection, cache: cache).install { progress in heard.withLock { $0.append(progress) } }
+        #expect(heard.withLock { $0 }.isEmpty)
     }
 
     @Test func runsOnItsOwnAndIsFoundAgain() async throws {

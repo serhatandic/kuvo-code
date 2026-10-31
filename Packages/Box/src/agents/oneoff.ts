@@ -27,6 +27,8 @@ export interface SessionInfo {
   agent?: string
   parentID?: string
   metadata?: Record<string, any>
+  /** Put away: archived, as Kuvo Code archives one (`kuvo.archived` in its metadata) or the engine does. */
+  archived?: boolean
 }
 
 export async function sessionInfo(api: Requester, session: string): Promise<SessionInfo> {
@@ -34,7 +36,7 @@ export async function sessionInfo(api: Requester, session: string): Promise<Sess
   const model = typeof data.model?.providerID === "string" && typeof data.model?.id === "string"
     ? { providerID: data.model.providerID, id: data.model.id, ...(typeof data.model.variant === "string" && data.model.variant !== "default" ? { variant: data.model.variant } : {}) }
     : undefined
-  return { id: session, model, permissions: Array.isArray(data.permissions) ? data.permissions : undefined, directory: data.location?.directory, title: data.title || undefined, agent: data.agent, parentID: data.parentID || undefined, metadata: data.metadata }
+  return { id: session, model, permissions: Array.isArray(data.permissions) ? data.permissions : undefined, directory: data.location?.directory, title: data.title || undefined, agent: data.agent, parentID: data.parentID || undefined, metadata: data.metadata, archived: data.metadata?.["kuvo.archived"] === true || Boolean(data.metadata?.kuvo?.archived) || Boolean(data.time?.archived) }
 }
 
 const text = (answer: any) => String(answer?.data?.text ?? "")

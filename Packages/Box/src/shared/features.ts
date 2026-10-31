@@ -5,10 +5,10 @@
 
 export const FEATURES = [
   "accounts.credentials", "accounts.ended", "accounts.found", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply",
-  "engine.restart", "engine.start", "file", "folders", "git", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys",
+  "engine.restart", "engine.start", "file", "folders", "folders.files", "git", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys",
   "mcp.catalog", "moves", "named", "personalities", "plugins.search", "programs", "providers.models", "personalities.events", "phones", "phones.pair", "projects", "reviews", "reviews.parts", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return",
   "skills", "skills.trash", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where", "bots.events", "bots.job",
-  "agent-tools", "sessions.start", "letters-read", "queue", "work", "work.projects", "vault",
+  "agent-tools", "sessions.start", "letters-read", "queue", "queue.waits", "work", "work.projects", "work.goals", "vault", "sandbox", "sandbox.check", "sandbox.asks",
 ] as const;
 
 /** One of them. */

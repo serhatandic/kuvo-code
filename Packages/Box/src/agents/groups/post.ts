@@ -127,6 +127,8 @@ export interface PeerParts {
 }
 
 export function receive(parts: PeerParts, from: string, mail: SeatMail) {
+  // Anything from it says its computer is there again: its bots here are asked again.
+  parts.directory.existing(from)?.heardFrom(from)
   if (mail.kind === "state" || mail.kind === "result") parts.directory.existing(from)?.take(from, mail)
   else if (mail.kind === "report") parts.runner.reported(from, mail)
   else parts.server.take(from, mail)

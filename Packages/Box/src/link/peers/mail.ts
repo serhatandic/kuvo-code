@@ -4,7 +4,7 @@
 
 import { isObject } from "../../shared/json";
 import { receiveDocs } from "../documents/exchange";
-import { readEngineFile, runningAgentsBridge } from "../engine/client";
+import { readEngineFile } from "../engine/client";
 import { leaveAnswer, letterWent } from "../letters/outbox";
 import { takeLetter } from "../letters/take";
 import { takeMoveMail } from "../moves/move";
@@ -15,7 +15,7 @@ import { announce, toldPeers, writeAgents } from "./agents";
 import { takeAgents } from "./directory";
 import { forgetOldMacs, macsOf, mailFor, openMail, takeLegacyPeers } from "./known";
 import { takeSeat } from "./seats";
-import type { Target } from "../../shared/records";
+import type { PeerPlaces } from "../engine/client";
 import type { DocsMail } from "../documents/work";
 import type { Delivered } from "../letters/outbox";
 import type { LetterSender } from "../letters/take";
@@ -28,7 +28,7 @@ let answeringAsk: Promise<void> | null = null;
 const asksFrom = new Map<string, number>();
 
 // What peers tell each other: their agents, letters, how letters went, and moves (PROTOCOL.md, "Peers").
-export function peerMail(sender: MailSender, payload: Record<string, unknown>, host: LinkHost | null | undefined, targets: () => Target[] = () => []): void {
+export function peerMail(sender: MailSender, payload: Record<string, unknown>, host: LinkHost | null | undefined, places: () => PeerPlaces = () => ({ targets: [], bridge: true })): void {
   const send = (peer: LetterSender, message: { delivered: Delivered }) => {
     const link = readLink();
     const bytes = link && mailFor(peer, { ...message, at: Date.now() }, link);
@@ -50,7 +50,7 @@ export function peerMail(sender: MailSender, payload: Record<string, unknown>, h
       answeringAsk = announce(host, readEngineFile).catch(() => {}).finally(() => { answeringAsk = null; });
     }
   }
-  if (isObject(payload.letter)) takeLetter(sender, payload.letter, { send, targets: targets(), answer: leaveAnswer, moving: async session => frozen().has(session), bridgeDown: !runningAgentsBridge() }).catch(() => {});
+  if (isObject(payload.letter)) takeLetter(sender, payload.letter, { send, ...places(), answer: leaveAnswer, moving: async session => frozen().has(session) }).catch(() => {});
   // A move between this box and that one (PROTOCOL.md, `kuvo/moves`).
   if (isObject(payload.move)) takeMoveMail(sender, payload.move).catch(() => {});
   // Group chats across your computers: to the coding agents' bridge here.

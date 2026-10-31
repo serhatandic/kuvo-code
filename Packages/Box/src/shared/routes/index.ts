@@ -15,6 +15,7 @@ import { MISC_ROUTES } from "./misc";
 import { MOVE_ROUTES } from "./moves";
 import { PERSONALITY_ROUTES } from "./personalities";
 import { PROJECT_ROUTES } from "./projects";
+import { SANDBOX_ROUTES } from "./sandbox";
 import { SESSION_ROUTES } from "./sessions";
 import { SETTINGS_ROUTES } from "./settings";
 import { SKILL_ROUTES } from "./skills";
@@ -45,6 +46,7 @@ export const ROUTES: RouteShape[] = [
   ...MISC_ROUTES,
   ...PERSONALITY_ROUTES,
   ...PROJECT_ROUTES,
+  ...SANDBOX_ROUTES,
   ...SESSION_ROUTES,
   ...SETTINGS_ROUTES,
   ...SKILL_ROUTES,

@@ -12,10 +12,16 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { sshAgentsOf } from "./bot-keys-scenarios.js";
 
 // (Short: the vault's socket is in it.)
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kvt-")));
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+// (Once the box and the tool have stopped: they write in its folder until they have.)
+after(async () => {
+  await Promise.all([box, mcp].map(child => child && child.exitCode === null && child.signalCode === null ? new Promise(done => { child.once("exit", done); child.kill(); }) : null));
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(sshAgentsOf(home), { recursive: true, force: true });
+});
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
@@ -30,16 +36,27 @@ const TOKEN = "glpat-very-secret-token-0001";
 
 // The engine: a bot's conversation, in its folder, and the tool call it's making now (the box
 // answers a vault call only as one its conversation makes: vault/who.ts).
-let calling = [];
+// Also its seat in a group chat, a conversation of its own the chat marks as the bot's; and a
+// subagent whose parent the engine can't say just then.
+const conversations = {
+  ses_ship: { id: "ses_ship", title: "Ship", location: { directory: home } },
+  ses_seat: { id: "ses_seat", title: "Release chat", location: { directory: home }, metadata: { kuvo: { seat: { group: "grp_release", bot: "bot_ship" } } } },
+  ses_sub: { id: "ses_sub", parentID: "ses_lost", title: "A subagent", location: { directory: home } },
+};
+const calling = {};
 let calls = 0;
 const engine = http.createServer((request, response) => {
-  if (/^\/api\/session\/ses_ship\/message/.test(request.url)) {
+  const id = decodeURIComponent((request.url.match(/^\/api\/session\/([^/?]+)/) ?? [])[1] ?? "");
+  if (/^\/api\/session\/[^/?]+\/message/.test(request.url) && conversations[id]) {
     response.writeHead(200, { "content-type": "application/json" });
-    return response.end(JSON.stringify({ data: [{ type: "assistant", content: calling }] }));
+    return response.end(JSON.stringify({ data: [{ type: "assistant", content: calling[id] ?? [] }] }));
   }
-  const found = request.url.match(/^\/api\/session\/(ses_ship)$/);
-  response.writeHead(found ? 200 : 404, { "content-type": "application/json" });
-  response.end(JSON.stringify(found ? { data: { id: "ses_ship", title: "Ship", location: { directory: home } } } : { message: "No such session." }));
+  if (id === "ses_lost") {
+    response.writeHead(500, { "content-type": "application/json" });
+    return response.end(JSON.stringify({ message: "The engine is busy." }));
+  }
+  response.writeHead(conversations[id] ? 200 : 404, { "content-type": "application/json" });
+  response.end(JSON.stringify(conversations[id] ? { data: conversations[id] } : { message: "No such session." }));
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
 after(() => { engine.closeAllConnections(); engine.close(); });
@@ -50,6 +67,8 @@ write(path.join(home, "bots", "bot_ship", "session"), "ses_ship");
 // The box's own process, which holds the vault, and a client of it (as this Mac's app reaches its own).
 let box;
 let client;
+/** A request from something on this machine (the browser's fill), without a client's key. */
+let local;
 before(async () => {
   box = spawn(process.execPath, [script, "serve"], { env: { ...env, OPENCODE_PASSWORD: "box-pw" }, stdio: ["pipe", "pipe", "ignore"] });
   let out = "";
@@ -60,12 +79,16 @@ before(async () => {
     const response = await fetch(`${url}/${route}`, { method, headers: { authorization: `Basic ${Buffer.from("opencode:box-pw").toString("base64")}`, "content-type": "application/json", "x-kuvo-from": "app" }, body: body ? JSON.stringify(body) : undefined });
     return { status: response.status, value: await response.json().catch(() => ({})) };
   };
+  local = async (method, route, body) => {
+    const response = await fetch(`${url}/${route}`, { method, headers: { authorization: `Basic ${Buffer.from("opencode:box-pw").toString("base64")}`, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+    return { status: response.status, value: await response.json().catch(() => ({})) };
+  };
+  asksURL = `${url}/kuvo/vault/asks/events`;
 });
-after(() => box?.kill());
+let asksURL;
 
 // The tool, as the engine starts it, and its calls, as the engine makes them.
 const mcp = spawn(process.execPath, [tool, "mcp"], { env, stdio: ["pipe", "pipe", "ignore"] });
-after(() => mcp.kill());
 const answers = new Map();
 let buffer = "";
 mcp.stdout.on("data", chunk => {
@@ -85,10 +108,32 @@ function ask(method, params) {
     mcp.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
   });
 }
-const call = (name, args) => {
-  calling = [{ type: "tool", id: `call_${++calls}`, name: `kuvo-browser_${name}`, state: { status: "running", input: args ?? {} } }];
-  return ask("tools/call", { name, arguments: args, _meta: { "ai.opencode/sessionID": "ses_ship" } });
+const running = (session, name, input) => { calling[session] = [{ type: "tool", id: `call_${++calls}`, name: `kuvo-browser_${name}`, state: { status: "running", input: input ?? {} } }]; };
+const call = (name, args, session = "ses_ship") => {
+  running(session, name, args);
+  return ask("tools/call", { name, arguments: args, _meta: { "ai.opencode/sessionID": session } });
 };
+/** What the box asks you, once it asks something new (its asks as a client follows them). */
+async function asked(seen = new Set()) {
+  const stop = new AbortController();
+  const response = await fetch(asksURL, { headers: { authorization: `Basic ${Buffer.from("opencode:box-pw").toString("base64")}`, "x-kuvo-from": "app" }, signal: stop.signal });
+  let buffer = "";
+  for await (const chunk of response.body.pipeThrough(new TextDecoderStream())) {
+    buffer += chunk;
+    let end;
+    while ((end = buffer.indexOf("\n")) >= 0) {
+      const { asks } = JSON.parse(buffer.slice(0, end));
+      buffer = buffer.slice(end + 1);
+      if (asks?.some(each => !seen.has(each.id))) {
+        stop.abort();
+        return asks.filter(each => !seen.has(each.id));
+      }
+    }
+  }
+  throw new Error("The box stopped telling its asks.");
+}
+/** `asked`, or a failure if `running` ends first (it ran, or gave up, without asking). */
+const askedBefore = (running, seen) => Promise.race([asked(seen), running.then(ran => assert.fail(`It didn't ask: ${ran.content?.[0]?.text ?? JSON.stringify(ran)}`))]);
 
 test("an agent on a machine lists the vault's tools, in its box's words", async () => {
   const { tools } = await ask("tools/list", {});
@@ -109,4 +154,75 @@ test("its bot uses what it's granted, through its box, and never sees a value", 
   assert.ok(!JSON.stringify(ran).includes(TOKEN));
   const activity = (await client("GET", "kuvo/vault/activity")).value.entries;
   assert.ok(activity.some(entry => entry.what === "used" && entry.botName === "Ship" && entry.program === "echo"));
+});
+
+test("its seat in a group chat asks you each time, whatever it may use on its own, and never for good", async () => {
+  const deploy = (await client("POST", "kuvo/vault/items", { kind: "key", name: "Deploy key", sites: [], values: { token: "deploy-secret-0002" } })).value.item;
+  assert.equal((await client("POST", "kuvo/vault/grants", { item: deploy.id, who: { everyone: true }, how: "own" })).status, 200);
+  const release = (await client("POST", "kuvo/vault/items", { kind: "key", name: "Release token", sites: [], values: { token: "release-secret-0003" } })).value.item;
+  assert.equal((await client("POST", "kuvo/vault/grants", { item: release.id, who: { bot: "bot_ship" }, how: "own" })).status, 200);
+  const grants = (await client("GET", "kuvo/vault")).value.grants.length;
+  const listed = (await call("vault_items", {}, "ses_seat")).content[0].text;
+  assert.match(listed, /“Release token”: a key; the user is asked each time/);
+  assert.match(listed, /“Deploy key”: a key; the user is asked each time/);
+  const running = call("vault_run", { command: "echo \"using $T\"", variables: { T: "Deploy key" }, why: "To deploy." }, "ses_seat");
+  const [card] = await askedBefore(running);
+  assert.equal(card.kind, "use");
+  assert.equal(card.botName, "Ship");
+  assert.equal(card.session, "ses_seat");
+  assert.equal(card.group, "grp_release");
+  // An Always (from a client that doesn't know) is this once.
+  assert.equal((await client("POST", `kuvo/vault/asks/${card.id}`, { answer: "always" })).status, 200);
+  const ran = await running;
+  assert.equal(ran.isError, false, ran.content[0].text);
+  assert.match(ran.content[0].text, /using \[vault: Deploy key\]/);
+  assert.equal((await client("GET", "kuvo/vault")).value.grants.length, grants);
+  const again = call("vault_run", { command: "echo again", variables: { T: "Release token" }, why: "Once more." }, "ses_seat");
+  const [next] = await askedBefore(again, new Set([card.id]));
+  assert.equal(next.group, "grp_release");
+  assert.equal((await client("POST", `kuvo/vault/asks/${next.id}`, { answer: "no" })).status, 200);
+  assert.match((await again).content[0].text, /didn't let you use “Release token”/);
+});
+
+test("what its seat asks you for is given once, even given for good", async () => {
+  const notes = (await client("POST", "kuvo/vault/items", { kind: "note", name: "Release notes key", values: { text: "notes-secret-0005" } })).value.item;
+  const grants = (await client("GET", "kuvo/vault")).value.grants.length;
+  const asking = call("vault_ask", { need: "The release notes key", why: "To publish them." }, "ses_seat");
+  const [card] = await askedBefore(asking);
+  assert.equal(card.kind, "item");
+  assert.equal(card.group, "grp_release");
+  assert.equal((await client("POST", `kuvo/vault/asks/${card.id}`, { answer: "always", item: notes.id })).status, 200);
+  assert.equal((await asking).isError, false);
+  assert.equal((await client("GET", "kuvo/vault")).value.grants.length, grants, "no grant: a seat's is once");
+  // Its next use goes ahead, as given once; the one after asks again.
+  const used = await call("vault_run", { command: "echo \"using $T\"", variables: { T: "Release notes key" }, why: "To publish them." }, "ses_seat");
+  assert.equal(used.isError, false, used.content[0].text);
+  const again = call("vault_run", { command: "echo again", variables: { T: "Release notes key" }, why: "Once more." }, "ses_seat");
+  const [next] = await askedBefore(again, new Set([card.id]));
+  assert.equal((await client("POST", `kuvo/vault/asks/${next.id}`, { answer: "no" })).status, 200);
+  assert.match((await again).content[0].text, /didn't let you use “Release notes key”/);
+});
+
+test("its seat signs in with a sign-in it could use on its own only once you say so, in the chat", async () => {
+  const login = (await client("POST", "kuvo/vault/items", { kind: "login", name: "Staging", sites: ["staging.example.com"], username: "ship", values: { password: "staging-pw-0004" } })).value.item;
+  assert.equal((await client("POST", "kuvo/vault/grants", { item: login.id, who: { everyone: true }, how: "own" })).status, 200);
+  running("ses_seat", "browser_sign_in");
+  const filling = local("POST", "kuvo/vault/fill", { session: "ses_seat", origin: "https://staging.example.com", purpose: "sign-in" });
+  const [card] = await Promise.race([asked(), filling.then(filled => assert.fail(`It didn't ask: ${filled.status} ${JSON.stringify(filled.value)}`))]);
+  assert.equal(card.group, "grp_release");
+  assert.equal(card.itemName, "Staging");
+  assert.equal((await client("POST", `kuvo/vault/asks/${card.id}`, { answer: "once" })).status, 200);
+  const filled = await filling;
+  assert.equal(filled.status, 200, JSON.stringify(filled.value));
+  assert.equal(filled.value.values.password, "staging-pw-0004");
+});
+
+test("a conversation whose root the engine can't say just then asks you, whatever everyone may use", async () => {
+  // (“Deploy key”: everyone's to use on their own, from the test before.)
+  const running = call("vault_run", { command: "echo \"using $T\"", variables: { T: "Deploy key" }, why: "To deploy." }, "ses_sub");
+  const [card] = await askedBefore(running);
+  assert.equal(card.itemName, "Deploy key");
+  assert.equal(card.group, undefined);
+  assert.equal((await client("POST", `kuvo/vault/asks/${card.id}`, { answer: "no" })).status, 200);
+  assert.match((await running).content[0].text, /didn't let you use “Deploy key”/);
 });

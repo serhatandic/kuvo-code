@@ -663,6 +663,26 @@ test("kuvo/info names the Mac that runs the engine, so another Mac or a phone ca
   assert.equal((await answer(link.engineHandler(() => { throw new Error("none"); }), "GET", "kuvo/info")).json.home, undefined);
 });
 
+test("kuvo/info lists the Macs that use the machine, by name, and how many phones reach it: who an uninstall would stop it for", async () => {
+  const [air, studio, phone, other] = ["Air", "Studio", "Phone", "Other"].map(shaped);
+  link.writeLink({ secret: "s", key: "k", relay: "wss://relay.test", mac: studio, macs: [air, studio], macNames: { [air]: "MacBook Air", [studio]: "Studio" }, macSeen: { [air]: 1000, [studio]: 2000 },
+    phones: [{ key: phone, name: "iPhone", from: "pair", added: 1 }, { key: phone, name: "iPhone", from: "mac", mac: air, added: 1 }, { key: other, name: "iPad", from: "mac", mac: studio, added: 1 }] });
+  try {
+    const info = (await answer(link.engineHandler(() => { throw new Error("none"); }), "GET", "kuvo/info")).json;
+    assert.deepEqual(info.macs, [{ key: air, name: "MacBook Air", seen: 1000 }, { key: studio, name: "Studio", seen: 2000 }]);
+    assert.equal(info.phones, 2, "each phone once");
+    // A Mac that removed it no longer counts, nor does its name stay.
+    const kept = link.readLink();
+    link.leaveMac(kept, studio);
+    link.writeLink(kept);
+    const after = (await answer(link.engineHandler(() => { throw new Error("none"); }), "GET", "kuvo/info")).json;
+    assert.deepEqual(after.macs, [{ key: air, name: "MacBook Air", seen: 1000 }]);
+    assert.equal(link.readLink().macNames[studio], undefined);
+  } finally {
+    for (const file of ["link.json", "link.needed"]) fs.rmSync(path.join(home, "run", file), { force: true });
+  }
+});
+
 test("plan accounts: listed, signed in to and switched from a phone", async t => {
   const engine = await fakeEngine();
   t.after(engine.close);
@@ -896,8 +916,10 @@ test("setup keeps the machine's keys and its own phones, takes the Mac's documen
   const linkFile = path.join(folder, "run", "link.json");
   try {
     // A relay nobody listens on: the bridge keeps trying, which is all this needs.
-    const first = setup({ docs: [phones([A])] });
+    const first = setup({ docs: [phones([A])], macName: "MacBook Air" });
     assert.match(first.address, /^[A-Za-z0-9_-]{22}$/);
+    // The Mac's name kept with it, to say who else uses this machine.
+    assert.deepEqual(JSON.parse(fs.readFileSync(linkFile, "utf8")).macNames, { [MAC]: "MacBook Air" });
     assert.match(first.sign, /^[A-Za-z0-9_-]{43}$/, "its signing key, for the Mac to name it by");
     // Its own documents, signed with that key: its phones, and its view of your personalities.
     const own = first.docs.map(link.readDoc).filter(doc => doc?.origin === first.sign);
@@ -1117,10 +1139,13 @@ test("a Mac's phones document, by mail, counts from the Macs that set the machin
   await give(other, link.signDoc(seeds.other, "phones", 1, { phones: [{ key: k(others), name: "Other iPhone", pairing: "" }], removed: [] }));
   assert.deepEqual(names(), ["mac:New iPhone", "mac:Other iPhone", "pair:Paired here"]);
 
-  // A Mac not heard from in 30 days no longer counts: its phones go, not for good.
+  // A Mac not heard from in 30 days, the machine's box running all that time, no longer counts:
+  // its phones go, not for good.
   const later = link.readLink();
   link.forgetOldMacs(later, otherKey);
-  link.forgetOldMacs(later, macKey, Date.now() + 31 * 24 * 3600 * 1000);
+  const month = Date.now() + 31 * 24 * 3600 * 1000;
+  for (let at = Date.now(); at < month; at += 4 * 60_000) link.noteOnline(at);
+  link.forgetOldMacs(later, macKey, month);
   link.foldPhones(later);
   assert.deepEqual(later.phones.map(phone => phone.name), ["New iPhone", "Paired here"]);
   assert.deepEqual(link.macsOf(later), [macKey]);
@@ -1220,13 +1245,13 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     personalities: ["GET", "kuvo/personalities"], "personalities.events": ["POST", "kuvo/personalities/events"], phones: ["GET", "kuvo/phones"], "phones.pair": ["DELETE", "kuvo/phones/pair"], projects: ["GET", "kuvo/projects"],
     "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"], "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
     "sign-in.return": ["GET", "kuvo/sign-in/return"], skills: ["GET", "kuvo/skills"], "skills.trash": ["GET", "kuvo/skill-trash"], update: ["GET", "kuvo/update"], wakes: ["GET", "kuvo/wakes"],
-    "wakes.edit": ["POST", "kuvo/wakes/ses_none/pause"], "wakes.events": ["POST", "kuvo/wakes/events"], worktrees: ["GET", "kuvo/worktrees"], "worktrees.events": ["POST", "kuvo/worktrees/events"], "worktrees.where": ["POST", "kuvo/worktrees/where"], folders: ["DELETE", "kuvo/folders"], "plugins.search": ["POST", "kuvo/plugins/search"], programs: ["POST", "kuvo/programs"], "providers.models": ["GET", "kuvo/providers/models"],
+    "wakes.edit": ["POST", "kuvo/wakes/ses_none/pause"], "wakes.events": ["POST", "kuvo/wakes/events"], worktrees: ["GET", "kuvo/worktrees"], "worktrees.events": ["POST", "kuvo/worktrees/events"], "worktrees.where": ["POST", "kuvo/worktrees/where"], folders: ["DELETE", "kuvo/folders"], "folders.files": ["GET", "kuvo/folders?files=1"], "plugins.search": ["POST", "kuvo/plugins/search"], programs: ["POST", "kuvo/programs"], "providers.models": ["GET", "kuvo/providers/models"],
     // What a side question's and a review's routes take besides, on the coding agents' bridge.
     "btw.threads": ["GET", "kuvo/agents/api/kuvo/btw"], "reviews.scopes": ["GET", "kuvo/agents/api/kuvo/reviews"],
     "agent-tools": ["POST", "kuvo/agent-tools"], "sessions.start": ["POST", "kuvo/sessions"],
     // What its agents' mail says it takes (a letter that reads a conversation), on the agents' tools.
-    "letters-read": ["POST", "kuvo/agent-tools"], queue: ["GET", "kuvo/sessions/ses_none/queue"], work: ["GET", "kuvo/work"], "work.projects": ["GET", "kuvo/work/settings"],
-    vault: ["GET", "kuvo/vault/tools"],
+    "letters-read": ["POST", "kuvo/agent-tools"], queue: ["GET", "kuvo/sessions/ses_none/queue"], "queue.waits": ["POST", "kuvo/sessions/ses_none/queue/add"], work: ["GET", "kuvo/work"], "work.projects": ["GET", "kuvo/work/settings"], "work.goals": ["GET", "kuvo/work/goals"],
+    vault: ["GET", "kuvo/vault/tools"], sandbox: ["GET", "kuvo/sandbox"], "sandbox.check": ["POST", "kuvo/sandbox/check"], "sandbox.asks": ["GET", "kuvo/sandbox/allowed"],
   };
   const named = (await answer(handle, "GET", "kuvo/info")).json.features;
   assert.deepEqual([...named].sort(), Object.keys(routes).sort(), "every name has a route here, and every route here its name");

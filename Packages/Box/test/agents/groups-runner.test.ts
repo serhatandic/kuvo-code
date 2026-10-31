@@ -218,6 +218,21 @@ describe("a group chat on a machine", () => {
     expect(asked.body.text).toStartWith(`You're not in "Team", but the user named you there with &Carl`)
   }, 15_000)
 
+  test("a guest you name while the lead wraps up still answers", async () => {
+    const { groups } = runner()
+    bot("bot_carl", "Carl")
+    engine.lines = { Ada: ["A.", "C.", "Wrapped.", "PASS", "NONE"], Ben: ["B.", "PASS", "PASS"], Carl: ["Carl here."] }
+    engine.heldPrompts.add("Wrap up this discussion now")
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Should we ship?")
+    await until(() => engine.prompts().some((request) => String(request.body.text).includes("Wrap up this discussion now")))
+    groups.send("grp_team000001", "&Carl, thoughts?")
+    engine.release("Wrap up this discussion now")
+    const said = () => groups.get("grp_team000001")!.messages.map((message) => message.text)
+    await until(() => said().includes("Carl here.") && !groups.talk("grp_team000001").discussing)
+    expect(said().indexOf("Carl here.")).toBeGreaterThan(said().indexOf("Wrapped."))
+  })
+
   test("a seat grown well past the chat starts over at the bot's next turn, given the whole chat", async () => {
     const { groups } = runner()
     // Her seat grown by 35,000 from its first turn, at its second (each discussion's work list,
@@ -291,6 +306,41 @@ describe("a group chat on a machine", () => {
     await until(() => said() > 6 && !groups.talk("grp_team000001").discussing, 8000)
   }, 20_000)
 
+  test("a debate paused at its limit that you answer with a message rather than Keep Going is summed up once, at its end", async () => {
+    const { groups } = runner()
+    engine.lines = { Ada: ["Ada 0", "Ada 1", "Ada 2", "Ada 3"], Ben: ["Ben 0", "Ben 1", "Ben 2"] }
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Debate it.")
+    await until(() => groups.talk("grp_team000001").paused && !groups.talk("grp_team000001").discussing, 8000)
+    const wrapUps = () => groups.get("grp_team000001")!.messages.filter((message) => message.kind === "wrapUp").length
+    groups.send("grp_team000001", "One more round.")
+    await until(() => !groups.talk("grp_team000001").discussing && groups.get("grp_team000001")!.messages.some((message) => message.text === "Ada 3"), 8000)
+    expect(wrapUps()).toBe(1)
+  }, 20_000)
+
+  test("a meeting that reaches its limit while you're away is still summed up", async () => {
+    const { groups } = runner()
+    engine.lines = { Ada: ["Ada 0", "Ada 1", "Ada 2", "Ada 3"], Ben: ["Ben 0", "Ben 1", "Ben 2"] }
+    groups.put(group({ next: stamp(new Date(Date.now() - 1000)), topic: "Standup: what's new?" }), [], "active", false)
+    groups.meetDue()
+    await until(() => groups.talk("grp_team000001").paused && !groups.talk("grp_team000001").discussing, 8000)
+    expect(groups.get("grp_team000001")!.messages.filter((message) => message.kind === "wrapUp")).toHaveLength(1)
+  }, 20_000)
+
+  test("a debate paused at its limit isn't wrapped up yet: the lead sums it up once, at its real end", async () => {
+    const { groups } = runner()
+    engine.lines = { Ada: ["Ada 0", "Ada 1", "Ada 2", "Ada 3"], Ben: ["Ben 0", "Ben 1", "Ben 2"] }
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Debate it.")
+    await until(() => groups.talk("grp_team000001").paused && !groups.talk("grp_team000001").discussing, 8000)
+    const wrapUps = () => groups.get("grp_team000001")!.messages.filter((message) => message.kind === "wrapUp").length
+    expect(wrapUps()).toBe(0)
+    groups.keepGoing("grp_team000001")
+    await until(() => !groups.talk("grp_team000001").paused && !groups.talk("grp_team000001").discussing && wrapUps() > 0, 8000)
+    expect(groups.get("grp_team000001")!.messages.some((message) => message.text === "Ada 3")).toBe(true)
+    expect(wrapUps()).toBe(1)
+  }, 20_000)
+
   test("undo from your message", async () => {
     const { groups } = runner()
     engine.lines = { Ada: ["First thought."], Ben: [] }
@@ -315,6 +365,28 @@ describe("a group chat on a machine", () => {
     await Bun.sleep(700)
     expect(groups.get("grp_team000001")!.messages.map((message) => message.author ?? "you")).toEqual(["you"])
     expect(engine.requests.some((request) => request.path.endsWith("/interrupt"))).toBe(true)
+  })
+
+  test("stopped as a bot's first seat is made, then written to again: the stopped turn's seat goes, and the bot keeps its next turn's", async () => {
+    const { groups } = runner()
+    engine.lines = { Ada: ["Hello again."], Ben: [] }
+    engine.holdMaking = true
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Go")
+    await until(() => engine.waitingToMake === 1)
+    groups.stop("grp_team000001")
+    groups.send("grp_team000001", "Go, really")
+    await until(() => engine.waitingToMake === 2)
+    engine.letMake()
+    await until(() => groups.get("grp_team000001")!.messages.some((message) => message.text === "Hello again.") && !groups.talk("grp_team000001").discussing)
+    const kept = groups.get("grp_team000001")!.group.seats.bot_ada
+    const made = engine.requests.filter((request) => request.method === "POST" && request.path === "/api/session" && request.body.title === "Ada in Team").length
+    const dropped = engine.requests.filter((request) => request.method === "DELETE" && request.path.startsWith("/api/session/ses_seat")).map((request) => request.path.split("/").pop())
+    expect(made).toBe(2)
+    expect(dropped).toHaveLength(1)
+    expect(dropped).not.toContain(kept)
+    // The seat kept is the one that heard the chat: its prompt went there.
+    expect(engine.prompts(kept).length).toBeGreaterThan(0)
   })
 
   test("a bot taken out of the chat as it speaks: the chat goes on without it", async () => {
@@ -452,6 +524,138 @@ describe("a group chat on a machine", () => {
     store.saveGroup({ group: group(), status: "active", talking: true, messages: [] })
     const { groups } = runner()
     expect(groups.talk("grp_team000001")).toEqual({ speaking: undefined, discussing: false, paused: true })
+  })
+
+  test("a debate paused at its limit still waits for Keep Going after the engine started over", async () => {
+    const { groups } = runner()
+    engine.lines = { Ada: Array.from({ length: 8 }, (_, index) => `Ada ${index}`), Ben: Array.from({ length: 8 }, (_, index) => `Ben ${index}`) }
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Debate it.")
+    await until(() => groups.talk("grp_team000001").paused && !groups.talk("grp_team000001").discussing, 8000)
+    const { groups: again } = runner()
+    expect(again.talk("grp_team000001").paused).toBe(true)
+    const said = () => again.get("grp_team000001")!.messages.filter((message) => message.author && message.kind === "message").length
+    again.keepGoing("grp_team000001")
+    await until(() => said() > 6 && !again.talk("grp_team000001").discussing, 8000)
+    // Stopped: not paused at the next start.
+    again.stop("grp_team000001")
+    expect(runner().groups.talk("grp_team000001").paused).toBe(false)
+  }, 20_000)
+
+  test("written to just as a bot ends its turn: what you said doesn't wait unanswered in its seat, its turn goes on to answer it", async () => {
+    const { groups } = runner()
+    engine.lines = { Ada: ["First.", "Yes, the docs too."], Ben: [] }
+    engine.held.add("Ada")
+    engine.lateSteers.add("Ada")
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Go")
+    await until(() => engine.prompts().length === 1)
+    groups.send("grp_team000001", "And the docs?")
+    await until(() => engine.prompts().some((request) => request.body.delivery === "steer"))
+    engine.release("Ada")
+    const said = () => groups.get("grp_team000001")!.messages.filter((message) => message.author === "bot_ada").map((message) => message.text)
+    await until(() => said().length > 0 && !groups.talk("grp_team000001").discussing)
+    expect(said()).toEqual(["First.\n\nYes, the docs too."])
+    // What you wrote went to it again, as its turn went on, and once.
+    const seat = groups.get("grp_team000001")!.group.seats.bot_ada
+    expect(engine.prompts(seat).filter((request) => String(request.body.text).includes("And the docs?")).map((request) => request.body.delivery)).toEqual(["steer", "queue"])
+  })
+
+  test("written to as a bot ends its turn, the message still on its way as the turn picks it up: it's answered, and not told it again at its next turn", async () => {
+    const { groups } = runner()
+    engine.lines = { Ada: ["First.", "Yes, the docs too."], Ben: ["Agreed."] }
+    engine.held.add("Ada")
+    engine.held.add("Ben")
+    engine.lateSteers.add("Ada")
+    engine.holdSteers = true
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Go")
+    await until(() => engine.prompts().length === 1)
+    const docs = groups.send("grp_team000001", "And the docs?")!
+    await until(() => engine.prompts().some((request) => request.body.delivery === "steer"))
+    // Its run ends with the message in its inbox, its sending not answered yet: the turn sends it again.
+    engine.release("Ada")
+    const said = () => groups.get("grp_team000001")!.messages.filter((message) => message.author === "bot_ada").map((message) => message.text)
+    await until(() => said().length > 0)
+    expect(said()).toEqual(["First.\n\nYes, the docs too."])
+    // Its sending answered at last: Ada has heard it.
+    engine.letSteers()
+    const seat = groups.get("grp_team000001")!.group.seats.bot_ada
+    const takenBack = () => engine.requests.filter((request) => request.method === "DELETE" && request.path.startsWith(`/api/session/${seat}/inbox`)).length
+    const heard = () => groups.get("grp_team000001")!.group.heard.bot_ada === docs.id
+    await until(() => heard() || takenBack() > 1)
+    expect(heard()).toBe(true)
+    engine.release("Ben")
+  })
+
+  test("a bot answering as the bridge started over: its answer still reaches the chat, once, and the chat waits for Keep Going", async () => {
+    // The bridge that goes: from then on, nothing it asks of the engine comes back.
+    let gone = false
+    const engineOf = server(engine.url, "x")
+    const { groups } = runner({ engine: { request: (...args: Parameters<typeof engineOf.request>) => (gone ? new Promise<never>(() => {}) : engineOf.request(...args)) } })
+    engine.lines = { Ada: ["Here it is."], Ben: [] }
+    engine.held.add("Ada")
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Go")
+    await until(() => engine.prompts().length === 1)
+    gone = true
+    const { groups: again } = runner()
+    again.start()
+    expect(again.talk("grp_team000001").paused).toBe(true)
+    engine.release("Ada")
+    const answers = () => again.get("grp_team000001")!.messages.filter((message) => message.author === "bot_ada" && message.text === "Here it is.")
+    await until(() => answers().length === 1)
+    // Followed, not asked again.
+    expect(engine.prompts()).toHaveLength(1)
+    expect(again.talk("grp_team000001").paused).toBe(true)
+  })
+
+  test("a bot whose answer was cut off as the bridge started over: what it had half said isn't put in the chat as its answer, and the chat says so", async () => {
+    let gone = false
+    const engineOf = server(engine.url, "x")
+    const { groups } = runner({ engine: { request: (...args: Parameters<typeof engineOf.request>) => (gone ? new Promise<never>(() => {}) : engineOf.request(...args)) } })
+    engine.lines = { Ada: ["Here it"], Ben: [] }
+    engine.held.add("Ada")
+    engine.cutShort.add("Ada")
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Go")
+    await until(() => engine.prompts().length === 1)
+    gone = true
+    const { groups: again } = runner()
+    again.start()
+    engine.release("Ada")
+    const notes = () => again.get("grp_team000001")!.messages.filter((message) => message.kind === "note")
+    const ada = () => again.get("grp_team000001")!.messages.filter((message) => message.author === "bot_ada")
+    await until(() => notes().length > 0 || ada().length > 0)
+    expect(ada()).toEqual([])
+    expect(notes()[0].text).toContain("cut off")
+    expect(again.talk("grp_team000001").paused).toBe(true)
+  })
+
+  test("Keep Going while a bot's answer from before the bridge started over is still coming: it isn't asked again, and its answer is in the chat once", async () => {
+    let gone = false
+    const engineOf = server(engine.url, "x")
+    const { groups } = runner({ engine: { request: (...args: Parameters<typeof engineOf.request>) => (gone ? new Promise<never>(() => {}) : engineOf.request(...args)) } })
+    engine.lines = { Ada: ["Here it is.", "Second."], Ben: [] }
+    engine.held.add("Ada")
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Go")
+    await until(() => engine.prompts().length === 1)
+    const seat = engine.prompts()[0].path
+    gone = true
+    const { groups: again } = runner()
+    again.start()
+    again.keepGoing("grp_team000001")
+    // Ada is the one talking still.
+    expect(again.talk("grp_team000001").speaking).toBe("bot_ada")
+    engine.release("Ada")
+    const ada = () => again.get("grp_team000001")!.messages.filter((message) => message.author === "bot_ada").map((message) => message.text)
+    await until(() => !again.talk("grp_team000001").discussing && ada().length > 0)
+    expect(ada().filter((text) => text.includes("Here it is."))).toEqual(["Here it is."])
+    // Its seat was given "Go" once, and asked next only after it answered.
+    const asked = engine.prompts().filter((prompt) => prompt.path === seat)
+    expect(String(asked[0].body.text)).toContain("Go")
+    expect(asked.slice(1).every((prompt) => !String(prompt.body.text).includes("User: Go"))).toBe(true)
   })
 
   test("let go of (moved away), its seats stay; deleted, they go", async () => {

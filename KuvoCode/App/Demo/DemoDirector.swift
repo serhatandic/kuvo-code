@@ -235,7 +235,7 @@ enum DemoDirector {
 
     /// KUVO_DEMO_PANEL: tools to open in the panel, comma-separated: terminal, browser=<address>,
     /// machine=<machine>[=<address>] (a tab in its browser, with a session there in view), files,
-    /// file=<path>, changes, run (the project's run command), expand, toggle=<seconds>.
+    /// file=<path>, folder=<path>, changes, run (the project's run command), expand, toggle=<seconds>.
     private static func openPanelTools(_ list: String, app: AppModel, window: DemoWindow) {
         let utilities = app.utilities
         for item in list.split(separator: ",").map(String.init) {
@@ -262,6 +262,12 @@ enum DemoDirector {
                 Task {
                     await DemoWait.pause(.conversationShows)
                     utilities.show(RemoteFolder.url(parts[1]))
+                }
+            case "folder" where parts.count > 1:
+                // Files, open down to that folder, as an agent's show_in_panel opens it.
+                Task {
+                    await DemoWait.pause(.conversationShows)
+                    utilities.show(RemoteFolder.url(parts[1]), isFolder: true)
                 }
             case "changes": utilities.showChanges()
             case "run": window.runProject()
@@ -445,13 +451,19 @@ enum DemoDirector {
             }
             // KUVO_DEMO_WAITING=<text>|<text>…: those as messages waiting in its queue (not sent);
             // a text of "<words>@<picture path>" has that picture attached.
-            if let waiting = environment["KUVO_DEMO_WAITING"] {
+            // KUVO_DEMO_WAITING_FROM=<from>|<from>…: after them, these as what came while it was
+            // stopped, waiting on its box (paused), each "<sender>:<words>" (no sender: yours).
+            if environment["KUVO_DEMO_WAITING"] != nil || environment["KUVO_DEMO_WAITING_FROM"] != nil {
+                let waiting = environment["KUVO_DEMO_WAITING"] ?? "", fromOthers = environment["KUVO_DEMO_WAITING_FROM"] ?? ""
                 Task {
                     guard await DemoWait.until("\(id) to load (KUVO_DEMO_WAITING)", limit: .seconds(30), { workspace.model(for: id)?.isLoaded == true }), let model = workspace.model(for: id) else { return }
                     model.showWaiting(waiting.split(separator: "|").enumerated().map { index, entry in
                         let parts = entry.split(separator: "@", maxSplits: 1).map(String.init)
                         return Transcript.Pending(id: "msg_demo_waiting_\(index)", text: parts[0], delivery: .queue, isLocal: false,
                                                   files: parts.count > 1 ? [URL(filePath: parts[1])] : [])
+                    }, onBox: fromOthers.split(separator: "|").enumerated().map { index, entry in
+                        let parts = entry.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+                        return SessionModel.BoxQueue.Waiting(id: "msg_demo_box_\(index)", from: parts.count > 1 && !parts[0].isEmpty ? parts[0] : nil, text: parts.last ?? "")
                     })
                 }
             }
@@ -566,7 +578,8 @@ enum DemoDirector {
         }
         // KUVO_DEMO_GOAL: `met` or `working`, a sample goal over the composer, once the first turn
         // ended (no model checks it).
-        if let kind = environment["KUVO_DEMO_GOAL"], let model = workspace.model(for: session.id) {
+        // (`<bot's name>:<kind>` is a bot's goal and its plan: `GoalPlans.demo(for:)`.)
+        if let kind = environment["KUVO_DEMO_GOAL"], !kind.contains(":"), let model = workspace.model(for: session.id) {
             await DemoWait.until("its turn to end (KUVO_DEMO_GOAL)", limit: .seconds(180)) { !model.isRunning }
             let now = Date.now.timeIntervalSince1970 * 1000
             var goal: [String: Any] = ["session": session.id, "condition": "The README says how to run the tests", "state": kind == "met" ? "met" : "working",

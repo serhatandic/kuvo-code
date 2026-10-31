@@ -73,6 +73,40 @@ import Testing
         #expect(servers.first { $0.id == "chrome-devtools" }?.macOnly == true)
     }
 
+    /// A phone adds a rule while Settings here still shows the rules from before; then a skill is
+    /// switched off here, which writes the rules whole. The phone's rule stays: the change here is
+    /// refused and said, the rules shown as they are now, to make it again.
+    @Test func aListChangedElsewhereMeanwhileIsntWrittenOver() async throws {
+        let box = try await SettingsBox(port: 47_907, settings: #"{"permissions": [{"action": "shell", "resource": "npm test *", "effect": "allow"}]}"#)
+        defer { box.stop() }
+        let config = AppModel().engineConfig
+        await config.refresh()
+        let body = Data(#"{"changes": [{"path": ["permissions"], "value": [{"action": "shell", "resource": "npm test *", "effect": "allow"}, {"action": "shell", "resource": "docker *", "effect": "deny"}]}]}"#.utf8)
+        #expect(try await box.client.send("PATCH", "kuvo/config", body: body).status == 200)
+
+        config.setItems(config.items(["permissions"]) + [PermissionRule(action: "skill", resource: "pdf", effect: .deny).json], at: ["permissions"])
+        #expect(await config.settled()?.contains("changed elsewhere meanwhile") == true, "refused, and said")
+        let disk = try SettingsBox.onDisk()
+        #expect((disk["permissions"] as? [[String: String]])?.map { $0["resource"] } == ["npm test *", "docker *"], "the phone's rule stays")
+        await config.refresh()
+        #expect(config.permissionRules.map(\.resource) == ["npm test *", "docker *"])
+
+        // The phone takes them all away meanwhile, and the last one's taken away here: refused too.
+        let removed = Data(#"{"changes": [{"path": ["permissions"], "value": [{"action": "shell", "resource": "npm test *", "effect": "allow"}, {"action": "shell", "resource": "docker *", "effect": "deny"}, {"action": "shell", "resource": "rm *", "effect": "deny"}]}]}"#.utf8)
+        let stale = config.items(["permissions"])
+        #expect(try await box.client.send("PATCH", "kuvo/config", body: removed).status == 200)
+        config.setItems([], at: ["permissions"])
+        #expect(await config.settled() != nil)
+        #expect((try SettingsBox.onDisk()["permissions"] as? [[String: String]])?.count == 3, "the phone's rule stays")
+        await config.refresh()
+        #expect(stale.count == 2)
+
+        // Made again on the rules as they are: saved.
+        config.setItems(config.items(["permissions"]) + [PermissionRule(action: "skill", resource: "pdf", effect: .deny).json], at: ["permissions"])
+        #expect(await config.settled() == nil)
+        #expect((try SettingsBox.onDisk()["permissions"] as? [[String: String]])?.map { $0["resource"] } == ["npm test *", "docker *", "rm *", "pdf"])
+    }
+
     @Test func aFileWithCommentsIsLeftAloneAndSaidToBe() async throws {
         let box = try await SettingsBox(port: 47_921)
         defer { box.stop() }

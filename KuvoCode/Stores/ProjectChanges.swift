@@ -28,9 +28,11 @@ nonisolated struct ChangedFile: Identifiable, Hashable, Sendable {
     var root: String?
     var oldObject: String?
     var newObject: String?
-    /// A new file on a machine, listed but not read yet: its box sends it (`Git.readNew`).
+    /// A new file, listed but not read yet (`Git.readNew`): this Mac's from disk, a machine's from
+    /// its box.
     var unread = false
-    /// git's hash of a machine's new file, as listed: its read is kept until the hash changes.
+    /// A new file's stamp (its size and when it last changed), as listed: its read is kept until
+    /// that changes.
     var hash: String?
 
     var id: String { path }
@@ -73,7 +75,8 @@ final class ProjectChanges {
     }
 
     let directory: String
-    var scope = Scope.uncommitted
+    /// Another scope's list isn't this one's as last seen.
+    var scope = Scope.uncommitted { didSet { if scope != oldValue { hasRead = false } } }
     /// The branch this one comes from, for the Branch scope: a worktree's base, or the
     /// repository's default branch.
     var base: String?
@@ -84,16 +87,34 @@ final class ProjectChanges {
     /// committed changes too).
     private(set) var hasUncommitted = true
     private(set) var isLoaded = false
+    /// A machine's box couldn't be asked before anything showed: not a folder without git, and
+    /// Stage and Discard come back with the list.
+    private(set) var isUnreachable = false
+    /// When the list was last read: what's said of it as last seen while its machine is away. Not
+    /// watched, so a look every few seconds doesn't redraw the panel (nothing reads it while away).
+    @ObservationIgnored private(set) var read: Date?
+    private var hasRead = false
+    /// Its machine isn't connected: its box isn't asked until it's back, and the list shows as last
+    /// seen. Set from the machine's engine.
+    var isAway = false
     private var signature = 0
     /// Each refresh's number: only the latest one's list shows.
     private var generation = 0
-    /// A machine's new files as its box last sent them, by path and git's hash, so each poll
-    /// reads only what changed.
-    private var machineReads: [String: ChangedFile] = [:]
+    /// New files as they were last read, by path and stamp (`ChangedFile.hash`), so each look
+    /// reads only those that changed: after an install in a project with no .gitignore, thousands.
+    private var reads: [String: ChangedFile] = [:]
 
-    init(directory: String) {
+    /// A machine's box, by the machine's id.
+    private let box: @Sendable (String) -> BoxClient
+
+    init(directory: String, box: @escaping @Sendable (String) -> BoxClient = BoxClient.machine) {
         self.directory = directory
+        self.box = box
     }
+
+    /// The list as it is, as last seen under the away bar, or (never read) the machine's connection
+    /// in its place.
+    var shown: ChangesAway.Shown { ChangesAway.shown(isAway: isAway || isUnreachable, read: hasRead ? read : nil) }
 
     var additions: Int { files.reduce(0) { $0 + $1.additions } }
     var deletions: Int { files.reduce(0) { $0 + $1.deletions } }
@@ -103,32 +124,48 @@ final class ProjectChanges {
     /// session's edits changed.
     func refresh(fallback: [FileDiff] = [], edits: [FileDiff] = []) async {
         let directory = directory, scope = scope, base = base
+        // Not asked while it's away: its connection says when it's back.
+        if isAway { return }
         generation += 1
         let mine = generation
         if scope == .session {
             hasUncommitted = false
+            isUnreachable = false
             apply(fallback.map { DiffParser.file(from: $0, directory: directory) })
+            isLoaded = true
+            stamp()
+            return
+        }
+        let found = await Git.found(in: directory, scope: scope, base: base, box: box)
+        // A machine's box out of reach for a moment: what showed stays, rather than reading as no
+        // repository. Out of reach from the start: said so.
+        if case .unreachable = found {
+            guard mine == generation, !Task.isCancelled, !isLoaded || isUnreachable else { return }
+            isUnreachable = true
             isLoaded = true
             return
         }
-        let found = await Git.found(in: directory, scope: scope, base: base)
-        // A machine's box out of reach for a moment: what showed stays, rather than reading as no
-        // repository.
-        if case .unreachable = found, isLoaded { return }
+        // Answered, but not with the changes (git couldn't say for a moment): what showed stays.
+        if case .refused = found, isLoaded, !isUnreachable { return }
         if case .listed(let result, let uncommitted) = found {
-            let read = await Git.readNew(result, known: machineReads)
+            let read = await Git.readNew(result, known: reads, box: box)
             // Kept whichever list shows: what was read is the file as it is.
-            machineReads = Git.kept(read)
+            reads = Git.kept(read)
+            let signature = await Task.detached { Git.signature(of: read) }.value
             // Gone to another scope, or a later refresh is under way: theirs shows.
             guard mine == generation, !Task.isCancelled else { return }
             isRepository = true
+            isUnreachable = false
             if hasUncommitted != uncommitted { hasUncommitted = uncommitted }
-            apply(read)
+            apply(read, signature: signature)
         } else {
+            guard mine == generation, !Task.isCancelled else { return }
             isRepository = false
+            isUnreachable = false
             apply((fallback.isEmpty ? edits : fallback).map { DiffParser.file(from: $0, directory: directory) })
         }
         isLoaded = true
+        stamp()
     }
 
     enum Action { case stage, unstage, discard }
@@ -138,6 +175,8 @@ final class ProjectChanges {
     /// A file git doesn't know yet goes to the Trash. Returns git's complaint, if any.
     func perform(_ action: Action, on file: ChangedFile) async -> String? {
         guard let root = file.root else { return nil }
+        // (Asked for before it went: its alert was open.)
+        if isAway { return ChangesAway.notBack(RemoteFolder.machine(of: directory) ?? "Its machine") }
         let failure = await Git.performing(action, on: file, root: root, scope: scope)
         await refresh()
         return failure
@@ -148,6 +187,7 @@ final class ProjectChanges {
     /// hooks, signing and pushing see what they do in Terminal.
     func commit(message: String, push: Bool, environment: [String: String]) async -> String? {
         let directory = directory
+        if isAway { return ChangesAway.notBack(RemoteFolder.machine(of: directory) ?? "Its machine") }
         let failure = await Git.committing(message: message, push: push, in: directory, environment: environment)
         if failure == nil { Analytics.shared.track("changes_committed", ["pushed": push]) }
         await refresh()
@@ -167,9 +207,14 @@ final class ProjectChanges {
         return await Git.commitDiffing(in: directory).staged
     }
 
+    private func stamp() {
+        read = .now
+        if !hasRead { hasRead = true }
+    }
+
     /// Only publishes when something changed, so a refresh doesn't redraw the panel.
-    private func apply(_ files: [ChangedFile]) {
-        let signature = files.hashValue
+    private func apply(_ files: [ChangedFile], signature: Int? = nil) {
+        let signature = signature ?? files.hashValue
         guard signature != self.signature else { return }
         self.signature = signature
         self.files = files
@@ -186,8 +231,10 @@ nonisolated enum Git {
         case listed([ChangedFile], Bool)
         /// Not in a repository, or git couldn't say.
         case notRepository
-        /// A machine's box couldn't be asked.
+        /// A machine's box couldn't be asked (the connection, not what it answered).
         case unreachable
+        /// A machine's box answered, but not with the changes (git couldn't say, an older box).
+        case refused
     }
 
     /// The changed files in `scope`. A machine's come from its box (`kuvo/git/changes`), as a
@@ -208,7 +255,15 @@ nonisolated enum Git {
         }
         let asked = Asked(directory: path, scope: scope == .session ? "uncommitted" : scope.rawValue, base: base)
         let found: Answer
-        do { found = try await box(machine).value(Answer.self, "POST", "kuvo/git/changes", body: asked) } catch { return .unreachable }
+        do {
+            found = try await box(machine).value(Answer.self, "POST", "kuvo/git/changes", body: asked)
+        } catch is BoxRefusal {
+            return .refused
+        } catch is DecodingError {
+            return .refused
+        } catch {
+            return .unreachable
+        }
         guard found.repository, let root = found.root, let against = found.against, let patch = found.patch else { return .notRepository }
         let files = listed(patch: patch, root: RemoteFolder.folder(root, on: machine), base: against, scope: scope,
                            untracked: found.untracked ?? [], hashes: found.hashes ?? [:])
@@ -313,15 +368,8 @@ nonisolated enum Git {
             file.root = root
             // A new file git doesn't know (a repository inside this one by its folder, "web/").
             if parsed.unread || parsed.path.hasSuffix("/") {
-                // A machine's: git's hash of it, so it's read from its box only when it changes.
-                file.hash = hashes[file.path]
-                // This Mac's is read now; a machine's afterwards, from its box (`readNew`), as a
-                // phone reads it.
-                guard file.url.isFileURL else { return file }
-                file.unread = false
-                let size = (try? file.url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-                file.isTooBig = size > 2_000_000
-                if !file.isTooBig { fill(&file, with: try? Data(contentsOf: file.url)) }
+                // Its stamp (a machine's box sends them), so it's read (`readNew`) only when it changes.
+                file.hash = file.url.isFileURL ? stamp(file.url) : hashes[file.path]
                 return file
             }
             // Where each side lives, for showing pictures.
@@ -329,6 +377,11 @@ nonisolated enum Git {
             if scope == .staged, file.status != .deleted { file.newObject = ":" + file.path }
             return file
         }
+    }
+
+    /// Why Discard leaves a submodule be, as a machine's box says it too.
+    static func submoduleRefusal(_ path: String) -> String {
+        "\(path) is a submodule: its changes are in its own repository, so discard them there."
     }
 
     static func perform(_ action: ProjectChanges.Action, on file: ChangedFile, root: String, scope: ProjectChanges.Scope) -> String? {
@@ -394,6 +447,14 @@ nonisolated enum Git {
                 }
                 do { try trash(file.url) } catch { return error.localizedDescription }
                 return nil
+            }
+            // A submodule with edits of its own: they're in its repository, and git's restore
+            // leaves them as they are and says nothing, which read as done. (One moved to another
+            // commit, or gone, goes back as before.)
+            if file.status == .modified, on(["ls-files", "-s", "--", file.path])?.hasPrefix("160000") == true,
+               let edits = run(["status", "--porcelain"], in: (root as NSString).appendingPathComponent(file.path)),
+               !edits.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return submoduleRefusal(file.path)
             }
             if let failure = clear(scope == .unstaged ? paths : [file.path]) { return failure }
             if scope == .unstaged { return git(["restore", "--worktree", "--"] + paths) }
@@ -472,30 +533,88 @@ nonisolated enum Git {
         return text.isEmpty ? "git \(arguments.first ?? "") failed." : text
     }
 
-    /// A machine's new files, read from its box (`box`, by the machine's id): their lines, or binary
-    /// or too big, as this Mac's are. `known`: those read before (`kept`), used again while git's
-    /// hash is the same.
+    /// New files' lines, or binary or too big: this Mac's from its disk, a machine's from its box
+    /// (`box`, by the machine's id), as a phone reads them, several at a time. `known`: those read
+    /// before (`kept`), used again while their stamp is the same.
     @concurrent static func readNew(_ files: [ChangedFile], known: [String: ChangedFile] = [:],
-                                    box: @Sendable (String) -> BoxClient = BoxClient.machine) async -> [ChangedFile] {
+                                    box: @escaping @Sendable (String) -> BoxClient = BoxClient.machine) async -> [ChangedFile] {
         var read = files
+        var waiting: [Int] = []
         for index in read.indices where read[index].unread {
             if let hash = read[index].hash, let before = known[read[index].path + "\0" + hash] {
                 read[index] = before
-                continue
+            } else {
+                waiting.append(index)
             }
-            read[index].unread = false
-            guard let (machine, path) = RemoteFolder.parse(read[index].url) else { continue }
-            do {
-                fill(&read[index], with: try await box(machine).file(path, max: 2_000_000))
-            } catch let refusal as BoxRefusal where refusal.status == 413 {
-                read[index].isTooBig = true
-            } catch {
-                read[index].isBinary = true
-                // Not kept: read again next time (the box away for a moment, a refresh stopped).
-                read[index].hash = nil
+        }
+        await withTaskGroup(of: (Int, ChangedFile).self) { group in
+            var next = waiting.makeIterator()
+            func start() {
+                guard !Task.isCancelled, let index = next.next() else { return }
+                let file = read[index]
+                group.addTask { (index, await readOne(file, box: box)) }
+            }
+            for _ in 0..<8 { start() }
+            for await (index, file) in group {
+                read[index] = file
+                start()
             }
         }
         return read
+    }
+
+    private static func readOne(_ file: ChangedFile, box: @Sendable (String) -> BoxClient) async -> ChangedFile {
+        var file = file
+        file.unread = false
+        if file.url.isFileURL {
+            // Gone since it was listed: read again next time, not shown as binary.
+            guard let size = (try? file.url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize else {
+                file.hash = nil
+                return file
+            }
+            file.isTooBig = size > 2_000_000
+            if !file.isTooBig { fill(&file, with: try? Data(contentsOf: file.url)) }
+            return file
+        }
+        guard let (machine, path) = RemoteFolder.parse(file.url) else { return file }
+        do {
+            fill(&file, with: try await box(machine).file(path, max: 2_000_000))
+        } catch let refusal as BoxRefusal where refusal.status == 413 {
+            file.isTooBig = true
+        } catch {
+            file.isBinary = true
+            // Not kept: read again next time (the box away for a moment, a refresh stopped).
+            file.hash = nil
+        }
+        return file
+    }
+
+    /// A file on this Mac as it is now: its size and when it last changed, as a box stamps a
+    /// machine's. nil when it can't be read (a broken link), so it's read each time.
+    /// One changed in the last few seconds has none (as git treats one it can't be sure of): a
+    /// disk that keeps times to the second could change it again, the same size, unseen.
+    private static func stamp(_ url: URL) -> String? {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+              let size = values.fileSize, let modified = values.contentModificationDate,
+              Date().timeIntervalSince(modified) > 3 else { return nil }
+        return "\(size)-\(modified.timeIntervalSinceReferenceDate)"
+    }
+
+    /// What tells one list from another: a new file by its path and stamp, not by hashing its
+    /// lines again each look (thousands, after an install).
+    static func signature(of files: [ChangedFile]) -> Int {
+        var hasher = Hasher()
+        for file in files {
+            if let stamp = file.hash, file.status == .added {
+                hasher.combine(file.path)
+                hasher.combine(stamp)
+                hasher.combine(file.isBinary)
+                hasher.combine(file.isTooBig)
+            } else {
+                hasher.combine(file)
+            }
+        }
+        return hasher.finalize()
     }
 
     /// What `readNew` read, to use again (its `known`).

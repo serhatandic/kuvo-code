@@ -37,6 +37,10 @@ export const LETTER_ID = /^[A-Za-z0-9_-]{6,80}$/;
 export const composeLetter = (name: string, session: string, words: string, waits: boolean): string =>
   `[Message from ${name} · ${session}] (${waits ? "They're waiting for your reply: just answer, in your words." : session === "unknown" ? "It can't be answered: who sent it isn't known." : `To answer, use send_message to ${session}.`})\n\n${words}`;
 
+// What a letter's sender hears when the conversation it wrote to is stopped: the box keeps it there.
+export const pausedNote = (name?: string): string =>
+  `${name ? `${name} is stopped: the user paused its conversation.` : "That conversation is stopped: the user paused it."} Your message waits there and goes once they resume it; its answer, if it writes one, comes to you as a message.`;
+
 // A session here, where it runs: the engine's or the coding agents' bridge's, by asking each, and
 // what it is. Null when each says there's no such session; it throws when one can't be asked (try
 // again later).

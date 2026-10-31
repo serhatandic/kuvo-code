@@ -223,7 +223,7 @@ nonisolated enum MachineBrowserInstaller {
         let file = cache.appending(path: "\(runtime.id)-\(architecture).tar.gz")
         let checksum = cache.appending(path: "\(runtime.id)-\(architecture).sha256")
         if fm.fileExists(atPath: file.path), let expected = try? String(contentsOf: checksum, encoding: .utf8),
-           (try? EngineInstaller.sha256(of: file)) == expected.trimmingCharacters(in: .whitespacesAndNewlines) {
+           (try? sha256(of: file)) == expected.trimmingCharacters(in: .whitespacesAndNewlines) {
             return file
         }
         guard let chromium = runtime.chromium(for: architecture), let packages = runtime.packages[architecture] else {
@@ -295,7 +295,7 @@ nonisolated enum MachineBrowserInstaller {
         try await run("/usr/bin/tar", ["--no-xattrs", "--no-mac-metadata", "-czf", packed.path, "-C", bundle.path, "."], environment: ["COPYFILE_DISABLE": "1"])
         try? fm.removeItem(at: file)
         try fm.moveItem(at: packed, to: file)
-        try Data(try EngineInstaller.sha256(of: file).utf8).write(to: checksum)
+        try Data(try sha256(of: file).utf8).write(to: checksum)
         // Older builds aren't needed again.
         for entry in (try? fm.contentsOfDirectory(atPath: cache.path)) ?? [] where !entry.hasPrefix(runtime.id) && !entry.hasPrefix(".staging") {
             try? fm.removeItem(at: cache.appending(path: entry))
@@ -332,7 +332,7 @@ nonisolated enum MachineBrowserInstaller {
                     try? FileManager.default.removeItem(at: temporary)
                     continue
                 }
-                guard try EngineInstaller.sha256(of: temporary) == expected else {
+                guard try sha256(of: temporary) == expected else {
                     try? FileManager.default.removeItem(at: temporary)
                     throw MachineBrowserError.checksum(name)
                 }
@@ -348,6 +348,12 @@ nonisolated enum MachineBrowserInstaller {
             }
         }
         throw MachineBrowserError.download(name, lastError)
+    }
+
+    static func sha256(of file: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+        return try handle.digest(SHA256.self).map { String(format: "%02x", $0) }.joined()
     }
 
     /// This Mac's unzip or tar, unpacking or packing the browser's downloads. Each takes seconds:
@@ -459,7 +465,7 @@ extension MachineBrowserInstaller {
         K="$HOME/\(RemoteEngineInstaller.root)"; E="$K/engine/\(OpenCodeEngine.version)/opencode"; \
         [ -x "$E" ] || E="\(RemoteEngineInstaller.newestEngine)"; \
         XDG_DATA_HOME="$K/data" XDG_CONFIG_HOME="$K/config" XDG_STATE_HOME="$K/state" XDG_CACHE_HOME="$K/cache" \
-        BUN_INSTALL="$K/cache/bun" KUVO_HOME="$K" KUVO_LANG="\(languages)" BUN_BE_BUN=1 exec "$E" "\(helperPath)" \(mode)
+        BUN_INSTALL="$K/cache/bun" KUVO_HOME="$K" KUVO_LANG="\(languages)" BUN_BE_BUN=1 exec "$E" --config=/dev/null --no-env-file "\(helperPath)" \(mode)
         """
     }
 

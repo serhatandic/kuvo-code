@@ -270,7 +270,7 @@ import Testing
         defer { done(box) }
         // As the app has it (`startMachines`), each change's work handed to the test to wait for.
         var work: [Task<Void, Never>] = []
-        app.workspace.onArchived = { [app] session, _ in work.append(app.archivedChanged(session)) }
+        app.workspace.onArchived = { [app] session, _, _ in work.append(app.archivedChanged(session)) }
         let owner = WakeUps.owner(of: try #require(app.workspace.session(id)))
         try await app.wakeUps.add(to: owner, at: .now.addingTimeInterval(86_400), every: nil, note: "Check the nightly build")
         // The engine says it changed; this Mac reads it again, and does what that calls for.
@@ -298,7 +298,7 @@ import Testing
         let box = try await start()
         defer { done(box) }
         var work: [Task<Void, Never>] = []
-        app.workspace.onArchived = { [app] session, _ in work.append(app.archivedChanged(session)) }
+        app.workspace.onArchived = { [app] session, _, _ in work.append(app.archivedChanged(session)) }
         let owner = WakeUps.owner(of: try #require(app.workspace.session(id)))
         try await app.wakeUps.add(to: owner, at: .now.addingTimeInterval(86_400), every: nil, note: "Check the nightly build")
         let listed = StubWeb.json(["data": [Self.session(id, archived: true)]])
@@ -344,7 +344,7 @@ import Testing
         let box = try await start()
         defer { done(box) }
         var told: [Bool] = []
-        app.workspace.onArchived = { _, isArchived in told.append(isArchived) }
+        app.workspace.onArchived = { _, isArchived, _ in told.append(isArchived) }
         let answer = StubWeb.json(["data": Self.session(id)])
         StubWeb.route(Self.engine + "/api/session/\(id)") { _ in StubWeb.json(["message": "Session is busy"], status: 500) }
 

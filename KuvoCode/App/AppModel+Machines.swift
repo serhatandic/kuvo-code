@@ -21,18 +21,7 @@ extension AppModel {
         // An agent on a machine browses with the machine's browser: the panel shows it, as it
         // shows its own browser for an agent here.
         workspace.onMachineBrowsing = { [weak self] machine, session in self?.utilities.revealMachineBrowser(machine, for: session) }
-        workspace.onDeleted = { [weak self] session in
-            self?.utilities.closeTabs(of: session)
-            // A machine's bot's conversation gone there (carried on with the coding agents from a
-            // phone, say): what it has now is read from its box.
-            if let self, let machine = bots.list.first(where: { $0.sessionID == session })?.machine {
-                Task { await self.bots.refresh(machine) }
-            }
-            // Its wake-ups and watches go with it.
-            if let found = self?.workspace.session(session) { self?.wakeUps.forget(found) } else { self?.wakeUps.forget(sessionID: session) }
-        }
-        // An archived session's wake-ups wait, and come back with it.
-        workspace.onArchived = { [weak self] session, _ in self?.archivedChanged(session) }
+        followSessions()
         // A subagent's calls go by the conversation that started it: its folder, its permissions.
         BrowserTools.sessionFolder = { [weak self] session in
             guard let self else { return nil }
@@ -274,13 +263,47 @@ extension AppModel {
         RemoteEngineInstaller.root == ".kuvo-code" || RemoteEngineInstaller.root == ".kuvo-code-demo" && PhoneLink.isEnabled
     }
 
+    /// A session gone (deleted) or put away (archived), here, from a phone or by another Mac:
+    /// what's here of it follows.
+    func followSessions() {
+        workspace.onDeleted = { [weak self] session in
+            self?.utilities.closeTabs(of: session)
+            // A machine's bot's conversation gone there (carried on with the coding agents from a
+            // phone, say): what it has now is read from its box.
+            if let self, let machine = bots.list.first(where: { $0.sessionID == session })?.machine {
+                Task { await self.bots.refresh(machine) }
+            }
+            // Its wake-ups and watches go with it.
+            if let found = self?.workspace.session(session) { self?.wakeUps.forget(found) } else { self?.wakeUps.forget(sessionID: session) }
+        }
+        workspace.onArchived = { [weak self] session, archived, carriedTo in
+            guard let self else { return }
+            if archived {
+                // Carried on in another just now (moved to the coding agents by its box): its panel
+                // goes with it, its Run still running. Otherwise (one carried on before, brought
+                // back and archived again too), out of sight in the archive, nothing of it goes on
+                // running in the panel.
+                if let carried = carriedTo {
+                    utilities.handOver(from: session, to: carried)
+                } else {
+                    utilities.closeTerminals(of: session)
+                }
+            }
+            // Its wake-ups wait, and come back with it.
+            archivedChanged(session)
+        }
+    }
+
     /// A session was archived or brought back (here, from a phone, by another Mac): its wake-ups
     /// wait, or come back, as it is once this runs, so a list read again meanwhile that flipped it
-    /// back and forth acts on where it ended up. (A test waits for it.)
+    /// back and forth acts on where it ended up. Archived, its panel's terminals close, and what
+    /// runs in them (a dev server holding its port, in a worktree that may be gone) ends with them;
+    /// its other tabs stay for when it comes back. (A test waits for it.)
     @discardableResult
     func archivedChanged(_ session: String) -> Task<Void, Never> {
         Task {
             guard let found = workspace.session(session) else { return }
+            if Workspace.isArchived(found) { utilities.closeTerminals(of: session) }
             await wakeUps.archived(found, Workspace.isArchived(found))
         }
     }
@@ -419,6 +442,19 @@ extension AppModel {
         }
     }
 
+    /// Who else uses a machine, as its box says (`kuvo/info`'s `macs` and `phones`): your other
+    /// Macs, by name, and your phones. What Uninstall would stop it for, so its dialog says so.
+    func readAlsoUsedBy(_ engine: MachineEngine) async {
+        struct Info: Decodable {
+            struct Mac: Decodable { var key: String; var name: String? }
+            var macs: [Mac]?
+            var phones: Int?
+        }
+        // (Which of them is this Mac: its key, as they know it.)
+        guard let own = phoneLink.macKey, let info = try? await box(engine.machine.id).value(Info.self, "GET", "kuvo/info"), let macs = info.macs else { return }
+        engine.alsoUsedBy = .init(macs: macs.filter { $0.key != own }.map { $0.name ?? "another Mac" }, phones: info.phones ?? 0)
+    }
+
     /// After a dropped connection (the Mac slept, the machine restarted): tries further apart
     /// each time, for half an hour, while its sessions wait.
     private func reconnect(_ engine: MachineEngine) async {
@@ -450,6 +486,16 @@ extension AppModel {
         // Removed, or disconnected, while it started (or since): its connection ended, and nothing
         // of yours goes there.
         guard let connection = await engine.start(machineLaunch(engine), cache: AppInfo.supportDirectory.appending(path: "engine-linux")) else { return }
+        #if DEBUG
+        // KUVO_DEMO_AWAY=<machine>: a few seconds after it connected (its accounts are read as it
+        // connects), disconnected as Disconnect does, so its pages show it away, as last seen.
+        if ProcessInfo.processInfo.environment["KUVO_DEMO_AWAY"] == engine.machine.id {
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                self?.disconnect(engine)
+            }
+        }
+        #endif
         await connection.run("connected") { [weak self] in await self?.connected(engine, connection) }.value
     }
 
@@ -461,9 +507,13 @@ extension AppModel {
         guard await MachineConnection.inTurn([{ await self.machines.runWaiting(only: machine) }]) else { return }
         // Its sessions, once it's up: tried again a few times, as they're what makes them live.
         await MachineClock.retry(after: [0, 2, 5, 10, 20]) { await workspace.refresh(engine) }
+        engine.sessionsRead()
         guard await MachineConnection.inTurn([
-            // Phones you've paired reach it directly, through its own bridge.
-            { await self.phoneLink.sync(engine) },
+            // Phones you've paired reach it directly, through its own bridge; then who else uses it.
+            {
+                await self.phoneLink.sync(engine)
+                await self.readAlsoUsedBy(engine)
+            },
             // Its worktrees, as it keeps them (some this Mac made there before, handed over once).
             { await self.workspace.takeWorktrees(from: machine) },
             // Its bots' keys of their own are its own: any this Mac kept from before go to it, and
@@ -486,6 +536,8 @@ extension AppModel {
             { await Utilities.shareTabTidying(on: machine) },
             // What its bots ask you (making a project), then followed while it's connected.
             { await self.botAsks.read(machine) },
+            // Its bots' goals, the same way.
+            { await self.goalPlans.read(machine) },
         ]) else { return }
         connection.every(600, "sign-ins", [
             { await self.syncSignIns(with: engine) },
@@ -497,6 +549,9 @@ extension AppModel {
         // Settings changed here while it connected, after it took the ones it has.
         connection.run("settings") { [weak self] in await self?.keepSettingsCurrent(engine) }
         connection.run("bot-asks") { [weak self] in await self?.botAsks.follow(machine) }
+        // What its agents ask to run outside its sandbox, followed while it's connected.
+        connection.run("sandbox-asks") { await Sandboxes.shared.follow(machine) }
+        connection.run("goal-plans") { [weak self] in await self?.goalPlans.follow(machine) }
     }
 
     /// Closes this Mac's connection to a machine. It runs on, as a box of its own: its sessions,
@@ -554,12 +609,15 @@ extension AppModel {
         machines.engine(id)?.browser.reset()
         browserAsks.closeAll(on: id)
         utilities.closeMachineBrowser(id)
+        utilities.closeTerminals(on: id)
+        mainTerminals.close(on: id)
         machines.remove(id, uninstall: uninstall)
         if uninstall { phoneLink.forget(machine: id) } else { phoneLink.machineRemoved(id) }
         workspace.machines = Set(machines.list.map(\.id))
         workspace.forget(id, forGood: true)
         boxGroups.forget(machine: id)
         Vaults.shared.forget(id)
+        Sandboxes.shared.forget(id)
         // Its pages in Settings.
         settingsTabs.closeTabs(notOn: Set(machines.list.map(\.id)), machines: machines)
         // Your others hear of it: one uninstalled stops being their peer (one only removed stays,

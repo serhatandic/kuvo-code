@@ -91,6 +91,12 @@ export interface PermissionAsk {
   /** The agent settled it itself (it timed out there): it's taken back, refused. */
   signal?: AbortSignal
   /**
+   * Whether the process that asks runs in the box's sandbox, where the agent can tell its
+   * processes apart (Codex's helpers may run on an app-server started before it was on); else the
+   * thread's own `sandboxed` says.
+   */
+  sandboxed?: boolean
+  /**
    * Asked by the engine, which already weighed your rules and its own (reading `.env` asks even
    * with Approve All): only a rule of yours or an earlier "Always" answers it without you.
    */
@@ -238,6 +244,10 @@ export interface Thread {
   turnAway?(): void
   /** It has work going that closing it would end (commands left running): it's kept open. */
   readonly keepsWorking?: boolean
+  /** Its commands run in the box's sandbox now: the agent's whole program runs in it. */
+  readonly sandboxed?: boolean
+  /** A process of its that runs commands was started outside the box's sandbox, and still runs. */
+  readonly outside?: boolean
 }
 
 export interface Agent {
@@ -255,6 +265,10 @@ export interface Agent {
   signsInRemotely?: boolean
   signInWithKey?(key: string): Promise<void>
   signOut?(): Promise<void>
+  /** A process of its that runs turns was started outside the box's sandbox, and still runs (one its threads don't own). */
+  outside?(): boolean
+  /** Stops those (`outside`) that nothing is at work in now, to start again in the sandbox (you said to restart them); whether one is still at work. */
+  restartOutside?(): boolean
   models(): Promise<Model[]>
   /**
    * Known to be signed out of, for an agent whose models run somewhere that drops a request it

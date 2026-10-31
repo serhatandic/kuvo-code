@@ -137,24 +137,15 @@ struct SubscriptionsSection: View {
         engine.isReady && engine.agents.api != nil && !engine.agents.isDown
     }
 
-    /// A machine whose agents can't be asked now: why, and a way back.
+    /// A machine whose agents can't be asked now: why. Away, the page's bar says so and connects
+    /// it; its agents aren't kept as last seen (they're asked afresh each time).
     @ViewBuilder private func unavailable(_ engine: MachineEngine) -> some View {
         if engine.isReady {
             ErrorCard(message: "The coding agents aren’t running on \(engine.machine.name). They start with its engine: when nothing runs there, stop its engine in Settings › Machines and start it again.")
         } else {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    // COMPAT(0.7 engine-stop): an engine an older Mac stopped. Goes 3 months after 0.8.0.
-                    Text(engine.isStopped ? "\(engine.machine.name)’s engine is stopped" : "\(engine.machine.name) isn’t connected")
-                    MachineStatus(engine: engine)
-                }
-                Spacer()
-                if !engine.connection.isUnderWay {
-                    // COMPAT(0.7 engine-stop): Start. Goes 3 months after 0.8.0.
-                    Button(engine.isStopped ? "Start" : "Connect") { app.connectOrStart(engine) }
-                        .buttonStyle(.glass)
-                }
-            }
+            Text("Its coding agents show here once it’s connected.")
+                .foregroundStyle(.secondary)
+                .padding(.vertical, 6)
         }
     }
 

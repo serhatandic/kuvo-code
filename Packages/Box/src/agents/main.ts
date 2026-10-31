@@ -31,7 +31,8 @@ import { Snapshots } from "./snapshots"
 import { Roster } from "./roster"
 import { cancelSignIns, handler } from "./server"
 import { Sessions } from "./sessions"
-import { refreshLoginPath } from "./proc"
+import { noteAgentsInside } from "./fence"
+import { useSavedLoginPath } from "./proc"
 import { setSkillSource } from "./skills"
 import { Store } from "./store"
 import { server as requester } from "./groups/api"
@@ -100,7 +101,7 @@ if (onMachine) {
   // The agents' programs are the machine's own now, found on its login shell's PATH (which a
   // command over SSH doesn't get), not copies of Kuvo Code's.
   dropOwnPrograms(join(home, "runtime"))
-  void refreshLoginPath()
+  useSavedLoginPath()
 }
 // COMPAT(0.7 agents-runtime): `cache/install`. Goes 3 months after 0.8.0.
 // What an earlier bridge left of its downloads (it kept them on this Mac): nothing installs yet.
@@ -131,6 +132,21 @@ const sessions = new Sessions(
   new Snapshots(join(home, "snapshots")),
   (directory) => link.titleModel(directory),
 )
+// Tells the box's link, as it changes, whether every agent's process here runs in its sandbox
+// (none started before it came on still runs): only then do agents use the vault.
+// And restarts those you said to (`kuvo/sandbox/restart`): each between turns now, the rest as
+// their turns end, looked at again with the note.
+let restarting = false
+const noteInside = () => {
+  if (restarting) restarting = [sessions.restartOutside(), ...roster.all().map((agent) => agent.restartOutside?.() ?? false)].some(Boolean)
+  noteAgentsInside(!sessions.outside() && !roster.all().some((agent) => agent.outside?.()))
+}
+const restartOutside = () => {
+  restarting = true
+  noteInside()
+}
+noteInside()
+setInterval(noteInside, 5_000).unref?.()
 
 // The group chats that live on this computer, run here: on a machine, in its Kuvo Code folder; on
 // the Mac, where the app says (KUVO_GROUPS, with its bots in KUVO_BOTS and its trash in
@@ -205,6 +221,9 @@ const places: GoalPlaces = {
   },
 }
 const goals = new Goals(join(home, "goals.json"), places)
+// Goals paused at a limit, looked at once a minute too: a timer can come late after the computer
+// slept.
+setInterval(() => goals.resumeDue(), 60_000).unref?.()
 // Its other keywords, for the same conversations: side questions, handoffs and reviews.
 const sideQuestions = new SideQuestions(join(home, "side-questions.json"), places)
 const handoffs = new Handoffs(places)
@@ -262,7 +281,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted }),
+    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside }),
   })
 } catch (error: any) {
   console.error("couldn't listen:", error?.message ?? error)

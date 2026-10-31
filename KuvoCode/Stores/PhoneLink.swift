@@ -535,6 +535,8 @@ final class PhoneLink {
                 var tolerates = 1
                 /// This Mac's ID, as its engine launches there name it.
                 var macID = MachineEngine.macID
+                /// This Mac's name, for saying who else uses the machine.
+                var macName = PhoneLink.computerName
             }
             let settings = folder.appending(path: "setup.json")
             // This Mac's keys and documents, as its box keeps them (a box starting, or not told
@@ -559,7 +561,7 @@ final class PhoneLink {
             try JSONEncoder().encode(Setup(relay: relay.absoluteString, name: machine.name, mac: given.mac, macSign: given.macSign,
                                            docs: given.docs, id: machine.id)).write(to: settings)
             let output = try await machine.connection.run(RemoteEngineInstaller.script("""
-                KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$E" "$K/bin/\(Bridge.fileName)" setup
+                KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$E" --config=/dev/null --no-env-file "$K/bin/\(Bridge.fileName)" setup
                 """), input: settings)
             struct Answer: Decodable { var address: String?; var key: String?; var peers: Bool?; var sign: String?; var docs: [Documents.Envelope]? }
             let answer = try? JSONDecoder().decode(Answer.self, from: Data(output.utf8))
@@ -971,10 +973,10 @@ final class PhoneLink {
     /// `engine.start` and `update`), and the Mac's own. `usage` is added while the usage panel is.
     static let features = [
         "accounts.credentials", "accounts.found", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply", "engine.restart",
-        "file", "folders", "git", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves",
+        "file", "folders", "folders.files", "git", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves",
         "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.parts", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
-        "personalities.events", "skills.trash", "vault", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
-        "agent-tools", "sessions.start", "letters-read", "queue", "work", "work.projects",
+        "personalities.events", "skills.trash", "sandbox", "sandbox.check", "sandbox.asks", "vault", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
+        "agent-tools", "sessions.start", "letters-read", "queue", "queue.waits", "work", "work.projects", "work.goals",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",
     ]

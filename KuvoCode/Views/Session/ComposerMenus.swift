@@ -89,7 +89,9 @@ enum ToolApproval: String, CaseIterable {
     static let watchAsCommand = "This conversation asks before running commands, and a watch runs its check by itself, so the user approves it first: start it with the shell command kuvo-wake watch <every> \"<check>\" \"<what to do when it changes>\" instead, which asks them."
 
     init(rules: [PermissionRule]?) {
-        self = (rules ?? []).contains { $0.action == "shell" && $0.effect == .ask } ? .askFirst : .approveAll
+        // Its own rule, for every command: a bot's sessions ask for some commands whatever their
+        // approval (what always comes to you).
+        self = (rules ?? []).contains { $0.action == "shell" && $0.resource == "*" && $0.effect == .ask } ? .askFirst : .approveAll
     }
 }
 

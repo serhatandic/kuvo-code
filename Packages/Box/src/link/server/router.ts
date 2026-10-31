@@ -27,6 +27,7 @@ import { pairingRoute, phonesRemoveRoute, phonesRoute } from "../areas/phones";
 import { QUEUE_ROUTE, queueRoute } from "../areas/queue";
 import { pluginSearchRoute } from "../areas/plugins";
 import { programsRoute } from "../areas/programs";
+import { sandboxRoute } from "../areas/sandbox";
 import { providerModelsRoute } from "../areas/providers";
 import { answerProjects } from "../areas/projects";
 import { settingsRoute } from "../areas/settings";
@@ -34,7 +35,7 @@ import { skillsRoute } from "../areas/skills";
 import { moveEventsRoute, movePlacesRoute, movesRoute } from "../areas/moves";
 import { sessionWakesRoute, wakeEventsRoute, wakesRoute } from "../areas/wakes";
 import { worktreeEventsRoute, worktreesRoute } from "../areas/worktrees";
-import { newProjectRoute, WORK_ASKS_ROUTE, WORK_ROUTE, workAsksRoute, workRoute } from "../areas/work";
+import { newProjectRoute, GOALS_ROUTE, goalsRoute, WORK_ASKS_ROUTE, WORK_ROUTE, workAsksRoute, workRoute } from "../areas/work";
 import { phoneHere } from "../compat/leave-running";
 import { readBridgeFile, readEngineFile } from "../engine/client";
 import { linkRoute } from "../mac/routes";
@@ -60,6 +61,7 @@ export interface Route<Match = true> {
 const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/info", answer: infoRoute },
   { when: route => route === "kuvo/vault" || route.startsWith("kuvo/vault/"), answer: vaultRoute },
+  { when: route => route === "kuvo/sandbox" || route.startsWith("kuvo/sandbox/"), answer: sandboxRoute },
   { when: route => route === "kuvo/file", answer: ({ request, json }: RouteContext) => fileAt(request.path, json) },
   { when: route => route === "kuvo/update", answer: updateRoute },
   { when: (route, request) => /^kuvo\/integrations(\/|\?|$)/.test(request.path), answer: integrationsRoute },
@@ -103,6 +105,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   // A bot's work (PROTOCOL.md, "Work"), its stop-all before a bot's own route.
   { when: route => route.match(WORK_ROUTE), answer: workRoute },
   { when: route => route.match(WORK_ASKS_ROUTE), answer: workAsksRoute },
+  { when: route => route.match(GOALS_ROUTE), answer: goalsRoute },
   // (Before the bot keys' route, which would take "keys" for a bot.)
   { when: route => route === "kuvo/bots/keys/refresh", answer: botKeysRefreshRoute },
   { when: route => /^kuvo\/bots\/[^/]+\/keys(\/[^/]+)?$/.test(route), answer: botKeysRoute },

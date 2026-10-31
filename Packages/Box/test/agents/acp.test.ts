@@ -2,9 +2,11 @@
 // it asks is answered as the session's rules and modes say; Stop stops it; what it costs is counted.
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { AcpThread, acpTiming } from "../../src/agents/acp"
 import type { Agent } from "../../src/agents/agent"
 import { AntigravityAgent } from "../../src/agents/agents/antigravity"
@@ -14,6 +16,9 @@ import { subscribe } from "../../src/agents/events"
 import type { Roster } from "../../src/agents/roster"
 import { Sessions } from "../../src/agents/sessions"
 import { Store } from "../../src/agents/store"
+import { setToolServer } from "../../src/agents/kuvotools"
+import { canFence, realFence } from "./support/fence"
+import { noteAgentsInside } from "../../src/agents/fence"
 import type { PermissionRule } from "../../src/agents/wire"
 
 const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-acp-test-"))
@@ -40,6 +45,12 @@ interface Script {
   setup?: Record<string, unknown>
   /** Requests it turns down with an error: by method, and what their params hold. */
   refuses?: { method: string; params?: Record<string, unknown> }[]
+  /**
+   * What it tries at each prompt, where it runs, and says (`name=yes|no`, or what it found):
+   * `write`/`read` a file, `tools` (Kuvo Code's, a call through the server it was given), `app`
+   * (a server's address, straight), `env` (a variable's value, or `none`).
+   */
+  tries?: Record<string, [string, string]>
 }
 
 /**
@@ -67,6 +78,37 @@ const prompts = ${JSON.stringify(prompts)}
 const setup = ${JSON.stringify({ sessionId: "s1", ...script.setup })}
 const refuses = ${JSON.stringify(script.refuses ?? [])}
 const later = ${JSON.stringify(later)}
+const tries = ${JSON.stringify(script.tries ?? null)}
+let servers = []
+async function attempt(how, place) {
+  if (how === "env") return process.env[place] ?? "none"
+  if (how === "arg") return process.argv.includes(place) ? "yes" : "no"
+  try {
+    if (how === "write") require("node:fs").writeFileSync(place, "x")
+    else if (how === "read") require("node:fs").readFileSync(place)
+    else if (how === "link") require("node:fs").symlinkSync("/", place)
+    else if (how === "linked") return require("node:fs").lstatSync(place).isSymbolicLink() ? "yes" : "no"
+    else if (how === "move in") {
+      // A folder made in its project, with a link in it, moved to \`place\` (where there's none yet).
+      const fs = require("node:fs"), path = require("node:path")
+      if (fs.existsSync(place)) throw new Error("There already.")
+      const staged = fs.mkdtempSync(path.join(process.cwd(), "staged-"))
+      fs.symlinkSync("/", path.join(staged, "prompt_history.jsonl"))
+      fs.renameSync(staged, place)
+    }
+    else if (how === "tools" || how === "app") {
+      const server = how === "tools" ? servers.find((each) => each.type === "http") : { url: place, headers: [] }
+      if (!server) return "none"
+      const headers = Object.fromEntries(server.headers.map((each) => [each.name, each.value]))
+      const response = await fetch(server.url, { method: "POST", headers: { ...headers, "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "show_in_panel", arguments: {} } }) })
+      if (!response.ok) return "no"
+      return (await response.json()).result?.content?.[0]?.text ?? "no"
+    }
+    return "yes"
+  } catch {
+    return "no"
+  }
+}
 /** How many prompts it had before this one, in any of its processes. */
 const before = () => readFileSync(${JSON.stringify(log)}, "utf8").split("\\n").filter((line) => line && JSON.parse(line).method === "session/prompt").length - 1
 let prompt, turn, asked = 0, stopped = false
@@ -82,9 +124,20 @@ process.stdin.on("data", (chunk) => {
     const message = JSON.parse(line)
     log(message)
     if (refuses.some((refused) => refused.method === message.method && Object.entries(refused.params ?? {}).every(([key, value]) => message.params?.[key] === value))) send({ id: message.id, error: { code: -32603, message: "Refused." } })
-    else if (message.method === "initialize") send({ id: message.id, result: { protocolVersion: 1, authMethods: [], agentCapabilities: { loadSession: true } } })
-    else if (message.method === "session/new" || message.method === "session/load") send({ id: message.id, result: setup })
-    else if (message.method === "session/prompt") {
+    else if (message.method === "initialize") send({ id: message.id, result: { protocolVersion: 1, authMethods: [], agentCapabilities: { loadSession: true, mcpCapabilities: { http: true } } } })
+    else if (message.method === "session/new" || message.method === "session/load") {
+      servers = message.params?.mcpServers ?? []
+      send({ id: message.id, result: setup })
+    } else if (message.method === "session/prompt" && tries) {
+      // (What it tries is all that prompt does.)
+      const id = message.id
+      void (async () => {
+        const found = []
+        for (const [name, [how, place]] of Object.entries(tries)) found.push(name + "=" + (await attempt(how, place)))
+        update("s1", { sessionUpdate: "agent_message_chunk", content: { type: "text", text: found.join(" ") } })
+        send({ id, result: { stopReason: "end_turn" } })
+      })()
+    } else if (message.method === "session/prompt") {
       prompt = message.id
       turn = prompts[Math.min(before(), prompts.length - 1)]
       asked = 0
@@ -113,9 +166,10 @@ process.stdin.on("data", (chunk) => {
   return path
 }
 
-/** The script as a program, run with what it's given (Grok's `grok`, Antigravity's server). */
+/** The script as a program, run with what it's given (Grok's `grok`, Antigravity's server). As Bun
+ * whatever runs the tests: on a machine that's its engine, Bun by `BUN_BE_BUN`, which the sandbox doesn't pass on. */
 function program(script: string, path: string): string {
-  writeFileSync(path, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`)
+  writeFileSync(path, `#!/bin/sh\nexport BUN_BE_BUN=1\nexec "${process.execPath}" "${script}" "$@"\n`)
   chmodSync(path, 0o755)
   return path
 }
@@ -595,5 +649,201 @@ describe("What an ACP agent costs", () => {
     send(id)
     await settled(id, 2)
     expect(sessions.get(id).cost).toBeCloseTo(0.08, 6)
+  })
+})
+
+describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
+  /** Kuvo Code's folder, Grok's own home, and a folder elsewhere. */
+  let kuvo: string, home: string, elsewhere: string
+  beforeEach(() => {
+    kuvo = realpathSync(mkdtempSync(join(base, "kuvo-")))
+    home = realpathSync(mkdtempSync(join(base, "grok-home-")))
+    elsewhere = realpathSync(mkdtempSync(join(base, "elsewhere-")))
+    writeFileSync(join(kuvo, "secret"), "s")
+    for (const folder of ["sessions/project", "bin"]) mkdirSync(join(home, folder), { recursive: true })
+    process.env.GROK_HOME = home
+    process.env.XAI_API_KEY = "xai-test"
+    process.env.KUVO_FENCE = realFence(kuvo)
+  })
+  afterEach(() => {
+    delete process.env.KUVO_FENCE
+    delete process.env.GROK_HOME
+    delete process.env.XAI_API_KEY
+    setToolServer(undefined)
+  })
+
+  /** Grok whose prompts try `tries` where it runs. */
+  const trying = (tries: Record<string, [string, string]>) => new TestGrok(program(fakeAcp([], [], undefined, { tries }), join(root, "grok")), root)
+
+  test("Grok runs whole in it: what it runs, even a command you allowed, writes the session's folder and Grok's own state, never its settings, hooks or program (on a Mac), nor elsewhere, and can't read Kuvo Code's folder", async () => {
+    const id = await run(trying({
+      project: ["write", join(root, "made.txt")],
+      state: ["write", join(home, "sessions", "project", "conversation.json")],
+      signin: ["write", join(home, "auth.json")],
+      lock: ["write", join(home, "grok.lock")],
+      settings: ["write", join(home, "config.toml")],
+      hooks: ["write", join(home, "hooks-paths")],
+      shared: ["write", join(home, "settings.json")],
+      statusline: ["write", join(home, "statusline.sh")],
+      // What a project always allows, kept with its conversations.
+      grants: ["write", join(home, "sessions", "project", "permission.toml")],
+      // A link your own Grok would write through, elsewhere.
+      link: ["link", join(home, "sessions", "project", "prompt_history.jsonl")],
+      models: ["write", join(home, "models_cache.json")],
+      program: ["write", join(home, "bin", "grok")],
+      elsewhere: ["write", join(elsewhere, "e.txt")],
+      kuvo: ["read", join(kuvo, "secret")],
+      // Its own sandbox off (one can't run in another on a Mac), its memories off (what it writes
+      // there it's told as it starts), never in a shared leader, and its key, which it signs in with.
+      sandbox: ["env", "GROK_SANDBOX"],
+      memory: ["env", "GROK_MEMORY"],
+      leader: ["arg", "--no-leader"],
+      key: ["env", "XAI_API_KEY"],
+    }), 1, { permissions: askFirst })
+    // (Linux grants its home whole: there, a machine's, it's Kuvo Code's own copy of Grok's.)
+    const mac = process.platform === "darwin" ? "no" : "yes"
+    expect(words(id)).toBe(`project=yes state=yes signin=yes lock=yes settings=${mac} hooks=${mac} shared=${mac} statusline=${mac} grants=${mac} link=${mac} models=${mac} program=${mac} elsewhere=no kuvo=no sandbox=off memory=0 leader=yes key=xai-test`)
+  })
+
+  test("Kuvo Code's tools reach it through the bridge, as its own session's; the app's server itself it can't use", async () => {
+    // The app's tool server: with its password, says which session each call was for.
+    const app = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: (request) =>
+        request.headers.get("authorization") === "Bearer app-token"
+          ? Response.json({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: request.headers.get("x-kuvo-session") ?? "anyone" }] } })
+          : new Response("Not allowed.", { status: 401 }),
+    })
+    try {
+      setToolServer({ url: `http://127.0.0.1:${app.port}/mcp`, token: "app-token", timeout: 30_000 })
+      const id = await run(trying({ tools: ["tools", ""], app: ["app", `http://127.0.0.1:${app.port}/mcp`] }))
+      // (Its password, which only the bridge has.)
+      expect(words(id)).toBe(`tools=${id} app=no`)
+    } finally {
+      app.stop(true)
+    }
+  })
+
+  test("a folder you let the project's commands write (Also Allowed) it writes from its next message", async () => {
+    const agent = trying({ elsewhere: ["write", join(elsewhere, "e.txt")] })
+    const id = await run(agent)
+    expect(words(id)).toBe("elsewhere=no")
+    // Also Allowed, as the box writes it for this project.
+    const allowed = join(kuvo, "run", "fence", "allowed", createHash("sha256").update(realpathSync(root)).digest("hex").slice(0, 32))
+    mkdirSync(dirname(allowed), { recursive: true })
+    writeFileSync(allowed, elsewhere + "\n")
+    send(id, "again")
+    await settled(id, 2)
+    expect(words(id)).toBe("elsewhere=noelsewhere=yes")
+  })
+
+  test("in a session's worktree, a folder you let its project's commands write it writes from its next message, as the project's", async () => {
+    // The session's branch: a worktree of the project's repository.
+    const project = realpathSync(mkdtempSync(join(base, "project-")))
+    const git = (...args: string[]) => execFileSync("git", ["-C", project, ...args], { stdio: "ignore" })
+    git("init", "-q")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "first")
+    root = join(base, `branch-${basename(project)}`)
+    git("worktree", "add", "-q", root)
+    root = realpathSync(root)
+    const agent = trying({ elsewhere: ["write", join(elsewhere, "e.txt")] })
+    const id = await run(agent)
+    expect(words(id)).toBe("elsewhere=no")
+    // Also Allowed, as the box writes it for the project.
+    const allowed = join(kuvo, "run", "fence", "allowed", createHash("sha256").update(project).digest("hex").slice(0, 32))
+    mkdirSync(dirname(allowed), { recursive: true })
+    writeFileSync(allowed, elsewhere + "\n")
+    send(id, "again")
+    await settled(id, 2)
+    expect(words(id)).toBe("elsewhere=noelsewhere=yes")
+  })
+
+  test("a link moved into its state inside a folder is taken away before it runs again, so your own Grok never writes through it", async () => {
+    const moved = join(home, "sessions", "another")
+    const agent = trying({ moved: ["move in", moved], there: ["linked", join(moved, "prompt_history.jsonl")] })
+    const id = await run(agent)
+    expect(words(id)).toBe("moved=yes there=yes")
+    // Started again (Also Allowed changed for its project, as the box writes it).
+    const allowed = join(kuvo, "run", "fence", "allowed", createHash("sha256").update(realpathSync(root)).digest("hex").slice(0, 32))
+    mkdirSync(dirname(allowed), { recursive: true })
+    writeFileSync(allowed, elsewhere + "\n")
+    send(id, "again")
+    await settled(id, 2)
+    // (The folder stays, its link gone.)
+    expect(words(id)).toBe("moved=yes there=yesmoved=no there=no")
+    expect(() => lstatSync(join(moved, "prompt_history.jsonl"))).toThrow()
+  })
+
+  test("one started before the sandbox came on keeps agents from the vault until it's done", async () => {
+    const fence = process.env.KUVO_FENCE!
+    rmSync(join(fence, "on"))
+    const id = await run(trying({ elsewhere: ["write", join(elsewhere, "e.txt")] }))
+    expect(words(id)).toBe("elsewhere=yes")
+    // The sandbox comes on, with Grok's process from before still running (it's kept for the next message).
+    writeFileSync(join(fence, "on"), "set up again")
+    noteAgentsInside(!sessions.outside())
+    // (The box asks you, once, to restart it, PROTOCOL.md "Sandbox".)
+    expect(JSON.parse(readFileSync(join(fence, "agents"), "utf8")).outside).toBe(true)
+    // Done (its process closed): now every agent's process runs in it.
+    sessions.closeAll()
+    noteAgentsInside(!sessions.outside())
+    const said = JSON.parse(readFileSync(join(fence, "agents"), "utf8"))
+    expect(said.pid).toBe(process.pid)
+    expect(said.outside).toBeUndefined()
+  })
+
+  test("with the sandbox off, it runs as before: its own program, its own sandbox as you set it", async () => {
+    delete process.env.KUVO_FENCE
+    const id = await run(trying({ sandbox: ["env", "GROK_SANDBOX"], leader: ["arg", "--no-leader"], elsewhere: ["write", join(elsewhere, "e.txt")] }))
+    expect(words(id)).toBe("sandbox=none leader=no elsewhere=yes")
+  })
+})
+
+describe.skipIf(!canFence)("Antigravity in the box's sandbox", () => {
+  /** Kuvo Code's folder, the bridge's (where Antigravity's agent and home are), and a folder elsewhere. */
+  let kuvo: string, home: string, elsewhere: string
+  beforeEach(() => {
+    kuvo = realpathSync(mkdtempSync(join(base, "kuvo-")))
+    home = realpathSync(mkdtempSync(join(base, "agy-home-")))
+    elsewhere = realpathSync(mkdtempSync(join(base, "elsewhere-")))
+    writeFileSync(join(kuvo, "secret"), "s")
+    process.env.KUVO_FENCE = realFence(kuvo)
+  })
+  afterEach(() => {
+    delete process.env.KUVO_FENCE
+  })
+
+  /** Antigravity whose prompts try `tries` where it runs (`places`: its home and program, once made). */
+  const trying = (tries: (places: { profile: string; program: string }) => Record<string, [string, string]>) => {
+    const agent = new TestAntigravity(fakeAcp([], [], undefined, { tries: {} }), home)
+    const places = { profile: agent.profile, program: (agent as any).folder as string }
+    mkdirSync(join(places.profile, "conversations"), { recursive: true })
+    // (Made again, now with what it tries, in the same place.)
+    program(fakeAcp([], [], undefined, { tries: tries(places) }), join(places.program, "agy_acp_server.par"))
+    return agent
+  }
+
+  test("it runs whole in it: it writes the session's folder and its own home, never its program nor elsewhere, can't read Kuvo Code's folder, and writes files itself rather than through Kuvo Code", async () => {
+    const id = await run(trying(({ profile, program }) => ({
+      project: ["write", join(root, "made.txt")],
+      conversation: ["write", join(profile, "conversations", "c.json")],
+      signin: ["write", join(profile, "antigravity-acp", "acp_token.json")],
+      program: ["write", join(program, "agy_acp_server.par")],
+      elsewhere: ["write", join(elsewhere, "e.txt")],
+      kuvo: ["read", join(kuvo, "secret")],
+    })))
+    expect(words(id)).toBe("project=yes conversation=yes signin=yes program=no elsewhere=no kuvo=no")
+    // Kuvo Code would read and write outside the sandbox for it: it isn't offered to.
+    const initialize = received().find((message) => message.method === "initialize")
+    expect(initialize.params.clientCapabilities.fs).toEqual({ readTextFile: false, writeTextFile: false })
+  })
+
+  test("with the sandbox off, it runs as before, reading and writing files through Kuvo Code", async () => {
+    delete process.env.KUVO_FENCE
+    const id = await run(trying(() => ({ elsewhere: ["write", join(elsewhere, "e.txt")] })))
+    expect(words(id)).toBe("elsewhere=yes")
+    const initialize = received().find((message) => message.method === "initialize")
+    expect(initialize.params.clientCapabilities.fs).toEqual({ readTextFile: true, writeTextFile: true })
   })
 })

@@ -246,12 +246,14 @@ connection.
     `retry` isn't counted, so one tried again and again leaves room for the rest), and only
     to a conversation an agent could be. A subagent's, a group chat's seat or one put away doesn't
     take letters. One it can't look up now (its engine starting) is answered `retry`, and so is one
+    for a conversation the engine doesn't have while the coding agents' bridge isn't running (it may
+    be a Claude Code or Codex one; bridge 0.9.118, before which it was refused), and one
     for a conversation moving to or from another computer now, or that lives on another one now
     (`moved`): it reaches it where it lives once the move is over (bridge 0.9.63). A box knows by
     its own moves (`kuvo/moves`; bridge 0.9.108, before which this Mac's box asked its app). One
     for a conversation its engine doesn't have, while its coding agents' bridge isn't running, is
     answered `retry` too (it may be one of theirs, starting again), for half an hour from the first
-    time; after that it's refused as for no conversation.
+    time; after that it's refused as for no conversation (bridge 0.9.123).
   - **Sender**: it names the sender as the sending box named that agent, when that box alone
     lists `from` and it isn't one of the receiver's own conversations. Otherwise the letter is from
     "an agent on <box>", with no address to answer.
@@ -286,7 +288,8 @@ connection.
     `run/replies/<id>.json` (`{text}`, `{failed}` or `{note}`), and touches `<id>.alive` as it
     looks. An answer that comes once it isn't is delivered as a message, and so is one it was given
     but never took (its turn stopped as the answer came): once the tool's gone (`<id>.gaveup`, or
-    `<id>.alive` ten seconds old), once (bridge 0.9.63). After eleven minutes, or stopped, it leaves
+    `<id>.alive` ten seconds old), once (bridge 0.9.63), kept a day while the coding agents' bridge
+    isn't running for a conversation the engine doesn't know. After eleven minutes, or stopped, it leaves
     `<id>.gaveup`, and its letter goes on without waiting. The link notes `run/relay-down` while
     it's been off the relay half a minute, so a tool says so at once rather than wait.
   - Letters an older Kuvo Code left in `run/outbox` for a Mac to collect over SSH are taken on by
@@ -548,16 +551,43 @@ the same for every client and with none connected, and keeps them in `run/queues
   what was for the next step in the queue, ahead of what was queued, the latest first: only what's
   still waiting once it's moved there. A message you write to go now (`steer`) unpauses it;
   another agent's letter, a wake-up or a note doesn't. A Resume or Send Now just after an interrupt
-  wins over the look at it. Once nothing waits, nothing's paused.
-- `GET kuvo/sessions/<id>/queue` → `{paused, held: [inboxID…]}`; `GET kuvo/sessions/queues/events`
-  follows them all (ndjson: `{"queues": {<session>: {paused, held}}}` now and at each change; a
-  session neither paused nor holding anything is left out).
+  wins over the look at it. The box's `stop` pauses it whether anything waits or not (a bot's
+  `stop_session` on its own work only when something does, as a failed run); once paused, it stays
+  so until Resume, Send Now or a message of yours to go now, though nothing is left waiting.
+- **What arrives waits** (bridge 0.9.128, `queue.waits`): the engine would run everything waiting
+  with the first thing to reach a stopped conversation, so while its queue is paused, what the box
+  sends it on its own waits on the box instead: another agent's letter (from here or another
+  computer; a sender waiting for the answer hears the conversation is stopped, and the answer comes
+  as a message), an answer to a letter, a wake-up sent now, a bot's work news, an ask's late answer
+  and a goal's notes. A scheduled wake-up that comes due waits there too, as a `Wake-up` (`kuvo-wake
+  fire` reads `run/queues.json` and hands it over with `box route`, `queue/add`; one that repeats is
+  kept once); a watch waits in its folder. Each goes once the queue goes on, after what the engine holds, one at a time
+  as runs end; kept in `run/queues.json` (`waiting`) and, whole, in `run/waiting/<message id>.json`,
+  across a restart. Send Now sends one at once; `DELETE …/queue/<item>` takes one away.
+- `GET kuvo/sessions/<id>/queue` → `{paused, held: [inboxID…], waiting?: [{id, from?, text, files?,
+  at}]}`: `waiting`, left out when nothing waits on the box, first come first: who it's from (an
+  agent's name, `Wake-up`, `Its sessions`, `Your answer`, `Goal`; none for one of yours), what it
+  says, the names of its files, when it came (ms). `GET kuvo/sessions/queues/events` follows them
+  all (ndjson: `{"queues": {<session>: {paused, held, waiting?}}}` now and at each change; a session
+  neither paused nor holding anything is left out).
 - `POST kuvo/sessions/<id>/stop`: held and paused, then the run stopped. `POST …/queue/hold` (`{items?}`):
   held and paused without stopping (before an undo, or a move); `items`, messages a client held
   as they went to the engine, go first, in that order. `POST …/queue/resume`: unpaused, and the
-  next one goes now. `POST …/queue/<item>/now` (Send Now): unpaused, the item steered, and a run
-  under way stopped to go on with it; 404 when it isn't waiting. Each answers the queue as it is
-  now; 404 for no such session here, 503 with no engine, 502 when the engine refused.
+  next one goes now. `POST …/queue/<item>/now` (Send Now): unpaused, the item steered (one waiting
+  on the box sent), and a run under way stopped to go on with it; 404 when it isn't waiting.
+  `POST …/queue/add` (`{id?, text, files?, delivery?, from?, words?}`, a prompt's body): a client's
+  own message for the queue (every one sent after this run, and Undo), its files kept on the box
+  as a message's are (a phone's also naming its agents and saying it's from the phone, as its
+  prompt would), shown as `words` (as you wrote it, without what the client added for the agent),
+  else as its text; while it's paused it waits on the box (`from` names who it was from, for one put
+  back), else it goes to the engine as asked (`queue` by default); its answer says which,
+  `waits: true|false`. `DELETE …/queue/<item>`: one waiting on the box taken away, its answer
+  carrying it as it was, `removed: {id, text, files?, delivery, from?, words}` (`words`, as it was
+  shown); 404 if it isn't. Undo adds it back with `…/queue/add` and `kept: true` (its body as it
+  was kept, its files not kept again, shown with its `words`). Each answers the queue as it is
+  now; 404 for no such session here, 503 with no engine, 502 when the engine refused. A run that
+  fails pauses the queue again while anything waits on the box; a conversation deleted takes its
+  queue and what waited for it with it.
 - Clients show what's held and whether it's paused from these; the in-flight record of a message
   still on its way (and that Stop held it) stays with the client that sends it, which waits for its
   request before it asks the box to stop, and for its hold before it asks the box to resume.
@@ -575,7 +605,10 @@ client shows it from the same routes.
   `kuvo: {startedBy, by: {bot, name}, depth, wake?}`: the bot it works for, how deep it is
   (1 for one the bot started), and what its starter hears of it (a bot: both, or only its asks
   when it waited for the answer). What a starter hears is gathered a few seconds and sent as one
-  message (an ask to be read at its next step), kept in `run/work/wakes.json` until it's sent. Clients mark rows by `kuvo.by`.
+  message (an ask to be read at its next step), kept in `run/work/wakes.json` until it's sent (for a
+  conversation the engine doesn't know while the coding agents' bridge isn't running, a day at most,
+  since it may be the bridge's; and so is an answer given late, below; for an archived one, until
+  it's brought back, as its own wake-ups wait, a week at most). Clients mark rows by `kuvo.by`.
   Its task ends with the session's half of the playbook: review your work with reviewer subagents,
   fix what they find, and end with a short report.
 - **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
@@ -611,6 +644,28 @@ client shows it from the same routes.
       allowing a build or a test run allows the project's code as it is then.
     - A file can change between the check and the run, and a hard link looks like any file.
     - git follows the diff, textconv and LFS settings the user already has.
+- **Answering asks in the sandbox** (`work/policy.ts`): where the session's commands run in the
+  sandbox ("Sandbox": the engine's, while it's `on`; a coding agent's, when the agents bridge marks
+  its ask `sandboxed`, its program having started in it, and while it's still set up), which holds what they write and read, a bot may allow any of its commands, wherever it
+  runs, within the engine's rules as above; but never one that acts beyond this computer with your
+  accounts, and whatever it can't be sure isn't (any part, past `sudo`, `env`, `npx` and the like,
+  with no option but a bare flag before the program, and the program a package runner runs, `npm
+  exec`, `pnpm dlx`, `bun x`, or `find -exec` does; `xargs`, a runner's `-c`, git's settings on the
+  line, `-c` and `GIT_…=`, setting them (`git config` but its reads, in either syntax, a clone's `--config`, a
+  `--template`; git's own programs, `git-config`, count as git), and naming or writing git's own files, `.git/…`, aren't): a `push`,
+  `send-pack`, `send-email`, `dcommit` or `upload` anywhere among a program's words but the ones
+  that only read or print them (`grep`, `echo`…; `git stash push` stays here), `docker push`,
+  `--push`, a registry output, publishing (`npm publish`,
+  `cargo publish`…), deploying or releasing (`vercel`, `netlify`, `firebase`, `fastlane`, `xcrun
+  altool`, a program or script named for it, a package script so named: `npm run deploy`), sending
+  with `curl` or `wget` anywhere but this computer, reaching another computer (`ssh`, `scp`,
+  `rsync`, `sftp`), `gh` and `glab`, and `security`; nor code it can't read (`sh -c`, `eval`,
+  `node -e`, `python -c`…), nor a line it can't read plainly (`$…`, a here-document). This reads
+  the line, not what a script it runs does: the sandbox can't hold the network. Those, and every
+  edit (which the engine
+  makes itself, outside the sandbox: as above), go to the user. A command a bot allows still can't
+  get out of the sandbox: only you can let one out (`sandbox_ask`, "Asks"), and no tool answers
+  that.
   Each answer is kept on the session, `kuvo.answers: [{ask, call?, what, decision, reason, by:
   {bot?, name}, at}]` (the latest 40), where clients show it on the ask's tool call ("Allowed by
   Pixel") and in the bot's work.
@@ -631,8 +686,9 @@ client shows it from the same routes.
   stopped (held and paused, as the queue's Stop), and the bot's own turn too, with what it was
   still to hear of them dropped. 404 for no such bot here, 503 with no engine.
 - **A box starting again** (its link): what its followed sessions did while it was down (finished,
-  failed, asked) is told to their starters once, by what `run/work/told.json` says was told, and an
-  answer to an ask given after its tool stopped waiting goes to its conversation if it hadn't.
+  failed, asked; not one that was stopped) is told to their starters once, by what
+  `run/work/told.json` says was told, and an answer to an ask given after its tool stopped waiting
+  goes to its conversation if it hadn't.
 
 **Projects** (bridge 0.9.107, feature `work.projects`): a bot makes new projects on its box, in a
 folder you pick once per box, after asking you.
@@ -648,7 +704,8 @@ folder you pick once per box, after asking you.
 - **Asking you first**: `make_project` asks unless you said Always to that bot for that kind,
   and a projects folder is picked. The ask is kept in `run/work/asks.json` until you answer; the
   tool waits up to ten minutes, then says it stays asked, and the conversation gets
-  `[The user answered] …` as a message when you do.
+  `[The user answered] …` as a message when you do (for a conversation the engine doesn't know
+  while the coding agents' bridge isn't running, tried again every few minutes, a week at most).
   - An ask goes with its bot (deleted), or after a week unanswered.
   - `GET kuvo/work/asks` and `GET kuvo/work/asks/events` (ndjson, a line now and at each change)
     → `{asks: [{id, action: makeProject|cloneProject, session, name, bot?, project, clone?,
@@ -670,6 +727,128 @@ folder you pick once per box, after asking you.
   the same way (no `madeBy`): 403 `{needs: "projectsFolder"}` with none picked, 409 for one there,
   400 for a name or address that won't do, 502 when git fails.
 
+**What always comes to you** (bridge 0.9.122, `work/always.ts`): payments, permanent deletes,
+changes to who may do what, new accounts, messages to people, your passwords, keys and sign-ins,
+and git's settings. No mode, Always, plan or goal's switch turns this off. A command that runs in
+the sandbox is the sandbox's rule's alone ("Answering asks in the sandbox"): there a bot may allow
+what stays on this computer.
+- `answer_ask` checks it first, before the policy above, by the tool call's whole input: a
+  command's programs and subcommands, git's past its own options (`rm`, `chmod`, `sudo`, `git -C x
+  config`, `git push --force` or `+ref`, `gh pr create`, `gh api` that writes, `stripe … create`,
+  `docker rm`…), a request to a payment's or a message's service (an address like
+  `https://api.stripe.com`), anything naming where keys are kept (`.ssh`, `.env`, `.netrc`…), a
+  file written in place (`sed -i`, `>>`), an edit of `.env`, `.ssh/`, `.gitconfig`, and another tool
+  by its name's words, in any case (`gmail_send_email`, `sendMail`, `create_pull_request`), unless
+  its first verb only reads (`get_order`) and it reads no secret. It refuses with the kind in words:
+  "That's a permanent delete, which always comes to the user".
+- Every session a bot starts, and the bot's own conversation, carries engine rules that ask for
+  them whatever its approval: `shell` for those programs, subcommands and services, and `edit` for
+  where keys are kept and git's settings, after its own rules so they win over Approve All, then
+  its own Don't Allows of commands again, so those stay Don't Allow. Nothing else of its rules
+  moves, and its approval reads as it was (Ask First is its own `shell *` rule). Another tool (an
+  integration's) can't be named ahead in the engine's rules: on Approve All, only the bot's answers
+  and words hold it back.
+
+**Goals** (bridge 0.9.122, feature `work.goals`, `work/goals.ts`): you give a bot a goal of any
+length, a couple of hours or a month, and it takes it end to end. It's the conversation's own goal
+("Goals", below: the agents bridge keeps the bot at it turn after turn), with a plan kept here
+beside it.
+- **Tools** (a bot's conversation only): `propose_goal` (`{goal, title?, steps: [text | {text, phase?,
+  site?, after?: [step number]}],
+  checks?: [{text, ok?, detail?, url?, button?}], spend?: [{what, cap, currency?, per?:
+  day|week|month|goal}], public?: [text], projects?: [name], ends?, digest?:
+  day|week|milestones|none}`) puts the card up, replacing one it proposed before (refused while one
+  runs; `digest` is a day's for a plan in phases or of more than 12 steps unless it says);
+  `goal_progress` (`{steps: [{step, state?: todo|doing|done|waiting|paused|skipped, progress?: 0–1,
+  note?}]}`, `add?: [text | {text, phase?, after?}]`, `waiting?: {kind: you|judgment|outside, text,
+  detail?, url?}`, `resolved?: [id or words]` (what waited and is dealt with), `spent?: [{what,
+  amount}]` (one on no spend line is kept as waiting, kind `outside`), `watching?: [text]}`; all
+  checked before any is kept; it says whether you're here); `may_publish` (`{step}`: yes only for a public step you switched on); `may_spend` (`{what,
+  amount}`: whether it fits the line's cap in its period now); `finish_goal` (`{report, watching?}`).
+  `start_session` takes `step` (its number or id), and that step's track lists the session.
+- **Asked for**: `POST kuvo/work/goals/ask` `{session, goal}` (`/goal` in a bot's chat, from a
+  client) has the bot plan it and propose it at once (`[Goal] …`) → `{text}`; 400 for a conversation
+  that isn't a bot's.
+- **Only you start it**: `POST kuvo/work/goals/<id>` from a client, `{action: start, public?: {<id>:
+  bool}, wake?, digest?, ends?, spend?: [{cap?, per?}] (by line)}`, `{action: decline}` or `{action:
+  stop}` → `{goal}` (`ends: null` starts it with no end, taking away the one the bot proposed; left
+  out, the bot's stands); while it runs, `{action: change, …the same but start's}` (a cap raised past what's
+  spent lets what spends go on; the bot is told `[Goal changed] …`) and `{action: clear, waiting:
+  <id>}` (what waited, put away). An end written without a zone (`2026-11-30T18:00`) is in yours
+  (`KUVO_TZ`, else the computer's). Never a tool, an agent's message or another computer's mail. 400 for one in the
+  wrong state or a card from more than a day ago; 404 for none. Starting tells the bot `[Goal
+  started] …` (what's switched on and off, what it may spend, the projects it may make, the end) and
+  sets the conversation's goal with `long: true` (no brief of its own: this is it); declining tells
+  it `[Not now] …`; stopping stops its work as `stop-all` does, and takes the conversation's goal
+  away. The box's watch keeps the two as one: it sets the conversation's goal again where its bridge
+  lost it, takes it away once the plan has ended, and shows the bot's own pause at a model's limit
+  as the plan's (`paused` with `session` the bot's conversation).
+- **`GET kuvo/work/goals`** and **`GET kuvo/work/goals/events`** (ndjson, now and at each change) →
+  `{goals: [{id, bot, name, session, goal, title?, state: proposed|running|done|stopped|declined, steps:
+  [{id, text, state, progress?, note?, phase?, site?, after?, sessions?, resumes?,
+  began?, ended?}], checks: [{id, text,
+  detail?, state: ok|needs|failed, by: bot|box, site?, action?: {kind: open|projectsFolder, label, url?}}], spend:
+  [{what, cap, currency, per, spent, until?}], public: [{id, text, on}], projects, wake, digest,
+  ends?, proposed, started?, ended?, waiting: [{id, kind: you|judgment|outside|ask, text, detail?,
+  url?, site?, session?, at}], paused: [{why, until?, session?}], waited, watching, lastDigest?: {at, text},
+  report?, alone}]}`: each bot's latest, while it's proposed or running, or ended within a day. Kept
+  in `run/work/goals.json`; `kuvo/work/events` moves too. While it's proposed, the box's own checks
+  come first: `alone` (failed where this box can't work on it alone yet), `power` (a Mac on battery),
+  `projectsFolder` (needs, when the plan makes a project and none is picked). `progress` is given only
+  where the bot counted it, always with what it counted in `note` ("3 of 8 pages"), which is what
+  the apps show; a step without it is in progress, not some share of it. `site` (a step,
+  a check or what waits, tied to a service: `stripe.com`, from its page's address or as the bot
+  names it) is for the service's own icon, which each client loads from the site itself.
+- **Alone, or with you there**: a goal goes on alone only where the box's commands run in the
+  sandbox (`sandboxOn`, false until it's built in; a test box says yes with `KUVO_TEST_SANDBOX_ON=1`,
+  never the real app's, `run.kuvo.code/box`, whose app takes it out). Elsewhere it runs all the same,
+  with what its sessions ask waiting for you. Clients never say "sandbox" on the card: the check
+  reads "This Mac can't work on its own yet".
+- **The goal's own work**: the sessions the bot started since the goal did (a minute's slack); what it
+  started before isn't the goal's.
+- **Carrying on**: once nothing of the goal has been at work (the bot or its sessions) for 10
+  minutes, then 30, an hour, two, four, eight and twelve, the bot is told `[Goal] Nothing of the goal
+  is at work now…`, unless all that's left waits for you or a limit. Anything at work, or a
+  `goal_progress`, starts the wait over.
+- **Present or away**: you're here while a client is in use (`kuvo/attention`); the box keeps it in
+  `run/work/here.json` for the tools. Whether you're here or not, unattended rules hold:
+  - what its sessions ask that the bot hasn't answered in a couple of minutes, and what the bot
+    asks itself, is listed as `waiting` (kind `ask`) and waits for you, however long: it never
+    stalls the rest and is never said no to; it leaves the list once it's answered;
+  - a session the bot starts for a goal is told you may not be watching: prepare, don't publish,
+    deploy, send or pay unless its task says so;
+  - while no public step is switched on, publishing and deploying (`git push`, `npm publish`,
+    `vercel`, `wrangler deploy`, `docker push`, `gh release`…) ask too, in the bot's conversation
+    and every session of its work, whatever their approval;
+  - a project the plan names is made without asking.
+- **Limits pause; they never end it**:
+  - a session of its work whose turn failed at a model's limit (its words: a 429, a plan's window,
+    a rate limit) is paused until the reset (`resetsIn` reads when from its words, counted from when
+    the turn ended; 30 minutes otherwise), the steps it works on shown `paused` with `resumes`, and
+    told `[Limit reset] … Carry on where you stopped.` once it comes, a box restart in between too;
+    one that's gone or put away meanwhile is let go; the time anything was paused counts once in
+    `waited`;
+  - the bot's own turn at a model's limit pauses the conversation's goal ("Goals", below), shown as
+    the plan's pause;
+  - a day's limit you set (Edit Bot › Work, sessions or tokens a day) holds new sessions until your
+    midnight, and the bot is told `[Limit reset] …` then;
+  - a spend line's cap reached holds what spends on it until its period starts again (`until`); the
+    rest carries on;
+  - an end you set (`ends`) is the only one that ends it: the bot is told `[Goal's end] …` to finish
+    the step under way and report, and two hours on, the box ends it (`stopped`, with a short
+    report).
+- **Keep-awake**: a Mac's box holds `caffeinate -s -w <its pid>` while a goal's work is at it (the bot
+  or one of its sessions running), on power, and lets go while it waits or once it's over. A machine
+  doesn't sleep. On a Mac, a goal goes on while Kuvo Code runs; asleep or closed, it picks up when
+  the Mac wakes or the app opens again.
+- **Your phones**: what waits for you (not the asks, which notify as asks do), once, as category
+  `blocked` (`title` the bot, `subtitle` "Needs you", `data: {session, quiet: "1"}`, or `wake: "1"`
+  for kind `you` where you asked to be woken); a digest as often as `digest` says (daily or weekly
+  from its start, or as a phase is done), as `report` with `quiet: "1"` ("Day 3: 4 of 30 steps done,
+  1 waits for you, waited 2 h at limits"), kept as `lastDigest`; and the report, once, as `report`.
+  A Mac's box sends them while its phone link is on; the Mac app shows its own from
+  `kuvo/work/goals`.
+
 ### Updates
 
 A box's files say which Kuvo Code put them there: `~/.kuvo-code/bin/box-version`. It holds that
@@ -690,6 +869,8 @@ app's version, written by a Mac after it sets the box up, or by the box when it 
 - **Setup** also sends the Mac's ID (`macID`, as its engine launches name it). The bridge keeps
   `tolerantIDs[macID]`, set again at each setup, and notes in `run/launchers.json` which Mac
   started the engine (from `run/engine.json`'s `notes.mac`).
+- **Setup** also sends the Mac's name (`macName`), which the bridge keeps by the Mac's key
+  (`macNames`), dropped with that Mac, for `kuvo/info`'s `macs`.
 
 A Mac with Kuvo Code 0.7 or before still connects, and puts its own files there as it always
 did: the box keeps working as itself ("For released Macs").
@@ -775,7 +956,7 @@ with a mail frame, sealed with the sender's static key for the phone's. Its payl
 | `body` | What the Mac shows: the request, the question, the last words of a reply. |
 | `category` | What it's about, below. |
 | `thread` | What it's grouped under: the session's id, or the group chat's. |
-| `data` | Where it opens: `session` or `group`; `request` for a permission or a form, with `requestSession` when the session asking isn't the one shown (a subagent's), and `answerable: "0"` when its notification mustn't answer it from buttons (it can't show all it covers, or some of its text shows as dots); `ask` for a browser ask. |
+| `data` | Where it opens: `session` or `group`; `request` for a permission or a form, with `requestSession` when the session asking isn't the one shown (a subagent's), and `answerable: "0"` when its notification mustn't answer it from buttons (it can't show all it covers, or some of its text shows as dots); `ask` for a browser ask; `quiet: "1"` for one that shows without lighting the screen or a sound (what a goal needs of you, its digest), and `wake: "1"` for what a goal needs of you where you asked to be woken. |
 
 | Category | When |
 | --- | --- |
@@ -784,7 +965,8 @@ with a mail frame, sealed with the sender's static key for the phone's. Its payl
 | `ask` | An agent browsing asks for a sign-in, a code or a step. `ask` is it. |
 | `finished` | A run finished. |
 | `failed` | A run stopped with an error. |
-| `report` | A bot's run finished: a wake-up's or a watch's news. |
+| `report` | A bot's run finished: a wake-up's or a watch's news, a goal's digest (`quiet`) or its report. |
+| `blocked` | A bot's goal needs you (`quiet`, or `wake` where you asked to be woken). |
 | `message` | Something in a group chat. |
 
 A phone should ignore a category it doesn't know, and show the notification plainly.
@@ -960,7 +1142,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   one there through the engine, as for a project). A machine's bridge also says whether its engine
   is `running`, and whether it's `stopped` on purpose (it stays down until it's started, from a Mac
   or a phone), and `home`, the Mac that started its engine (`{"mac", "name"?}`, its name where
-  its start noted one); a Mac also names `integrations`, each integration's name by its MCP
+  its start noted one). It also says who uses it, for an uninstall to name whom it would stop it
+  for: `macs`, the Macs that set it up (`[{key, name?, seen}]`: each one's key, its name where its
+  setup gave one, `macName`, and when it was last heard from, in ms, moved on by the time the
+  machine was off since), and `phones`, how many phones
+  reach it. A Mac also names `integrations`, each integration's name by its MCP
   server's (`{"microsoft-365": "Outlook and Microsoft 365", …}`), for a card when one asks something.
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
   Antigravity), through the agents bridge beside the host's engine, which answers the same paths
@@ -975,6 +1161,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `api/kuvo/engine` (where the engine is), `api/kuvo/groups` (group chats' own steps, which a
   phone takes through `kuvo/groups`) and `api/kuvo/artifacts` (what its browser downloaded; the
   record is read through `kuvo/artifacts`). The same on both (`Vectors/link.json`, `agentRoutes`).
+  - A permission it lists (`…/session/<id>/permission`) has `sandboxed: true` when the agent asking
+    runs in the box's sandbox now (its whole program started in it), which a bot answering it reads
+    ("Work"); the engine's never have it.
   - Accounts: besides each agent's own sign-in, ones you added, each its own provider
     `<agent's provider>@<id>` (`claude-code@1f2e3d4c`), named `Claude Code · Work` in
     `kuvo/agents/api/integration` (`metadata.accountID`, `metadata.accountLabel`). Their models
@@ -1192,12 +1381,13 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     set aside in Accounts (Settings says Sign In Again, not Sign In). `problem`: the settings
     file can't be changed.
   - `POST kuvo/integrations/<id>` with `{"keys"?: {"<name>": "<value>"}}` adds it, as Connect
-    (or Add Key…) does: with the keys given, or those the computer has; one added already is
-    written again (the engine reads its keys again), and with new keys its server connects again a
+    (or Add Key…) does: with the keys given, and those not given as the computer has them (Change
+    Key may send only the one you changed); one added already is written again as it is then,
+    with what another client changed meanwhile (the engine reads its keys again), and with new keys its server connects again a
     moment later, in the engine's own copy and in every folder it has open (`api/debug/location`;
     over `box route`, in a process of its own, `kuvo-link.js box reconnect <id>`). `200 {"integration"}`, as listed; `400 {"message"}` without the keys it needs;
-    `404` for none; `409 {"message"}` for one used on its site, or a settings file that can't be
-    changed; `503 {"message"}` when its keys can't be kept (this Mac's Keychain, through its app).
+    `404` for none; `409 {"message"}` for one used on its site, a settings file that can't be
+    changed, or one removed while its keys were saved; `503 {"message"}` when its keys can't be kept (this Mac's Keychain, through its app).
   - `DELETE kuvo/integrations/<id>` removes it, as Remove… does: bots' own keys for it there first
     (each computer keeps its bots' keys itself: "Bots' own keys"), then it, its sign-in, what its
     server kept and its keys. `200 {}`; for one not added, `200 {}` when keys of it were left (a
@@ -1308,6 +1498,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     sessions, bots, sign-ins and keys, and still in `kuvo/hosts`: `200 {}`. `POST
     kuvo/machines/<id>/uninstall` does as Uninstall from <machine> does: also stops its engine
     there and deletes the sign-ins and keys it keeps, and it leaves `kuvo/hosts`: `200 {}`.
+  - A machine connecting has `step` (`{name, sent?, total?, fraction?}`): `name` is `checking`,
+    `downloading` (the engine's package to the Mac, `fraction` of it), `copying` (it, to the
+    machine over SSH: `sent` bytes of `total`), `starting` or `reading` (its sessions), for a
+    client to show how far. One whose box said who else uses it has `alsoUsedBy` (`{macs: [name],
+    phones}`, this Mac left out), for Remove's dialog to name whom Uninstall would stop it for.
   - A machine another Mac runs has `home` (`{"name"?}`, that Mac's name where its start noted
     one, as `kuvo/info`'s `home` says it); one this Mac runs has none. `POST kuvo/machines/<id>/home` makes this Mac its home, as Make This Mac Its Home does:
     the engine starts again there as this Mac's, with this Mac's accounts; its sessions, bots and
@@ -1371,8 +1566,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     branch left `base` for `branch`, or git's empty tree before the first commit); `patch` git's
     diff of the folder's files with each whole file as context (`a/` and `b/` prefixes, paths not
     quoted, renames found); `untracked` the new files git doesn't know (not for `staged`; a
-    repository inside this one ends in `/`), and `hashes` git's hash of each, by path, so a client
-    reads one again (`kuvo/file`) only when it changed; `uncommitted`, anything not committed yet
+    repository inside this one ends in `/`), and `hashes` a stamp of each (its size and when it
+    last changed, opaque to a client), by path, so a client reads one again (`kuvo/file`) only when
+    it changed; `uncommitted`, anything not committed yet
     (always true but for `branch`). `500 {"message"}` when git couldn't say.
   - `POST kuvo/git/stage`, `…/unstage` or `…/discard` with `{"root", "path", "oldPath"?, "status":
     "added|deleted|modified|renamed", "scope"?}` → `200 {}`, or `422 {"message"}` with what went
@@ -1395,7 +1591,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   "home", "parent", "folders": [{name, repository?}]}`, ordered as Finder orders names, without
   hidden ones unless `hidden=1`. No `path`, or `~`: the home folder; `~/` starts there. `parent` is
   null at `/`; `repository`, a git repository's own checkout. `404 {"message"}` for no folder there,
-  `403` for one it can't read, `400` for a path that isn't a full one.
+  `403` for one it can't read, `400` for a path that isn't a full one; each refusal with `reason`,
+  why as the computer says it (`Permission denied`, `No such folder`, `Not a folder`), so a client
+  never shows a folder it couldn't read as empty. With `files=1` (`folders.files`), its files too,
+  as a Files panel lists a folder: `files`, their names in the same order (with `hidden=1`, hidden
+  ones too; `.DS_Store` left out).
   `POST kuvo/folders {"path"}` makes a new folder in one that's there, as a folder panel's New
   Folder does → `{"path"}`; `409 {"message"}` for something there already, `404` when the folder
   it's in isn't there, `403` when one can't be made there, `400` for a path that isn't a full one.
@@ -1618,7 +1818,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 - `kuvo/wakes/<session>`: a session's (or chat's) wake-ups and watches, which its
   agent sets with `kuvo-wake`, as the bar over the Mac's composer shows them: `{"wakes": [{id,
   due, note, every}], "watches": [{letters, every, check, note}], "paused"}` (`due` in seconds
-  since 1970, `every` like `1d` or null; paused while it's archived: archive it as the Mac does,
+  since 1970, `every` like `1d`, left out for one that doesn't repeat; paused while it's archived: archive it as the Mac does,
   `PATCH api/session/<id>` with `{"metadata": {"kuvo.archived": true}}` (`false` brings it back),
   and its wake-ups wait, or come back, when the flag changes (it can go with every change to its
   metadata); a Mac sees to it, and a machine's bridge does with the Mac closed too;
@@ -1627,7 +1827,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `every` 30m, 2h, 1d, 1w or weekdays, at least 5m), with the computer's own clock and weekends;
   `400 {"message"}` for what can't be one, `409` with 50 waiting. `POST
   kuvo/wakes/<session>/pause` with `{"paused": true}` holds them (a pause of your own), `false`
-  lets them go; with `{"archived": true}` they're held as archiving holds them (a client that
+  lets them go (not archiving's hold: they still wait until it's back, bridge 0.9.121); with `{"archived": true}` they're held as archiving holds them (a client that
   archived it on the engine directly says so), `false` lets go of only that hold. Both answer the
   list as it is then. `POST
   kuvo/wakes/<session>/cancel` with `{"wake": "<id>"}` or `{"watch": "<letters>"}` cancels one;
@@ -1730,7 +1930,9 @@ Grok). With none to answer, the goal pauses and says so. A client reaches them a
 
 - `GET kuvo/agents/api/kuvo/goals` → `{data: [goal]}`: every goal on the box, a met one too until
   it's put away. `GET …/goals/<session>` → `{data: goal}`, or 404 when it has none.
-- `PUT …/goals/<session>` with `{"condition"}` (at most 4,000 characters) sets it, in place of one
+- `PUT …/goals/<session>` with `{"condition", "long"?}` (at most 4,000 characters; `long` for a bot's
+  goal with a plan, "Work › Goals": not briefed, checked or nudged here, only kept and paused at a
+  model's limit) sets it, in place of one
   it had, and starts the agent on it at once: `{data: goal}`; 400 `{message}` for no condition or
   one too long, 404 for a conversation that isn't there, 409 for a subagent's (the conversation it
   works for has the goal), 503 when it can't be reached. A turn already under way counts only if
@@ -1740,19 +1942,25 @@ Grok). With none to answer, the goal pauses and says so. A client reaches them a
   is checked (however it ended), and it carries on unless that met it. Both `{data: goal}`, 404 when it has none, 409 for one that's over (set it
   again instead).
 - `DELETE …/goals/<session>` puts it away, over or not: `{}`, or 404.
-- A goal: `{session, condition, state, note?, pausedBy?, started, ended?, turns, checking, last?}`.
-  `state` is `working`, `paused` (`pausedBy`: `you`, `error` (a turn failed, said in `note`),
-  `stalled` (three turns in a row doing nothing) or `limit` (a hundred turns since it was set or
-  resumed)), `met`, or `unmet` (it can't be met as asked: `note` says why). `turns`: the agent's
+- A goal: `{session, condition, state, note?, pausedBy?, resumesAt?, long?, started, ended?, turns,
+  checking, last?}`. A goal at a model's limit carries on with a word to its agent ("the limit has
+  reset"), not a check of the turn that failed; a check that meets one waits too. A `long` goal's
+  turns are only kept: its plan says when to carry on. `state` is `working`, `paused` (`pausedBy`: `you`, `error` (a turn failed, said
+  in `note`), `stalled` (three turns in a row doing nothing) or `limit` (a hundred turns since it was
+  set or resumed; or a model's limit reached, with `resumesAt`: it carries on by itself then, a box
+  restart in between too, and `note` says until when)), `met`, or `unmet` (it can't be met as asked: `note` says why). `turns`: the agent's
   turns toward it, each checked; `checking`: a check is under way; `last`: `{verdict: "met" |
   "not_met" | "impossible", reason, at}`, its reason what's left or what shows it's met. Times in
   ms since 1970.
 - The bridge's events (`kuvo/agents/api/event`) carry `kuvo.goal.updated` `{sessionID, goal}` for
-  each change, `goal` null once it's put away (or its conversation deleted).
+  each change, `goal` null once it's put away (or its conversation deleted, over or not, also while
+  the box was stopped).
 - In the conversation, the goal's messages to the agent are notes (`synthetic`) whose text starts
   with `[Goal] `: show their `description` ("Goal: …", "Not met yet: …") as the goal's. A turn
   you stop pauses it ("The turn was stopped."); so does one that fails. A turn cut short as the box
-  stopped is checked once it's back, as any turn, and one is never checked twice.
+  stopped is checked once it's back, as any turn, and one is never checked twice. While its
+  conversation is archived (`kuvo.archived` in its metadata, or the engine's own), the goal waits,
+  still `working`: its last turn is checked once the conversation is brought back (bridge 0.9.121).
 - "/goal" in a composer: `/goal <condition>` sets it, `/goal` alone shows it, and `/goal pause`,
   `/goal resume` and `/goal clear` (or `stop`, `off`, `reset`, `none`, `cancel`) do what they say
   (OpenCodeKit's `GoalCommand`, for every client alike).
@@ -1936,6 +2144,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `engine.restart` | `POST kuvo/engine/restart` |
 | `file` | `kuvo/file` |
 | `folders` | `kuvo/folders` |
+| `folders.files` | `kuvo/folders?files=1`: a folder's files too, and `reason` on a refusal |
 | `git` | `kuvo/git/…`: Changes (bridge 0.9.94) |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
@@ -1956,6 +2165,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
+| `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
 | `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |
 | `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
 | `search` | `kuvo/search` |
@@ -1971,6 +2181,9 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `sign-in.return` | `POST kuvo/sign-in/return` |
 | `skills` | `kuvo/skills…` and `kuvo/skill-library…` |
 | `skills.trash` | `kuvo/skill-trash…`: Recently Deleted, and restoring from it |
+| `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.118) |
+| `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
+| `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.118) |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
@@ -2015,7 +2228,7 @@ On a machine the bridge keeps its state in `~/.kuvo-code/run/link.json` (mode 60
 
 ```json
 {"relay": "wss://…", "secret": "…", "key": "<static private key>", "sign": "<signing key's seed>", "mac": "<the last Mac's static key>",
- "macs": ["<each Mac that set it up>"], "macSigns": {"<Mac>": "<its signing key>"}, "macSeen": {"<Mac>": <when it came, here>},
+ "macs": ["<each Mac that set it up>"], "macSigns": {"<Mac>": "<its signing key>"}, "macSeen": {"<Mac>": <when it came, here, moved on by time off since>}, "macNames": {"<Mac>": "<its name>"},
  "docs": {"<origin> <kind>": {"d": "…", "s": "…"}}, "own": {"<kind>": {"n", "h", "b"}}, "views": {"<origin>": {"n", "h"}},
  "phones": [{"key": "…", "name": "…", "added": 1760000000, "from": "mac", "mac": "<the Mac that listed it>", "address": "…", "pairing": "…"}],
  "removed": [{"key": "…", "pairing": "…"}]}
@@ -2407,6 +2620,16 @@ Mac's app runs it as it starts its engine, and a machine's start scripts do, so 
 after a restart with no Mac there gets it too; a box too old to know it starts its engine as
 before. A Mac sends none.
 
+A machine's engine, its coding agents and its link find programs on the PATH your login shell sets
+up there (`~/.local/bin` from your profile, nvm's node from `.bashrc`), not the bare one a start over
+SSH or from cron gets: `kuvo-link.js login-path` (bridge 0.9.117) prints it, read from an interactive
+login shell, then a login shell only (`$SHELL`; on Linux your account's when that's cron's `/bin/sh`;
+none for nushell or csh), followed by the folders of the PATH it was run with; or nothing when neither
+answers in time. A machine's start scripts run it once before starting the engine, and it keeps what
+it read in `run/login-path`, which the link and the coding agents' bridge go by; the bridge reads it
+again only after it installs or updates an agent (a .bashrc that starts an `ssh-agent` when there's
+none would leave one running with each read). This Mac's app reads its own shell's for its engine.
+
 ### Personalities
 
 The personalities you make are one library on every computer: each keeps its copy (a Mac in
@@ -2498,7 +2721,9 @@ then pauses everyone, and so does its being gone. The state says `tampered`. Val
 
 **The process that holds it.** The box's long-running process (`run` on a machine, `serve` on a
 Mac) holds the vault. A `box route` passes `kuvo/vault…` to it over `run/vault.sock` (`0600`, owned
-by the user, which the route checks first), one request a connection: `{"hello": <nonce>}`, answered
+by the user, which the route checks first), one request a connection: `{"hello": <nonce>, "key"}`
+(`key`, the box's socket key: the text of `run/socket.key`, `0600`, made by whichever of the box's
+processes needs it first; a connection without it gets nothing and is closed), answered
 `{"nonce", "proof"?}` (`proof`, while the holder has the unlock key: HMAC-SHA256 with it of
 `kuvo-vault-holder\0<the route's nonce>`, base64url); then a line of `{"method", "path", "headers",
 "body"}` (base64) there, `{"status", "type", "body"}` back. A request with the unlock key sends, to
@@ -2531,8 +2756,9 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
   one without making it.
 - `GET kuvo/vault` → `{state, items, grants}`. `state` is `{made, locked, paused, pausedBots:
   {<bot, or a conversation that isn't a bot's>: why}, store: "keychain" | "encrypted", keptDays,
-  agents, tampered?, generations: {items, grants, paused}}` (`agents`: whether agents may use it
-  on this box, below); an item is `{id, kind: "login" |
+  agents, agentsWaiting?, tampered?, generations: {items, grants, paused}}` (`agents`: whether agents may use it
+  on this box, below; `agentsWaiting`: its sandbox is on, and they may once the coding agents
+  started before it came on have finished, which clients say as “Locked for now: some agents started before the sandbox was on. The vault opens when they finish.”); an item is `{id, kind: "login" |
   "key" | "file" | "note", name, sites, username?, fields, fileName?, readable?, signInOnly?,
   created, changed, used?}` (`sites`: hosts, a site's own and those under it; `fields`: the names of the values it
   holds, a sign-in's `password`, a file's `file` (base64), a note's `text`, a key's own); a grant
@@ -2554,12 +2780,18 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
   `refused`, `added`, `changed`, `removed`, `granted`, `ungranted`, `paused`, `resumed`, `shown`.
 - `GET kuvo/vault/asks` → `{asks}`, and `GET kuvo/vault/asks/events` (`application/x-ndjson`, the
   list now and on each change): what agents wait on you for, `{id, kind: "use" | "item", at,
-  session?, sessionName?, bot?, botName?, item?, itemName?, need?, why?, site?, machine?}`. `use`:
-  an item it may use only by asking (or has no grant for); `item`: something it needs (`need`).
+  session?, sessionName?, bot?, botName?, item?, itemName?, need?, why?, site?, machine?, group?}`.
+  `use`: an item it may use only by asking (or has no grant for); `item`: something it needs
+  (`need`). `group`: asked from a bot's seat in that group chat (`session` the seat, `bot` its
+  bot), which a client shows in the chat, since no one opens a seat. The seat is on its bot's own
+  computer, so a chat follows the asks of each of its members' boxes as well as its own. A seat asks
+  each time, whatever it may use on its own, and is answered only once: no Always. So does a
+  conversation whose root the engine can't say just then, without a `group`.
   `POST kuvo/vault/asks/<id> {answer: "once" | "always" | "no", item?}` → `{}` (`item`, for an
   `item` ask, the one you give; `always` grants it on its own, to the bot or, for another session,
-  its project). An agent waits 15 minutes, then takes it as no. Your phones hear of one still open
-  after two seconds (`category: "ask"`, `data: {session?, vaultAsk}`).
+  its project; for a seat's, it's once). An agent waits 15 minutes, then takes it as no. Your phones hear of one still open
+  after two seconds (`category: "ask"`, `data: {session?, vaultAsk}`, or a seat's `{group, vaultAsk}`,
+  which opens its group chat).
 
 **The agents' own.** Both tool servers pass these on as they come, with the calling conversation.
 Each is answered only while that conversation is making the call: its engine (or the coding agents'
@@ -2567,13 +2799,12 @@ bridge) has a tool call of that name running in it (`api/session/<id>/message`, 
 `running` or `pending`; for `tools`, with the same arguments; for `fill`, `browser_sign_in` or
 `browser_fill`, and one fill for each such call). Any program on the computer could name a session;
 only the conversation's own call uses its grants. (On a machine its browser, and anything that runs
-as you there, can still reach a value a fill puts in a page: until agents' commands are fenced off,
-that's what a machine can't keep from them.)
+as you there outside the sandbox, can still reach a value a fill puts in a page.)
 
-Agents use the vault only on a box whose agents' commands are fenced (not yet on any box; the
-tests open it with `KUVO_VAULT_AGENTS=1`, which a Mac's app never passes its box, and which a box
+Agents use the vault only on a box whose agents' commands are all in the sandbox (below: its state's
+`on` and `agents`; the tests open it with `KUVO_VAULT_AGENTS=1`, which a Mac's app never passes its box, and which a box
 takes only in a test's own folder, never the account's own `~/.kuvo-code` or a Mac's
-`run.kuvo.code…/box`). Until then `GET kuvo/vault/tools` lists no tools, and a call says the vault
+`run.kuvo.code…/box`). Elsewhere `GET kuvo/vault/tools` lists no tools, and a call says the vault
 isn't open to agents. A fill does only what Kuvo Code did before the vault: for `browser_sign_in`
 with no item, the one sign-in for the page's site the conversation may use on its own (else `404`,
 and the browser asks you); an item named, or a field, is `404`. The browser tools leave out
@@ -2604,6 +2835,268 @@ named) asks you and waits. An item you give through `vault_ask` "always" is gran
 half an hour goes ahead. A command's copies (`run/vault-run/`) go when it ends, when the box ends,
 and as a box starts.
 
+### Sandbox
+
+Each box runs its agents' commands in a sandbox (`sandbox` in `features` and its asks, `sandbox.asks`, bridge 0.9.118) wherever
+it can, with no switch: the way out is per command (the card that asks you about one it refused).
+On, each command the engine runs (an agent's shell tool, and yours with `!`)
+writes only in its conversation's folder, that folder's git repository (a real one: a `.git` that's
+a link, or names a folder that isn't a repository or a worktree the repository doesn't name back,
+counts for nothing; on macOS never its hooks or config, its submodules' or its worktrees', nor the
+engine's settings in the folder: `.opencode/`, `opencode.json`, nor the coding agents' settings
+files, whose hooks and servers they run as they start there: `.claude/settings.json` and
+`settings.local.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and `mcp.json`,
+`.gemini/settings.json`, `.grok/settings.json`, and the scripts in `.claude/hooks` and
+`.cursor/hooks`; a folder moved or linked into place is checked only by its own name, so the folders
+that hold those, `.git`, a submodule's or a worktree's repository in it and the agents' `.claude`,
+`.codex`, `.cursor`, `.gemini` and `.grok`, can't be made, moved or removed, only written in), its conversation's own temporary
+folder (`TMPDIR`), its conversation's wake-ups' inbox (below), the system's temporary folders, devices and tools'
+caches, but not what in them runs later outside the sandbox (installed programs like
+`~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, npx's packages). It can't read
+Kuvo Code's own folders (on a machine `~/.kuvo-code`; on this Mac the app's folders under `Library`,
+any `run.kuvo.code…` copy's, its temporary folder and `/tmp/kuvo-ssh-<uid>`) but its `bin`, nor your
+secrets (cloud, package and git tokens, browsers' and password managers' data, private SSH keys:
+every file in `~/.ssh` but its config, known hosts and public keys; gh's `hosts.yml` when it holds
+the token). A bot's or a chat's command gets its own folder back, and not its neighbours'. Its
+environment has none of the engine's `OPENCODE_…` (but `OPENCODE_SESSION_ID`), no `KUVO_…` password,
+secret, token or key, and no `SSH_AUTH_SOCK` but its own SSH agent's (below).
+On macOS your Keychain stays readable, as gh and git's Keychain helper read their sign-ins from it in
+their own process (each item keeps its own access list, Kuvo Code's too, though one that trusts
+`security` reads without asking, and the file itself can be copied), but not the system's own
+keychain in its folder (`Library/Keychains/<UUID>`), which only its daemons read.
+On macOS it also can't reach Kuvo Code's own servers on `127.0.0.1` (the engine's, the bridge's,
+the box's, the host interface) or sockets in its folders, start launchd jobs, open apps
+(LaunchServices) or send Apple Events; on Linux the servers' passwords are in files it can't read,
+and its sockets (the vault's `run/vault.sock`, the browser keeper's `run/browser.sock`), which a
+command can still connect to there, serve only a connection that gives the box's socket key first
+(`run/socket.key`, which it can't read): the vault's in its hello, above; the keeper's as
+`{"method": "Kuvo.key", "params": {"key"}}`, before it says its own hello. Any other hears nothing
+from the vault, and from the keeper (within a few seconds and a short first line) only a
+`Kuvo.error` saying to update Kuvo Code, which is what an older Kuvo Code on a Mac shows; then it's
+closed.
+The engine's plugin makes a new key as that engine first sends commands through the sandbox (before
+any of them runs), so one a command read before opens nothing after. (A process a command started
+while the sandbox was off, or before the engine took it in, still runs outside it.)
+So neither a command nor what it starts can route a request to the vault (`box route` included),
+take a sign-in's fill, or drive, stop or answer the browser.
+
+**Wake-ups.** A command schedules its own conversation's (`kuvo-wake add` and `watch`, the
+conversation as the engine names it in `OPENCODE_SESSION_ID`), never another's: it reads its
+conversation's wake folder (its bot's, or its own in the box's `wakes`, which the launcher makes
+with its `session` and `directory` before the command runs, and which goes a day after it was last
+used if it never got a wake-up or a watch, or its conversation's archived) and writes only its
+`inbox/`. The launcher names that folder to kuvo-wake in `KUVO_WAKE_FOLDER`, and kuvo-wake puts what's
+asked there (wake-ups in `inbox/wakes`, watches in `inbox/watches`, cancels in `inbox/cancel`), each
+written whole under a `.new-` name first and then put in place, and lists them with what's kept. The
+box's round of wake-ups (`kuvo-wake fire`, each minute) takes the inbox in, unless it's empty or a
+`.new-` there is under a minute old: it moves it out of the commands' reach first (a link moves as the
+link), then keeps copies of only plain files (no link, no second name for a file, 64 KB at most)
+under the names kuvo-wake gives them, and clears the rest; what it keeps (`wakes/`, `watches/`, a
+watch's readings) no command writes. While the sandbox is on (`run/fence/on`), each watch's check
+runs in the sandbox, in its conversation's folder (none when that's gone), whether at its time or by
+Check Now (`kuvo-wake try`), what it prints going to a file; set up and checked (`run/fence/ready`)
+but not on, or its launcher missing, checks wait. Where the box can't set it up, checks run as
+commands do.
+
+**SSH keys.** Your own keys and agent stay hidden; a command signs with the SSH keys you keep in the
+vault for its conversation (a `key` item with a `private_key`, OpenSSH's own format or PEM, without
+a passphrase; for its bot, its project or everyone, as the vault's grants say, asking you when one
+says to) through Kuvo Code's own SSH agent, which `ssh`, git over SSH and `ssh-add` use as
+`SSH_AUTH_SOCK`. While agents may use the vault, the launcher notes each conversation before its
+command runs (`run/ssh-for/<session>`, or `dir-<sum>` with its folder for one of yours with none),
+and the process that holds the vault opens that conversation's agent: a socket of its own, named
+from the note's sum and random bytes, in `/tmp/kuvo-ssh-<uid>/agents-<sum>` on a Mac (a socket's
+path is short there) and `run/ssh-agents` on a machine, which the launcher hands the command.
+Each lists only the keys its conversation may use, signs inside that process (a key never reaches
+the command), answers one request at a time per connection, asks you once for a key whichever of
+the conversation's commands signs, and after you say no, says no for a little while without asking.
+Pause, a locked vault or a key removed: none offered. They go when the box does (cleared as it starts,
+too). On macOS a command reaches its own agent and no other's, nor the app's own SSH connections
+beside them; on Linux, which can't refuse a socket and shows every folder's names, any
+conversation's commands could reach another's agent, so there an agent offers only the keys you
+keep for everyone, until it can tell which conversation a connection comes from.
+
+**How.** The box writes, before it says where it is as it starts: `bin/kuvo-fence` (the shell the
+engine runs a command with) and, on Linux, `bin/kuvo-fence.js`; the rules in `run/fence/`
+(`project.sb` and `inside.sb` for macOS's `sandbox-exec`, `policy.json` for Linux's Landlock, which
+the engine's own Bun sets up through `bun:ffi`, Linux 5.13 or later); and the engine's plugin,
+`kuvo-sandbox.js` in its settings' `opencode/plugins`. The plugin names, for each folder the engine
+opens, that folder (the engine's own, never the command's) and its repository, and sends each
+command's shell through `bin/kuvo-fence`, which refuses to run one without a folder (exit `126`). The
+box first runs a command through it and checks that it can't read or write what's hidden; only then
+does it give the engine the plugin, and it takes it away (with what the engine noted of it, so
+it's `on` again only once the engine has loaded it again) when a check fails, so commands run as
+before rather than not at all. (Kuvo Code's own kill switch, for a rollout, does the same: the box
+started with `KUVO_SANDBOX=off`. No client shows a reason for it.) It puts it back if it goes, and keeps
+Kuvo Code's own ports in the macOS rules as they change: the engine's, the agents bridge's, the
+app's (`run/host.json`) and its server for Kuvo Code's tools (`run/tools.json`, `{"port"}`, which
+the agents bridge writes as the app tells it where that is, `PUT kuvo/tools`, and removes when it
+says it's gone; only an agent's relay reaches it).
+Agents are told: each box starts its engine with `run/fence/agents.md` among its instructions
+(`engine-config`, beside what it's given), which the engine reads again as it changes. While it's
+`on` (the engine has loaded the plugin) it says what commands can't do, and how builds and tools that would fail run (on a
+Mac: `swift … --disable-sandbox`, xcodebuild's package flags, `pgrep` rather than `ps`); otherwise
+it's empty.
+
+- `GET kuvo/sandbox` → `{on, why?, able, agents}`. `on`: every command the engine runs here
+  goes through the sandbox, checked (the engine loaded this box's plugin). `why`, when it isn't, in
+  words for Settings: why this computer can't (`able: false`: no Landlock, no engine
+  yet), a failed check, `Its plugin for the engine was changed or removed.`, `The engine isn't
+  running.`, `Waiting for the engine to load it.`. `agents`: the coding agents' own
+  programs (Claude Code, Codex, Cursor, Grok and Antigravity, whose commands don't go through the
+  engine) run in it too: each starts its next turn in it once it's set up and checked here, and
+  `agents` is true once no agent process the bridge started before it was on still runs (the
+  agents bridge notes it, `{pid, on}`, in `run/fence/agents`, for the sandbox as it is: `on` is the
+  token each setup writes in `run/fence/on`, with `outside: true` while one still runs; with no
+  bridge running, it's true). `restart`: the box asks you, once, to restart those: true the first
+  time it's on with one still running (never if it was on with all inside it first), until you
+  answer with `POST kuvo/sandbox/restart` `{restart}`, which answers the state anew (400 without
+  a true or false; 503 when the agents bridge doesn't answer, and it stays asked). True has the
+  bridge (`POST /api/kuvo/sandbox/restart`) close each agent's process started before the sandbox
+  was on once its conversation is between turns and nothing it left going (commands, subagents)
+  still runs, the rest as they get there; each starts again in the sandbox with its next turn, going on with its
+  conversation. False leaves them to finish as they are. `kuvo/sandbox/asks` carries it too, so a
+  client following the asks hears it as it comes and goes. Clients show it as a card in the
+  computer's conversations: "Restart agents in the sandbox?". It counts the
+  agents' own processes, from their start: a command one of them started outside the sandbox that
+  outlives it isn't followed, as with the engine's. Each runs whole in it, and so does all it
+  starts: its commands, and its hooks and MCP servers, yours and a project's. Claude Code through
+  `run/fence/shell/run` (the SDK's own start of it, `spawnClaudeCodeProcess`), in the conversation's
+  folder, its own sandbox off; of its settings folder (`~/.claude`, or an added account's) it writes,
+  on a Mac, only what's named as its state (its conversations, their files, todos and plans, shell
+  snapshots, history, caches and logs, its sign-in, an added account's `.claude.json`), and in
+  those never settings (`settings*.json`, `hooks`, `.mcp.json`); never your `~/.claude.json` (it
+  goes on without saving to it), nor its own updates (`DISABLE_AUTOUPDATER`; Update does them,
+  outside); Kuvo Code's tools through the relay, and files you attach as copies, as for Codex.
+  Codex runs whole in the sandbox
+  (`run/fence/shell/run`), an app-server for each session in that session's folder (and your
+  account's in its `sessions` folder), its own sandbox off, asking as it does, and Kuvo Code's tools
+  through the agents bridge's relay on 127.0.0.1, a key for each session. Of its home it writes, on
+  a Mac, only what's named as its state (its sign-in, its databases, its conversations, logs and
+  caches), and in those never settings (`*.toml`, `.env`, `hooks.json`, `rules`); nothing else
+  there (its settings, plugins, skills, helpers, shell snapshots, models' instructions, the ChatGPT
+  app's state), and it can't reach the ChatGPT app's socket (`ipc`); on Linux, a machine's Codex
+  home (Kuvo Code's own copy) whole. In its state a command makes only files and folders, never a
+  link (your own agent would write through it, elsewhere); a link carried in inside a folder the
+  bridge takes away as the agent starts and stops (the agents make none there). Its memories'
+  database it opens as it starts, so a command can write it (what your Codex is told later, never
+  what it runs; so can a conversation of its, when you take it up). Files you attach are copied for
+  it to `run/fence/attachments`, which it only reads.
+  Grok runs whole the same way, as Antigravity does: its process per
+  session through `run/fence/shell/run`, its own sandbox off (`GROK_SANDBOX=off`), its memories
+  off (`GROK_MEMORY=0`), never in a shared leader (`--no-leader`; on a Mac its socket in `~/.grok`
+  is refused), Kuvo Code's tools through the relay; of its home, on a Mac, only what's named as its
+  state (`sessions`, `logs`, `memtrace`, `debug`, `crash`, its sign-in, locks and databases), and
+  in those never settings (`*.toml`, `hooks-paths`, `disabled-hooks`, `*.sh`, so a project's
+  always-allowed commands too); nothing else there (its settings, hooks, status line, language
+  servers, the settings xAI sends, its models' list, which names where each model's requests go,
+  its program, plugins, skills or memories). In a project, `.grok`'s settings, language servers,
+  hooks, plugins, agents and workflows are kept as the other agents' are.
+  Cursor, whose SDK runs its tools in the process that runs it (the bridge's, otherwise), runs whole
+  the same way: its SDK in a process of its own for each session (the engine's runtime run as Bun:
+  `KUVO_FENCE_BUN=1`, which commands don't get), which the bridge asks over its stdin and stdout,
+  Cursor's own sandbox off, stopped once it's been done 15 minutes. Your sign-in stays with the
+  bridge, which hands it the key it runs with, out of its reach: of Cursor's folders it reads and
+  writes only its conversations and a folder of its own for its notes, sandbox policies and computer
+  use's (`cursor/in-sandbox`, never what Cursor keeps run in the bridge), and it reads its SDK.
+  Antigravity runs whole too, for its sessions and its sign-in alike: its home (`GEMINI_HOME`, Kuvo
+  Code's own, never yours) and its temporary folder, where it unpacks itself, written whole; its
+  program and the bridge's browser catcher only read; Kuvo Code's tools through the relay. It
+  writes and reads files with its own tools then: the bridge offers none (`fs` false in
+  `initialize`), since it would write outside the sandbox.
+  When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
+  you can do (`action`) and the box's route that does it (`route`, where there is one):
+
+  | `reason` | when | `action` | `route` |
+  | --- | --- | --- | --- |
+  | `kernel` | Linux without Landlock; `needs`: `"Linux 5.13"` | `help` | |
+  | `macos` | this macOS has no sandbox | `softwareUpdate` | |
+  | `engineMissing` | a machine without its engine yet | `retry` | `POST kuvo/sandbox/check` |
+  | `checking` | not checked yet | `retry` | `POST kuvo/sandbox/check` |
+  | `checkFailed` | its check failed; `check`: `folder`, `tempFiles`, `readsOwn`, `writesOwn`, `didntRun` or `setup` | `retry` | `POST kuvo/sandbox/check` |
+  | `plugin` | its plugin for the engine was changed or removed | `fix` | `POST kuvo/sandbox/check` |
+  | `engineDown` | the engine isn't running | `restartEngine` | `POST kuvo/engine/restart` |
+  | `waiting` | the engine hasn't loaded it yet | `restartEngine` | `POST kuvo/engine/restart` |
+
+  `failures`, with
+  `checking` and `checkFailed`: checks failed in a row (the box tries again each minute). A box
+  without `sandbox.check` in its features gives none of these; without `sandbox`, it has no sandbox
+  (an older Kuvo Code, to update).
+- `POST kuvo/sandbox/check` → the state, after setting it up and checking it again.
+
+#### Asks
+
+When the sandbox stops a command a task needs, the agent asks with its tool `sandbox_ask` (`command`,
+`why`, and what it printed, `error`; `timeout`, how long it may run, 300 seconds unless it says, at
+most 600). Every client is asked; on Allow Once or Always for This, **the box runs that one command
+itself**, outside the sandbox: with your login shell (`-lc`), in the conversation's folder (the
+engine's record of it, never the command's), with the box's environment but without the passwords
+and secrets of Kuvo Code's own processes, and hands back what it printed (the last 64 KB) and how it ended. The
+agent's text starts `Ran outside the sandbox · Allowed once` or `· Always for this: …` (with the
+folder its commands now write in); on Don't Allow,
+`The user said no: …`, and nothing runs. An ask nobody answers in 15 minutes runs nothing either, and
+the text starts `Nobody answered in time` (a client shows it as no answer, not as your no). The agent
+never lets a command out itself, and no tool answers an ask (a bot neither): only a client. A bot's
+seat in a group chat runs no commands, so it has nothing to ask: its rules deny the tool, and the box
+refuses one from a seat, asking nobody.
+
+The tool is the box's, so an agent has it on every box (`sandbox.asks`): this Mac's tool server and a
+machine's (`kuvo-browser.js mcp`, through `box route`) list what `GET kuvo/sandbox/tools` gives (only
+while the sandbox is `on`) and pass a call to `POST kuvo/sandbox/tools` `{session, name, arguments}`
+→ `{text, isError}`, which, as the vault's, the box carries out only while that conversation is
+making that call. The asks, the tool and the answers live in the box's long-running process, as the
+vault does (`run/vault.sock`); another passes them on.
+
+- `GET kuvo/sandbox/asks` → `{asks: [ask], restart?}`, oldest first, with `restart: true` while
+  the box asks you to restart its agents (the state's `restart`); `kuvo/sandbox/asks/events`, NDJSON,
+  the same at once and on every change. An ask: `{id, at, session?, sessionName?, bot?, botName?,
+  project, command, why, stopped?, error?, always?, machine?}`. `session` is the conversation's root
+  (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
+  that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,
+  `job`, `app` or `other`; `path`, the file, folder or address). `always`: what Always for This would
+  keep besides running it, `{kind: "write", path}`, the one place the sandbox stopped it writing,
+  when that's all it stopped and it's one that may be given (below); without it, the command can
+  only be allowed once. A command itself is never let out for good: what it runs (its scripts, its
+  project's settings, `package.json`, a `Makefile`) is what the sandbox writes, so the same command
+  asks again each time. `machine`: the machine's name, on a machine.
+- `POST kuvo/sandbox/asks/<id>` `{answer: "once" | "always" | "no"}` → `200`, `404` for one that
+  isn't open, `400` for another answer. `always` without `always` in the ask counts as once.
+- Each open ask is also a notice to your phones (as the vault's are): `<who> wants to run a command
+  outside the sandbox`, the command and why, `category` `ask`, `data.sandboxAsk` its id.
+
+On macOS the launcher tags each command's refusals in the system's log
+(`kuvo-sandbox <session> <first 16 hex of the command's SHA-256>`, as `sandbox-exec`'s message), and
+the box reads them for `stopped` (`log show`, the last 3 minutes). Linux's Landlock logs nothing, so
+there an ask has only what the agent says (`error`) and never `always`: a folder is added to Also
+Allowed by hand. Reading the log doesn't hold up the box: the ask waits on it.
+
+#### Also Allowed
+
+What you let a project's commands do beyond the sandbox, from Always for This or added in Settings:
+a folder (or file) they write in the sandbox, at most 8 a project. Kept in the box's own
+`box/sandbox-allowed.json`, which no command can write, and changed only in the box's long-running
+process (another passes the routes on). A rule: `{id, project, kind: "write", path, at, by?}`
+(`project`, `path`: real paths; `by`: `Mac` or the phone's name).
+
+The launcher reads a project's as each command starts, from `run/fence/allowed/<sum>` (one path a
+line; `sum`, the first 32 hex of the SHA-256 of the project's real path, as the launcher names its
+temporary folder); a folder that's become a link since isn't given. Inside one, what's kept from a
+project's commands is kept there too on macOS (git's hooks and config, the engine's and the coding
+agents' settings: Linux's Landlock grants a folder whole, as it does the project).
+
+What can't be given (`400`, and only allowed once): your home folder or the whole disk; a folder of
+Kuvo Code's; a secret or a folder that holds one; and what runs later outside the sandbox: anything in
+your home folder's hidden folders, `Library`, `bin` or `Applications`; the system's folders (`/usr`,
+`/opt`, `/etc`, `/Library`, `/Applications`, `/nix`…); a folder on the box's `PATH` or one that holds
+one; a repository's own folder (`.git`) or a settings folder of the engine's or an agent's; and the
+places the sandbox already keeps read-only. Your home folder is your account's own, whatever `HOME`
+says.
+
+- `GET kuvo/sandbox/allowed[?project=<folder>]` → `{allowed: [rule]}`, every project's without one.
+- `POST kuvo/sandbox/allowed` `{project, kind: "write", path}` → `{allowed}`, that project's; `400` with `message` for one that can't be given. The same rule again
+  is the one there.
+- `DELETE kuvo/sandbox/allowed/<id>` → `{allowed}`, that project's; `404` for one that isn't there.
+
 ### Paired phones
 
 Each computer keeps the phones paired with it, and the ones removed, by the pairing they came in
@@ -2623,8 +3116,10 @@ machine's bridge, held to `Vectors/link.json` (`phoneBooks`):
   own; a phone a Mac's document no longer lists goes off, not for good, and another Mac's phones
   stay. A removal in any phones document a box takes is noted there too, so one removed anywhere
   is removed everywhere, reached or not. One from before Macs were named (no `mac`) stays until a
-  Mac signs its phones. A Mac the machine hasn't heard from in 30 days (setup or any mail), by its
-  own clock, no longer counts, and its phones go; it counts again once it sets the machine up.
+  Mac signs its phones. A Mac the machine hasn't heard from in 30 days (setup or any mail) of its
+  box running (noted every few minutes in `run/online`; time off doesn't count, and a clock set
+  wrong and then right moves no Mac on) no longer counts, and its phones go; it counts again once
+  it sets the machine up.
 
 On both, for a paired phone:
 

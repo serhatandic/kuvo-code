@@ -15,10 +15,16 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { sshAgentsOf } from "./bot-keys-scenarios.js";
 
 // (Short: the vault's and the browser's sockets are in it.)
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kvf-")));
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+// (Once the box and the tool have stopped: they write in its folder until they have.)
+after(async () => {
+  await Promise.all([box, mcp].map(child => child && child.exitCode === null && child.signalCode === null ? new Promise(done => { child.once("exit", done); child.kill(); }) : null));
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(sshAgentsOf(home), { recursive: true, force: true });
+});
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
@@ -137,7 +143,6 @@ before(async () => {
   box.stdout.setEncoding("utf8");
   await new Promise(resolve => box.stdout.on("data", chunk => { out += chunk; if (out.includes("\n")) resolve(); }));
 });
-after(() => box?.kill());
 
 // The Mac over SSH: `box route`, with the vault's key when it has one.
 async function fromMac(method, route, body, key) {
@@ -159,7 +164,6 @@ async function askedNow(key) {
 
 // The tool, as the engine starts it, and its calls, as the engine makes them for each conversation.
 const mcp = spawn(process.execPath, [tool, "mcp"], { env, stdio: ["pipe", "pipe", "ignore"] });
-after(() => mcp.kill());
 const answers = new Map();
 let buffer = "";
 mcp.stdout.on("data", chunk => {
@@ -227,4 +231,29 @@ test("a page that left its site while the vault asked you gets nothing", { timeo
   const outcome = await signIn.result;
   assert.match(outcome.content[0].text, /The page left github\.com meanwhile\. Nothing was filled/);
   assert.deepEqual(pages.login.filled, [], "nothing typed into the page");
+});
+
+// A process of yours that isn't Kuvo Code's own, like an agent's command in the sandbox, can reach
+// the vault's socket (Linux's sandbox doesn't hide a socket from connecting) but not the box's
+// socket key in `run`: while a sign-in is calling, it tries to take the fill for itself.
+test("a process without the box's socket key gets nothing from the vault's socket, even while a sign-in calls", { timeout: 60_000 }, async () => {
+  pages.login.url = "https://github.com/login";
+  pages.login.filled = [];
+  const signIn = started(call("ses_ship", "browser_sign_in", { username: 1, password: 2, item: "GitHub" }));
+  const asked = await askedNow(key);
+  const said = await new Promise(resolve => {
+    const socket = net.createConnection(path.join(home, "run", "vault.sock"));
+    let heard = "";
+    socket.setEncoding("utf8");
+    socket.on("connect", () => socket.write(JSON.stringify({ hello: "mine" }) + "\n" + JSON.stringify({ method: "POST", path: "kuvo/vault/fill", headers: {}, body: Buffer.from(JSON.stringify({ session: "ses_ship", item: "GitHub" })).toString("base64") }) + "\n"));
+    socket.on("data", chunk => (heard += chunk));
+    socket.on("error", () => {});
+    socket.on("close", () => resolve(heard));
+  });
+  assert.equal(said, "", "nothing answers it: not even the holder's hello");
+  // The sign-in it raced goes on as before, once you allow it.
+  assert.equal((await fromMac("POST", `kuvo/vault/asks/${asked.id}`, { answer: "once" }, key)).status, 200);
+  const signedIn = await signIn.result;
+  assert.equal(signedIn.isError, false, signedIn.content[0].text);
+  assert.deepEqual(pages.login.filled, [{ index: 1, value: "ship-bot" }, { index: 2, value: SECRET }]);
 });

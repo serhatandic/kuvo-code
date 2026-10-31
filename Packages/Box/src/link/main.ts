@@ -21,9 +21,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { plainName } from "../shared/text";
 import { sleep } from "../shared/wait";
+import { joinPath, loginPath, saveLoginPath, savedLoginPath } from "../shared/platform";
 import { watchAsks } from "./areas/asks";
 import { watchWorkAsks } from "./work/asks";
+import { watchGoals } from "./work/goals";
 import { refreshBotsKeys } from "./areas/bot-keys";
 import { setBoxKey } from "./areas/box-keys";
 import { addMacDefaults, changeSettings, ownsSettings, readSettings } from "./areas/config";
@@ -42,12 +45,12 @@ import { docsNoted, noteDocsChanged, onDocsChanged } from "./documents/changed";
 import { docsChanged, macDocsChanged } from "./documents/exchange";
 import { newSigningSeed, ownSign, SIGN } from "./documents/format";
 import { docsWork, ownDocs, pruneDocs } from "./documents/work";
-import { peerTargets, readBridgeFile, readEngineFile } from "./engine/client";
+import { peerPlaces, peerTargets, readBridgeFile, readEngineFile } from "./engine/client";
 import { engineConfigContent } from "./engine/compatibility";
 import { watchBox } from "./engine/watch";
 import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
-import { IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, takeVaultSecrets, VERSION_FILE, homeFolder } from "./home";
+import { IS_MAC, K, NEEDED_FILE, OWN_RUNTIME, PID_FILE, REAL_BOX, RUN, scriptIs, socketKey, takeVaultSecrets, VERSION_FILE } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
 import { noteRelay } from "./letters/leave";
 import { deliverLeftAnswers, sendOutbox } from "./letters/outbox";
@@ -56,13 +59,14 @@ import { macNoticeHold, macTell } from "./mac/notices";
 import { runMacPeers } from "./mac/peers";
 import { runMacLink } from "./mac/relay";
 import { watchVaultAsks } from "./vault/asks";
+import { watchSandboxAsks } from "./fence/outside";
 import { holdVault } from "./vault/holder";
 import { primeGenerations } from "./vault/store";
 import { setVaultTell } from "./vault/use";
 import { HELD_FILE, NoticeHold } from "./notices/hold";
 import { noticeJSON, pushTo } from "./notices/notice";
 import { announce, forgetMacsAgents, refreshOwn } from "./peers/agents";
-import { forgetOldMacs, KEY, leaveMac, macsOf, peersOf, takeLegacyPeers } from "./peers/known";
+import { forgetOldMacs, KEY, leaveMac, macsOf, noteOnline, peersOf, takeLegacyPeers } from "./peers/known";
 import { peerMail, receiveMail } from "./peers/mail";
 import { watchSeats } from "./peers/seats";
 import { changePersonalities, mergePersonalities, readPersonalities } from "./personalities/library";
@@ -78,6 +82,7 @@ import { BRIDGE_VERSION } from "./version";
 import type { AddressInfo } from "node:net";
 import type { SignedDoc } from "../shared/documents";
 import type { EngineRecord } from "../shared/records";
+import { fenceOwnPort, keepFence } from "./fence/state";
 import type { KeptNotice } from "./notices/hold";
 import type { Notice } from "./notices/notice";
 import type { GivenLibrary } from "./personalities/library";
@@ -98,6 +103,9 @@ export { forgetMovesInMemory, keepMoving, sendMovesWith, takeMoveMail, watchMove
 export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
 export { queueOf, queueWatcher, readQueues, scanQueues } from "./engine/queue";
 export { workWatcher } from "./work/wakes";
+export { lookAtGoals, periodOf, periodEnd } from "./work/goals";
+export { keptAwake, letGo } from "./work/awake";
+export { ALWAYS_ASK_RULES, PUBLISH_ASK_RULES, alwaysAsks, withAlwaysAsk } from "./work/always";
 export { macLink, readLink, updateLink, writeLink } from "./state";
 export { searchPlugins } from "./areas/plugins";
 export { listFolders, makeFolder } from "./areas/folders";
@@ -137,7 +145,7 @@ export { ASK_HOLD, LONGEST_LEASE, NEWS_HOLD, NoticeHold, RESTORED_WAIT, SHOWN_WI
 export { describeForm, describePermission, groupNotice, noticeFor, projectNameOf, settleHeld } from "./notices/news";
 export { STEER_AFTER, steering, watchBox, watchEvents } from "./engine/watch";
 export { answerBotKeys, refreshBotsKeys } from "./areas/bot-keys";
-export { forgetOldMacs, leaveMac, macsOf, mailFor, movedOf, openMail, peersOf, takeLegacyPeers } from "./peers/known";
+export { forgetOldMacs, leaveMac, macsOf, mailFor, movedOf, noteOnline, openMail, peersOf, takeLegacyPeers } from "./peers/known";
 export { noteDocsChanged } from "./documents/changed";
 export { authorizePhone, confirmPhone, foldPhones, newPairing, pairPhone, removeAsMac, removePhones } from "./phones";
 export { noLongerNeeded } from "./keeper";
@@ -150,6 +158,7 @@ export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeSeat, t
 export { announce, ownAgents, refreshOwn, writeAgents } from "./peers/agents";
 export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
 export { takeLetter } from "./letters/take";
+export { peerPlaces } from "./engine/client";
 export { answerPersonalities, retellBots, takePersonalities, takePersonalitiesDocument } from "./personalities/take";
 export { docsChanged, macDocsChanged, receiveDocs } from "./documents/exchange";
 export { peerMail, receiveMail } from "./peers/mail";
@@ -211,6 +220,10 @@ async function run(): Promise<void> {
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
   fs.writeFileSync(PID_FILE, String(process.pid), { mode: 0o600 });
   fs.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 0o600 });
+  // The programs it looks for (an MCP server's `npx`) found where the engine finds them: on the
+  // PATH your login shell sets up, as the engine's start read it, which the keeper's start doesn't get.
+  const saved = savedLoginPath(K);
+  if (saved) process.env.PATH = joinPath(path.join(K, "bin"), saved);
   // COMPAT(beta.1 connected): `run/connected` (beta.1) and `run/present` (0.7 with the phone link on), cleared. Goes when 0.8.0 ships.
   // The notes an earlier Kuvo Code on a Mac left that it was connected (it did some of the box's
   // work then): nothing reads them now.
@@ -296,12 +309,19 @@ async function run(): Promise<void> {
   // Moves to and from your other computers, carried on the same connection.
   watchMoves(() => current);
   watchAsks(tell, { answered });
+  // Agents' commands, in the sandbox wherever it can run (fence/state.ts), set up before the vault
+  // goes by it.
+  keepFence();
   // The vault, held here: its key in this process's memory, its asks told to your phones.
   holdVault(engineHandler(readEngineFile, { name: os.hostname() }));
   setVaultTell(tell);
   watchVaultAsks(tell, answered);
+  watchSandboxAsks(tell, answered);
   // What its bots ask you before they do it (making a project): told the same way.
   watchWorkAsks(tell, { answered });
+  // Its bots' goals: carried on at limits' resets, what waits for you listed (and told quietly),
+  // digests and reports, and this computer kept awake while one is at work.
+  watchGoals(tell, peerTargets, { here: () => hold.inUse });
   // Your other computers: this box's agents told to them while the relay connection is up (and
   // listed here, relay or not), and its agents' letters sent; without the relay a while, those
   // not sent yet go to the Mac.
@@ -325,6 +345,8 @@ async function run(): Promise<void> {
   setInterval(() => {
     if (current?.welcomed) announce(current, readEngineFile).catch(() => {});
     else refreshOwn(readEngineFile).catch(() => {});
+    // Running: its Macs' 30 days go on, the relay there or not (time off doesn't count).
+    try { noteOnline(); } catch {}
   }, 60_000);
   setInterval(() => {
     if (current?.welcomed && docsNoted()) try { docsChanged(current, { tell: true }); } catch {}
@@ -349,7 +371,7 @@ async function run(): Promise<void> {
       hello: { v: 1, kind: "machine", name: link!.name || os.hostname(), app: BRIDGE_VERSION, engine: engine.version ?? null },
       authorize: authorizePhone,
       confirmed: confirmPhone,
-      mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerTargets), (mac, given, at) => hold.attend(`mac:${mac}`, given, at)),
+      mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerPlaces), (mac, given, at) => hold.attend(`mac:${mac}`, given, at)),
       handle: engineHandler(readEngineFile, { name: link!.name || os.hostname() }, readBridgeFile, changed => host.keepOnly(new Set((changed.phones ?? []).map(phone => phone.key))), hold),
       connect: engineConnect(readEngineFile),
       send: () => {},
@@ -405,7 +427,7 @@ async function box(command: string): Promise<void> {
       const blocked = updatesBlocked();
       if (blocked) return say({ status: 409, message: blocked });
       if (isUpdating()) return say({ status: 409, message: "It's updating already." });
-      spawn(process.execPath, [fileURLToPath(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+      spawn(process.execPath, [...OWN_RUNTIME, fileURLToPath(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
       return say({ status: 202, ...updateStatus(), updating: "checking" });
     }
     case "route": {
@@ -414,7 +436,8 @@ async function box(command: string): Promise<void> {
       answerOnce();
       let given: { method?: unknown; path?: unknown; body?: unknown; bodyText?: unknown; headers?: unknown } | null = {};
       try { given = JSON.parse(await input()); } catch {}
-      const handle = engineHandler(readEngineFile, { name: os.hostname() });
+      // (The coding agents' bridge's sessions too: a wake-up held for one, say.)
+      const handle = engineHandler(readEngineFile, { name: os.hostname() }, readBridgeFile);
       // With the folder it's asked about (`x-opencode-directory`), as a phone's request has it.
       const folder = (given?.headers as Record<string, unknown> | undefined)?.["x-opencode-directory"];
       // And the Mac's proof for a request to this machine's vault (or its unlock key, to unlock it),
@@ -524,6 +547,11 @@ async function serve(): Promise<void> {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
+  // The key to its sockets, and agents' commands in the sandbox (fence/state.ts), which refuses them
+  // this server too, there before it says where it is (holdVault makes the key too, after).
+  try { socketKey(); } catch {}
+  fenceOwnPort((server.address() as AddressInfo).port);
+  keepFence();
   console.log(JSON.stringify({ url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }));
   // The vault, held here (on a machine, `run` holds it; a test's box serves alone), its asks told
   // to your phones through this Mac's link.
@@ -538,6 +566,7 @@ async function serve(): Promise<void> {
   if (IS_MAC) {
     setVaultTell(macTell);
     watchVaultAsks(macTell, id => macLink.hold?.resolve(id));
+    watchSandboxAsks(macTell, id => macLink.hold?.resolve(id));
   }
   // Its bots' folders' settings, as its keys and integrations are now (after an update, say), as a
   // machine's bridge does as it starts; where its keys can't be reached yet, they stay as they were.
@@ -550,8 +579,8 @@ async function serve(): Promise<void> {
   if (IS_MAC) runMacLink().catch(() => {});
   // Its agents and their letters, and its group chats' mail, for your other computers. (Not for
   // the app's route scenarios, `KUVO_TEST_NO_PEERS`, whose fixture tells its bridge who they are.)
-  // Never the real app's box (`run.kuvo.code/box`).
-  const testsAlone = process.env.KUVO_TEST_NO_PEERS && path.basename(path.dirname(path.resolve(K))) !== "run.kuvo.code";
+  // Never a real box (a test's folder only).
+  const testsAlone = process.env.KUVO_TEST_NO_PEERS && !REAL_BOX;
   if (IS_MAC && !testsAlone) runMacPeers();
   // Recently Deleted's skills past their 30 days, gone with no client there too.
   keepSkillTrashClear();
@@ -561,6 +590,9 @@ async function serve(): Promise<void> {
   // Its bots kept told what they are as their runs start, on the engine and with the coding agents;
   // on a Mac, its news for your phones too (while the phone link's on), and its sign-ins that ended.
   watchBox({ tell: macTell, hold: macLink.hold, bots: true, notices: IS_MAC });
+  // Its bots' goals: carried on at limits' resets, what waits for you listed (and told quietly to
+  // your phones), digests and reports, and this Mac kept awake while one is at work (on power).
+  if (IS_MAC) watchGoals(macTell, peerTargets, { here: () => macLink.hold?.inUse ?? false });
   // Its app gone (its stdin closed): so is it, once what its link has queued for the relay is out
   // (a notice sent as the app quit), a moment at most.
   const leave = async (): Promise<void> => {
@@ -582,6 +614,8 @@ interface SetupInput {
   name?: string;
   mac?: string;
   macSign?: string;
+  /** The Mac's own name, for who else uses this box. */
+  macName?: string;
   docs?: SignedDoc[];
   id?: string;
   macID?: string;
@@ -619,6 +653,7 @@ async function setup(): Promise<void> {
       next.mac = mac;
       next.macs = [...new Set([...macsOf(next), mac])];
       forgetOldMacs(next, mac);
+      if (typeof input.macName === "string" && plainName(input.macName)) next.macNames = { ...(next.macNames ?? {}), [mac]: plainName(input.macName).slice(0, 100) };
       // The key its documents are signed with (over SSH, so this box knows it's that Mac's), which
       // takes the place of a list it gave before it signed them.
       if (typeof input.macSign === "string" && SIGN.test(input.macSign)) {
@@ -758,12 +793,22 @@ if (main) {
   // A machine's start scripts' (`kuvo-launch`): what its engine starts with, its OPENCODE_CONFIG_CONTENT
   // with what some providers need on top, as this box last learned it (PROTOCOL.md, "Settings per box").
   else if (mode === "engine-config") process.stdout.write(engineConfigContent(process.env.OPENCODE_CONFIG_CONTENT));
+  // A machine's start scripts' too: the PATH your login shell sets up there (`~/.local/bin`, nvm's
+  // node), then the folders of the one it was run with, for the engine and what it starts, which a
+  // start over SSH or from cron doesn't get. Nothing when the shell doesn't give it, for the start
+  // to keep the PATH it has.
+  // Kept for the link and the agents' bridge (each read can leave a program a .bashrc starts running).
+  else if (mode === "login-path") {
+    const found = await loginPath();
+    if (found) saveLoginPath(K, found);
+    process.stdout.write(found ?? "");
+  }
   else if (mode === "update") {
     // `update [--now]`, and for a test's folder only, `--url <boxes.json> --key <public key>`. Once
     // it's updated, the running bridge goes, for the keeper to start the new one.
     const args = process.argv.slice(3);
     const option = (name: string): string | undefined => (args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined);
-    const test = option("--url") && option("--key") && path.resolve(K) !== path.join(homeFolder(), ".kuvo-code");
+    const test = option("--url") && option("--key") && !REAL_BOX;
     const outcome = await update({ now: args.includes("--now"), step: running => noteUpdate({ running }), ...(test ? { url: option("--url"), keys: [option("--key")!], blocked: null } : {}) });
     noteUpdate({ running: null, ...(outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } }) });
     if (outcome.result === "updated") {
@@ -779,7 +824,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | update [--now] | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | login-path | update [--now] | selftest");
     process.exit(2);
   }
 }

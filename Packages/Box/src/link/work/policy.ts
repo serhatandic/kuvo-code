@@ -1,8 +1,11 @@
-// What a bot may allow its sessions (answer_ask, PROTOCOL.md "Work"): the policy until the sandbox.
-// Reading a command can't be made airtight, so until sessions run in the sandbox a bot answers
-// only edits inside the session's folder (never what a later command runs) and a handful of
-// commands that read, with literal paths inside the folder. Everything else goes to the user,
-// however it's phrased.
+// What a bot may allow its sessions (answer_ask, PROTOCOL.md "Work"). Where the session's commands
+// run in the sandbox, which holds what they can write and read, a bot may allow its commands, but
+// never one that acts beyond this computer with your accounts (pushing, publishing, deploying,
+// reaching another computer). Elsewhere, the policy until the sandbox: reading a command can't be
+// made airtight, so a bot answers only a handful of commands that read, with literal paths inside
+// the folder. Either way, edits only inside the session's folder (never what a later command runs),
+// as the engine makes them itself, outside the sandbox. Everything else goes to the user, however
+// it's phrased.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -18,8 +21,9 @@ interface Line {
 }
 
 /** Why a line can't be read as plain programs (something a shell expands or runs besides), or
- * the line. */
-export function readLine(line: string): Line | { unreadable: string } {
+ * the line. `redirects`: where its output goes or its input comes from is read too (in the sandbox,
+ * which holds what's written), rather than refused. */
+export function readLine(line: string, redirects = false): Line | { unreadable: string } {
   const parts: Line["parts"] = [];
   let words: string[] = [], writes: string[] = [], word = "", has = false, quote: string | null = null, start = 0;
   let redirect: "write" | "read" | null = null;
@@ -96,7 +100,12 @@ export function readLine(line: string): Line | { unreadable: string } {
       start = i + 1;
     } else if (char === ">" || char === "<") {
       // Until the sandbox: where a command reads or writes is only what its words name.
-      return no("input or output sent elsewhere");
+      if (!redirects) return no("input or output sent elsewhere");
+      if (char === "<" && line[i + 1] === "<") return no("a here-document");
+      // (A stream's number, `2>`, is no word of its own.)
+      if (has && /^[0-9]+$/.test(word)) { word = ""; has = false; } else endWord();
+      if (line[i + 1] === char) i++;
+      redirect = char === ">" ? "write" : "read";
     } else {
       word += char;
       has = true;
@@ -294,6 +303,184 @@ const NAMED: Record<string, string> = {
   swift: "building, testing or installing", xcodebuild: "building, testing or installing", pytest: "building, testing or installing", pod: "installing", bundle: "installing", brew: "installing",
 };
 
+// Programs that run the one after them, which counts as the command's.
+const WRAPPERS = new Set(["sudo", "doas", "env", "nohup", "time", "exec", "command", "nice", "xargs", "timeout", "npx", "bunx", "pnpx", "uvx"]);
+// What acts beyond this computer with your accounts, whatever the sandbox holds here.
+const OUTWARD: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(NAMED).filter(([, what]) => ["deploying", "sending to a store", "your keys and sign-ins", "reaching another computer"].includes(what))),
+  sftp: "reaching another computer", ftp: "reaching another computer", gh: "using your GitHub account", glab: "using your GitLab account",
+};
+
+// Programs that run code given on their command line (`sh -c`, `node -e`), which can't be read for
+// what it does: with that, the user's to answer.
+const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
+const INLINE: Record<string, string[]> = {
+  node: ["-e", "--eval", "-p", "--print"], bun: ["-e", "--eval", "-p", "--print"], deno: ["eval"], python: ["-c"], python3: ["-c"],
+  ruby: ["-e"], perl: ["-e", "-E"], php: ["-r"], osascript: ["-e"], lua: ["-e"],
+};
+// Package managers whose `run <script>` (or, for some, the script's name alone) runs a script of the
+// project's: read by the script's name.
+const RUNS_SCRIPTS = new Set(["npm", "pnpm", "yarn", "bun"]);
+const LOCAL_URL = /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])([:/]|$)/i;
+// curl's and wget's options that send something, rather than fetch (with what they send in the same
+// word, `-d@file`, or not).
+const SENDS = /^(-[a-zA-Z]*[TFdX]|--upload-file|--form|--data|--json|--post-(data|file)|--body-(data|file)|--request|--method)/;
+
+// Package runners' commands that run a package's program, which counts as the command's (`npm exec
+// vercel`, `pnpm dlx`, `bun x`).
+const RUNNERS: Record<string, string[]> = { npm: ["exec", "x"], pnpm: ["exec", "dlx"], yarn: ["exec", "dlx"], bun: ["x"] };
+// find's options that run a command of their own on what it finds.
+const FIND_RUNS = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
+// A program's commands that send beyond this computer, wherever they are among its words, whatever
+// options come before (`npm --prefix . publish`, `git --git-dir .git push`, `git subtree push`).
+const SENDING: Record<string, string> = {
+  push: "sending it beyond this computer", upload: "sending it beyond this computer", publish: "publishing", deploy: "releasing or deploying",
+  "send-pack": "pushing", "send-email": "pushing", "http-push": "pushing", dcommit: "pushing",
+};
+// Programs that only read or print their words, whatever they say (`grep -r deploy`).
+const QUIET = new Set(["grep", "rg", "ag", "echo", "printf", "cat", "ls", "head", "tail", "wc", "sort", "uniq", "diff", "file", "stat", "du", "which", "type", "man", "jq", "less", "tree"]);
+// The options a wrapper may have and still plainly run the program after it; any other (`env -u`,
+// `sudo -u`, `timeout -s`) takes a value that could be read as that program.
+const BARE: Record<string, RegExp> = {
+  npx: /^(-y|--yes|-q|--quiet)$/, bunx: /^--bun$/, timeout: /^([0-9.]+[smhd]?|--foreground|--preserve-status|-v|--verbose)$/,
+  nice: /^(-n|-?[0-9]+)$/, env: /^(-i|--ignore-environment)$/, time: /^-p$/, command: /^-p$/,
+};
+// git's own settings and hooks, which a command in the project can name or write (on Linux the
+// sandbox doesn't keep them, as macOS's does): what git runs next isn't on the line.
+const GIT_OWN = /(^|\/)\.git(\/|$)|(^|\/)\.git(config|modules)$/;
+// git's own options that take the next word as their value.
+const GIT_VALUED = /^(-C|-c|--git-dir|--work-tree|--namespace|--super-prefix|--config-env|--exec-path)$/;
+// What `git config` only reads with (`--get`, `--list`, or `git config get`), and what writes even then.
+const GIT_CONFIG_READS = /^(--get|--get-all|--get-regexp|--get-urlmatch|--get-color|--get-colorbool|--list|-l)$/;
+const GIT_CONFIG_WRITES = /^(--add|--replace-all|--unset|--unset-all|--rename-section|--remove-section|--edit|-e)$/;
+// `git config`'s own options that take the next word as their value (so `--default get` isn't `get`).
+const GIT_CONFIG_VALUED = /^(-f|--file|--blob|--type|--default|--comment|--value|--url)$/;
+
+/** Whether git's words set its own settings, or carry them in (a clone's `--config`, a template's
+ * hooks): what git runs next (`core.hooksPath`, `core.fsmonitor`, an alias) isn't on the line. */
+function setsGitSettings(rest: string[]): boolean {
+  let at = 0;
+  while (at < rest.length && rest[at].startsWith("-")) at += GIT_VALUED.test(rest[at]) ? 2 : 1;
+  const [sub, ...args] = rest.slice(at);
+  if (sub === "config") return gitConfigSets(args);
+  return (sub === "clone" || sub === "init" || sub === "submodule") && args.some(word => /^--(config|template)(=|$)/.test(word));
+}
+
+/** Whether `git config`'s words (past `config`) change a setting, rather than read one: in either
+ * syntax, past its options that take a value. */
+export function gitConfigSets(args: string[]): boolean {
+  const words: string[] = [];
+  let reads = false;
+  for (let at = 0; at < args.length; at++) {
+    const word = args[at];
+    if (word === "--") {
+      words.push(...args.slice(at + 1));
+      break;
+    }
+    if (GIT_CONFIG_VALUED.test(word)) at++;
+    else if (GIT_CONFIG_WRITES.test(word)) return true;
+    else if (GIT_CONFIG_READS.test(word)) reads = true;
+    else if (!word.startsWith("-")) words.push(word);
+  }
+  const [first] = words;
+  if (first === "get" || first === "list") return false;
+  if (["set", "unset", "rename-section", "remove-section", "edit"].includes(first)) return true;
+  // The older way: a key alone reads it, a key and a value set it.
+  return !reads && words.length > 1;
+}
+
+/** Why a bot can't allow a command even in the sandbox: it pushes, publishes, deploys, uploads or
+ * reaches another computer, or runs code that can't be read (a shell's `-c`, `node -e`), or can't be
+ * read plainly at all; or null. Whatever it can't be sure of is the user's to answer. */
+export function outwardRefusal(line: string): string | null {
+  const read = readLine(line, true);
+  if ("unreadable" in read) return `${CANT} (${read.unreadable})`;
+  for (const part of read.parts) {
+    if (part.writes.some(each => GIT_OWN.test(each))) return `${CANT} (it changes git's own settings)`;
+    const why = outwardWords(part.words);
+    if (why) return why;
+  }
+  return null;
+}
+
+// One command's words, as `outwardRefusal` reads them (and the command a runner or find runs, alike).
+function outwardWords(words: string[]): string | null {
+  for (;;) {
+    const first = words[0];
+    if (first === undefined) return null;
+    // git's settings, given before it, can name what it runs (an alias, an SSH command, a diff tool).
+    if (/^GIT_[A-Za-z0-9_]*=/.test(first)) return CANT;
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) {
+      words = words.slice(1);
+      continue;
+    }
+    const wrapper = path.basename(first);
+    // (What xargs runs takes its words from elsewhere.)
+    if (wrapper === "xargs") return CANT;
+    if (!WRAPPERS.has(wrapper)) break;
+    words = words.slice(1);
+    for (; words.length && (words[0].startsWith("-") || /^[0-9]/.test(words[0])); words = words.slice(1)) {
+      if (words[0] === "--") continue;
+      if (!BARE[wrapper]?.test(words[0])) return CANT;
+    }
+  }
+  const [program, ...given] = words;
+  // (`git-config`, `/usr/lib/git-core/git-push`: git's own commands by their programs.)
+  const gitOwn = /^git-([a-z][a-z0-9-]*)$/.exec(path.basename(program));
+  const name = gitOwn ? "git" : path.basename(program);
+  const rest = gitOwn ? [gitOwn[1], ...given] : given;
+  if (OUTWARD[name]) return OUTWARD[name];
+  if (name === "eval") return "running a command it can't read";
+  if (SHELLS.has(name) && (rest.length === 0 || rest.some(word => /^-[a-zA-Z]*c/.test(word)))) return "running a command it can't read";
+  if (INLINE[name] && rest.some(word => INLINE[name].includes(word))) return "running code it can't read";
+  if (words.some(word => GIT_OWN.test(word))) return `${CANT} (it changes git's own settings)`;
+  // A program or script named for releasing (`./deploy.sh`, `node scripts/release.js`).
+  if ([program, ...rest].some(word => !word.startsWith("-") && /(deploy|release|publish)/i.test(path.basename(word)) && (word === program || /\.[a-z]+$/i.test(word)))) return "releasing or deploying";
+  // Building an image and sending it on (`docker buildx build --push`, `--output type=registry`).
+  if (rest.some(word => /^--push(=|$)/.test(word) || /(^|[=,])(type=registry|push=true)(,|$)/.test(word))) return "sending it beyond this computer";
+  // git's settings on its line can name what one of its commands runs.
+  if (name === "git" && rest.some(word => /^(-c|--config-env)/.test(word))) return CANT;
+  if (name === "git" && setsGitSettings(rest)) return `${CANT} (it changes git's own settings)`;
+  const subs = rest.filter(word => !word.startsWith("-"));
+  if (!QUIET.has(name)) {
+    // (`git stash push` keeps your changes aside, here.)
+    const sending = subs.find((word, at) => Object.hasOwn(SENDING, word) && !(name === "git" && subs[at - 1] === "stash"));
+    if (sending) return name === "git" ? "pushing" : SENDING[sending];
+  }
+  if (name === "git" && subs.includes("p4") && subs.includes("submit")) return "pushing";
+  if ((subs[0] === "release" && name !== "git") || (name === "xcrun" && subs.some(word => word === "altool" || word === "notarytool"))) return subs[0] === "release" ? "releasing or deploying" : "sending to a store";
+  // A project's script named for it (`npm run release`, `yarn --cwd app ship-release`).
+  if (RUNS_SCRIPTS.has(name) && subs.some(word => /(deploy|release|publish|push|upload)/i.test(word))) return "releasing or deploying";
+  // A package's program, run by a package runner: judged as that program; one given as a line of
+  // its own (`npm exec -c`) can't be read.
+  if (RUNNERS[name]) {
+    if (rest.some(word => /^(-c|--call)(=|$)/.test(word))) return "running a command it can't read";
+    const at = rest.findIndex(word => RUNNERS[name].includes(word));
+    if (at >= 0) {
+      let after = rest.slice(at + 1);
+      for (; after[0]?.startsWith("-"); after = after.slice(1)) if (!/^(-y|--yes|--)$/.test(after[0])) return CANT;
+      const why = outwardWords(after);
+      if (why) return why;
+    }
+  }
+  // What find runs on each thing it finds, up to its `;` or `+`.
+  if (name === "find") {
+    for (const [at, word] of rest.entries()) {
+      if (!FIND_RUNS.has(word)) continue;
+      const after = rest.slice(at + 1);
+      const end = after.findIndex(each => each === ";" || each === "+");
+      const why = outwardWords(end < 0 ? after : after.slice(0, end));
+      if (why) return why;
+    }
+  }
+  // (To this computer's own servers, as a test does, it may.)
+  if ((name === "curl" || name === "wget") && rest.some(word => SENDS.test(word))) {
+    const targets = rest.filter(word => /^[a-z][a-z0-9+.-]*:\/\//i.test(word) || LOCAL_URL.test(word) || /^[\w-]+(\.[\w-]+)+(:\d+)?(\/|$)/.test(word));
+    if (!targets.length || !targets.every(word => LOCAL_URL.test(word))) return "sending something beyond this computer";
+  }
+  return null;
+}
+
 /** The parts of a command line as the engine's rules match each: its own text, part by part. */
 export function partsOf(line: string): string[] {
   const read = readLine(line);
@@ -314,13 +501,22 @@ const EDIT_TOOLS = new Set(["edit", "write", "patch", "multiedit", "apply_patch"
  * extension, never a hidden path, a link, a folder, nor a file a later command runs or reads as
  * settings), and the few commands `commandRefusal` reads as safe, run in the session's folder.
  * Everything else, reading included, goes to the user. */
-export function allowRefusal(action: string, resources: readonly string[], folders: readonly string[], rules: readonly KitRule[], ruleFor: (rules: readonly KitRule[], action: string, resource: string) => KitRule["effect"], seen: ToolCallSeen | null): string | null {
+export function allowRefusal(action: string, resources: readonly string[], folders: readonly string[], rules: readonly KitRule[], ruleFor: (rules: readonly KitRule[], action: string, resource: string) => KitRule["effect"], seen: ToolCallSeen | null, sandboxed = false): string | null {
   const asked = resources.length ? resources : ["*"];
   if (!folders.length) return "working outside the project";
   if (action === "shell" || action === "bash") {
     // The command as it would run, whole, and where.
     const command = typeof seen?.input.command === "string" ? seen.input.command : null;
     if (!command) return `${CANT} (it can't see the whole command)`;
+    // In the sandbox (which writes only in the session's folder, wherever it runs): anything but
+    // what acts beyond this computer, within the engine's rules.
+    if (sandboxed) {
+      for (const line of [command, ...asked.filter(each => each !== "*")]) {
+        const why = outwardRefusal(line);
+        if (why) return why;
+      }
+      return [...partsOf(command), ...asked].every(part => ruleFor(rules, action, part) === "allow") ? null : "above";
+    }
     const where = [seen!.input.workdir, seen!.input.cwd, seen!.input.directory].find(each => each !== undefined && each !== null && each !== "");
     if (where !== undefined && (typeof where !== "string" || realOf(path.resolve(realOf(folders[0]), where)) !== realOf(folders[0]))) return "a command run somewhere other than the project";
     for (const line of [command, ...asked.filter(each => each !== "*")]) {

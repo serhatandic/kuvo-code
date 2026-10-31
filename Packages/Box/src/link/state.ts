@@ -43,11 +43,14 @@ export interface LinkState {
   name?: string;
   /** Its id on its Macs (their name for this machine). */
   id?: string;
-  /** The Macs that set it up, the last first named in `mac`; their signing keys, and when each was last heard from (ms). */
+  /** The Macs that set it up, the last first named in `mac`; their signing keys, and when each was
+   * last heard from (ms), moved on by the time this machine was off since (`noteOnline`). */
   mac?: string;
   macs?: string[];
   macSigns?: Record<string, string>;
   macSeen?: Record<string, number>;
+  /** Each Mac's name, as its setup said it: who else uses this box, to say so. */
+  macNames?: Record<string, string>;
   /** The documents it holds, by origin and kind; how far its own are, and the views it's met. */
   docs?: Record<string, SignedDoc>;
   own?: Record<string, { n: number; h: string; b: string }>;

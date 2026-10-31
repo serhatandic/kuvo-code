@@ -1,10 +1,13 @@
 // Claude Code's thread against a fake SDK: messages you send partway, taken late or never.
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
+import { repositoryOf } from "../../src/agents/fence"
+import { setToolServer } from "../../src/agents/kuvotools"
 import { Auto } from "../../src/agents/auto"
 import { Queue } from "../../src/agents/queue"
 import type { Roster } from "../../src/agents/roster"
@@ -30,6 +33,8 @@ class FakeClaude {
   modes: string[] = []
 
   options: any
+  /** The MCP servers it was given over its pipe. */
+  mcpServers?: Record<string, unknown>
 
   /** The models it lists, how much each holds (unsaid: an older Claude Code), and the ones it was asked about. */
   models: any[] = []
@@ -52,7 +57,9 @@ class FakeClaude {
     const out = this.out
     return {
       [Symbol.asyncIterator]: () => out[Symbol.asyncIterator](),
-      setMcpServers: async () => {},
+      setMcpServers: async (servers: Record<string, unknown>) => {
+        this.mcpServers = servers
+      },
       initializationResult: async () => ({ models: this.models }),
       setModel: async (model?: string) => {
         this.model = model
@@ -563,6 +570,159 @@ const toolCalls = (id: string) => steps(id).flatMap((message) => message.content
 
 /** Ask First, as the composer's menu sets it. */
 const askFirst: PermissionRule[] = ["edit", "write", "patch", "shell", "webfetch", "external_directory"].map((action) => ({ action, resource: "*", effect: "ask" }))
+
+describe("Claude Code in the box's sandbox", () => {
+  // The box's sandbox folder, as the box sets it up (link/fence/state.ts): its rules, and its
+  // launcher for an agent run whole, which here notes what it was told and runs the program.
+  let fence: string
+  const turnOn = () => {
+    writeFileSync(join(fence, "policy.json"), JSON.stringify({ hidden: [], readable: [], writable: [], readOnly: [] }))
+    writeFileSync(join(fence, "on"), "")
+  }
+  const told = () => join(root, "launched.json")
+  beforeEach(() => {
+    fence = join(root, "fence")
+    mkdirSync(join(fence, "shell"), { recursive: true })
+    writeFileSync(
+      join(fence, "shell", "run"),
+      `#!/bin/sh\nprintf '{"program":"%s","args":"%s","folder":"%s","work":"%s","git":"%s","own":"%s","state":"%s","kept":"%s","read":"%s","port":"%s","shell":"%s","tmp":"%s"}' "$KUVO_FENCE_SHELL" "$*" "$(pwd -P)" "$KUVO_FENCE_WORK" "$KUVO_FENCE_GIT" "$KUVO_FENCE_OWN" "$(printf '%s' "$KUVO_FENCE_STATE" | tr '\\n' ' ')" "$(printf '%s' "$KUVO_FENCE_KEPT" | tr '\\n' ' ')" "$(printf '%s' "$KUVO_FENCE_READ" | tr '\\n' ' ')" "$KUVO_FENCE_PORT" "\${CLAUDE_CODE_SHELL-none}" "\${CLAUDE_CODE_TMPDIR-none}" > ${JSON.stringify(told())}\nexec "$KUVO_FENCE_SHELL" "$@"\n`,
+      { mode: 0o700 },
+    )
+    process.env.KUVO_FENCE = fence
+  })
+  afterEach(() => {
+    delete process.env.KUVO_FENCE
+    setToolServer(undefined)
+  })
+
+  /** Claude Code started as the SDK starts it, through what the bridge gave it: what it printed, and what the launcher was told. */
+  async function started() {
+    const child = fake.options.spawnClaudeCodeProcess({ command: "/bin/echo", args: ["--output-format", "stream-json"], cwd: root, env: { PATH: process.env.PATH, OPENCODE_SESSION_ID: "ses_x", CLAUDE_CODE_TMPDIR: join(root, "kuvo-own") } })
+    let printed = ""
+    child.stdout.on("data", (chunk: Buffer) => (printed += chunk))
+    await new Promise((resolve) => child.once("exit", resolve))
+    return { printed: printed.trim(), launched: JSON.parse(readFileSync(told(), "utf8")) }
+  }
+
+  test("while it's on, Claude Code runs whole in it, so what it starts does too (its commands, hooks and MCP servers, a project's too): in the conversation's folder, keeping its conversations but not its settings, with Kuvo Code's tools through the relay", async () => {
+    turnOn()
+    spawnSync("git", ["init", "-q", root])
+    setToolServer({ url: "http://127.0.0.1:9/mcp", token: "app-password", timeout: 10_000 })
+    await begin()
+    const { printed, launched } = await started()
+    const work = realpathSync(root)
+    // The program as the SDK names it, with its arguments, started by the box's launcher.
+    expect(printed).toBe("--output-format stream-json")
+    expect(launched).toMatchObject({ program: "/bin/echo", args: "--output-format stream-json", folder: work, work, git: join(work, ".git") })
+    // Its settings folder its own: its conversations, sign-in and caches written; never its
+    // settings or hooks, which run outside the sandbox when you use it yourself.
+    expect(launched.own).toBe(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"))
+    expect(launched.state.split(" ")).toEqual(expect.arrayContaining(["projects", "sessions", "todos", ".credentials.json*"]))
+    // Never what your own Claude Code, outside, runs or reads later: its settings, the shells its
+    // commands source, a session's environment, an editor's lock, a settings backup.
+    for (const later of ["settings.json", "shell-snapshots", "session-env", "ide", "backups"]) expect(launched.state.split(" ")).not.toContain(later)
+    expect(launched.kept.split(" ")).toEqual(expect.arrayContaining(["settings*.json", "hooks"]))
+    // Its commands are in the sandbox already: no shell of the box's in it, nor a temporary folder
+    // of Kuvo Code's own (hidden from it).
+    expect(launched.shell).toBe("none")
+    expect(launched.tmp).toBe("none")
+    // Kuvo Code's tools, through the relay, the one port it may reach.
+    const servers = fake.mcpServers as Record<string, any>
+    const tools = Object.values(servers)[0]
+    expect(tools.url).toBe(`http://127.0.0.1:${launched.port}/mcp`)
+    expect(tools.headers.Authorization).not.toBe("Bearer app-password")
+  })
+
+  test("on, with no launcher of the box's yet (a box from before), Claude Code doesn't start, rather than outside the sandbox", async () => {
+    turnOn()
+    rmSync(join(fence, "shell"), { recursive: true })
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_turn_0001", text: "go", files: [], delivery: "steer" })
+    await until(() => idles(id).length === 1)
+    expect(idles(id)[0].error?.message ?? "").toContain("restart Kuvo Code")
+    expect(fake.options).toBeUndefined()
+  })
+
+  test("its own sandbox stays off while the box's is on, whatever your settings or a project's say (one can't run inside the other)", async () => {
+    turnOn()
+    await begin()
+    expect(fake.options.sandbox).toEqual({ enabled: false })
+  })
+
+  test("a file you attach reaches it as a copy it can read, outside Kuvo Code's own folder", async () => {
+    turnOn()
+    const file = join(root, "kuvo-own", "plan.pdf")
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, "%PDF-1.4\n")
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_turn_0001", text: "read it", files: [{ uri: `file://${file}`, name: "plan.pdf" }], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const said = fake.sent[0].message.content.at(-1).text as string
+    const copy = said.split("- ").at(-1)!.trim()
+    expect(copy.startsWith(join(fence, "attachments") + "/")).toBe(true)
+    expect(readFileSync(copy, "utf8")).toBe("%PDF-1.4\n")
+  })
+
+  test("off, Claude Code runs as it always does; turned on, its next turn starts it again in the sandbox", async () => {
+    const { id, first } = await begin()
+    expect(fake.options.spawnClaudeCodeProcess).toBeUndefined()
+    fake.streams([first], [{ type: "text", text: "Done." }])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    turnOn()
+    sessions.prompt(id, { id: "msg_claude_turn_9001", text: "again", files: [], delivery: "steer" })
+    await until(() => fake.options.spawnClaudeCodeProcess !== undefined)
+  })
+
+  test("restarted as you said to, a Claude Code started before the sandbox was on finishes its turn first, then its next starts in the sandbox, going on with its conversation", async () => {
+    const { id, first } = await begin()
+    turnOn()
+    expect(sessions.outside()).toBe(true)
+    // At work: it waits for its turn to end.
+    expect(sessions.restartOutside()).toBe(true)
+    expect(fake.closed).toBe(false)
+    const conversation = fake.options.sessionId
+    fake.out.push({ type: "system", subtype: "init", session_id: conversation })
+    fake.streams([first], [{ type: "text", text: "Done." }])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    // Between turns: it goes now.
+    expect(sessions.restartOutside()).toBe(false)
+    expect(fake.closed).toBe(true)
+    expect(sessions.outside()).toBe(false)
+    sessions.prompt(id, { id: "msg_claude_turn_9001", text: "again", files: [], delivery: "steer" })
+    await until(() => fake.options.spawnClaudeCodeProcess !== undefined)
+    expect(fake.options.resume).toBe(conversation)
+  })
+
+  test("restarted as you said to, a Claude Code started before the sandbox was on lets a command it left running finish first", async () => {
+    const { id, first } = await begin()
+    turnOn()
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "t1", task_type: "local_bash", description: "Start the dev server", tool_use_id: "tool1", is_backgrounded: true })
+    fake.out.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "t1", task_type: "local_bash", description: "Start the dev server" }] })
+    fake.streams([first], [{ type: "text", text: "It's running." }])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    // Between turns, but its command still runs: it waits.
+    expect(sessions.restartOutside()).toBe(true)
+    expect(fake.closed).toBe(false)
+    fake.out.push({ type: "system", subtype: "background_tasks_changed", tasks: [] })
+    await until(() => sessions.restartOutside() === false)
+    expect(fake.closed).toBe(true)
+    expect(sessions.outside()).toBe(false)
+  })
+
+  test("a worktree's commits go to its repository's own folder, which its commands write; a .git that names a folder not naming it back gives none", () => {
+    const repository = join(root, "repo")
+    spawnSync("git", ["init", "-q", repository])
+    spawnSync("git", ["-C", repository, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "first"])
+    spawnSync("git", ["-C", repository, "worktree", "add", "-q", join(root, "tree")])
+    expect(repositoryOf(realpathSync(join(root, "tree")))).toBe(realpathSync(join(repository, ".git")))
+    mkdirSync(join(root, "posing"))
+    writeFileSync(join(root, "posing", ".git"), `gitdir: ${join(repository, ".git", "worktrees", "tree")}\n`)
+    expect(repositoryOf(realpathSync(join(root, "posing")))).toBe("")
+  })
+})
 
 describe("Claude Code's permissions", () => {
   test("Ask First: a command it would run is your card on its step; Allow Once lets it run", async () => {
