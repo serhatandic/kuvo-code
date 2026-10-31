@@ -257,7 +257,7 @@ export async function answerWorktrees(method: string, requestPath: string, body:
     // Not while an agent works there (nor while that can't be told); with changes not committed
     // only when they're to go.
     const here = await sessionsHere(engine, signal, bridge);
-    if (!here) return { status: 503, value: message(engine?.port ? `It couldn't be told whether an agent is working in the worktree of ${tree.branch}, so it stays. Try again in a moment.` : "The engine isn't running.") };
+    if (!here) return { status: 503, value: message(engine?.port ? `It couldn't be told whether an agent is working in the worktree of ${tree.branch}, so it stays. Try again in a moment.` : `The engine isn't running, so the worktree of ${tree.branch} stays. Try again once it's started.`) };
     const { sessions, active } = here;
     if (sessions.some(session => inside(session.location?.directory ?? session.directory, tree.root) && active.has(session.id))) {
       return { status: 409, value: message(`An agent is still working in the worktree of ${tree.branch}, so it stays. Stop it first, then remove the worktree.`) };
