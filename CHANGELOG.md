@@ -16,6 +16,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A worktree isn't removed while a Claude Code or Codex session works in it, or while its computer can't tell who's working there.
+- A worktree whose folder you deleted by hand can be removed; commits on no branch in a worktree (an agent stopped mid-rebase) are kept on a branch of their own when it goes.
+- A session in a worktree of a repository with no commits says to make a first commit, and a branch prefix git can't use there is named, with where to change it.
 - Connecting a machine for the first time shows how far it's come: the step it's on, and the engine being copied there in megabytes, with the connecting picture filling and a filling ring in the sidebar and Settings › Machines. Its pages in Settings show the same until it's up, rather than saying its settings can't be read.
 - A folder Kuvo Code can't read in the Files panel says so, with the computer's reason and Try Again, instead of looking empty; a folder that really is empty says Empty.
 - A machine's Accounts page, while it isn't connected, says its accounts are as last seen and when, with Connect.
