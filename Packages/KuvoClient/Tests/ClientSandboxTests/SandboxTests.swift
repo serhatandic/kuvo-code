@@ -77,7 +77,25 @@ import Testing
         #expect(ask.subtitle == "The sandbox stopped it from changing a file outside kuvo-ai.")
         #expect(ask.stopped?.map { "\($0.label) \($0.detail)" } == ["Write ~/.zshrc"])
         #expect(ask.alwaysPath == "~/.zshrc")
-        #expect(ask.alwaysMeaning == "Run it outside the sandbox now, and from now on let commands in kuvo-ai write in ~/.zshrc, in the sandbox")
+        #expect(ask.alwaysScope == nil && ask.alwaysTitle == "Always for ~/.zshrc")
+    }
+
+    @Test func aBotsOwnFolderOrTheChatsAreNamedAsSuchAndAChatsAlwaysIsEveryChats() {
+        var fromScout = ask
+        fromScout.project = "/Users/me/.kuvo-code/bots/bot_scout/workspace"
+        fromScout.owner = SandboxOwner(kind: .bot, id: "bot_scout", name: "Scout")
+        #expect(fromScout.subtitle == "The sandbox stopped it from changing a file outside Scout’s folder.")
+        #expect(fromScout.alwaysTitle == "Always for ~/.zshrc")
+        var fromChat = ask
+        fromChat.botName = nil
+        fromChat.project = "/home/me/.kuvo-code/chats"
+        fromChat.owner = .chats
+        #expect(fromChat.subtitle == "The sandbox stopped it from changing a file outside Chats.")
+        #expect(fromChat.alwaysScope == "in every chat" && fromChat.alwaysTitle == "Always for ~/.zshrc in every chat")
+        // A box before owners: by the folder's name, as before.
+        var before = fromChat
+        before.owner = nil
+        #expect(before.subtitle == "The sandbox stopped it from changing a file outside chats." && before.alwaysScope == nil)
     }
 
     @Test func aMachinesErrorIsQuotedAndThereIsNoAlways() {
@@ -97,5 +115,51 @@ import Testing
     @Test func itSaysHowLongItsBeenWaitingOnceItsAMinute() {
         #expect(ask.waiting(now: 1_000_000 + 59_000) == nil)
         #expect(ask.waiting(now: 1_000_000 + 12 * 60_000 + 5_000) == "Scout is waiting for you · 12 min")
+    }
+}
+
+/// Also Allowed at a glance: every rule on a computer, grouped by whose it is, in the order both
+/// apps list them, with how far each reaches.
+@Suite struct AlsoAllowedTests {
+    private func rule(_ id: String, _ project: String, _ path: String, owner: SandboxOwner? = nil, gone: Bool? = nil) -> SandboxRule {
+        SandboxRule(id: id, project: project, path: path, owner: owner, gone: gone)
+    }
+
+    @Test func rulesAreGroupedByWhoseTheyAreProjectsFirstThenBotsThenChats() throws {
+        let scout = SandboxOwner(kind: .bot, id: "bot_scout", name: "Scout"), ada = SandboxOwner(kind: .bot, id: "bot_ada", name: "Ada")
+        let listed = try JSONDecoder().decode(SandboxAllowed.self, from: Data("""
+        {"allowed":[
+          {"id":"r1","project":"/c/chats","kind":"write","path":"/x/exports","at":1,"owner":{"kind":"chats","name":"Chats"}},
+          {"id":"r2","project":"/b/bot_scout/workspace","kind":"write","path":"/x/reports","at":2,"owner":{"kind":"bot","id":"bot_scout","name":"Scout"}},
+          {"id":"r3","project":"/p/web","kind":"write","path":"/x/dist","at":3,"owner":{"kind":"project","name":"web"}},
+          {"id":"r4","project":"/p/kuvo-ai","kind":"write","path":"/x/cache","at":4,"owner":{"kind":"project","name":"kuvo-ai"}},
+          {"id":"r5","project":"/c/chats","kind":"write","path":"/x/receipts","at":5,"owner":{"kind":"chats","name":"Chats"}},
+          {"id":"r6","project":"/b/bot_ada/workspace","kind":"write","path":"/x/notes","at":6,"owner":{"kind":"bot","id":"bot_ada","name":"Ada"}},
+          {"id":"r7","project":"/p/old","kind":"write","path":"/x/old","at":7,"owner":{"kind":"project","name":"old"},"gone":true}],
+         "owners":[{"kind":"bot","id":"bot_ada","name":"Ada"},{"kind":"bot","id":"bot_scout","name":"Scout"},{"kind":"chats","name":"Chats"}]}
+        """.utf8))
+        #expect(listed.owners == [ada, scout, .chats])
+        // The client's own order for its projects, most recently used first, and its names for them.
+        let groups = AlsoAllowed.groups(listed.allowed, names: ["/p/kuvo-ai": "Kuvo AI"], order: ["/p/kuvo-ai", "/p/web"])
+        #expect(groups.map(\.name) == ["Kuvo AI", "web", "old", "Ada", "Scout", "Chats"])
+        #expect(groups.map(\.caption) == ["project", "project", "folder no longer there", "its own folder", "its own folder", "every chat"])
+        #expect(groups.last?.rules.map(\.path) == ["/x/exports", "/x/receipts"], "both chats' places under the one Chats")
+        #expect(groups[2].gone)
+    }
+
+    @Test func aBoxBeforeOwnersListsEachRuleByItsProjectsFolder() {
+        let groups = AlsoAllowed.groups([rule("r1", "/Users/me/shop", "/x/a"), rule("r2", "/Users/me/blog", "/x/b"), rule("r3", "/Users/me/shop", "/x/c")])
+        #expect(groups.map(\.name) == ["blog", "shop"])
+        #expect(groups.map { $0.rules.map(\.id) } == [["r2"], ["r1", "r3"]])
+        #expect(groups.allSatisfy { $0.owner.kind == .project })
+    }
+
+    @Test func whatsAddedForABotOrTheChatsSaysWhose() throws {
+        #expect(SandboxOwner(kind: .bot, id: "bot_scout", name: "Scout").sent == ["kind": "bot", "id": "bot_scout"])
+        #expect(SandboxOwner.chats.sent == ["kind": "chats"])
+        #expect(AlsoAllowed.choosing(for: .chats) == "Choose a folder every chat may write in, still in the sandbox.")
+        #expect(SandboxRoutes.allowedAll == "kuvo/sandbox/allowed?all" && SandboxRoutes.rule("al_1", all: true) == "kuvo/sandbox/allowed/al_1?all")
+        let noon = Date(timeIntervalSince1970: 1_793_275_200) // 2026-10-29, midday UTC
+        #expect(AlsoAllowed.detail(of: SandboxRule(id: "r", project: "/p", path: "/x", at: noon.timeIntervalSince1970 * 1000, by: "Serhat’s iPhone"), locale: Locale(identifier: "en_US")) == "Can write · Oct 29, from Serhat’s iPhone")
     }
 }
