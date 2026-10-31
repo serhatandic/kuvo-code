@@ -262,15 +262,26 @@ private struct ProductBlock: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 14) {
-                ProviderLogo(id: product.logo, size: 22)
-                    .frame(width: 32)
-                Text(title)
-                    .font(.body.weight(.medium))
-                    .help(version.map { "Version \($0)" } ?? "")
-                Spacer(minLength: 12)
-                actions
+            // The actions beside the name; in a narrow window, under it, and one above the other
+            // when they don't fit side by side there either.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 14) {
+                    heading
+                    Spacer(minLength: 12)
+                    actions(AnyLayout(HStackLayout(spacing: 10)))
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    heading
+                    actions(AnyLayout(HStackLayout(spacing: 10)))
+                        .padding(.leading, 40)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    heading
+                    actions(AnyLayout(VStackLayout(alignment: .leading, spacing: 4)))
+                        .padding(.leading, 40)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             VStack(alignment: .leading, spacing: 0) {
                 switch product.kind {
                 case .agent(let own, let added):
@@ -319,9 +330,20 @@ private struct ProductBlock: View {
         }
     }
 
+    /// Its mark and name.
+    private var heading: some View {
+        HStack(spacing: 14) {
+            ProviderLogo(id: product.logo, size: 22)
+                .frame(width: 32)
+            Text(title)
+                .font(.body.weight(.medium))
+                .help(version.map { "Version \($0)" } ?? "")
+        }
+    }
+
     /// What it needs from you, on the product's line: installing again, or an update; and another account.
-    private var actions: some View {
-        HStack(spacing: 10) {
+    private func actions(_ layout: AnyLayout) -> some View {
+        layout {
             if isInstalling {
                 HStack(spacing: 6) {
                     Spinner(size: 12)
@@ -360,7 +382,7 @@ private struct ProductBlock: View {
                 }
             }
             Button(action: addAccount) {
-                Label(product.hasAccounts ? "Add Another" : "Add Account", systemImage: "plus")
+                Label(product.hasAccounts ? "Add Another Account" : "Add Account", systemImage: "plus")
                     .font(.callout)
                     .fixedSize()
             }
@@ -368,6 +390,8 @@ private struct ProductBlock: View {
             .disabled(isAgent && agents.api == nil)
             .help(isAgent ? "Another \(title) account, signed in on its own: each shows in the model picker" : "Another \(title) account: the engine uses one at a time")
         }
+        // Each on one line: the row puts them under the name when they don't fit beside it.
+        .fixedSize()
     }
 
     // MARK: Doing
