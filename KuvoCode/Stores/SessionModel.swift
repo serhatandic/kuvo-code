@@ -2223,8 +2223,10 @@ final class SessionModel {
     func applyHelper(_ event: ServerEvent, from helper: String) {
         if !transcript.helpers.contains(helper) { transcript.helpers.insert(helper) }
         if live?.helpers.contains(helper) == false { live?.helpers.insert(helper) }
-        // Its run ending: only what it asked goes, not this session's own run.
+        // Its run ending: only what it asked goes, not this session's own run (and not from a
+        // read under way, which may still have it).
         if Self.runEnds.contains(event.type) {
+            for read in Array(cameDuringRead.keys) { cameDuringRead[read]?.append(event) }
             transcript.apply(event)
             live?.apply(event)
             return
