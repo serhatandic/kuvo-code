@@ -1,6 +1,7 @@
 import AppKit
 import ClientDesign
 import SwiftUI
+import Textual
 
 /// A page of a machine's browser, in its tab: the page live, with back, forward, reload and the
 /// address, and what the agent is doing. Clicks, scrolling and typing go to the page. A new tab,
@@ -392,7 +393,7 @@ final class RemotePageView: NSView, @preconcurrency NSTextInputClient, PictureVi
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .cursorUpdate, .activeInKeyWindow, .inVisibleRect], owner: self)
+        let area = PointerClaim.trackingArea(owner: self)
         addTrackingArea(area)
         tracking = area
     }
@@ -426,9 +427,23 @@ final class RemotePageView: NSView, @preconcurrency NSTextInputClient, PictureVi
     private var cursor = NSCursor.arrow
     private var cursorQuery: Task<Void, Never>?
     private var lastCursorQuery = Date.distantPast
+    /// Shown only where the page is what's under the pointer, not under a bar or card over it.
+    private let claim = PointerClaim()
+
+    private func showCursor(at location: NSPoint) {
+        claim.show(PointerClaim.isTopmost(self, at: location) ? cursor : nil)
+    }
 
     override func cursorUpdate(with event: NSEvent) {
-        cursor.set()
+        showCursor(at: event.locationInWindow)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        showCursor(at: event.locationInWindow)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        claim.show(nil)
     }
 
     private func updateCursor(at point: CGPoint) {
@@ -442,7 +457,10 @@ final class RemotePageView: NSView, @preconcurrency NSTextInputClient, PictureVi
             cursorQuery = nil
             guard let name else { return }
             cursor = Self.cursor(named: name)
-            if let window, window.isKeyWindow, bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil)) { cursor.set() }
+            if let window, window.isKeyWindow {
+                let location = window.mouseLocationOutsideOfEventStream
+                if bounds.contains(convert(location, from: nil)) { showCursor(at: location) }
+            }
         }
     }
 

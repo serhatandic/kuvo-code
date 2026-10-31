@@ -223,22 +223,11 @@ nonisolated final class LinkSpots: Sendable {
     }
 
     private let spots = OSAllocatedUnfairLock<[Spot]>(initialState: [])
-    /// Told when they change.
-    private let changed = OSAllocatedUnfairLock<(@Sendable () -> Void)?>(initialState: nil)
 
     var all: [Spot] { spots.withLock { $0 } }
 
     func set(_ new: [Spot]) {
-        guard spots.withLock({ old in
-            guard old != new else { return false }
-            old = new
-            return true
-        }) else { return }
-        if let tell = changed.withLock({ $0 }) { DispatchQueue.main.async(execute: tell) }
-    }
-
-    func onChange(_ tell: (@Sendable () -> Void)?) {
-        changed.withLock { $0 = tell }
+        spots.withLock { $0 = new }
     }
 }
 
@@ -268,18 +257,11 @@ private struct LinkArea: NSViewRepresentable {
         let view = LinkAreaView()
         view.spots = spots
         view.open = open
-        spots.onChange { [weak view] in
-            MainActor.assumeIsolated { view?.spotsChanged() }
-        }
         return view
     }
 
     func updateNSView(_ view: LinkAreaView, context: Context) {
         view.open = open
-    }
-
-    static func dismantleNSView(_ view: LinkAreaView, coordinator: ()) {
-        view.spots?.onChange(nil)
     }
 }
 
@@ -299,26 +281,29 @@ private final class LinkAreaView: NSView {
         return spot(at: convert(point, from: superview)) == nil ? nil : self
     }
 
-    func spotsChanged() {
-        window?.invalidateCursorRects(for: self)
-        updateTrackingAreas()
-    }
-
-    override func resetCursorRects() {
-        for spot in spots?.all ?? [] { addCursorRect(spot.rect, cursor: .pointingHand) }
-    }
+    // The hand over a link, where nothing is drawn over it (`PointerClaim`).
+    private let claim = PointerClaim()
+    private var tracking: NSTrackingArea?
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        for area in trackingAreas { removeTrackingArea(area) }
-        for spot in spots?.all ?? [] {
-            addTrackingArea(NSTrackingArea(rect: spot.rect, options: [.cursorUpdate, .activeInKeyWindow], owner: self))
-        }
+        if let tracking { removeTrackingArea(tracking) }
+        let area = PointerClaim.trackingArea(owner: self)
+        addTrackingArea(area)
+        tracking = area
     }
 
-    override func cursorUpdate(with event: NSEvent) {
-        NSCursor.pointingHand.set()
+    private func pointerMoved(_ event: NSEvent) {
+        let onLink = PointerClaim.isTopmost(self, at: event.locationInWindow)
+        // Off a link, still on the words: the selectable text's I-beam, as it shows elsewhere.
+        let onText = bounds.contains(convert(event.locationInWindow, from: nil))
+        claim.show(onLink ? .pointingHand : nil, otherwise: onText ? .iBeam : .arrow)
     }
+
+    override func cursorUpdate(with event: NSEvent) { pointerMoved(event) }
+    override func mouseEntered(with event: NSEvent) { pointerMoved(event) }
+    override func mouseMoved(with event: NSEvent) { pointerMoved(event) }
+    override func mouseExited(with event: NSEvent) { claim.show(nil) }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 

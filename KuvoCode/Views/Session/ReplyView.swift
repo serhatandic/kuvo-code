@@ -738,6 +738,11 @@ class ReplyChipButton: NSButton {
 
     override var fittingSize: NSSize { intrinsicContentSize }
 
+    // The pointing hand, as on the app's other borderless buttons (`clickablePointer`).
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }

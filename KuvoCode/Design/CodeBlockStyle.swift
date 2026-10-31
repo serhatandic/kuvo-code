@@ -164,6 +164,7 @@ private struct CopyableCodeBlock: View {
                 }
             }
             .buttonStyle(CornerButtonStyle(isHovering: isHoveringCopy))
+            .clickablePointer()
             .background(HoverTracker { isHoveringCopy = $0 })
             .help("Copy Code")
         }
