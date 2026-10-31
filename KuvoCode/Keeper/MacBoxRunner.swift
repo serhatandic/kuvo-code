@@ -90,7 +90,7 @@ final class MacBoxRunner {
         self.launch = launch
         engine = .starting
         // Why one before stopped (a keeper killed before it could take it away) isn't this one's.
-        try? FileManager.default.removeItem(at: KeeperRecord.run.appending(path: "engine-stopped"))
+        BoxProcess.forgetEngineStopped()
         do {
             async let environment = ShellEnvironment.load()
             let binary: URL
