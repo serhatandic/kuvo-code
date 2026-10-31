@@ -246,8 +246,8 @@ struct ProvidersView: View {
     }
 }
 
-/// A rounded search field that lives in the content, not in a toolbar: a recessed well with no
-/// outline; its magnifying glass takes the accent color while you type. Also filters the skills in Settings.
+/// A rounded search field that lives in the content, not in a toolbar: a recessed well, with the
+/// focus rim while you type. Also filters the skills in Settings.
 struct SearchField: View {
     @Binding var text: String
     let prompt: String
@@ -257,7 +257,7 @@ struct SearchField: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(isFocused ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .foregroundStyle(.secondary)
             TextField(prompt, text: $text)
                 .textFieldStyle(.plain)
                 .focused($isFocused)
@@ -274,8 +274,9 @@ struct SearchField: View {
         .font(.body)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        // Sunken, like the sidebar's search, with no outline; the same while you type.
+        // Sunken, like the sidebar's search.
         .background(Surface.well(scheme), in: .rect(cornerRadius: 10))
+        .focusRim(.rect(cornerRadius: 10), isOn: isFocused)
         .contentShape(.rect)
         .onTapGesture { isFocused = true }
     }

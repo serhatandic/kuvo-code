@@ -157,11 +157,11 @@ struct BrowserAskCard: View {
     private var signIn: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Username or email", text: $username)
-                .wellField()
+                .wellField(isFocused: focus == .username)
                 .focused($focus, equals: .username)
                 .onSubmit { focus = .password }
             SecureField("Password", text: $password)
-                .wellField()
+                .wellField(isFocused: focus == .password)
                 .focused($focus, equals: .password)
                 .onSubmit(send)
             HStack(alignment: .top) {
@@ -204,7 +204,7 @@ struct BrowserAskCard: View {
             }
             TextField("Code", text: $code)
                 .font(.body.monospaced().weight(.medium))
-                .wellField()
+                .wellField(isFocused: focus == .code)
                 .focused($focus, equals: .code)
                 .onSubmit(send)
         }

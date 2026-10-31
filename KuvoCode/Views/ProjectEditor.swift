@@ -157,8 +157,8 @@ struct ProjectEditor: View {
             }
 
             section("Run") {
-                WellGroup {
-                    WellRow(isActive: isRunFocused) {
+                WellGroup(isFocused: isRunFocused) {
+                    WellRow {
                         Image(systemName: "play.fill")
                             .font(.system(size: 13))
                     } content: {
@@ -175,8 +175,8 @@ struct ProjectEditor: View {
 
             section("Terminal Instead of Chat", note: "New sessions in this project open a terminal running this command, flags and all; leave it empty for the usual chat.") {
                 VStack(alignment: .leading, spacing: 10) {
-                    WellGroup {
-                        WellRow(isActive: isTerminalFocused) {
+                    WellGroup(isFocused: isTerminalFocused) {
+                        WellRow {
                             Image(systemName: "apple.terminal")
                                 .font(.system(size: 13))
                         } content: {
@@ -206,8 +206,8 @@ struct ProjectEditor: View {
 
             if setup != nil {
                 section("Worktree Setup") {
-                    WellGroup {
-                        WellRow(isActive: isSetupFocused) {
+                    WellGroup(isFocused: isSetupFocused) {
+                        WellRow {
                             Image(systemName: "arrow.triangle.branch")
                                 .font(.system(size: 14))
                         } content: {
@@ -279,8 +279,8 @@ struct ProjectEditor: View {
     // MARK: Name
 
     private var nameField: some View {
-        WellGroup {
-            WellRow(isActive: isNameFocused) {
+        WellGroup(isFocused: isNameFocused) {
+            WellRow {
                 Image(systemName: "folder")
             } content: {
                 // Left empty, the project takes its primary folder's name.
@@ -413,11 +413,11 @@ private struct FolderRow: View {
     }
 }
 
-/// A group of rows drawn into the sheet like one field: sunken, with an edge of its own and no
-/// outline. It looks the same while you type in it, like every other well: the row's icon
-/// shows the focus (`WellRow`). In a popover, the rows sit on the popover itself
-/// (`popoverContent`).
+/// A group of rows drawn into the sheet like one field: sunken, with an edge of its own. While
+/// you type in one of its rows it has the focus rim, as every well does. In a popover, the rows
+/// sit on the popover itself (`popoverContent`).
 struct WellGroup<Content: View>: View {
+    var isFocused = false
     @ViewBuilder var content: Content
     @Environment(\.isInPopover) private var isInPopover
 
@@ -427,15 +427,13 @@ struct WellGroup<Content: View>: View {
         } else {
             VStack(spacing: 0) { content }
                 .clipShape(.rect(cornerRadius: 10))
-                .recessedWell(RoundedRectangle(cornerRadius: 10))
+                .recessedWell(RoundedRectangle(cornerRadius: 10), isFocused: isFocused)
         }
     }
 }
 
-/// One row of a well: an icon in its own column, a hairline, then the content. The icon takes
-/// the accent color while the row's field has the focus, in place of an outline.
+/// One row of a well: an icon in its own column, a hairline, then the content.
 struct WellRow<Icon: View, Content: View>: View {
-    var isActive = false
     var height: CGFloat = 44
     @ViewBuilder var icon: Icon
     @ViewBuilder var content: Content
@@ -445,7 +443,7 @@ struct WellRow<Icon: View, Content: View>: View {
     var body: some View {
         HStack(spacing: 0) {
             icon
-                .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .foregroundStyle(.secondary)
                 .frame(width: isInPopover ? WellRow.popoverIcon : 42)
             // In a popover, the icon and the words with nothing between, as in the system's.
             if !isInPopover {

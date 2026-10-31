@@ -54,7 +54,7 @@ struct ReportProblemSheet: View {
                 }
                 .font(.callout)
                 section("What happened?") {
-                    WellGroup {
+                    WellGroup(isFocused: isFocused) {
                         TextField("What happened?", text: $description, prompt: Text("What you did, what you expected, and what happened instead"), axis: .vertical)
                             .textFieldStyle(.plain)
                             .lineLimit(4...10)

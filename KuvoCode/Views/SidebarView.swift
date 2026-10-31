@@ -1222,7 +1222,7 @@ struct SidebarSearchRow: View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 13))
-                .foregroundStyle(isFocused ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .foregroundStyle(.secondary)
                 .frame(width: SidebarMetrics.iconWidth)
             TextField("Search", text: $text)
                 .textFieldStyle(.plain)
@@ -1241,8 +1241,9 @@ struct SidebarSearchRow: View {
         }
         .padding(.horizontal, 10)
         .frame(height: SidebarMetrics.rowHeight)
-        // Sunken, without a border of its own; the same while you type in it, as every well is.
+        // Sunken, without a border of its own; the focus rim while you type in it, as every well.
         .background(Surface.well(scheme), in: .rect(cornerRadius: 8))
+        .focusRim(.rect(cornerRadius: 8), isOn: isFocused)
         .contentShape(.rect)
         .onTapGesture { isFocused = true }
         .padding(.vertical, 4)

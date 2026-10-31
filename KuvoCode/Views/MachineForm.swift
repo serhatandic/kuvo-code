@@ -72,8 +72,8 @@ struct MachineForm: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: 8) {
-                WellGroup {
-                    WellRow(isActive: isFocused) {
+                WellGroup(isFocused: isFocused) {
+                    WellRow {
                         Image(systemName: "server.rack")
                     } content: {
                         TextField("SSH host", text: $destination, prompt: Text(verbatim: "my-server or user@host"))

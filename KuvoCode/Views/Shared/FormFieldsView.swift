@@ -64,6 +64,7 @@ private struct FieldView: View {
     @Binding var value: FormValue?
     let style: FormFieldsView.Style
     @State private var custom = ""
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -93,7 +94,8 @@ private struct FieldView: View {
                 }
                 if allowsCustom {
                     TextField("Something else…", text: $custom)
-                        .wellField()
+                        .wellField(isFocused: isFocused)
+                        .focused($isFocused)
                         .onChange(of: custom) { old, text in
                             if !text.isEmpty { value = .string(text) }
                             // Cleared: no answer, rather than its last letter (a choice picked
@@ -103,11 +105,13 @@ private struct FieldView: View {
                 }
             } else if format == "password" {
                 SecureField(placeholder ?? "", text: stringBinding)
-                    .wellField()
+                    .wellField(isFocused: isFocused)
+                    .focused($isFocused)
                     .accessibilityLabel(name)
             } else {
                 TextField(placeholder ?? "", text: stringBinding)
-                    .wellField()
+                    .wellField(isFocused: isFocused)
+                    .focused($isFocused)
                     .accessibilityLabel(name)
             }
         case .number(let isInteger, _, _, _):
@@ -115,7 +119,8 @@ private struct FieldView: View {
                 get: { if case .number(let n) = value { n } else { nil } },
                 set: { value = $0.map { .number(isInteger ? $0.rounded() : $0) } }
             ), format: .number)
-            .wellField()
+            .wellField(isFocused: isFocused)
+            .focused($isFocused)
             .accessibilityLabel(name)
             .frame(maxWidth: 160)
         case .boolean:
@@ -132,7 +137,8 @@ private struct FieldView: View {
             }
             if allowsCustom {
                 TextField("Something else…", text: $custom)
-                    .wellField()
+                    .wellField(isFocused: isFocused)
+                    .focused($isFocused)
                     .onSubmit {
                         guard !custom.isEmpty else { return }
                         value = .list(listValue + [custom])

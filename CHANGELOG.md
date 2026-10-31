@@ -74,8 +74,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - On a machine, agents find the programs you installed there as your terminal does, like nvm's `node` and the tools you installed with its npm, or what's in `~/.local/bin`.
 - A machine whose SSH settings run a command of their own, like `tmux`, or always ask for a terminal now connects, and one whose host key changed says so and how to clear the old key.
 - **Uninstall from** a machine stops its engine even when the connection drops partway, the next time it answers, rather than leaving it running.
-- Connecting a subscription that's used with a key, like OpenCode Go or Z.ai's GLM Coding Plan, says the key comes with it, with **Get Your Key** to open the page that has it.
-- A field you're typing in, like a new project's or bot's name, keeps the same color as the fields around it; its icon turns to your accent color instead.
+- Connecting a subscription that's used with a key, like OpenCode Go, Z.ai's GLM Coding Plan or a token plan, says the key comes with it, with **Get Your Key** to open the page that has it.
+- A field you're typing in, like a new project's or bot's name, keeps the same color as the fields around it, and has a rim in your accent color instead, the same in every sheet, card and search field.
 - In **Settings › Accounts**, the button beside a provider that adds one more of your accounts says **Add Another Account**, and in a narrow window a provider's buttons move under its name rather than squeezing it.
 - In **Settings › Accounts**, signing in, **Disconnect**, **Remove Account**, **Use This Account** and an agent's **Sign Out** say why when they don't work, like a machine that isn't connected or this Mac's engine restarting, rather than doing nothing.
 - A coding agent you install from the first launch that doesn't get installed says why there, with its command to copy and run yourself, rather than in **Settings › Accounts** the next time you open it.

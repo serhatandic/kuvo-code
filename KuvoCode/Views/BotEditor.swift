@@ -449,8 +449,8 @@ struct BotEditor: View {
             }
             .frame(width: 92)
             VStack(alignment: .leading, spacing: 8) {
-                WellGroup {
-                    WellRow(isActive: focus == .name) {
+                WellGroup(isFocused: focus == .name) {
+                    WellRow {
                         Image(systemName: "face.smiling")
                     } content: {
                         TextField("Name", text: $name, prompt: Text("Name, like Scout"))
@@ -665,8 +665,8 @@ private struct JobFields: View {
                 .font(.callout)
                 .transition(.opacity)
             }
-            WellGroup {
-                WellRow(isActive: focus == .line) {
+            WellGroup(isFocused: focus != nil) {
+                WellRow {
                     Image(systemName: "briefcase")
                 } content: {
                     TextField("In a Few Words", text: $job.line, prompt: Text("In a few words, like Keeps the build green"))
@@ -926,8 +926,8 @@ private struct PersonalityPicker: View {
     /// Making or changing one of yours: its name, and how it talks.
     private var form: some View {
         VStack(alignment: .leading, spacing: 10) {
-            WellGroup {
-                WellRow(isActive: draftFocus == .name) {
+            WellGroup(isFocused: draftFocus != nil) {
+                WellRow {
                     Image(systemName: "person.crop.circle")
                 } content: {
                     TextField("Name", text: Binding(get: { draft?.name ?? "" }, set: { draft?.name = $0; refusal = nil }), prompt: Text("Name, like Night Owl"))

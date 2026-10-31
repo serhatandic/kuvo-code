@@ -123,15 +123,23 @@ extension View {
         modifier(PickHighlight(shape: shape, isOn: isOn, leading: leading))
     }
 
-    /// A text field drawn into the surface: sunken, with no bezel and no focus outline, like the
-    /// sidebar's search. For fields outside a grouped form (a form's own fields stay native).
-    public func wellField(cornerRadius: CGFloat = 10) -> some View {
-        modifier(WellField(cornerRadius: cornerRadius))
+    /// A text field drawn into the surface: sunken, with no bezel, like the sidebar's search. For
+    /// fields outside a grouped form (a form's own fields stay native). While you type in it, it
+    /// has the focus rim.
+    public func wellField(cornerRadius: CGFloat = 10, isFocused: Bool = false) -> some View {
+        modifier(WellField(cornerRadius: cornerRadius, isFocused: isFocused))
     }
 
-    /// A recessed well, one step below the card, with a subtle inner border: for code.
-    public func recessedWell<S: InsettableShape>(_ shape: S) -> some View {
-        modifier(RecessedWell(shape: shape))
+    /// A recessed well, one step below the card, with a subtle inner border: for code, and for
+    /// the rows of a form, which pass `isFocused` while you type in one of them.
+    public func recessedWell<S: InsettableShape>(_ shape: S, isFocused: Bool = false) -> some View {
+        modifier(RecessedWell(shape: shape, isFocused: isFocused))
+    }
+
+    /// What marks the well you're typing in, the same for every one: a rim in the accent color
+    /// along its edge. The well's fill doesn't change.
+    public func focusRim<S: InsettableShape>(_ shape: S, isOn: Bool) -> some View {
+        modifier(FocusRim(shape: shape, isOn: isOn))
     }
 }
 
@@ -337,6 +345,7 @@ private struct PickHighlight<S: InsettableShape>: ViewModifier {
 
 private struct WellField: ViewModifier {
     let cornerRadius: CGFloat
+    let isFocused: Bool
     @Environment(\.colorScheme) private var scheme
 
     func body(content: Content) -> some View {
@@ -346,11 +355,13 @@ private struct WellField: ViewModifier {
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .background(Surface.well(scheme), in: .rect(cornerRadius: cornerRadius))
+            .focusRim(.rect(cornerRadius: cornerRadius), isOn: isFocused)
     }
 }
 
 private struct RecessedWell<S: InsettableShape>: ViewModifier {
     let shape: S
+    let isFocused: Bool
     @Environment(\.colorScheme) private var scheme
 
     func body(content: Content) -> some View {
@@ -361,6 +372,25 @@ private struct RecessedWell<S: InsettableShape>: ViewModifier {
                     .strokeBorder(Surface.wellBorder(scheme), lineWidth: 1)
                     .allowsHitTesting(false)
             }
+            .focusRim(shape, isOn: isFocused)
+    }
+}
+
+private struct FocusRim<S: InsettableShape>: ViewModifier {
+    let shape: S
+    let isOn: Bool
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            if isOn {
+                // The tint, so it follows the accent (Graphite too); full strength and wider with
+                // Increase Contrast.
+                shape
+                    .strokeBorder(.tint.opacity(contrast == .increased ? 1 : 0.8), lineWidth: contrast == .increased ? 2 : 1.5)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 }
 

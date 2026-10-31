@@ -160,8 +160,8 @@ struct GroupEditor: View {
                 }
                 .frame(width: 92)
                 .animation(.ui, value: members)
-                WellGroup {
-                    WellRow(isActive: focus == .name) {
+                WellGroup(isFocused: focus != nil) {
+                    WellRow {
                         Image(systemName: "bubble.left.and.bubble.right")
                     } content: {
                         // Both wrap, so a narrow card shows all of what's in them, prompts too.
@@ -173,7 +173,7 @@ struct GroupEditor: View {
                             .padding(.vertical, 12)
                     }
                     WellDivider()
-                    WellRow(isActive: focus == .purpose) {
+                    WellRow {
                         Image(systemName: "target")
                     } content: {
                         TextField("Purpose", text: $purpose, prompt: Text("What it's for, like Plan each week's release"), axis: .vertical)
@@ -229,7 +229,7 @@ struct GroupEditor: View {
 
     /// When the chat meets on its own, like a standup every weekday at 9.
     private var meetingRows: some View {
-        WellGroup {
+        WellGroup(isFocused: focus == .topic) {
             WellRow {
                 Image(systemName: "calendar")
             } content: {

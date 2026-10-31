@@ -119,6 +119,7 @@ struct BotKeyEntry: View {
     @Environment(AppModel.self) private var app
     @State private var values: [String: String] = [:]
     @State private var isSaving = false
+    @FocusState private var focusedKey: String?
     @State private var failure: String?
 
     private var keys: [Integrations.Key] { Integrations.keys(of: service.way) }
@@ -137,7 +138,7 @@ struct BotKeyEntry: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            WellGroup {
+            WellGroup(isFocused: focusedKey != nil) {
                 ForEach(Array(keys.enumerated()), id: \.element.name) { index, key in
                     if index > 0 { WellDivider() }
                     WellRow {
@@ -146,6 +147,7 @@ struct BotKeyEntry: View {
                         SecureField(key.label, text: Binding(get: { values[key.name] ?? "" }, set: { values[key.name] = $0 }), prompt: Text(key.label + ": " + key.prompt))
                             .textFieldStyle(.plain)
                             .labelsHidden()
+                            .focused($focusedKey, equals: key.name)
                     }
                 }
             }
