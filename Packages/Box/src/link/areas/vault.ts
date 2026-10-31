@@ -35,8 +35,6 @@ const stringOf = (value: unknown) => (typeof value === "string" ? value : undefi
 const filledFor = new Set<string>();
 const ED_SPKI = Buffer.from("302a300506032b6570032100", "hex");
 
-/** Who's asking, as a client: a phone (by its name), this Mac's app, the Mac over SSH with the
- * unlock key; null for anyone else (an agent's command on this computer). */
 // The grants as clients show them: a bot's only while it's on this computer. One deleted (or moved
 // away) can't use the vault here, and its grants, kept in the vault's signed file, aren't taken out
 // of it by whichever process deleted it; one moved back has them again.
@@ -45,6 +43,8 @@ function shownGrants(grants: VaultGrant[]): VaultGrant[] {
   return grants.filter(grant => !grant.who.bot || here.has(grant.who.bot));
 }
 
+/** Who's asking, as a client: a phone (by its name), this Mac's app, the Mac over SSH with the
+ * unlock key; null for anyone else (an agent's command on this computer). */
 function clientOf({ request, phone }: RouteContext): string | null {
   if (phone?.key) {
     const key = phone.key.toString("base64url");
