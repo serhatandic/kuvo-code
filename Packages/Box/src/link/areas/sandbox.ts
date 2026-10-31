@@ -7,7 +7,7 @@
 
 import { isObject, parsed } from "../../shared/json";
 import type { SandboxState } from "../../shared/routes/sandbox";
-import { addRule, allowedFor, removeRule, RuleRefusal } from "../fence/allowed";
+import { addableOwners, addRule, allowedFor, folderOfOwner, listed, removeRule, RuleRefusal } from "../fence/allowed";
 import { answerSandboxAsk, callSandboxTool, listSandboxAsks, onSandboxAsksChanged, SANDBOX_TOOLS } from "../fence/outside";
 import { answeredRestart, asksToRestart, fenceState, restartSettled, setUpFence, tellAgents } from "../fence/state";
 import { bridgeTarget, call } from "../engine/client";
@@ -77,19 +77,22 @@ export async function* sandboxRoute(context: RouteContext): AsyncGenerator<Answe
 
   if (route === "kuvo/sandbox/allowed" || parts[2] === "allowed") {
     try {
-      if (route === "kuvo/sandbox/allowed" && method === "GET") {
-        const project = new URLSearchParams(request.path.split("?")[1] ?? "").get("project") ?? undefined;
-        return yield* json(200, { allowed: allowedFor(project) });
-      }
+      // A project's (`?project=`), or every rule here and whom else one can be added for: what a
+      // GET with none named answers, and an add's or a removal's with `?all`.
+      const query = new URLSearchParams(request.path.split("?")[1] ?? "");
+      const answer = (of?: string) => ({ allowed: listed(allowedFor(of)), ...(of ? {} : { owners: addableOwners() }) });
+      if (route === "kuvo/sandbox/allowed" && method === "GET") return yield* json(200, answer(query.get("project") ?? undefined));
       if (route === "kuvo/sandbox/allowed" && method === "POST") {
-        const rule = addRule({ ...given, by: clientName(context) });
-        return yield* json(200, { allowed: allowedFor(rule.project) });
+        // For a project by its folder, or for a bot's own folder or the chats' by `owner`.
+        const project = given.project === undefined && given.owner !== undefined ? folderOfOwner(given.owner) : given.project;
+        const rule = addRule({ ...given, project, by: clientName(context) });
+        return yield* json(200, answer(query.has("all") ? undefined : rule.project));
       }
       if (parts.length === 4 && method === "DELETE") {
         const id = idOf(parts[3]);
         const rule = allowedFor().find(each => each.id === id);
         if (!rule || !removeRule(id)) return yield* json(404, { message: "That isn't in Also Allowed." });
-        return yield* json(200, { allowed: allowedFor(rule.project) });
+        return yield* json(200, answer(query.has("all") ? undefined : rule.project));
       }
       return yield* json(405, {});
     } catch (error) {

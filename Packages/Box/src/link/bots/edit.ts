@@ -9,6 +9,7 @@ import { askGroups } from "../areas/groups";
 import { call } from "../engine/client";
 import { textOf } from "../files";
 import { BOTS, HERE, IS_MAC, K, RUN } from "../home";
+import { forgetRulesIn, realProject } from "../fence/allowed";
 import { hostTrash } from "../host-interface";
 import { botVariable, deleteKey, keyNames } from "../keys";
 import { botPersonalities } from "../personalities/library";
@@ -269,6 +270,8 @@ export async function deleteBot(id: string, readEngine: () => Target, readBridge
   if (!here) return no(404, "That bot isn’t there any more.");
   if (isMoving(here.folder)) return no(409, MOVING);
   let trashed: string;
+  // (Its folder as Also Allowed keeps its rules, by where it really is, before it goes.)
+  const workspace = realProject(path.join(here.folder, "workspace"));
   try {
     // For a Mac to let go of it as it next connects (this Mac's own box needs no note).
     if (!IS_MAC) noteDeleted(id);
@@ -289,6 +292,8 @@ export async function deleteBot(id: string, readEngine: () => Target, readBridge
     await hostTrash(trashed).catch(() => {});
     if (!fs.existsSync(trashed)) try { fs.rmdirSync(path.dirname(trashed)); } catch {}
   }
+  // What you allowed its own commands in Also Allowed.
+  try { forgetRulesIn(workspace); } catch {}
   // Its keys of its own (`KUVO_KEY_…__<ID>`). Where they can't be reached now (this Mac's app not
   // answering), the bot is deleted all the same, and its keys go once they can be.
   noteKeysLeft(id, true);

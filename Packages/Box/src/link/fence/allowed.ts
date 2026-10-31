@@ -1,6 +1,7 @@
 // Also Allowed (PROTOCOL.md, "Sandbox"): what you let a project's commands do beyond the sandbox,
 // from an ask's Always for This or added in Settings: a folder (or file) its commands write in the
-// sandbox. Kept in the box's own folder, which nothing in a project can write. (Never a command
+// sandbox. A bot's own folder and the chats' are projects here too, each rule listed by whose it is
+// (`ownerOf`); a bot's go with it when it's deleted. Kept in the box's own folder, which nothing in a project can write. (Never a command
 // that runs outside it without asking: what a command runs, its scripts and its project's settings,
 // is what the sandbox writes.)
 //
@@ -11,10 +12,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { SandboxRule } from "../../shared/routes/sandbox";
+import type { SandboxOwner, SandboxRule } from "../../shared/routes/sandbox";
+import { botHere } from "../bots/here";
 import { newID } from "../../shared/text";
 import { writePrivate } from "../files";
-import { accountHome, BOX, RUN } from "../home";
+import { accountHome, BOTS, BOX, CHATS, RUN } from "../home";
 import { fencePolicy, realish } from "./policy";
 
 const FILE = path.join(BOX, "sandbox-allowed.json");
@@ -28,7 +30,8 @@ export class RuleRefusal extends Error {}
 /** A project's folder by its real path; a worktree of a repository (a session's branch) is its
  * repository's own folder, so it has the project's folders and Always there keeps them for it.
  * (Only one the repository names back, as the sandbox's plugin finds it.) */
-const realProject = (project: string) => {
+/** A project's folder by where it really is, as its rules are kept. */
+export const realProject = (project: string) => {
   let real: string;
   try { real = fs.realpathSync(project); } catch { return path.resolve(project); }
   try {
@@ -62,6 +65,58 @@ export function allowedFor(project?: string): SandboxRule[] {
   if (!project) return all;
   const real = realProject(project);
   return all.filter(rule => rule.project === real);
+}
+
+const BOT_ID = /^bot_[A-Za-z0-9]+$/;
+
+/** Whose a conversation's folder is: the chats', a bot's own (its folder's workspace, by the name
+ * it has now) or else a project's, by its folder's name. */
+export function ownerOf(project: string): SandboxOwner {
+  const real = realProject(project);
+  if (real === realish(CHATS)) return { kind: "chats", name: "Chats" };
+  const [id, workspace, ...more] = path.relative(realish(BOTS), real).split(path.sep);
+  if (BOT_ID.test(id) && workspace === "workspace" && !more.length) {
+    return { kind: "bot", id, name: botHere(id)?.described.name || "A bot no longer here" };
+  }
+  return { kind: "project", name: path.basename(real) || real };
+}
+
+/** The rules as a client lists them: each with whose it is, and whether its folder is gone. */
+export function listed(rules: SandboxRule[]): SandboxRule[] {
+  const owners = new Map<string, { owner: SandboxOwner; gone: boolean }>();
+  return rules.map(rule => {
+    let known = owners.get(rule.project);
+    if (!known) owners.set(rule.project, known = { owner: ownerOf(rule.project), gone: !fs.existsSync(rule.project) });
+    return { ...rule, owner: known.owner, ...(known.gone ? { gone: true } : {}) };
+  });
+}
+
+/** Those a client may add a folder for besides its projects: each bot here working in its own
+ * folder (not a project), by name, then the chats. */
+export function addableOwners(): SandboxOwner[] {
+  const bots: SandboxOwner[] = [];
+  let ids: string[] = [];
+  try { ids = fs.readdirSync(BOTS).filter(id => BOT_ID.test(id)); } catch {}
+  for (const id of ids) {
+    const here = botHere(id);
+    if (here && typeof here.described.project !== "string") bots.push({ kind: "bot", id, name: here.described.name });
+  }
+  bots.sort((a, b) => a.name.localeCompare(b.name));
+  return [...bots, { kind: "chats", name: "Chats" }];
+}
+
+/** The folder a rule for `owner` is kept under: a bot's own (one here, in its own folder) or the
+ * chats'. */
+export function folderOfOwner(owner: unknown): string {
+  const given = owner && typeof owner === "object" ? owner as { kind?: unknown; id?: unknown } : {};
+  if (given.kind === "chats") return CHATS;
+  if (given.kind === "bot" && typeof given.id === "string" && BOT_ID.test(given.id)) {
+    const here = botHere(given.id);
+    if (!here) throw new RuleRefusal("That bot isn't on this computer any more.");
+    if (typeof here.described.project === "string") throw new RuleRefusal(`${here.described.name} works in a project: add the folder for that project.`);
+    return path.join(here.folder, "workspace");
+  }
+  throw new RuleRefusal("Name whose it is: {kind: \"bot\", id} or {kind: \"chats\"}.");
 }
 
 function keep(rules: SandboxRule[]): void {
@@ -137,6 +192,14 @@ export function addRule(given: { project?: unknown; kind?: unknown; path?: unkno
   const rule: SandboxRule = { id: newID("al_"), project, kind: "write", path: where, at: Date.now(), ...(given.by ? { by: given.by } : {}) };
   keep([...rules, rule]);
   return rule;
+}
+
+/** Removes the rules of a folder (by where it really is, `realProject`) and those inside it: a
+ * bot's, as it's deleted. */
+export function forgetRulesIn(top: string): void {
+  const rules = readAllowed();
+  const left = rules.filter(rule => !inside(rule.project, top));
+  if (left.length !== rules.length) keep(left);
 }
 
 /** Removes a rule: false for one that isn't there. */
