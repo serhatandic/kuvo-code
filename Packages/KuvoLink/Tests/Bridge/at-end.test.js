@@ -85,6 +85,14 @@ test("a process it stopped whose own process still holds their pipes doesn't kee
   assert.equal(kept, false);
 });
 
+test("a process whose output was read to its end is let finish: the file passes", { timeout: 60_000 }, async () => {
+  const { code, said, running, kept } = await run("output read");
+  assert.equal(code, 0, said);
+  assert.doesNotMatch(said, /Still open/);
+  assert.equal(running, false);
+  assert.equal(kept, false);
+});
+
 test("anything else left open (a folder watched) fails the file, named, and is closed, so the file ends", { timeout: 60_000 }, async () => {
   const { code, said, running, kept } = await run("watching");
   assert.notEqual(code, 0);

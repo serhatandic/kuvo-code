@@ -51,6 +51,15 @@ if (how === "clean") {
   atEnd(() => parent.kill());
   atEnd(() => new Promise(resolve => { child.once("close", resolve); child.kill(); }));
   atEnd(() => server.close());
+} else if (how === "output read") {
+  atEnd(() => new Promise(resolve => { child.once("close", resolve); child.kill(); }));
+  atEnd(() => server.close());
+  // A command whose answer is read to its end, as a route run with `box route` is: its process is
+  // still finishing up for a moment after its output has ended.
+  const command = spawn(process.execPath, ["-e", `process.stdout.end("done", () => setTimeout(() => {}, 2000))`], { env, stdio: ["ignore", "pipe", "ignore"] });
+  let said = "";
+  for await (const chunk of command.stdout) said += chunk;
+  if (said !== "done") throw new Error(`It said ${said}`);
 } else if (how === "watching") {
   atEnd(() => new Promise(resolve => { child.once("close", resolve); child.kill(); }));
   atEnd(() => server.close());

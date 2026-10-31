@@ -47,7 +47,7 @@ after(async () => {
 });
 
 // What the file still has open: the runner's own stdio aside, and what's on its way out let go
-// first (a process told to stop, until it has; then its pipes, which a process of its own may still
+// first (a process told to stop or done answering, until it has; then its pipes, which a process of its own may still
 // hold, and the file's own connections out, closed; then what closes with them, a few turns of the
 // loop: a server's side of them). Each named, then stopped.
 async function leftOpen() {
@@ -55,7 +55,8 @@ async function leftOpen() {
   // (A process that has exited is still listed while its handle closes.)
   const open = () => process._getActiveHandles().filter(handle => !own.has(handle) && !(handle instanceof ChildProcess && ended(handle)));
   const children = () => open().filter(handle => handle instanceof ChildProcess);
-  await Promise.all(children().filter(child => child.killed || child.stdin?.writableEnded).map(exited));
+  // (Told to stop, its input ended, or its output read to its end: a command's answer.)
+  await Promise.all(children().filter(child => child.killed || child.stdin?.writableEnded || child.stdout?.readableEnded).map(exited));
   const left = [];
   for (const child of children()) {
     left.push(`a process never stopped (${child.spawnargs.join(" ").slice(0, 200)})`);
