@@ -27,9 +27,10 @@ public struct KeyPage: Equatable, Sendable {
     /// The link after the line.
     public var linkTitle: String { opensDocs ? "How to Get It" : "Get Your Key" }
 
-    /// The page for an engine's provider, given the name the engine lists it by; nil for a
-    /// provider whose key is an ordinary one.
-    public static func page(for providerID: String, name: String) -> KeyPage? {
+    /// The page for an engine's provider, given the name the engine lists it by and the docs its
+    /// catalog links, if any; nil for a provider whose key is an ordinary one. A plan the table
+    /// doesn't know links its docs.
+    public static func page(for providerID: String, name: String, docs: URL? = nil) -> KeyPage? {
         let known = pages[providerID]
         guard known != nil || isPlan(providerID) else { return nil }
         let plan: String? = switch known?.plan ?? .engine {
@@ -37,7 +38,8 @@ public struct KeyPage: Equatable, Sendable {
         case .named(let named): named
         case .keyOfItsOwn: nil
         }
-        return KeyPage(plan: plan, source: known?.source, url: known?.url, opensDocs: known?.opensDocs ?? false)
+        guard let known else { return KeyPage(plan: plan, source: nil, url: docs, opensDocs: docs != nil) }
+        return KeyPage(plan: plan, source: known.source, url: known.url, opensDocs: known.opensDocs)
     }
 
     /// Whether the engine's provider is a subscription used with a key: its id has "plan" as a

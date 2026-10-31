@@ -54,9 +54,22 @@ import ClientAccounts
     }
 
     @Test func aPlanTheEngineAddsLaterStillSaysSo() {
+        // Its catalog links its docs: they're the link, and say they're docs.
+        let docs = URL(string: "https://acme.example/docs/coding-plan")!
+        let linked = KeyPage.page(for: "acme-coding-plan-eu", name: "Acme Coding Plan (Europe)", docs: docs)
+        #expect(linked?.line == "Your Acme Coding Plan subscription's key.")
+        #expect(linked?.url == docs)
+        #expect(linked?.linkTitle == "How to Get It")
+        // No docs either: the line alone.
         let page = KeyPage.page(for: "acme-coding-plan-eu", name: "Acme Coding Plan (Europe)")
         #expect(page?.line == "Your Acme Coding Plan subscription's key.")
-        #expect(page?.url == nil, "no link until its page is known")
+        #expect(page?.url == nil)
+    }
+
+    @Test func aKnownPageWinsOverTheCatalogsDocs() {
+        let page = KeyPage.page(for: "zai-coding-plan", name: "Z.AI Coding Plan", docs: URL(string: "https://docs.z.ai/devpack/overview"))
+        #expect(page?.url?.absoluteString == "https://z.ai/manage-apikey/apikey-list")
+        #expect(page?.linkTitle == "Get Your Key")
     }
 
     @Test func anOrdinaryKeyHasNoLine() {

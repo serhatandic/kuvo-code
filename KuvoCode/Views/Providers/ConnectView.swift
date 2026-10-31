@@ -230,12 +230,15 @@ struct ConnectView: View {
                     .accessibilityLabel("API key")
                     .accessibilityHint(keyPage?.line ?? "")
                 // A key that comes with a subscription says so, so it doesn't read as pay-as-you-go.
+                // The field's hint already reads the line, so VoiceOver gets only the link here.
                 if let keyPage {
                     Text(Self.keyLine(keyPage))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityHidden(keyPage.url == nil)
+                        .accessibilityRepresentation {
+                            if let url = keyPage.url { Link(keyPage.linkTitle, destination: url) }
+                        }
                 }
             }
             if !method.form.isEmpty {
@@ -267,7 +270,9 @@ struct ConnectView: View {
         return AttributedString(page.line + " ") + link
     }
 
-    private var keyPage: KeyPage? { KeyPage.page(for: integrationID, name: title) }
+    private var keyPage: KeyPage? {
+        KeyPage.page(for: integrationID, name: title, docs: integration?.metadata?["doc"]?.string.flatMap(URL.init(string:)))
+    }
 
     /// Getting ready (an agent downloading first, its page not there yet): what it's doing, not
     /// yet waiting on you.
