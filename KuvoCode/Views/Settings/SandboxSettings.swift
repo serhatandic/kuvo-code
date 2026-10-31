@@ -214,6 +214,7 @@ struct SandboxSettings: View {
                 #if DEBUG
                 if Sandboxes.demoRules != nil {
                     sandboxes.showDemo(on: id, project: projects.first?.path, bot: bots.first.map { ($0.id, $0.name) })
+                    home = (id, NSHomeDirectory())
                     return
                 }
                 #endif
