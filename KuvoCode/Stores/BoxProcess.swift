@@ -331,7 +331,8 @@ final class BoxProcess {
             if output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 try? FileManager.default.removeItem(at: run.appending(path: "engine-output"))
             } else {
-                try Data(output.utf8).write(to: run.appending(path: "engine-output"), options: .atomic)
+                // (Without it, the reason still: never neither.)
+                try? Data(output.utf8).write(to: run.appending(path: "engine-output"), options: .atomic)
             }
             try Data(why.utf8).write(to: run.appending(path: "engine-stopped"), options: .atomic)
         } catch {
