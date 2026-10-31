@@ -2,13 +2,14 @@
 // PROTOCOL.md, "Host interface"), read again for each call: while the app isn't answering, its keys
 // can't be reached and that's said; once the app's host interface is back, at another address, the
 // box reaches it at once, without starting again.
-import { test, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { script, standInHost } from "./bot-keys-scenarios.js";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-host-file-")));
 const home = path.join(root, "box");
@@ -18,7 +19,7 @@ Object.assign(process.env, { KUVO_HOME: home, KUVO_BOX: "mac", KUVO_ENGINE_CONFI
 delete process.env.KUVO_HOST_URL;
 delete process.env.KUVO_HOST_PASSWORD;
 const link = await import(script);
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+removeAtEnd(root);
 
 const shared = "KUVO_KEY_TODOIST_API_KEY";
 const catalogFile = path.join(root, "integrations.json");
@@ -74,7 +75,7 @@ test("a host.json left behind, its port taken by something else that says yes to
     response.end(JSON.stringify({ names: [], value: "x", proof: "0".repeat(64) }));
   });
   await new Promise(resolve => impostor.listen(0, "127.0.0.1", resolve));
-  after(() => { impostor.closeAllConnections(); impostor.close(); });
+  atEnd(() => { impostor.closeAllConnections(); impostor.close(); });
   hostAt({ url: `http://127.0.0.1:${impostor.address().port}` }, "left-behind-password");
 
   assert.equal((await listed()).keysSaved, undefined, "not said: it isn't the app");
@@ -102,7 +103,7 @@ test("something at a left-behind port relaying the box's nonce to the app at its
     response.end(await asked.text());
   });
   await new Promise(resolve => relay.listen(0, "127.0.0.1", resolve));
-  after(() => { relay.closeAllConnections(); relay.close(); });
+  atEnd(() => { relay.closeAllConnections(); relay.close(); });
   // A host.json left behind with the app's password (the worst case), its port the relay's now.
   hostAt({ url: `http://127.0.0.1:${relay.address().port}` }, "real-password");
 

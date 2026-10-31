@@ -16,11 +16,12 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, beforeEach, test } from "node:test";
+import { beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-bots-goals-")));
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+removeAtEnd(home);
 process.env.KUVO_HOME = home;
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
@@ -121,7 +122,7 @@ const engine = http.createServer((request, response) => {
   });
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
-after(() => { engine.closeAllConnections(); engine.close(); });
+atEnd(() => { engine.closeAllConnections(); engine.close(); });
 const target = () => [{ port: engine.address().port, password: "p" }];
 
 // The agents bridge, beside the engine: the conversation's goal (its loop), as it's set, taken away
@@ -146,7 +147,7 @@ const bridge = http.createServer((request, response) => {
 await new Promise(resolve => bridge.listen(0, "127.0.0.1", resolve));
 // A process the box takes for the bridge's (by its name).
 const bridgeProcess = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9)", "kuvo-agents"], { stdio: "ignore" });
-after(() => { bridge.closeAllConnections(); bridge.close(); bridgeProcess.kill(); });
+atEnd(() => { bridge.closeAllConnections(); bridge.close(); bridgeProcess.kill(); });
 
 beforeEach(() => {
   resetEngine();

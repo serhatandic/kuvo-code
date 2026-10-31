@@ -7,7 +7,7 @@
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/sandbox.test.js`; on Linux, with Bun (the
 // engine's: `BUN_BE_BUN=1 <engine> test sandbox.test.js`).
-import { test, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -18,12 +18,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { script, sshAgentsOf } from "./bot-keys-scenarios.js";
 import { NO_BUN, testBun } from "./bun-for-tests.js";
+import { removeAtEnd } from "./at-end.js";
 
 // In the folder tests keep in your home (not the temporary folders, which commands may write), so
 // what a command mustn't write is somewhere it otherwise couldn't.
 fs.mkdirSync(path.join(os.homedir(), ".kuvo-code-test"), { recursive: true });
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".kuvo-code-test", "sb-")));
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+removeAtEnd(root);
 const linux = process.platform === "linux";
 // kuvo-wake, as Wakes.swift has it and BoxFiles puts it in every box's bin.
 const swift = fs.readFileSync(new URL("../../../OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url), "utf8");

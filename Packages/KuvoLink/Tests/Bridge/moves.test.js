@@ -14,9 +14,10 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, before, test } from "node:test";
+import { before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { relayStandIn } from "./relay-stand-in.js";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-moves-")));
@@ -112,7 +113,7 @@ async function engineWith(sessions) {
     return send(200, listed(session));
   });
   const port = await listening(server);
-  after(() => { server.closeAllConnections(); server.close(); });
+  atEnd(() => { server.closeAllConnections(); server.close(); });
   return Object.assign(engine, { port, password: "pw" });
 }
 
@@ -148,7 +149,7 @@ async function bridgeWith(groups = new Map()) {
     return send(200, {});
   });
   const port = await listening(server);
-  after(() => { server.closeAllConnections(); server.close(); });
+  atEnd(() => { server.closeAllConnections(); server.close(); });
   return { port, password: "pw", pid: process.pid, groups };
 }
 
@@ -264,7 +265,8 @@ before(async () => {
   await eventually(() => relay.has(link.addressOf(macSecret)) && relay.has(Buffer.from(lab.address, "base64url")));
 });
 
-after(async () => {
+removeAtEnd(support);
+atEnd(async () => {
   link.stopMacPeers();
   link.stopMacLink();
   let pid = 0;
@@ -278,7 +280,6 @@ after(async () => {
   }
   await relay.close();
   appHost.close();
-  fs.rmSync(support, { recursive: true, force: true });
 });
 
 // What's in a box's trash: each thing it holds, by its name.

@@ -11,13 +11,14 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const keeper = path.resolve(import.meta.dirname, "../../../../KuvoCode/Resources/kuvo-browser.js");
 // A short path: Unix sockets' are limited.
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "kpk-"));
 const home = path.join(root, "home");
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+removeAtEnd(root);
 
 /** Messages as they come, and a way to wait for one that fits. */
 class Heard {
@@ -86,8 +87,10 @@ const host = spawn(process.execPath, [keeper, "host"], {
   env: { ...process.env, KUVO_HOME: home, KUVO_TEST_CHROME: pipePath },
   stdio: "ignore",
 });
-after(() => {
+atEnd(() => {
   host.kill("SIGKILL");
+  // (Chrome's end, which the keeper started, goes once it sees this one has.)
+  toKeeper?.destroy();
   pipe.close();
 });
 
@@ -115,7 +118,7 @@ async function client() {
       buffer = buffer.slice(end + 1);
     }
   });
-  after(() => socket.destroy());
+  atEnd(() => socket.destroy());
   const send = (message) => socket.write(JSON.stringify(message) + "\n");
   // Kuvo Code's own, which knows the box's socket key: it gives it first.
   send({ method: "Kuvo.key", params: { key: socketKey } });

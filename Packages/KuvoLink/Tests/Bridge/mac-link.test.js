@@ -11,11 +11,12 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, before, test } from "node:test";
+import { before, test } from "node:test";
 import { relayStandIn } from "./relay-stand-in.js";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-mac-link-")));
-after(() => fs.rmSync(support, { recursive: true, force: true }));
+removeAtEnd(support);
 
 // Each time a stand-in (the app, the relay) records something: what a test waits on looks again.
 const waitingForChange = [];
@@ -69,7 +70,7 @@ const appHost = http.createServer((request, response) => {
   });
 });
 await new Promise(resolve => appHost.listen(0, "127.0.0.1", resolve));
-after(() => appHost.close());
+atEnd(() => appHost.close());
 
 Object.assign(process.env, {
   KUVO_HOME: path.join(support, "box"),
@@ -84,7 +85,7 @@ Object.assign(process.env, {
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 const relay = await relayStandIn(link, { changed: poke });
-after(() => relay.close());
+atEnd(() => relay.close());
 
 // This Mac's keys, as your Keychain keeps them.
 const macKey = link.newKey();
@@ -204,7 +205,7 @@ async function paired() {
 }
 
 before(() => { link.runMacLink(); });
-after(() => link.stopMacLink());
+atEnd(() => link.stopMacLink());
 
 test("the link waits for its app, and without your Keychain's keys stays off and says so, making none of its own", async () => {
   assert.equal(link.macLink.status.state, "off");

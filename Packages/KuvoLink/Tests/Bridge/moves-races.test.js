@@ -14,7 +14,8 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, test as nodeTest } from "node:test";
+import { test as nodeTest } from "node:test";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 // Each fails, rather than hangs, when what it waits for never comes.
 const test = (name, run) => nodeTest(name, { timeout: 30_000 }, run);
@@ -102,12 +103,12 @@ link.sendMovesWith((_peer, move) => {
 const say = move => link.takeMoveMail(lab, move);
 const stop = new AbortController();
 link.watchMoves(() => ({ send() {} }), stop.signal);
-after(() => {
+removeAtEnd(support);
+atEnd(() => {
   stop.abort();
   link.sendMovesWith(null);
   server.closeAllConnections();
   server.close();
-  fs.rmSync(support, { recursive: true, force: true });
 });
 
 const handle = link.engineHandler(link.readEngineFile, { name: "Mac" }, link.readBridgeFile, () => {}, null);

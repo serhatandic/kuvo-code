@@ -13,10 +13,11 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, afterEach, test } from "node:test";
+import { afterEach, test } from "node:test";
+import { removeAtEnd } from "./at-end.js";
 
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-attention-mac-")));
-after(() => fs.rmSync(support, { recursive: true, force: true }));
+removeAtEnd(support);
 Object.assign(process.env, {
   KUVO_HOME: path.join(support, "box"),
   KUVO_BOTS: path.join(support, "bots"),

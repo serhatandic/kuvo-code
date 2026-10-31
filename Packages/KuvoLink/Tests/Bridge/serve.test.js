@@ -8,11 +8,12 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
-import { after, test } from "node:test";
+import { test } from "node:test";
+import { removeAtEnd } from "./at-end.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-serve-"));
 process.env.KUVO_HOME = home;
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+removeAtEnd(home);
 const script = new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url);
 const link = await import(script);
 

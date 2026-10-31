@@ -1,7 +1,7 @@
 // What a bot's keys of its own do on a box, whichever way it keeps them: run by bot-keys.test.js
 // (a machine's files) and bot-keys-host.test.js (this Mac's app, through its host interface). Also
 // the stand-in for that app, and this Mac's box started as the app starts it.
-import { test, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -9,6 +9,7 @@ import http from "node:http";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { atEnd } from "./at-end.js";
 
 export const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 /** Where a box (its folder `KUVO_HOME`) keeps its conversations' SSH agents (vault/ssh.ts): on a Mac,
@@ -152,7 +153,7 @@ export async function standInHost(password) {
     }
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  after(() => { server.closeAllConnections(); server.close(); });
+  atEnd(() => { server.closeAllConnections(); server.close(); });
   host.url = `http://127.0.0.1:${server.address().port}`;
   return host;
 }

@@ -90,6 +90,11 @@ The bridge's tests that run the box itself need a Bun: `bun` on your PATH, or
 which they run as Bun). Run them on a Linux machine too, in a test folder of your own with
 `TMPDIR` inside it, before calling a box change done.
 
+A bridge test file cleans up with `atEnd` and `removeAtEnd` from `Tests/Bridge/at-end.js`, never
+node:test's `after` (a test's own `t.after` is fine). They stop what the file started, latest
+first, and remove its folders last, even when a step fails. Then anything still open fails the
+file, named, rather than keeping its process and the whole run going.
+
 `./scripts/test-app.sh` runs one at a time: a run started while another is going
 waits for it, since they share the test copy's settings and temporary folders.
 

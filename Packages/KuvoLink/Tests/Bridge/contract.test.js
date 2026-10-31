@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { after } from "node:test";
+import { removeAtEnd } from "./at-end.js";
 
 // The box's folder (KUVO_HOME, read once as the bridge loads), and a folder for what a scenario
 // makes outside it (repositories, files an agent made), both the test's own.
@@ -17,7 +17,7 @@ process.env.HOME = path.join(root, "home");
 fs.mkdirSync(process.env.HOME);
 // git without your settings, the bridge's own too (it reads them as it loads).
 Object.assign(process.env, { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "Tests", GIT_AUTHOR_EMAIL: "tests@example.com", GIT_COMMITTER_NAME: "Tests", GIT_COMMITTER_EMAIL: "tests@example.com" });
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+removeAtEnd(root);
 const { contract } = await import("./contract-runner.js");
 
 contract({ box: "machine", root });

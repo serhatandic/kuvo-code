@@ -1,12 +1,13 @@
 // Settings › Skills on a machine, from a phone with the Mac closed: the machine's own skills
 // folder, a skill written and put away, and GitHub's collections, which the machine reaches
 // itself (a local stand-in here), installed from whole.
-import { test, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-skills-"));
 process.env.KUVO_HOME = home;
@@ -71,9 +72,9 @@ const github = http.createServer((request, response) => {
 await new Promise(resolve => github.listen(0, "127.0.0.1", resolve));
 process.env.KUVO_TEST_GITHUB = `http://127.0.0.1:${github.address().port}`;
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
-after(() => {
+removeAtEnd(home);
+atEnd(() => {
   github.close();
-  fs.rmSync(home, { recursive: true, force: true });
 });
 
 const skills = path.join(home, "config", "opencode", "skills");

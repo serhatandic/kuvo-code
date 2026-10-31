@@ -6,13 +6,14 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, beforeEach, test } from "node:test";
+import { beforeEach, test } from "node:test";
 import { runningAs } from "./running-as.js";
+import { removeAtEnd } from "./at-end.js";
 
 // The bridge reads Kuvo Code's folder from KUVO_HOME: one of this test's own.
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-bots-"));
 process.env.KUVO_HOME = home;
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+removeAtEnd(home);
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // A bot's rules as its box makes them: what always comes to you asked whatever its approval (PROTOCOL.md,

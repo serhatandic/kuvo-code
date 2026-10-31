@@ -3,13 +3,14 @@
 // connected or not), listed with what to know before removing it, and removed (not while an
 // agent works there). Real git; the engine is a stand-in that makes and removes worktrees with
 // git, as it does.
-import { test, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-worktrees-")));
 process.env.KUVO_HOME = path.join(home, ".kuvo-code");
@@ -64,10 +65,10 @@ const engine = http.createServer((request, response) => {
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
 const atEngine = { port: engine.address().port, password: "pw" };
-after(() => {
+removeAtEnd(home);
+atEnd(() => {
   engine.closeAllConnections();
   engine.close();
-  fs.rmSync(home, { recursive: true, force: true });
 });
 const ask = (method, route, body) => link.answerWorktrees(method, route, body, atEngine, undefined);
 
