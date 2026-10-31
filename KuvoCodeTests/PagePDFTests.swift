@@ -9,7 +9,7 @@ import Testing
 /// shows it again after. A path that isn't a full one ending in .pdf, a folder's, or an empty
 /// browser is turned down, saying why. Real WebKit, on a local page.
 @MainActor
-@Suite(.serialized) struct PagePDFTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct PagePDFTests {
     let folder = AppInfo.testRoot.appending(path: "PDF-\(UUID().uuidString.prefix(6))")
     let utilities = Utilities()
     var agent: BrowserAgent { BrowserAgent(utilities: utilities, asks: BrowserAsks()) }
@@ -83,6 +83,10 @@ import Testing
         let inside = folder.appending(path: "out/report.pdf")
         #expect(await save(inside.path(percentEncoded: false)).text.hasPrefix("Saved the page as a"))
         #expect(words(inside).contains("Lighthouse report"))
+        // Named through a folder that isn't there yet: still outside, and told at once.
+        let around = await save(elsewhere.path(percentEncoded: false) + "/new/../notes.pdf")
+        #expect(around.text.hasPrefix("Not saved:"), "\(around.text)")
+        #expect(try String(contentsOf: outside, encoding: .utf8) == "your notes")
     }
 
     @Test func whatItTurnsDown() async throws {

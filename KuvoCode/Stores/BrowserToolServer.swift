@@ -362,13 +362,15 @@ enum BrowserTools {
     /// Where a file that may not be there yet would be: its nearest folder that is, with links
     /// followed, and the rest of its path.
     static func realTarget(_ path: String) -> String {
-        var folder = URL(filePath: path)
+        // (Its ".." taken out first, as the file is written: one in a folder that isn't there yet
+        // would otherwise never get to one that is.)
+        var folder = (path as NSString).standardizingPath
         var rest: [String] = []
-        while !FileManager.default.fileExists(atPath: folder.path(percentEncoded: false)), folder.path(percentEncoded: false) != "/" {
-            rest.insert(folder.lastPathComponent, at: 0)
-            folder.deleteLastPathComponent()
+        while !FileManager.default.fileExists(atPath: folder), folder != "/", !folder.isEmpty {
+            rest.insert((folder as NSString).lastPathComponent, at: 0)
+            folder = (folder as NSString).deletingLastPathComponent
         }
-        return rest.reduce(folder.resolvingSymlinksInPath()) { $0.appending(path: $1) }.path(percentEncoded: false)
+        return rest.reduce(URL(filePath: folder).resolvingSymlinksInPath()) { $0.appending(path: $1) }.path(percentEncoded: false)
     }
 
     /// What the browser says instead of opening `address`, when it's an added integration's
@@ -599,7 +601,7 @@ enum BrowserTools {
             guard let path = string("path") else { return text("Missing path.", error: true) }
             // Saved outside the conversation's folder, it would replace what's there without
             // asking, where a command would have asked.
-            let expanded = (path as NSString).expandingTildeInPath
+            let expanded = ((path as NSString).expandingTildeInPath as NSString).standardizingPath
             if expanded.hasPrefix("/"), fileNote(for: URL(filePath: realTarget(expanded)).absoluteString, caller: caller) != nil {
                 return text("Not saved: \(expanded) is outside this conversation's folder, and this session asks before writing files elsewhere. Save it in the folder; if the user wants it elsewhere, ask them first, then move it there (a command, which asks them).", error: true)
             }
