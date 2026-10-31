@@ -370,10 +370,16 @@ struct WidgetPage: NSViewRepresentable {
     })();
     """
 
-    /// Its height, whenever it changes.
+    /// Its height, whenever it changes: its content's, so it gets shorter again too. (The page's
+    /// scroll height is never less than the room it's given, so it's only taken when what's in it
+    /// runs past that.)
     static let measure = """
     (() => {
-      const report = () => window.webkit.messageHandlers.kuvo.postMessage({ type: "height", value: Math.ceil(document.documentElement.scrollHeight) });
+      const report = () => {
+        const page = document.documentElement;
+        const height = Math.max(page.getBoundingClientRect().height, page.scrollHeight > page.clientHeight ? page.scrollHeight : 0);
+        window.webkit.messageHandlers.kuvo.postMessage({ type: "height", value: Math.ceil(height) });
+      };
       new ResizeObserver(report).observe(document.documentElement);
       report();
     })();

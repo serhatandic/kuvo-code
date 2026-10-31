@@ -28,14 +28,44 @@ import WebKit
         try await until { (reports.height ?? 0) >= 420 }
         #expect(abs(try #require(reports.height) - 428) <= 4)
     }
+
+    /// Details shown and hidden again: the widget gets its height back, with no empty space left
+    /// under it. The conversation gives it the room it said it needs, as it does in the app.
+    @Test func aWidgetGetsShorterAgainWhenItsContentDoes() async throws {
+        let reports = Reports()
+        let page = load(#"<div id="chart" style="height: 120px; background: #eee">A chart</div>"#, reports: reports)
+        try await until { reports.height.map { $0 >= 120 } == true }
+        page.frame.size.height = try #require(reports.height)
+        _ = try await page.evaluateJavaScript(#"document.getElementById("chart").style.height = "420px""#)
+        try await until { (reports.height ?? 0) >= 420 }
+        page.frame.size.height = try #require(reports.height)
+        let before = reports.count
+        _ = try await page.evaluateJavaScript(#"document.getElementById("chart").style.height = "120px""#)
+        try await until { reports.count > before }
+        #expect(abs(try #require(reports.height) - 128) <= 4)
+    }
+
+    /// A page made to fill its window (`height: 100%`, as many full pages are) whose content grows
+    /// later, a chart drawn in after loading: the widget grows with it, none of it cut off.
+    @Test func aFullHeightPageSaysWhenItsContentGrows() async throws {
+        let reports = Reports()
+        let page = load(#"<style>html, body { height: 100%; }</style><div id="chart" style="height: 120px; background: #eee">A chart</div>"#, reports: reports)
+        try await until { reports.height.map { $0 >= 120 } == true }
+        page.frame.size.height = try #require(reports.height)
+        _ = try await page.evaluateJavaScript(#"document.getElementById("chart").style.height = "420px""#)
+        try await until { (reports.height ?? 0) >= 420 }
+        #expect(abs(try #require(reports.height) - 424) <= 4)
+    }
 }
 
 @MainActor
 private final class Reports: NSObject, WKScriptMessageHandler {
     var height: Double?
+    private(set) var count = 0
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], body["type"] as? String == "height", let height = body["value"] as? Double else { return }
         self.height = height
+        count += 1
         TestPulse.beat()
     }
 }
