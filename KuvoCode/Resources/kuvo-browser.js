@@ -1559,6 +1559,8 @@ function destination(input) {
     const url = new URL(text);
     if (["http:", "https:", "file:", "about:"].includes(url.protocol)) return url.href;
   } catch {}
+  // A file's path on this machine ("/home/me/report.html", "~/site/index.html"), as on the Mac.
+  if (text.startsWith("/") || text.startsWith("~/")) return pathToFileURL(text.startsWith("~/") ? path.join(os.homedir(), text.slice(2)) : text).href;
   const looksLikeHost = !text.includes(" ") && (text.includes(".") || text.startsWith("localhost") || text.includes(":"));
   if (looksLikeHost) return (text.startsWith("localhost") || text.startsWith("127.") ? "http://" : "https://") + text;
   const search = process.env.KUVO_SEARCH || "https://www.google.com/search?q=%s";
