@@ -237,6 +237,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Kuvo Code no longer freezes when the agent saves a page as a PDF at a path that goes through a folder that isn't there yet and back up with `..`.
 - A page the agent's browser couldn't open, in its tab or a new one, shows as a failed step in the conversation, rather than as **Opened** that address.
 - A long text file, like a log, attached to a Claude Code, Codex, Cursor, Grok or Antigravity session goes to the agent as a file to open, rather than whole in the message, where it could make the turn fail as too long. On this Mac, an attached folder goes to them by its path too, and the file's chip says so, rather than saying it's in the message.
+- A queued message keeps its attached files when you edit it, or put it back with Undo after removing it, also after Kuvo Code restarts and when it was queued from your phone, and its bubble shows them. Undo and Branch keep a sent message's photos from your phone too.
 - In a Cursor session, a picture moved or deleted before its message went (one waiting in the queue) goes to the agent by its name, rather than failing the turn.
 - A reply the agent is still writing keeps its words when its conversation is read again, after the network or a machine comes back: they no longer vanish until the paragraph ends, or show twice in a coding agent's reply.
 - A note the agent's engine adds by itself, like a background command finishing, shows even when it was waiting as you opened the conversation.

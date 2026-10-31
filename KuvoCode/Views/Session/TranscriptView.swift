@@ -751,7 +751,8 @@ private struct RowView: View, Equatable {
                         isOffline: isOffline)
         case .pending(let item):
             let (text, comments, paths, references) = SentMessage.split(item.text)
-            UserBubble(text: text, references: references, folders: folders(), attachments: item.files.map(AttachmentItem.local) + Attachments.paths(paths, besides: item.files).map(AttachmentItem.path), comments: comments,
+            UserBubble(text: text, references: references, folders: folders(), attachments: item.files.map(AttachmentItem.local) + item.inlineFiles.enumerated().map { AttachmentItem.stored($1, id: "\(item.id)#\($0)") }
+                           + Attachments.paths(paths, besides: item.files).map(AttachmentItem.path), comments: comments,
                        widget: SentMessage.widget(of: item.text), keyword: SentMessage.keyword(of: item.text), status: item.isLocal ? "Sending" : item.delivery == .queue ? "Queued" : "Sending")
                 .contextMenu { Button("Cancel", role: .destructive) { cancel(item) }.disabled(isOffline) }
         case .assistant(let message, let showsError):

@@ -329,4 +329,41 @@ import Testing
         #expect(back.body["text"] as? String == "Then update the docs")
         #expect(back.body["delivery"] as? String == "queue", "it should wait behind the run, as it did")
     }
+
+    /// A queued message that carries its file in itself (one queued from the phone, or for a
+    /// machine, read again after a relaunch): its bubble shows the file, and Edit and Undo bring
+    /// it back with the file, rather than the words alone.
+    @Test func aMessageCarryingItsFileKeepsItThroughEditAndUndo() async throws {
+        let notes = "Weekly numbers: 12, 15, 9\n"
+        func carrying(_ message: String, _ text: String) -> [String: Any] {
+            ["id": message, "sessionID": id, "type": "user", "delivery": "queue",
+             "payload": ["text": text, "files": [["uri": "data:text/plain;base64,\(Data(notes.utf8).base64EncodedString())", "name": "numbers.txt", "mime": "text/plain"]]]]
+        }
+        let (model, box, _) = try await open(running: true, inbox: [carrying("msg_02", "Sum these up"), carrying("msg_03", "Then chart them")])
+        defer { box.stop(); engine.stop() }
+        let removed = try #require(model.waiting.first { $0.id == "msg_02" })
+        #expect(removed.inlineFiles.count == 1)
+
+        // Undo after Remove: it goes back with its file.
+        model.cancelPending(removed)
+        try await until { !engine.requests("DELETE", "/inbox/msg_02").isEmpty }
+        model.apply(try engine.event("session.inbox.cancelled", session: id, ["inboxID": "msg_02"]))
+        model.requeue(removed, for: nil, paused: false)
+        try await until { !engine.requests("POST", "/prompt").isEmpty }
+        let back = try #require(engine.requests("POST", "/prompt").first)
+        let sent = (back.body["files"] as? [[String: Any]] ?? []).compactMap { ($0["uri"] as? String).flatMap(URL.init(string:)) }
+        #expect(sent.count == 1, "\(back.body)")
+        #expect(sent.first.flatMap { try? String(contentsOf: $0, encoding: .utf8) } == notes)
+
+        // Edit: the composer has it, file and all.
+        model.edit(try #require(model.waiting.first { $0.id == "msg_03" }))
+        try await until { !engine.requests("DELETE", "/inbox/msg_03").isEmpty }
+        model.apply(try engine.event("session.inbox.cancelled", session: id, ["inboxID": "msg_03"]))
+        try await until { !model.draftText.isEmpty }
+        #expect(model.draftText == "Then chart them")
+        #expect(model.draftFiles.count == 1)
+        #expect(model.draftFiles.first.flatMap { try? String(contentsOf: $0, encoding: .utf8) } == notes)
+        model.draftText = ""
+        model.draftFiles = []
+    }
 }

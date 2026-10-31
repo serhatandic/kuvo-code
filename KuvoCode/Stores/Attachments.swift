@@ -311,6 +311,15 @@ nonisolated enum Attachments {
         return url
     }
 
+    /// The files a message carries in itself (a photo from the phone, a file sent to a machine),
+    /// written out to attach again: when it's edited, put back or branched from.
+    static func writeCarried(_ files: [Message.User.Attachment]) -> [URL] {
+        files.compactMap { file in
+            guard file.fileURL == nil, let bytes = file.bytes else { return nil }
+            return writeReceived(bytes, named: file.name ?? "Attachment", type: UTType(mimeType: file.mime))
+        }
+    }
+
     /// `name` as one file's name in the folder: its last part, without `:`, control characters or
     /// leading dots (a hidden file), and short enough to take a counter and an extension.
     static func fileName(_ name: String) -> String {

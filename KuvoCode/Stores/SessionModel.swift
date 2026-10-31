@@ -905,7 +905,7 @@ final class SessionModel {
         }
         let (text, paths) = Attachments.split(item.text)
         if paused { isQueuePaused = true }
-        post(text, files: Attachments.restored(item.files, noting: paths), for: model, queue: true, holds: paused, written: text, comments: [])
+        post(text, files: Attachments.restored(item.files + Attachments.writeCarried(item.inlineFiles), noting: paths), for: model, queue: true, holds: paused, written: text, comments: [])
     }
 
     /// The goal's ✕ once it's over: cleared once Undo's moment passes, unless another goal took
@@ -1836,7 +1836,7 @@ final class SessionModel {
                 }
             }
             guard outgoing[item.id]?.state == .cancelled else { return }
-            restoreDraft(item.text, files: item.files)
+            restoreDraft(item.text, files: item.files + Attachments.writeCarried(item.inlineFiles))
         }
     }
 
@@ -1898,13 +1898,14 @@ final class SessionModel {
 
     private var undone: (before: ComposerState, after: ComposerState, put: String)?
 
-    /// A sent message's attached files that are still on this Mac.
+    /// A sent message's attached files that are still on this Mac, and those it carries in
+    /// itself, written out.
     static func files(of message: Message.User) -> [URL] {
-        (message.files ?? []).compactMap { file in
-            guard case .uri(let uri) = file.source, let url = URL(string: uri), url.isFileURL,
-                  FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let files = message.files ?? []
+        return files.compactMap { file in
+            guard let url = file.fileURL, FileManager.default.fileExists(atPath: url.path) else { return nil }
             return url
-        }
+        } + Attachments.writeCarried(files)
     }
 
     /// The same, as they were picked when the message was seen going out, else as the engine
