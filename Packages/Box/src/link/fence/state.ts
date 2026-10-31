@@ -76,7 +76,7 @@ const places: FencePlaces = {
   key: SOCKET_KEY_FILE,
   sshFor: SSH_FOR,
   sshAgents: SSH_AGENTS,
-  caches: (({ npm, pnpm, uv }) => ({ npm: realish(npm), pnpm: realish(pnpm), uv: realish(uv) }))(sandboxCaches()),
+  caches: sandboxCaches(),
   platform,
 };
 const VERSION = crypto.createHash("sha256")

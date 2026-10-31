@@ -706,13 +706,13 @@ test("npx fetches a package it hasn't yet and runs it, in the sandbox, into a ca
   }
 });
 
-// Your own caches of pnpm and uv (whole: `pnpm dlx` and uvx run what they fetched from them, and
-// what's installed from them is linked to their files), where they keep them, in your real home,
-// which the sandbox's rules name (not this test's HOME).
+// Your own caches of pnpm, uv and corepack (whole: `pnpm dlx`, uvx and corepack's pnpm and yarn run
+// what they fetched from them, and what's installed from them is linked to their files), where they
+// keep them, in your real home, which the sandbox's rules name (not this test's HOME).
 const realHome = os.userInfo().homedir;
-const yourToolCaches = [[".cache", "pnpm"], [".cache", "uv"], ...(linux ? [] : [["Library", "Caches", "pnpm"]])];
+const yourToolCaches = [[".cache", "pnpm"], [".cache", "uv"], [".cache", "node", "corepack"], ...(linux ? [] : [["Library", "Caches", "pnpm"]])];
 
-test("commands get pnpm's and uv's caches of Kuvo Code's own, which they write, and your own pnpm's and uv's they only read", async () => {
+test("commands get caches of Kuvo Code's own for pnpm, uv and corepack, which they write, and your own they only read", async () => {
   const box = boxAt("tool-caches");
   const project = path.join(root, "tool-caches-project");
   fs.mkdirSync(project);
@@ -730,24 +730,67 @@ test("commands get pnpm's and uv's caches of Kuvo Code's own, which they write, 
   try {
     assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
     const ran = await engineRuns(box, project, [
-      `printf '%s|%s\\n' "\${pnpm_config_cache_dir-unset}" "\${UV_CACHE_DIR-unset}"`,
+      `printf '%s|%s|%s\\n' "\${pnpm_config_cache_dir-unset}" "\${UV_CACHE_DIR-unset}" "\${COREPACK_HOME-unset}"`,
       tries([
         ["pnpm's own", `mkdir -p "$pnpm_config_cache_dir/dlx/one" && echo x > "$pnpm_config_cache_dir/dlx/one/cli.js"`],
         ["uv's own", `mkdir -p "$UV_CACHE_DIR/archive-v0/one" && echo x > "$UV_CACHE_DIR/archive-v0/one/tool.py"`],
+        ["corepack's own", `mkdir -p "$COREPACK_HOME/v1/pnpm" && echo x > "$COREPACK_HOME/v1/pnpm/pnpm.cjs"`],
         ...yourToolCaches.map(parts => [`your ${parts.join("/")}`, `mkdir -p ${JSON.stringify(path.join(realHome, ...parts, mark))}`]),
       ]),
     ].join("\n"));
-    const caches = [["sandbox-pnpm"], ["sandbox-uv", "cache"]].map(parts => fs.realpathSync(path.join(box.home, "cache", ...parts)));
+    const caches = [["sandbox-pnpm"], ["sandbox-uv", "cache"], ["sandbox-corepack"]].map(parts => fs.realpathSync(path.join(box.home, "cache", ...parts)));
     assert.equal(ran.out.split("\n")[0], caches.join("|"), ran.out);
     assert.deepEqual(outcome(ran.out), {
       "pnpm's own": "allowed",
       "uv's own": "allowed",
+      "corepack's own": "allowed",
       ...Object.fromEntries(yourToolCaches.map(parts => [`your ${parts.join("/")}`, "refused"])),
     }, ran.out);
   } finally {
     await running.stop();
     for (const parts of yourToolCaches) fs.rmSync(path.join(realHome, ...parts, mark), { recursive: true, force: true });
     for (const folder of made.reverse()) try { fs.rmdirSync(folder); } catch {}
+  }
+});
+
+test("with a cache folder of your own (XDG_CACHE_HOME), the tools' caches in it are only read too", async () => {
+  const box = boxAt("own-cache");
+  const project = path.join(root, "own-cache-project");
+  fs.mkdirSync(project);
+  // Yours, where commands write tools' caches otherwise (on a Mac in `Library/Caches`, on Linux in
+  // `~/.cache`), with uv's in it and another tool's.
+  const yours = path.join(realHome, ...(linux ? [".cache"] : ["Library", "Caches"]), `kuvo-sandbox-test-${process.pid}`);
+  for (const name of ["uv", "other"]) fs.mkdirSync(path.join(yours, name), { recursive: true });
+  const running = await start(box, { XDG_CACHE_HOME: yours });
+  try {
+    const ran = await engineRuns(box, project, tries([
+      ["another tool's cache", `echo x > ${JSON.stringify(path.join(yours, "other", "file"))}`],
+      ["your uv's cache", `echo x > ${JSON.stringify(path.join(yours, "uv", "file"))}`],
+    ]));
+    assert.deepEqual(outcome(ran.out), { "another tool's cache": "allowed", "your uv's cache": "refused" }, ran.out);
+  } finally {
+    await running.stop();
+    fs.rmSync(yours, { recursive: true, force: true });
+  }
+});
+
+test("bunx's packages in your temporary folder, which it runs again as they are, are only read", { skip: linux && "macOS only (Landlock can't take one name out of /tmp)" }, async () => {
+  const box = boxAt("bunx");
+  const project = path.join(root, "bunx-project");
+  fs.mkdirSync(project);
+  // Your temporary folder, as bunx names its packages' folders in it (`bunx-<uid>-<package>`).
+  const temporary = fs.realpathSync(spawnSync("getconf", ["DARWIN_USER_TEMP_DIR"], { encoding: "utf8" }).stdout.trim());
+  const [mine, bunx] = [`kuvo-sandbox-test-${process.pid}`, `bunx-${process.getuid()}-kuvo-sandbox-test-${process.pid}`].map(name => path.join(temporary, name));
+  const running = await start(box, { TMPDIR: temporary });
+  try {
+    const ran = await engineRuns(box, project, tries([
+      ["your temporary folder", `mkdir ${JSON.stringify(mine)}`],
+      ["bunx's packages", `mkdir ${JSON.stringify(bunx)}`],
+    ]));
+    assert.deepEqual(outcome(ran.out), { "your temporary folder": "allowed", "bunx's packages": "refused" }, ran.out);
+  } finally {
+    await running.stop();
+    for (const folder of [mine, bunx]) fs.rmSync(folder, { recursive: true, force: true });
   }
 });
 
@@ -799,6 +842,13 @@ test("uvx installs a tool and runs it, in the sandbox, from a cache of Kuvo Code
     assert.equal(ran.status, 0, ran.out);
     const cache = fs.realpathSync(path.join(box.home, "cache", "sandbox-uv", "cache"));
     assert.ok(ran.out.includes(`ran from ${cache}/`), `it ran from Kuvo Code's own cache for commands: ${ran.out}`);
+    // A project's environment it makes shares no file with that cache, which every conversation's
+    // commands write, and which you run outside the sandbox.
+    const venv = await engineRuns(box, project, `uv venv --offline --no-config -q .venv && uv pip install --offline --no-config -q --python .venv ./${wheel} && .venv/bin/kuvo-tool`);
+    assert.equal(venv.status, 0, venv.out);
+    const installed = venv.out.match(/ran from (\S+)/)?.[1];
+    assert.ok(installed?.startsWith(fs.realpathSync(project)), venv.out);
+    assert.equal(fs.statSync(path.join(installed, "__init__.py")).nlink, 1, "the environment's file is the cache's too");
     // Not yours (where uv finds them with this test's HOME), nor your tools folder.
     for (const yours of [path.join(root, ".cache", "uv"), path.join(root, ".local", "share", "uv")]) assert.equal(fs.existsSync(yours), false, yours);
   } finally {

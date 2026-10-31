@@ -2856,7 +2856,17 @@ that hold those, `.git`, a submodule's or a worktree's repository in it and the 
 `.codex`, `.cursor`, `.gemini` and `.grok`, can't be made, moved or removed, only written in), its conversation's own temporary
 folder (`TMPDIR`), its conversation's wake-ups' inbox (below), the system's temporary folders, devices and tools'
 caches, but not what in them runs later outside the sandbox (installed programs like
-`~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, npx's packages). It can't read
+`~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, npx's packages, the caches of
+pre-commit, pnpm, uv and corepack in `~/.cache` and your own `XDG_CACHE_HOME`, pnpm's in
+`~/Library/Caches`, and on macOS bunx's packages in your temporary folder). Its npm, pnpm (11 and
+later), uv and corepack use caches of Kuvo Code's own instead (`npm_config_cache`,
+`pnpm_config_cache_dir`, `UV_CACHE_DIR` and `UV_TOOL_DIR`, `COREPACK_HOME`: `cache/sandbox-…`,
+on this Mac in the app's `Library/Caches` folder), and on Linux uv copies what it installs
+(`UV_LINK_MODE=copy`). What it can't close yet, on Linux: a file linked to one it may write, as pnpm's
+store and Bun's cache link theirs into a project's `node_modules` and pnpm's into its `dlx` cache, and
+as your own uv links its cache's into a project's `.venv`; bunx's packages in `/tmp`; and a new
+folder at the top of `~/.cache`, which it can't make (Landlock's right to make one would reach the
+folders it only reads). It can't read
 Kuvo Code's own folders (on a machine `~/.kuvo-code`; on this Mac the app's folders under `Library`,
 any `run.kuvo.code…` copy's, its temporary folder and `/tmp/kuvo-ssh-<uid>`) but its `bin`, nor your
 secrets (cloud, package and git tokens, browsers' and password managers' data, private SSH keys:
