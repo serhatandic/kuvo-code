@@ -2759,7 +2759,7 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
   there's a vault, the state (`made: false`) whatever the key, so a client can tell whether to fetch
   one without making it.
 - `GET kuvo/vault` → `{state, items, grants}`. `state` is `{made, locked, paused, pausedBots:
-  {<bot, or a conversation that isn't a bot's>: why}, store: "keychain" | "encrypted", keptDays,
+  {<bot on this computer, or a conversation that isn't a bot's>: why}, store: "keychain" | "encrypted", keptDays,
   agents, agentsWaiting?, tampered?, generations: {items, grants, paused}}` (`agents`: whether agents may use it
   on this box, below; `agentsWaiting`: its sandbox is on, and they may once the coding agents
   started before it came on have finished, which clients say as “Locked for now: some agents started before the sandbox was on. The vault opens when they finish.”); an item is `{id, kind: "login" |

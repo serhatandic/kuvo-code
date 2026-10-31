@@ -14322,11 +14322,12 @@ function pausedFor(bot, root) {
 }
 function vaultState() {
   const paused = readPaused();
+  const here = new Set(listBots().map((bot) => bot.id));
   return {
     made: isMade(),
     locked: isLocked(),
     paused: Boolean(paused.all),
-    pausedBots: { ...paused.bots ?? {} },
+    pausedBots: Object.fromEntries(Object.entries(paused.bots ?? {}).filter(([who]) => !who.startsWith("bot_") || here.has(who))),
     store: onHost() ? "keychain" : "encrypted",
     keptDays: KEPT_DAYS,
     agents: agentsUseVault(),

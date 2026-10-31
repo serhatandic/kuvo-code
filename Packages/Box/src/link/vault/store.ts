@@ -14,6 +14,7 @@ import { GRANT_HOWS, ITEM_KINDS, type VaultGrant, type VaultItem, type VaultStat
 import { locked, textOf, writePrivate } from "../files";
 import { BOX, KEYS_ON_HOST, MAC_VAULT_FILE_KEY, RUN } from "../home";
 import { appHost, askHost, KeysUnavailable, NOT_ANSWERING } from "../host-interface";
+import { listBots } from "../bots/list";
 import { agentsUseVault, agentsWaitForOlder } from "./gate";
 
 export const VAULT_FOLDER = path.join(BOX, "vault");
@@ -567,11 +568,13 @@ export function pausedFor(bot: string | undefined, root?: string): string | null
 
 export function vaultState(): VaultState {
   const paused = readPaused();
+  const here = new Set(listBots().map(bot => bot.id));
   return {
     made: isMade(),
     locked: isLocked(),
     paused: Boolean(paused.all),
-    pausedBots: { ...(paused.bots ?? {}) },
+    // (A bot's only while it's on this computer: one deleted or moved away is no one to let go on.)
+    pausedBots: Object.fromEntries(Object.entries(paused.bots ?? {}).filter(([who]) => !who.startsWith("bot_") || here.has(who))),
     store: onHost() ? "keychain" : "encrypted",
     keptDays: KEPT_DAYS,
     agents: agentsUseVault(),
