@@ -706,6 +706,106 @@ test("npx fetches a package it hasn't yet and runs it, in the sandbox, into a ca
   }
 });
 
+// Your own caches of pnpm and uv (whole: `pnpm dlx` and uvx run what they fetched from them, and
+// what's installed from them is linked to their files), where they keep them, in your real home,
+// which the sandbox's rules name (not this test's HOME).
+const realHome = os.userInfo().homedir;
+const yourToolCaches = [[".cache", "pnpm"], [".cache", "uv"], ...(linux ? [] : [["Library", "Caches", "pnpm"]])];
+
+test("commands get pnpm's and uv's caches of Kuvo Code's own, which they write, and your own pnpm's and uv's they only read", async () => {
+  const box = boxAt("tool-caches");
+  const project = path.join(root, "tool-caches-project");
+  fs.mkdirSync(project);
+  const mark = `kuvo-sandbox-test-${process.pid}`;
+  // (What a write that wasn't refused would leave in your home, to remove after: the mark, and
+  // each folder down to it that wasn't there before.)
+  const made = [];
+  for (const parts of yourToolCaches) {
+    for (let at = 1; at <= parts.length; at++) {
+      const folder = path.join(realHome, ...parts.slice(0, at));
+      if (!fs.existsSync(folder) && !made.includes(folder)) made.push(folder);
+    }
+  }
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const ran = await engineRuns(box, project, [
+      `printf '%s|%s\\n' "\${pnpm_config_cache_dir-unset}" "\${UV_CACHE_DIR-unset}"`,
+      tries([
+        ["pnpm's own", `mkdir -p "$pnpm_config_cache_dir/dlx/one" && echo x > "$pnpm_config_cache_dir/dlx/one/cli.js"`],
+        ["uv's own", `mkdir -p "$UV_CACHE_DIR/archive-v0/one" && echo x > "$UV_CACHE_DIR/archive-v0/one/tool.py"`],
+        ...yourToolCaches.map(parts => [`your ${parts.join("/")}`, `mkdir -p ${JSON.stringify(path.join(realHome, ...parts, mark))}`]),
+      ]),
+    ].join("\n"));
+    const caches = [["sandbox-pnpm"], ["sandbox-uv", "cache"]].map(parts => fs.realpathSync(path.join(box.home, "cache", ...parts)));
+    assert.equal(ran.out.split("\n")[0], caches.join("|"), ran.out);
+    assert.deepEqual(outcome(ran.out), {
+      "pnpm's own": "allowed",
+      "uv's own": "allowed",
+      ...Object.fromEntries(yourToolCaches.map(parts => [`your ${parts.join("/")}`, "refused"])),
+    }, ran.out);
+  } finally {
+    await running.stop();
+    for (const parts of yourToolCaches) fs.rmSync(path.join(realHome, ...parts, mark), { recursive: true, force: true });
+    for (const folder of made.reverse()) try { fs.rmdirSync(folder); } catch {}
+  }
+});
+
+const pnpmMajor = Number(spawnSync("pnpm", ["--version"], { encoding: "utf8" }).stdout?.split(".")[0]) || 0;
+
+test("pnpm dlx fetches a package and runs it, in the sandbox, from a cache of Kuvo Code's own that nothing outside it runs from", { skip: pnpmMajor < 11 && "needs pnpm 11 or later on the PATH (pnpm 10's dlx is refused, as it would write in yours)" }, async () => {
+  const box = boxAt("pnpm-dlx");
+  const project = path.join(root, "pnpm-project");
+  fs.mkdirSync(path.join(project, "package"), { recursive: true });
+  // A package as the registry hands one over (a tarball), here so nothing goes to the network.
+  fs.writeFileSync(path.join(project, "package", "package.json"), JSON.stringify({ name: "kuvo-tool", version: "1.0.0", bin: { "kuvo-tool": "cli.js" } }));
+  fs.writeFileSync(path.join(project, "package", "cli.js"), "#!/usr/bin/env node\nconsole.log('ran from ' + __dirname)\n", { mode: 0o755 });
+  assert.equal(spawnSync("tar", ["-czf", "tool.tgz", "package"], { cwd: project }).status, 0);
+  const running = await start(box);
+  try {
+    // (pnpm's store in the project: the one in this test's HOME isn't one the sandbox's rules name.
+    // Any trip to a registry fails at once.)
+    const ran = await engineRuns(box, project, `pnpm_config_store_dir="$PWD/.store" npm_config_registry=http://127.0.0.1:9/ pnpm dlx --package="$PWD/tool.tgz" kuvo-tool`);
+    assert.equal(ran.status, 0, ran.out);
+    const cache = fs.realpathSync(path.join(box.home, "cache", "sandbox-pnpm"));
+    assert.ok(ran.out.includes(`ran from ${cache}/dlx/`), `it ran from Kuvo Code's own cache for commands: ${ran.out}`);
+    // Not yours (where pnpm finds it with this test's HOME).
+    for (const yours of [path.join(root, ".cache", "pnpm"), path.join(root, "Library", "Caches", "pnpm")]) assert.equal(fs.existsSync(yours), false, yours);
+  } finally {
+    await running.stop();
+  }
+});
+
+const hasUv = spawnSync("uv", ["--version"]).status === 0 && spawnSync("python3", ["--version"]).status === 0;
+
+test("uvx installs a tool and runs it, in the sandbox, from a cache of Kuvo Code's own that nothing outside it runs from", { skip: !hasUv && "needs uv and python3 on the PATH" }, async () => {
+  const box = boxAt("uvx");
+  const project = path.join(root, "uvx-project");
+  fs.mkdirSync(project);
+  // A tool as PyPI hands one over (a wheel), here so nothing goes to the network.
+  const wheel = "kuvo_tool-1.0.0-py3-none-any.whl";
+  const files = {
+    "kuvo_tool/__init__.py": "import os\ndef main():\n    print('ran from ' + os.path.dirname(os.path.realpath(__file__)))\n",
+    "kuvo_tool-1.0.0.dist-info/METADATA": "Metadata-Version: 2.1\nName: kuvo-tool\nVersion: 1.0.0\n",
+    "kuvo_tool-1.0.0.dist-info/WHEEL": "Wheel-Version: 1.0\nGenerator: kuvo-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    "kuvo_tool-1.0.0.dist-info/entry_points.txt": "[console_scripts]\nkuvo-tool = kuvo_tool:main\n",
+  };
+  files["kuvo_tool-1.0.0.dist-info/RECORD"] = [...Object.keys(files), "kuvo_tool-1.0.0.dist-info/RECORD"].map(name => `${name},,`).join("\n") + "\n";
+  const zipped = spawnSync("python3", ["-I", "-c", "import json, sys, zipfile\nwith zipfile.ZipFile(sys.argv[1], 'w') as z:\n    [z.writestr(n, t) for n, t in json.loads(sys.argv[2]).items()]", path.join(project, wheel), JSON.stringify(files)]);
+  assert.equal(zipped.status, 0, String(zipped.stderr));
+  const running = await start(box);
+  try {
+    const ran = await engineRuns(box, project, `uvx --offline --no-config --from ./${wheel} kuvo-tool`);
+    assert.equal(ran.status, 0, ran.out);
+    const cache = fs.realpathSync(path.join(box.home, "cache", "sandbox-uv", "cache"));
+    assert.ok(ran.out.includes(`ran from ${cache}/`), `it ran from Kuvo Code's own cache for commands: ${ran.out}`);
+    // Not yours (where uv finds them with this test's HOME), nor your tools folder.
+    for (const yours of [path.join(root, ".cache", "uv"), path.join(root, ".local", "share", "uv")]) assert.equal(fs.existsSync(yours), false, yours);
+  } finally {
+    await running.stop();
+  }
+});
+
 test("a commit runs pre-commit's hooks, which set themselves up as they first run, and your own pre-commit's are left as they are", async () => {
   const box = boxAt("pre-commit");
   const project = path.join(root, "hooked");
