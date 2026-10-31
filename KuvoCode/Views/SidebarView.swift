@@ -544,7 +544,7 @@ struct SidebarView: View {
                     botRow(bot, snippet: result.snippet, action: show)
                 case .session(let session):
                     ConversationResultRow(title: session.title ?? "New Session", snippet: result.snippet, isSelected: selection == session.id, action: show)
-                        .contextMenu { menu(for: session, opensBeside: canOpenBeside && session.id != selection) }
+                        .contextMenu { menu(for: session) }
                 }
             }
             ForEach(unsearched, id: \.key) { computer, why in
@@ -932,7 +932,7 @@ struct SidebarView: View {
     /// `folded`: what's out of view under it, whose news and asks show on it.
     private func sessionOnlyRow(_ session: Session, in place: Place, branches: Int, folded: [Session] = [], branchInset: CGFloat? = nil) -> some View {
         let look = SessionRowLook(session: session, place: place, isHighlighted: isHighlighted(session, in: place),
-                                  isEditing: renaming == RenameTarget(id: session.id, place: place), opensBeside: canOpenBeside && session.id != selection,
+                                  isEditing: renaming == RenameTarget(id: session.id, place: place),
                                   branches: branches, folded: folded, branchInset: branchInset, isUnfolded: isUnfolded(session.id), isSearching: !search.isEmpty,
                                   isUnread: session.isUnread || workspace.hasNewSubSessions(session.id),
                                   origin: branchInset == nil ? "" : Self.origin(of: session, in: workspace))
@@ -948,7 +948,6 @@ struct SidebarView: View {
         let place: Place
         let isHighlighted: Bool
         let isEditing: Bool
-        let opensBeside: Bool
         let branches: Int
         let folded: [Session]
         let branchInset: CGFloat?
@@ -960,9 +959,6 @@ struct SidebarView: View {
         /// Where a branch came from, for VoiceOver (from the list too).
         let origin: String
     }
-
-    /// Open Beside, on another session's menu: while a session's tab is in view.
-    private var canOpenBeside: Bool { tabs.besideOpener != nil }
 
     private func sessionRowContent(_ look: SessionRowLook) -> some View {
         let session = look.session, place = look.place, branches = look.branches, folded = look.folded
@@ -1028,7 +1024,7 @@ struct SidebarView: View {
                 }
             }
         }
-        .contextMenu { menu(for: session, in: place, opensBeside: look.opensBeside) }
+        .contextMenu { menu(for: session, in: place) }
         .modifier(BranchesAction(count: branches, isUnfolded: look.isUnfolded) { toggleBranches(of: session.id) })
         .accessibilityHint(look.origin)
     }
@@ -1076,7 +1072,7 @@ struct SidebarView: View {
 
     /// `place`: where the row is, for renaming it there; nil for a row that can't show it (a
     /// conversation search result).
-    @ViewBuilder private func menu(for session: Session, in place: Place? = nil, opensBeside: Bool) -> some View {
+    @ViewBuilder private func menu(for session: Session, in place: Place? = nil) -> some View {
         // A bot's own conversation (found by a search): the bot's menu. Deleting, archiving or
         // renaming it as a session would leave the bot without its conversation.
         if let bot = bots.list.first(where: { $0.sessionID == session.id }) {
@@ -1091,11 +1087,11 @@ struct SidebarView: View {
             default: Button(engine.isStopped ? "Start" : "Connect Now") { app.reconnectNow(engine) }
             }
         } else {
-            liveMenu(for: session, in: place, opensBeside: opensBeside)
+            liveMenu(for: session, in: place)
         }
     }
 
-    @ViewBuilder private func liveMenu(for session: Session, in place: Place?, opensBeside: Bool) -> some View {
+    @ViewBuilder private func liveMenu(for session: Session, in place: Place?) -> some View {
         if !Workspace.isArchived(session) {
             if Workspace.isPinned(session) {
                 Button("Unpin") { Task { await workspace.setPinned(session.id, false) } }
@@ -1103,9 +1099,7 @@ struct SidebarView: View {
                 Button("Pin") { Task { await workspace.setPinned(session.id, true) } }
             }
         }
-        if opensBeside {
-            Button("Open Beside") { tabs.openBeside(session.id) }
-        }
+        OpenBesideItem(session: session.id)
         sideQuestionsMenu(for: session, in: place)
         // Moving to another computer: what would change it waits until it's there.
         let moving = app.moves.isMoving(session.id)
@@ -1275,6 +1269,9 @@ struct RowHighlight: ViewModifier {
             .background(alignment: .leading) {
                 shape.fill(Color.primary.opacity(fill))
                     .padding(.leading, leading)
+                    // The open one's moves at once, as a Mac's sidebars do. Faded with a tab switch's
+                    // animation, it had the whole sidebar drawn again on each of its frames.
+                    .transaction(value: isSelected) { $0.animation = nil }
             }
             .contentShape(shape)
             .onHover { isHovering = $0 }
@@ -2285,4 +2282,19 @@ private struct StillRow<Look: Equatable, Content: View>: View, Equatable {
     var body: some View { content() }
 
     static func == (lhs: StillRow, rhs: StillRow) -> Bool { lhs.look == rhs.look }
+}
+
+/// Open Beside, on another session's menu while a session's tab is in view. It reads the tab in
+/// view itself, so going from a session's tab to a draft's or a group chat's works out this item
+/// again rather than every row; and only that, not the sessions (`openBeside` checks both are
+/// there), so a session changing doesn't work out every row's.
+private struct OpenBesideItem: View {
+    let session: String
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        if let open = app.tabs.sessionID, open != session {
+            Button("Open Beside") { app.tabs.openBeside(session) }
+        }
+    }
 }
