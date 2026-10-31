@@ -10910,6 +10910,7 @@ class CodexAgent {
       this.unfencedServers.add(rpc);
     rpc.onNotification = (method, params) => this.notification(method, params, rpc);
     rpc.onRequest = (method, params, id) => this.request(rpc, method, params, id);
+    slot.opening = rpc;
     rpc.onExit = () => {
       fence?.ended();
       this.unfencedServers.delete(rpc);
@@ -10927,6 +10928,9 @@ class CodexAgent {
     } catch (error) {
       rpc.kill();
       throw error;
+    } finally {
+      if (slot.opening === rpc)
+        slot.opening = undefined;
     }
     if (this.slots.get(key) !== slot) {
       rpc.kill();
@@ -10938,6 +10942,7 @@ class CodexAgent {
   }
   stop(key) {
     const slot = this.slots.get(key);
+    slot?.opening?.kill();
     const server = slot?.server;
     if (!slot || !server)
       return;
@@ -22132,4 +22137,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 6576a788193d62b1136640396eb851e6e0c889c888512e3a9bfdc1c8e23fcf0e
+// Built from Packages/Box/src/agents 7544afcd8ba6b04da997c81463a6129744f6c68c1db293c6465990fd6175da47
