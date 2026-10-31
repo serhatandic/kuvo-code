@@ -678,6 +678,34 @@ test("each conversation's temporary files are its own", async () => {
   }
 });
 
+const hasNpm = spawnSync("npm", ["--version"]).status === 0;
+
+test("npx fetches a package it hasn't yet and runs it, in the sandbox, into a cache of Kuvo Code's own that nothing outside it runs from, and your own npm cache is left as it is", { skip: !hasNpm && "needs npm on the PATH" }, async () => {
+  const box = boxAt("npx");
+  const project = path.join(root, "npx-project");
+  fs.mkdirSync(path.join(project, "package"), { recursive: true });
+  // A package as npm's registry hands one over (a tarball), here so nothing goes to the network.
+  fs.writeFileSync(path.join(project, "package", "package.json"), JSON.stringify({ name: "kuvo-tool", version: "1.0.0", bin: { "kuvo-tool": "cli.js" } }));
+  fs.writeFileSync(path.join(project, "package", "cli.js"), "#!/usr/bin/env node\nconsole.log('ran from ' + __dirname)\n", { mode: 0o755 });
+  assert.equal(spawnSync("tar", ["-czf", "tool.tgz", "package"], { cwd: project }).status, 0);
+  // Your own npm cache (where npm finds it with this test's HOME): npx runs what's in its `_npx`
+  // outside the sandbox too.
+  const yours = path.join(root, ".npm");
+  const running = await start(box);
+  try {
+    // (Any trip to a registry fails at once.)
+    const ran = await engineRuns(box, project, `npm_config_registry=http://127.0.0.1:9/ npm_config_update_notifier=false npx --yes --package=file:./tool.tgz -- kuvo-tool`);
+    assert.equal(ran.status, 0, ran.out);
+    const cache = fs.realpathSync(path.join(box.home, "cache", "sandbox-npm"));
+    assert.ok(ran.out.includes(`ran from ${cache}/_npx/`), `it ran from Kuvo Code's own cache for commands: ${ran.out}`);
+    // Not the engine's (which runs outside the sandbox), nor yours.
+    assert.equal(fs.existsSync(path.join(box.home, "cache", "npm")), false);
+    assert.equal(fs.existsSync(path.join(yours, "_npx")), false);
+  } finally {
+    await running.stop();
+  }
+});
+
 test("a commit runs pre-commit's hooks, which set themselves up as they first run, and your own pre-commit's are left as they are", async () => {
   const box = boxAt("pre-commit");
   const project = path.join(root, "hooked");

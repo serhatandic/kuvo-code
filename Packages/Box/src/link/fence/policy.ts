@@ -28,6 +28,9 @@ export interface FencePolicy {
   kuvoReadable: string[];
   /** Written besides WORK, GIT and TMP: the system's temporary folders, devices, tools' caches. */
   writable: string[];
+  /** Kuvo Code's own caches for commands, inside its folders: written, and never used outside the
+   * sandbox (`sandboxNpmCache`). */
+  commandCaches: string[];
   /** Inside those, what's only read: what runs later outside the sandbox (tools' own programs and
    * settings, scripts they run as they start). */
   readOnly: string[];
@@ -105,6 +108,17 @@ export function appTemporary(): string | null {
   return path.basename(tmp) === path.basename(path.dirname(path.resolve(K))) ? tmp : null;
 }
 
+/**
+ * npm's cache for commands in the sandbox, Kuvo Code's own: npx fetches a package there and runs it
+ * from it, so nothing it fetches runs outside the sandbox, as it would from yours (whose `_npx`
+ * commands only read). In this Mac's app's cache folder, on its box; in `cache` elsewhere (a
+ * machine's `~/.kuvo-code`). Never the engine's own (`cache/npm`), which runs outside it.
+ */
+export function sandboxNpmCache(): string {
+  const tmp = appTemporary();
+  return tmp ? path.join(os.userInfo().homedir, "Library", "Caches", path.basename(tmp), "sandbox-npm") : path.join(K, "cache", "sandbox-npm");
+}
+
 /** This Mac's app's folders, around its box's (`…/Application Support/<bundle>/box`). */
 function macFolders(home: string): { kuvo: string[]; readable: string[] } {
   const app = path.dirname(path.resolve(K));
@@ -131,9 +145,10 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
   const kuvo = [...new Set(own.kuvo.map(realish))];
   const kuvoReadable = own.readable.map(realish);
   const readOnly = inHome(RUNS_LATER);
+  const commandCaches = [realish(sandboxNpmCache())];
   if (process.platform === "darwin") {
     return {
-      home, kuvo, kuvoReadable, readOnly, ports,
+      home, kuvo, kuvoReadable, readOnly, ports, commandCaches,
       // Every copy's (`run.kuvo.code…`), wherever the system keeps an app's.
       kuvoPatterns: [
         `^${escapeRegex(home)}/Library/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
@@ -145,7 +160,7 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
     };
   }
   return {
-    home, kuvo, kuvoReadable, readOnly, ports,
+    home, kuvo, kuvoReadable, readOnly, ports, commandCaches,
     kuvoPatterns: [],
     writable: ["/tmp", "/var/tmp", "/dev", "/dev/shm", ...inHome([...CACHES, ...LINUX_CACHES])],
     secrets: [...inHome([...SECRETS, ...LINUX_SECRETS]), ...sshKeys(home), ...ghHosts(home)],
