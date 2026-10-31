@@ -288,7 +288,7 @@ private final class LinkAreaView: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = PointerClaim.trackingArea(owner: self)
+        let area = PointerClaim.trackingArea(owner: self, in: self)
         addTrackingArea(area)
         tracking = area
     }
@@ -304,6 +304,12 @@ private final class LinkAreaView: NSView {
     override func mouseEntered(with event: NSEvent) { pointerMoved(event) }
     override func mouseMoved(with event: NSEvent) { pointerMoved(event) }
     override func mouseExited(with event: NSEvent) { claim.show(nil) }
+
+    // Removed under the pointer: no `mouseExited` comes.
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil { claim.show(nil) }
+    }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 

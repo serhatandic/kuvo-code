@@ -393,7 +393,7 @@ final class RemotePageView: NSView, @preconcurrency NSTextInputClient, PictureVi
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = PointerClaim.trackingArea(owner: self)
+        let area = PointerClaim.trackingArea(owner: self, in: self)
         addTrackingArea(area)
         tracking = area
     }
@@ -412,6 +412,8 @@ final class RemotePageView: NSView, @preconcurrency NSTextInputClient, PictureVi
     }
 
     override func mouseMoved(with event: NSEvent) {
+        // At once, so it lets go onto a bar or a button over the page (Take Over).
+        showCursor(at: event.locationInWindow)
         // Hovers at most 30 times a second: each is a message over the network.
         guard Date.now.timeIntervalSince(lastMove) > 1.0 / 30 else { return }
         lastMove = .now
@@ -446,6 +448,12 @@ final class RemotePageView: NSView, @preconcurrency NSTextInputClient, PictureVi
         claim.show(nil)
     }
 
+    // Removed under the pointer (the pane closed): no `mouseExited` comes.
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil { claim.show(nil) }
+    }
+
     private func updateCursor(at point: CGPoint) {
         guard cursorQuery == nil else { return }
         let wait = max(0, 0.12 - Date.now.timeIntervalSince(lastCursorQuery))
@@ -457,9 +465,11 @@ final class RemotePageView: NSView, @preconcurrency NSTextInputClient, PictureVi
             cursorQuery = nil
             guard let name else { return }
             cursor = Self.cursor(named: name)
+            // Only where the page is on top: off it, the last move let go already, and what's
+            // there (Take Over's hand) keeps its pointer.
             if let window, window.isKeyWindow {
                 let location = window.mouseLocationOutsideOfEventStream
-                if bounds.contains(convert(location, from: nil)) { showCursor(at: location) }
+                if PointerClaim.isTopmost(self, at: location) { claim.show(cursor) }
             }
         }
     }

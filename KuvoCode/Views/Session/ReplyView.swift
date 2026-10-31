@@ -738,27 +738,40 @@ class ReplyChipButton: NSButton {
 
     override var fittingSize: NSSize { intrinsicContentSize }
 
-    // The pointing hand, as on the app's other borderless buttons (`clickablePointer`).
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
-    }
-
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        let area = PointerClaim.trackingArea(owner: self, in: self)
         addTrackingArea(area)
         tracking = area
     }
 
+    // The pointing hand, as on the app's other borderless buttons (`clickablePointer`), where
+    // it's on top (not under a bar over the code) and can be clicked.
+    private let claim = PointerClaim()
+
+    private func claimPointer(for event: NSEvent) {
+        claim.show(isEnabled && PointerClaim.isTopmost(self, at: event.locationInWindow) ? .pointingHand : nil)
+    }
+
+    override func cursorUpdate(with event: NSEvent) { claimPointer(for: event) }
+    override func mouseMoved(with event: NSEvent) { claimPointer(for: event) }
+
     override func mouseEntered(with event: NSEvent) {
         isHovering = true
         show(title: current)
+        claimPointer(for: event)
     }
 
     override func mouseExited(with event: NSEvent) {
         isHovering = false
         show(title: current)
+        claim.show(nil)
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil { claim.show(nil) }
     }
 
     override func draw(_ dirtyRect: NSRect) {
