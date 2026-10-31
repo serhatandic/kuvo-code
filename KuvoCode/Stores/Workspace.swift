@@ -968,12 +968,10 @@ final class Workspace {
     /// stays with its commits, unless it's merged already. Never while an agent works in it.
     func removeWorktree(_ directory: String, discardingChanges: Bool = true) async throws {
         guard let tree = worktrees[directory] else { return }
-        guard api(forFolder: directory) != nil else {
-            // The machine removes it, with its engine.
-            if let machine = RemoteFolder.machine(of: tree.root) {
-                throw GitFailure(message: "\(machine) isn’t connected, so the worktree of \(tree.branch) can’t be removed now.")
-            }
-            return
+        // A machine removes it, with its engine. This Mac's box answers with its engine down too,
+        // and says why it can't.
+        if api(forFolder: directory) == nil, let machine = RemoteFolder.machine(of: tree.root) {
+            throw GitFailure(message: "\(machine) isn’t connected, so the worktree of \(tree.branch) can’t be removed now.")
         }
         // Looked at again now: an agent may have written more since you were asked.
         // Any session there, opened or not, with its subagents and background commands.
@@ -985,7 +983,13 @@ final class Workspace {
         // a phone) is gone already.
         do {
             let _: Empty = try await onBox(Self.box(of: tree.root), "POST", "kuvo/worktrees/remove", ["path": Self.onBox(tree.root), "discard": discardingChanges])
-        } catch let refusal as BoxRefusal where refusal.status == 404 {}
+        } catch let refusal as BoxRefusal where refusal.status == 404 {
+        } catch let refusal as BoxRefusal {
+            throw refusal
+        } catch {
+            // Not reached at all: said plainly, not as the connection's own words.
+            throw GitFailure(message: "\(Self.box(of: tree.root) == BoxClient.mac ? "Kuvo Code’s background service on this Mac" : Self.box(of: tree.root)) didn’t answer, so the worktree of \(tree.branch) stays. Try again in a moment.")
+        }
         for (folder, removed) in worktrees where removed.root == tree.root { removedWorktrees[folder] = removed.project }
         UserDefaults.standard.set(removedWorktrees, forKey: "removedWorktrees")
         worktrees = worktrees.filter { $0.value.root != tree.root }
@@ -994,14 +998,15 @@ final class Workspace {
     }
 
     /// A box's worktrees as it keeps them: this Mac's as its box starts, a machine's as it
-    /// connects, each as its Worktrees page opens (`sizes`: with the room each takes there, by
-    /// root as this Mac names it), and as a session in one gets its title. This Mac shows them
+    /// connects, each as its Worktrees page opens (`details`: with the room each takes there and
+    /// what in it isn't committed or merged, by root as this Mac names it), and as a session in one
+    /// gets its title. This Mac shows them
     /// from then on. Ones this Mac kept for it before the box kept them are handed over, and ones
     /// it no longer has (removed from a phone, say) go here too. Nil when it couldn't be asked:
     /// what this Mac had stays.
-    @discardableResult func takeWorktrees(from box: String, sizes: Bool = false) async -> [String: Int64]? {
+    @discardableResult func takeWorktrees(from box: String, details: Bool = false) async -> [String: BoxWorktree]? {
         struct Listed: Decodable { var worktrees: [BoxWorktree] }
-        guard let listed: Listed = try? await onBox(box, "GET", sizes ? "kuvo/worktrees" : "kuvo/worktrees?records=1", nil) else { return nil }
+        guard let listed: Listed = try? await onBox(box, "GET", details ? "kuvo/worktrees" : "kuvo/worktrees?records=1", nil) else { return nil }
         var records = listed.worktrees
         let onIt = { (folder: String) in Self.box(of: folder) == box }
         for (folder, tree) in worktrees where onIt(tree.root) {
@@ -1026,7 +1031,7 @@ final class Workspace {
         // While this Mac follows its own, only what it's told changes them: an answer read before
         // a change since would undo it.
         if box != BoxClient.mac || !followingWorktrees { take(records, from: box) }
-        return Dictionary(records.compactMap { record in record.size.map { (Self.here(record.root, on: box), $0) } }, uniquingKeysWith: { first, _ in first })
+        return Dictionary(records.map { (Self.here($0.root, on: box), $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     /// `records` as `box`'s worktrees, here, in place of what was known of them. One that's gone
@@ -1100,12 +1105,16 @@ final class Workspace {
         var branch: String
         var base: String?
         var size: Int64?
+        /// Whether it has changes that aren't committed, and how many commits its base doesn't
+        /// have; nil when git couldn't say.
+        var uncommitted: Bool?
+        var ahead: Int?
 
         init(project: String, root: String, folder: String?, branch: String, base: String?) {
             (self.project, self.root, self.folder, self.branch, self.base) = (project, root, folder, branch, base)
         }
 
-        private enum CodingKeys: String, CodingKey { case project, root, path, folder, branch, base, size }
+        private enum CodingKeys: String, CodingKey { case project, root, path, folder, branch, base, size, uncommitted, ahead }
 
         init(from decoder: any Decoder) throws {
             let keys = try decoder.container(keyedBy: CodingKeys.self)
@@ -1115,6 +1124,20 @@ final class Workspace {
             branch = try keys.decode(String.self, forKey: .branch)
             base = try keys.decodeIfPresent(String.self, forKey: .base)
             size = try keys.decodeIfPresent(Int64.self, forKey: .size)
+            uncommitted = try keys.decodeIfPresent(Bool.self, forKey: .uncommitted)
+            ahead = try keys.decodeIfPresent(Int.self, forKey: .ahead)
+        }
+
+        /// What removing it does, as far as git could say: whether changes not committed go with
+        /// its folder, and the commits its branch keeps.
+        var removalNote: String {
+            var note = switch uncommitted {
+            case true?: "Its folder is deleted, with changes in it that aren’t committed."
+            case false?: "Its folder is deleted. Everything in it is committed."
+            case nil: "Its folder and anything in it that isn’t committed are deleted."
+            }
+            if let ahead, ahead > 0 { note += " \(branch) keeps its \(ahead.counting("commit")) not merged yet." }
+            return note + " Its sessions stay, without a folder to run in."
         }
     }
 
