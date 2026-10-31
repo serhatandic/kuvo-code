@@ -160,7 +160,7 @@ struct GroupEditor: View {
                 }
                 .frame(width: 92)
                 .animation(.ui, value: members)
-                WellGroup(isFocused: focus != nil) {
+                WellGroup(isFocused: focus == .name || focus == .purpose) {
                     WellRow {
                         Image(systemName: "bubble.left.and.bubble.right")
                     } content: {
