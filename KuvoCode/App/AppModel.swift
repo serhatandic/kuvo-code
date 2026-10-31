@@ -596,8 +596,9 @@ final class AppModel {
     private func boxEngine() async throws -> ServerEndpoint {
         // The keeper's, unless macOS doesn't let it run; and the keeper's anyway when it runs the
         // box already (one allowed while the app ran its own waits for the app to quit). Never one
-        // registered (a copy that never asks macOS), there's no keeper to share it with.
-        if keeperBox == nil, !ownBoxStarted, keeperRuns() || (BackgroundWork.shared.state != .off && !ownBox.claim()) {
+        // registered (a copy that never asks macOS), there's no keeper to share it with. One that
+        // didn't come up this launch isn't waited on again: the app runs the box itself.
+        if keeperBox == nil, !ownBoxStarted, (keeperRuns() && !BackgroundWork.shared.didntStart) || (BackgroundWork.shared.state != .off && !ownBox.claim()) {
             let follower = KeeperFollower(box: box, agents: agents)
             follower.onEngine = { [weak self] state in self?.boxEngineChanged(state) }
             follower.onKeeper = { [weak self] in Task { await self?.tellKeeper() } }
@@ -749,7 +750,8 @@ final class AppModel {
     /// while agents work there.
     func stopBox() {
         keeperBox?.stop()
-        if keeperBox == nil { ownBox.stop() }
+        // Only a box the app started: before then, what runs (and its records) is the keeper's.
+        if keeperBox == nil, ownBoxStarted { ownBox.stop() }
         Awake.shared.agentsWork(false)
         Awake.shared.keeper = nil
     }

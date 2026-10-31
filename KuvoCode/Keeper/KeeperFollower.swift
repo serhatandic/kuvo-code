@@ -272,7 +272,8 @@ final class KeeperFollower {
         guard let data = try? Data(contentsOf: KeeperRecord.run.appending(path: name)),
               let record = try? JSONDecoder().decode(Record.self, from: data),
               let port = record.port, let url = URL(string: "http://127.0.0.1:\(port)") else { return nil }
-        if let pid = record.pid, kill(pid, 0) != 0, errno != EPERM { return nil }
+        // Gone, or its process ID another user's now (reused after a restart): the box's are yours.
+        if let pid = record.pid, kill(pid, 0) != 0 { return nil }
         return ServerEndpoint(url: url, password: record.password)
     }
 }

@@ -204,7 +204,9 @@ final class MacBoxRunner {
     }
 
     /// The engine started over (it says it's starting at once); the box and the bridge stay up.
+    /// Asked for (Try Again, Restart), so its stops before count no more.
     func restartEngine() {
+        restarts.removeAll()
         stopEngine()
         engine = .starting
         Task { await start() }

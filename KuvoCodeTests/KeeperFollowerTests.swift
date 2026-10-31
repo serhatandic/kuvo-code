@@ -1,4 +1,5 @@
 import Foundation
+import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
@@ -27,5 +28,27 @@ import Testing
 
         await follower.read()
         #expect(heard.isEmpty)
+    }
+
+    /// After a restart, the box's records from before it are still there, and a process of
+    /// another user's (macOS's own) has the process ID the keeper and its engine had: the app
+    /// doesn't take them for a keeper and an engine running, and connect where nothing answers.
+    @Test func recordsWhoseProcessIDIsAnotherUsersNowAreFromBefore() async throws {
+        try #require(KeeperRecord.read() == nil, "no keeper runs for the tests")
+        setenv("KUVO_KEEPER", "follow", 1)
+        // launchd's process ID, which is root's.
+        try KeeperRecord(pid: 1, version: AppInfo.version, build: AppInfo.build, url: "http://127.0.0.1:9", password: "x", started: 0).write()
+        BoxProcess.engineChanged(ServerEndpoint(url: URL(string: "http://127.0.0.1:9")!, password: "x"), version: "1", pid: 1)
+        let follower = KeeperFollower(box: BoxProcess(), agents: OutsideAgents())
+        defer {
+            follower.stop()
+            KeeperRecord.forget(pid: 1)
+            BoxProcess.engineChanged(nil, version: nil, pid: nil)
+            unsetenv("KUVO_KEEPER")
+        }
+
+        await follower.start()
+        #expect(KeeperRecord.read() == nil, "no keeper runs")
+        #expect(follower.engine == .starting, "it waits for the keeper's engine rather than connect to the old one")
     }
 }
