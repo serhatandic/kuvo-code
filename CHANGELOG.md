@@ -19,6 +19,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Removing a worktree in Settings › Worktrees says whether it has changes that aren't committed and how many commits its branch keeps; an old failure note goes once a remove works, and removing one on this Mac while its engine is down says why instead of doing nothing.
 - When this Mac's engine stops, Settings › Accounts and the first launch's subscriptions step say so above the list, with Try Again, and dim what needs the engine until it's back, rather than offering sign-ins that fail. Coding agents still sign in meanwhile.
 - Settings › Storage says it measures only this Mac, once you've added a machine.
+- Merge into… in Changes leaves a merge you're in the middle of in the project's folder as it is, and says to finish it first, rather than throwing it away.
 - A worktree isn't removed while a Claude Code or Codex session works in it, or while its computer can't tell who's working there.
 - A worktree whose folder you deleted by hand can be removed; commits on no branch in a worktree (an agent stopped mid-rebase) are kept on a branch of their own when it goes.
 - A session in a worktree of a repository with no commits says to make a first commit, and a branch prefix git can't use there is named, with where to change it.
