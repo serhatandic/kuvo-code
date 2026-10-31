@@ -10,6 +10,7 @@ import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // Packages/Box/src/shared/text.ts
 import crypto from "node:crypto";
+var AGENTS_TEXT_BYTES = 200000;
 var oneLine = (text, limit) => Array.from(String(text).replace(/[\t\r\n]/g, " ")).slice(0, limit).join("");
 var stamp = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 var newID = (prefix) => prefix + Array.from(crypto.randomBytes(10), (byte) => "abcdefghijklmnopqrstuvwxyz0123456789"[byte % 36]).join("");
@@ -16273,7 +16274,7 @@ class LinkHost {
 import crypto27 from "node:crypto";
 import fs61 from "node:fs";
 import path62 from "node:path";
-async function attachedIn(body, session, modelInput, joinsNote = false, guesses = true) {
+async function attachedIn(body, session, modelInput, joinsNote = false, toAgents = false) {
   let prompt;
   try {
     prompt = JSON.parse(Buffer.from(body ?? "").toString());
@@ -16296,7 +16297,7 @@ async function attachedIn(body, session, modelInput, joinsNote = false, guesses 
       continue;
     }
     const saved = save(attachments, data.bytes, typeof file.name === "string" ? file.name : "");
-    if (reads(data.mime, data.bytes.length, input, guesses)) {
+    if (reads(data.mime, data.bytes.length, input, !toAgents, toAgents ? AGENTS_TEXT_BYTES : MODEL_BYTES)) {
       sent.push(isText(data.mime) && data.mime !== "text/plain" ? { ...file, uri: `data:text/plain;base64,${data.bytes.toString("base64")}` } : file);
       if (saved)
         included.push(saved);
@@ -16318,11 +16319,11 @@ function inline(file) {
 var MODEL_BYTES = 20 * 1024 * 1024;
 var TEXT_TYPES = new Set(["application/json", "application/javascript", "application/xml", "application/x-yaml", "application/yaml", "application/toml", "application/x-sh", "application/sql"]);
 var isText = (mime) => mime.startsWith("text/") || TEXT_TYPES.has(mime);
-function reads(mime, size, input, guess) {
+function reads(mime, size, input, guess, textBytes) {
   if (size > MODEL_BYTES)
     return false;
   if (isText(mime))
-    return true;
+    return size <= textBytes;
   if (mime === "application/pdf")
     return input?.includes("pdf") ?? guess;
   if (mime.startsWith("image/"))
@@ -16440,7 +16441,7 @@ async function* forward(target, path, request, signal, allows, naming = null, do
     if (!sending)
       return request.body;
     const session = decodeURIComponent(sending[1]);
-    const body = await attachedIn(request.body, session, modelInput(url, headers, signal), request.fromMac === true, !toAgents);
+    const body = await attachedIn(request.body, session, modelInput(url, headers, signal), request.fromMac === true, toAgents);
     return prompt ? fromPhone(await namedIn(body, session, naming)) : body;
   };
   let response;
@@ -18313,7 +18314,7 @@ import fs68 from "node:fs";
 import path70 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.141";
+var BRIDGE_VERSION = "0.9.142";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

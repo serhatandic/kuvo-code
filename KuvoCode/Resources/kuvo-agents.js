@@ -13019,6 +13019,13 @@ class CursorWorker {
 }
 
 // Packages/Box/src/agents/agents/cursor.ts
+function readable(path) {
+  try {
+    return readFileSync21(path).toString("base64");
+  } catch {
+    return;
+  }
+}
 var effortParameters = ["effort", "reasoning", "reasoning_effort"];
 var SDK2 = [{ name: "@cursor/sdk", version: "1.0.35" }];
 var outputLimit5 = 30000;
@@ -13318,9 +13325,17 @@ class CursorThread {
       hooks.saveState();
     }
     await this.ensureAgent(sdk, options, hooks);
-    const images = input.files.filter((file) => file.mime.startsWith("image/")).map((file) => ({ data: file.data ?? (file.path ? readFileSync21(file.path).toString("base64") : ""), mimeType: file.mime })).filter((image) => image.data);
+    const images = [];
+    const byPath = [];
+    for (const file of input.files) {
+      const data = file.mime.startsWith("image/") ? file.data ?? (file.path ? readable(file.path) : undefined) : undefined;
+      if (data)
+        images.push({ data, mimeType: file.mime });
+      else if (file.path)
+        byPath.push(file.path);
+    }
     let text = input.text;
-    const others = input.files.filter((file) => !file.mime.startsWith("image/") && file.path).map((file) => this.worker ? fenceCopy(cwd, file.path) : file.path);
+    const others = byPath.map((path) => this.worker ? fenceCopy(cwd, path) : path);
     if (others.length)
       text += `
 
@@ -14550,6 +14565,9 @@ function safeJSON(text) {
     return {};
   }
 }
+
+// Packages/Box/src/shared/text.ts
+var AGENTS_TEXT_BYTES = 200000;
 
 // Packages/Box/src/agents/sessions.ts
 function isBusy(doing) {
@@ -16905,7 +16923,7 @@ function mime(uri) {
     json: "application/json"
   }[extension] ?? "application/octet-stream";
 }
-var textFileLimit = 200000;
+var textFileLimit = AGENTS_TEXT_BYTES;
 function withTextFiles(text, files) {
   const others = [];
   const parts = [];
@@ -18427,7 +18445,8 @@ function chat(runner, id, withMessages = true) {
     speaking: state.speaking,
     discussing: Boolean(state.discussing),
     paused: Boolean(state.paused),
-    ...state.activity?.length ? { activity: state.activity } : {}
+    ...state.activity?.length ? { activity: state.activity } : {},
+    ...state.stopped?.length ? { stopped: state.stopped } : {}
   };
 }
 function following(read, chat, signal) {
@@ -18626,7 +18645,7 @@ async function make(runner, store, given, here) {
 import { existsSync as existsSync17, readFileSync as readFileSync26, renameSync as renameSync12, writeFileSync as writeFileSync18 } from "fs";
 
 // Packages/Box/src/shared/seats.ts
-var SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "report", "memory"];
+var SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "held", "report", "memory"];
 
 // Packages/Box/src/agents/groups/api.ts
 function server3(url, password) {
@@ -19269,9 +19288,11 @@ class Seats {
     const queues = this.context.queues;
     return queues !== undefined && (readQueues(queues)[session]?.waiting ?? []).some((item) => item.id === promptID);
   }
-  async follow(botID, promptID, started, wanted) {
+  async follow(botID, promptID, started, wanted, held) {
     let misses = 0;
     let stoppedChecks = 0;
+    let wasStopped = false;
+    let sinceSaid = 0;
     for (;; ) {
       await sleep2(3000 * (this.context.pace ?? 1));
       if (!wanted())
@@ -19279,6 +19300,15 @@ class Seats {
       const bot = this.bot(botID);
       if (!bot)
         return { ok: false, why: "the bot is gone" };
+      const queues = this.context.queues;
+      const stopped = queues !== undefined && readQueues(queues)[bot.sessionID]?.paused === true;
+      if (stopped !== wasStopped) {
+        held?.(wasStopped = stopped);
+        sinceSaid = 1;
+      } else if (sinceSaid > 0 && ++sinceSaid > 20) {
+        held?.(stopped);
+        sinceSaid = stopped ? 1 : 0;
+      }
       const api = this.ownAPI(bot);
       if (!api)
         continue;
@@ -19633,7 +19663,14 @@ class GroupRunner {
   }
   talk(id) {
     const live = this.state(id);
-    return { speaking: live.speaking ?? live.splitting, discussing: live.abort !== undefined, paused: live.paused, ...live.speaking && live.activity ? { activity: live.activity } : {} };
+    const stopped = [...new Set([...live.stopped ?? []].filter(([task, { wrapUp }]) => this.taskState(task, wrapUp, id)?.state === "working").map(([, { bot }]) => bot))];
+    return {
+      speaking: live.speaking ?? live.splitting,
+      discussing: live.abort !== undefined,
+      paused: live.paused,
+      ...live.speaking && live.activity ? { activity: live.activity } : {},
+      ...stopped.length ? { stopped } : {}
+    };
   }
   list() {
     return [...this.chats.values()].map((kept) => {
@@ -20487,9 +20524,19 @@ class GroupRunner {
       return;
     if (!task.prompt || !this.bot(task.bot))
       return this.fail(taskID, wrapUpID, id, "the bot is gone");
-    const result = await this.seats.follow(task.bot, task.prompt, task.started, () => this.taskState(taskID, wrapUpID, id)?.state === "working");
+    const result = await this.seats.follow(task.bot, task.prompt, task.started, () => this.taskState(taskID, wrapUpID, id)?.state === "working", (stopped) => this.waitsOnStopped(taskID, wrapUpID, id, task.bot, stopped)).finally(() => this.waitsOnStopped(taskID, wrapUpID, id, task.bot, false));
     if (result)
       this.finish(taskID, wrapUpID, id, task.bot, result);
+  }
+  waitsOnStopped(taskID, wrapUpID, id, botID, stopped) {
+    const live = this.state(id);
+    if (stopped === (live.stopped?.has(taskID) ?? false))
+      return;
+    if (stopped)
+      (live.stopped ??= new Map).set(taskID, { bot: botID, wrapUp: wrapUpID });
+    else
+      live.stopped?.delete(taskID);
+    this.told(id);
   }
   finish(taskID, wrapUpID, id, botID, result) {
     const task = this.taskState(taskID, wrapUpID, id);
@@ -20501,6 +20548,7 @@ class GroupRunner {
         return this.changeTask(taskID, wrapUpID, id, (part) => delete part.lost);
       return this.fail(taskID, wrapUpID, id, result.why);
     }
+    this.waitsOnStopped(taskID, wrapUpID, id, botID, false);
     this.changeTask(taskID, wrapUpID, id, (part) => {
       part.state = "done";
       part.finished = stamp3();
@@ -20511,6 +20559,12 @@ class GroupRunner {
     const kept = this.chats.get(id);
     if (kept)
       emit("kuvo.group.done", { id, name: kept.group.name, bot: botID, who: this.name(botID), text: result.text });
+  }
+  held(from, part) {
+    const task = this.taskState(part.task, part.wrapUp, part.chat);
+    if (!task || task.prompt !== `peer:${from}`)
+      return;
+    this.waitsOnStopped(part.task, part.wrapUp, part.chat, task.bot, part.stopped === true && task.state === "working");
   }
   reported(from, report) {
     const task = this.taskState(report.task, report.wrapUp, report.chat);
@@ -20541,6 +20595,7 @@ class GroupRunner {
       peers.home(to).remember({ chat: memory.chat, bot: memory.bot, at: this.memoryTime(), forget: true });
   }
   fail(taskID, wrapUpID, id, why, thenOthers = true, lost = false) {
+    this.waitsOnStopped(taskID, wrapUpID, id, "", false);
     this.changeTask(taskID, wrapUpID, id, (part) => {
       part.state = "failed";
       part.finished = stamp3();
@@ -21080,6 +21135,7 @@ class SeatServer {
   clock;
   turns = new Map;
   following = new Set;
+  stopped = new Set;
   anew = new Map;
   constructor(seats, transport, context, clock = realClock) {
     this.seats = seats;
@@ -21122,6 +21178,8 @@ class SeatServer {
     if (known) {
       if (known.done && known.result && known.host === host)
         this.tell(given.task, known, known.result);
+      else if (!known.done && known.host === host && this.stopped.has(given.task))
+        this.sayHeld(given.task, known, true);
       return;
     }
     const work = { host, chat: given.chat, wrapUp: given.wrapUp, bot: given.bot, started: given.started };
@@ -21146,10 +21204,20 @@ class SeatServer {
     this.seats.follow(work.bot, work.prompt, work.started, () => {
       const now = this.context?.store.peerWork()[task];
       return Boolean(now && !now.done);
-    }).then((result) => {
+    }, (stopped) => this.sayHeld(task, work, stopped)).then((result) => {
       if (result)
         this.report(task, work, result);
-    }).finally(() => this.following.delete(task));
+    }).finally(() => {
+      this.following.delete(task);
+      this.stopped.delete(task);
+    });
+  }
+  sayHeld(task, work, stopped) {
+    if (stopped)
+      this.stopped.add(task);
+    else
+      this.stopped.delete(task);
+    this.transport.send(work.host, { kind: "held", task, wrapUp: work.wrapUp, chat: work.chat, stopped }, false);
   }
   report(task, work, result) {
     const fitted = fitReport(result);
@@ -21483,6 +21551,8 @@ function receive(parts, from, mail) {
     parts.directory.existing(from)?.take(from, mail);
   else if (mail.kind === "report")
     parts.runner.reported(from, mail);
+  else if (mail.kind === "held")
+    parts.runner.held(from, mail);
   else
     parts.server.take(from, mail);
 }
@@ -22438,4 +22508,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 51235a09bcc0f60a98210b3a17cf9d442bc489cb1e1a933967c3de3346372428
+// Built from Packages/Box/src/agents d371c62fe5c072fad050b02f883a11a324705d458fe96fc50e1baec23539ff1c
