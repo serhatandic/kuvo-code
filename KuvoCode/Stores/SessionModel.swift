@@ -290,7 +290,7 @@ final class SessionModel {
     /// Its computer's agents bridge, which runs goals there (the workspace sets it).
     @ObservationIgnored var goalBridge: () -> OutsideAgents? = { nil }
     /// What's done here waits while its engine can't be reached: it would only fail.
-    private var canReach: Bool { !waitsForEngine && isReachable() }
+    var canReach: Bool { !waitsForEngine && isReachable() }
     private(set) var changes: [FileDiff] = []
     /// The files its agent's edits changed, from the edits themselves: what the Changes tab shows
     /// in a folder outside a git repository, where `changes` stays empty (the engine keeps no

@@ -462,9 +462,10 @@ private struct StoppedLine: View {
         .padding(.bottom, 8)
     }
 
-    /// Its conversation's queue picked up again, where it lives; one this Mac can't reach is opened instead.
+    /// Its conversation's queue picked up again, where it lives; one this Mac can't reach now is
+    /// opened instead, where it says why.
     private func resume() {
-        if let model = app.workspace.model(for: bot.sessionID) { model.resumeQueue() } else { app.open(.session(bot.sessionID)) }
+        if let model = app.workspace.model(for: bot.sessionID), model.canReach { model.resumeQueue() } else { app.open(.session(bot.sessionID)) }
     }
 }
 
@@ -493,6 +494,7 @@ private struct WorkState: View {
             case .working where stopped:
                 Label("Stopped", systemImage: "pause.circle")
                     .foregroundStyle(.secondary)
+                    .help("Waits until you resume the bot’s conversation")
             case .working where needsYou:
                 Label("Needs You", systemImage: "hand.raised.fill")
                     .foregroundStyle(.orange)
