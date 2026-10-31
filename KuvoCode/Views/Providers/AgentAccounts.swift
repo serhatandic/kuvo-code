@@ -262,8 +262,9 @@ private struct ProductBlock: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // The actions beside the name; in a narrow window, under it, and one above the other
-            // when they don't fit side by side there either.
+            // The actions beside the name; in a narrow window, under it, lined up with the name
+            // and the accounts; and one above the other when they don't fit side by side there
+            // either, where what's still too long is cut short.
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 14) {
                     heading
@@ -272,13 +273,13 @@ private struct ProductBlock: View {
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     heading
-                    actions(AnyLayout(HStackLayout(spacing: 10)))
-                        .padding(.leading, 40)
+                    actions(AnyLayout(HStackLayout(spacing: 10)), isUnder: true)
+                        .padding(.leading, Self.indent)
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     heading
-                    actions(AnyLayout(VStackLayout(alignment: .leading, spacing: 4)))
-                        .padding(.leading, 40)
+                    actions(AnyLayout(VStackLayout(alignment: .leading, spacing: 4)), isUnder: true, truncates: true)
+                        .padding(.leading, Self.indent)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -296,7 +297,7 @@ private struct ProductBlock: View {
                 }
             }
             // Under the product's name.
-            .padding(.leading, 46)
+            .padding(.leading, Self.indent)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
@@ -330,6 +331,9 @@ private struct ProductBlock: View {
         }
     }
 
+    /// Where the name starts: past the mark's column and the space after it.
+    private static let indent: CGFloat = 46
+
     /// Its mark and name.
     private var heading: some View {
         HStack(spacing: 14) {
@@ -337,26 +341,31 @@ private struct ProductBlock: View {
                 .frame(width: 32)
             Text(title)
                 .font(.body.weight(.medium))
+                .lineLimit(1)
                 .help(version.map { "Version \($0)" } ?? "")
         }
     }
 
-    /// What it needs from you, on the product's line: installing again, or an update; and another account.
-    private func actions(_ layout: AnyLayout) -> some View {
+    /// What it needs from you, on the product's line: installing again, or an update; and another
+    /// account. Under the name (`isUnder`), the buttons' words line up with it, as the plain
+    /// words do.
+    private func actions(_ layout: AnyLayout, isUnder: Bool = false, truncates: Bool = false) -> some View {
         layout {
             if isInstalling {
                 HStack(spacing: 6) {
                     Spinner(size: 12)
                     Text("Installing…")
                         .font(.callout)
+                        .lineLimit(1)
                         .foregroundStyle(.secondary)
                 }
             } else if isAgent, !isInstalled, let installCommand {
                 Button(action: install) {
                     Label("Install", systemImage: "arrow.down.circle")
                         .font(.callout)
+                        .lineLimit(1)
                 }
-                .buttonStyle(TextButtonStyle())
+                .buttonStyle(TextButtonStyle(outset: isUnder))
                 .disabled(agents.api == nil)
                 .help("It isn't installed. Runs \(installCommand), its maker's installer.")
             } else if isUpdating {
@@ -364,6 +373,7 @@ private struct ProductBlock: View {
                     Spinner(size: 12)
                     Text("Updating…")
                         .font(.callout)
+                        .lineLimit(1)
                         .foregroundStyle(.secondary)
                 }
             } else if let latest {
@@ -371,12 +381,14 @@ private struct ProductBlock: View {
                     Button(action: update) {
                         Label("Update to \(latest)", systemImage: "arrow.down.circle")
                             .font(.callout)
+                            .lineLimit(1)
                     }
-                    .buttonStyle(TextButtonStyle())
+                    .buttonStyle(TextButtonStyle(outset: isUnder))
                     .help("You have \(version ?? "an older version"). Newer models may need the newer version. Runs \(updateCommand ?? "its update").")
                 } else {
                     Text("\(latest) is out")
                         .font(.callout)
+                        .lineLimit(1)
                         .foregroundStyle(.secondary)
                         .help("You have \(version ?? "an older version"). Update it the way you installed it.")
                 }
@@ -384,14 +396,15 @@ private struct ProductBlock: View {
             Button(action: addAccount) {
                 Label(product.hasAccounts ? "Add Another Account" : "Add Account", systemImage: "plus")
                     .font(.callout)
-                    .fixedSize()
+                    .lineLimit(1)
             }
-            .buttonStyle(TextButtonStyle())
+            .buttonStyle(TextButtonStyle(outset: isUnder))
             .disabled(isAgent && agents.api == nil)
             .help(isAgent ? "Another \(title) account, signed in on its own: each shows in the model picker" : "Another \(title) account: the engine uses one at a time")
         }
-        // Each on one line: the row puts them under the name when they don't fit beside it.
-        .fixedSize()
+        // Each on one line: the row puts them under the name when they don't fit beside it, and
+        // cuts them short only when nothing else fits.
+        .fixedSize(horizontal: !truncates, vertical: true)
     }
 
     // MARK: Doing
