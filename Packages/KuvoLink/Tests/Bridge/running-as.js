@@ -7,7 +7,7 @@
 import { spawn } from "node:child_process";
 
 export async function runningAs(name, t) {
-  const child = spawn(process.execPath, ["-e", "process.stdin.on('end', () => process.exit()).on('error', () => process.exit()).resume(); process.stdout.write('ready')", name], { stdio: ["pipe", "pipe", "ignore"] });
+  const child = spawn(process.execPath, ["-e", "process.stdin.on('end', () => process.exit()).on('error', () => process.exit()).resume(); process.stdout.write('ready')", name], { stdio: ["pipe", "pipe", "inherit"] });
   t.after(() => child.kill());
   await new Promise((resolve, reject) => {
     child.stdout.once("data", resolve);
