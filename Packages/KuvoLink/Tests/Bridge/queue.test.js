@@ -10,11 +10,12 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, beforeEach, test } from "node:test";
+import { beforeEach, test } from "node:test";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-queue-")));
 process.env.KUVO_HOME = home;
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+removeAtEnd(home);
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // The engine: each session's inbox and whether it runs; what was asked of it, each time a test
@@ -59,7 +60,7 @@ const engine = http.createServer((request, response) => {
   });
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
-after(() => { engine.closeAllConnections(); engine.close(); });
+atEnd(() => { engine.closeAllConnections(); engine.close(); });
 const target = { port: engine.address().port, password: "p", pid: 1 };
 fs.mkdirSync(path.join(home, "run"), { recursive: true });
 fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify(target));

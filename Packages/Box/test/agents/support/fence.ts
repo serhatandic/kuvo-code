@@ -16,9 +16,9 @@ export function realFence(kuvo: string, sockets: string[] = []) {
   const platform = process.platform === "darwin" ? "darwin" : "linux"
   const places: FencePlaces = {
     folder, launcher: join(kuvo, "bin", "kuvo-fence"), runner: join(kuvo, "bin", "kuvo-fence.js"), inside: [join(kuvo, "bots")], probe: join(folder, "probe"),
-    bots: join(kuvo, "bots"), wakes: join(kuvo, "wakes"), key: join(kuvo, "run", "socket.key"), sshFor: join(kuvo, "run", "ssh-for"), sshAgents: join(kuvo, "run", "ssh"), platform,
+    bots: join(kuvo, "bots"), wakes: join(kuvo, "wakes"), key: join(kuvo, "run", "socket.key"), sshFor: join(kuvo, "run", "ssh-for"), sshAgents: join(kuvo, "run", "ssh"), npm: join(kuvo, "cache", "sandbox-npm"), platform,
   }
-  const policy: FencePolicy = { home: kuvo, kuvo: [kuvo], kuvoPatterns: [], kuvoReadable: [join(kuvo, "bin")], writable: ["/dev"], readOnly: [], secrets: [], ports: [], sockets }
+  const policy: FencePolicy = { home: kuvo, kuvo: [kuvo], kuvoPatterns: [], kuvoReadable: [join(kuvo, "bin")], writable: ["/dev"], readOnly: [], secrets: [], ports: [], sockets, commandCaches: [join(kuvo, "cache", "sandbox-npm")] }
   mkdirSync(join(folder, "shell"), { recursive: true })
   const write = (file: string, text: string, mode = 0o600) => {
     mkdirSync(dirname(file), { recursive: true })

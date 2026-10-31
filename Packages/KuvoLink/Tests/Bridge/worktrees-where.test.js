@@ -2,13 +2,14 @@
 // engine's own folder for each project, one beside the projects, one in your home folder, and one
 // in the repository that git would list as new files until it's ignored. Real git; the engine is a
 // stand-in that says which project a folder is, as the real one does.
-import { test, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-where-")));
 process.env.KUVO_HOME = path.join(home, ".kuvo-code");
@@ -43,9 +44,9 @@ const engine = http.createServer((request, response) => {
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
 const atEngine = { port: engine.address().port, password: "pw" };
-after(() => {
+removeAtEnd(home);
+atEnd(() => {
   engine.close();
-  fs.rmSync(home, { recursive: true, force: true });
 });
 
 const where = (directory, projects = [shop, notes, drafts], at = atEngine) => link.worktreesWhere(directory, at, undefined, projects);

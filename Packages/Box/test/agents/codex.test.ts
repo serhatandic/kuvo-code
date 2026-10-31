@@ -238,11 +238,41 @@ process.stdin.on("data", (chunk) => {
     await until(() => !pids.some(running))
   })
 
+  test("a Codex stopped while it's still starting isn't left running", async () => {
+    const script = join(root, "never.js")
+    // It starts, and never answers being started.
+    writeFileSync(script, `require("node:fs").writeFileSync(${JSON.stringify(join(root, "pid"))}, String(process.pid))
+process.stdin.on("end", () => process.exit(0))
+process.stdin.resume()
+`)
+    const launcher = join(root, "codex")
+    writeFileSync(launcher, `#!/bin/sh\nexport BUN_BE_BUN=1\nexec "${process.execPath}" "${script}" "$@"\n`)
+    chmodSync(launcher, 0o755)
+    const agent = (codex = new TestCodex(launcher, root))
+    const starting = agent.rpc()
+    starting.catch(() => {})
+    await until(() => existsSync(join(root, "pid")))
+    const pid = Number(readFileSync(join(root, "pid"), "utf8"))
+    // (As when the session it's for closes, or the bridge stops.)
+    agent.shutdown()
+    await until(() => {
+      try {
+        process.kill(pid, 0)
+        return false
+      } catch {
+        return true
+      }
+    })
+    await expect(starting).rejects.toThrow()
+  })
+
   test("one still starting outside the sandbox counts as outside it (agents keep off the vault) from its start until it stops", async () => {
     const go = join(root, "go")
     const script = join(root, "slow.js")
     writeFileSync(script, `const fs = require("node:fs")
 fs.writeFileSync(${JSON.stringify(join(root, "started"))}, "")
+// (Gone when its input ends, as Codex's app-server is: never outliving the tests.)
+process.stdin.on("end", () => process.exit(0))
 process.stdin.on("data", (chunk) => {
   for (const line of String(chunk).split("\\n").filter(Boolean)) {
     const message = JSON.parse(line)

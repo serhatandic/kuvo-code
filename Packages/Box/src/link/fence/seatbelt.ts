@@ -98,6 +98,8 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   allow("file-write*", ...homes.flatMap(home => ["$", "/"].flatMap(after => ["REGULAR-FILE", "DIRECTORY"].map(type =>
     `(require-all ${inHome(home, `"/(" (param "STATE") ")${after}"`)} (vnode-type ${type}))`))));
   allow(HIDDEN, param("TMP"));
+  // Kuvo Code's own caches for commands (npm's), in its folders.
+  allow(HIDDEN, ...policy.commandCaches.map(subpath));
   if (options.inside) allow(HIDDEN, param("WORK"));
   // Its conversation's wake-ups and watches (kuvo-wake): what's kept there is read, and only its
   // inbox written, which the box takes in, out of its reach (kuvo-wake's `take`).

@@ -34,6 +34,8 @@ export interface FencePlaces {
    * (vault/ssh.ts): there only while agents may use the vault. */
   sshFor: string;
   sshAgents: string;
+  /** npm's cache for commands (`sandboxNpmCache`). */
+  npm: string;
   platform: "darwin" | "linux";
 }
 
@@ -130,6 +132,9 @@ export function launcherScript(places: FencePlaces): string {
     // pre-commit's hooks set their tools up in its own folder as they first run, which runs later
     // outside the sandbox, so commands only read it: theirs go in their temporary folder instead.
     `export PRE_COMMIT_HOME="$TMPDIR"pre-commit`,
+    // npm's, likewise: npx fetches a package there and runs it from it, so its cache is Kuvo Code's
+    // own for commands, never used outside the sandbox (yours runs outside it, so its `_npx` is only read).
+    `(umask 077; mkdir -p ${sh(places.npm)}) && export npm_config_cache=${sh(places.npm)}`,
     // (As the sandbox compares paths: through links, `/var` being `/private/var`.)
     ...(places.platform === "darwin" ? [`tmp=$(cd "$tmp" 2>/dev/null && pwd -P) || { echo "This command can't run: its temporary folder isn't there." >&2; exit 126; }`] : []),
     // Its conversation's wake-ups and watches (kuvo-wake): its bot's folder, or its own in the
@@ -283,7 +288,7 @@ export function agentsNote(platform: "darwin" | "linux"): string {
         ]
       : []),
     "",
-    "`npx` can't fetch a package the project doesn't have (its packages there are only read, and npm says to `chown` its cache: don't). Run it with `npm exec --cache \"$TMPDIR/npm\" --yes -- <package>` instead, or add it to the project.",
+    "`npx` and `npm` use a cache of Kuvo Code's own here (`$npm_config_cache`): leave it as it is, and `npx -y <package>` fetches what it needs.",
     "",
     "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
     "",

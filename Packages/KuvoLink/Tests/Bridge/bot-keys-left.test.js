@@ -9,10 +9,11 @@ import crypto from "node:crypto";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-keys-left-")));
-after(() => fs.rmSync(support, { recursive: true, force: true }));
+removeAtEnd(support);
 
 // The app, keeping keys by name, answering or not.
 const kept = new Map([["KUVO_KEY_TODOIST_TODOIST_API_KEY__BOT_ADA0000001", "tok"], ["KUVO_KEY_TODOIST_TODOIST_API_KEY", "shared"]]);
@@ -34,7 +35,7 @@ const host = http.createServer((request, response) => {
   });
 });
 await new Promise(resolve => host.listen(0, "127.0.0.1", resolve));
-after(() => { host.closeAllConnections(); host.close(); });
+atEnd(() => { host.closeAllConnections(); host.close(); });
 
 Object.assign(process.env, {
   KUVO_BOX: "mac",

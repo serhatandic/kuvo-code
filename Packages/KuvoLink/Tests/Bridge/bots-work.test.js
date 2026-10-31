@@ -12,13 +12,14 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, beforeEach, test } from "node:test";
+import { beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { runningAs } from "./running-as.js";
 import { NO_BUN, testBun } from "./bun-for-tests.js";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-bots-work-")));
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+removeAtEnd(home);
 const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -173,8 +174,8 @@ const engine = http.createServer(standIn(false));
 const bridge = http.createServer(standIn(true));
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
 await new Promise(resolve => bridge.listen(0, "127.0.0.1", resolve));
-after(() => { bridge.closeAllConnections(); bridge.close(); });
-after(() => { engine.closeAllConnections(); engine.close(); });
+atEnd(() => { bridge.closeAllConnections(); bridge.close(); });
+atEnd(() => { engine.closeAllConnections(); engine.close(); });
 write(path.join(home, "run", "engine.json"), JSON.stringify({ port: engine.address().port, password: "p", version: "0.0.0" }));
 
 beforeEach(() => {

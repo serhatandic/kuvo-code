@@ -15,9 +15,10 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, before, test } from "node:test";
+import { before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { relayStandIn } from "./relay-stand-in.js";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-mac-peers-")));
@@ -101,7 +102,7 @@ async function engineWith(sessions) {
     return send(200, { id: session.id, title: session.title });
   });
   const port = await listening(server);
-  after(() => { server.closeAllConnections(); server.close(); });
+  atEnd(() => { server.closeAllConnections(); server.close(); });
   return { port, password: "pw", seen };
 }
 
@@ -131,7 +132,7 @@ async function bridgeWith() {
     return done();
   });
   const port = await listening(server);
-  after(() => { server.closeAllConnections(); server.close(); });
+  atEnd(() => { server.closeAllConnections(); server.close(); });
   return { port, password: "pw", pid: process.pid, seen, give: line => { for (const stream of seen.streams) stream.write(JSON.stringify(line) + "\n"); } };
 }
 
@@ -218,7 +219,8 @@ before(async () => {
   link.runMacPeers();
 });
 
-after(async () => {
+removeAtEnd(support);
+atEnd(async () => {
   link.stopMacPeers();
   link.stopMacLink();
   let pid = 0;
@@ -232,7 +234,6 @@ after(async () => {
   }
   await relay.close();
   appHost.close();
-  fs.rmSync(support, { recursive: true, force: true });
 });
 
 test("each box tells the other who its agents are, with what this Mac answers", { timeout: 60_000 }, async t => {

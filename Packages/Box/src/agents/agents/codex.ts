@@ -63,6 +63,8 @@ const ACCOUNT = "account"
 interface Slot {
   server?: RPC
   starting?: Promise<RPC>
+  /** Its app-server while it's starting, before it's `server`. */
+  opening?: RPC
   /** The one still running the old Codex, or with the box's sandbox as it was. */
   outdated?: RPC
   /** The box's sandbox as it started with it (`fenceKey`). */
@@ -299,6 +301,7 @@ export class CodexAgent implements Agent {
     else this.unfencedServers.add(rpc)
     rpc.onNotification = (method, params) => this.notification(method, params, rpc)
     rpc.onRequest = (method, params, id) => this.request(rpc, method, params, id)
+    slot.opening = rpc
     rpc.onExit = () => {
       fence?.ended()
       this.unfencedServers.delete(rpc)
@@ -315,6 +318,8 @@ export class CodexAgent implements Agent {
       // One that won't start isn't left running: the next ask starts another.
       rpc.kill()
       throw error
+    } finally {
+      if (slot.opening === rpc) slot.opening = undefined
     }
     // Its session closed meanwhile: not left running.
     if (this.slots.get(key) !== slot) {
@@ -329,6 +334,8 @@ export class CodexAgent implements Agent {
   /** Stops an app-server: its threads are loaded again, in a new one, as they're next used. */
   private stop(key: string) {
     const slot = this.slots.get(key)
+    // One still starting too (its start then fails).
+    slot?.opening?.kill()
     const server = slot?.server
     if (!slot || !server) return
     slot.server = undefined

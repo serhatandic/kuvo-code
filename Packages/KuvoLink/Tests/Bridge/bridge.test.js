@@ -8,9 +8,10 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { EventEmitter, once } from "node:events";
-import { after, test } from "node:test";
+import { test } from "node:test";
 import { runningAs } from "./running-as.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { removeAtEnd } from "./at-end.js";
 
 // The bridge keeps its state in KUVO_HOME, so give it a folder of its own before loading it.
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-test-"));
@@ -19,10 +20,8 @@ process.env.KUVO_HOME = home;
 // home would be), so the box names its paths whole wherever the tests run.
 const user = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-user-"));
 process.env.HOME = user;
-after(() => {
-  fs.rmSync(home, { recursive: true, force: true });
-  fs.rmSync(user, { recursive: true, force: true });
-});
+removeAtEnd(home);
+removeAtEnd(user);
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // A phone's key as a phone has one (32 bytes, base64url), named for a test.

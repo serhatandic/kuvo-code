@@ -2,7 +2,7 @@
 // follows something answers with what it says now (its first line) and ends, rather than never
 // answering; and a picture's bytes come back whole, not mangled as text, as do bytes that
 // aren't text, whatever kind they were sent as.
-import { test, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-artifacts-")));
@@ -40,11 +41,11 @@ await new Promise(resolve => bridge.listen(0, "127.0.0.1", resolve));
 const stand = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "kuvo-agents"], { stdio: "ignore" });
 fs.mkdirSync(path.join(home, "run"), { recursive: true });
 fs.writeFileSync(path.join(home, "run", "bridge.json"), JSON.stringify({ pid: stand.pid, port: bridge.address().port, password: "x" }));
-after(() => {
+removeAtEnd(home);
+atEnd(() => {
   stand.kill();
   bridge.closeAllConnections();
   bridge.close();
-  fs.rmSync(home, { recursive: true, force: true });
 });
 
 async function route(request) {

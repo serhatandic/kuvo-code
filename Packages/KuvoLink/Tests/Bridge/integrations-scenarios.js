@@ -1,11 +1,12 @@
 // What Settings › Integrations does on a box, whichever way it keeps its keys: run by
 // integrations.test.js (a machine's, in its files, with the Mac closed) and
 // integrations-host.test.js (this Mac's, in its Keychain, through its app's host interface).
-import { test, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { atEnd } from "./at-end.js";
 
 const shared = "KUVO_KEY_TODOIST_API_KEY";
 const theirs = `${shared}__BOT_SCOUT`;
@@ -49,7 +50,7 @@ export async function standInEngine(servers, folders = [], credentials = () => [
     response.end(JSON.stringify(data));
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  after(() => { server.closeAllConnections(); server.close(); });
+  atEnd(() => { server.closeAllConnections(); server.close(); });
   return { engine: { port: server.address().port, password: "pw" }, asked };
 }
 

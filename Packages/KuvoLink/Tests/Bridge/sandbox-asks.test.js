@@ -8,7 +8,7 @@
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/sandbox-asks.test.js`; on Linux, with Bun (the
 // engine's: `BUN_BE_BUN=1 <engine> test sandbox-asks.test.js`).
-import { test, after, before } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -19,13 +19,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { script } from "./bot-keys-scenarios.js";
 import { runningAs } from "./running-as.js";
 import { NO_BUN, testBun } from "./bun-for-tests.js";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 // In the folder tests keep in your home (not the temporary folders, which commands may write), so
 // what a command mustn't write is somewhere it otherwise couldn't. (Short: the vault's socket,
 // which the box's long-running process holds, lives in it.)
 fs.mkdirSync(path.join(os.homedir(), ".kuvo-code-test"), { recursive: true });
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".kuvo-code-test", "sa-")));
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+removeAtEnd(root);
 const linux = process.platform === "linux";
 const home = path.join(root, ".kuvo-code");
 const env = { ...process.env, HOME: root, KUVO_HOME: home };
@@ -68,7 +69,7 @@ before(async () => {
   await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
   fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify({ pid: process.pid, port: engine.address().port, password: "engine-pw", version: "test" }));
 });
-after(() => { engine?.closeAllConnections(); engine?.close(); });
+atEnd(() => { engine?.closeAllConnections(); engine?.close(); });
 
 // The box's long-running process.
 async function start() {
@@ -169,7 +170,7 @@ before(async () => {
   const state = (await box.ask("GET", "kuvo/sandbox")).value;
   assert.equal(state.on, true, state.why);
 });
-after(() => box?.stop());
+atEnd(() => box?.stop());
 
 // An agent on a machine: its tool server there (`kuvo-browser.js mcp`, as the engine starts it), which
 // passes sandbox_ask to the box's long-running process through `box route`.
@@ -199,7 +200,7 @@ function machineTools() {
 test("an agent on a machine has sandbox_ask while the sandbox is on, and its call asks you there and runs once allowed", async () => {
   assert.deepEqual((await box.ask("GET", "kuvo/sandbox/tools")).value.tools.map(tool => tool.name), ["sandbox_ask"]);
   const tools = machineTools();
-  after(() => tools.stop());
+  atEnd(() => tools.stop());
   const listed = (await tools.ask("tools/list", {})).tools;
   const tool = listed.find(each => each.name === "sandbox_ask");
   assert.ok(tool, "listed with the browser's tools");

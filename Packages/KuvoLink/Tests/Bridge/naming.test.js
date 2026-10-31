@@ -9,16 +9,17 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-naming-"));
 process.env.KUVO_HOME = home;
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 // (Once the list a message started working out is written: it would write it again in a folder
 // just removed.)
-after(async () => {
+removeAtEnd(home);
+atEnd(async () => {
   await link.ownRefreshed();
-  fs.rmSync(home, { recursive: true, force: true });
 });
 const vector = JSON.parse(fs.readFileSync(new URL("../../Vectors/routes/names/agent-naming.json", import.meta.url), "utf8"));
 

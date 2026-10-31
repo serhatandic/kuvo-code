@@ -7,7 +7,7 @@
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/sandbox.test.js`; on Linux, with Bun (the
 // engine's: `BUN_BE_BUN=1 <engine> test sandbox.test.js`).
-import { test, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -18,12 +18,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { script, sshAgentsOf } from "./bot-keys-scenarios.js";
 import { NO_BUN, testBun } from "./bun-for-tests.js";
+import { removeAtEnd } from "./at-end.js";
 
 // In the folder tests keep in your home (not the temporary folders, which commands may write), so
 // what a command mustn't write is somewhere it otherwise couldn't.
 fs.mkdirSync(path.join(os.homedir(), ".kuvo-code-test"), { recursive: true });
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".kuvo-code-test", "sb-")));
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+removeAtEnd(root);
 const linux = process.platform === "linux";
 // kuvo-wake, as Wakes.swift has it and BoxFiles puts it in every box's bin.
 const swift = fs.readFileSync(new URL("../../../OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url), "utf8");
@@ -672,6 +673,34 @@ test("each conversation's temporary files are its own", async () => {
     assert.equal(first.status, 0, first.out);
     const ran = await engineRuns(box, two, tries([["read another's temporary files", `cat ${JSON.stringify(path.join(first.out.trim(), "note"))}`]]));
     assert.deepEqual(outcome(ran.out), { "read another's temporary files": "refused" }, ran.out);
+  } finally {
+    await running.stop();
+  }
+});
+
+const hasNpm = spawnSync("npm", ["--version"]).status === 0;
+
+test("npx fetches a package it hasn't yet and runs it, in the sandbox, into a cache of Kuvo Code's own that nothing outside it runs from, and your own npm cache is left as it is", { skip: !hasNpm && "needs npm on the PATH" }, async () => {
+  const box = boxAt("npx");
+  const project = path.join(root, "npx-project");
+  fs.mkdirSync(path.join(project, "package"), { recursive: true });
+  // A package as npm's registry hands one over (a tarball), here so nothing goes to the network.
+  fs.writeFileSync(path.join(project, "package", "package.json"), JSON.stringify({ name: "kuvo-tool", version: "1.0.0", bin: { "kuvo-tool": "cli.js" } }));
+  fs.writeFileSync(path.join(project, "package", "cli.js"), "#!/usr/bin/env node\nconsole.log('ran from ' + __dirname)\n", { mode: 0o755 });
+  assert.equal(spawnSync("tar", ["-czf", "tool.tgz", "package"], { cwd: project }).status, 0);
+  // Your own npm cache (where npm finds it with this test's HOME): npx runs what's in its `_npx`
+  // outside the sandbox too.
+  const yours = path.join(root, ".npm");
+  const running = await start(box);
+  try {
+    // (Any trip to a registry fails at once.)
+    const ran = await engineRuns(box, project, `npm_config_registry=http://127.0.0.1:9/ npm_config_update_notifier=false npx --yes --package=file:./tool.tgz -- kuvo-tool`);
+    assert.equal(ran.status, 0, ran.out);
+    const cache = fs.realpathSync(path.join(box.home, "cache", "sandbox-npm"));
+    assert.ok(ran.out.includes(`ran from ${cache}/_npx/`), `it ran from Kuvo Code's own cache for commands: ${ran.out}`);
+    // Not the engine's (which runs outside the sandbox), nor yours.
+    assert.equal(fs.existsSync(path.join(box.home, "cache", "npm")), false);
+    assert.equal(fs.existsSync(path.join(yours, "_npx")), false);
   } finally {
     await running.stop();
   }

@@ -12,9 +12,10 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, before, test } from "node:test";
+import { before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { relayStandIn } from "./relay-stand-in.js";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-two-boxes-")));
@@ -145,7 +146,8 @@ function setUp(docs) {
 }
 
 before(() => { link.runMacLink(); });
-after(async () => {
+removeAtEnd(support);
+atEnd(async () => {
   link.stopMacLink();
   // The machine's bridge stopped, and gone before its folder is (it writes as it ends).
   let pid = 0;
@@ -159,7 +161,6 @@ after(async () => {
   }
   await relay.close();
   appHost.close();
-  fs.rmSync(support, { recursive: true, force: true });
 });
 
 // A phone on the relay, opening sessions with a box (`to`: its address and key) and asking it things.
