@@ -197,7 +197,7 @@ final class Sandboxes {
         if asking && !restartAnswered.contains(box) { restarting.insert(box) } else { restarting.remove(box) }
     }
 
-    /// Your answer: restart them (each after its current turn) or leave them be. The box asks once,
+    /// Your answer: restart them (each once it finishes what it’s doing) or leave them be. The box asks once,
     /// so the card goes either way, here and on your other devices.
     func answerRestart(_ restart: Bool, on box: String) async throws {
         guard restartAnswered.insert(box).inserted else { return }

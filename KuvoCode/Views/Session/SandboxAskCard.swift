@@ -151,6 +151,8 @@ struct SandboxAskCard: View {
 /// conversations, until it's answered here or on another device. Restart Agents, or Not Now.
 struct SandboxRestartCard: View {
     let box: String
+    /// The answer on its way, for the spinner's words.
+    @State private var sent: Bool?
 
     var body: some View {
         if Sandboxes.shared.asksToRestart(on: box) {
@@ -192,7 +194,7 @@ struct SandboxRestartCard: View {
                 Spacer()
                 if answering {
                     Spinner()
-                        .accessibilityLabel("Restarting the agents")
+                        .accessibilityLabel(sent == false ? "Leaving the agents as they are" : "Restarting the agents")
                 }
                 Button(SandboxRestart.restart) { answer(true) }
                     .buttonStyle(.glassProminent)
@@ -206,7 +208,14 @@ struct SandboxRestartCard: View {
     }
 
     private func answer(_ restart: Bool) {
-        Task { try? await Sandboxes.shared.answerRestart(restart, on: box) }
+        sent = restart
+        Task {
+            do {
+                try await Sandboxes.shared.answerRestart(restart, on: box)
+            } catch {
+                if let trouble = Sandboxes.shared.restartFailures[box] { AccessibilityNotification.Announcement(trouble).post() }
+            }
+        }
     }
 }
 
