@@ -2837,7 +2837,8 @@ has the vault sends `agents`; a client reads its absence as `true`, a box from b
   page (`400`), only on one of the item's sites. A sign-in without an item takes the one sign-in
   for the site the caller may use on its own (`404` for none or more, and the browser asks you as
   before). An item named for another site is refused (`403`) and pauses that bot's use of the
-  vault (a conversation's that isn't a bot's, by its root session), telling your phones.
+  vault (a conversation's that isn't a bot's, by its root session), telling your phones
+  (`category: "message"`, `data: {session}`, or a seat's `{group}`).
 
 Every use first checks Pause, then the grant: `own` goes ahead, `ask` (or no grant, for an item
 named) asks you and waits. An item you give through `vault_ask` "always" is granted on its own
