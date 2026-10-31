@@ -24,6 +24,15 @@ final class BackgroundWork {
     private(set) var state: State = .off
     /// Why it couldn't be registered or started, when macOS said no.
     private(set) var failure: String?
+    /// On, but its keeper didn't start this time (launchd couldn't, or it never came up): the app
+    /// runs the work itself, and it stops when you quit.
+    var didntStart = false
+
+    #if DEBUG
+    /// Tests: what macOS says of the agent, and whether this copy registers as a user's does.
+    static var status: (() -> SMAppService.Status)?
+    static var asUsersCopy = false
+    #endif
 
     /// The launch agent in the app (`Contents/Library/LaunchAgents`), which a build phase names
     /// after this copy's bundle ID.
@@ -37,7 +46,18 @@ final class BackgroundWork {
 
     /// As macOS has it now (changed in System Settings, say).
     func refresh() {
-        state = switch service.status {
+        var status: SMAppService.Status { service.status }
+        #if DEBUG
+        if let given = Self.status {
+            state = switch given() {
+            case .enabled: .on
+            case .requiresApproval: .needsApproval
+            default: .off
+            }
+            return
+        }
+        #endif
+        state = switch status {
         case .enabled: .on
         case .requiresApproval: .needsApproval
         default: .off
@@ -49,11 +69,14 @@ final class BackgroundWork {
     @discardableResult
     func register() -> Bool {
         refresh()
-        guard state == .off else { return state == .on }
-        guard !AppInfo.isHostingTests, Self.mayRegister(ProcessInfo.processInfo.environment) else {
+        // A demo, test or measurement copy runs its work itself, also when its bundle ID was
+        // registered before (by a copy run with KUVO_KEEPER=on): launchd would start that copy's
+        // keeper, from wherever it was, or none at all.
+        guard registersHere else {
             failure = "This copy runs its work itself (a demo, test or measurement): KUVO_KEEPER=on registers it."
             return false
         }
+        guard state == .off else { return isOn() }
         guard AppInfo.mayPrompt("Background work (macOS adds a background item and tells you)") else {
             failure = "This copy never asks macOS (KUVO_DEMO_NO_PROMPTS)."
             return false
@@ -66,7 +89,23 @@ final class BackgroundWork {
             failure = "macOS didn’t allow it. Check System Settings › General › Login Items & Extensions."
         }
         refresh()
-        return state == .on
+        return isOn()
+    }
+
+    /// Whether this copy registers its keeper (`mayRegister`).
+    var registersHere: Bool {
+        #if DEBUG
+        if Self.asUsersCopy { return true }
+        #endif
+        return !AppInfo.isHostingTests && Self.mayRegister(ProcessInfo.processInfo.environment)
+    }
+
+    /// Whether it's on; once it is, Open at Login's login item goes, since the work it opened
+    /// Kuvo Code for runs at login without it.
+    private func isOn() -> Bool {
+        guard state == .on else { return false }
+        OpenAtLogin.shared.retire()
+        return true
     }
 
     /// Whether this copy registers its keeper: a copy launched for a demo, a test or a measurement
@@ -79,15 +118,19 @@ final class BackgroundWork {
 
     /// Started again after Stop Background Work (opening the app, or Start in Settings): launchd
     /// runs it now, as it would at the next login.
-    /// `over`: one running (but not answering) is stopped and started again.
-    func start(over: Bool = false) {
-        guard register() else { return }
+    /// `over`: one running (but not answering) is stopped and started again. Whether launchd took
+    /// it (it has no such agent when the app it was registered from is gone, say).
+    @discardableResult
+    func start(over: Bool = false) -> Bool {
+        guard register() else { return false }
         let launchctl = Process()
         launchctl.executableURL = URL(filePath: "/bin/launchctl")
         launchctl.arguments = ["kickstart"] + (over ? ["-k"] : []) + ["gui/\(getuid())/\(Self.label)"]
         launchctl.standardOutput = FileHandle.nullDevice
         launchctl.standardError = FileHandle.nullDevice
-        try? launchctl.run()
+        guard (try? launchctl.run()) != nil else { return false }
+        launchctl.waitUntilExit()
+        return launchctl.terminationStatus == 0
     }
 
     /// Stop Background Work: the keeper stops what runs, and itself, until it's started again.

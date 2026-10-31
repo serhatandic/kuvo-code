@@ -41,4 +41,24 @@ extension View {
     public func panelCardSurface() -> some View {
         cardSurface()
     }
+
+    /// A button on the panel's glass capsule, as the footer's Options is: its label stays as
+    /// bright before the panel has the keyboard as after, where the system's glass button draws
+    /// it dimmed (fork addition).
+    public func panelGlassButton() -> some View {
+        modifier(PanelGlassButton())
+    }
+}
+
+private struct PanelGlassButton: ViewModifier {
+    @Environment(PopoverTransparencyStore.self) private var transparency
+
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: 13, weight: .semibold))
+            .frame(height: 28)
+            .contentShape(Capsule())
+            .buttonStyle(.plain)
+            .interactiveGlass(in: Capsule(), reinforced: transparency.effectiveStyle.needsChromeLegibilityBacking)
+    }
 }

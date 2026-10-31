@@ -5,7 +5,7 @@ import UsageKit
 /// What works on this Mac while Kuvo Code's window is closed, at the foot of the usage item's panel
 /// (`InBackground`): the sessions working, and the next wake-up, with Open Kuvo Code and Stop. The
 /// first time, a note above it says the work goes on. Drawn as the panel draws its own cards: its
-/// card surface, a hint card's type, glass buttons like the footer's.
+/// card surface, a hint card's type, buttons on glass capsules like the footer's Options.
 struct BackgroundWorkCard: View {
     let app: AppModel
     @State private var stopping = false
@@ -69,6 +69,8 @@ struct BackgroundWorkCard: View {
                         line(title)
                     }
                     if working.count > 3 { line("and \(working.count - 3) more") }
+                    // After an update, until the work moves to it.
+                    if app.keeperMakesWay, !working.isEmpty { line("Updates once this is done") }
                     if let next { line(next) }
                     if working.isEmpty, next == nil {
                         Text("Nothing is running. A message or a wake-up starts the work again.")
@@ -85,6 +87,7 @@ struct BackgroundWorkCard: View {
                 Button { InBackground.shared.leave() } label: {
                     Text("Open Kuvo Code").frame(maxWidth: .infinity)
                 }
+                .panelGlassButton()
                 Button {
                     stopping = true
                     Task {
@@ -94,12 +97,12 @@ struct BackgroundWorkCard: View {
                 } label: {
                     Text("Stop…").frame(maxWidth: .infinity)
                 }
+                .panelGlassButton()
                 .disabled(stopping)
+                .opacity(stopping ? 0.5 : 1)
                 .accessibilityLabel("Stop Background Work")
                 .help("Stop the work in the background, and quit Kuvo Code. It starts again when you open Kuvo Code or log in.")
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.capsule)
         }
         .padding(12)
         .panelCardSurface()

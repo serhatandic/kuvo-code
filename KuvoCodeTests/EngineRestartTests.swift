@@ -90,6 +90,59 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: crashFile))
     }
 
+    /// Accounts and onboarding's subscriptions say the engine stopped (dimming what needs it) only
+    /// once it has: not while it first starts, all the while it's down, through Try Again's start,
+    /// and no longer once it's back.
+    @Test func accountsSayTheEngineStoppedUntilItsBack() async throws {
+        let binary = try fakeEngine()
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        let app = AppModel()
+        // It doesn't answer before it's up the first time, nor once held, until let go.
+        let up = Gate(), held = Gate(), letGo = Gate()
+        defer {
+            up.open()
+            letGo.open()
+            app.stop()
+            unsetenv("KUVO_OPENCODE_BINARY")
+            try? FileManager.default.removeItem(at: folder)
+            engine.stop()
+        }
+        engine.on("GET", "/api/info") { _ in
+            !up.isOpen || held.isOpen && !letGo.isOpen ? StubWeb.Answer(status: 503) : StubWeb.json(["version": OpenCodeEngine.version, "pid": 1])
+        }
+        engine.list([])
+        #expect(!app.engineIsDown)
+        let starting = Task { await app.start() }
+        try await until { engineStarts > 0 }
+        #expect(app.engine != .ready)
+        #expect(!app.engineIsDown, "starting for the first time isn't stopped")
+        up.open()
+        await starting.value
+        #expect(app.engine == .ready && !app.engineIsDown)
+
+        var failed = false
+        for _ in 0..<5 where !failed {
+            let before = engineStarts
+            crash()
+            try await until { engineStarts > before && app.engine == .ready || { if case .failed = app.engine { true } else { false } }() }
+            if case .failed = app.engine { failed = true }
+        }
+        #expect(failed, "it never stopped trying")
+        #expect(app.engineIsDown)
+
+        // Try Again: still down while it starts (it doesn't answer yet), and not once it's back.
+        held.open()
+        let startsBefore = engineStarts
+        let restarting = Task { await app.restart() }
+        try await until { engineStarts > startsBefore }
+        #expect(app.engine != .ready)
+        #expect(app.engineIsDown, "starting again after it stopped")
+        letGo.open()
+        await restarting.value
+        #expect(app.engine == .ready)
+        #expect(!app.engineIsDown)
+    }
+
     /// One that keeps stopping, which the app gives up on: a phone asking this Mac's box hears it
     /// stopped and why, not that it's starting, until it's started again.
     @Test func aPhoneHearsThisMacsEngineStoppedOnceTheAppGivesUp() async throws {

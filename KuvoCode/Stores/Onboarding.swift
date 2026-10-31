@@ -154,16 +154,20 @@ final class Onboarding {
 
     /// Runs an agent's installer from this step (`OutsideAgents.install`). Why one didn't work is
     /// this step's to say while it shows, rather than Settings › Accounts' the next time it opens;
-    /// one that fails after you've gone on, or that you haven't seen yet, is Settings' to say.
-    func install(_ row: Offers.Row, with agents: OutsideAgents, then refresh: @escaping (Bool) async -> Void) {
+    /// one that fails after you've gone on, or that you haven't seen yet, is Settings' to say. So
+    /// is the sign-in that follows one installed after you've gone on: `refresh` gets whether to
+    /// sign in here.
+    func install(_ row: Offers.Row, with agents: OutsideAgents, then refresh: @escaping (_ signInHere: Bool) async -> Void) {
         guard case .install(let id) = row.action else { return }
         installFailures[id] = nil
         installingAgents = agents
         agents.install(id) { [weak self] installed in
-            if let self, step == .subscriptions, let message = agents.installFailures.removeValue(forKey: id) {
+            let here = self?.step == .subscriptions
+            if let self, here, let message = agents.installFailures.removeValue(forKey: id) {
                 installFailures[id] = InstallFailure(integrationID: id, name: row.name, message: message)
             }
-            await refresh(installed)
+            if installed, !here { agents.signInsAfterInstall.insert(id) }
+            await refresh(installed && here)
         }
     }
 

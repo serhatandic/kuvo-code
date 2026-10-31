@@ -4,7 +4,9 @@ import KuvoLink
 /// Settings › General's While Agents Work for a phone (PROTOCOL.md, `kuvo/mac`): this Mac opening
 /// at login, and staying awake while agents work.
 extension PhoneLink {
-    func answerMac(_ request: LinkRequest) -> (Int, Data) {
+    /// `awakeNow`: whether it's kept awake now, by the app or by the keeper it follows (which reads
+    /// the setting again as it's asked, so the answer to a change here says what it changed).
+    func answerMac(_ request: LinkRequest) async -> (Int, Data) {
         let login = OpenAtLogin.shared
         switch request.method.uppercased() {
         case "GET":
@@ -26,6 +28,6 @@ extension PhoneLink {
         default:
             return (405, Data("{}".utf8))
         }
-        return (200, Self.json(["openAtLogin": login.isOn, "keepsAwake": Awake.isOn, "awakeNow": Awake.shared.isHolding]))
+        return (200, Self.json(["openAtLogin": login.isOn, "keepsAwake": Awake.isOn, "awakeNow": await Awake.shared.holdsNow()]))
     }
 }

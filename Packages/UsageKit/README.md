@@ -37,9 +37,9 @@ here.
   read from what the panel already has, for Kuvo Code to show beside a session.
 - **A card of the host's** (`Embedding/HostCard.swift`): shown at the foot of the dashboard, above
   the footer's row, for Kuvo Code's "Working in the background" while its window is closed, on
-  the panel's own card surface. While Kuvo Code is in the background, the Options menu's and the
-  right-click menu's Quit read and do what the host says (`HostCard.quitItem`: "Stop Background
-  Work…"), since quitting only takes it there.
+  the panel's own card surface, with buttons on the Options button's glass capsule. While Kuvo
+  Code is in the background, the Options menu's and the right-click menu's Quit read and do what
+  the host says (`HostCard.quitItem`: "Stop Background Work…"), since quitting only takes it there.
 - **The panel for the host's phones** (`Embedding/UsageMenuBar+Phone.swift`): what the Bars view
   lists, as JSON (providers in its order with their brand color, mark, notice and lines), and a
   refresh of everything, for Kuvo Code for iPhone.

@@ -20,6 +20,18 @@ final class OpenAtLogin {
         isOn = SMAppService.mainApp.status == .enabled
     }
 
+    /// Gone once background work is on: the keeper does at login what it opened Kuvo Code for,
+    /// so Kuvo Code doesn’t open by itself as well.
+    func retire() {
+        guard SMAppService.mainApp.status == .enabled else { return }
+        do {
+            try SMAppService.mainApp.unregister()
+        } catch {
+            Logger(subsystem: "run.kuvo.code", category: "login").error("Open at Login wasn't retired: \(error.localizedDescription, privacy: .public)")
+        }
+        refresh()
+    }
+
     func set(_ on: Bool) {
         guard AppInfo.mayPrompt("Open at Login (macOS adds a login item and tells you)") else {
             failure = "This copy never asks macOS (KUVO_DEMO_NO_PROMPTS)."

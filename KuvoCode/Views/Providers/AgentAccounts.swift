@@ -466,6 +466,12 @@ private struct SubscriptionTile: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, open)
+        // Installed from the first launch after you'd gone on: the sign-in that would have
+        // followed there.
+        .task(id: installCommand == nil) {
+            guard installCommand == nil, agents.signInsAfterInstall.remove(product.main.id) != nil else { return }
+            connect(product.main)
+        }
         .alert("Couldn't Install \(product.title)", isPresented: Binding(get: { installFailure != nil }, set: { if !$0 { agents.installFailures[product.main.id] = nil } })) {
             if let installCommand {
                 Button("Copy Command") { Clipboard.copy(installCommand) }

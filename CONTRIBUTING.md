@@ -348,11 +348,13 @@ when you're there to answer.
 | `KUVO_DEMO_ONBOARDING` | Show the first launch from a step: `loader`, `subscriptions` or `screenAccess` |
 | `KUVO_DEMO_LOADER` | With `KUVO_DEMO_ONBOARDING=loader`: hold the bots' loader at a share of the way (`0.4`), or `failed` or `offline` |
 | `KUVO_DEMO_SCREEN_ACCESS` | What macOS says of Screen Recording and Accessibility, for the first launch's last step: the allowed ones (`screenRecording,accessibility`), or `none` |
+| `KUVO_DEMO_ENGINE_STOPPED` | Say the engine stopped over Settings › Accounts and the subscriptions step (`1`), or that it's starting again (`starting`); the engine itself runs on |
 | `KUVO_DEMO_ADD_ANOTHER` | With `KUVO_DEMO_ONBOARDING=subscriptions`: Add Another open, on `plans` or `keys`; `KUVO_DEMO_SHOW_KEYS` opens the API keys found in place instead |
 | `KUVO_DEMO_OPENCODE_AUTH` | An opencode `auth.json` of your own for the first launch to find, in place of `~/.local/share/opencode/auth.json` |
 | `KUVO_DEMO_SETTINGS` | Open Settings on a page, by its `SettingsPage` name: `general`, `appearance`, `storage`, `accounts`, `agents`, `mcp`, `git`, `browser`, `vault` and so on; `permissions@<machine>` for a machine's |
 | `KUVO_DEMO_VAULT` | This Mac's vault with sample items (made only where they aren't yet), for a look at its pages |
 | `KUVO_DEMO_VAULT_ASK` | With `KUVO_DEMO_VAULT` and a bot: the first bot asks the vault for this, as `vault_ask` does, so its card shows over its composer and in Settings › Vault |
+| `KUVO_DEMO_SANDBOX_STATE`, `KUVO_DEMO_SANDBOX_RULES` | With `KUVO_DEMO_SETTINGS=permissions`: how every box's sandbox says it is (`on`, `checkFailed`, `kernel`…), and with `1` its Also Allowed, a folder for the first project, one for the first bot and two for the chats (`empty`: none) |
 | `KUVO_DEMO_VAULT_ITEM` | With `KUVO_DEMO_SETTINGS=vault`: the sheet of the item with this name, open |
 | `KUVO_DEMO_SETTINGS_TABS` | With `KUVO_DEMO_SETTINGS` and the tab bar on: these pages too, comma-separated, each in a tab of its own (`page@<machine>` for a machine's) |
 | `KUVO_DEMO_DISCONNECT` | Don't connect to this machine, as after Disconnect, so this copy reaches it only through the relay (set it up in an earlier launch) |
@@ -416,7 +418,7 @@ when you're there to answer.
 | `KUVO_DEMO_LOG_EVENTS` | Log each session event from the engine, to see the order they come in (`log show --predicate 'subsystem == "run.kuvo.code"'`) |
 | `KUVO_DEMO_SHOW_HOVER` | Show group chat messages' buttons as if under the pointer |
 | `KUVO_DEMO_CYCLE_TABS` | Go to the next session tab every this many seconds, a few times |
-| `KUVO_PERF_SWITCH` | Ten seconds after launch, go to the next session tab this many times, 1.5 s apart, and write how the main thread kept up to `KUVO_PERF_LOG` (stalls to `KUVO_PERF_STALLS`); `KUVO_PERF_SWITCH_CHECK` also gives each tab's session a draft and checks the composer shows it and takes typing after each switch |
+| `KUVO_PERF_SWITCH` | Ten seconds after launch, go to the next session tab this many times, 1.5 s apart, and write how the main thread kept up to `KUVO_PERF_LOG` (stalls to `KUVO_PERF_STALLS`); `KUVO_PERF_SWITCH_BY=1,-1` goes by those steps in turn instead, `KUVO_PERF_SWITCH_PLAIN` switches without the animation, and `KUVO_PERF_SWITCH_CHECK` also gives each tab's session a draft and checks the composer shows it and takes typing after each switch |
 | `KUVO_PERF_TOGGLE` | Ten seconds after launch, hide and show the sidebar this many times, then the panel, a second apart, and write how the main thread kept up with each to `KUVO_PERF_LOG` (stalls to `KUVO_PERF_STALLS`); for the panel, also how many times the sidebar and its rows were worked out again, which should be none. `KUVO_PERF_TOGGLE_ONLY=panel` measures the panel alone |
 | `KUVO_PERF_TYPE` | Ten seconds after launch, type this many characters into the composer, one every 60 ms, and write how the main thread kept up (and the longest a character took) to `KUVO_PERF_LOG` |
 | `KUVO_PERF_LAYERS` | A file: the window's layers drawn on the CPU that were drawn again between looks 1.5 s apart, four times from `KUVO_PERF_LAYERS_AT` seconds after launch (12), largest first |

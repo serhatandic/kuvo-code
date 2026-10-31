@@ -28,6 +28,9 @@ struct ProvidersView: View {
     /// back.
     private var away: MachineEngine? { machine.flatMap { $0.isReady ? nil : $0 } }
 
+    /// This Mac's engine stopped (a machine's says so as it's away).
+    private var engineIsDown: Bool { box.machine == nil && app.engineIsDown }
+
     /// Under the away bar: as of when, and that nothing changes meanwhile.
     static func asLastSeen(_ read: Date?, now: Date = .now, locale: Locale = .current) -> String {
         let ago = RelativeDateTimeFormatter()
@@ -119,6 +122,10 @@ struct ProvidersView: View {
                         MachineOfflineBar(engine: away, kept: Self.asLastSeen(catalog.integrationsRead, now: context.date))
                     }
                     .background(SettingsMetrics.groupFill(scheme), in: .rect(cornerRadius: SettingsMetrics.groupRadius))
+                } else if engineIsDown {
+                    EngineStoppedBar()
+                        .background(SettingsMetrics.groupFill(scheme), in: .rect(cornerRadius: SettingsMetrics.groupRadius))
+                        .transition(.opacity)
                 }
 
                 SearchField(text: $search, prompt: "Search \(catalog.providers.count) providers")
@@ -129,6 +136,7 @@ struct ProvidersView: View {
                     .opacity(away != nil ? 0.55 : 1)
                     .accessibilityHint(away != nil ? "As last seen, while \(away?.machine.name ?? "it") isn’t connected" : "")
             }
+            .animation(.ui, value: engineIsDown)
             // Lined up with the page's title above it.
             .padding(.horizontal, inset)
             .padding(.vertical, 16)
@@ -138,8 +146,19 @@ struct ProvidersView: View {
     @ViewBuilder private var accounts: some View {
         VStack(alignment: .leading, spacing: 26) {
             if search.isEmpty {
+                // The coding agents run beside the engine, through its restarts: they work meanwhile.
                 SubscriptionsSection(shows: .agents, machine: machine) { connecting = Connecting(integration: $0, machine: box.machine) }
+            }
+            // This Mac's engine down: the rest stays in view, and waits for it.
+            providers
+        }
+    }
+
+    @ViewBuilder private var providers: some View {
+        VStack(alignment: .leading, spacing: 26) {
+            if search.isEmpty {
                 SubscriptionsSection(shows: .plans, machine: machine) { connecting = Connecting(integration: $0, machine: box.machine) }
+                    .waitsForEngine(engineIsDown)
             }
 
             if search.isEmpty, !connected.isEmpty {
@@ -154,6 +173,7 @@ struct ProvidersView: View {
                     }
                     .background(SettingsMetrics.groupFill(scheme), in: .rect(cornerRadius: SettingsMetrics.groupRadius))
                 }
+                .waitsForEngine(engineIsDown)
             }
 
             if search.isEmpty, !featured.isEmpty {
@@ -164,10 +184,12 @@ struct ProvidersView: View {
                         }
                     }
                 }
+                .waitsForEngine(engineIsDown)
             }
 
             if search.isEmpty {
                 CustomProvidersSection { connecting = Connecting(integration: $0, machine: box.machine) } edit: { id in editing = ProviderEdit(id: id) }
+                    .waitsForEngine(engineIsDown)
             }
 
             if others.isEmpty, !search.isEmpty {
@@ -185,6 +207,8 @@ struct ProvidersView: View {
                     LazyVStack(spacing: 0) {
                         ForEach(others) { provider in
                             ProviderRow(provider: provider) { connecting = Connecting(integration: provider, machine: box.machine) }
+                                // A search finds the coding agents too, which work meanwhile.
+                                .waitsForEngine(engineIsDown && !OutsideAgents.isAgent(provider.id))
                         }
                     }
                     .padding(4)

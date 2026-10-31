@@ -240,6 +240,32 @@ test("a wake-up due in a conversation you stopped waits on the box, shown as a w
   assert.deepEqual(prompted.filter(each => each.session === "ses_stopped"), []);
 });
 
+test("two conversations you stopped, with the same wake-up (bots made from one template), each keep theirs", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const first = conversation(t, "ses_inbox1", { folder: true });
+  const second = conversation(t, "ses_inbox2", { folder: true });
+  const queues = path.join(support, "box", "run", "queues.json");
+  t.after(() => fs.rmSync(queues, { force: true }));
+  fs.writeFileSync(queues, JSON.stringify({ ses_inbox1: { paused: true, held: [] }, ses_inbox2: { paused: true, held: [] } }));
+  fs.writeFileSync(path.join(first, "wakes", `${now() - 5}-abcdef-1d`), "Check the inbox");
+  const fire = async () => {
+    const stop = link.sendWakes();
+    try {
+      t.mock.timers.tick(500);
+    } finally {
+      await stop();
+    }
+  };
+  await fire();
+  // The second's comes due once the first's waits on the box.
+  fs.writeFileSync(path.join(second, "wakes", `${now() - 5}-ghijkl-1d`), "Check the inbox");
+  await fire();
+  const waiting = session => (link.queueOf(session).waiting ?? []).map(each => [each.from, each.text]);
+  assert.deepEqual(waiting("ses_inbox1"), [["Wake-up", "Check the inbox"]]);
+  assert.deepEqual(waiting("ses_inbox2"), [["Wake-up", "Check the inbox"]], "the other's waiting isn't this one's");
+  assert.deepEqual(prompted.filter(each => each.session.startsWith("ses_inbox")), []);
+});
+
 test("one an agent's kuvo-wake writes beside the box goes at its time, not at the next minute", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const folder = conversation(t, "ses_soon", { folder: true });

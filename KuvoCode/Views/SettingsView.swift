@@ -295,8 +295,8 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     /// More words search finds the page by.
     var keywords: String {
         switch self {
-        case .general: "tab bar updates editor open files with startup"
-        case .appearance: "dark light mode theme accent color font text size glass solid window sidebar computers machines switch dock swipe"
+        case .general: "tab bar side by side split swipe sidebar computers machines switch trackpad keep awake sleep caffeinate editor open files with opencode import bring over beta version updates startup"
+        case .appearance: "dark light mode theme accent color font text size glass solid window"
         case .notifications: "alerts sound dock badge"
         case .phone: "iphone mobile pair qr relay companion"
         case .shortcuts: "keys keyboard hotkeys"

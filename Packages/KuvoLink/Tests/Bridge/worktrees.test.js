@@ -50,6 +50,8 @@ const engine = http.createServer((request, response) => {
     }
     if (url.pathname === "/api/worktree" && request.method === "DELETE") {
       const sent = JSON.parse(body);
+      // As the real one refuses one whose folder is gone.
+      if (!fs.existsSync(sent.directory)) return send({ name: "WorktreeError", data: { message: `Worktree directory unavailable: ${sent.directory}` } }, 400);
       try { git(project, "worktree", "remove", ...(sent.force ? ["--force"] : []), sent.directory); } catch { return send({ message: "git refused" }, 400); }
       return send({});
     }
@@ -118,6 +120,99 @@ test("made for a session on a branch of its own, named after it, listed with wha
   // Recorded again by a Mac that still had it: it's gone, so it stays gone.
   assert.equal((await ask("POST", "kuvo/worktrees/record", { project, root, branch: "kuvo/fix-the-total" })).status, 404);
   assert.deepEqual((await ask("GET", "kuvo/worktrees?records=1")).value.worktrees, []);
+});
+
+test("not removed while a coding agent works there, nor while who works there can't be told", async () => {
+  // The coding agents' bridge: its own sessions, as the engine lists them.
+  const bridgeSessions = [];
+  const bridgeActive = new Set();
+  const bridge = http.createServer((request, response) => {
+    const url = new URL(request.url, "http://x");
+    const send = value => { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+    if (url.pathname === "/api/session") return send({ data: bridgeSessions });
+    if (url.pathname === "/api/session/active") return send({ data: Object.fromEntries([...bridgeActive].map(id => [id, { type: "busy" }])) });
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise(resolve => bridge.listen(0, "127.0.0.1", resolve));
+  const atBridge = { port: bridge.address().port, password: "pw" };
+  try {
+    const made = (await ask("POST", "kuvo/worktrees", { project })).value;
+    bridgeSessions.push({ id: "ses_claude", title: "Fix the cart", location: { directory: made.folder } });
+    bridgeActive.add("ses_claude");
+    const busy = await link.answerWorktrees("POST", "kuvo/worktrees/remove", { path: made.root }, atEngine, undefined, atBridge);
+    assert.equal(busy.status, 409);
+    assert.match(busy.value.message, /still working/);
+    const [listed] = (await link.answerWorktrees("GET", "kuvo/worktrees", null, atEngine, undefined, atBridge)).value.worktrees.filter(each => each.path === made.root);
+    assert.equal(listed.sessions, 1);
+    assert.equal(listed.working, true);
+    // Taken back as made for nothing: not while a Claude Code session has it.
+    bridgeActive.delete("ses_claude");
+    assert.equal((await link.answerWorktrees("POST", "kuvo/worktrees/remove", { path: made.root, forget: true }, atEngine, undefined, atBridge)).status, 409);
+
+    // The bridge stopped answering: nobody can say who's there, so the worktree and its branch stay.
+    bridge.closeAllConnections();
+    await new Promise(resolve => bridge.close(resolve));
+    const unknown = await link.answerWorktrees("POST", "kuvo/worktrees/remove", { path: made.root, forget: true }, atEngine, undefined, atBridge);
+    assert.equal(unknown.status, 503);
+    assert.match(unknown.value.message, /couldn.t be told/);
+    assert.ok(fs.existsSync(made.root));
+    assert.notEqual(git(project, "branch", "--list", made.branch), "");
+
+    // No engine running: it says so, and that the worktree stays.
+    const down = await link.answerWorktrees("POST", "kuvo/worktrees/remove", { path: made.root }, undefined, undefined, atBridge);
+    assert.equal(down.status, 503);
+    assert.match(down.value.message, /engine isn.t running, so the worktree of .+ stays/);
+    assert.ok(fs.existsSync(made.root));
+
+    assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
+  } finally {
+    if (bridge.listening) { bridge.closeAllConnections(); bridge.close(); }
+  }
+});
+
+test("one whose folder was deleted by hand can still be removed", async () => {
+  const made = (await ask("POST", "kuvo/worktrees", { project })).value;
+  fs.rmSync(made.root, { recursive: true, force: true });
+  const removed = await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true });
+  assert.equal(removed.status, 200, removed.value.message);
+  assert.equal(link.readWorktrees().some(each => each.root === made.root), false);
+  assert.equal(git(project, "worktree", "list").includes(made.root), false, "git forgot it too");
+  assert.equal(git(project, "branch", "--list", made.branch), "", "made for nothing: its branch went");
+});
+
+test("commits on no branch in a worktree are kept on a branch of their own when it's removed", async () => {
+  const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  // The agent stopped mid-rebase, say: a commit on no branch.
+  git(made.root, "switch", "-q", "--detach");
+  fs.writeFileSync(path.join(made.root, "lost.txt"), "work\n");
+  git(made.root, "add", "-A");
+  git(made.root, "commit", "-q", "-m", "Work on no branch");
+  const work = git(made.root, "rev-parse", "HEAD");
+  const removed = await ask("POST", "kuvo/worktrees/remove", { path: made.root });
+  assert.equal(removed.status, 200, removed.value.message);
+  assert.equal(fs.existsSync(made.root), false);
+  const keeping = git(project, "for-each-ref", "--contains", work, "--format=%(refname:short)", "refs/heads");
+  assert.equal(keeping, `${made.branch}-kept`);
+  git(project, "branch", "-D", keeping);
+});
+
+test("a repository with no commit yet says to make one first", async () => {
+  const empty = path.join(home, "empty");
+  fs.mkdirSync(empty);
+  git(empty, "init", "-q", "-b", "main");
+  const refused = await ask("POST", "kuvo/worktrees", { project: empty });
+  assert.equal(refused.status, 409);
+  assert.match(refused.value.message, /first commit/);
+});
+
+test("a branch prefix git can't use there is named", async () => {
+  git(project, "branch", "taken");
+  const refused = await ask("POST", "kuvo/worktrees", { project, branchPrefix: "taken/" });
+  assert.equal(refused.status, 502);
+  assert.match(refused.value.message, /“taken\/”.*Settings › Git/);
+  git(project, "branch", "-D", "taken");
+  assert.equal(git(project, "worktree", "list").split("\n").length, 1 + link.readWorktrees().filter(each => each.project === project && fs.existsSync(each.root)).length, "the worktree it made for it went");
 });
 
 test("a session a phone makes in a worktree it asked for is told it works there", async () => {

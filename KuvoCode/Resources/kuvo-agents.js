@@ -18883,7 +18883,8 @@ var fileNames = (files) => (files ?? []).flatMap((file) => {
     return [file.name];
   return typeof file.uri === "string" && !file.uri.startsWith("data:") ? [path3.basename(decodeURIComponent(file.uri.replace(/^file:\/\//, "")))] : ["file"];
 });
-function keepWaiting(files, session, message, { from, words, kept: keptText } = {}, changed) {
+var last2 = (state, item) => ({ ...state, waiting: [...state.waiting ?? [], item] });
+function keepWaiting(files, session, message, { from, words, kept: keptText } = {}, changed, place = last2) {
   let kept = false;
   changeQueue(files, session, (state) => {
     if (!state.paused)
@@ -18892,7 +18893,7 @@ function keepWaiting(files, session, message, { from, words, kept: keptText } = 
     kept = true;
     const names = fileNames(message.files);
     const waiting = { id: message.id, ...from ? { from } : {}, text: words ?? message.text, ...names.length ? { files: names } : {}, at: Date.now() };
-    return { ...state, waiting: [...(state.waiting ?? []).filter((each) => each.id !== message.id), waiting] };
+    return place({ ...state, waiting: (state.waiting ?? []).filter((each) => each.id !== message.id) }, waiting);
   }, changed);
   return kept;
 }
@@ -22437,4 +22438,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 70cd2a176ee0db10414c049bf394b991ad16955ca2a6256dcaea1da30bd0a3e8
+// Built from Packages/Box/src/agents 51235a09bcc0f60a98210b3a17cf9d442bc489cb1e1a933967c3de3346372428

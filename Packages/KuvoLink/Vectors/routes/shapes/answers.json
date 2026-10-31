@@ -5085,7 +5085,26 @@
            "path": "string"
           }
          },
-         "machine?": "string"
+         "machine?": "string",
+         "owner?": {
+          "object": {
+           "kind": {
+            "oneOf": [
+             {
+              "literal": "project"
+             },
+             {
+              "literal": "bot"
+             },
+             {
+              "literal": "chats"
+             }
+            ]
+           },
+           "id?": "string",
+           "name": "string"
+          }
+         }
         }
        }
       },
@@ -5121,7 +5140,48 @@
          },
          "path": "string",
          "at": "number",
-         "by?": "string"
+         "by?": "string",
+         "owner?": {
+          "object": {
+           "kind": {
+            "oneOf": [
+             {
+              "literal": "project"
+             },
+             {
+              "literal": "bot"
+             },
+             {
+              "literal": "chats"
+             }
+            ]
+           },
+           "id?": "string",
+           "name": "string"
+          }
+         },
+         "gone?": "bool"
+        }
+       }
+      },
+      "owners?": {
+       "list": {
+        "object": {
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "project"
+           },
+           {
+            "literal": "bot"
+           },
+           {
+            "literal": "chats"
+           }
+          ]
+         },
+         "id?": "string",
+         "name": "string"
         }
        }
       }
@@ -5148,7 +5208,48 @@
          },
          "path": "string",
          "at": "number",
-         "by?": "string"
+         "by?": "string",
+         "owner?": {
+          "object": {
+           "kind": {
+            "oneOf": [
+             {
+              "literal": "project"
+             },
+             {
+              "literal": "bot"
+             },
+             {
+              "literal": "chats"
+             }
+            ]
+           },
+           "id?": "string",
+           "name": "string"
+          }
+         },
+         "gone?": "bool"
+        }
+       }
+      },
+      "owners?": {
+       "list": {
+        "object": {
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "project"
+           },
+           {
+            "literal": "bot"
+           },
+           {
+            "literal": "chats"
+           }
+          ]
+         },
+         "id?": "string",
+         "name": "string"
         }
        }
       }
@@ -5175,7 +5276,48 @@
          },
          "path": "string",
          "at": "number",
-         "by?": "string"
+         "by?": "string",
+         "owner?": {
+          "object": {
+           "kind": {
+            "oneOf": [
+             {
+              "literal": "project"
+             },
+             {
+              "literal": "bot"
+             },
+             {
+              "literal": "chats"
+             }
+            ]
+           },
+           "id?": "string",
+           "name": "string"
+          }
+         },
+         "gone?": "bool"
+        }
+       }
+      },
+      "owners?": {
+       "list": {
+        "object": {
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "project"
+           },
+           {
+            "literal": "bot"
+           },
+           {
+            "literal": "chats"
+           }
+          ]
+         },
+         "id?": "string",
+         "name": "string"
         }
        }
       }
@@ -5601,7 +5743,8 @@
          ]
         },
         "from?": "string",
-        "words": "string"
+        "words": "string",
+        "before?": "string"
        }
       }
      }

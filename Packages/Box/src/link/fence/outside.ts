@@ -20,7 +20,7 @@ import { askBook } from "../notices/asking";
 import type { Notice } from "../notices/notice";
 import { commandEnv, runCommand } from "../run-command";
 import type { Caller } from "../vault/who";
-import { addRule, writeRuleWouldBe } from "./allowed";
+import { addRule, ownerOf, writeRuleWouldBe } from "./allowed";
 
 /** Your answer, and who gave it: "Mac", or a phone's name. */
 export interface SandboxAnswer {
@@ -172,6 +172,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
     ...(error ? { error } : {}),
     ...(always ? { always } : {}),
     ...(IS_MAC ? {} : { machine: os.hostname() }),
+    owner: ownerOf(project),
   }, signal);
   if (answered.unanswered) return { text: "Nobody answered in time, so it didn't run. Don't get around the sandbox another way: go on without it, or ask the user when they're back.", isError: false };
   if (answered.answer === "no") return { text: "The user said no: don't run it, nor get around the sandbox another way. Find another way to do the task, or ask them why.", isError: false };

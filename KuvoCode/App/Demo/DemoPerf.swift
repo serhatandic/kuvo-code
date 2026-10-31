@@ -46,7 +46,14 @@ enum DemoPerf {
         let by = environment["KUVO_PERF_SWITCH_BY"].map { $0.split(separator: ",").compactMap { Int($0) } } ?? [1]
         let sidebar = (ScrollFrameMonitor.sidebarBodies, ScrollFrameMonitor.sidebarRowBodies)
         for step in 0..<count {
-            app.tabs.cycle(by: by[step % by.count])
+            // KUVO_PERF_SWITCH_PLAIN: without the animation ⌃Tab and a click switch with, to tell
+            // what it costs.
+            if environment["KUVO_PERF_SWITCH_PLAIN"] != nil, !app.tabs.keys.isEmpty {
+                let index = app.tabs.selection.flatMap { app.tabs.keys.firstIndex(of: $0) } ?? 0
+                app.tabs.selection = app.tabs.keys[(index + by[step % by.count] + app.tabs.keys.count) % app.tabs.keys.count]
+            } else {
+                app.tabs.cycle(by: by[step % by.count])
+            }
             await DemoWait.pause(.step(.milliseconds(1500)))
             if check, let id = app.tabs.selection?.text, let model = app.workspace.model(for: id),
                let editor = NSApp.windows.lazy.compactMap({ $0.firstResponder as? NSTextView }).first(where: { $0.isFieldEditor || $0 is MessageTextView }) {

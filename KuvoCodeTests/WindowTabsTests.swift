@@ -78,7 +78,7 @@ import Testing
 
     /// A conversation deleted while one of its subagents shows in its tab (its own subagent's
     /// too): the tab goes with it, rather than showing a subagent of a conversation that's gone.
-    @Test func deletingAConversationClosesItsSubagentsTab() async {
+    @Test func deletingAConversationClosesItsSubagentsTab() async throws {
         defer { done() }
         engine.list([
             StubEngine.session("ses_a", title: "ses_a", directory: folder),
@@ -94,7 +94,7 @@ import Testing
         tabs.openInPlace("ses_deep")
         #expect(keys == ["ses_a", "ses_deep"])
 
-        await app.workspace.delete("ses_timer")
+        try await app.workspace.delete("ses_timer")
         // (As the window does when the list changes.)
         tabs.dropClosed()
         #expect(keys == ["ses_a"])
