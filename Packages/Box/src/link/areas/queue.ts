@@ -3,6 +3,8 @@
 // Send Now, and a client's own message to wait with it.
 
 import { isObject, parsed } from "../../shared/json";
+import { MOVING } from "../bots/here";
+import { frozen } from "../moves/records";
 import { followed } from "../follow";
 import { placeOfSession } from "../letters/letter";
 import { targetsOf } from "../letters/tools";
@@ -37,6 +39,8 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
     if (method !== "GET") return yield* json(405, {});
     return yield* json(200, shownQueue(queueOf(session)));
   }
+  // One moving to or from another computer: what waits for it goes as it was read for the move.
+  if (frozen().has(session)) return yield* json(409, { message: MOVING });
   if (item && !now) {
     if (method !== "DELETE") return yield* json(405, {});
     // (The engine's inbox, for what came after it; none when it can't be read.)

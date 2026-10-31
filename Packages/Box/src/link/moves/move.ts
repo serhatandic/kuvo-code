@@ -21,7 +21,7 @@ import { askGroups } from "../areas/groups";
 import { botHere, MOVING } from "../bots/here";
 import { settleBot } from "../bots/tell";
 import { call, readBridgeFile, readEngineFile } from "../engine/client";
-import { forgetQueue, packQueues, resumeQueue, unpackQueues } from "../engine/queue";
+import { forgetQueue, packQueues, queueOf, resumeQueue, unpackQueues } from "../engine/queue";
 import { writePrivate } from "../files";
 import { HERE, IS_MAC, K } from "../home";
 import { readPeerAgents } from "../peers/directory";
@@ -328,12 +328,13 @@ function unhold(folder: string | undefined, wasPaused: boolean, pausedAs?: strin
   } catch {}
 }
 
-/** Until none of its conversations is at work and nothing waits to go to them: a minute at most. */
+/** Until none of its conversations is at work and nothing waits to go to them: a minute at most.
+ * What the engine holds for one you stopped waits for Resume, and goes with it (`packQueues`). */
 async function settle(engine: Target, sessions: readonly string[], name: string): Promise<void> {
   for (let tries = 0; tries < SETTLE_FOR; tries++) {
     const active = await call(engine, "GET", "/api/session/active").catch(() => ({}));
     const busy = isObject(active) && sessions.some(session => session in active);
-    const inbox = sessions[0] ? await call(engine, "GET", `/api/session/${encodeURIComponent(sessions[0])}/inbox`).catch(() => []) : [];
+    const inbox = sessions[0] && !queueOf(sessions[0]).paused ? await call(engine, "GET", `/api/session/${encodeURIComponent(sessions[0])}/inbox`).catch(() => []) : [];
     if (!busy && !(Array.isArray(inbox) && inbox.length)) return;
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
@@ -347,9 +348,10 @@ class Refused extends Error {
 }
 
 /** What a move carries of its conversations, to see whether anything changed as it went: their
- * messages, word for word (`conversationHash`), and their queues (what waits for them on the box). */
-const fingerprint = (exports: unknown[], sessions: readonly string[]): string =>
-  `${conversationHash(exports)}.${crypto.createHash("sha256").update(JSON.stringify(packQueues(sessions))).digest("base64url")}`;
+ * messages, word for word (`conversationHash`), and their queues (what waits for them), but when
+ * each was read as waiting. */
+const fingerprint = (exports: unknown[], queues: Record<string, unknown>): string =>
+  `${conversationHash(exports)}.${crypto.createHash("sha256").update(JSON.stringify(queues, (key, value) => key === "at" ? undefined : value)).digest("base64url")}`;
 
 // What the box it leaves has of each move in memory: the parts the other box has, and those on
 // their way (by when they went).
@@ -362,6 +364,7 @@ async function carryOn(id: string): Promise<void> {
   hold(record);
   saveMove(record);
   let exports: unknown[] = [];
+  let queues: Record<string, unknown> = {};
   const contents: Contents = { kind: record.kind, thing: record.thing, name: record.name, exports, wasPaused: record.wasPaused };
   if (record.kind === "group") {
     contents.group = await groupAction(readBridgeFile(), record.thing, "hold") as Contents["group"];
@@ -373,8 +376,8 @@ async function carryOn(id: string): Promise<void> {
     exports = await exportAll(engine, record.sessions[0]);
     contents.exports = exports;
     record.sessions = idsOf(exports);
-    // A conversation you stopped goes stopped, with what waits for it on this box.
-    const queues = packQueues(record.sessions);
+    // A conversation you stopped goes stopped, with what waits for it, here and in the engine.
+    queues = await packQueues(engine, record.sessions);
     if (Object.keys(queues).length) contents.queues = queues;
     if (record.folder) contents.folder = path.basename(record.folder);
     if (record.kind === "bot") {
@@ -388,7 +391,7 @@ async function carryOn(id: string): Promise<void> {
   // Taken back meanwhile (as the box started again): it stays taken back.
   const still = readMove(id);
   if (!still || still.failed || still.stage !== "holding") return;
-  outgoing.set(id, { got: new Set(), flying: new Map(), exports: fingerprint(exports, record.sessions) });
+  outgoing.set(id, { got: new Set(), flying: new Map(), exports: fingerprint(exports, queues) });
   const now = changeMove(id, each => {
     Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now() });
   });
@@ -433,7 +436,7 @@ async function arrived(record: MoveRecord): Promise<void> {
     const before = outgoing.get(record.id)?.exports;
     // Taken back meanwhile (its copy there couldn't be set up, or it took too long): nothing more.
     if (!still()) return;
-    if (!before || fingerprint(again, record.sessions) !== before) {
+    if (!before || fingerprint(again, await packQueues(engine, record.sessions)) !== before) {
       if (record.tries >= 2) throw new Refused(say.busy(record.name));
       changeMove(record.id, each => { each.tries += 1; each.stage = "holding"; each.step = undefined; });
       return drive(record.id);

@@ -6,7 +6,7 @@ import crypto34 from "node:crypto";
 import fs80 from "node:fs";
 import os13 from "node:os";
 import path81 from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // Packages/Box/src/shared/text.ts
 import crypto from "node:crypto";
@@ -727,6 +727,7 @@ function changeDescription(folder, change) {
 // Packages/Box/src/link/engine/queue.ts
 import fs8 from "node:fs";
 import path7 from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Packages/Box/src/link/engine/sessions.ts
 import crypto3 from "node:crypto";
@@ -943,21 +944,84 @@ function carryQueue(from, to, renamed) {
 }
 var CARRIED_FILE = path7.join(RUN, "queues-carried.json");
 var MOST_CARRIED = 300;
-function packQueues(sessions) {
+var CARRIED_FILE_BYTES = 20 * 1024 * 1024;
+var FILE_TYPES = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".heic": "image/heic",
+  ".pdf": "application/pdf",
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".json": "application/json"
+};
+function carriedFiles(given) {
+  return (Array.isArray(given) ? given : []).flatMap((file) => {
+    if (!isObject(file))
+      return [];
+    const name = typeof file.name === "string" ? { name: file.name } : {};
+    const uri = isObject(file.source) && typeof file.source.uri === "string" ? file.source.uri : file.uri;
+    const type = typeof file.mime === "string" && file.mime ? file.mime : null;
+    if (typeof uri === "string" && uri.startsWith("data:"))
+      return [{ uri, ...name }];
+    if (typeof file.data === "string")
+      return [{ uri: `data:${type ?? "application/octet-stream"};base64,${file.data}`, ...name }];
+    if (typeof uri !== "string" || !uri.startsWith("file:"))
+      return [];
+    try {
+      const at = fileURLToPath(uri);
+      if (fs8.statSync(at).size > CARRIED_FILE_BYTES)
+        return [];
+      const bytes = fs8.readFileSync(at);
+      return [{ uri: `data:${type ?? FILE_TYPES[path7.extname(at).toLowerCase()] ?? "application/octet-stream"};base64,${bytes.toString("base64")}`, name: name.name ?? path7.basename(at) }];
+    } catch {
+      return [];
+    }
+  });
+}
+function shownOfHeld(text) {
+  const mail = /^\[Message from (.*) · (?:ses_\S+|unknown)\] \([^\n]*\)\n\n([\s\S]*)$/.exec(text);
+  if (mail)
+    return { from: mail[1], words: mail[2] };
+  if (text.startsWith("[Wake-up] "))
+    return { from: "Wake-up", words: text.slice("[Wake-up] ".length) };
+  return {};
+}
+var fileNamesOf = (carried) => carried.map((file) => file.name ?? "file");
+async function packQueues(target, sessions) {
   const all = readQueues2();
   const packed = {};
   for (const session of sessions) {
     const state = all[session];
     if (!state || !state.paused && !state.waiting?.length)
       continue;
-    const waiting = (state.waiting ?? []).map((shown) => {
-      let message = null;
-      try {
-        message = JSON.parse(fs8.readFileSync(waitingFile2(shown.id), "utf8"));
-      } catch {}
-      return { shown, message };
+    const inbox = state.paused ? await inboxOf(target, session) : [];
+    const renamed = {};
+    const waiting = orderOf(inbox, state).flatMap((id) => {
+      const shown = state.waiting?.find((each) => each.id === id);
+      if (shown) {
+        let message = null;
+        try {
+          message = JSON.parse(fs8.readFileSync(waitingFile2(id), "utf8"));
+        } catch {}
+        return [{ shown, message: isObject(message) ? { ...message, ...Array.isArray(message.files) ? { files: carriedFiles(message.files) } : {} } : null }];
+      }
+      const held = inbox.find((item) => item.id === id);
+      const text = typeof held?.text === "string" ? held.text : typeof held?.payload?.text === "string" ? held.payload.text : null;
+      if (!held || held.type !== "user" || text === null)
+        return [];
+      const ownID = /^msg_[A-Za-z0-9]{1,80}$/.test(id) ? id : renamed[id] = messageID();
+      const carried = carriedFiles(held.payload?.files);
+      const { from, words } = shownOfHeld(text);
+      return [{
+        shown: { id: ownID, ...from ? { from } : {}, text: words ?? text, ...carried.length ? { files: fileNamesOf(carried) } : {}, at: Date.now() },
+        message: { id: ownID, text, delivery: "queue", ...carried.length ? { files: carried } : {} }
+      }];
     });
-    packed[session] = { paused: state.paused, held: state.held.filter((id) => waiting.some((each) => each.shown.id === id)), waiting };
+    const ids = new Set(waiting.map((each) => each.shown.id));
+    packed[session] = { paused: state.paused, held: state.held.map((id) => renamed[id] ?? id).filter((id) => ids.has(id)), waiting };
   }
   return packed;
 }
@@ -969,13 +1033,15 @@ function unpackQueues(carried, sessions) {
     const queue = carried[session];
     if (!isObject(queue))
       continue;
+    forgetQueue(session);
     const waiting = [];
     for (const each of Array.isArray(queue.waiting) ? queue.waiting : []) {
       const [shown] = keptWaiting([isObject(each) ? each.shown : null]);
       const message = isObject(each) && isObject(each.message) ? each.message : null;
       if (!shown || !message || typeof message.text !== "string" || waiting.some((other) => other.id === shown.id))
         continue;
-      writePrivate(waitingFile2(shown.id), JSON.stringify({ id: shown.id, text: message.text, delivery: message.delivery === "steer" ? "steer" : "queue", ...Array.isArray(message.files) ? { files: message.files } : {} }));
+      const brought = (Array.isArray(message.files) ? message.files : []).flatMap((file) => isObject(file) && typeof file.uri === "string" && /^data:[^,]*;base64,/.test(file.uri) ? [{ uri: file.uri, ...typeof file.name === "string" ? { name: file.name } : {} }] : []);
+      writePrivate(waitingFile2(shown.id), JSON.stringify({ id: shown.id, text: message.text, delivery: message.delivery === "steer" ? "steer" : "queue", ...brought.length ? { files: brought } : {} }));
       waiting.push(shown);
     }
     const held = (Array.isArray(queue.held) ? queue.held : []).filter((id) => typeof id === "string" && waiting.some((each) => each.id === id));
@@ -12032,7 +12098,7 @@ async function settle(engine, sessions, name) {
   for (let tries = 0;tries < SETTLE_FOR; tries++) {
     const active = await call(engine, "GET", "/api/session/active").catch(() => ({}));
     const busy = isObject(active) && sessions.some((session) => (session in active));
-    const inbox = sessions[0] ? await call(engine, "GET", `/api/session/${encodeURIComponent(sessions[0])}/inbox`).catch(() => []) : [];
+    const inbox = sessions[0] && !queueOf(sessions[0]).paused ? await call(engine, "GET", `/api/session/${encodeURIComponent(sessions[0])}/inbox`).catch(() => []) : [];
     if (!busy && !(Array.isArray(inbox) && inbox.length))
       return;
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -12047,7 +12113,7 @@ class Refused extends Error {
     this.status = status;
   }
 }
-var fingerprint = (exports, sessions) => `${conversationHash(exports)}.${crypto20.createHash("sha256").update(JSON.stringify(packQueues(sessions))).digest("base64url")}`;
+var fingerprint = (exports, queues) => `${conversationHash(exports)}.${crypto20.createHash("sha256").update(JSON.stringify(queues, (key, value) => key === "at" ? undefined : value)).digest("base64url")}`;
 var outgoing = new Map;
 async function carryOn(id) {
   const record = readMove(id);
@@ -12056,6 +12122,7 @@ async function carryOn(id) {
   hold2(record);
   saveMove(record);
   let exports = [];
+  let queues = {};
   const contents = { kind: record.kind, thing: record.thing, name: record.name, exports, wasPaused: record.wasPaused };
   if (record.kind === "group") {
     contents.group = await groupAction(readBridgeFile(), record.thing, "hold");
@@ -12067,7 +12134,7 @@ async function carryOn(id) {
     exports = await exportAll(engine, record.sessions[0]);
     contents.exports = exports;
     record.sessions = idsOf(exports);
-    const queues = packQueues(record.sessions);
+    queues = await packQueues(engine, record.sessions);
     if (Object.keys(queues).length)
       contents.queues = queues;
     if (record.folder)
@@ -12086,7 +12153,7 @@ async function carryOn(id) {
   const still = readMove(id);
   if (!still || still.failed || still.stage !== "holding")
     return;
-  outgoing.set(id, { got: new Set, flying: new Map, exports: fingerprint(exports, record.sessions) });
+  outgoing.set(id, { got: new Set, flying: new Map, exports: fingerprint(exports, queues) });
   const now = changeMove(id, (each) => {
     Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now() });
   });
@@ -12131,7 +12198,7 @@ async function arrived(record) {
     const before = outgoing.get(record.id)?.exports;
     if (!still())
       return;
-    if (!before || fingerprint(again, record.sessions) !== before) {
+    if (!before || fingerprint(again, await packQueues(engine, record.sessions)) !== before) {
       if (record.tries >= 2)
         throw new Refused(say.busy(record.name));
       changeMove(record.id, (each) => {
@@ -17535,7 +17602,7 @@ import path68 from "node:path";
 // Packages/Box/src/link/areas/file.ts
 import fs65 from "node:fs";
 import path67 from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 var FILE_LIMIT = 25 * 1024 * 1024;
 var TYPES = {
   png: "image/png",
@@ -17565,7 +17632,7 @@ async function* fileAt(requestPath, json) {
   const max = Number(asked.get("max") ?? FILE_LIMIT);
   let file;
   try {
-    file = uri ? fileURLToPath(uri) : undefined;
+    file = uri ? fileURLToPath2(uri) : undefined;
   } catch {}
   if (!file)
     return yield* json(400, { message: "That isn’t a file:// address." });
@@ -18271,6 +18338,8 @@ async function* queueRoute(context, match) {
       return yield* json(405, {});
     return yield* json(200, shownQueue(queueOf(session)));
   }
+  if (frozen().has(session))
+    return yield* json(409, { message: MOVING });
   if (item && !now) {
     if (method !== "DELETE")
       return yield* json(405, {});
@@ -21485,7 +21554,7 @@ function serveBox(password, handle = engineHandler(readEngineFile, { name: os12.
 }
 
 // Packages/Box/src/link/main.ts
-scriptIs(fileURLToPath2(import.meta.url));
+scriptIs(fileURLToPath3(import.meta.url));
 onDocsChanged(macDocsChanged);
 onLinkWritten((link) => {
   if (IS_MAC) {
@@ -21730,7 +21799,7 @@ async function box(command) {
         return say({ status: 409, message: blocked });
       if (isUpdating())
         return say({ status: 409, message: "It's updating already." });
-      spawn10(process.execPath, [...OWN_RUNTIME, fileURLToPath2(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+      spawn10(process.execPath, [...OWN_RUNTIME, fileURLToPath3(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
       return say({ status: 202, ...updateStatus(), updating: "checking" });
     }
     case "route": {
@@ -22035,7 +22104,7 @@ function selftest() {
   const ok = said.toString() === "hello" && payload.toString() === "welcome" && echoed.toString() === "ping" && mail.toString() === "mail" && responder.rs.equals(publicOf(phone)) && typeof WebSocket === "function" && typeof fetch === "function";
   return ok;
 }
-var main = process.argv[1] && fs80.realpathSync(process.argv[1]) === fs80.realpathSync(fileURLToPath2(import.meta.url));
+var main = process.argv[1] && fs80.realpathSync(process.argv[1]) === fs80.realpathSync(fileURLToPath3(import.meta.url));
 if (main) {
   const [mode, argument] = process.argv.slice(2);
   if (mode === "run")

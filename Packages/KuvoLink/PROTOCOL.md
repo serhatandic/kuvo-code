@@ -411,18 +411,20 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   its way, for a client to show how far it is. `away`: conversations this box's engine lists that don't live here (a copy not
   switched to yet, an original still going): clients leave them out.
 - While it moves, nothing reaches it: a prompt to one of its conversations through the link answers
-  `409 {message}`, a letter `retry`, its wake-ups and watches are held (`paused` says `moving`), and
+  `409 {message}`, as does a change to its queue (`…/stop`, `…/queue/…`; reading it still works), a letter `retry`, its wake-ups and watches are held (`paused` says `moving`), and
   changing or deleting the bot answers `409`. A client shows it as moving.
 
 Between the boxes, each `{"move": {op, id, …}}` (`id`: `mov_…`), each step sent again each minute
 until it's answered:
 
 1. The box it leaves holds it, waits until its conversations are settled (no turn running, nothing
-   in their inbox; a minute at most), and packs one file: `move.json` (its conversations as the
+   in their inbox but what a Stop held there; a minute at most), and packs one file: `move.json` (its conversations as the
    engine exports them, root first; a bot's own keys; a group chat as its bridge held it, `POST
    api/kuvo/groups/<id>/hold`; `queues`, by conversation, each one paused or with something
    waiting on the box ("The queue"), bridge 0.9.134: `{paused, held, waiting: [{shown, message}]}`,
-   what waits as it's shown and whole, in its order) and its folder (a bot's; a chat's wake-ups'),
+   what waits as it's shown and whole, in the order it would go: what waits on the box, and for one
+   paused, what its engine held, carried as one waiting on the box; each file a message brings as
+   a `data:` link with what's in it, read on this box, or left out) and its folder (a bot's; a chat's wake-ups'),
    tar, gzip; at most 1 GB.
 2. `offer {kind, thing, name, size, hash, wasPaused, pausedAs?, from, members?}` → `ready`, or
    `refused {message}`: its engine or group chats aren't running, too big, a group chat's bots
@@ -439,8 +441,8 @@ until it's answered:
    in it or for it, or a `move.json` that isn't a file of its own, and it's refused), `paused` saying `moving`,
    a chat's `directory` its chats folder; each conversation imported under its own ID (noted first;
    they must be one conversation and its subagents', rooted at the chat or at the conversation a
-   bot's folder names, none of them on this box already); their `queues` kept paused (what waits,
-   whole, in its order); a bot's keys given; a group chat put there
+   bot's folder names, none of them on this box already); their `queues` kept paused in place of
+   any there (what waits, whole, in its order; a file only as a `data:` link); a bot's keys given; a group chat put there
    held (`PUT api/kuvo/groups/<id>`, `status: "held"`). → `arrived`, or `failed {message}`, what it
    set up gone again; the message says only what's wrong with what came, never what this box found.
    Setting it up for 30 minutes (its engine stuck) is given up on the same way.

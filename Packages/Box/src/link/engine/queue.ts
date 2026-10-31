@@ -9,6 +9,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isObject } from "../../shared/json";
 import { locked, writePrivate } from "../files";
 import { RUN } from "../home";
@@ -29,10 +30,14 @@ export const WAITING_DIR = FILES.waiting;
  * may still be handing over what it had. */
 export const DRAIN_AFTER = 1500;
 
-/** A message in a session's inbox, as far as the queue reads it. */
+/** A message in a session's inbox, as far as the queue reads it (and a move carries it): what it
+ * says and the files it brings, in the engine's form. */
 interface InboxEntry {
   id: string;
   delivery: "steer" | "queue";
+  type?: string;
+  text?: unknown;
+  payload?: { text?: unknown; files?: unknown };
 }
 
 /** A queue as a client reads it. */
@@ -176,48 +181,112 @@ const CARRIED_FILE = path.join(RUN, "queues-carried.json");
 const MOST_CARRIED = 300;
 
 /** What waits for a conversation, as a move carries it to another box (`move.json`'s `queues`):
- * whether it's paused, what's held of what waits on the box, and what waits, as it's shown and
- * whole, in its order. */
+ * whether it's paused, what's held, and what waits (on the box, and what the engine held for it), as
+ * it's shown and whole, in its order. */
 export interface CarriedQueue {
   paused: boolean;
   held: string[];
   waiting: { shown: Waiting; message: unknown }[];
 }
 
+// What a file a carried message brings can weigh (as a model reads one, `attachedIn`'s); a
+// bigger one stays behind.
+const CARRIED_FILE_BYTES = 20 * 1024 * 1024;
+const FILE_TYPES: Record<string, string> = {
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".heic": "image/heic",
+  ".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown", ".json": "application/json",
+};
+
+/** The files a message brings (as a prompt takes them, or the engine's inbox keeps them), as
+ * another box can open them: each with what's in it, as a `data:` link; a file of this box's read
+ * now. One that can't be read here, or is too big, stays behind. */
+function carriedFiles(given: unknown): { uri: string; name?: string }[] {
+  return (Array.isArray(given) ? given : []).flatMap(file => {
+    if (!isObject(file)) return [];
+    const name = typeof file.name === "string" ? { name: file.name } : {};
+    const uri = isObject(file.source) && typeof file.source.uri === "string" ? file.source.uri : file.uri;
+    const type = typeof file.mime === "string" && file.mime ? file.mime : null;
+    if (typeof uri === "string" && uri.startsWith("data:")) return [{ uri, ...name }];
+    if (typeof file.data === "string") return [{ uri: `data:${type ?? "application/octet-stream"};base64,${file.data}`, ...name }];
+    if (typeof uri !== "string" || !uri.startsWith("file:")) return [];
+    try {
+      const at = fileURLToPath(uri);
+      if (fs.statSync(at).size > CARRIED_FILE_BYTES) return [];
+      const bytes = fs.readFileSync(at);
+      return [{ uri: `data:${type ?? FILE_TYPES[path.extname(at).toLowerCase()] ?? "application/octet-stream"};base64,${bytes.toString("base64")}`, name: name.name ?? path.basename(at) }];
+    } catch {
+      return [];
+    }
+  });
+}
+
+/** How a message the engine held is shown waiting (as one the box kept would be): another agent's
+ * letter or a wake-up by who it's from, in its own words; yours as it is. */
+function shownOfHeld(text: string): Shown {
+  const mail = /^\[Message from (.*) · (?:ses_\S+|unknown)\] \([^\n]*\)\n\n([\s\S]*)$/.exec(text);
+  if (mail) return { from: mail[1], words: mail[2] };
+  if (text.startsWith("[Wake-up] ")) return { from: "Wake-up", words: text.slice("[Wake-up] ".length) };
+  return {};
+}
+
+const fileNamesOf = (carried: { name?: string }[]): string[] => carried.map(file => file.name ?? "file");
+
 /** The queues of `sessions` that are paused or have something waiting on the box, for a move
- * (`unpackQueues` sets them up on the box it goes to). What the engine held isn't among them: a
- * move goes once its inbox is empty. */
-export function packQueues(sessions: readonly string[]): Record<string, CarriedQueue> {
+ * (`unpackQueues` sets them up on the box it goes to): what waits on the box, and for one that's
+ * paused, what its engine (`target`) held, in the order they'd go (`orderOf`), with their files.
+ * One not paused has nothing in the engine by then (a move waits for its inbox to empty). */
+export async function packQueues(target: Target, sessions: readonly string[]): Promise<Record<string, CarriedQueue>> {
   const all = readQueues();
   const packed: Record<string, CarriedQueue> = {};
   for (const session of sessions) {
     const state = all[session];
     if (!state || (!state.paused && !state.waiting?.length)) continue;
-    const waiting = (state.waiting ?? []).map(shown => {
-      let message: unknown = null;
-      try { message = JSON.parse(fs.readFileSync(waitingFile(shown.id), "utf8")); } catch {}
-      return { shown, message };
+    const inbox = state.paused ? await inboxOf(target, session) : [];
+    const renamed: Record<string, string> = {};
+    const waiting = orderOf(inbox, state).flatMap(id => {
+      const shown = state.waiting?.find(each => each.id === id);
+      if (shown) {
+        let message: unknown = null;
+        try { message = JSON.parse(fs.readFileSync(waitingFile(id), "utf8")); } catch {}
+        return [{ shown, message: isObject(message) ? { ...message, ...(Array.isArray(message.files) ? { files: carriedFiles(message.files) } : {}) } : null }];
+      }
+      // One the engine held: waiting on the box there, as one kept here would.
+      const held = inbox.find(item => item.id === id);
+      const text = typeof held?.text === "string" ? held.text : typeof held?.payload?.text === "string" ? held.payload.text : null;
+      if (!held || held.type !== "user" || text === null) return [];
+      const ownID = /^msg_[A-Za-z0-9]{1,80}$/.test(id) ? id : (renamed[id] = messageID());
+      const carried = carriedFiles(held.payload?.files);
+      const { from, words } = shownOfHeld(text);
+      return [{
+        shown: { id: ownID, ...(from ? { from } : {}), text: words ?? text, ...(carried.length ? { files: fileNamesOf(carried) } : {}), at: Date.now() },
+        message: { id: ownID, text, delivery: "queue", ...(carried.length ? { files: carried } : {}) },
+      }];
     });
-    packed[session] = { paused: state.paused, held: state.held.filter(id => waiting.some(each => each.shown.id === id)), waiting };
+    const ids = new Set(waiting.map(each => each.shown.id));
+    packed[session] = { paused: state.paused, held: state.held.map(id => renamed[id] ?? id).filter(id => ids.has(id)), waiting };
   }
   return packed;
 }
 
 /** The queues a move brought (`packQueues`'s), for `sessions` only, kept here paused while its copy
- * is held: what waits, whole, in its order (one whose contents didn't come, left out). The
- * sessions whose queue went on where it came from, to go on here once it's switched to. */
+ * is held, in place of any it had: what waits, whole, in its order (one whose contents didn't come,
+ * left out; a file only with what's in it). The sessions whose queue went on where it came from, to
+ * go on here once it's switched to. */
 export function unpackQueues(carried: unknown, sessions: readonly string[]): string[] {
   if (!isObject(carried)) return [];
   const goOn: string[] = [];
   for (const session of sessions) {
     const queue = carried[session];
     if (!isObject(queue)) continue;
+    forgetQueue(session);
     const waiting: Waiting[] = [];
     for (const each of Array.isArray(queue.waiting) ? queue.waiting : []) {
       const [shown] = files.keptWaiting([isObject(each) ? each.shown : null]);
       const message = isObject(each) && isObject(each.message) ? each.message : null;
       if (!shown || !message || typeof message.text !== "string" || waiting.some(other => other.id === shown.id)) continue;
-      writePrivate(waitingFile(shown.id), JSON.stringify({ id: shown.id, text: message.text, delivery: message.delivery === "steer" ? "steer" : "queue", ...(Array.isArray(message.files) ? { files: message.files } : {}) }));
+      const brought = (Array.isArray(message.files) ? message.files : []).flatMap(file => isObject(file) && typeof file.uri === "string" && /^data:[^,]*;base64,/.test(file.uri)
+        ? [{ uri: file.uri, ...(typeof file.name === "string" ? { name: file.name } : {}) }] : []);
+      writePrivate(waitingFile(shown.id), JSON.stringify({ id: shown.id, text: message.text, delivery: message.delivery === "steer" ? "steer" : "queue", ...(brought.length ? { files: brought } : {}) }));
       waiting.push(shown);
     }
     const held = (Array.isArray(queue.held) ? queue.held : []).filter((id): id is string => typeof id === "string" && waiting.some(each => each.id === id));
