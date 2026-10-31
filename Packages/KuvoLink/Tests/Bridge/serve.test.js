@@ -93,6 +93,22 @@ test("a stream goes as it comes, and stops when the client goes", async t => {
   while (!stopped) await new Promise(resolve => setImmediate(resolve));
 });
 
+test("an answer cut off as it comes (the engine gone halfway) reaches the app cut off, not as a whole one", async t => {
+  const handle = async function* () {
+    yield { head: { status: 200, headers: { "content-type": "application/json" } } };
+    yield { body: Buffer.from('{"sessions": [') };
+    throw new Error("The engine went.");
+  };
+  const server = link.serveBox("pw", handle);
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  // (Node's fetch has its head first, Bun's may not: either way it never reads as whole.)
+  await assert.rejects(async () => {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/session`, { headers: { authorization: auth("pw") } });
+    await response.text();
+  });
+});
+
 test("the app's own requests aren't a phone using the box; a phone's, through the Mac, are", async t => {
   const server = link.serveBox("pw");
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));

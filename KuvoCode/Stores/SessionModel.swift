@@ -992,7 +992,7 @@ final class SessionModel {
                 // Removed meanwhile: it doesn't go.
                 guard outgoing[id]?.state == .sending else { return }
                 // Moving to another computer: back in the composer, to send once it's there.
-                if Moves.isFrozen(self.id) { throw Moves.Failure.moving }
+                try Moves.checkNotMoving(self.id)
                 // Held while it was on its way: to the queue, not the next step.
                 let asked: InboxItem.Delivery = outgoing[id]?.heldAt != nil ? .queue : delivery
                 // For after this run: to the box, which holds it while the queue is paused, as anything
@@ -1058,12 +1058,18 @@ final class SessionModel {
     /// engine would take the message and drop it without a word. A "!" command needs no model.
     func submitDraft(for model: Model?, queue: Bool, commands: [Command], unavailable: String? = nil) {
         failure = nil
+        // Carrying on with the coding agents: it stays in the composer, and goes along with it.
+        if Moves.toAgents.contains(id) {
+            failure = Moves.Failure.movingToAgents.localizedDescription
+            return
+        }
         // (Nor does pausing, resuming or taking away a goal.)
         if let unavailable, Self.shellCommand(in: draftText) == nil, GoalCommand(draftText)?.needsModel ?? true {
             failure = unavailable
             return
         }
         // A "!" or "/" command runs as typed; what you were replying to waits for a message.
+        let commands = Keyword.commands(commands, keywords: keywords)
         let isCommand = Self.shellCommand(in: draftText) != nil || SlashCommands.parse(draftText, commands: commands) != nil || GoalCommand(draftText) != nil || typedKeyword(draftText) != nil
         let text = isCommand ? draftText : Quoting.message(quotes: draftQuotes, text: draftText)
         let files = draftFiles
@@ -1077,7 +1083,10 @@ final class SessionModel {
     /// be sent goes back there.
     /// `keptElsewhere`: what's sent is kept on disk until it's gone already (a new session's first
     /// message, kept by its new-session composer), so it isn't kept twice.
+    /// `commands`: the engine's commands and yours, as the catalog has them; the engine's own
+    /// /review goes by /review-quick here where the keyword has the name, as "/" lists it.
     func submit(_ text: String, files: [URL], for model: Model?, queue: Bool, commands: [Command], keptElsewhere: Bool = false) {
+        let commands = Keyword.commands(commands, keywords: keywords)
         sendsKeptElsewhere = keptElsewhere
         defer { sendsKeptElsewhere = false }
         sent += 1
@@ -1521,7 +1530,7 @@ final class SessionModel {
             await previous?.value
             do {
                 // Moving to another computer: back in the composer, to run once it's there.
-                if Moves.isFrozen(id) { throw Moves.Failure.moving }
+                try Moves.checkNotMoving(id)
                 try await api.runShell(session: id, command: command)
             } catch {
                 notRun(written, because: error)
@@ -1549,7 +1558,7 @@ final class SessionModel {
             do {
                 let machine = RemoteFolder.machine(of: session.location.directory)
                 let prepared = await Task.detached { machine != nil ? Attachments.prepareForMachine(files) : Attachments.prepare(files, for: model) }.value
-                if Moves.isFrozen(id) { throw Moves.Failure.moving }
+                try Moves.checkNotMoving(id)
                 if let machine, !prepared.files.isEmpty {
                     try await MachineBox.command(session: id, name: name, text: Attachments.text(arguments, for: prepared), files: prepared.files, delivery: delivery,
                                                  withAgents: OutsideAgents.isAgentSession(session), folder: RemoteFolder.parse(session.location.directory)?.path,
@@ -2158,7 +2167,7 @@ final class SessionModel {
             var sentID: String?
             var user = message
             do {
-                if Moves.isFrozen(self.id) { throw Moves.Failure.moving }
+                try Moves.checkNotMoving(self.id)
                 user = await stored(message)
                 // Each as the engine kept it: by where it is, or (sent inline: a machine's, a photo
                 // from the phone) with what's in it.

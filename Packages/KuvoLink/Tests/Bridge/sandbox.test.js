@@ -10,7 +10,6 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
@@ -18,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { script, sshAgentsOf } from "./bot-keys-scenarios.js";
+import { NO_BUN, testBun } from "./bun-for-tests.js";
 
 // In the folder tests keep in your home (not the temporary folders, which commands may write), so
 // what a command mustn't write is somewhere it otherwise couldn't.
@@ -45,8 +45,8 @@ function boxAt(name, mac = false) {
   // one, run on the engine as a machine's link is; or the Bun on the PATH).
   fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify({ pid: process.pid, port: 1, password: "engine-pw", version: "test" }));
   if (linux) {
-    const bun = process.versions.bun ? process.execPath : spawnSync("sh", ["-c", "command -v bun"], { encoding: "utf8" }).stdout.trim();
-    assert.ok(bun, "the sandbox runs on Bun on Linux: run this with the engine (BUN_BE_BUN=1) or with Bun on the PATH");
+    const bun = testBun();
+    assert.ok(bun, NO_BUN);
     fs.mkdirSync(path.join(home, "engine", "test"), { recursive: true });
     fs.symlinkSync(bun, path.join(home, "engine", "test", "opencode"));
   }
@@ -88,6 +88,9 @@ async function engineRuns(box, folder, command, session) {
     let hook;
     await plugin.setup({ location: { directory: folder }, shell: { hook: async (name, take) => { assert.equal(name, "create.before"); hook = take; } } });
     hook(input);
+    // (The plugin names the engine's runtime, its own: here that's this test's, so on Linux,
+    // without Bun, the Bun this box's engine is.)
+    if (linux && !process.versions.bun) input.env.KUVO_FENCE_RUNTIME = path.join(box.home, "engine", "test", "opencode");
   }
   if (session) input.env.OPENCODE_SESSION_ID = session;
   const run = spawnSync(input.shell, ["-c", input.command], { cwd: input.cwd, env: input.env, encoding: "utf8" });
@@ -287,44 +290,33 @@ test("a command can't change what git runs on its own, the engine's settings or 
   }
 });
 
-test("Claude Code's commands, run with the box's shell for it as Claude Code runs them, are in the sandbox, and a worktree commits", async () => {
-  const box = boxAt("claude");
-  const repository = path.join(root, "claude-repo");
-  const project = path.join(root, "claude-tree");
+test("a coding agent's commands in a worktree are in the sandbox, and commit to its repository", async () => {
+  const box = boxAt("worktree");
+  const repository = path.join(root, "agent-repo");
+  const project = path.join(root, "agent-tree");
   assert.equal(spawnSync("git", ["init", "-q", repository]).status, 0);
   assert.equal(spawnSync("git", ["-C", repository, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "first"]).status, 0);
   assert.equal(spawnSync("git", ["-C", repository, "worktree", "add", "-q", project]).status, 0);
   const running = await start(box);
   try {
     assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
-    // What the coding agents' bridge gives Claude Code (agents/fence.ts): the shell, by its name, the
-    // conversation's folder and repository, and the commands' temporary folder for its own notes.
-    const fence = path.join(box.home, "run", "fence");
-    const shell = ["zsh", "bash"].map(name => path.join(fence, "shell", name)).find(place => fs.existsSync(place));
-    assert.ok(shell, "the box wrote a shell for Claude Code");
-    const temporary = path.join(fence, "tmp", crypto.createHash("sha256").update(project).digest("hex").slice(0, 32));
-    fs.mkdirSync(path.join(temporary, "claude-1"), { recursive: true, mode: 0o700 });
-    const env = { PATH: process.env.PATH, HOME: root, KUVO_FENCE_WORK: project, KUVO_FENCE_GIT: path.join(repository, ".git"), OPENCODE_SESSION_ID: "ses_claudeTest" };
-    // Each command as Claude Code sends it: its snapshot (which may not be there), the command, then
-    // where it ended up, noted in its temporary folder.
-    const cwd = path.join(temporary, "claude-1", "claude-7-cwd");
-    const claudeRuns = command => spawnSync(shell, ["-c", `source ${JSON.stringify(path.join(box.home, "agents", "snapshot.sh"))} 2>/dev/null || true && eval '${command.replace(/'/g, "'\\''")}' < /dev/null && pwd -P >| ${JSON.stringify(cwd)}`], { cwd: project, env, encoding: "utf8" });
-    const ran = claudeRuns(tries([
+    // An agent run whole, as the coding agents' bridge starts it (agents/fence.ts): its program,
+    // the conversation's folder and repository.
+    const ran = spawnSync(path.join(box.home, "run", "fence", "shell", "run"), ["-c", tries([
       ["write in its project", "echo ok > made.txt"],
       ["commit in its worktree", "git add made.txt && git -c user.name=t -c user.email=t@t commit -qm made"],
       ["read the box's files", `cat ${JSON.stringify(path.join(box.home, "run", "engine.json"))}`],
       ["write outside its project", `echo x > ${JSON.stringify(path.join(root, "planted"))}`],
       ["add a git hook", `echo x > ${JSON.stringify(path.join(repository, ".git", "hooks", "pre-commit"))}`],
-    ]));
+    ])], { cwd: project, encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, KUVO_FENCE_SHELL: "/bin/sh", KUVO_FENCE_WORK: project, KUVO_FENCE_GIT: path.join(repository, ".git"), KUVO_FENCE_OWN: path.join(root, "agent-home"), KUVO_FENCE_PORT: "0", OPENCODE_SESSION_ID: "ses_agentTest" } });
     assert.deepEqual(outcome(ran.stdout), {
       "write in its project": "allowed", "commit in its worktree": "allowed", "read the box's files": "refused",
       "write outside its project": "refused", "add a git hook": linux ? "allowed" : "refused",
     }, ran.stdout + ran.stderr);
     assert.equal(spawnSync("git", ["-C", repository, "log", "--all", "--format=%s"], { encoding: "utf8" }).stdout.includes("made"), true);
-    // Claude Code learns where a cd took the command.
-    assert.equal(claudeRuns("cd ..").status, 0);
-    assert.equal(fs.readFileSync(cwd, "utf8").trim(), root);
     assert.equal(fs.existsSync(path.join(root, "planted")), false);
+    // Only the launcher for agents run whole is there: none of the shells a box before made for Claude Code's commands.
+    assert.deepEqual(fs.readdirSync(path.join(box.home, "run", "fence", "shell")), ["run"]);
   } finally {
     await running.stop();
   }
@@ -380,6 +372,48 @@ test("a coding agent run whole in the sandbox keeps its own sign-in and state (o
     if (!linux) assert.equal(fs.readFileSync(path.join(own, "config.toml"), "utf8"), "model = 'x'\n");
     // (Linux leaves local ports open to every command.)
     if (!linux) assert.equal(outcome(whole().stdout)["reach its tools"], "refused", "only the agent's own port, only for it");
+  } finally {
+    await running.stop();
+  }
+});
+
+test("Claude Code run whole in the sandbox writes its conversations and sign-in, but not its settings or yours, and the hooks and MCP servers it starts, a project's too, are in the sandbox", async () => {
+  const box = boxAt("claude-whole", !linux);
+  const project = path.join(root, "claude-whole-project");
+  fs.mkdirSync(path.join(project, ".claude", "hooks"), { recursive: true });
+  // Its settings folder, as yours is (`~/.claude`), and your Claude Code's settings file beside it.
+  const own = path.join(root, ".claude");
+  fs.mkdirSync(own, { recursive: true });
+  fs.writeFileSync(path.join(own, "settings.json"), "{}\n");
+  fs.writeFileSync(path.join(root, ".claude.json"), "{}\n");
+  // A project's hook and MCP server, as Claude Code starts them: programs of their own, run by it.
+  fs.writeFileSync(path.join(project, ".claude", "hooks", "start.sh"), tries([
+    ["a project's hook writes in its project", "echo ok > hooked.txt"],
+    ["a project's hook writes outside it", `echo x > ${JSON.stringify(path.join(root, "planted-by-hook"))}`],
+    ["a project's MCP server reads Kuvo Code's files", `cat ${JSON.stringify(path.join(box.home, "run", "engine.json"))}`],
+  ]) + "\n");
+  // Claude Code, as far as what it writes and starts goes.
+  const claude = path.join(root, "claude-program");
+  fs.writeFileSync(claude, "#!/bin/sh\n" + tries([
+    ["write its conversation", `mkdir -p ${JSON.stringify(path.join(own, "projects", "p"))} && echo x > ${JSON.stringify(path.join(own, "projects", "p", "s.jsonl"))}`],
+    ["write its sign-in", `echo x > ${JSON.stringify(path.join(own, ".credentials.json"))}`],
+    ["add a hook to its settings", `echo '{"hooks":{}}' > ${JSON.stringify(path.join(own, "settings.json"))}`],
+    ["put settings in its conversations", `echo x > ${JSON.stringify(path.join(own, "projects", "settings.json"))}`],
+    ["add a server to your settings file", `echo '{"mcpServers":{}}' > ${JSON.stringify(path.join(root, ".claude.json"))}`],
+  ]) + "\nsh .claude/hooks/start.sh\n", { mode: 0o755 });
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const ran = spawnSync(path.join(box.home, "run", "fence", "shell", "run"), [], { cwd: project, encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, KUVO_FENCE_SHELL: claude, KUVO_FENCE_WORK: project, KUVO_FENCE_OWN: own, KUVO_FENCE_STATE: "projects\nsessions\ntodos\n.credentials.json*\n.claude.json*", KUVO_FENCE_KEPT: "settings*.json\nhooks\n.mcp.json", KUVO_FENCE_PORT: "0" } });
+    // (Linux grants its homes whole: a machine's Claude Code's is Kuvo Code's own there.)
+    const mac = linux ? "allowed" : "refused";
+    assert.deepEqual(outcome(ran.stdout), {
+      "write its conversation": "allowed", "write its sign-in": "allowed", "add a hook to its settings": mac, "put settings in its conversations": mac,
+      "add a server to your settings file": "refused",
+      "a project's hook writes in its project": "allowed", "a project's hook writes outside it": "refused", "a project's MCP server reads Kuvo Code's files": "refused",
+    }, ran.stdout + ran.stderr);
+    assert.equal(fs.readFileSync(path.join(root, ".claude.json"), "utf8"), "{}\n");
+    assert.equal(fs.existsSync(path.join(root, "planted-by-hook")), false);
   } finally {
     await running.stop();
   }
@@ -548,6 +582,7 @@ test("Kuvo Code's passwords and your SSH agent stay out of a command's environme
     let hook;
     await plugin.setup({ location: { directory: project }, shell: { hook: async (name, take) => { hook = take; } } });
     hook(input);
+    if (linux && !process.versions.bun) input.env.KUVO_FENCE_RUNTIME = path.join(box.home, "engine", "test", "opencode");
     input.env.OPENCODE_SESSION_ID = "ses_env";
     const seen = spawnSync(input.shell, ["-c", input.command], { cwd: project, env: input.env, encoding: "utf8" }).stdout;
     assert.doesNotMatch(seen, /engine-pw|server-pw|agent\.sock/);
@@ -639,6 +674,67 @@ test("each conversation's temporary files are its own", async () => {
     assert.deepEqual(outcome(ran.out), { "read another's temporary files": "refused" }, ran.out);
   } finally {
     await running.stop();
+  }
+});
+
+test("a commit runs pre-commit's hooks, which set themselves up as they first run, and your own pre-commit's are left as they are", async () => {
+  const box = boxAt("pre-commit");
+  const project = path.join(root, "hooked");
+  fs.mkdirSync(project);
+  assert.equal(spawnSync("git", ["init", "-q", project]).status, 0);
+  // As `pre-commit install` leaves it, outside the sandbox: a hook that sets up its tools in
+  // pre-commit's own folder (as pre-commit finds it) the first time, then runs them.
+  fs.writeFileSync(path.join(project, ".git", "hooks", "pre-commit"), [
+    "#!/bin/sh",
+    'store=${PRE_COMMIT_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/pre-commit}',
+    'mkdir -p "$store/repo-lint" && echo set up > "$store/repo-lint/env" && echo linted',
+  ].join("\n") + "\n", { mode: 0o755 });
+  // Your own pre-commit's folder, which commands only read (what's in it runs outside the sandbox):
+  // as the sandbox keeps yours, since this test's home isn't the one its rules name.
+  const yours = path.join(root, ".cache", "pre-commit");
+  fs.mkdirSync(yours, { recursive: true });
+  fs.chmodSync(yours, 0o555);
+  const running = await start(box);
+  try {
+    const ran = await engineRuns(box, project, "echo ok > made.txt && git add made.txt && git -c user.name=t -c user.email=t@t commit -qm made");
+    assert.equal(ran.status, 0, ran.out);
+    assert.match(ran.out, /linted/);
+    assert.deepEqual(fs.readdirSync(yours), [], "your own pre-commit's tools, which run outside it, aren't what it set up");
+  } finally {
+    await running.stop();
+    fs.chmodSync(yours, 0o755);
+  }
+});
+
+test("a command's own socket in its temporary folder works, as a server's tests or Python's multiprocessing make one", { skip: linux && "this Mac's box only (a machine's is in its own short ~/.kuvo-code, where this test's folder is deeper)" }, async () => {
+  // This Mac's box as the app starts it, its temporary files in the app's temporary folder (named
+  // as long as the app's own), its folder as deep as `~/Library/Application Support/<bundle>`.
+  const bundle = "kuvo.sock.tst";
+  const box = boxAt(path.join("Library", "Application Support", bundle), true);
+  const temporary = path.join(os.tmpdir(), bundle);
+  fs.rmSync(temporary, { recursive: true, force: true });
+  box.env.TMPDIR = path.join(temporary, "box") + "/";
+  const project = path.join(root, "sockets");
+  fs.mkdirSync(project);
+  const python = [
+    "import os, socket",
+    "from multiprocessing.managers import BaseManager",
+    "if __name__ == '__main__':",
+    "    where = os.path.join(os.environ['TMPDIR'], 'server.sock')",
+    "    server = socket.socket(socket.AF_UNIX); server.bind(where); server.listen(1)",
+    "    client = socket.socket(socket.AF_UNIX); client.connect(where); print('connected')",
+    "    manager = BaseManager(authkey=b'k'); manager.start(); manager.shutdown(); print('managed')",
+  ].join("\n");
+  fs.writeFileSync(path.join(project, "sockets.py"), python + "\n");
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const ran = await engineRuns(box, project, "python3 sockets.py");
+    assert.equal(ran.status, 0, ran.out);
+    assert.match(ran.out, /connected\nmanaged/);
+  } finally {
+    await running.stop();
+    fs.rmSync(temporary, { recursive: true, force: true });
   }
 });
 

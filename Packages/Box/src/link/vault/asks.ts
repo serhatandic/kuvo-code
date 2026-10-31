@@ -44,10 +44,11 @@ export function vaultAskNotice(asked: VaultAsk): Notice {
   return {
     title,
     subtitle: asked.machine,
-    body: asked.why || (asked.kind === "use" ? "Allow it once, always, or say no." : "Give it an item from your vault, or say no."),
+    body: asked.why || (asked.kind === "use" ? (asked.group ? "Allow it once, or say no." : "Allow it once, always, or say no.") : "Give it an item from your vault, or say no."),
     category: "ask",
-    thread: asked.session ?? asked.id,
-    data: { ...(asked.session ? { session: asked.session } : {}), vaultAsk: asked.id },
+    thread: asked.group ?? asked.session ?? asked.id,
+    // (A seat's opens its group chat: no one opens the seat.)
+    data: { ...(asked.group ? { group: asked.group } : asked.session ? { session: asked.session } : {}), vaultAsk: asked.id },
   };
 }
 

@@ -19,7 +19,7 @@ import { BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SANDBOX_N
 import { tellLauncher } from "./allowed";
 import { agentShellScript, agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
 import { LANDLOCK_RUNNER, landlockPolicy } from "./landlock";
-import { fencePolicy, realish } from "./policy";
+import { appTemporary, fencePolicy, realish } from "./policy";
 import { seatbeltProfile } from "./seatbelt";
 
 export interface FenceState {
@@ -31,6 +31,8 @@ export interface FenceState {
   able: boolean;
   /** Every coding agent's process here runs in it too: none started before it was on still runs. */
   agents: boolean;
+  /** The box asks you, once, to restart the agents started before it was on (`POST kuvo/sandbox/restart`). */
+  restart?: boolean;
   /** Why not, for a client to map without reading `why`, and what you can do about it. */
   reason?: FenceReason;
   action?: FenceAction;
@@ -93,7 +95,7 @@ let lastProfiles = "";
 
 /** Whether the sandbox is on here: read each time from what the box knows, without waiting. */
 export function fenceState(): FenceState {
-  const base = { able: checked.able, agents: agentsAllInside() };
+  const base = { able: checked.able, agents: agentsAllInside(), ...(asksToRestart() ? { restart: true } : {}) };
   // Kuvo Code's own kill switch: no reason a client shows, as there's nothing you can do.
   if (!fenceWanted()) return { ...base, on: false, why: "Kuvo Code has it turned off on this computer for now." };
   if (!checked.passed) return { ...base, on: false, ...cannot(checked) };
@@ -135,17 +137,53 @@ export const agentsCommandsInSandbox = (): boolean => fenceWanted() && fs.exists
  * sandbox as it is (`run/fence/agents`; none it started before it was on still runs), or none runs.
  * What opens the vault to agents. */
 export function agentsAllInside(): boolean {
-  if (!agentsCommandsInSandbox()) return false;
+  const said = bridgeSays();
+  return said === "none" || said === "inside";
+}
+
+/** What the agents bridge says of its agents' processes, for the sandbox as it is now: all inside
+ * it, some started before it was on still running (`outside`), none running, or nothing yet (it
+ * hasn't looked since it was set up, or the sandbox isn't on). */
+function bridgeSays(): "inside" | "outside" | "none" | undefined {
+  if (!agentsCommandsInSandbox()) return undefined;
   let bridge: { pid?: number } | null = null;
   try { bridge = JSON.parse(fs.readFileSync(BRIDGE_FILE, "utf8")); } catch {}
-  if (!bridge?.pid || !processRuns(bridge.pid, "kuvo-agents")) return true;
+  if (!bridge?.pid || !processRuns(bridge.pid, "kuvo-agents")) return "none";
   try {
     const said = JSON.parse(fs.readFileSync(path.join(FOLDER, "agents"), "utf8"));
     const on = sandboxGeneration(ON);
-    return Boolean(on) && said.pid === bridge.pid && said.on === on;
+    if (!on || said.pid !== bridge.pid || said.on !== on) return undefined;
+    return said.outside === true ? "outside" : "inside";
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+// Asked once whether to restart them: the first time it's on with some still outside it (or was
+// once the bridge said all were in it, when there was nothing to ask; none running yet, as while
+// the bridge starts, settles nothing).
+const RESTART_ASKED = path.join(FOLDER, "restart-asked");
+
+/**
+ * Whether the box asks you to restart the agents started before the sandbox was on (it does once,
+ * the first time it's on with some still running), noting that it's past once none is left.
+ */
+export function asksToRestart(): boolean {
+  if (fs.existsSync(RESTART_ASKED)) return false;
+  const said = bridgeSays();
+  if (said === "outside") return true;
+  if (said === "inside") answeredRestart();
+  return false;
+}
+
+/** Whether it's no longer to ask here: answered, or there was nothing to ask. */
+export function restartSettled(): boolean {
+  return fs.existsSync(RESTART_ASKED);
+}
+
+/** You answered whether to restart them (or there was nothing to ask): never asked again here. */
+export function answeredRestart(): void {
+  try { writePrivate(RESTART_ASKED, ""); } catch {}
 }
 
 // Why a box doesn't have it on, and what you can do.
@@ -207,12 +245,6 @@ function writeProfiles(): void {
   for (const [name, body] of files) writePrivate(path.join(FOLDER, name), body);
   lastProfiles = text;
 }
-
-// Each shell this computer has, by the name Claude Code knows it by.
-const AGENT_SHELLS: [string, string | undefined][] = [
-  ["zsh", ["/bin/zsh", "/usr/bin/zsh"].find(shell => fs.existsSync(shell))],
-  ["bash", ["/bin/bash", "/usr/bin/bash"].find(shell => fs.existsSync(shell))],
-];
 
 function writeExecutable(file: string, text: string): void {
   if (textOf(file) === text) return;
@@ -288,6 +320,22 @@ function withdraw(): void {
 }
 
 /**
+ * On this Mac's box, where commands' temporary folders go (`temporary`, which the launcher and the
+ * agents' bridge read): the app's own temporary folder, and the key their names are made from,
+ * kept while it's the same folder so a conversation keeps its own. Elsewhere, none: `tmp`.
+ */
+function writeTemporary(): void {
+  const file = path.join(FOLDER, "temporary");
+  const root = platform === "darwin" ? appTemporary() : null;
+  if (!root) return fs.rmSync(file, { force: true });
+  const [had, key] = (textOf(file) ?? "").split("\n");
+  if (had === root && /^[0-9a-f]{64}$/.test(key ?? "")) return;
+  writePrivate(file, `${root}\n${crypto.randomBytes(32).toString("hex")}\n`);
+  // Those from before, in the box's own folder, go.
+  for (const name of listOf(path.join(FOLDER, "tmp"))) fs.rmSync(path.join(FOLDER, "tmp", name), { recursive: true, force: true });
+}
+
+/**
  * Sets the sandbox up: its files written and checked, then its plugin given to the engine; where it
  * can't run or the check fails (or with the kill switch), the plugin taken away, so commands run as
  * before rather than not at all.
@@ -307,11 +355,13 @@ export function setUpFence(): FenceState {
   }
   try {
     fs.mkdirSync(path.join(FOLDER, "tmp"), { recursive: true, mode: 0o700 });
+    writeTemporary();
     writeExecutable(places.launcher, launcherScript(places));
     if (platform === "linux") writeExecutable(places.runner, LANDLOCK_RUNNER);
-    // The shells Claude Code's commands run with (the coding agents' bridge picks one).
+    // The launcher as the coding agents' bridge runs an agent whole in the sandbox (the shells a
+    // box before put beside it for Claude Code's commands go: Claude Code runs whole too).
     fs.mkdirSync(path.join(FOLDER, "shell"), { recursive: true, mode: 0o700 });
-    for (const [name, real] of AGENT_SHELLS) if (real) writeExecutable(path.join(FOLDER, "shell", name), agentShellScript(places, real));
+    for (const name of ["zsh", "bash"]) fs.rmSync(path.join(FOLDER, "shell", name), { force: true });
     writeExecutable(path.join(FOLDER, "shell", "run"), agentShellScript(places));
     lastProfiles = "";
     writeProfiles();

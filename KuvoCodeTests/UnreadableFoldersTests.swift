@@ -79,6 +79,22 @@ import Testing
         #expect(tree.allFilesFailure == .denied)
     }
 
+    /// A machine's folder that couldn't be read (asleep, or not let in) is read again with the rest
+    /// every few seconds, and shows its files once it can be, without Try Again: as the phone's does
+    /// as its computer comes back.
+    @Test func aMachinesFolderThatCouldntBeReadShowsOnceItCanBe() async throws {
+        defer { done() }
+        SSHConnection.standIn = { _, script in Self.runHere(script) }
+        try lock(folder.path)
+        let tree = FileTree(roots: [RemoteFolder.url(RemoteFolder.folder(folder.path, on: "lokum"))])
+        try await until { tree.rootFailure != nil }
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        await tree.refresh()
+        #expect(tree.rootFailure == nil)
+        #expect(!shown(tree).contains { $0.hasPrefix("Couldn’t read") })
+    }
+
     /// On a machine: the machine's own reason, said as its; one that isn't there, or a machine
     /// that can't be reached, said as such.
     @Test func onAMachineItsOwnReasonIsKept() async throws {

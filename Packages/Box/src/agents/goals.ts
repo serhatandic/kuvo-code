@@ -332,8 +332,7 @@ export class Goals {
     try {
       messages = await this.messages(session, place)
     } catch (error: any) {
-      // (Stopped meanwhile, the bridge is going: another may keep its goals now, so nothing here.)
-      if (error?.status === 404) return this.stopped ? undefined : this.forget(session)
+      if (error?.status === 404) return this.forget(session)
       return this.lookLater(session)
     }
     if (!current()) return

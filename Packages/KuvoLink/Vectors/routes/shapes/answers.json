@@ -4772,6 +4772,7 @@
       "why?": "string",
       "able": "bool",
       "agents": "bool",
+      "restart?": "bool",
       "reason?": {
        "oneOf": [
         {
@@ -4857,6 +4858,7 @@
       "why?": "string",
       "able": "bool",
       "agents": "bool",
+      "restart?": "bool",
       "reason?": {
        "oneOf": [
         {
@@ -4934,6 +4936,97 @@
    }
   },
   {
+   "route": "POST kuvo/sandbox/restart",
+   "answers": {
+    "200": {
+     "object": {
+      "on": "bool",
+      "why?": "string",
+      "able": "bool",
+      "agents": "bool",
+      "restart?": "bool",
+      "reason?": {
+       "oneOf": [
+        {
+         "literal": "kernel"
+        },
+        {
+         "literal": "macos"
+        },
+        {
+         "literal": "engineMissing"
+        },
+        {
+         "literal": "checking"
+        },
+        {
+         "literal": "checkFailed"
+        },
+        {
+         "literal": "plugin"
+        },
+        {
+         "literal": "engineDown"
+        },
+        {
+         "literal": "waiting"
+        }
+       ]
+      },
+      "action?": {
+       "oneOf": [
+        {
+         "literal": "help"
+        },
+        {
+         "literal": "softwareUpdate"
+        },
+        {
+         "literal": "retry"
+        },
+        {
+         "literal": "fix"
+        },
+        {
+         "literal": "restartEngine"
+        }
+       ]
+      },
+      "route?": "string",
+      "needs?": "string",
+      "check?": {
+       "oneOf": [
+        {
+         "literal": "folder"
+        },
+        {
+         "literal": "tempFiles"
+        },
+        {
+         "literal": "readsOwn"
+        },
+        {
+         "literal": "writesOwn"
+        },
+        {
+         "literal": "didntRun"
+        },
+        {
+         "literal": "setup"
+        }
+       ]
+      },
+      "failures?": "number"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
    "route": "GET kuvo/sandbox/asks",
    "answers": {
     "200": {
@@ -4995,7 +5088,8 @@
          "machine?": "string"
         }
        }
-      }
+      },
+      "restart?": "bool"
      }
     }
    }
@@ -6450,7 +6544,8 @@
          "need?": "string",
          "why?": "string",
          "site?": "string",
-         "machine?": "string"
+         "machine?": "string",
+         "group?": "string"
         }
        }
       }

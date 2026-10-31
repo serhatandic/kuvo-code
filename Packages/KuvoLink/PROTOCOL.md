@@ -653,7 +653,8 @@ client shows it from the same routes.
   accounts, and whatever it can't be sure isn't (any part, past `sudo`, `env`, `npx` and the like,
   with no option but a bare flag before the program, and the program a package runner runs, `npm
   exec`, `pnpm dlx`, `bun x`, or `find -exec` does; `xargs`, a runner's `-c`, git's settings on the
-  line, `-c` and `GIT_…=`, and naming or writing git's own files, `.git/…`, aren't): a `push`,
+  line, `-c` and `GIT_…=`, setting them (`git config` but its reads, in either syntax, a clone's `--config`, a
+  `--template`; git's own programs, `git-config`, count as git), and naming or writing git's own files, `.git/…`, aren't): a `push`,
   `send-pack`, `send-email`, `dcommit` or `upload` anywhere among a program's words but the ones
   that only read or print them (`grep`, `echo`…; `git stash push` stays here), `docker push`,
   `--push`, a registry output, publishing (`npm publish`,
@@ -730,8 +731,9 @@ folder you pick once per box, after asking you.
 
 **What always comes to you** (bridge 0.9.122, `work/always.ts`): payments, permanent deletes,
 changes to who may do what, new accounts, messages to people, your passwords, keys and sign-ins,
-and git's settings. No mode, Always, plan or goal's switch turns this off, nor the sandbox: what a
-bot may allow there is within these rules.
+and git's settings. No mode, Always, plan or goal's switch turns this off. A command that runs in
+the sandbox is the sandbox's rule's alone ("Answering asks in the sandbox"): there a bot may allow
+what stays on this computer.
 - `answer_ask` checks it first, before the policy above, by the tool call's whole input: a
   command's programs and subcommands, git's past its own options (`rm`, `chmod`, `sudo`, `git -C x
   config`, `git push --force` or `+ref`, `gh pr create`, `gh api` that writes, `stripe … create`,
@@ -1144,7 +1146,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   or a phone), and `home`, the Mac that started its engine (`{"mac", "name"?}`, its name where
   its start noted one). It also says who uses it, for an uninstall to name whom it would stop it
   for: `macs`, the Macs that set it up (`[{key, name?, seen}]`: each one's key, its name where its
-  setup gave one, `macName`, and when it was last heard from, in ms), and `phones`, how many phones
+  setup gave one, `macName`, and when it was last heard from, in ms, moved on by the time the
+  machine was off since), and `phones`, how many phones
   reach it. A Mac also names `integrations`, each integration's name by its MCP
   server's (`{"microsoft-365": "Outlook and Microsoft 365", …}`), for a card when one asks something.
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
@@ -1819,7 +1822,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 - `kuvo/wakes/<session>`: a session's (or chat's) wake-ups and watches, which its
   agent sets with `kuvo-wake`, as the bar over the Mac's composer shows them: `{"wakes": [{id,
   due, note, every}], "watches": [{letters, every, check, note}], "paused"}` (`due` in seconds
-  since 1970, `every` like `1d` or null; paused while it's archived: archive it as the Mac does,
+  since 1970, `every` like `1d`, left out for one that doesn't repeat; paused while it's archived: archive it as the Mac does,
   `PATCH api/session/<id>` with `{"metadata": {"kuvo.archived": true}}` (`false` brings it back),
   and its wake-ups wait, or come back, when the flag changes (it can go with every change to its
   metadata); a Mac sees to it, and a machine's bridge does with the Mac closed too;
@@ -2229,7 +2232,7 @@ On a machine the bridge keeps its state in `~/.kuvo-code/run/link.json` (mode 60
 
 ```json
 {"relay": "wss://…", "secret": "…", "key": "<static private key>", "sign": "<signing key's seed>", "mac": "<the last Mac's static key>",
- "macs": ["<each Mac that set it up>"], "macSigns": {"<Mac>": "<its signing key>"}, "macSeen": {"<Mac>": <when it came, here>}, "macNames": {"<Mac>": "<its name>"},
+ "macs": ["<each Mac that set it up>"], "macSigns": {"<Mac>": "<its signing key>"}, "macSeen": {"<Mac>": <when it came, here, moved on by time off since>}, "macNames": {"<Mac>": "<its name>"},
  "docs": {"<origin> <kind>": {"d": "…", "s": "…"}}, "own": {"<kind>": {"n", "h", "b"}}, "views": {"<origin>": {"n", "h"}},
  "phones": [{"key": "…", "name": "…", "added": 1760000000, "from": "mac", "mac": "<the Mac that listed it>", "address": "…", "pairing": "…"}],
  "removed": [{"key": "…", "pairing": "…"}]}
@@ -2759,7 +2762,7 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
   {<bot, or a conversation that isn't a bot's>: why}, store: "keychain" | "encrypted", keptDays,
   agents, agentsWaiting?, tampered?, generations: {items, grants, paused}}` (`agents`: whether agents may use it
   on this box, below; `agentsWaiting`: its sandbox is on, and they may once the coding agents
-  started before it came on have finished); an item is `{id, kind: "login" |
+  started before it came on have finished, which clients say as “Locked for now: some agents started before the sandbox was on. The vault opens when they finish.”); an item is `{id, kind: "login" |
   "key" | "file" | "note", name, sites, username?, fields, fileName?, readable?, signInOnly?,
   created, changed, used?}` (`sites`: hosts, a site's own and those under it; `fields`: the names of the values it
   holds, a sign-in's `password`, a file's `file` (base64), a note's `text`, a key's own); a grant
@@ -2781,12 +2784,18 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
   `refused`, `added`, `changed`, `removed`, `granted`, `ungranted`, `paused`, `resumed`, `shown`.
 - `GET kuvo/vault/asks` → `{asks}`, and `GET kuvo/vault/asks/events` (`application/x-ndjson`, the
   list now and on each change): what agents wait on you for, `{id, kind: "use" | "item", at,
-  session?, sessionName?, bot?, botName?, item?, itemName?, need?, why?, site?, machine?}`. `use`:
-  an item it may use only by asking (or has no grant for); `item`: something it needs (`need`).
+  session?, sessionName?, bot?, botName?, item?, itemName?, need?, why?, site?, machine?, group?}`.
+  `use`: an item it may use only by asking (or has no grant for); `item`: something it needs
+  (`need`). `group`: asked from a bot's seat in that group chat (`session` the seat, `bot` its
+  bot), which a client shows in the chat, since no one opens a seat. The seat is on its bot's own
+  computer, so a chat follows the asks of each of its members' boxes as well as its own. A seat asks
+  each time, whatever it may use on its own, and is answered only once: no Always. So does a
+  conversation whose root the engine can't say just then, without a `group`.
   `POST kuvo/vault/asks/<id> {answer: "once" | "always" | "no", item?}` → `{}` (`item`, for an
   `item` ask, the one you give; `always` grants it on its own, to the bot or, for another session,
-  its project). An agent waits 15 minutes, then takes it as no. Your phones hear of one still open
-  after two seconds (`category: "ask"`, `data: {session?, vaultAsk}`).
+  its project; for a seat's, it's once). An agent waits 15 minutes, then takes it as no. Your phones hear of one still open
+  after two seconds (`category: "ask"`, `data: {session?, vaultAsk}`, or a seat's `{group, vaultAsk}`,
+  which opens its group chat).
 
 **The agents' own.** Both tool servers pass these on as they come, with the calling conversation.
 Each is answered only while that conversation is making the call: its engine (or the coding agents'
@@ -2942,10 +2951,28 @@ it's empty.
   engine) run in it too: each starts its next turn in it once it's set up and checked here, and
   `agents` is true once no agent process the bridge started before it was on still runs (the
   agents bridge notes it, `{pid, on}`, in `run/fence/agents`, for the sandbox as it is: `on` is the
-  token each setup writes in `run/fence/on`; with no bridge running, it's true). It counts the
+  token each setup writes in `run/fence/on`, with `outside: true` while one still runs; with no
+  bridge running, it's true). `restart`: the box asks you, once, to restart those: true the first
+  time it's on with one still running (never if it was on with all inside it first), until you
+  answer with `POST kuvo/sandbox/restart` `{restart}`, which answers the state anew (400 without
+  a true or false; 503 when the agents bridge doesn't answer, and it stays asked). True has the
+  bridge (`POST /api/kuvo/sandbox/restart`) close each agent's process started before the sandbox
+  was on once its conversation is between turns and nothing it left going (commands, subagents)
+  still runs, the rest as they get there; each starts again in the sandbox with its next turn, going on with its
+  conversation. False leaves them to finish as they are. `kuvo/sandbox/asks` carries it too, so a
+  client following the asks hears it as it comes and goes. Clients show it as a card in the
+  computer's conversations: "Restart agents in the sandbox?". It counts the
   agents' own processes, from their start: a command one of them started outside the sandbox that
-  outlives it isn't followed, as with the engine's. How each does: Claude Code runs its commands through the
-  box's shell for it (`run/fence/shell/zsh` or `bash`); Codex runs whole in the sandbox
+  outlives it isn't followed, as with the engine's. Each runs whole in it, and so does all it
+  starts: its commands, and its hooks and MCP servers, yours and a project's. Claude Code through
+  `run/fence/shell/run` (the SDK's own start of it, `spawnClaudeCodeProcess`), in the conversation's
+  folder, its own sandbox off; of its settings folder (`~/.claude`, or an added account's) it writes,
+  on a Mac, only what's named as its state (its conversations, their files, todos and plans, shell
+  snapshots, history, caches and logs, its sign-in, an added account's `.claude.json`), and in
+  those never settings (`settings*.json`, `hooks`, `.mcp.json`); never your `~/.claude.json` (it
+  goes on without saving to it), nor its own updates (`DISABLE_AUTOUPDATER`; Update does them,
+  outside); Kuvo Code's tools through the relay, and files you attach as copies, as for Codex.
+  Codex runs whole in the sandbox
   (`run/fence/shell/run`), an app-server for each session in that session's folder (and your
   account's in its `sessions` folder), its own sandbox off, asking as it does, and Kuvo Code's tools
   through the agents bridge's relay on 127.0.0.1, a key for each session. Of its home it writes, on
@@ -3024,8 +3051,9 @@ while the sandbox is `on`) and pass a call to `POST kuvo/sandbox/tools` `{sessio
 making that call. The asks, the tool and the answers live in the box's long-running process, as the
 vault does (`run/vault.sock`); another passes them on.
 
-- `GET kuvo/sandbox/asks` → `{asks: [ask]}`, oldest first; `kuvo/sandbox/asks/events`, NDJSON, the
-  same at once and on every change. An ask: `{id, at, session?, sessionName?, bot?, botName?,
+- `GET kuvo/sandbox/asks` → `{asks: [ask], restart?}`, oldest first, with `restart: true` while
+  the box asks you to restart its agents (the state's `restart`); `kuvo/sandbox/asks/events`, NDJSON,
+  the same at once and on every change. An ask: `{id, at, session?, sessionName?, bot?, botName?,
   project, command, why, stopped?, error?, always?, machine?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,
@@ -3092,8 +3120,10 @@ machine's bridge, held to `Vectors/link.json` (`phoneBooks`):
   own; a phone a Mac's document no longer lists goes off, not for good, and another Mac's phones
   stay. A removal in any phones document a box takes is noted there too, so one removed anywhere
   is removed everywhere, reached or not. One from before Macs were named (no `mac`) stays until a
-  Mac signs its phones. A Mac the machine hasn't heard from in 30 days (setup or any mail), by its
-  own clock, no longer counts, and its phones go; it counts again once it sets the machine up.
+  Mac signs its phones. A Mac the machine hasn't heard from in 30 days (setup or any mail) of its
+  box running (noted every few minutes in `run/online`; time off doesn't count, and a clock set
+  wrong and then right moves no Mac on) no longer counts, and its phones go; it counts again once
+  it sets the machine up.
 
 On both, for a paired phone:
 

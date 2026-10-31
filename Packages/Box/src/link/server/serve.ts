@@ -47,11 +47,11 @@ export function serveBox(password: string, handle: LinkHandler = engineHandler(r
         if (part.body) response.write(part.body);
       }
     } catch (error) {
-      if (!headed) {
-        response.writeHead(500, { "content-type": "application/json" });
-        response.write(JSON.stringify({ message: String((error as Error | undefined)?.message ?? error) }));
-        headed = true;
-      }
+      // Cut off once it's begun (the engine gone halfway): ends cut off, not as a whole answer.
+      if (headed) return response.destroy(error as Error);
+      response.writeHead(500, { "content-type": "application/json" });
+      response.write(JSON.stringify({ message: String((error as Error | undefined)?.message ?? error) }));
+      headed = true;
     }
     if (!headed) response.writeHead(502);
     response.end();

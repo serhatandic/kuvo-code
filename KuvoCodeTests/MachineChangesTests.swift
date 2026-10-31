@@ -213,4 +213,64 @@ import Testing
         #expect(!changes.isUnreachable)
         #expect(changes.files.map(\.path) == ["README.md"])
     }
+
+    /// Out of reach when Changes first opens: its connection shows in the list's place, never "No
+    /// Changes" or a folder without git; read once it's back.
+    @Test func aMachineAwayBeforeItsChangesAreReadShowsItsConnection() async throws {
+        let box = try await MachineTestBox()
+        defer { box.stop() }
+        let client = box.client
+        let asked = Asked()
+        let changes = ProjectChanges(directory: root) { _ in asked.add(); return client }
+        try repo.write("README.md", "Hello\nWorld\n")
+        changes.isAway = true
+
+        await changes.refresh()
+        #expect(changes.shown == .waiting)
+        #expect(changes.files.isEmpty)
+        #expect(asked.count == 0, "its box isn't asked while it's away")
+
+        changes.isAway = false
+        await changes.refresh()
+        #expect(changes.shown == .list)
+        #expect(changes.files.map(\.path) == ["README.md"])
+    }
+
+    /// Away after it was read: the list stays as last seen, with when, and its box isn't asked
+    /// again (an edit there meanwhile doesn't show) until it's back.
+    @Test func aMachineAwayAfterItsChangesWereReadKeepsThemAsLastSeen() async throws {
+        let box = try await MachineTestBox()
+        defer { box.stop() }
+        let client = box.client
+        let asked = Asked()
+        let changes = ProjectChanges(directory: root) { _ in asked.add(); return client }
+        try repo.write("README.md", "Hello\nWorld\n")
+        let before = Date.now
+        await changes.refresh()
+        #expect(changes.shown == .list)
+        let read = try #require(changes.read)
+        #expect(read >= before)
+
+        changes.isAway = true
+        try repo.write("notes.txt", "Later\n")
+        let count = asked.count
+        await changes.refresh()
+        #expect(asked.count == count, "its box isn't asked while it's away")
+        #expect(changes.shown == .asLastSeen)
+        #expect(changes.files.map(\.path) == ["README.md"])
+        #expect(changes.read == read)
+        // Its Discard alert or commit form open from before it went: said to wait, nothing done.
+        let readme = try #require(changes.files.first)
+        #expect(await changes.perform(.discard, on: readme) == ChangesAway.notBack("lab"))
+        #expect(await changes.commit(message: "Later", push: false, environment: [:]) == ChangesAway.notBack("lab"))
+        #expect(asked.count == count)
+        #expect(try repo.status().contains(" M README.md"))
+        #expect(ChangesAway.asLastSeen(changes.read, now: read.addingTimeInterval(180), locale: Locale(identifier: "en_US"))
+                == "These are its changes as last seen, 3 minutes ago. They can’t be staged or committed until it’s back.")
+
+        changes.isAway = false
+        await changes.refresh()
+        #expect(changes.shown == .list)
+        #expect(changes.files.map(\.path) == ["notes.txt", "README.md"])
+    }
 }

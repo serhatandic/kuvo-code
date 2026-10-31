@@ -105,6 +105,7 @@ async function askForItem(caller: Caller, args: Record<string, unknown>, signal?
     kind: "item",
     need,
     why,
+    ...(caller.group ? { group: caller.group } : {}),
     ...(site ? { site } : {}),
     ...(caller.bot ? { bot: caller.bot, botName: caller.botName } : {}),
     ...(caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}),

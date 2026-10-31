@@ -7,7 +7,7 @@
 // tool (an integration's) the engine's rules can't name ahead, so on Approve All only the bot's
 // own answers and words hold it back.
 
-import { readLine } from "./policy";
+import { gitConfigSets, readLine } from "./policy";
 import type { KitRule } from "../bots/kit";
 import type { ToolCallSeen } from "./answers";
 
@@ -34,7 +34,8 @@ const PROGRAMS: Record<string, AlwaysKind> = {
 // Programs whose subcommand says what it is: the words after the program (git's past its own
 // options), as a line.
 const SUBCOMMANDS: [RegExp, RegExp, AlwaysKind][] = [
-  [/^git$/, /^(config\s+(?!(--get|--get-all|--get-regexp|--list|-l)\b)\S+\s+\S|config\s+--(add|unset|unset-all|replace-all|rename-section|remove-section|edit|one-off)\b|config\s+-e\b|remote\s+(add|set-url|remove|rm)\b|credential\b)/, "gitConfig"],
+  // (`git config` itself, by gitConfigSets.)
+  [/^git$/, /^(config\s+--one-off\b|remote\s+(add|set-url|remove|rm)\b|credential\b)/, "gitConfig"],
   [/^git$/, /^(clean\s+(?!.*(-n|--dry-run)\b)|reset\s+.*--hard|branch\s+.*-D\b|push\s+.*(--delete\b|--force\b|--force-with-lease\b|\s-f\b|\s-d\b|\s:\S|\s\+\S)|stash\s+(drop|clear)\b|reflog\s+expire\b|gc\s+.*--prune)/, "delete"],
   [/^gh$/, /^(issue\s+(create|comment)|pr\s+(create|comment|review)|gist\s+create|discussion|release\s+create)\b/, "message"],
   [/^gh$/, /^api\b.*(\s(-X|--method)[\s=]*(POST|PATCH|PUT|DELETE)\b|\s-[fF]\s|\s--(raw-)?field\b|\s--input\b)/i, "message"],
@@ -119,11 +120,16 @@ export function commandAlways(line: string): AlwaysKind | null {
       const kind = fileKind(file);
       if (kind) return kind;
     }
-    const words = commandWords(part.words);
+    let words = commandWords(part.words);
     if (!words.length) continue;
+    // (`git-config`, `/usr/lib/git-core/git-push`: git's own commands by their programs.)
+    const gitOwn = /^git-([a-z][a-z0-9-]*)$/.exec(programOf(words[0]));
+    if (gitOwn) words = ["git", gitOwn[1], ...words.slice(1)];
     const program = programOf(words[0]);
     if (PROGRAMS[program]) return PROGRAMS[program];
-    const rest = (program === "git" ? gitRest(words.slice(1)) : words.slice(1)).join(" ");
+    const given = program === "git" ? gitRest(words.slice(1)) : words.slice(1);
+    if (program === "git" && given[0] === "config" && gitConfigSets(given.slice(1))) return "gitConfig";
+    const rest = given.join(" ");
     for (const [name, sub, kind] of SUBCOMMANDS) if (name.test(program) && sub.test(rest)) return kind;
     // Changing a file in place (sed -i, tee, cp over it): the file's kind.
     if (["sed", "perl", "tee", "cp", "mv", "install"].includes(program)) {
@@ -236,7 +242,7 @@ export const ALWAYS_ASK_RULES: KitRule[] = [
     "*.ssh/*", "*.aws/credentials*", "*.netrc*", "*.git-credentials*",
   ].map(resource => ({ action: "shell", resource, effect: "ask" as const })),
   // Reading git's settings is reading.
-  ...["git config --get*", "git config --list*", "git config -l*", "git config --get-all*", "git config --get-regexp*"].map(resource => ({ action: "shell", resource, effect: "allow" as const })),
+  ...["git config --get*", "git config --list*", "git config -l*", "git config --get-all*", "git config --get-regexp*", "git config get *", "git config list", "git config list -*"].map(resource => ({ action: "shell", resource, effect: "allow" as const })),
   ...["*.env", "*.env.*", "*/.ssh/*", "*/.gitconfig", "*/.gitmodules", "*/.git/config", "*/.netrc", "*/.npmrc", "*/.pypirc", "*/.git-credentials", "*/.aws/credentials", "*/.docker/config.json", "*/.kube/config"]
     .map(resource => ({ action: "edit", resource, effect: "ask" as const })),
   { action: "edit", resource: "*.env.example", effect: "allow" },

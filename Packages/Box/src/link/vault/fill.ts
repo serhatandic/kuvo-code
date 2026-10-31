@@ -46,7 +46,8 @@ export async function fill(given: unknown, caller: Caller, signal?: AbortSignal)
     if (!usableOn(item, site)) return refused(403, tripwire(item, caller, site));
   } else {
     if (purpose === "field") return refused(400, "Name the item to fill from.");
-    const own = readItems().filter(each => each.kind === "login" && usableOn(each, site) && (grantFor(each, caller) === "own" || hasOnce(caller, each.id)));
+    // (A seat's own, as its bot's would be: it's still asked for, below.)
+    const own = readItems().filter(each => each.kind === "login" && usableOn(each, site) && (grantFor(each, { ...caller, seat: false }) === "own" || hasOnce(caller, each.id)));
     if (own.length !== 1) return refused(404, own.length ? "More than one sign-in fits this site." : "No sign-in in the vault is yours to use on this site.");
     item = own[0];
   }

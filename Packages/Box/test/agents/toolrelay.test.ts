@@ -12,10 +12,13 @@ import { noteToolServer } from "../../src/agents/fence"
 const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-relay-test-"))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
 
+/** The agent's thread holding a session's tools. */
+const thread = {}
+
 afterEach(() => {
   setToolServer(undefined)
   setToolProgram(undefined)
-  for (const session of ["ses_one", "ses_two"]) dropRelayed(session)
+  for (const session of ["ses_one", "ses_two"]) dropRelayed(session, thread)
 })
 
 /** Calls a tool through the relay, as the agent would, with `key`'s session and saying it's `claims`'s. */
@@ -46,8 +49,8 @@ process.stdin.on("data", (chunk) => {
 })
 `)
     setToolProgram(JSON.stringify({ mcp: { servers: { "kuvo-browser": { command: [process.execPath, program], environment: {} } } } }))
-    const one = relayedTools("ses_one")!
-    const two = relayedTools("ses_two")!
+    const one = relayedTools("ses_one", thread)!
+    const two = relayedTools("ses_two", thread)!
     expect(one.url).toStartWith("http://127.0.0.1:")
     const [mine, claimed, theirs] = await Promise.all([call(one, 7), call(one, 7, "ses_two"), call(two, 7)])
     expect(mine.body).toEqual({ jsonrpc: "2.0", id: 7, result: { content: [{ type: "text", text: "ses_one" }] } })
@@ -74,7 +77,7 @@ process.stdin.on("data", (chunk) => {
 })
 `)
     setToolProgram(JSON.stringify({ mcp: { servers: { "kuvo-browser": { command: [process.execPath, program], environment: {} } } } }))
-    const tools = relayedTools("ses_one")!
+    const tools = relayedTools("ses_one", thread)!
     const post = (body: unknown, connection?: string) =>
       fetch(tools.url, { method: "POST", headers: { ...tools.headers, "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...(connection ? { "mcp-session-id": connection } : {}) }, body: JSON.stringify(body) })
     const connect = async () => (await post({ jsonrpc: "2.0", id: 0, method: "initialize", params: {} })).headers.get("mcp-session-id")!
@@ -94,9 +97,21 @@ process.stdin.on("data", (chunk) => {
 
   test("a key it didn't give, or one whose session is done, reaches nothing", async () => {
     setToolProgram(JSON.stringify({ mcp: { servers: { "kuvo-browser": { command: [process.execPath, "-e", ""], environment: {} } } } }))
-    const one = relayedTools("ses_one")!
+    const one = relayedTools("ses_one", thread)!
     expect((await call({ url: one.url, headers: { Authorization: "Bearer nope" } }, 1)).status).toBe(401)
-    dropRelayed("ses_one")
+    dropRelayed("ses_one", thread)
+    expect((await call(one, 1)).status).toBe(401)
+  })
+
+  test("a session's other agent keeps reaching its tools when one is done with them (an account switched, say)", async () => {
+    setToolProgram(JSON.stringify({ mcp: { servers: { "kuvo-browser": { command: [process.execPath, "-e", ""], environment: {} } } } }))
+    const other = {}
+    relayedTools("ses_one", thread)
+    const one = relayedTools("ses_one", other)!
+    dropRelayed("ses_one", thread)
+    expect((await call({ url: one.url, headers: { Authorization: "Bearer nope" } }, 1)).status).toBe(401)
+    expect((await call(one, 1)).status).not.toBe(401)
+    dropRelayed("ses_one", other)
     expect((await call(one, 1)).status).toBe(401)
   })
 })
@@ -115,7 +130,7 @@ describe("on this Mac: the app's server", () => {
     })
     try {
       setToolServer({ url: `http://127.0.0.1:${app.port}/mcp`, token: "app-password", timeout: 10_000 })
-      const one = relayedTools("ses_one")!
+      const one = relayedTools("ses_one", thread)!
       expect(one.headers.Authorization).not.toContain("app-password")
       const answer = await call({ ...one, headers: { ...one.headers, "X-Kuvo-Session": "ses_two" } }, 3, "ses_two")
       expect(answer.body).toEqual({ jsonrpc: "2.0", id: 3, result: { content: [] } })

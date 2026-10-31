@@ -2483,6 +2483,29 @@ export class Sessions {
     return [...this.live.values()].some((live) => [...live.threads.values()].some((thread) => thread.outside))
   }
 
+  /**
+   * Restarts the agents' processes here that started before the box's sandbox was on (you said
+   * to): each closes once its session is between turns (what it left running stops with it), and
+   * starts again in the sandbox with its next turn, going on with its conversation. Whether one
+   * still waits for its turn to end.
+   */
+  restartOutside(): boolean {
+    let waiting = false
+    for (const live of this.live.values()) {
+      for (const [providerID, thread] of live.threads) {
+        if (!thread.outside) continue
+        // (Its turn, and what it left going, commands or subagents, as when it closes idle.)
+        if (isBusy(live.doing) || thread.keepsWorking) {
+          waiting = true
+          continue
+        }
+        thread.close()
+        live.threads.delete(providerID)
+      }
+    }
+    return waiting
+  }
+
   permissions(id: string): PermissionRequest[] {
     this.record(id)
     return [...(this.live.get(id)?.permissions.values() ?? [])].map((pending) => pending.request)

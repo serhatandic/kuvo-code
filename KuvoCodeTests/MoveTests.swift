@@ -69,7 +69,8 @@ import Testing
         try await until { !Moves.isFrozen("ses_trip") && !Moves.isFrozen("ses_copy") }
         #expect(try await reply.value)
         #expect(engine.requests("POST", "/api/session/ses_trip/prompt").count == 1)
-        #expect(app.workspace.movedAway.isEmpty)
+        // (Let go of as each move's over is read, just after it unfreezes.)
+        try await until { app.workspace.movedAway.isEmpty }
         // The copy's this Mac's now, though a phone asked for the move: listed.
         try await until { app.workspace.session("ses_copy") != nil }
         #expect(!app.moves.isPending("ses_trip"))

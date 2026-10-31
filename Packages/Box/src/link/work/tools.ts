@@ -155,9 +155,9 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
     const folder = data.location?.directory ?? data.directory ?? "";
     const rules = rulesOf((caller.place.data.permissions ?? []) as KitRule[]);
     const seen = await callOf(target, permission, signal);
-    // What always comes to the user, whatever the mode, the plan or the goal's switches, and the
-    // policy (in the sandbox, its rule). Where the command runs in the sandbox, the sandbox's rule
-    // answers first, in its words; what always comes to the user still does after it.
+    // What always comes to the user, whatever the mode, the plan or the goal's switches, then the
+    // policy. A command that runs in the sandbox is the sandbox's rule's alone (`allowRefusal`):
+    // anything but what acts beyond this computer, which it reads as plainly as the line allows.
     const sandboxed = commandsInSandbox(target, permission);
     const user = `The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`;
     const always = () => {
@@ -169,7 +169,7 @@ export async function answerAskTool(caller: Caller, args: Record<string, unknown
       if (why === "above") return refused(`You can't allow that: you'd have to ask the user about it yourself. ${user}`);
       return why ? refused(`That's ${why}, which always comes to the user: you can't allow it. ${user}`) : null;
     };
-    const refusal = sandboxed && (permission.action === "shell" || permission.action === "bash") ? policy() ?? always() : always() ?? policy();
+    const refusal = sandboxed && (permission.action === "shell" || permission.action === "bash") ? policy() : always() ?? policy();
     if (refusal) return refusal;
   }
   try {

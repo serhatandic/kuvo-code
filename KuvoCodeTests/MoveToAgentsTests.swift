@@ -96,6 +96,42 @@ import Testing
                 "marked as carried on there, as its box marks one it carries: what waits on the box goes on there")
     }
 
+    /// The move takes a while (the run stopped, the whole conversation read and handed over).
+    /// Sent meanwhile, a message isn't left in the engine's session, which goes to Archived: it
+    /// stays in the composer, says why, and goes to the new session with all you'd written, to
+    /// the last moment, none of it also left behind in the old one.
+    @Test func whatYouSendWhileItMovesGoesWithIt() async throws {
+        defer { done() }
+        let session = StubEngine.session(id, title: "Settings", directory: folder)
+        engine.list([session])
+        engine.conversation(id, [text("msg_01", "Add a settings page", created: 1)])
+        engine.on("GET", "/api/session/\(id)", json: ["data": session])
+        engine.on("GET", "/api/session/\(id)/inbox", json: ["data": []])
+        engine.on("PATCH", "/api/session/\(id)", json: [:])
+        engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
+        let handing = Gate()
+        let imported = StubWeb.json(["data": StubEngine.session("ses_agent", title: "Settings", directory: folder)])
+        bridge.on("POST", "/api/session/import") { _ in
+            handing.wait()
+            return imported
+        }
+        await workspace.refresh()
+        let old = try #require(workspace.model(for: id))
+
+        let moving = Task { try await workspace.moveToAgents(id, model: ModelRef(id: "sonnet", providerID: "claude-code")) }
+        try await until { !bridge.requests("POST", "/api/session/import").isEmpty }
+        old.draftText = "and a font size"
+        old.submitDraft(for: nil, queue: false, commands: [])
+        #expect(old.draftText == "and a font size", "it stays in the composer")
+        #expect(old.failure != nil, "and says why")
+        handing.open()
+        _ = try await moving.value
+
+        #expect(engine.requests("POST", "/api/session/\(id)/prompt").isEmpty, "nothing went to the engine's session")
+        #expect(Drafts.shared["ses_agent"].text == "and a font size", "it's in the new session's composer")
+        #expect(Drafts.shared[id].isEmpty, "and not also left in the archived one's")
+    }
+
     /// Its side panel goes with it: the page it had open (signed in, say) is the new session's,
     /// the one its agent goes on browsing in, not left running behind the archived one.
     @Test func itsPanelGoesWithIt() async throws {

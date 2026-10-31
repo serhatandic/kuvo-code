@@ -31,16 +31,10 @@ export interface PeerPlaces {
 
 export function peerPlaces(): PeerPlaces {
   const targets: Target[] = [];
-  let bridge = false;
   try { targets.push(readEngineFile()); } catch {}
-  try {
-    const record = readBridgeFile();
-    if (record?.port && record?.password && runs(record.pid, "kuvo-agents")) {
-      targets.push(record);
-      bridge = true;
-    }
-  } catch {}
-  return { targets, bridge };
+  const bridge = bridgeTarget();
+  if (bridge) targets.push(bridge);
+  return { targets, bridge: bridge !== null };
 }
 
 // Where a letter's agent can be here: the engine, and the coding agents' bridge while it runs.
