@@ -17284,6 +17284,19 @@ The parts before yours are done. What they reported:
 
 Do your part here, with all your tools, as you would any task from the user. When it's done, end with a few lines on what you did and anything left over. That last message of yours goes to the chat as your report on its own, so don't send it anywhere; the others' parts start from it.`;
 }
+function partShown(text) {
+  if (!text.startsWith(opening3))
+    return {};
+  const head = text.indexOf(`]
+
+`);
+  if (head < 0)
+    return {};
+  const name = text.slice(opening3.length, head).replace(/ \u00B7 [^\u00B7]+$/, "");
+  const rest = text.slice(head + 3);
+  const end = rest.indexOf(divider);
+  return { from: name, words: (end < 0 ? rest : rest.slice(0, end)).trim() };
+}
 function plainError(error, provider, place) {
   if (!/authorization header|unauthori[sz]ed|\b401\b|\b403\b|forbidden|invalid api key/i.test(error))
     return error;
@@ -18437,6 +18450,136 @@ class SeatAPI {
   }
 }
 
+// Packages/Box/src/shared/queues.ts
+import fs3 from "fs";
+import path3 from "path";
+
+// Packages/Box/src/shared/json.ts
+var isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+// Packages/Box/src/shared/files.ts
+import fs2 from "fs";
+import path2 from "path";
+function writePrivate(file, text) {
+  fs2.mkdirSync(path2.dirname(file), { recursive: true, mode: 448 });
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs2.writeFileSync(temporary, text, { mode: 384 });
+  fs2.renameSync(temporary, file);
+}
+function take(lock, stale) {
+  try {
+    fs2.mkdirSync(lock);
+    return true;
+  } catch {
+    try {
+      if (Date.now() - fs2.statSync(lock).mtimeMs > stale)
+        fs2.rmdirSync(lock);
+    } catch {}
+    return false;
+  }
+}
+function hold(lock, stale, wait) {
+  fs2.mkdirSync(path2.dirname(lock), { recursive: true, mode: 448 });
+  const nap = new Int32Array(new SharedArrayBuffer(4));
+  for (let i = 0;i < wait / 10; i++) {
+    if (take(lock, stale))
+      return true;
+    Atomics.wait(nap, 0, 0, 10);
+  }
+  return false;
+}
+function locked(lock, work, { stale = 1e4, wait = 3000 } = {}) {
+  const held = hold(lock, stale, wait);
+  try {
+    return work();
+  } finally {
+    if (held)
+      try {
+        fs2.rmdirSync(lock);
+      } catch {}
+  }
+}
+var turns = new Map;
+
+// Packages/Box/src/shared/queues.ts
+var queueFiles = (run) => ({
+  file: path3.join(run, "queues.json"),
+  waiting: path3.join(run, "waiting"),
+  lock: path3.join(run, ".queues.lock")
+});
+var WAITING_ID = /^msg_[A-Za-z0-9]{1,80}$/;
+var keptWaiting = (value) => (Array.isArray(value) ? value : []).flatMap((item) => {
+  if (!isObject(item) || typeof item.id !== "string" || !WAITING_ID.test(item.id) || typeof item.text !== "string")
+    return [];
+  const files = Array.isArray(item.files) ? item.files.filter((name) => typeof name === "string") : [];
+  return [{ id: item.id, ...typeof item.from === "string" ? { from: item.from } : {}, text: item.text, ...files.length ? { files } : {}, at: typeof item.at === "number" ? item.at : 0 }];
+});
+var keptState = (value) => {
+  const waiting = keptWaiting(isObject(value) ? value.waiting : undefined);
+  return {
+    paused: isObject(value) && value.paused === true,
+    held: isObject(value) && Array.isArray(value.held) ? value.held.filter((id) => typeof id === "string") : [],
+    ...isObject(value) && typeof value.resumed === "number" ? { resumed: value.resumed } : {},
+    ...waiting.length ? { waiting } : {}
+  };
+};
+var showsQueue = (state) => state.paused || state.held.length > 0 || Boolean(state.waiting?.length);
+var RESUMED_FOR = 60000;
+function readQueues(files) {
+  let all = {};
+  try {
+    all = JSON.parse(fs3.readFileSync(files.file, "utf8"));
+  } catch {}
+  return isObject(all) ? Object.fromEntries(Object.entries(all).map(([session, state]) => [session, keptState(state)])) : {};
+}
+function changeQueue(files, session, change, changed) {
+  let made = false;
+  const after = locked(files.lock, () => {
+    const all = readQueues(files);
+    const before = all[session] ?? { paused: false, held: [] };
+    const state = keptState(change(before));
+    state.held = [...new Set(state.held)];
+    made = JSON.stringify(state) !== JSON.stringify(before);
+    if (!made)
+      return state;
+    all[session] = state;
+    for (const [id, each] of Object.entries(all)) {
+      if (each.resumed && Date.now() - each.resumed >= RESUMED_FOR)
+        delete each.resumed;
+      if (!showsQueue(each) && !each.resumed)
+        delete all[id];
+    }
+    try {
+      writePrivate(files.file, JSON.stringify(all));
+    } catch {}
+    return state;
+  });
+  if (made)
+    changed?.();
+  return after;
+}
+var waitingFile = (files, id) => path3.join(files.waiting, `${id}.json`);
+var fileNames = (files) => (files ?? []).flatMap((file) => {
+  if (!isObject(file))
+    return [];
+  if (typeof file.name === "string" && file.name)
+    return [file.name];
+  return typeof file.uri === "string" && !file.uri.startsWith("data:") ? [path3.basename(decodeURIComponent(file.uri.replace(/^file:\/\//, "")))] : ["file"];
+});
+function keepWaiting(files, session, message, { from, words, kept: keptText } = {}, changed) {
+  let kept = false;
+  changeQueue(files, session, (state) => {
+    if (!state.paused)
+      return state;
+    writePrivate(waitingFile(files, message.id), JSON.stringify(keptText === undefined ? message : { ...message, text: keptText }));
+    kept = true;
+    const names = fileNames(message.files);
+    const waiting = { id: message.id, ...from ? { from } : {}, text: words ?? message.text, ...names.length ? { files: names } : {}, at: Date.now() };
+    return { ...state, waiting: [...(state.waiting ?? []).filter((each) => each.id !== message.id), waiting] };
+  }, changed);
+  return kept;
+}
+
 // Packages/Box/src/agents/groups/seat.ts
 var seatKey = "kuvo.seat";
 var turnLimit2 = 600000;
@@ -18445,7 +18588,7 @@ class Cancelled extends Error {
 }
 class SeatGone extends Error {
 }
-var sleep = (ms, signal) => new Promise((done, fail) => {
+var sleep2 = (ms, signal) => new Promise((done, fail) => {
   if (signal?.aborted)
     return fail(new Cancelled);
   const stop = () => {
@@ -18477,7 +18620,7 @@ class Nudge {
     }
     const woken = new Promise((resolve) => this.waiting = resolve);
     try {
-      await Promise.race([sleep(ms, signal), woken]);
+      await Promise.race([sleep2(ms, signal), woken]);
     } finally {
       this.waiting = undefined;
     }
@@ -18798,14 +18941,21 @@ class Seats {
       throw new Error("the coding agents aren\u2019t running");
     const promptID = newID("msg");
     this.context.given?.(promptID, { chat, bot: bot.id });
+    const queues = this.context.queues;
+    if (queues && keepWaiting(queues, bot.sessionID, { id: promptID, text, delivery: "queue" }, partShown(text)))
+      return promptID;
     await api.prompt(bot.sessionID, promptID, text, "queue");
     return promptID;
+  }
+  waitsOnBox(session, promptID) {
+    const queues = this.context.queues;
+    return queues !== undefined && (readQueues(queues)[session]?.waiting ?? []).some((item) => item.id === promptID);
   }
   async follow(botID, promptID, started, wanted) {
     let misses = 0;
     let stoppedChecks = 0;
     for (;; ) {
-      await sleep(3000 * (this.context.pace ?? 1));
+      await sleep2(3000 * (this.context.pace ?? 1));
       if (!wanted())
         return;
       const bot = this.bot(botID);
@@ -18826,7 +18976,7 @@ class Seats {
         continue;
       const read = await this.messagesFrom(promptID, bot.sessionID, started, api);
       if (read.kind !== "found") {
-        if (read.kind === "missing" && !queued.some((item) => item.id === promptID)) {
+        if (read.kind === "missing" && !queued.some((item) => item.id === promptID) && !this.waitsOnBox(bot.sessionID, promptID)) {
           if (++misses >= 2)
             return { ok: false, why: `its message was taken back before ${bot.name} read it` };
         } else {
@@ -18966,7 +19116,7 @@ class Seats {
     let woken = false;
     for (;; ) {
       try {
-        await (nudge ? nudge.sleep(600 * pace, signal) : sleep(600 * pace, signal));
+        await (nudge ? nudge.sleep(600 * pace, signal) : sleep2(600 * pace, signal));
       } catch (error) {
         await api.interrupt(seat).catch(() => {});
         throw error;
@@ -21804,7 +21954,8 @@ var groupMemoryKey = process.env.KUVO_GROUPS_MEMORY_KEY || undefined;
 var artifactsFolder = onMachine ? join27(machineHome, "artifacts") : process.env.KUVO_ARTIFACTS || undefined;
 var botsFolder = groupFolders?.bots ?? (onMachine ? join27(machineHome, "bots") : process.env.KUVO_BOTS || undefined);
 var agentsFile = onMachine ? join27(machineHome, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined;
-for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", ...onMachine ? [] : ["KUVO_BOTS"]])
+var runFolder = onMachine ? join27(machineHome, "run") : process.env.KUVO_RUN || undefined;
+for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", "KUVO_RUN", ...onMachine ? [] : ["KUVO_BOTS"]])
   delete process.env[name];
 if (groupFolders) {
   try {
@@ -21827,7 +21978,8 @@ if (groupFolders) {
         return { name: agent.name, signedOut: !account.signedIn && agent.methods().length > 0 };
       },
       peers: directory,
-      given: (prompt, part) => partGiven?.(prompt, part.chat)
+      given: (prompt, part) => partGiven?.(prompt, part.chat),
+      queues: runFolder ? queueFiles(runFolder) : undefined
     });
     const server = new SeatServer(runner.seats, post, { store, remembered: (from, memory) => runner.remembered(from, memory) });
     groups = { store, runner, peers: { post, directory, server, runner } };
@@ -21967,4 +22119,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f5769ee926e192f87bb99fa60b3f6d1f6184035ffcb52454bf4d9afc1dc3b5e1
+// Built from Packages/Box/src/agents b3b8feebc471f026eadb85c7c07fa237b08815be767bc2636604196f0aad3a82

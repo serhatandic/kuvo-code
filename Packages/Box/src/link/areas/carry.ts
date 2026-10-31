@@ -8,6 +8,7 @@ import { botHere, isModel, isMoving, MOVING } from "../bots/here";
 import { readKit, runsWithAgents } from "../bots/kit";
 import { tellBot, toldNow } from "../bots/tell";
 import { call, engineGet } from "../engine/client";
+import { carryQueue } from "../engine/queue";
 import { conversationOf } from "../engine/conversations";
 import { messageID } from "../engine/sessions";
 import { listOf } from "../files";
@@ -118,11 +119,14 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
       const still: Record<string, unknown> = (await engineGet(engine, "api/session/active").catch(() => null) as EngineAnswer<Record<string, unknown>> | null)?.data ?? {};
       if (!(id in still)) break;
     }
+    const renamed: Record<string, string> = Object.fromEntries(waiting.map(item => [item.id, messageID()]));
     const moved = await call(agents, "POST", "/api/session/import", {
       title: session.title, agent: session.agent, model, location: { directory }, permissions: session.permissions, messages,
-      waiting: waiting.map(item => ({ id: messageID(), text: item.text, files: promptFiles(item.payload) })),
+      waiting: waiting.map(item => ({ id: renamed[item.id], text: item.text, files: promptFiles(item.payload) })),
     }) as Fields<"id"> | null;
     if (typeof moved?.id !== "string") return no(502, "The coding agents didn’t take it.");
+    // Stopped by you, it stays stopped there, with what waited on the box.
+    carryQueue(id, moved.id, renamed);
     for (const item of waiting) await call(engine, "DELETE", `/${route}/inbox/${encodeURIComponent(item.id)}`).catch(() => {});
     const entries = `/api/experimental/session/${encodeURIComponent(moved.id)}/instructions/entries`;
     await tellWorktree(agents, moved.id).catch(() => {});

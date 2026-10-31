@@ -5,6 +5,7 @@
 // (`seat.ts`). They go on with no client connected; the Mac's window and the phone follow them
 // through the bridge's API and its event feed.
 
+import type { QueueFiles } from "../../shared/queues"
 import { emit } from "../events"
 import { newID } from "../ids"
 import { SeatAPI, type Requester } from "./api"
@@ -77,6 +78,8 @@ export interface RunnerContext {
   peers?: PeerDirectory
   /** A chat's part given to a bot's own conversation (see `SeatContext.given`). */
   given?: (prompt: string, part: { chat: string; bot: string }) => void
+  /** The box's queues (see `SeatContext.queues`). */
+  queues?: QueueFiles
 }
 
 /** A bot in a chat: one of this computer's, or another's (`box`). */

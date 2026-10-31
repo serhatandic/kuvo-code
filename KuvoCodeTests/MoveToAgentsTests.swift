@@ -91,6 +91,9 @@ import Testing
         #expect(Drafts.shared["ses_agent"].text == "and a font size", "what you were typing comes along")
         #expect(workspace.session("ses_agent") != nil)
         #expect(Workspace.isArchived(try #require(workspace.session(id))), "the engine's goes to Archived")
+        let archived = try #require(engine.requests("PATCH", "/api/session/\(id)").last)
+        #expect((archived.body["metadata"] as? [String: Any])?["kuvo.carriedTo"] as? String == "ses_agent",
+                "marked as carried on there, as its box marks one it carries: what waits on the box goes on there")
     }
 
     /// The move takes a while (the run stopped, the whole conversation read and handed over).

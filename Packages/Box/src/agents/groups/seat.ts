@@ -6,10 +6,11 @@
 
 import { autoProvider } from "../auto"
 import { parseProvider } from "../accounts"
+import { keepWaiting, readQueues, type QueueFiles } from "../../shared/queues"
 import { newID } from "../ids"
 import type { ModelRef, ToolCall } from "../wire"
 import { SeatAPI, type Requester } from "./api"
-import { activity as activityOf, isWaiting, plainError, said, seatBudget, seatInstructions, seatRules, thought, type Activity, type Group, type SeatBot } from "./rules"
+import { activity as activityOf, isWaiting, partShown, plainError, said, seatBudget, seatInstructions, seatRules, thought, type Activity, type Group, type SeatBot } from "./rules"
 import type { GroupStore, MachineBot } from "./store"
 
 /** The key of a seat's instructions. */
@@ -115,6 +116,8 @@ export interface SeatContext {
   agentAccount?: (provider: string) => Promise<{ name: string; signedOut: boolean } | undefined>
   /** A chat's part given to a bot's own conversation, by the message that starts it: what the bot makes there is the chat's too (the record of what agents made). */
   given?: (prompt: string, part: { chat: string; bot: string }) => void
+  /** The box's queues: a part for a conversation you stopped waits there until you resume it. */
+  queues?: QueueFiles
 }
 
 class Cancelled extends Error {}
@@ -513,8 +516,18 @@ export class Seats implements SeatHome {
     if (!api) throw new Error("the coding agents aren’t running")
     const promptID = newID("msg")
     this.context.given?.(promptID, { chat, bot: bot.id })
+    // Its conversation stopped by you: it waits on the box with what else came, shown as the
+    // chat's, and goes once you resume it (PROTOCOL.md, "What arrives waits").
+    const queues = this.context.queues
+    if (queues && keepWaiting(queues, bot.sessionID, { id: promptID, text, delivery: "queue" }, partShown(text))) return promptID
     await api.prompt(bot.sessionID, promptID, text, "queue")
     return promptID
+  }
+
+  /** Whether a bot's message waits on the box for its conversation to go on. */
+  private waitsOnBox(session: string, promptID: string): boolean {
+    const queues = this.context.queues
+    return queues !== undefined && (readQueues(queues)[session]?.waiting ?? []).some((item) => item.id === promptID)
   }
 
   /**
@@ -540,7 +553,7 @@ export class Seats implements SeatHome {
       const read = await this.messagesFrom(promptID, bot.sessionID, started, api)
       if (read.kind !== "found") {
         // Its message taken back before it was read: the part ends, rather than working forever; twice in a row, both read.
-        if (read.kind === "missing" && !queued.some((item) => item.id === promptID)) {
+        if (read.kind === "missing" && !queued.some((item) => item.id === promptID) && !this.waitsOnBox(bot.sessionID, promptID)) {
           if (++misses >= 2) return { ok: false, why: `its message was taken back before ${bot.name} read it` }
         } else {
           misses = 0
