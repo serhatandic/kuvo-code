@@ -17980,7 +17980,7 @@ async function* queueRoute(context, match) {
     return yield* json(502, { message: String(error?.message ?? error) });
   }
 }
-async function* add({ request, bridge, json, signal }, target, session) {
+async function* add({ request, bridge, readEngine, json, signal }, target, session) {
   const given = parsed(request.body);
   if (!isObject(given) || typeof given.text !== "string" || !given.text.trim() && !(Array.isArray(given.files) && given.files.length))
     return yield* json(400, { message: 'Send {"text": …}.' });
@@ -17991,9 +17991,11 @@ async function* add({ request, bridge, json, signal }, target, session) {
   const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
   const toAgents = bridge()?.port === target.port;
   const asGiven = Buffer.from(JSON.stringify({ id, text: given.text, ...Array.isArray(given.files) ? { files: given.files } : {}, delivery }));
-  const body = given.kept === true ? asGiven : await attachedIn(asGiven, session, modelInput(base, headers, signal), request.fromMac === true, !toAgents);
+  const fromPhoneToo = request.fromMac !== true && request.fromApp !== true;
+  const attached = given.kept === true ? asGiven : await attachedIn(asGiven, session, modelInput(base, headers, signal), request.fromMac === true, !toAgents);
+  const body = given.kept !== true && fromPhoneToo ? fromPhone(await namedIn(attached, session, namingHere(readEngine))) : attached;
   const message = parsed(body);
-  const words = given.kept === true && typeof given.words === "string" ? given.words : undefined;
+  const words = given.kept !== true ? given.text : typeof given.words === "string" ? given.words : undefined;
   if (keepWaiting(session, message, { from, words }))
     return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
   await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message);

@@ -576,7 +576,8 @@ the same for every client and with none connected, and keeps them in `run/queues
   on the box sent), and a run under way stopped to go on with it; 404 when it isn't waiting.
   `POST …/queue/add` (`{id?, text, files?, delivery?, from?}`, a prompt's body): a client's own
   message for the queue (Undo, or one sent after this run), its files kept on the box as a
-  message's are; while it's paused it waits on the box (`from` names who it was from, for one put
+  message's are (a phone's also naming its agents and saying it's from the phone, as its prompt
+  would), shown as written; while it's paused it waits on the box (`from` names who it was from, for one put
   back), else it goes to the engine as asked (`queue` by default); its answer says which,
   `waits: true|false`. `DELETE …/queue/<item>`: one waiting on the box taken away, its answer
   carrying it as it was, `removed: {id, text, files?, delivery, from?, words}` (`words`, as it was

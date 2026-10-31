@@ -10,7 +10,8 @@ import { asked } from "../engine/client";
 import { dropWaiting, holdQueue, keepWaiting, queueFollowers, queueOf, readQueues, resumeQueue, sendNow, showsQueue, shownQueue, stopSession } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { attachedIn } from "../server/attached";
-import { modelInput } from "../server/forward";
+import { fromPhone, modelInput } from "../server/forward";
+import { namedIn, namingHere } from "../server/naming";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import type { Target } from "../../shared/records";
 
@@ -70,7 +71,7 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
 // files kept on the box as a message's are (`attachedIn`), then waiting there while the queue is
 // paused, else to the engine as it asked. `{id?, text, files?, delivery?, from?}`; `waits` says which.
 // `kept`: one a DELETE gave back (Undo), as it was kept already, shown with its `words`.
-async function* add({ request, bridge, json, signal }: RouteContext, target: Target, session: string): AsyncGenerator<AnswerPiece> {
+async function* add({ request, bridge, readEngine, json, signal }: RouteContext, target: Target, session: string): AsyncGenerator<AnswerPiece> {
   const given = parsed(request.body);
   if (!isObject(given) || typeof given.text !== "string" || (!given.text.trim() && !(Array.isArray(given.files) && given.files.length))) return yield* json(400, { message: "Send {\"text\": …}." });
   const id = typeof given.id === "string" && /^msg_[A-Za-z0-9]{1,80}$/.test(given.id) ? given.id : messageID();
@@ -80,9 +81,13 @@ async function* add({ request, bridge, json, signal }: RouteContext, target: Tar
   const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
   const toAgents = bridge()?.port === target.port;
   const asGiven = Buffer.from(JSON.stringify({ id, text: given.text, ...(Array.isArray(given.files) ? { files: given.files } : {}), delivery }));
-  const body = given.kept === true ? asGiven : await attachedIn(asGiven, session, modelInput(base, headers, signal), request.fromMac === true, !toAgents);
+  // (A phone's also says who it names with "&", and that it's from the phone, as its prompt would.)
+  const fromPhoneToo = request.fromMac !== true && request.fromApp !== true;
+  const attached = given.kept === true ? asGiven : await attachedIn(asGiven, session, modelInput(base, headers, signal), request.fromMac === true, !toAgents);
+  const body = given.kept !== true && fromPhoneToo ? fromPhone(await namedIn(attached, session, namingHere(readEngine))) : attached;
   const message = parsed(body) as { id: string; text: string; files?: unknown[]; delivery: "steer" | "queue" };
-  const words = given.kept === true && typeof given.words === "string" ? given.words : undefined;
+  // Shown as written (not with what was added for the agent), or, put back, as it was shown.
+  const words = given.kept !== true ? given.text : typeof given.words === "string" ? given.words : undefined;
   if (keepWaiting(session, message, { from, words })) return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
   await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message);
   return yield* json(200, { ...shownQueue(queueOf(session)), waits: false });

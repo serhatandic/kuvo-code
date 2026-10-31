@@ -104,9 +104,10 @@ function box() {
 
 // The box's routes, as a client asks them.
 const handle = link.engineHandler(() => target, { name: "lab" }, () => { throw new Error("none"); });
-async function ask(method, route, body) {
+// (From this Mac's app, unless `from` says "phone".)
+async function ask(method, route, body, from = "app") {
   let status = 0, text = "";
-  for await (const part of handle({ method, path: route, headers: {}, body: body === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(body)) }, {}, undefined)) {
+  for await (const part of handle({ method, path: route, headers: {}, body: body === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(body)), fromApp: from === "app" }, {}, undefined)) {
     if (part.head) status = part.head.status;
     if (part.body) text += part.body.toString();
   }
@@ -370,6 +371,16 @@ test("Undo puts one taken away from what waits back as it was: its whole words, 
   assert.deepEqual(prompted, [], "nothing reached the engine");
   await ask("POST", "kuvo/sessions/ses_1/queue/msg_w1/now");
   assert.deepEqual(prompted.map(each => [each.id, each.text]), [["msg_w1", "From Ada: the build is green."]], "whole, as it would have gone");
+});
+
+test("a phone's message held while stopped goes as the phone's prompt would, saying it's from the phone, shown as written", async () => {
+  inboxes.ses_1 = [];
+  await ask("POST", "kuvo/sessions/ses_1/stop");
+  const added = await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_p1", text: "Ship it after this." }, "phone");
+  assert.equal(added.json.waits, true);
+  assert.deepEqual(added.json.waiting.map(each => each.text), ["Ship it after this."]);
+  await ask("POST", "kuvo/sessions/ses_1/queue/msg_p1/now");
+  assert.match(prompted[0].text, /^Ship it after this\.\n\n<from-phone>[\s\S]*<\/from-phone>$/);
 });
 
 test("Send Now sends one waiting on the box at once, the queue going again; one taken away doesn't go", async () => {
