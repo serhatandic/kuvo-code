@@ -160,7 +160,7 @@ struct GroupEditor: View {
                 }
                 .frame(width: 92)
                 .animation(.ui, value: members)
-                WellGroup(isActive: focus != nil) {
+                WellGroup {
                     WellRow(isActive: focus == .name) {
                         Image(systemName: "bubble.left.and.bubble.right")
                     } content: {
@@ -229,7 +229,7 @@ struct GroupEditor: View {
 
     /// When the chat meets on its own, like a standup every weekday at 9.
     private var meetingRows: some View {
-        WellGroup(isActive: focus == .topic) {
+        WellGroup {
             WellRow {
                 Image(systemName: "calendar")
             } content: {

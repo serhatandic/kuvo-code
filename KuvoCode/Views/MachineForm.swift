@@ -72,7 +72,7 @@ struct MachineForm: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: 8) {
-                WellGroup(isActive: isFocused) {
+                WellGroup {
                     WellRow(isActive: isFocused) {
                         Image(systemName: "server.rack")
                     } content: {

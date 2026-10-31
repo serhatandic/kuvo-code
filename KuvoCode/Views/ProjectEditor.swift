@@ -157,7 +157,7 @@ struct ProjectEditor: View {
             }
 
             section("Run") {
-                WellGroup(isActive: isRunFocused) {
+                WellGroup {
                     WellRow(isActive: isRunFocused) {
                         Image(systemName: "play.fill")
                             .font(.system(size: 13))
@@ -175,7 +175,7 @@ struct ProjectEditor: View {
 
             section("Terminal Instead of Chat", note: "New sessions in this project open a terminal running this command, flags and all; leave it empty for the usual chat.") {
                 VStack(alignment: .leading, spacing: 10) {
-                    WellGroup(isActive: isTerminalFocused) {
+                    WellGroup {
                         WellRow(isActive: isTerminalFocused) {
                             Image(systemName: "apple.terminal")
                                 .font(.system(size: 13))
@@ -206,7 +206,7 @@ struct ProjectEditor: View {
 
             if setup != nil {
                 section("Worktree Setup") {
-                    WellGroup(isActive: isSetupFocused) {
+                    WellGroup {
                         WellRow(isActive: isSetupFocused) {
                             Image(systemName: "arrow.triangle.branch")
                                 .font(.system(size: 14))
@@ -279,7 +279,7 @@ struct ProjectEditor: View {
     // MARK: Name
 
     private var nameField: some View {
-        WellGroup(isActive: isNameFocused) {
+        WellGroup {
             WellRow(isActive: isNameFocused) {
                 Image(systemName: "folder")
             } content: {
@@ -414,12 +414,11 @@ private struct FolderRow: View {
 }
 
 /// A group of rows drawn into the sheet like one field: sunken, with an edge of its own and no
-/// outline, a touch deeper while you type in it. In a popover, the rows sit on the popover itself
+/// outline. It looks the same while you type in it, like every other well: the row's icon
+/// shows the focus (`WellRow`). In a popover, the rows sit on the popover itself
 /// (`popoverContent`).
 struct WellGroup<Content: View>: View {
-    var isActive = false
     @ViewBuilder var content: Content
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.isInPopover) private var isInPopover
 
     var body: some View {
@@ -427,10 +426,8 @@ struct WellGroup<Content: View>: View {
             VStack(spacing: 0) { content }
         } else {
             VStack(spacing: 0) { content }
-                .background((scheme == .dark ? Color.black : Surface.slate).opacity(isActive ? 0.05 : 0), in: .rect(cornerRadius: 10))
                 .clipShape(.rect(cornerRadius: 10))
                 .recessedWell(RoundedRectangle(cornerRadius: 10))
-                .animation(.easeOut(duration: 0.15), value: isActive)
         }
     }
 }

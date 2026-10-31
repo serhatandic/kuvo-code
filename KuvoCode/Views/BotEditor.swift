@@ -449,7 +449,7 @@ struct BotEditor: View {
             }
             .frame(width: 92)
             VStack(alignment: .leading, spacing: 8) {
-                WellGroup(isActive: focus == .name) {
+                WellGroup {
                     WellRow(isActive: focus == .name) {
                         Image(systemName: "face.smiling")
                     } content: {
@@ -665,7 +665,7 @@ private struct JobFields: View {
                 .font(.callout)
                 .transition(.opacity)
             }
-            WellGroup(isActive: focus != nil) {
+            WellGroup {
                 WellRow(isActive: focus == .line) {
                     Image(systemName: "briefcase")
                 } content: {
@@ -926,7 +926,7 @@ private struct PersonalityPicker: View {
     /// Making or changing one of yours: its name, and how it talks.
     private var form: some View {
         VStack(alignment: .leading, spacing: 10) {
-            WellGroup(isActive: draftFocus != nil) {
+            WellGroup {
                 WellRow(isActive: draftFocus == .name) {
                     Image(systemName: "person.crop.circle")
                 } content: {
