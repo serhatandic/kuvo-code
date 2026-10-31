@@ -1612,11 +1612,29 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     picture's old side), its bytes; `404` for one git doesn't have, `413` over 25 MB.
   - `POST kuvo/git/commit {"directory", "message", "push"?, "author"?}` commits what's staged, or
     everything in the folder when nothing is, and pushes when asked (a new branch is pushed and
-    tracked) → `200 {}`, or `422 {"message"}` with git's words (a failed push: committed, but the
-    push didn't go through). `author`: `GIT_AUTHOR_NAME`, `…_EMAIL`, `GIT_COMMITTER_NAME`,
+    tracked) → `200 {}`, or `422 {"message"}` with git's words. A push that didn't go through
+    after the commit landed says so too, `422 {"message", "committed": true, "pushed": false}`
+    (bridge 0.9.143): a client offers Push then, never the commit again. `author`: `GIT_AUTHOR_NAME`, `…_EMAIL`, `GIT_COMMITTER_NAME`,
     `…_EMAIL` from your shell, the only settings taken along. `POST kuvo/git/commit-diff
     {"directory"}` → `{"diff", "staged"}`: what a commit would take, cut short, for writing its
     message.
+  - `POST kuvo/git/push {"directory"}` (`git.push`, bridge 0.9.143) pushes what the folder has
+    checked out (a new branch pushed and tracked) → `200 {}`, or `422 {"message"}` with git's words.
+  - `POST kuvo/git/merge {"directory", "into"}` (`git.merge`, bridge 0.9.143): Merge into…, what's
+    committed on the folder's branch merged into `into` (a worktree's `base` in `kuvo/worktrees`),
+    in the folder that has `into` checked out (the project's) → `200 {}`. `409 {"message"}` when it
+    can't go yet (changes not committed, nothing `into` doesn't have, `into` checked out nowhere,
+    the folder on no branch), and for a merge that would conflict, `409 {"message", "conflicts":
+    [path]}`: the merge taken back and nothing merged. `422 {"message"}` with git's words when it
+    stopped for another reason (taken back too).
+  - `POST kuvo/git/pull-request {"directory", "title"?, "body"?}` (`git.pull-request`, bridge
+    0.9.143): Create Pull Request. The folder's branch is pushed to `origin` (and tracked), then
+    made a pull request with GitHub's `gh` when it's there and signed in → `{"url"}` (also for
+    one already open for the branch); otherwise → `{"compareURL"}`, the GitHub or GitLab page that
+    opens one, with the title and description filled in; `{}` for another host (pushed, to open
+    one there). Without a title, `gh` takes it from the commits. Its base is the worktree's, from
+    the box's worktrees (none: the host's main branch); with one, `409 {"message"}` as for a
+    merge when it can't go yet. `422 {"message"}` for a push that didn't go through.
 - `GET kuvo/folders[?path=<folder>&hidden=1]` (`folders`): the folders in one of this box's folders,
   for a client to choose one (Settings › Worktrees' folder) as a folder panel does → `{"path",
   "home", "parent", "folders": [{name, repository?}]}`, ordered as Finder orders names, without
@@ -1900,10 +1918,17 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   sign-in (the fields the page has, and the accounts Passwords keeps for the site, never
   their passwords), a one-time code, or a step only you can do. `kuvo/asks/events` is the same
   list as a response that doesn't end: a line of JSON now, and another each time it changes.
-  `POST kuvo/asks/<id>` answers one: `{"answer": "signIn", "username", "password", "save"}`
-  (or `"saved": "<account>"`, which the Mac fills in from Passwords itself), `{"answer":
-  "code", "code"}`, `{"answer": "done"}` or `{"answer": "declined"}`. What's typed goes into
-  the page, never to the agent. An ask has `"passkey": true` once its site asked for a passkey
+  `POST kuvo/asks/<id>` answers one: `{"answer": "signIn", "username", "password", "save"?,
+  "agents"?}` (or `"saved": "<account>"`, which the Mac fills in from its vault itself),
+  `{"answer": "code", "code"}`, `{"answer": "done"}` or `{"answer": "declined"}`. What's typed
+  goes into the page, never to the agent. A sign-in is kept as the Mac's own card keeps it, over
+  https only (a site that's `http://…` or a file has `offersToSave` false, and `save` and `agents`
+  are left out): `save` keeps what's typed in the vault (a saved account's password typed anew is
+  kept too), and `agents: true` is Let agents sign in here on their own, for the account answered
+  with (bridge 0.9.143; a client asks for Face ID or Touch ID first when it's a saved account's).
+  The answer comes once it's kept: `200 {}`, or `200 {"message"}` when the vault didn't take it
+  (the page has the sign-in all the same). A `saved` account that's gone, or whose password can't
+  be read, gets `422 {"message"}` and the ask stays, for the password to be typed instead. An ask has `"passkey": true` once its site asked for a passkey
   (then, or in the ten minutes before): the browsers can't use passkeys yet, so a client tells
   you to sign in another way.
 - A machine's bridge answers the same three for what's asked in that machine's
@@ -2193,6 +2218,9 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `folders` | `kuvo/folders` |
 | `folders.files` | `kuvo/folders?files=1`: a folder's files too, and `reason` on a refusal |
 | `git` | `kuvo/git/…`: Changes (bridge 0.9.94) |
+| `git.merge` | `POST kuvo/git/merge`: Merge into… (bridge 0.9.143) |
+| `git.pull-request` | `POST kuvo/git/pull-request`: Create Pull Request (bridge 0.9.143) |
+| `git.push` | `POST kuvo/git/push`, and a commit's `committed` when only its push failed (bridge 0.9.143) |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
 | `btw.threads` | a side question's `thread`, follow-ups and a thread's removal (bridge 0.9.98) |

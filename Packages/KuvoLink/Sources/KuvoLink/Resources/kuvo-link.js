@@ -9454,6 +9454,9 @@ var FEATURES = [
   "folders",
   "folders.files",
   "git",
+  "git.merge",
+  "git.pull-request",
+  "git.push",
   "goals",
   "groups",
   "groups.delete",
@@ -17794,20 +17797,20 @@ var EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 var AUTHOR = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"];
 var SCOPES = ["uncommitted", "unstaged", "staged", "branch"];
 var STATUSES = ["added", "deleted", "modified", "renamed"];
-function git(folder, args, changing = false, more = {}) {
+function git(folder, args, changing = false, more = {}, program = "git") {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...changing ? {} : { GIT_OPTIONAL_LOCKS: "0" }, ...more };
   if (!changing) {
     return new Promise((resolve) => {
-      execFile4("git", args, { cwd: folder, env, encoding: "buffer", maxBuffer: 1024 * 1024 * 1024, timeout: 600000 }, (error, stdout, stderr) => resolve({ ok: !error, out: stdout ?? Buffer.alloc(0), said: String(stderr ?? "").trim() }));
+      execFile4(program, args, { cwd: folder, env, encoding: "buffer", maxBuffer: 1024 * 1024 * 1024, timeout: 600000 }, (error, stdout, stderr) => resolve({ ok: !error, out: stdout ?? Buffer.alloc(0), said: String(stderr ?? "").trim() }));
     });
   }
   return new Promise((resolve) => {
     const out = [];
     const said = [];
-    const child = spawn7("git", args, { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn7(program, args, { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.on("data", (piece) => out.push(piece));
     child.stderr.on("data", (piece) => said.push(piece));
-    child.on("error", () => resolve({ ok: false, out: Buffer.alloc(0), said: "git isn’t there." }));
+    child.on("error", () => resolve({ ok: false, out: Buffer.alloc(0), said: `${program} isn’t there.` }));
     child.on("exit", (code) => setImmediate(() => {
       child.stdout.destroy();
       child.stderr.destroy();
@@ -17987,32 +17990,145 @@ async function perform(action, root, file, scope) {
     return failed;
   return scope === "unstaged" ? run(["restore", "--worktree", "--", ...paths]) : run(["restore", "--source=HEAD", "--staged", "--worktree", "--", file.path]);
 }
+var refusal = (root, author = {}) => async (args) => {
+  const ran = await git(root, args, true, author);
+  if (ran.ok)
+    return null;
+  const words = (ran.out.toString("utf8") + `
+` + ran.said).trim();
+  return words || `git ${args[0]} failed.`;
+};
+async function pushFrom(root, said = refusal(root)) {
+  const pushed = await said(["push"]);
+  return pushed?.includes("no upstream branch") ? said(["push", "-u", "origin", "HEAD"]) : pushed;
+}
 async function commit(directory, message, push, author) {
   const root = (await text2(directory, ["rev-parse", "--show-toplevel"]))?.trim();
   if (!root)
-    return "Not a git repository.";
-  const said = async (args) => {
-    const ran = await git(root, args, true, author);
-    if (ran.ok)
-      return null;
-    const words = (ran.out.toString("utf8") + `
-` + ran.said).trim();
-    return words || `git ${args[0]} failed.`;
-  };
+    return { failed: "Not a git repository.", committed: false };
+  const said = refusal(root, author);
   if (!await hasStaged(root)) {
     const relative = path68.relative(realOr2(root), realOr2(directory));
     const failed = await said(["add", "-A", "--", relative && !relative.startsWith("..") ? relative : "."]);
     if (failed)
-      return failed;
+      return { failed, committed: false };
   }
   const failed = await said(["commit", "-m", message]);
-  if (failed || !push)
-    return failed;
-  let pushed = await said(["push"]);
-  if (pushed?.includes("no upstream branch"))
-    pushed = await said(["push", "-u", "origin", "HEAD"]);
-  return pushed && `Committed, but the push didn’t go through:
-${pushed}`;
+  if (failed)
+    return { failed, committed: false };
+  if (!push)
+    return null;
+  const pushed = await pushFrom(root, said);
+  return pushed ? { failed: `Committed, but the push didn’t go through:
+${pushed}`, committed: true } : null;
+}
+var branchOf = async (directory) => (await text2(directory, ["symbolic-ref", "--quiet", "--short", "HEAD"]))?.trim() || null;
+async function unready(directory, branch, target) {
+  const status = await text2(directory, ["status", "--porcelain", "--untracked-files=normal"]);
+  if (status === null || status.trim())
+    return "Commit the changes first. Only what’s committed goes.";
+  const ahead = (await text2(directory, ["rev-list", "--count", `${target}..HEAD`]))?.trim();
+  if (ahead === undefined)
+    return `There’s no branch ${target} to compare with.`;
+  return ahead === "0" ? `${branch} has nothing ${target} doesn’t have yet.` : null;
+}
+async function mergeInto(directory, into) {
+  const branch = await branchOf(directory);
+  if (!branch)
+    return { status: 409, failed: "This folder isn’t on a branch." };
+  if (branch === into)
+    return { status: 409, failed: `This folder is on ${into} itself.` };
+  const why = await unready(directory, branch, into);
+  if (why)
+    return { status: 409, failed: why };
+  const listed = await text2(directory, ["worktree", "list", "--porcelain", "-z"]) ?? "";
+  let target;
+  for (const entry of listed.split("\x00\x00")) {
+    const lines = entry.split("\x00");
+    if (lines.includes(`branch refs/heads/${into}`))
+      target = lines.find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
+  }
+  if (!target || !fs66.existsSync(target))
+    return { status: 409, failed: `${into} isn’t checked out in the project’s folder. Check it out there to merge, or create a pull request.` };
+  const said = refusal(target);
+  const failed = await said(["merge", "--no-edit", branch]);
+  if (!failed)
+    return null;
+  const conflicts = (await text2(target, ["-c", "core.quotepath=off", "diff", "--name-only", "-z", "--diff-filter=U"]) ?? "").split("\x00").filter(Boolean);
+  if ((await git(target, ["rev-parse", "-q", "--verify", "MERGE_HEAD"])).ok)
+    await said(["merge", "--abort"]);
+  if (!conflicts.length)
+    return { status: 422, failed };
+  const named = conflicts.slice(0, 5).join(", ") + (conflicts.length > 5 ? ` and ${conflicts.length - 5} more` : "");
+  return { status: 409, failed: `${into} changed some of the same lines: ${named}. Nothing was merged.`, conflicts };
+}
+function webPage(remote) {
+  let address = remote.trim().replace(/\.git$/, "");
+  if (/^(ssh|git):\/\//.test(address))
+    address = "https://" + address.replace(/^[a-z]+:\/\//, "").replace(/^[^@/]*@/, "");
+  else if (!address.includes("://") && address.includes(":")) {
+    const colon = address.indexOf(":");
+    address = "https://" + address.slice(0, colon).replace(/^[^@]*@/, "") + "/" + address.slice(colon + 1);
+  }
+  try {
+    const page = new URL(address);
+    if (page.protocol !== "https:" && page.protocol !== "http:")
+      return null;
+    page.protocol = "https:";
+    page.username = page.password = page.port = "";
+    return page;
+  } catch {
+    return null;
+  }
+}
+function comparePage(remote, branch, base, title, body) {
+  const page = webPage(remote);
+  if (!page)
+    return null;
+  const at = page.toString().replace(/\/$/, "");
+  const query = new URLSearchParams;
+  if (page.hostname.includes("gitlab")) {
+    query.set("merge_request[source_branch]", branch);
+    if (base)
+      query.set("merge_request[target_branch]", base);
+    if (title)
+      query.set("merge_request[title]", title);
+    if (body)
+      query.set("merge_request[description]", body);
+    return `${at}/-/merge_requests/new?${query}`;
+  }
+  if (!page.hostname.includes("github"))
+    return null;
+  query.set("expand", "1");
+  if (title)
+    query.set("title", title);
+  if (body)
+    query.set("body", body);
+  return `${at}/compare/${(base ? `${encodeURIComponent(base)}...` : "") + encodeURIComponent(branch)}?${query}`;
+}
+async function pullRequest(directory, title, body) {
+  const branch = await branchOf(directory);
+  if (!branch)
+    return { status: 409, failed: "This folder isn’t on a branch." };
+  const real = realOr2(directory);
+  const base = readWorktrees().find((tree) => real === realOr2(tree.root) || real.startsWith(realOr2(tree.root) + path68.sep))?.base;
+  if (base) {
+    const why = await unready(directory, branch, base);
+    if (why)
+      return { status: 409, failed: why };
+  }
+  const root = (await text2(directory, ["rev-parse", "--show-toplevel"]))?.trim() ?? directory;
+  const pushed = await refusal(root)(["push", "-u", "origin", "HEAD"]);
+  if (pushed)
+    return { status: 422, failed: pushed };
+  const made = await git(root, ["pr", "create", "--head", branch, ...base ? ["--base", base] : [], ...title ? ["--title", title, "--body", body ?? ""] : ["--fill"]], true, { GH_PROMPT_DISABLED: "1", NO_COLOR: "1" }, "gh");
+  const url = (made.out.toString("utf8") + `
+` + made.said).match(/https:\/\/\S+\/(?:pull|merge_requests)\/\d+/)?.[0];
+  if (url)
+    return { url };
+  const remote = (await text2(root, ["remote", "get-url", "origin"]))?.trim();
+  const compareURL = remote ? comparePage(remote, branch, base, title, body) : null;
+  return compareURL ? { compareURL } : {};
 }
 var hasStaged = async (directory) => !(await git(directory, ["diff", "--cached", "--quiet"])).ok;
 async function commitDiff(directory, limit = 40000) {
@@ -18086,8 +18202,30 @@ async function* changesRoute(context) {
       return yield* json(400, { message: "Write a commit message." });
     const given = body.author ?? {};
     const author = Object.fromEntries(AUTHOR.flatMap((key) => typeof given[key] === "string" ? [[key, given[key]]] : []));
-    const failed = await commit(directory, message, body.push === true, author);
-    return yield* failed ? json(422, { message: failed }) : json(200, {});
+    const done = await commit(directory, message, body.push === true, author);
+    return yield* done ? json(422, { message: done.failed, ...done.committed ? { committed: true, pushed: false } : {} }) : json(200, {});
+  }
+  if (route === "kuvo/git/push" || route === "kuvo/git/merge" || route === "kuvo/git/pull-request") {
+    const directory = folderAt(body.directory);
+    if (!directory)
+      return yield* json(404, { message: "That folder isn’t there." });
+    if (route === "kuvo/git/push") {
+      const root = (await text2(directory, ["rev-parse", "--show-toplevel"]))?.trim();
+      if (!root)
+        return yield* json(422, { message: "Not a git repository." });
+      const failed = await pushFrom(root);
+      return yield* failed ? json(422, { message: failed }) : json(200, {});
+    }
+    if (route === "kuvo/git/merge") {
+      const into = body.into;
+      if (typeof into !== "string" || !into || into.startsWith("-"))
+        return yield* json(400, { message: "Name the branch to merge into." });
+      const failed = await mergeInto(directory, into);
+      return yield* failed ? json(failed.status, { message: failed.failed, ...failed.conflicts ? { conflicts: failed.conflicts } : {} }) : json(200, {});
+    }
+    const words = (value) => typeof value === "string" && value.trim() ? value.trim() : undefined;
+    const made = await pullRequest(directory, words(body.title), words(body.body));
+    return yield* "failed" in made ? json(made.status, { message: made.failed }) : json(200, made);
   }
   return yield* json(404, {});
 }
@@ -18202,7 +18340,7 @@ async function* botsRoute(context) {
 import fs67 from "node:fs";
 import path69 from "node:path";
 var byName = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
-function refusal(at, error) {
+function refusal2(at, error) {
   const code = error?.code;
   if (code === "ENOENT")
     return { status: 404, value: { message: `There's no folder ${at} here.`, reason: "No such folder" } };
@@ -18225,7 +18363,7 @@ function listFolders(requestPath) {
   try {
     entries = fs67.readdirSync(at, { withFileTypes: true });
   } catch (error) {
-    return refusal(at, error);
+    return refusal2(at, error);
   }
   const hidden = query.get("hidden") === "1";
   const asks = at === home ? promptedFolders() : new Set;
@@ -18314,7 +18452,7 @@ import fs68 from "node:fs";
 import path70 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.142";
+var BRIDGE_VERSION = "0.9.143";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

@@ -1,6 +1,7 @@
 // A project's Changes on a box, as a Mac asks a machine's over SSH (`box route`) and a phone through
 // the relay: what's changed, new files with their stamps, staging and unstaging, Discard putting a
-// file back with anything in its way in Kuvo Code's trash, a picture's old side whole, and a commit.
+// file back with anything in its way in Kuvo Code's trash, a picture's old side whole, a commit and a
+// push, and a branch's work brought back: Merge into… and Create Pull Request.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -39,9 +40,9 @@ beforeEach(() => {
   git("commit", "-q", "-m", "First");
 });
 
-async function route(method, routePath, body) {
+async function route(method, routePath, body, env = {}) {
   const child = spawn(process.execPath, [script, "box", "route"], {
-    env: { ...process.env, KUVO_HOME: home, KUVO_CHANGES_TRASH: trash, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+    env: { ...process.env, KUVO_HOME: home, KUVO_CHANGES_TRASH: trash, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", ...env },
     stdio: ["pipe", "pipe", "inherit"],
   });
   child.stdin.end(JSON.stringify({ method, path: routePath, ...(body ? { body } : {}) }));
@@ -282,6 +283,99 @@ test("Commit and Push: the commit reaches the remote, a new branch pushed and tr
   assert.equal((await route("POST", "kuvo/git/commit", { directory: repo, message: "Pushed", push: true })).status, 200);
   assert.equal(execFileSync("git", ["--git-dir", remote, "log", "-1", "--format=%s", "feature"], { encoding: "utf8" }).trim(), "Pushed");
   assert.equal(git("rev-parse", "--abbrev-ref", "feature@{upstream}").trim(), "origin/feature");
+});
+
+test("Commit and Push whose push doesn't go through says it committed, and Push sends it once the remote is there", async () => {
+  const remote = path.join(fs.mkdtempSync(path.join(root, "remote-")), "app.git");
+  git("remote", "add", "origin", remote);
+  write("README.md", "Hello\nLater\n");
+  const { status: code, json } = await route("POST", "kuvo/git/commit", { directory: repo, message: "Later", push: true });
+  assert.equal(code, 422);
+  assert.match(json.message, /^Committed, but the push didn’t go through/);
+  assert.equal(json.committed, true, "a client offers Push, not the commit again");
+  assert.equal(json.pushed, false);
+  assert.equal(git("log", "-1", "--format=%s").trim(), "Later");
+
+  const failed = await route("POST", "kuvo/git/push", { directory: repo });
+  assert.equal(failed.status, 422);
+  assert.ok(failed.json.message, "git's own words");
+  execFileSync("git", ["init", "-q", "--bare", remote]);
+  assert.equal((await route("POST", "kuvo/git/push", { directory: repo })).status, 200);
+  assert.equal(execFileSync("git", ["--git-dir", remote, "log", "-1", "--format=%s", "main"], { encoding: "utf8" }).trim(), "Later");
+  assert.equal(git("rev-parse", "--abbrev-ref", "main@{upstream}").trim(), "origin/main", "tracked from now on");
+  assert.equal(git("status", "--porcelain").trim(), "", "nothing committed twice");
+});
+
+/** A worktree of the project on a branch of its own, as a session in one has. */
+function worktree(branch = "kuvo/feature") {
+  const folder = path.join(fs.mkdtempSync(path.join(root, "tree-")), "app");
+  git("worktree", "add", "-q", "-b", branch, folder);
+  const there = (...args) => execFileSync("git", args, { cwd: folder, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+  return { folder, there, write: (name, text) => fs.writeFileSync(path.join(folder, name), text) };
+}
+
+test("Merge into…: a worktree's commits go into the project's branch; work not committed, nothing new and a conflict are refused with why, the project left as it was", async () => {
+  const tree = worktree();
+  const merge = () => route("POST", "kuvo/git/merge", { directory: tree.folder, into: "main" });
+  tree.write("README.md", "Hello\nFrom the worktree\n");
+  let answer = await merge();
+  assert.equal(answer.status, 409);
+  assert.equal(answer.json.message, "Commit the changes first. Only what’s committed goes.");
+  tree.there("commit", "-q", "-am", "From the worktree");
+  assert.equal((await merge()).status, 200);
+  assert.equal(read("README.md"), "Hello\nFrom the worktree\n", "in the project's folder, on main");
+  assert.equal(git("log", "-1", "--format=%s", "main").trim(), "From the worktree");
+  answer = await merge();
+  assert.equal(answer.status, 409);
+  assert.equal(answer.json.message, "kuvo/feature has nothing main doesn’t have yet.");
+
+  // main and the branch change the same line.
+  write("src/app.js", "let a = 2\n");
+  git("commit", "-q", "-am", "Two on main");
+  tree.write("src/app.js", "let a = 3\n");
+  tree.there("commit", "-q", "-am", "Three on the branch");
+  answer = await merge();
+  assert.equal(answer.status, 409);
+  assert.deepEqual(answer.json.conflicts, ["src/app.js"]);
+  assert.equal(answer.json.message, "main changed some of the same lines: src/app.js. Nothing was merged.");
+  assert.equal(read("src/app.js"), "let a = 2\n");
+  assert.equal(git("status", "--porcelain").trim(), "", "taken back: not left in the middle of a merge");
+
+  assert.equal((await route("POST", "kuvo/git/merge", { directory: tree.folder, into: "elsewhere" })).status, 409);
+  assert.equal((await route("POST", "kuvo/git/merge", { directory: tree.folder, into: "--abort" })).status, 400);
+});
+
+test("Create Pull Request pushes the branch and makes it with gh against the worktree's base, or gives the host's page without gh", async () => {
+  const tree = worktree();
+  const remote = fs.mkdtempSync(path.join(root, "remote-"));
+  execFileSync("git", ["init", "-q", "--bare", remote]);
+  git("remote", "add", "origin", "git@github.com:kuvo-test/app.git");
+  // Pushed here, while the remote reads as GitHub's.
+  git("config", "remote.origin.pushurl", remote);
+  assert.equal((await route("POST", "kuvo/worktrees/record", { project: repo, root: tree.folder, branch: "kuvo/feature", base: "main" })).status, 200);
+  // gh stands in for GitHub's own program: one not signed in, then one that makes it (and says what it was asked).
+  const bin = fs.mkdtempSync(path.join(root, "bin-"));
+  const asked = path.join(bin, "asked");
+  fs.writeFileSync(path.join(bin, "gh"), "#!/bin/sh\necho 'To get started with GitHub CLI, please run:  gh auth login' >&2\nexit 4\n", { mode: 0o755 });
+  const env = { PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+  const pullRequest = body => route("POST", "kuvo/git/pull-request", { directory: tree.folder, ...body }, env);
+
+  tree.write("README.md", "Hello\nReviewed\n");
+  let answer = await pullRequest({});
+  assert.equal(answer.status, 409);
+  assert.equal(answer.json.message, "Commit the changes first. Only what’s committed goes.");
+  tree.there("commit", "-q", "-am", "Reviewed");
+
+  answer = await pullRequest({ title: "Say reviewed", body: "Why & how" });
+  assert.equal(answer.status, 200);
+  assert.equal(answer.json.compareURL, "https://github.com/kuvo-test/app/compare/main...kuvo%2Ffeature?expand=1&title=Say+reviewed&body=Why+%26+how");
+  assert.equal(execFileSync("git", ["--git-dir", remote, "log", "-1", "--format=%s", "kuvo/feature"], { encoding: "utf8" }).trim(), "Reviewed");
+
+  fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' "$@" > '${asked}'\necho https://github.com/kuvo-test/app/pull/7\n`, { mode: 0o755 });
+  answer = await pullRequest({ title: "Say reviewed", body: "Why" });
+  assert.equal(answer.status, 200);
+  assert.deepEqual(answer.json, { url: "https://github.com/kuvo-test/app/pull/7" });
+  assert.deepEqual(fs.readFileSync(asked, "utf8").trim().split("\n"), ["pr", "create", "--head", "kuvo/feature", "--base", "main", "--title", "Say reviewed", "--body", "Why"]);
 });
 
 test("Discard on a submodule with edits of its own says to discard them there, and leaves them", async () => {
