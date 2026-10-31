@@ -806,7 +806,8 @@ var fileNames = (files) => (files ?? []).flatMap((file) => {
     return [file.name];
   return typeof file.uri === "string" && !file.uri.startsWith("data:") ? [path6.basename(decodeURIComponent(file.uri.replace(/^file:\/\//, "")))] : ["file"];
 });
-function keepWaiting(files, session, message, { from, words, kept: keptText } = {}, changed) {
+var last = (state, item) => ({ ...state, waiting: [...state.waiting ?? [], item] });
+function keepWaiting(files, session, message, { from, words, kept: keptText } = {}, changed, place = last) {
   let kept = false;
   changeQueue(files, session, (state) => {
     if (!state.paused)
@@ -815,7 +816,7 @@ function keepWaiting(files, session, message, { from, words, kept: keptText } = 
     kept = true;
     const names = fileNames(message.files);
     const waiting = { id: message.id, ...from ? { from } : {}, text: words ?? message.text, ...names.length ? { files: names } : {}, at: Date.now() };
-    return { ...state, waiting: [...(state.waiting ?? []).filter((each) => each.id !== message.id), waiting] };
+    return place({ ...state, waiting: (state.waiting ?? []).filter((each) => each.id !== message.id) }, waiting);
   }, changed);
   return kept;
 }
@@ -845,16 +846,38 @@ async function isRunning(target, session) {
 }
 var setDelivery = (target, session, item, delivery) => asked(target, "PATCH", `api/session/${address(session)}/inbox/${address(item)}`, { delivery });
 var interrupt = (target, session, resume = false) => asked(target, "POST", `api/session/${address(session)}/interrupt${resume ? "?resume=true" : ""}`);
-function nextOf(inbox, held) {
-  for (const id of held) {
-    const found = inbox.find((item) => item.id === id);
-    if (found)
-      return found;
-  }
-  return inbox.find((item) => item.delivery === "steer") ?? inbox.find((item) => item.delivery === "queue") ?? null;
+function orderOf(inbox, { held, waiting = [] }) {
+  const first = held.filter((id) => inbox.some((item) => item.id === id) || waiting.some((each) => each.id === id));
+  const then = (ids) => ids.filter((id) => !first.includes(id));
+  return [
+    ...first,
+    ...then(inbox.filter((item) => item.delivery === "steer").map((item) => item.id)),
+    ...then(inbox.filter((item) => item.delivery === "queue").map((item) => item.id)),
+    ...then(waiting.map((each) => each.id))
+  ];
 }
 var waitingFile2 = (id) => waitingFile(FILES, id);
-var keepWaiting2 = (session, message, shown = {}) => keepWaiting(FILES, session, message, shown, tellFollowers);
+var keepWaiting2 = (session, message, shown = {}, place) => keepWaiting(FILES, session, message, shown, tellFollowers, place);
+var placedBefore = (inbox, before) => (given, item) => {
+  const state = { ...given, held: given.held.filter((id) => id !== item.id) };
+  const waiting = state.waiting ?? [];
+  const order = orderOf(inbox, state);
+  const at = before && before !== item.id ? order.indexOf(before) : -1;
+  if (at < 0)
+    return { ...state, waiting: [...waiting, item] };
+  const inHeld = state.held.indexOf(before);
+  if (inHeld >= 0)
+    return { ...state, held: [...state.held.slice(0, inHeld), item.id, ...state.held.slice(inHeld)], waiting: [...waiting, item] };
+  if (inbox.some((entry) => entry.id === before)) {
+    return { ...state, held: [...state.held, ...order.slice(0, at).filter((id) => !state.held.includes(id)), item.id], waiting: [...waiting, item] };
+  }
+  const there = waiting.findIndex((each) => each.id === before);
+  return { ...state, waiting: [...waiting.slice(0, there), item, ...waiting.slice(there)] };
+};
+async function keepWaitingBefore(target, session, message, shown, before) {
+  const inbox = before ? await inboxOf(target, session).catch(() => []) : [];
+  return keepWaiting2(session, message, shown, placedBefore(inbox, before));
+}
 async function sendInto(target, session, message, shown = {}) {
   const whole = { ...message, id: message.id ?? messageID() };
   if (keepWaiting2(session, whole, shown))
@@ -862,13 +885,18 @@ async function sendInto(target, session, message, shown = {}) {
   await asked(target, "POST", `api/session/${address(session)}/prompt`, whole);
   return "sent";
 }
-function takeWaiting(session, item, resume = false) {
+function takeWaiting(session, item, resume = false, inbox = []) {
   let shown;
+  let held = false;
+  let before;
   changeQueue2(session, (state) => {
     shown = item ? state.waiting?.find((each) => each.id === item) : state.waiting?.[0];
     if (!shown)
       return state;
-    return { ...state, ...resume ? { paused: false, resumed: Date.now() } : {}, waiting: state.waiting.filter((each) => each !== shown) };
+    const order = orderOf(inbox, state);
+    before = order[order.indexOf(shown.id) + 1];
+    held = state.held.includes(shown.id);
+    return { ...state, ...resume ? { paused: false, resumed: Date.now() } : {}, held: state.held.filter((id) => id !== shown.id), waiting: state.waiting.filter((each) => each !== shown) };
   });
   if (!shown)
     return null;
@@ -878,7 +906,7 @@ function takeWaiting(session, item, resume = false) {
   } catch {}
   fs8.rmSync(waitingFile2(shown.id), { force: true });
   const message = isObject(whole) && typeof whole.text === "string" && (whole.delivery === "steer" || whole.delivery === "queue") ? { id: shown.id, text: whole.text, delivery: whole.delivery, ...Array.isArray(whole.files) ? { files: whole.files } : {} } : null;
-  return { shown, message };
+  return { shown, message, held, ...before ? { before } : {} };
 }
 function carryQueue(from, to, renamed) {
   const again = locked(FILES.lock, () => {
@@ -905,7 +933,7 @@ function carryQueue(from, to, renamed) {
   });
   if (!showsQueue(was))
     return;
-  const held = was.held.flatMap((id) => renamed[id] ? [renamed[id]] : []);
+  const held = was.held.flatMap((id) => renamed[id] ? [renamed[id]] : was.waiting?.some((each) => each.id === id) ? [id] : []);
   changeQueue2(to, (state) => ({
     ...state,
     paused: state.paused || was.paused,
@@ -924,42 +952,50 @@ function forgetQueue(session) {
   for (const each of gone)
     fs8.rmSync(waitingFile2(each.id), { force: true });
 }
-function dropWaiting(session, item) {
-  return takeWaiting(session, item);
+function dropWaiting(session, item, inbox = []) {
+  return takeWaiting(session, item, false, inbox);
 }
+var inboxFor = (target, session) => inboxOf(target, session).catch(() => []);
 async function drain(target, session) {
   if (queueOf(session).paused || await isRunning(target, session))
     return;
-  const next = nextOf(await inboxOf(target, session), queueOf(session).held);
+  const inbox = await inboxOf(target, session);
+  const first = orderOf(inbox, queueOf(session))[0];
   if (queueOf(session).paused || await isRunning(target, session))
     return;
+  if (!first)
+    return;
+  const next = inbox.find((item) => item.id === first);
   if (!next)
-    return sendWaiting(target, session);
+    return sendWaiting(target, session, first);
   if (next.delivery === "queue")
     await setDelivery(target, session, next.id, "steer");
   else
     await interrupt(target, session, true);
   changeQueue2(session, (state) => ({ ...state, held: state.held.filter((id) => id !== next.id) }));
 }
-async function sendWaiting(target, session) {
-  let first = takeWaiting(session);
-  while (first && !first.message)
-    first = takeWaiting(session);
-  if (!first?.message)
+async function sendWaiting(target, session, item) {
+  const taken = takeWaiting(session, item);
+  if (!taken)
     return;
+  if (!taken.message)
+    return drain(target, session);
   try {
-    await asked(target, "POST", `api/session/${address(session)}/prompt`, { ...first.message, delivery: "steer" });
+    await asked(target, "POST", `api/session/${address(session)}/prompt`, { ...taken.message, delivery: "steer" });
   } catch (error) {
     if (/ 404\.$/.test(String(error?.message)))
       return;
-    putBack(session, first.message, first.shown);
+    putBack(session, { ...taken, message: taken.message });
     throw error;
   }
 }
-function putBack(session, message, shown) {
+function putBack(session, { message, shown, held }, place) {
   changeQueue2(session, (state) => {
     writePrivate(waitingFile2(message.id), JSON.stringify(message));
-    return { ...state, waiting: [shown, ...(state.waiting ?? []).filter((each) => each.id !== shown.id)] };
+    const without = { ...state, held: state.held.filter((id) => id !== shown.id), waiting: (state.waiting ?? []).filter((each) => each.id !== shown.id) };
+    if (place)
+      return place(without, shown);
+    return { ...without, ...held ? { held: [shown.id, ...without.held] } : {}, waiting: [shown, ...without.waiting] };
   });
 }
 async function holdQueue(target, session, since, items = []) {
@@ -978,8 +1014,10 @@ async function holdQueue(target, session, since, items = []) {
       moved.push(id);
   }
   const waiting = await inboxOf(target, session).catch(() => inbox);
-  const there = (id) => waiting.some((item) => item.id === id);
-  return changeQueue2(session, (state) => since !== undefined && (state.resumed ?? 0) >= since ? state : { ...state, paused: state.paused || waiting.length > 0 || Boolean(state.waiting?.length), held: [...moved.filter(there), ...state.held.filter((id) => !moved.includes(id) && there(id))] });
+  return changeQueue2(session, (state) => {
+    const there = (id) => waiting.some((item) => item.id === id) || Boolean(state.waiting?.some((each) => each.id === id));
+    return since !== undefined && (state.resumed ?? 0) >= since ? state : { ...state, paused: state.paused || waiting.length > 0 || Boolean(state.waiting?.length), held: [...moved.filter(there), ...state.held.filter((id) => !moved.includes(id) && there(id))] };
+  });
 }
 async function stopSession(target, session, holds = true) {
   const held = await holdQueue(target, session);
@@ -993,7 +1031,8 @@ async function resumeQueue(target, session) {
   return queueOf(session);
 }
 async function sendNow(target, session, item) {
-  const kept = takeWaiting(session, item, true);
+  const inbox = await inboxFor(target, session);
+  const kept = takeWaiting(session, item, true, inbox);
   if (kept) {
     if (!kept.message)
       return false;
@@ -1001,7 +1040,7 @@ async function sendNow(target, session, item) {
     try {
       await asked(target, "POST", `api/session/${address(session)}/prompt`, { ...kept.message, delivery: "steer" });
     } catch (error) {
-      putBack(session, kept.message, kept.shown);
+      putBack(session, { ...kept, message: kept.message }, placedBefore(inbox, kept.before));
       throw error;
     }
     if (running)
@@ -1011,7 +1050,7 @@ async function sendNow(target, session, item) {
   const entry = (await inboxOf(target, session)).find((each) => each.id === item);
   if (!entry)
     return false;
-  changeQueue2(session, (state) => ({ paused: false, held: state.held.filter((id) => id !== item), resumed: Date.now() }));
+  changeQueue2(session, (state) => ({ ...state, paused: false, held: state.held.filter((id) => id !== item), resumed: Date.now() }));
   const running = await isRunning(target, session);
   if (entry.delivery === "queue")
     await setDelivery(target, session, item, "steer");
@@ -1094,7 +1133,7 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
           break;
         inboxOf(target, session).then((inbox) => changeQueue2(session, (state) => ({
           ...state,
-          held: state.held.filter((id) => id !== gone && inbox.some((item) => item.id === id))
+          held: state.held.filter((id) => id !== gone && inbox.some((item) => item.id === id) || Boolean(state.waiting?.some((each) => each.id === id)))
         }))).catch(() => {});
         break;
       }
@@ -18178,11 +18217,12 @@ async function* queueRoute(context, match) {
   if (item && !now) {
     if (method !== "DELETE")
       return yield* json(405, {});
-    const dropped = dropWaiting(session, decodeURIComponent(item));
+    const place = await placeOfSession(session, targetsOf({ readEngine, bridge })).catch(() => null);
+    const dropped = dropWaiting(session, decodeURIComponent(item), place ? await inboxFor(place.target, session) : []);
     if (!dropped)
       return yield* json(404, { message: "That message isn't waiting any more." });
     const { from, text: words } = dropped.shown;
-    const removed = dropped.message ? { ...dropped.message, ...from ? { from } : {}, words } : undefined;
+    const removed = dropped.message ? { ...dropped.message, ...from ? { from } : {}, words, ...dropped.before ? { before: dropped.before } : {} } : undefined;
     return yield* json(200, { ...shownQueue(queueOf(session)), ...removed ? { removed } : {} });
   }
   if (method !== "POST")
@@ -18229,7 +18269,8 @@ async function* add({ request, bridge, readEngine, json, signal }, target, sessi
   const body = given.kept !== true && fromPhoneToo ? fromPhone(await namedIn(attached, session, namingHere(readEngine))) : attached;
   const message = parsed(body);
   const words = typeof given.words === "string" ? given.words : given.kept !== true ? given.text : undefined;
-  if (keepWaiting2(session, message, { from, words }))
+  const before = typeof given.before === "string" && /^[A-Za-z0-9_]{1,100}$/.test(given.before) ? given.before : undefined;
+  if (await keepWaitingBefore(target, session, message, { from, words }, before))
     return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
   await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message);
   return yield* json(200, { ...shownQueue(queueOf(session)), waits: false });

@@ -358,19 +358,81 @@ test("paused, the queue stays so once what waited is taken away: what arrives af
   assert.equal((await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_late", text: "One more thing." })).json.waits, true);
 });
 
-test("Undo puts one taken away from what waits back as it was: its whole words, who it's from, and how it was shown", async () => {
+test("Undo puts one taken away from what waits back as it was, where it was: its whole words, who it's from, and how it was shown", async () => {
   inboxes.ses_1 = [];
   await ask("POST", "kuvo/sessions/ses_1/stop");
   await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w1", text: "From Ada: the build is green.", from: "Ada" });
   await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w2", text: "Second." });
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w3", text: "Third." });
   const { removed } = (await ask("DELETE", "kuvo/sessions/ses_1/queue/msg_w1")).json;
-  assert.deepEqual(removed, { id: "msg_w1", text: "From Ada: the build is green.", delivery: "queue", from: "Ada", words: "From Ada: the build is green." });
+  // (`before`: what came after it, for Undo to put it back ahead of.)
+  assert.deepEqual(removed, { id: "msg_w1", text: "From Ada: the build is green.", delivery: "queue", from: "Ada", words: "From Ada: the build is green.", before: "msg_w2" });
   const back = await ask("POST", "kuvo/sessions/ses_1/queue/add", { ...removed, words: "the build is green.", kept: true });
   assert.equal(back.json.waits, true);
-  assert.deepEqual(back.json.waiting.map(each => [each.id, each.from ?? null, each.text]), [["msg_w2", null, "Second."], ["msg_w1", "Ada", "the build is green."]]);
+  assert.deepEqual(back.json.waiting.map(each => [each.id, each.from ?? null, each.text]), [["msg_w1", "Ada", "the build is green."], ["msg_w2", null, "Second."], ["msg_w3", null, "Third."]], "first again, where it was");
+  // One from the middle, and the last: each where it was too.
+  for (const item of ["msg_w2", "msg_w3"]) {
+    const taken = (await ask("DELETE", `kuvo/sessions/ses_1/queue/${item}`)).json.removed;
+    await ask("POST", "kuvo/sessions/ses_1/queue/add", { ...taken, kept: true });
+    assert.deepEqual(link.queueOf("ses_1").waiting.map(each => each.id), ["msg_w1", "msg_w2", "msg_w3"], item);
+  }
   assert.deepEqual(prompted, [], "nothing reached the engine");
   await ask("POST", "kuvo/sessions/ses_1/queue/msg_w1/now");
   assert.deepEqual(prompted.map(each => [each.id, each.text]), [["msg_w1", "From Ada: the build is green."]], "whole, as it would have gone");
+});
+
+test("after a Stop, one the engine held, removed and put back with Undo, waits on the box in its old place, and Resume sends it first", async () => {
+  inboxes.ses_1 = [{ id: "msg_s1", delivery: "steer" }, { id: "msg_q2", delivery: "queue" }];
+  running.add("ses_1");
+  assert.deepEqual((await ask("POST", "kuvo/sessions/ses_1/stop")).json, { paused: true, held: ["msg_s1"] });
+  running.delete("ses_1");
+  // A client takes the first away in the engine, as it does, and the box hears.
+  inboxes.ses_1 = [{ id: "msg_q2", delivery: "queue" }];
+  box().hear("session.inbox.cancelled", { inboxID: "msg_s1" });
+  await until(state => state.held.length === 0);
+  // Undo: back ahead of what came after it, which the client names.
+  const back = await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_s1", text: "Fix the docs.", before: "msg_q2" });
+  assert.equal(back.json.waits, true);
+  assert.deepEqual([back.json.held, back.json.waiting.map(each => each.id)], [["msg_s1"], ["msg_s1"]], "first in what goes, waiting on the box");
+  assert.deepEqual(prompted, [], "nothing reached the engine, which would run it all");
+  // Resume: it goes first; what the engine holds once its run ends.
+  await ask("POST", "kuvo/sessions/ses_1/queue/resume");
+  assert.deepEqual(prompted.map(each => [each.id, each.delivery]), [["msg_s1", "steer"]]);
+  assert.ok(!asked.includes("ses_1 msg_q2 steer"), "not yet");
+  const b = box();
+  b.hear("session.execution.started");
+  b.hear("session.execution.succeeded");
+  b.wait(1500);
+  assert.deepEqual((await askedAfter(4)).slice(-2), ["ses_1 prompt msg_s1", "ses_1 msg_q2 steer"]);
+});
+
+test("one the engine queued, taken from the middle and put back, goes between the same two again", async () => {
+  inboxes.ses_1 = [{ id: "msg_a", delivery: "queue" }, { id: "msg_c", delivery: "queue" }];
+  fs.writeFileSync(path.join(home, "run", "queues.json"), JSON.stringify({ ses_1: { paused: true, held: [] } }));
+  const back = await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_b", text: "B.", before: "msg_c" });
+  assert.deepEqual(back.json.held, ["msg_a", "msg_b"], "after the one ahead of it, ahead of the one after");
+  await ask("POST", "kuvo/sessions/ses_1/queue/resume");
+  assert.deepEqual(asked, ["ses_1 msg_a steer"]);
+  // Each run ends, and the next goes.
+  const b = box();
+  inboxes.ses_1 = [{ id: "msg_c", delivery: "queue" }];
+  b.hear("session.execution.succeeded");
+  b.wait(1500);
+  await askedAfter(2);
+  b.hear("session.execution.succeeded");
+  b.wait(1500);
+  assert.deepEqual(await askedAfter(3), ["ses_1 msg_a steer", "ses_1 prompt msg_b", "ses_1 msg_c steer"]);
+});
+
+test("Send Now on one the engine holds keeps what waits on the box, to go after it", async () => {
+  inboxes.ses_1 = [{ id: "msg_q1", delivery: "queue" }];
+  await ask("POST", "kuvo/sessions/ses_1/stop");
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w1", text: "[Letter] The build is green.", from: "Ada", words: "The build is green.", kept: true });
+  const sent = await ask("POST", "kuvo/sessions/ses_1/queue/msg_q1/now");
+  assert.equal(sent.status, 200);
+  assert.ok(asked.includes("ses_1 msg_q1 steer"));
+  assert.deepEqual(sent.json.waiting?.map(each => [each.id, each.from]), [["msg_w1", "Ada"]], "the letter still waits");
+  assert.ok(fs.existsSync(path.join(home, "run", "waiting", "msg_w1.json")));
 });
 
 test("a phone's message held while stopped goes as the phone's prompt would, saying it's from the phone, shown as written", async () => {

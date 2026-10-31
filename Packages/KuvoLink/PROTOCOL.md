@@ -565,8 +565,8 @@ the same for every client and with none connected, and keeps them in `run/queues
   conversation, from the chat (by its name; the coding agents' bridge keeps it in the same files,
   and the part goes on working until the bot reports, or fails once it's taken away). Each goes once the queue goes on, after what the engine holds, one at a time
   as runs end; kept in `run/queues.json` (`waiting`) and, whole, in `run/waiting/<message id>.json`,
-  across a restart. Send Now sends one at once; `DELETE …/queue/<item>` takes one away.
-- `GET kuvo/sessions/<id>/queue` → `{paused, held: [inboxID…], waiting?: [{id, from?, text, files?,
+  across a restart (one Undo put back goes where it was, below). Send Now sends one at once; `DELETE …/queue/<item>` takes one away.
+- `GET kuvo/sessions/<id>/queue` → `{paused, held: [id…], waiting?: [{id, from?, text, files?,
   at}]}`: `waiting`, left out when nothing waits on the box, first come first: who it's from (an
   agent's name, `Wake-up`, `Its sessions`, `Your answer`, `Goal`, a group chat's name; none for one of yours), what it
   says, the names of its files, when it came (ms). `GET kuvo/sessions/queues/events` follows them
@@ -577,16 +577,24 @@ the same for every client and with none connected, and keeps them in `run/queues
   as they went to the engine, go first, in that order. `POST …/queue/resume`: unpaused, and the
   next one goes now. `POST …/queue/<item>/now` (Send Now): unpaused, the item steered (one waiting
   on the box sent), and a run under way stopped to go on with it; 404 when it isn't waiting.
-  `POST …/queue/add` (`{id?, text, files?, delivery?, from?, words?}`, a prompt's body): a client's
+  `POST …/queue/add` (`{id?, text, files?, delivery?, from?, words?, before?}`, a prompt's body): a client's
   own message for the queue (every one sent after this run, and Undo), its files kept on the box
   as a message's are (a phone's also naming its agents and saying it's from the phone, as its
   prompt would), shown as `words` (as you wrote it, without what the client added for the agent),
   else as its text; while it's paused it waits on the box (`from` names who it was from, for one put
   back), else it goes to the engine as asked (`queue` by default); its answer says which,
   `waits: true|false`. `DELETE …/queue/<item>`: one waiting on the box taken away, its answer
-  carrying it as it was, `removed: {id, text, files?, delivery, from?, words}` (`words`, as it was
-  shown); 404 if it isn't. Undo adds it back with `…/queue/add` and `kept: true` (its body as it
-  was kept, its files not kept again, shown with its `words`). Each answers the queue as it is
+  carrying it as it was, `removed: {id, text, files?, delivery, from?, words, before?}` (`words`, as
+  it was shown; `before`, what came after it, left out when it was last); 404 if it isn't. Undo
+  adds it back with `…/queue/add` and `kept: true` (its body as it was kept, its files not kept
+  again, shown with its `words`). **Undo puts it back where it was** (bridge 0.9.133): `…/queue/add`
+  takes `before`, what came after it as the client showed it (for one the engine held, which the
+  client took away in the engine; `removed` carries it for one that waited on the box), and while
+  the queue is paused it waits just ahead of that one: in what waits on the box, or in `held` (so
+  `held` can name one waiting on the box, and holds what the engine had ahead of it too, in the
+  same order); with no `before`, or one that isn't waiting any more, last. The order it all goes
+  in, and clients show: `held` in its order (in the engine or on the box), then the engine's for
+  the next step, then its queue, then the rest of what waits on the box. Each answers the queue as it is
   now; 404 for no such session here, 503 with no engine, 502 when the engine refused. A run that
   fails pauses the queue again while anything waits on the box; a conversation deleted takes its
   queue and what waited for it with it.
