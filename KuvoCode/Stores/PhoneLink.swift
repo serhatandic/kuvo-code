@@ -796,6 +796,16 @@ final class PhoneLink {
                 }
             }
         }
+        // Settings › General's While Agents Work: whether it's kept awake now can be the keeper's
+        // to say.
+        if route == "kuvo/mac" {
+            return AsyncThrowingStream { [routed] continuation in
+                Task { @MainActor in
+                    let (status, body) = await link?.answerMac(routed) ?? (503, Data())
+                    Self.sendJSON(status, body, to: continuation)
+                }
+            }
+        }
         if route == "kuvo/asks/events" { return Self.following { link?.asksJSON() } }
         if route == "kuvo/usage/events" { return Self.following { link?.usageJSON() } }
         return AsyncThrowingStream { [routed] continuation in
@@ -1049,8 +1059,6 @@ final class PhoneLink {
             return answerAsk(String(path.dropFirst("kuvo/asks/".count)), with: request.body)
         case let path where path.hasPrefix("kuvo/asks/"):
             return (405, Data("{}".utf8))
-        case "kuvo/mac":
-            return answerMac(request)
         case "kuvo/engine/restart" where request.method.uppercased() == "POST":
             // Answered first: the restart takes the link down with the engine, and the phone sees
             // this Mac come back (`kuvo/info` answers again).
