@@ -10,6 +10,7 @@ import SwiftUI
 struct SubscriptionsStep: View {
     @Environment(AppModel.self) private var app
     @Environment(Catalog.self) private var catalog
+    @Environment(\.colorScheme) private var scheme
     @State private var signingIn: SignIn?
     /// Add Another, open on a tab.
     @State private var adding: Adding?
@@ -47,6 +48,13 @@ struct SubscriptionsStep: View {
             } else {
                 OnboardingPage(title: "Bring your subscriptions", detail: "Use the plans you pay for. Everything else works with free models.") {
                     VStack(alignment: .leading, spacing: 6) {
+                        if app.engineIsDown {
+                            EngineStoppedBar()
+                                .background(Surface.cardFill(scheme, focused: scheme == .light), in: .rect(cornerRadius: 12))
+                                .specularRim(RoundedRectangle(cornerRadius: 12))
+                                .environment(\.backgroundMaterial, nil)
+                                .transition(.opacity)
+                        }
                         heading("Plans")
                         switch onboarding.agents(failure: app.agents.failure) {
                         case .listed: EmptyView()
@@ -61,6 +69,7 @@ struct SubscriptionsStep: View {
                             ForEach(offers.keys) { row(for: $0) }
                         }
                         links(offers)
+                            .disabled(app.engineIsDown)
                         if onboarding.offersUsage {
                             UsageRow(usage: onboarding.usage) { Task { await onboarding.turnOnUsage() } }
                                 .padding(.top, 14)
@@ -68,6 +77,7 @@ struct SubscriptionsStep: View {
                         failure
                     }
                     .animation(.ui, value: showsKeys)
+                    .animation(.ui, value: app.engineIsDown)
                 } buttons: {
                     Spacer()
                     Button("Continue") { onboarding.advance() }
@@ -151,6 +161,9 @@ struct SubscriptionsStep: View {
 
     private func row(for row: Offers.Row) -> some View {
         OfferRow(row: row, isBusy: isBusy(row)) { _ in perform(row) { signingIn = SignIn(id: $0) } }
+            // What's found stays in view; what needs the engine waits for it (the coding agents
+            // run beside it, through its restarts).
+            .disabled(app.engineIsDown && !OutsideAgents.isAgent(row.integrationID))
     }
 
     private func isBusy(_ row: Offers.Row) -> Bool {

@@ -343,6 +343,7 @@ when you're there to answer.
 | `KUVO_DEMO_ONBOARDING` | Show the first launch from a step: `loader`, `subscriptions` or `screenAccess` |
 | `KUVO_DEMO_LOADER` | With `KUVO_DEMO_ONBOARDING=loader`: hold the bots' loader at a share of the way (`0.4`), or `failed` or `offline` |
 | `KUVO_DEMO_SCREEN_ACCESS` | What macOS says of Screen Recording and Accessibility, for the first launch's last step: the allowed ones (`screenRecording,accessibility`), or `none` |
+| `KUVO_DEMO_ENGINE_STOPPED` | Say the engine stopped over Settings › Accounts and the subscriptions step (`1`), or that it's starting again (`starting`); the engine itself runs on |
 | `KUVO_DEMO_ADD_ANOTHER` | With `KUVO_DEMO_ONBOARDING=subscriptions`: Add Another open, on `plans` or `keys`; `KUVO_DEMO_SHOW_KEYS` opens the API keys found in place instead |
 | `KUVO_DEMO_OPENCODE_AUTH` | An opencode `auth.json` of your own for the first launch to find, in place of `~/.local/share/opencode/auth.json` |
 | `KUVO_DEMO_SETTINGS` | Open Settings on a page, by its `SettingsPage` name: `general`, `appearance`, `storage`, `accounts`, `agents`, `mcp`, `git`, `browser`, `vault` and so on; `permissions@<machine>` for a machine's |

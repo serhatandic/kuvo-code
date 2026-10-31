@@ -68,6 +68,12 @@ struct StorageSettings: View {
                 }
             } header: {
                 Text("This Mac")
+            } footer: {
+                // Each machine keeps its own, which this page can't measure yet.
+                if !app.machines.list.isEmpty {
+                    Text(Self.machinesNote)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section {
@@ -208,6 +214,8 @@ struct StorageSettings: View {
             Text("Machines you’ve added keep their engine and browser. A new one downloads them again.")
         }
     }
+
+    static let machinesNote = "Only this Mac. A machine’s sessions and logs aren’t shown here yet."
 
     /// A machine being set up reads the downloads meanwhile: they stay until it's done.
     private var machineInstalling: Bool {
