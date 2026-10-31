@@ -222,6 +222,13 @@ export function fenceAgent(program: string, directory: string, mine: AgentPlaces
 }
 
 /**
+ * For one of the computer's MCP servers an agent reaches through the relay (toolrelay.ts): the
+ * launcher that runs its command in the sandbox as the conversation's own commands run (in its
+ * folder and repository, nothing of an agent's own). Undefined while the sandbox is off here.
+ */
+export const fenceServer = (program: string, directory: string, own: { homes: string[]; read: string[] }) => fenceAgent(program, directory, { homes: own.homes, state: own.homes.length ? ["*"] : [], kept: [], read: own.read })
+
+/**
  * The links inside an agent's state folders, taken away (by the box, outside the sandbox): the
  * agents make none there, and a command can't make one either, but can move in a folder with one
  * inside, which your own agent, outside the sandbox, would write through to elsewhere. (A state

@@ -3008,6 +3008,24 @@ it's empty.
   program and the bridge's browser catcher only read; Kuvo Code's tools through the relay. It
   writes and reads files with its own tools then: the bridge offers none (`fs` false in
   `initialize`), since it would write outside the sandbox.
+  Every agent also gets the computer's MCP servers, sandbox on or off: those the engine has for the
+  conversation's folder (`GET /api/config` with it, read in the engine's order, so a bot's folder's
+  own keys, from Edit Bot › Keys, win over this computer's), but those turned off. They reach them
+  through the same relay, at `/mcp/<name>` with the session's key: the agent is told only that
+  address (Claude Code over its pipe, Codex in its thread's settings, Cursor in its agent's, an ACP
+  agent in `mcpServers` when it takes HTTP), never a server's command, address or keys. A URL's
+  server the bridge reaches with its headers, and with your sign-in to it when you signed in
+  (`/api/credential`); one about to run out, or turned down, it has the engine renew (connecting
+  the server again) and tries once more. A command's server it starts for each connection (found on
+  the PATH), with its keys in its environment and the engine's caches, in the conversation's
+  folder; while the sandbox is on, in it, as the conversation's commands are, but with its
+  integration's own folder (`KUVO_INTEGRATIONS/<one>`, where it keeps a sign-in) its to write, the
+  engine's program to read (Bun, for `kuvo-npx` without Node), and Bun's cache in the sandbox's npm
+  cache. One no connection has used for an hour stops. What a server asks the agent (`roots/list`,
+  `elicitation/create`, `sampling/createMessage`) is answered -32601 at once, not passed on; its
+  stderr goes nowhere, as it can hold its keys. Another set of servers (one added or taken away)
+  starts Codex's thread, Cursor's agent and an ACP agent again and is told to Claude Code; a key you
+  changed reaches the relay alone, from the agent's next turn.
   When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
   you can do (`action`) and the box's route that does it (`route`, where there is one):
 

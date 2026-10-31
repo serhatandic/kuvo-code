@@ -15,6 +15,8 @@ import { Sessions } from "../../src/agents/sessions"
 import { Store } from "../../src/agents/store"
 import { noTokens, type Message, type PermissionRule, type Session } from "../../src/agents/wire"
 import { canFence, realFence } from "./support/fence"
+import { callServer, computerServers, KEYS } from "./support/servers"
+import { forgetServers } from "../../src/agents/servers"
 
 /** Cursor's SDK as far as the bridge uses it: each agent's options as it was made (`made`) or
  *  picked up again (`resumed`, when it `resumes`), and what each run was sent with (`sent`). A run
@@ -152,6 +154,100 @@ describe("Cursor", () => {
     await thread.prepare?.(input, hooks(state))
     expect(sdk.made.length).toBe(2)
     expect(sdk.made.at(-1)?.mcpServers?.["kuvo-browser"]?.url).toBe("http://127.0.0.1:47001/mcp")
+  })
+})
+
+describe("Cursor and the computer's MCP servers", () => {
+  test("its agent gets them through the bridge, without their keys, and a call reaches each with what it needs", async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-cursor-")))
+    folders.push(home)
+    const servers = computerServers(home)
+    await servers.serve()
+    try {
+      const sdk = fakeSDK()
+      process.env.CURSOR_API_KEY = "key_test"
+      const agent = new CursorAgent({ home, temporary: home, deps: { ensure: async () => home, load: async () => sdk } as any })
+      const session: Session = { id: "ses_servers", projectID: "p", cost: 0, tokens: noTokens(), time: { created: 1, updated: 1 }, title: "Primary", location: { directory: home } }
+      const state: Record<string, unknown> = {}
+      const thread = agent.thread(session, state)
+      await thread.prepare?.({ text: "hi", files: [], model: { id: "grok-4.7", providerID: "cursor" }, plan: false }, hooks(state))
+      const given = sdk.made.at(-1)?.mcpServers as Record<string, any>
+      expect(Object.keys(given).sort()).toEqual(["files", "notes", "tracker"])
+      const text = JSON.stringify(given)
+      for (const key of Object.values(KEYS)) expect(text).not.toContain(key)
+      expect(await callServer(given.files)).toBe(`key:${KEYS.shared}`)
+      expect(await callServer(given.tracker)).toBe(`auth:Bearer ${KEYS.tracker},key:none,at:/tracker`)
+      thread.close?.()
+      // Its key to them went with it.
+      expect(await callServer(given.files)).toBe("401")
+    } finally {
+      servers.stop()
+    }
+  })
+
+  /** Cursor's agent, prepared for a turn in `home`: the servers it was given. */
+  async function preparedIn(home: string) {
+    const sdk = fakeSDK()
+    process.env.CURSOR_API_KEY = "key_test"
+    const agent = new CursorAgent({ home, temporary: home, deps: { ensure: async () => home, load: async () => sdk } as any })
+    const session: Session = { id: `ses_servers_${folders.length}`, projectID: "p", cost: 0, tokens: noTokens(), time: { created: 1, updated: 1 }, title: "Primary", location: { directory: home } }
+    const state: Record<string, unknown> = {}
+    const thread = agent.thread(session, state)
+    await thread.prepare?.({ text: "hi", files: [], model: { id: "grok-4.7", providerID: "cursor" }, plan: false }, hooks(state))
+    return { given: sdk.made.at(-1)?.mcpServers as Record<string, any>, thread }
+  }
+
+  test("your sign-in to a URL's server, running out in a long turn, is renewed by the engine before a call, rather than turned down", async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-cursor-")))
+    folders.push(home)
+    const servers = computerServers(home)
+    await servers.serve()
+    try {
+      const { given, thread } = await preparedIn(home)
+      // An hour on, in the same turn: it ran out.
+      servers.expiring = true
+      forgetServers()
+      expect(await callServer(given.tracker)).toBe(`auth:Bearer ${KEYS.renewed},key:none,at:/tracker`)
+      expect(servers.connects).toBe(1)
+      thread.close?.()
+    } finally {
+      servers.stop()
+    }
+  })
+
+  test("a command's server asking the agent something (its folders, a question) is told it isn't passed on, and its call ends", async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-cursor-")))
+    folders.push(home)
+    const servers = computerServers(home)
+    await servers.serve()
+    try {
+      const { given, thread } = await preparedIn(home)
+      expect(await callServer(given.files, "asks")).toBe("error:-32601")
+      thread.close?.()
+    } finally {
+      servers.stop()
+    }
+  })
+
+  test("with the sandbox off, a command's server keeps its caches where the engine's do, in Kuvo Code's folder, never in your home", async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-cursor-")))
+    folders.push(home)
+    const servers = computerServers(home)
+    await servers.serve()
+    // This Mac's bridge: the engine's data folder named, its own caches not set.
+    const before = { cache: process.env.XDG_CACHE_HOME, npm: process.env.npm_config_cache, data: process.env.KUVO_ENGINE_DATA }
+    delete process.env.XDG_CACHE_HOME
+    delete process.env.npm_config_cache
+    process.env.KUVO_ENGINE_DATA = join(home, "engine", "data", "opencode")
+    try {
+      const { given, thread } = await preparedIn(home)
+      expect(await callServer(given.files, "env", { name: "XDG_CACHE_HOME" })).toBe(join(home, "engine", "cache"))
+      expect(await callServer(given.files, "env", { name: "npm_config_cache" })).toBe(join(home, "engine", "cache", "npm"))
+      thread.close?.()
+    } finally {
+      for (const [name, value] of [["XDG_CACHE_HOME", before.cache], ["npm_config_cache", before.npm], ["KUVO_ENGINE_DATA", before.data]] as const) value === undefined ? delete process.env[name] : (process.env[name] = value)
+      servers.stop()
+    }
   })
 })
 

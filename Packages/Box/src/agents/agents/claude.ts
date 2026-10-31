@@ -20,7 +20,8 @@ import { Queue } from "../queue"
 import { commandSignIn } from "../signin"
 import { newID } from "../ids"
 import { kuvoTools } from "../kuvotools"
-import { dropRelayed, relayedTools, relayPort } from "../toolrelay"
+import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
+import { computerServers } from "../servers"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
 import { onMachine, ownFoldersScript } from "../machine"
 import { fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceOn } from "../fence"
@@ -496,6 +497,8 @@ class ClaudeThread implements Thread {
   /** The last of its tasks to end: what began a turn it starts on its own. */
   private lastEnded?: { type: string; description: string; command?: string; status: string; summary?: string }
   private opened?: { model: string; effort?: string; plan: boolean; append: string; program: number; tools?: string; skills?: string; fence: string }
+  /** The computer's servers it was last told (their names). */
+  private servers?: string
 
   constructor(
     private readonly agent: ClaudeAgent,
@@ -583,20 +586,30 @@ class ClaudeThread implements Thread {
     // So does it when the box's sandbox was turned on or off, or its rules changed.
     const fence = fenceKey()
     if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence)) this.close()
-    if (!this.query) {
+    // The computer's MCP servers (yours, the integrations', a bot's with its own keys), through the
+    // relay, which keeps their keys: another set of them is told to the same Claude Code.
+    const computer = await computerServers(this.session.location.directory)
+    const servers = relayedServers(this.session.id, this, this.session.location.directory, computer)
+    const opening = !this.query
+    if (opening) {
       this.open(sdk, modelID, effort, input.plan, append, hooks, skills)
-      // Kuvo Code's own tools, as the engine's models have them: told over its pipe, not on its
-      // command line (where any process could read their key).
-      if (tools) {
-        const entry = tools.kind === "http" ? { type: "http" as const, url: tools.url, headers: tools.headers, timeout: tools.timeout } : { type: "stdio" as const, command: tools.command, args: tools.args, env: tools.env, timeout: tools.timeout }
-        await this.query?.setMcpServers({ [tools.name]: entry }).catch(() => {})
-      }
     } else {
       // The same Claude Code goes on, told what changed.
       if (this.opened?.model !== modelID) await this.query.setModel(modelID === "default" ? undefined : modelID).catch(() => {})
       if (this.opened?.effort !== effort) await this.query.applyFlagSettings({ effortLevel: effort ?? null }).catch(() => {})
       if (this.opened?.plan !== input.plan) await this.query.setPermissionMode(input.plan ? "plan" : "default").catch(() => {})
       this.opened = { model: modelID, effort, plan: input.plan, append, program: this.agent.program, tools: tools?.key, skills, fence }
+    }
+    // Kuvo Code's own tools, as the engine's models have them, and those servers: told over its
+    // pipe, not on its command line (where any process could read their key).
+    if (this.query && (opening || this.servers !== computer.key)) {
+      const entries: Record<string, unknown> = {}
+      // (Its key to them made again, if it started again: the old one went with it.)
+      const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
+      if (tools) entries[tools.name] = tools.kind === "http" ? { type: "http", url: tools.url, headers: tools.headers, timeout: tools.timeout } : { type: "stdio", command: tools.command, args: tools.args, env: tools.env, timeout: tools.timeout }
+      for (const server of servers) entries[server.name] = { type: "http", url: server.url, headers: server.headers, timeout: server.timeout }
+      this.servers = computer.key
+      await this.query.setMcpServers(entries as any).catch(() => {})
     }
     if (hooks.signal.aborted) return { outcome: "interrupted" }
     return new Promise<RunResult>((resolve) => {
@@ -844,7 +857,6 @@ class ClaudeThread implements Thread {
     this.sandboxedNow = fenceOn() || undefined
     if (!this.sandboxedNow) return undefined
     const directory = this.session.location.directory
-    const relayed = relayedTools(this.session.id, this)
     const attached = fenceAttachments(directory)
     const settings = this.agent.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
     // (On a machine, the script that gives its commands the machine's own folders back, in Kuvo Code's.)
@@ -854,7 +866,7 @@ class ClaudeThread implements Thread {
       state: STATE_IN_HOME,
       kept: KEPT_IN_HOME,
       read: [...(skills ? [skills] : []), ...(attached ? [attached] : []), ...(machineFolders ? [machineFolders] : [])],
-      port: relayed ? relayPort() : undefined,
+      port: relayPort(),
     })
     if (!fence) throw new Error("Claude Code runs in the sandbox here, and it isn't ready: restart Kuvo Code.")
     // Its temporary files where the launcher puts them (the box's own folder is hidden from it),
@@ -1513,8 +1525,8 @@ class ClaudeThread implements Thread {
     this.query = undefined
     this.input = undefined
     this.leftRunning()
-    // Its key to its tools through the relay goes with it.
-    if (this.sandboxedNow) dropRelayed(this.session.id, this)
+    // Its key to its tools and servers through the relay goes with it.
+    dropRelayed(this.session.id, this)
   }
 
   /** What it left running ends with it. */

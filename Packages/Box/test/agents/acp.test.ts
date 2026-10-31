@@ -18,6 +18,8 @@ import { Sessions } from "../../src/agents/sessions"
 import { Store } from "../../src/agents/store"
 import { setToolServer } from "../../src/agents/kuvotools"
 import { canFence, realFence } from "./support/fence"
+import { computerServers, KEYS, SERVER_COMMAND } from "./support/servers"
+import { forgetServers } from "../../src/agents/servers"
 import { noteAgentsInside } from "../../src/agents/fence"
 import type { PermissionRule } from "../../src/agents/wire"
 
@@ -113,6 +115,20 @@ async function attempt(how, place) {
       const staged = fs.mkdtempSync(path.join(process.cwd(), "staged-"))
       fs.symlinkSync("/", path.join(staged, "prompt_history.jsonl"))
       fs.renameSync(staged, place)
+    }
+    else if (how === "server") {
+      // One of the computer's servers it was given, by name: started, then its tool called
+      // ("<server> [<tool> [<path or name>]]", its key told by default).
+      const [named, tool = "reveal", argument] = place.split(" ")
+      const server = servers.find((each) => each.name === named)
+      if (!server) return "none"
+      const headers = { ...Object.fromEntries(server.headers.map((each) => [each.name, each.value])), "Content-Type": "application/json", Accept: "application/json, text/event-stream" }
+      const started = await fetch(server.url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "agent", version: "1" } } }) })
+      if (!started.ok) return "no"
+      const session = started.headers.get("mcp-session-id")
+      const response = await fetch(server.url, { method: "POST", headers: { ...headers, ...(session ? { "mcp-session-id": session } : {}) }, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: tool, arguments: tool === "env" ? { name: argument } : { path: argument } } }) })
+      if (!response.ok) return "no"
+      return (await response.json()).result?.content?.[0]?.text ?? "no"
     }
     else if (how === "tools" || how === "app") {
       const server = how === "tools" ? servers.find((each) => each.type === "http") : { url: place, headers: [] }
@@ -815,6 +831,75 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
     delete process.env.KUVO_FENCE
     const id = await run(trying({ sandbox: ["env", "GROK_SANDBOX"], leader: ["arg", "--no-leader"], elsewhere: ["write", join(elsewhere, "e.txt")] }))
     expect(words(id)).toBe("sandbox=none leader=no elsewhere=yes")
+  })
+})
+
+describe.skipIf(!canFence)("The computer's MCP servers, for an ACP agent in the box's sandbox", () => {
+  let kuvo: string
+  let servers: ReturnType<typeof computerServers>
+  beforeEach(async () => {
+    kuvo = realpathSync(mkdtempSync(join(base, "kuvo-")))
+    writeFileSync(join(kuvo, "secret"), "s")
+    // The integrations' folder, in Kuvo Code's, where one keeps its sign-in.
+    mkdirSync(join(kuvo, "integrations", "files"), { recursive: true })
+    process.env.KUVO_INTEGRATIONS = join(kuvo, "integrations")
+    process.env.GROK_HOME = realpathSync(mkdtempSync(join(base, "grok-home-")))
+    process.env.KUVO_FENCE = realFence(kuvo)
+    servers = computerServers(root)
+    await servers.serve()
+  })
+  afterEach(() => {
+    servers.stop()
+    delete process.env.KUVO_FENCE
+    delete process.env.GROK_HOME
+    delete process.env.KUVO_INTEGRATIONS
+  })
+
+  const trying = (tries: Record<string, [string, string]>) => new TestGrok(program(fakeAcp([], [], undefined, { tries }), join(root, "grok")), root)
+  const everyKind: Record<string, [string, string]> = { files: ["server", "files"], notes: ["server", "notes"], tracker: ["server", "tracker"], off: ["server", "off"] }
+
+  test("each reaches it through the bridge with what it needs: a command's server, found on the PATH, with its key; a URL's with its headers or your sign-in; one turned off isn't there", async () => {
+    const id = await run(trying(everyKind))
+    expect(words(id)).toBe(`files=key:${KEYS.shared} notes=auth:none,key:${KEYS.notes},at:/notes tracker=auth:Bearer ${KEYS.tracker},key:none,at:/tracker off=none`)
+  })
+
+  test("a command's server runs in the sandbox as the conversation's commands do: Kuvo Code's folder hidden, but its integration's own folder, where it keeps its sign-in, its to write", async () => {
+    const token = join(kuvo, "integrations", "files", "token.json")
+    servers.filesEnvironment = { TOKEN_CACHE: token }
+    const id = await run(trying({ secret: ["server", `files read ${join(kuvo, "secret")}`], token: ["server", `files write ${token}`], project: ["server", `files write ${join(root, "made.txt")}`] }))
+    expect(words(id)).toBe("secret=no token=yes project=yes")
+  })
+
+  test("the agent is given only the bridge's address for each and its own key to it, never the servers' keys, commands or addresses", async () => {
+    await run(trying(everyKind))
+    const given = received().find((message) => message.method === "session/new").params.mcpServers as any[]
+    expect(given.map((server) => server.name)).toEqual(expect.arrayContaining(["files", "notes", "tracker"]))
+    const text = JSON.stringify(given)
+    for (const key of Object.values(KEYS)) expect(text).not.toContain(key)
+    expect(text).not.toContain(SERVER_COMMAND)
+    // Each the bridge's own address, one port for all.
+    const relay = new URL(given[0].url).port
+    for (const server of given) expect(server.url).toBe(`http://127.0.0.1:${relay}/mcp/${server.name}`)
+  })
+
+  test("a bot's own key (Edit Bot › Keys) is the one its server gets, in place of yours, from the agent's next message on", async () => {
+    const agent = trying({ files: ["server", "files"] })
+    const id = await run(agent)
+    expect(words(id)).toBe(`files=key:${KEYS.shared}`)
+    // Given to the bot now, while the same Grok goes on.
+    servers.botLayer = servers.botFiles()
+    forgetServers()
+    send(id, "again")
+    await settled(id, 2)
+    expect(words(id)).toBe(`files=key:${KEYS.shared}files=key:${KEYS.bot}`)
+  })
+
+  test("a call that doesn't carry the conversation's key to the bridge reaches none of them", async () => {
+    await run(trying(everyKind))
+    const given = received().find((message) => message.method === "session/new").params.mcpServers as any[]
+    const files = given.find((server) => server.name === "files")
+    const response = await fetch(files.url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer guessed" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }) })
+    expect(response.status).toBe(401)
   })
 })
 
