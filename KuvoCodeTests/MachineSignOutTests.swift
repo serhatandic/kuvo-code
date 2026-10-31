@@ -78,9 +78,9 @@ import Testing
         ("", true, nil, false, false),
     ] as [(String, Bool, String?, Bool, Bool)])
     func whatASignInsPasswordDoes(password: String, saving: Bool, savedPassword: String?, saves: Bool, typedNow: Bool) {
-        let handling = BrowserAskCard.handling(password: password, saving: saving, secure: true, savedPassword: savedPassword)
+        let handling = BrowserAsks.handling(password: password, saving: saving, secure: true, savedPassword: savedPassword)
         #expect(handling.saves == saves)
         #expect(handling.typedNow == typedNow)
-        #expect(!BrowserAskCard.handling(password: password, saving: saving, secure: false, savedPassword: savedPassword).saves)
+        #expect(!BrowserAsks.handling(password: password, saving: saving, secure: false, savedPassword: savedPassword).saves)
     }
 }
