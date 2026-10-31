@@ -6485,10 +6485,15 @@ var server2;
 var keys = new Map;
 var sessionsByKey = new Map;
 var programs = new Map;
-function relayedTools(sessionID) {
+var holders = new Map;
+function relayedTools(sessionID, holder) {
   const tools = kuvoTools(sessionID);
   if (!tools)
     return;
+  let held = holders.get(sessionID);
+  if (!held)
+    holders.set(sessionID, held = new Set);
+  held.add(holder);
   server2 ??= Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: answer });
   let key = keys.get(sessionID);
   if (!key) {
@@ -6499,7 +6504,12 @@ function relayedTools(sessionID) {
   return { kind: "http", name: tools.name, key: tools.key, timeout: tools.timeout, url: `http://127.0.0.1:${server2.port}/mcp`, headers: { Authorization: `Bearer ${key}` } };
 }
 var relayPort = () => server2?.port;
-function dropRelayed(sessionID) {
+function dropRelayed(sessionID, holder) {
+  const held = holders.get(sessionID);
+  held?.delete(holder);
+  if (held?.size)
+    return;
+  holders.delete(sessionID);
   const key = keys.get(sessionID);
   if (key)
     sessionsByKey.delete(key);
@@ -6878,7 +6888,7 @@ class AcpThread {
       return;
     const directory = this.session.location.directory;
     const attached = fenceAttachments(directory);
-    const relayed = relayedTools(this.session.id);
+    const relayed = relayedTools(this.session.id, this);
     const started = cleanEnv ? env ?? {} : { ...process.env, ...env };
     const fence = fenceAgent(argv[0], directory, {
       homes: whole.homes(started),
@@ -6892,7 +6902,7 @@ class AcpThread {
     return { argv: [fence.command, ...argv.slice(1)], env: { ...env, ...whole.env, ...fence.env }, ended: fence.ended };
   }
   mcpServers(init) {
-    const tools = this.fenced ? relayedTools(this.session.id) : kuvoTools(this.session.id);
+    const tools = this.fenced ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
     if (!tools || tools.kind === "http" && !init?.agentCapabilities?.mcpCapabilities?.http)
       return [];
     loadKuvoTools();
@@ -7515,7 +7525,7 @@ ${others.map((path) => `- ${path}`).join(`
     this.rpc?.kill();
     this.rpc = undefined;
     if (this.fenced)
-      dropRelayed(this.session.id);
+      dropRelayed(this.session.id, this);
     this.fenced = false;
   }
 }
@@ -8967,8 +8977,6 @@ var outputLimit3 = 30000;
 var STATE_IN_HOME = [
   "projects",
   "sessions",
-  "session-env",
-  "shell-snapshots",
   "file-history",
   "todos",
   "tasks",
@@ -8981,9 +8989,7 @@ var STATE_IN_HOME = [
   "cache",
   "paste-cache",
   "image-cache",
-  "ide",
   "state",
-  "backups",
   "logs",
   "uploads",
   "stats-cache.json*",
@@ -9374,7 +9380,7 @@ class ClaudeThread {
     const modelID = input.model.id;
     const effort = input.model.variant;
     const append = hooks.instructions();
-    const tools = fenceOn() ? relayedTools(this.session.id) : kuvoTools(this.session.id);
+    const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
     const skills = skillsFolder(await skillsFor(this.session.location.directory, this.agent.ownSkillFolders(this.session.location.directory), turnedOff(hooks)));
     const fence = fenceKey();
     if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence))
@@ -9587,7 +9593,7 @@ class ClaudeThread {
       delete this.state.claudeCost;
     const whole = this.whole(skills);
     this.input = new Queue;
-    const tools = fenceOn() ? relayedTools(this.session.id) : kuvoTools(this.session.id);
+    const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
     this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() };
     this.query = sdk.query({
       prompt: this.input,
@@ -9616,7 +9622,7 @@ class ClaudeThread {
     if (!this.sandboxedNow)
       return;
     const directory = this.session.location.directory;
-    const relayed = relayedTools(this.session.id);
+    const relayed = relayedTools(this.session.id, this);
     const attached = fenceAttachments(directory);
     const settings = this.agent.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join19(homedir(), ".claude");
     const machineFolders = this.agent.env().CLAUDE_ENV_FILE;
@@ -10267,7 +10273,7 @@ class ClaudeThread {
     this.input = undefined;
     this.leftRunning();
     if (this.sandboxedNow)
-      dropRelayed(this.session.id);
+      dropRelayed(this.session.id, this);
   }
   leftRunning() {
     for (const task of this.tasks.values())
@@ -10785,8 +10791,7 @@ class CodexAgent {
       const server = slot.server;
       if (!server || server.isClosed || !this.unfencedServers.has(server))
         continue;
-      const working = [...this.threads.values()].some((thread) => thread.server === server && thread.isRunning);
-      if (working || (key === SHARED || key === ACCOUNT) && (this.logins.size || [...this.oneOffs.values()].some((oneOff) => oneOff.rpc === server))) {
+      if (this.busy(key, server)) {
         waiting = true;
         continue;
       }
@@ -10854,7 +10859,7 @@ class CodexAgent {
     const skills = skillsRoot();
     if (skills)
       mkdirSync13(skills, { recursive: true, mode: 448 });
-    const relayed = sessionID ? relayedTools(sessionID) : undefined;
+    const relayed = sessionID ? relayedTools(sessionID, this) : undefined;
     const homes = [this.home, ...this.instance.home && !onMachine ? [this.yourCodex] : []];
     const attached = sessionID ? fenceAttachments(directory) : undefined;
     return fenceAgent(this.executable(), directory, {
@@ -10921,7 +10926,7 @@ class CodexAgent {
     for (const thread of this.threads.values())
       thread.serverStopped(server);
     if (key !== SHARED && key !== ACCOUNT)
-      dropRelayed(key);
+      dropRelayed(key, this);
   }
   notification(method, params, from) {
     if (method === "account/login/completed") {
@@ -11200,7 +11205,7 @@ class CodexAgent {
         this.spawned.delete(spawn);
     this.stop(sessionID);
     this.slots.delete(sessionID);
-    dropRelayed(sessionID);
+    dropRelayed(sessionID, this);
   }
 }
 var knownSpawns = 100;
@@ -11316,7 +11321,7 @@ class CodexThread {
     }
     const fenced = this.agent.isFenced(rpc);
     const instructions = hooks.instructions() || null;
-    const tools = fenced ? relayedTools(this.session.id) : kuvoTools(this.session.id);
+    const tools = fenced ? relayedTools(this.session.id, this.agent) : kuvoTools(this.session.id);
     const directory = this.session.location.directory;
     const own = this.agent.ownSkillFolders(directory);
     const off = turnedOff(hooks);
@@ -12916,7 +12921,7 @@ class CursorThread {
     const cwd = this.session.location.directory;
     const skills = skillsFolder(await skillsFor(cwd, this.owner.ownSkillFolders(cwd), turnedOff(hooks)));
     const fenced = Boolean(fenceRules());
-    const tools = fenced ? relayedTools(this.session.id) : kuvoTools(this.session.id);
+    const tools = fenced ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
     return {
       model: selection,
       name: `Kuvo Code: ${this.session.title ?? "session"}`,
@@ -13234,7 +13239,7 @@ ${text}`;
   }
   close() {
     this.stop();
-    dropRelayed(this.session.id);
+    dropRelayed(this.session.id, this);
   }
 }
 function limitOf2(message, error) {
@@ -16400,7 +16405,7 @@ ${live.agentPrompt}` : ""
       for (const [providerID, thread] of live.threads) {
         if (!thread.outside)
           continue;
-        if (isBusy(live.doing)) {
+        if (isBusy(live.doing) || thread.keepsWorking) {
           waiting = true;
           continue;
         }
@@ -21955,4 +21960,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 82bfa67d79dbcd227a37b40d211da6fbaaceb132a7555e98722f77b7121d931d
+// Built from Packages/Box/src/agents a4355eb7bdbe7ae2045b9793657b90edc2a96419652d3916f38fe0593b9aa554
