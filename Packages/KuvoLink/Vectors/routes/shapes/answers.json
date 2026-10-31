@@ -2348,6 +2348,9 @@
             "literal": "queue"
            },
            {
+            "literal": "queue.waits"
+           },
+           {
             "literal": "work"
            },
            {
@@ -2612,6 +2615,9 @@
            },
            {
             "literal": "queue"
+           },
+           {
+            "literal": "queue.waits"
            },
            {
             "literal": "work"
@@ -5203,6 +5209,19 @@
          "paused": "bool",
          "held": {
           "list": "string"
+         },
+         "waiting?": {
+          "list": {
+           "object": {
+            "id": "string",
+            "from?": "string",
+            "text": "string",
+            "files?": {
+             "list": "string"
+            },
+            "at": "number"
+           }
+          }
          }
         }
        }
@@ -5219,6 +5238,19 @@
       "paused": "bool",
       "held": {
        "list": "string"
+      },
+      "waiting?": {
+       "list": {
+        "object": {
+         "id": "string",
+         "from?": "string",
+         "text": "string",
+         "files?": {
+          "list": "string"
+         },
+         "at": "number"
+        }
+       }
       }
      }
     }
@@ -5232,6 +5264,19 @@
       "paused": "bool",
       "held": {
        "list": "string"
+      },
+      "waiting?": {
+       "list": {
+        "object": {
+         "id": "string",
+         "from?": "string",
+         "text": "string",
+         "files?": {
+          "list": "string"
+         },
+         "at": "number"
+        }
+       }
       }
      }
     },
@@ -5260,6 +5305,19 @@
       "paused": "bool",
       "held": {
        "list": "string"
+      },
+      "waiting?": {
+       "list": {
+        "object": {
+         "id": "string",
+         "from?": "string",
+         "text": "string",
+         "files?": {
+          "list": "string"
+         },
+         "at": "number"
+        }
+       }
       }
      }
     },
@@ -5288,6 +5346,19 @@
       "paused": "bool",
       "held": {
        "list": "string"
+      },
+      "waiting?": {
+       "list": {
+        "object": {
+         "id": "string",
+         "from?": "string",
+         "text": "string",
+         "files?": {
+          "list": "string"
+         },
+         "at": "number"
+        }
+       }
       }
      }
     },
@@ -5316,6 +5387,19 @@
       "paused": "bool",
       "held": {
        "list": "string"
+      },
+      "waiting?": {
+       "list": {
+        "object": {
+         "id": "string",
+         "from?": "string",
+         "text": "string",
+         "files?": {
+          "list": "string"
+         },
+         "at": "number"
+        }
+       }
       }
      }
     },
@@ -5330,6 +5414,105 @@
      }
     },
     "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sessions/:id/queue/add",
+   "answers": {
+    "200": {
+     "object": {
+      "paused": "bool",
+      "held": {
+       "list": "string"
+      },
+      "waiting?": {
+       "list": {
+        "object": {
+         "id": "string",
+         "from?": "string",
+         "text": "string",
+         "files?": {
+          "list": "string"
+         },
+         "at": "number"
+        }
+       }
+      },
+      "waits": "bool"
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "502": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/sessions/:id/queue/:item",
+   "answers": {
+    "200": {
+     "object": {
+      "paused": "bool",
+      "held": {
+       "list": "string"
+      },
+      "waiting?": {
+       "list": {
+        "object": {
+         "id": "string",
+         "from?": "string",
+         "text": "string",
+         "files?": {
+          "list": "string"
+         },
+         "at": "number"
+        }
+       }
+      },
+      "removed?": {
+       "object": {
+        "id": "string",
+        "text": "string",
+        "files?": {
+         "list": "any"
+        },
+        "delivery": {
+         "oneOf": [
+          {
+           "literal": "steer"
+          },
+          {
+           "literal": "queue"
+          }
+         ]
+        },
+        "from?": "string",
+        "words": "string"
+       }
+      }
+     }
+    },
+    "404": {
      "object": {
       "message": "string"
      }
