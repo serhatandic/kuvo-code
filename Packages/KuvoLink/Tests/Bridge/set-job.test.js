@@ -106,3 +106,25 @@ test("a bot keeps its job with set_job: its box keeps it, says it under its name
   assert.equal(nobody.isError, true);
   assert.match(nobody.content[0].text, /Only a bot keeps a job/);
 });
+
+// A coding agent's tools on a machine (Claude Code's, say): the agents bridge starts the tool for
+// one conversation, named in KUVO_SESSION, and its calls name none. Its wake-ups are that
+// conversation's, as its other tools are. (`kuvo-wake` is a stand-in that says what it was asked.)
+test("a coding agent's wake-ups are its conversation's: the tool started for it knows which", async () => {
+  const wakeScript = path.join(home, "bin", "kuvo-wake");
+  write(wakeScript, "#!/bin/sh\necho \"$@\"\n");
+  fs.chmodSync(wakeScript, 0o755);
+  const agent = spawn(process.execPath, [tool, "mcp"], { env: { ...process.env, KUVO_HOME: home, KUVO_SESSION: "ses_scout" }, stdio: ["pipe", "pipe", "ignore"] });
+  after(() => agent.kill());
+  const listed = await new Promise(resolve => {
+    let pending = "";
+    agent.stdout.on("data", chunk => {
+      pending += chunk;
+      const end = pending.indexOf("\n");
+      if (end >= 0) resolve(JSON.parse(pending.slice(0, end)).result);
+    });
+    agent.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_wake_ups", arguments: {} } }) + "\n");
+  });
+  assert.equal(listed.isError, false, listed.content[0].text);
+  assert.equal(listed.content[0].text, `${folder} list`, "the bot's own wake-ups");
+});

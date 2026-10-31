@@ -113,11 +113,14 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
     }
 
     /// Where it is on this Mac; one that only the engine has (a pasted image, a tool's picture)
-    /// is written out first, as a download of its type.
-    private func localURL() -> URL? {
+    /// is written out first, once, as a download of its type.
+    func localURL() -> URL? {
         if let url = fileURL { return url }
-        guard case .stored(let file, _) = self, let bytes = file.bytes else { return nil }
-        return Attachments.writeReceived(bytes, named: name, type: type)
+        guard case .stored(let file, let id) = self else { return nil }
+        if let written = AttachmentImages.written(id), FileManager.default.fileExists(atPath: written.path) { return written }
+        guard let bytes = file.bytes, let url = Attachments.writeReceived(bytes, named: name, type: type) else { return nil }
+        AttachmentImages.wrote(url, for: id)
+        return url
     }
 
     func revealInFinder() {
@@ -128,6 +131,13 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
 /// Decoded pictures, so scrolling the transcript doesn't decode them again. NSCache is thread-safe.
 nonisolated enum AttachmentImages {
     nonisolated(unsafe) static let cache = NSCache<NSString, NSImage>()
+
+    /// Where each attachment only the engine had was written out, so opening it again opens
+    /// that copy rather than writing another.
+    nonisolated(unsafe) private static var writtenOut: [String: URL] = [:]
+    private static let lock = NSLock()
+    static func written(_ id: String) -> URL? { lock.withLock { writtenOut[id] } }
+    static func wrote(_ url: URL, for id: String) { lock.withLock { writtenOut[id] = url } }
 }
 
 nonisolated private extension String {

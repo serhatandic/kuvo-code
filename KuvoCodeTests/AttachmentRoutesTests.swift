@@ -24,9 +24,9 @@ import Testing
         try png.write(to: folder.appending(path: "shot.png"))
     }
 
-    private func model(input: [String]) throws -> Model {
+    private func model(input: [String], provider: String = "p") throws -> Model {
         try JSONDecoder().decode(Model.self, from: JSONSerialization.data(withJSONObject: [
-            "id": "m-\(input.joined())", "modelID": "m", "providerID": "p", "name": "Test Model",
+            "id": "m-\(input.joined())", "modelID": "m", "providerID": provider, "name": "Test Model",
             "capabilities": ["tools": true, "input": input, "output": ["text"]], "variants": [],
             "time": ["released": 1], "cost": [["input": 1, "output": 1]], "status": "active", "enabled": true,
             "limit": ["context": 1000, "output": 100]]))
@@ -62,6 +62,23 @@ import Testing
         #expect(prepared.paths == [url("blob.bin").path])
     }
 
+    /// A coding agent's session: its bridge puts a text file in the message only up to its limit,
+    /// and never a folder, so a long log and a folder go by path, and the message doesn't say
+    /// they're in it. A short file is, and the engine's models still get the long one whole.
+    @Test func aCodingAgentGetsLongTextAndFoldersByPath() throws {
+        let log = url("build.log")
+        try Data(repeating: UInt8(ascii: "a"), count: 200_001).write(to: log)  // over the bridge's limit
+        let agent = try model(input: ["text", "image"], provider: "claude-code")
+        let prepared = Attachments.prepare([url("notes.txt"), log, url("src")], for: agent)
+        #expect(prepared.included == [url("notes.txt").path])
+        #expect(prepared.paths == [log.path, url("src").path])
+        guard case .path(let reason, let warns) = Attachments.route(log, for: agent) else { Issue.record("a long log went in a coding agent's message"); return }
+        #expect(reason.contains("gets its path") && !warns)
+        #expect(isContent("build.log", for: try model(input: ["text"])))
+        // On a machine, a folder goes there as its listing, and its chip doesn't say otherwise.
+        guard case .content = Attachments.route(url("src"), for: agent, onMachine: true) else { Issue.record("a folder for a machine was called a path"); return }
+    }
+
     /// On a machine, which can't read this Mac's files: what the model reads goes inline, a
     /// folder as its listing.
     @Test func onAMachineWhatItReadsGoesInline() throws {
@@ -94,5 +111,15 @@ import Testing
         let prepared = Attachments.prepareForMachine([url("notes.txt"), huge])
         #expect(prepared.files.map(\.name) == ["notes.txt"])
         #expect(prepared.unsent == [huge.path])
+    }
+
+    /// A picture only the engine has (a photo from the phone), opened twice: the same copy on
+    /// this Mac both times, not a second one.
+    @Test func openingAPictureTwiceWritesItOnce() throws {
+        let png = try Data(contentsOf: url("shot.png")).base64EncodedString()
+        let item = AttachmentItem.stored(.init(mime: "image/png", name: "photo.png", data: png), id: "msg_\(UUID().uuidString)#0")
+        let first = try #require(item.localURL())
+        defer { try? FileManager.default.removeItem(at: first) }
+        #expect(item.localURL() == first)
     }
 }

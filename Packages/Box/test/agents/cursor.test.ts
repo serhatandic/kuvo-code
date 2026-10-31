@@ -466,7 +466,8 @@ async function attempt(how, place, options, message) {
     else if (how === "store") {
       if (!(options.local.store instanceof JsonlLocalAgentStore)) return "none"
       writeFileSync(join(options.local.store.root, place), "{}")
-    } else if (how === "attached") readFileSync(/^- (.+)$/m.exec(typeof message === "string" ? message : message.text)[1])
+    } else if (how === "listed") return /^- (.+)$/m.exec(typeof message === "string" ? message : message.text)?.[1] ?? "none"
+    else if (how === "attached") readFileSync(/^- (.+)$/m.exec(typeof message === "string" ? message : message.text)[1])
     else if (how === "tools") {
       const server = Object.values(options.mcpServers ?? {})[0]
       if (!server) return "none"
@@ -569,6 +570,15 @@ describe.skipIf(!canFence)("Cursor in the box's sandbox", () => {
     opened.prompt(id, { id: "msg_cursor_attached00000001", text: "look", files: [{ uri: `file://${attachment}`, name: "report.pdf" }], delivery: "steer" })
     await until(() => idles(opened, id).length > before)
     expect(words(opened, id)).toBe("attached=yes")
+  })
+
+  test("a picture that's gone by the time its message goes (one queued a while) goes by its name, rather than failing the turn", async () => {
+    const gone = join(elsewhere, "screenshot.png")
+    const { opened, id } = session({ listed: ["listed", ""] })
+    const before = idles(opened, id).length
+    opened.prompt(id, { id: "msg_cursor_gonepicture00001", text: "look", files: [{ uri: `file://${gone}`, name: "screenshot.png" }], delivery: "steer" })
+    await until(() => idles(opened, id).length > before)
+    expect(words(opened, id)).toBe(`listed=${gone}`)
   })
 
   test("Kuvo Code's tools reach it through the bridge, as its own session's", async () => {

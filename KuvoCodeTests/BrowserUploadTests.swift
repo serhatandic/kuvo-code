@@ -52,6 +52,11 @@ import Testing
         #expect(outside.isError)
         #expect(outside.text.hasPrefix("Not attached: /etc/hosts is outside this conversation's folder"), "\(outside.text)")
         #expect(!(await agent.text()).contains("Got hosts"))
+        // Nor named without its leading slash (the app reads from /): not attached either.
+        let relative = result(await BrowserTools.call("browser_upload", arguments: ["index": field, "files": ["etc/hosts"]], agent: agent, caller: "ses_upload"))
+        #expect(relative.isError)
+        #expect(!relative.text.hasPrefix("Attached"), "\(relative.text)")
+        #expect(!(await agent.text()).contains("Got hosts"))
 
         // In it: the page has it.
         let inside = result(await BrowserTools.call("browser_upload", arguments: ["index": field, "files": [folder.appending(path: "report.txt").path(percentEncoded: false)]], agent: agent, caller: "ses_upload"))

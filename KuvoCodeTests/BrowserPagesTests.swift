@@ -137,5 +137,12 @@ import WebKit
         #expect(said.hasPrefix("Couldn't open http://127.0.0.1:1/orders: "), "\(said)")
         #expect(said.contains("still on the page before"), "\(said)")
         #expect(said.contains("Status board"), "with that page: \(said)")
+        // Through the tool, a failed step, so its line in the conversation doesn't read "Opened".
+        let step = await BrowserTools.call("browser_navigate", arguments: ["url": "http://127.0.0.1:1/orders"], agent: agent)
+        #expect(step["isError"] as? Bool == true)
+        #expect(((step["content"] as? [[String: Any]])?.first?["text"] as? String)?.hasPrefix("Couldn't open") == true)
+        let tab = await BrowserTools.call("browser_new_tab", arguments: ["url": "http://127.0.0.1:1/orders"], agent: agent)
+        #expect(tab["isError"] as? Bool == true)
+        #expect(((tab["content"] as? [[String: Any]])?.first?["text"] as? String)?.hasPrefix("Couldn't open") == true)
     }
 }

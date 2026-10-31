@@ -421,6 +421,19 @@ test("a Mac's files for a machine take the phone's path: kept on the machine's b
   assert.deepEqual(prompted["/api/session/ses_unknown1/prompt"].files, files);
   await ask("kuvo/agents/api/session/ses_unknown1/prompt", { id: "msg_4", text: "Read it", files });
   assert.equal(prompted["/api/session/ses_unknown1/prompt"].files, undefined);
+
+  // A long log: the engine's model reads it in the message, but the coding agents get only as
+  // much text as their bridge puts in one, so they open this one from where it's kept.
+  const log = Buffer.from("GET /health 200\n".repeat(20_000));
+  const logs = [{ uri: `data:text/plain;base64,${log.toString("base64")}`, name: "server.log" }];
+  await ask("api/session/ses_mac1/prompt", { id: "msg_5", text: "Why did it fail?", files: logs });
+  assert.deepEqual(prompted["/api/session/ses_mac1/prompt"].files, logs);
+  await ask("kuvo/agents/api/session/ses_mac1/prompt", { id: "msg_6", text: "Why did it fail?", files: logs });
+  const longLog = prompted["/api/session/ses_mac1/prompt"];
+  assert.equal(longLog.files, undefined);
+  const opens = longLog.text.split("\n");
+  assert.equal(opens[3], "Open these attached files with your tools if you need them:");
+  assert.deepEqual(fs.readFileSync(opens[4]), log);
 });
 
 test("requests go to the engine with its password, all of its API; paths that aren't what they seem don't", async t => {

@@ -111,13 +111,13 @@ final class OutsideAgents {
 
     /// The agents' providers (their models' and accounts' IDs), as the bridge names them: an
     /// account you added is `<agent's>@<id>` ("claude-code@1f2e3d4c").
-    static let order = Plans.agents
-    static let providers = Set(order)
+    nonisolated static let order = Plans.agents
+    nonisolated static let providers = Set(order)
     /// Auto's provider: a session on it runs down your list.
-    static let autoProvider = "auto"
+    nonisolated static let autoProvider = "auto"
 
     /// The agent's own provider, without the account: "claude-code" for "claude-code@1f2e3d4c".
-    static func base(_ providerID: String) -> String { Plans.base(providerID) }
+    nonisolated static func base(_ providerID: String) -> String { Plans.base(providerID) }
 
     /// The account part of an added account's provider, if it is one.
     static func account(_ providerID: String) -> String? {
@@ -143,12 +143,12 @@ final class OutsideAgents {
     }
 
     /// One of your accounts with a coding agent.
-    static func isAgent(_ providerID: String?) -> Bool {
+    nonisolated static func isAgent(_ providerID: String?) -> Bool {
         providerID.map { providers.contains(base($0)) } ?? false
     }
 
     /// A model the bridge runs a session on: an agent's, or Auto.
-    static func runsInBridge(_ providerID: String?) -> Bool {
+    nonisolated static func runsInBridge(_ providerID: String?) -> Bool {
         providerID == autoProvider || isAgent(providerID)
     }
 
