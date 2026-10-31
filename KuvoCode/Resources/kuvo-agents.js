@@ -6468,7 +6468,8 @@ function fenceAgent(program, directory, mine) {
       KUVO_FENCE_READ: places(mine.read.filter((place) => !mine.homes.some((home) => real(place) === real(home) || real(place).startsWith(real(home) + "/")))),
       KUVO_FENCE_STATE: names(mine.state),
       KUVO_FENCE_KEPT: names(mine.kept),
-      KUVO_FENCE_PORT: String(mine.port ?? 0)
+      KUVO_FENCE_PORT: String(mine.port ?? 0),
+      ...mine.session && /^ses_[A-Za-z0-9]+$/.test(mine.session) ? { OPENCODE_SESSION_ID: mine.session } : {}
     },
     ended: () => unlinked(mine.homes, mine.state)
   };
@@ -7208,7 +7209,8 @@ class AcpThread {
       state: whole.state,
       kept: whole.kept,
       read: [...skills?.startsWith("/") ? [skills] : [], ...attached ? [attached] : [], ...whole.read?.(started) ?? []],
-      port: relayPort()
+      port: relayPort(),
+      session: this.session.id
     });
     if (!fence)
       throw new Error(`${this.name} runs in the sandbox here, and it isn't ready: restart Kuvo Code.`);
@@ -9983,7 +9985,8 @@ class ClaudeThread {
       state: STATE_IN_HOME,
       kept: KEPT_IN_HOME,
       read: [...skills ? [skills] : [], ...attached ? [attached] : [], ...machineFolders ? [machineFolders] : []],
-      port: relayPort()
+      port: relayPort(),
+      session: this.session.id
     });
     if (!fence)
       throw new Error("Claude Code runs in the sandbox here, and it isn't ready: restart Kuvo Code.");
@@ -11217,7 +11220,8 @@ class CodexAgent {
       state: STATE_IN_HOME2,
       kept: KEPT_IN_HOME2,
       read: [...skills ? [skills] : [], ...attached ? [attached] : []],
-      port: relayPort()
+      port: relayPort(),
+      session: sessionID
     });
   }
   async start(key, slot, fenceNow, thread) {
@@ -13586,7 +13590,8 @@ ${text}`;
       state: ["*"],
       kept: [],
       read: [runtime, dirname11(process.execPath), ...options.local?.dirs ?? [], ...attached ? [attached] : []],
-      port: relayPort()
+      port: relayPort(),
+      session: this.session.id
     });
     if (!fence)
       throw new Error("Cursor runs in the sandbox here, and it isn't ready: restart Kuvo Code.");
@@ -22545,4 +22550,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents bd308100ba731c2d438ec47aaee94901dfadf5bd68a5b9c223c42263e90632b7
+// Built from Packages/Box/src/agents 5f089270db86bce368ef66b4f875f0780535e06c71579ca47694497317862770

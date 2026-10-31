@@ -867,6 +867,7 @@ class ClaudeThread implements Thread {
       kept: KEPT_IN_HOME,
       read: [...(skills ? [skills] : []), ...(attached ? [attached] : []), ...(machineFolders ? [machineFolders] : [])],
       port: relayPort(),
+      session: this.session.id,
     })
     if (!fence) throw new Error("Claude Code runs in the sandbox here, and it isn't ready: restart Kuvo Code.")
     // Its temporary files where the launcher puts them (the box's own folder is hidden from it),

@@ -504,6 +504,53 @@ test("a bot's command writes in its own folder, and another bot's is hidden from
   }
 });
 
+test("a bot keeps its memory from the sandbox, in its own conversation and its seats in group chats, and nothing else of its folder or another bot's", async () => {
+  const box = boxAt("memory");
+  const bot = (id, session) => {
+    const folder = path.join(box.bots, id);
+    fs.mkdirSync(path.join(folder, "workspace"), { recursive: true });
+    fs.writeFileSync(path.join(folder, "MEMORY.md"), `# ${id}'s memory\n`);
+    fs.writeFileSync(path.join(folder, "bot.json"), "{}");
+    fs.writeFileSync(path.join(folder, "session"), session);
+    return folder;
+  };
+  const ship = bot("bot_ship", "ses_ship");
+  const scout = bot("bot_scout", "ses_scout");
+  const running = await start(box);
+  try {
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    const attempts = tries([
+      ["read its memory", "cat ../MEMORY.md"],
+      ["write its memory", "echo '- likes tea' >> ../MEMORY.md"],
+      ["write its memory anew", "printf '# Ship\\n' > ../MEMORY.md"],
+      ["replace its memory", "echo x > ../MEMORY.new && mv ../MEMORY.new ../MEMORY.md"],
+      ["remove its memory", "rm ../MEMORY.md"],
+      ["link its memory elsewhere", "ln -sf ../bot.json ../MEMORY.md"],
+      ["change its settings", "echo x > ../bot.json"],
+      ["change its conversation", "echo ses_other > ../session"],
+      ["read another bot's memory", `cat ${JSON.stringify(path.join(scout, "MEMORY.md"))}`],
+      ["write another bot's memory", `echo x >> ${JSON.stringify(path.join(scout, "MEMORY.md"))}`],
+    ]);
+    const expected = {
+      "read its memory": "allowed", "write its memory": "allowed", "write its memory anew": "allowed",
+      "replace its memory": "refused", "remove its memory": "refused", "link its memory elsewhere": "refused",
+      "change its settings": "refused", "change its conversation": "refused",
+      "read another bot's memory": "refused", "write another bot's memory": "refused",
+    };
+    // Its own conversation, and its seat in a group chat (another conversation, in its folder).
+    for (const session of ["ses_ship", "ses_seat"]) {
+      fs.writeFileSync(path.join(ship, "MEMORY.md"), "# Ship's memory\n");
+      const ran = await engineRuns(box, path.join(ship, "workspace"), attempts, session);
+      assert.deepEqual(outcome(ran.out), expected, `${session}: ${ran.out}`);
+      assert.equal(fs.readFileSync(path.join(ship, "MEMORY.md"), "utf8"), "# Ship\n");
+    }
+    assert.equal(fs.readFileSync(path.join(ship, "bot.json"), "utf8"), "{}");
+    assert.equal(fs.readFileSync(path.join(scout, "MEMORY.md"), "utf8"), "# bot_scout's memory\n");
+  } finally {
+    await running.stop();
+  }
+});
+
 test("with Kuvo Code's own kill switch, the engine's plugin goes, and commands run as before", async () => {
   const box = boxAt("toggled");
   const project = path.join(root, "toggled-project");

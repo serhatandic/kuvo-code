@@ -220,6 +220,9 @@ export interface AgentPlaces {
   read: string[]
   /** Its Kuvo Code tools' port (the relay's). */
   port?: number
+  /** The conversation it runs, by its id: as the engine names its own commands' (a bot's own folder
+   * is found by it, for its memory and wake-ups). */
+  session?: string
 }
 
 /**
@@ -254,6 +257,7 @@ export function fenceAgent(program: string, directory: string, mine: AgentPlaces
       KUVO_FENCE_STATE: names(mine.state),
       KUVO_FENCE_KEPT: names(mine.kept),
       KUVO_FENCE_PORT: String(mine.port ?? 0),
+      ...(mine.session && /^ses_[A-Za-z0-9]+$/.test(mine.session) ? { OPENCODE_SESSION_ID: mine.session } : {}),
     },
     // As it stops (call it then).
     ended: () => unlinked(mine.homes, mine.state),

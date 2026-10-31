@@ -734,6 +734,35 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
     expect(said(id)).toBe(`project=yes own=yes signin=yes state=yes settings=${mac} other=${mac} kept=${mac} plugin=${mac} snapshot=${mac} models=${mac} elsewhere=no kuvo=no`)
   })
 
+  test("a bot on Codex keeps its memory from the sandbox, and nothing else of its folder or another bot's", async () => {
+    // Bots' folders, in Kuvo Code's: each with its memory, its settings and its conversation's folder.
+    const bot = (id: string) => {
+      const folder = join(kuvo, "bots", id)
+      mkdirSync(join(folder, "workspace"), { recursive: true })
+      writeFileSync(join(folder, "MEMORY.md"), `# ${id}'s memory\n`)
+      writeFileSync(join(folder, "bot.json"), "{}")
+      return folder
+    }
+    const ship = bot("bot_ship")
+    const scout = bot("bot_scout")
+    codex = new TestCodex(fakeCodex(root, [[tries, {
+      memory: ["write", join(ship, "MEMORY.md")],
+      settings: ["write", join(ship, "bot.json")],
+      other: ["write", join(scout, "MEMORY.md")],
+      read: ["read", join(scout, "MEMORY.md")],
+    }]]), root)
+    const agent = codex
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
+    // Its own conversation, in its folder, as the box keeps it (`session`).
+    const id = sessions.create({ title: "Ship", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: join(ship, "workspace") }, permissions: askFirst }).id
+    writeFileSync(join(ship, "session"), id)
+    sessions.prompt(id, { id: "msg_codex_test_001", text: "go", files: [], delivery: "steer" })
+    await until(() => ended(id))
+    expect(said(id)).toBe("memory=yes settings=no other=no read=no")
+    expect(readFileSync(join(ship, "MEMORY.md"), "utf8")).toBe("x")
+    expect(readFileSync(join(scout, "MEMORY.md"), "utf8")).toBe("# bot_scout's memory\n")
+  })
+
   test("what it runs can't ask the ChatGPT app to run something outside it (its socket in Codex's folder), and still reaches other sockets", async () => {
     const listen = async (folder: string) => {
       mkdirSync(folder, { recursive: true })

@@ -279,6 +279,7 @@ export class CodexAgent implements Agent {
       kept: KEPT_IN_HOME,
       read: [...(skills ? [skills] : []), ...(attached ? [attached] : [])],
       port: relayPort(),
+      session: sessionID,
     })
   }
 

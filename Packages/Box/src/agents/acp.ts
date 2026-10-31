@@ -381,6 +381,7 @@ export class AcpThread implements Thread {
       kept: whole.kept,
       read: [...(skills?.startsWith("/") ? [skills] : []), ...(attached ? [attached] : []), ...(whole.read?.(started) ?? [])],
       port: relayPort(),
+      session: this.session.id,
     })
     if (!fence) throw new Error(`${this.name} runs in the sandbox here, and it isn't ready: restart Kuvo Code.`)
     return { argv: [fence.command, ...argv.slice(1)], env: { ...env, ...whole.env, ...fence.env }, ended: fence.ended }
