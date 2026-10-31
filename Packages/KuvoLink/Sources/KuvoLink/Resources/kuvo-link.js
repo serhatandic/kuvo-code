@@ -9143,7 +9143,7 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
   if (route === "kuvo/worktrees/remove") {
     const here = await sessionsHere(engine, signal, bridge);
     if (!here)
-      return { status: 503, value: message(engine?.port ? `It couldn't be told whether an agent is working in the worktree of ${tree.branch}, so it stays. Try again in a moment.` : "The engine isn't running.") };
+      return { status: 503, value: message(engine?.port ? `It couldn't be told whether an agent is working in the worktree of ${tree.branch}, so it stays. Try again in a moment.` : `The engine isn't running, so the worktree of ${tree.branch} stays. Try again once it's started.`) };
     const { sessions, active } = here;
     if (sessions.some((session) => inside(session.location?.directory ?? session.directory, tree.root) && active.has(session.id))) {
       return { status: 409, value: message(`An agent is still working in the worktree of ${tree.branch}, so it stays. Stop it first, then remove the worktree.`) };
@@ -18299,7 +18299,7 @@ import fs68 from "node:fs";
 import path70 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.139";
+var BRIDGE_VERSION = "0.9.140";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

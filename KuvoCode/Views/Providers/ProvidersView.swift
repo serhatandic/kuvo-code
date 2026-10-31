@@ -151,7 +151,6 @@ struct ProvidersView: View {
             }
             // This Mac's engine down: the rest stays in view, and waits for it.
             providers
-                .disabled(engineIsDown)
         }
     }
 
@@ -159,6 +158,7 @@ struct ProvidersView: View {
         VStack(alignment: .leading, spacing: 26) {
             if search.isEmpty {
                 SubscriptionsSection(shows: .plans, machine: machine) { connecting = Connecting(integration: $0, machine: box.machine) }
+                    .waitsForEngine(engineIsDown)
             }
 
             if search.isEmpty, !connected.isEmpty {
@@ -173,6 +173,7 @@ struct ProvidersView: View {
                     }
                     .background(SettingsMetrics.groupFill(scheme), in: .rect(cornerRadius: SettingsMetrics.groupRadius))
                 }
+                .waitsForEngine(engineIsDown)
             }
 
             if search.isEmpty, !featured.isEmpty {
@@ -183,10 +184,12 @@ struct ProvidersView: View {
                         }
                     }
                 }
+                .waitsForEngine(engineIsDown)
             }
 
             if search.isEmpty {
                 CustomProvidersSection { connecting = Connecting(integration: $0, machine: box.machine) } edit: { id in editing = ProviderEdit(id: id) }
+                    .waitsForEngine(engineIsDown)
             }
 
             if others.isEmpty, !search.isEmpty {
@@ -204,6 +207,8 @@ struct ProvidersView: View {
                     LazyVStack(spacing: 0) {
                         ForEach(others) { provider in
                             ProviderRow(provider: provider) { connecting = Connecting(integration: provider, machine: box.machine) }
+                                // A search finds the coding agents too, which work meanwhile.
+                                .waitsForEngine(engineIsDown && !OutsideAgents.isAgent(provider.id))
                         }
                     }
                     .padding(4)

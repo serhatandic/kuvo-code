@@ -159,6 +159,12 @@ test("not removed while a coding agent works there, nor while who works there ca
     assert.ok(fs.existsSync(made.root));
     assert.notEqual(git(project, "branch", "--list", made.branch), "");
 
+    // No engine running: it says so, and that the worktree stays.
+    const down = await link.answerWorktrees("POST", "kuvo/worktrees/remove", { path: made.root }, undefined, undefined, atBridge);
+    assert.equal(down.status, 503);
+    assert.match(down.value.message, /engine isn.t running, so the worktree of .+ stays/);
+    assert.ok(fs.existsSync(made.root));
+
     assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
   } finally {
     if (bridge.listening) { bridge.closeAllConnections(); bridge.close(); }

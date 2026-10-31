@@ -46,3 +46,13 @@ struct EngineStoppedBar: View {
         .onAppear { AccessibilityNotification.Announcement(Self.title).post() }
     }
 }
+
+extension View {
+    /// What needs this Mac's engine, while it's down (`waits`): in view, dimmed and still, and saying
+    /// why to VoiceOver. Rows draw their own hover and colors, so being disabled alone doesn't show.
+    func waitsForEngine(_ waits: Bool) -> some View {
+        disabled(waits)
+            .opacity(waits ? 0.55 : 1)
+            .accessibilityHint(waits ? "Waits for the engine to start again" : "")
+    }
+}

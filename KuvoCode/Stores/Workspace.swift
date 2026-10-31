@@ -985,9 +985,8 @@ final class Workspace {
         // a phone) is gone already.
         do {
             let _: Empty = try await onBox(Self.box(of: tree.root), "POST", "kuvo/worktrees/remove", ["path": Self.onBox(tree.root), "discard": discardingChanges])
-        } catch let refusal as BoxRefusal where refusal.status == 404 {
         } catch let refusal as BoxRefusal {
-            throw refusal
+            guard refusal.status == 404 else { throw refusal }
         } catch {
             // Not reached at all: said plainly, not as the connection's own words.
             throw GitFailure(message: "\(Self.box(of: tree.root) == BoxClient.mac ? "Kuvo Code’s background service on this Mac" : Self.box(of: tree.root)) didn’t answer, so the worktree of \(tree.branch) stays. Try again in a moment.")
@@ -1135,7 +1134,7 @@ final class Workspace {
         var removalNote: String {
             var note = switch uncommitted {
             case true?: "Its folder is deleted, with changes in it that aren’t committed."
-            case false?: "Its folder is deleted. Everything in it is committed."
+            case false?: "Its folder is deleted. Git sees nothing in it that isn’t committed."
             case nil: "Its folder and anything in it that isn’t committed are deleted."
             }
             if let ahead, ahead > 0 { note += " \(branch) keeps its \(ahead.counting("commit")) not merged yet." }
