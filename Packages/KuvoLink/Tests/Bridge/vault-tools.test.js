@@ -183,6 +183,18 @@ test("a session its bot started for its work is the bot's: it uses what the bot 
   assert.equal((await client("POST", "kuvo/vault/pause", { paused: false, bot: "bot_ship" })).status, 200);
 });
 
+test("a bot deleted (or gone from this computer) isn't shown as able to use what it could", async () => {
+  write(path.join(home, "bots", "bot_temp", "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_temp", name: "Temp" }));
+  write(path.join(home, "bots", "bot_temp", "session"), "ses_temp");
+  const report = (await client("POST", "kuvo/vault/items", { kind: "key", name: "Report key", sites: [], values: { token: "report-secret-0008" } })).value.item;
+  assert.equal((await client("POST", "kuvo/vault/grants", { item: report.id, who: { bot: "bot_temp" }, how: "own" })).status, 200);
+  const whoFor = async () => (await client("GET", "kuvo/vault")).value.grants.filter(grant => grant.item === report.id).map(grant => grant.who);
+  assert.deepEqual(await whoFor(), [{ bot: "bot_temp" }]);
+  fs.rmSync(path.join(home, "bots", "bot_temp"), { recursive: true, force: true });
+  assert.deepEqual(await whoFor(), [], "no one may use it now");
+  assert.deepEqual((await client("GET", "kuvo/vault/grants")).value.grants.filter(grant => grant.item === report.id), []);
+});
+
 test("its seat in a group chat asks you each time, whatever it may use on its own, and never for good", async () => {
   const deploy = (await client("POST", "kuvo/vault/items", { kind: "key", name: "Deploy key", sites: [], values: { token: "deploy-secret-0002" } })).value.item;
   assert.equal((await client("POST", "kuvo/vault/grants", { item: deploy.id, who: { everyone: true }, how: "own" })).status, 200);

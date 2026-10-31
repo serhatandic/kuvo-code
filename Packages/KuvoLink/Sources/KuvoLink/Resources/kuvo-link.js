@@ -20791,6 +20791,10 @@ var NOT_CALLING2 = "Only a conversation's own tool call can use the vault, and t
 var stringOf = (value) => typeof value === "string" ? value : undefined;
 var filledFor = new Set;
 var ED_SPKI2 = Buffer.from("302a300506032b6570032100", "hex");
+function shownGrants(grants) {
+  const here = new Set(listBots().map((bot) => bot.id));
+  return grants.filter((grant) => !grant.who.bot || here.has(grant.who.bot));
+}
 function clientOf({ request, phone }) {
   if (phone?.key) {
     const key = phone.key.toString("base64url");
@@ -20948,7 +20952,7 @@ async function* answerVault(context) {
     if (method !== "GET")
       return yield* json(405, {});
     const items = isLocked() ? [] : readItems();
-    const grants = readGrants();
+    const grants = shownGrants(readGrants());
     return yield* json(200, { state: vaultState(), items, grants });
   }
   if (route === "kuvo/vault/pause") {
@@ -20974,7 +20978,7 @@ async function* answerVault(context) {
   }
   if (route === "kuvo/vault/grants") {
     if (method === "GET")
-      return yield* json(200, { grants: readGrants() });
+      return yield* json(200, { grants: shownGrants(readGrants()) });
     if (method !== "POST")
       return yield* json(405, {});
     const who = givenWho(given.who);
@@ -20983,7 +20987,7 @@ async function* answerVault(context) {
     const grants = setGrant(given.item, who, given.how ?? null);
     const item = itemByID(given.item);
     note2({ what: given.how ? "granted" : "ungranted", client, ...item ? { item: item.id, itemName: item.name, kind: item.kind } : {}, ...who.bot ? { bot: who.bot } : {}, ...typeof given.how === "string" ? { how: given.how } : {} });
-    return yield* json(200, { grants });
+    return yield* json(200, { grants: shownGrants(grants) });
   }
   if (route === "kuvo/vault/asks" || route === "kuvo/vault/asks/events") {
     if (method !== "GET")

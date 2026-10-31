@@ -11,8 +11,10 @@
 import crypto from "node:crypto";
 import { isObject, parsed } from "../../shared/json";
 import { oneLine } from "../../shared/text";
+import { listBots } from "../bots/list";
 import { macSign, readLink } from "../state";
 import type { AnswerPiece, RouteContext } from "../server/context";
+import type { VaultGrant } from "../../shared/routes/vault";
 import { note, readActivity } from "../vault/activity";
 import { answer as answerAsk, listAsks, onAsksChanged } from "../vault/asks";
 import { fill } from "../vault/fill";
@@ -35,6 +37,14 @@ const ED_SPKI = Buffer.from("302a300506032b6570032100", "hex");
 
 /** Who's asking, as a client: a phone (by its name), this Mac's app, the Mac over SSH with the
  * unlock key; null for anyone else (an agent's command on this computer). */
+// The grants as clients show them: a bot's only while it's on this computer. One deleted (or moved
+// away) can't use the vault here, and its grants, kept in the vault's signed file, aren't taken out
+// of it by whichever process deleted it; one moved back has them again.
+function shownGrants(grants: VaultGrant[]): VaultGrant[] {
+  const here = new Set(listBots().map(bot => bot.id));
+  return grants.filter(grant => !grant.who.bot || here.has(grant.who.bot));
+}
+
 function clientOf({ request, phone }: RouteContext): string | null {
   if (phone?.key) {
     const key = phone.key.toString("base64url");
@@ -185,7 +195,7 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
     if (method !== "GET") return yield* json(405, {});
     // Its files read first: the state says what reading them found.
     const items = isLocked() ? [] : readItems();
-    const grants = readGrants();
+    const grants = shownGrants(readGrants());
     return yield* json(200, { state: vaultState(), items, grants });
   }
   if (route === "kuvo/vault/pause") {
@@ -209,14 +219,14 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
     }) });
   }
   if (route === "kuvo/vault/grants") {
-    if (method === "GET") return yield* json(200, { grants: readGrants() });
+    if (method === "GET") return yield* json(200, { grants: shownGrants(readGrants()) });
     if (method !== "POST") return yield* json(405, {});
     const who = givenWho(given.who);
     if (typeof given.item !== "string" || !who) return yield* json(400, { message: "Send {\"item\", \"who\": {\"bot\"} or {\"project\"} or {\"everyone\": true}, \"how\": \"own\" | \"ask\" | null}." });
     const grants = setGrant(given.item, who, given.how ?? null);
     const item = itemByID(given.item);
     note({ what: given.how ? "granted" : "ungranted", client, ...(item ? { item: item.id, itemName: item.name, kind: item.kind } : {}), ...(who.bot ? { bot: who.bot } : {}), ...(typeof given.how === "string" ? { how: given.how } : {}) });
-    return yield* json(200, { grants });
+    return yield* json(200, { grants: shownGrants(grants) });
   }
   if (route === "kuvo/vault/asks" || route === "kuvo/vault/asks/events") {
     if (method !== "GET") return yield* json(405, {});

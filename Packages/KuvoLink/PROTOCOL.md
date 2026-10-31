@@ -2766,7 +2766,8 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
   "key" | "file" | "note", name, sites, username?, fields, fileName?, readable?, signInOnly?,
   created, changed, used?}` (`sites`: hosts, a site's own and those under it; `fields`: the names of the values it
   holds, a sign-in's `password`, a file's `file` (base64), a note's `text`, a key's own); a grant
-  is `{item, who: {bot} | {project: <folder>} | {everyone: true}, how: "own" | "ask", at}`.
+  is `{item, who: {bot} | {project: <folder>} | {everyone: true}, how: "own" | "ask", at}`; a bot's
+  only while the bot is on this computer (one deleted or moved away can't use it, and isn't shown).
 - `POST kuvo/vault/items {kind, name, sites?, username?, fileName?, readable?, signInOnly?, values}`
   → `{item, key?}`: `key` when this item made a machine's vault. A sign-in needs a site (a host, or a
   name without dots on your network); names are unique; a value has at least 4 characters, so it can
