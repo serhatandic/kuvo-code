@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { EngineLink } from "../../src/agents/engine"
@@ -218,10 +218,70 @@ describe("a goal", () => {
   })
 
   test("pauses on a turn that failed, with the error", async () => {
-    engine.turns = [{ outcome: "failed", error: "Rate limited by the provider" }]
+    engine.turns = [{ outcome: "failed", error: "The model refused the request" }]
     await goals.set("ses_work", "the build is green")
     await until(() => goal()?.state === "paused")
-    expect(goal()).toMatchObject({ pausedBy: "error", note: "The turn failed: Rate limited by the provider." })
+    expect(goal()).toMatchObject({ pausedBy: "error", note: "The turn failed: The model refused the request." })
+  })
+
+  test("waits at a model's limit until it resets, and carries on by itself then, a restart in between too, without checking the turn that failed", async () => {
+    let clock = Date.parse("2026-10-29T12:00:00Z")
+    goals.stopAll()
+    const timed = (now: () => number) => {
+      const made = new Goals(join(root, "goals.json"), places(), now)
+      made.onSettled = () => {
+        if (goals === made) settled += 1
+        beat()
+      }
+      return made
+    }
+    goals = timed(() => clock)
+    engine.turns = [{ outcome: "failed", error: "You've hit your usage limit. Try again in 2h 30m." }, { tool: true, text: "Carrying on." }]
+    await goals.set("ses_work", "the site is live")
+    await until(() => goal()?.state === "paused")
+    const resumesAt = goal()!.resumesAt!
+    expect(goal()!.pausedBy).toBe("limit")
+    // From when the turn ended, not when the box noticed.
+    expect(Math.abs(resumesAt - (Date.now() + 2.5 * 3_600_000))).toBeLessThan(10_000)
+    expect(goal()!.note).toStartWith("Paused until ")
+    expect(told()).toMatchObject({ pausedBy: "limit", resumesAt })
+    // The box stops while it waits, and starts again once the reset has come: it carries on.
+    goals.stopAll()
+    clock = resumesAt + 60_000
+    goals = timed(() => clock)
+    goals.start()
+    await until(() => goal()?.state === "working" && engine.synthetic.some((message) => message.description === "The limit has reset"))
+    expect(goal()!.resumesAt).toBeUndefined()
+    expect(engine.synthetic.at(-1)!.text).toContain("The model's limit has reset: carry on where you stopped.")
+  })
+
+  test("a check that meets a model's limit waits for the reset too, rather than stopping the goal", async () => {
+    engine.verdictError = "429 Too Many Requests: rate limit reached"
+    await goals.set("ses_work", "the site is live")
+    await until(() => goal()?.state === "paused")
+    expect(goal()!.pausedBy).toBe("limit")
+    expect(goal()!.resumesAt).toBeGreaterThan(Date.now())
+  })
+
+  test("a limit that doesn't say when it resets is tried again in a while, and pausing it yourself holds it", async () => {
+    engine.turns = [{ outcome: "failed", error: "429 Too Many Requests" }]
+    await goals.set("ses_work", "the site is live")
+    await until(() => goal()?.state === "paused")
+    expect(goal()!.pausedBy).toBe("limit")
+    expect(goal()!.resumesAt! - Date.now()).toBeGreaterThan(25 * 60_000)
+    expect(goals.pauseByYou("ses_work")).toMatchObject({ pausedBy: "you" })
+    expect(goal()!.resumesAt).toBeUndefined()
+  })
+
+  test("a bot's long goal is only kept, its plan telling the bot what's next: its turns aren't checked, nudged or paused for being quiet, and it isn't briefed twice", async () => {
+    engine.turns = Array.from({ length: quietLimit + 1 }, () => ({ tool: false, text: "Waiting on the sessions." }))
+    await goals.set("ses_work", "the site is live", { long: true })
+    expect(engine.synthetic).toHaveLength(0)
+    for (let turn = 0; turn < quietLimit + 1; turn++) engine.write("ses_work", `[Session finished] ${turn}`)
+    await until(() => settled >= quietLimit + 1)
+    expect(nudges()).toHaveLength(0)
+    expect(engine.checks).toHaveLength(0)
+    expect(goal()).toMatchObject({ state: "working", long: true, turns: 0 })
   })
 
   test(`pauses once the agent does nothing for ${quietLimit} turns in a row`, async () => {
@@ -358,8 +418,46 @@ describe("a goal", () => {
     engine.conversations.delete("ses_other")
     goals = makeGoals()
     goals.start()
-    await until(() => told("ses_work") === null && told("ses_other") === null)
-    expect(goals.list()).toEqual([])
+    await until(() => goals.list().length === 0)
+    expect([told("ses_work"), told("ses_other")]).toEqual([null, null])
+  })
+
+  test("a look under way as the box stops keeps and tells nothing as it ends, though its conversation is gone by then", async () => {
+    engine.holding = true
+    await goals.set("ses_work", "the build is green")
+    engine.holdingReads = true
+    engine.finish()
+    await until(() => engine.readsHeld === 1)
+    goals.stopAll()
+    engine.conversations.delete("ses_work")
+    const before = settled
+    engine.answerReads()
+    await until(() => settled > before)
+    // The box started again finds it gone and says so; the stopped one leaves that to it.
+    expect(told()?.state).toBe("working")
+    expect(JSON.parse(readFileSync(join(root, "goals.json"), "utf8")).map((kept: Goal) => kept.session)).toEqual(["ses_work"])
+  })
+
+  test("is left as it is by a box that has stopped, whatever the engine answers it late", async () => {
+    engine.holding = true
+    await goals.set("ses_work", "the build is green")
+    engine.holdingMessages = true
+    engine.finish()
+    await until(() => engine.heldMessages === 1)
+    // The box stops while its look at the turn waits on the engine, and the conversation goes meanwhile.
+    const stopped = goals
+    let looked = false
+    stopped.onSettled = () => {
+      looked = true
+      beat()
+    }
+    stopped.stopAll()
+    engine.conversations.delete("ses_work")
+    engine.answerMessages()
+    await until(() => looked)
+    expect(told()).toMatchObject({ condition: "the build is green", state: "working" })
+    // Kept for the box that starts next, which finds the conversation gone itself.
+    expect(JSON.parse(readFileSync(join(root, "goals.json"), "utf8"))).toMatchObject([{ session: "ses_work" }])
   })
 
   test("over, goes when its conversation was deleted while the engine was away", async () => {

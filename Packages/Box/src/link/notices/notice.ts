@@ -8,7 +8,7 @@ import { Frame, frame, relayPush } from "../relay/frames";
 import { masked } from "./mask";
 
 /** What a notice is about (PROTOCOL.md, "Notifications"), for its buttons: what's asked of you, or news. */
-export type NoticeCategory = "permission" | "question" | "ask" | "finished" | "failed" | "report" | "message";
+export type NoticeCategory = "permission" | "question" | "ask" | "finished" | "failed" | "report" | "blocked" | "message";
 
 /** Where a notice opens (`session` or `group`), and what answering takes it back (`request`, `ask`). */
 export interface NoticeData {
@@ -24,6 +24,11 @@ export interface NoticeData {
   vaultAsk?: string;
   /** A command an agent wants to run outside the sandbox (`kuvo/sandbox/asks`). */
   sandboxAsk?: string;
+  /** "1": shown quietly (what a goal needs of you, its digest): in the list, never lighting the
+   * screen or making a sound. */
+  quiet?: "1";
+  /** "1": what a goal needs of you, where you asked to be woken (shown, with its sound, not quietly). */
+  wake?: "1";
 }
 
 /** A notice for your phones, as the box words it, before it's masked and cut. */

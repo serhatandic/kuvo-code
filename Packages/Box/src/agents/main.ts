@@ -40,6 +40,7 @@ import { SeatServer } from "./groups/peer"
 import { LinkDirectory, PeerPost, type PeerParts } from "./groups/post"
 import { GroupRunner } from "./groups/runner"
 import { GroupStore } from "./groups/store"
+import { queueFiles } from "../shared/queues"
 
 const version = "1"
 const home = process.env.KUVO_AGENTS_HOME
@@ -134,7 +135,17 @@ const sessions = new Sessions(
 )
 // Tells the box's link, as it changes, whether every agent's process here runs in its sandbox
 // (none started before it came on still runs): only then do agents use the vault.
-const noteInside = () => noteAgentsInside(!sessions.outside() && !roster.all().some((agent) => agent.outside?.()))
+// And restarts those you said to (`kuvo/sandbox/restart`): each between turns now, the rest as
+// their turns end, looked at again with the note.
+let restarting = false
+const noteInside = () => {
+  if (restarting) restarting = [sessions.restartOutside(), ...roster.all().map((agent) => agent.restartOutside?.() ?? false)].some(Boolean)
+  noteAgentsInside(!sessions.outside() && !roster.all().some((agent) => agent.outside?.()))
+}
+const restartOutside = () => {
+  restarting = true
+  noteInside()
+}
 noteInside()
 setInterval(noteInside, 5_000).unref?.()
 
@@ -157,8 +168,10 @@ const artifactsFolder = onMachine ? join(machineHome!, "artifacts") : process.en
 const botsFolder = groupFolders?.bots ?? (onMachine ? join(machineHome!, "bots") : process.env.KUVO_BOTS || undefined)
 // Who there is to name with "&" in a chat: the agents the box's link lists (on the Mac, where the app says).
 const agentsFile = onMachine ? join(machineHome!, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined
+// The box's queues, where a chat's part for a conversation you stopped waits (on the Mac, the box's run folder the app says).
+const runFolder = onMachine ? join(machineHome!, "run") : process.env.KUVO_RUN || undefined
 // Nor do the agents get these.
-for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", ...(onMachine ? [] : ["KUVO_BOTS"])]) delete process.env[name]
+for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", "KUVO_RUN", ...(onMachine ? [] : ["KUVO_BOTS"])]) delete process.env[name]
 if (groupFolders) {
   try {
     const store = new GroupStore(groupFolders.root, groupFolders.bots, agentsFile)
@@ -182,6 +195,7 @@ if (groupFolders) {
       },
       peers: directory,
       given: (prompt, part) => partGiven?.(prompt, part.chat),
+      queues: runFolder ? queueFiles(runFolder) : undefined,
     })
     const server = new SeatServer(runner.seats, post, { store, remembered: (from, memory) => runner.remembered(from, memory) })
     groups = { store, runner, peers: { post, directory, server, runner } }
@@ -211,6 +225,9 @@ const places: GoalPlaces = {
   },
 }
 const goals = new Goals(join(home, "goals.json"), places)
+// Goals paused at a limit, looked at once a minute too: a timer can come late after the computer
+// slept.
+setInterval(() => goals.resumeDue(), 60_000).unref?.()
 // Its other keywords, for the same conversations: side questions, handoffs and reviews.
 const sideQuestions = new SideQuestions(join(home, "side-questions.json"), places)
 const handoffs = new Handoffs(places)
@@ -268,7 +285,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted }),
+    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside }),
   })
 } catch (error: any) {
   console.error("couldn't listen:", error?.message ?? error)

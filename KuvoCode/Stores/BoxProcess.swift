@@ -45,7 +45,7 @@ final class BoxProcess {
     /// Up, the first time or again (late, after Try Again, or after it stopped by itself).
     @ObservationIgnored var onStarted: () -> Void = {}
     /// It was given what it starts with (the engine's start got that far): Try Again can start it.
-    var canStartAgain: Bool { runtime != nil }
+    var canStartAgain: Bool { runtime != nil || follows }
 
     /// The box's script: KUVO_BOX_SCRIPT's (a checkout's `kuvo-link.js`, or its source,
     /// `Packages/Box/src/link/main.ts`) in a debug build, else the app's own.
@@ -113,8 +113,9 @@ final class BoxProcess {
         checksRuntime = checked
         runsEngine = true
         var env = environment
-        // The tests' stand-ins (GitHub's, npm's, a box kept from your other computers) are for the
-        // tests' box only (`TestBox`), never the app's.
+        // The tests' stand-ins (GitHub's, npm's, a box kept from your other computers, one that may
+        // work on goals alone without the sandbox) are for the tests' box only (`TestBox`), never the
+        // app's.
         for name in env.keys where name.hasPrefix("KUVO_TEST_") { env[name] = nil }
         env["BUN_BE_BUN"] = "1"
         // Bun would otherwise keep a copy of the script, compiled, in ~/Library/Caches/bun.
@@ -219,6 +220,8 @@ final class BoxProcess {
             }
             endpoint = server.endpoint
             PhoneLink.box.withLock { $0 = server.endpoint }
+            // Where it answers, for a client that didn't start it (the app, when the keeper runs it).
+            Self.write(Record(pid: server.processID, port: server.endpoint.url.port, password: server.endpoint.password, version: nil), to: "serve.json")
             failure = nil
             onStarted()
         } catch {
@@ -227,8 +230,13 @@ final class BoxProcess {
         }
     }
 
-    /// Started again after it stopped for good (Try Again where it shows).
+    /// Started again after it stopped for good (Try Again where it shows): by this Mac's keeper,
+    /// when it's the keeper's.
     func startAgain() async {
+        if follows {
+            do { try await KeeperControl.send(.restartBox) } catch { failure = error.localizedDescription }
+            return
+        }
         guard server == nil, let runtime else { return }
         restarts.removeAll()
         await launch(runtime.executable, environment: runtime.environment, arguments: runtime.arguments)
@@ -243,10 +251,34 @@ final class BoxProcess {
     #endif
 
     func stop() {
+        if server != nil { Self.write(nil, to: "serve.json") }
         server?.stop()
         server = nil
         endpoint = nil
         PhoneLink.box.withLock { $0 = nil }
+    }
+
+    // MARK: Run by this Mac's keeper
+
+    /// Whether it's the keeper's (`Keeper`), which runs it whether or not the app is open: this
+    /// follows it, by its record (`run/serve.json`), rather than starting it.
+    private(set) var follows = false
+
+    /// The keeper's box, as its record and the keeper say: where it answers, or why it doesn't.
+    func follow(_ endpoint: ServerEndpoint?, failure: String?) {
+        follows = true
+        if self.endpoint != endpoint {
+            self.endpoint = endpoint
+            PhoneLink.box.withLock { $0 = endpoint }
+            if endpoint != nil { onStarted() }
+        }
+        self.failure = endpoint == nil ? failure : nil
+    }
+
+    /// Not the keeper's any more (background work switched off): the app runs it itself from now on.
+    func unfollow() {
+        follow(nil, failure: nil)
+        follows = false
     }
 
     /// It stopped by itself: started again, unless it keeps stopping.

@@ -8,7 +8,7 @@ import { isObject } from "../../shared/json";
 import { plainName, stamp } from "../../shared/text";
 import { listOf, textOf } from "../files";
 import { BOTS, IS_MAC } from "../home";
-import { botHere, type BotHere, isMoving } from "./here";
+import { botHere, type BotHere, changeDescription, isMoving } from "./here";
 
 const JOB_FILE = "job.json";
 const MOST_JOB_LINE = 200, MOST_JOB_DETAILS = 8000;
@@ -34,12 +34,8 @@ export function writeJob(here: BotHere, job: Job): void {
   fs.renameSync(`${file}.new`, file);
   // COMPAT(0.7 bot-json-job): the job's line in `bot.json` too, where an older Mac reads it. Goes 3 months after 0.8.0.
   // Its description says it in a few words too, for what reads only that (a Mac of an earlier version).
-  if ((here.described.job ?? "") !== job.line) {
-    const described = path.join(here.folder, "bot.json");
-    fs.writeFileSync(`${described}.new`, JSON.stringify({ ...here.described, job: job.line }, null, 2));
-    fs.renameSync(`${described}.new`, described);
-    here.described = { ...here.described, job: job.line };
-  }
+  // (Onto it as it is now, under its lock: what another change saved is kept.)
+  if ((here.described.job ?? "") !== job.line) here.described = changeDescription(here.folder, now => ({ ...(now ?? here.described), job: job.line }));
 }
 
 // A bot's job. One from before bots kept it here is taken once from where it was: its memory's

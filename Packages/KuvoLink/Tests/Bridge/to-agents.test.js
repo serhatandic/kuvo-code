@@ -53,9 +53,9 @@ function engineFor(session, { running = false } = {}) {
     if (["POST", "DELETE", "PATCH"].includes(method)) return [200, {}];
   });
 }
-const agentsBridge = ({ signedIn = true } = {}) => standIn((method, url, body) => {
+const agentsBridge = ({ signedIn = true, id = "ses_theirs" } = {}) => standIn((method, url, body) => {
   if (method === "GET" && url === "/api/integration/claude-code") return [200, { data: { id: "claude-code", name: "Claude Code", metadata: { installed: true }, connections: signedIn ? [{ type: "agent" }] : [] } }];
-  if (method === "POST" && url === "/api/session/import") return [200, { data: { id: "ses_theirs", title: body.title } }];
+  if (method === "POST" && url === "/api/session/import") return [200, { data: { id, title: body.title } }];
   if (["PUT", "PATCH"].includes(method)) return [200, {}];
 });
 const sonnet = { id: "sonnet", providerID: "claude-code" };
@@ -97,6 +97,29 @@ test("a conversation goes on with the coding agents whole, with what was waiting
     for await (const part of handle({ method: "GET", path: "kuvo/sessions/ses_fix/agents", headers: {}, body: Buffer.alloc(0) }, {}, undefined)) parts.push(part);
     return parts[0].head.status;
   })()), 405);
+});
+
+test("a conversation you stopped stays stopped as it goes on with the coding agents: what waited on the box waits there for Resume", async () => {
+  const engine = await engineFor({ id: "ses_stopped", title: "Ship it", agent: "build", location: { directory: home } });
+  const agents = await agentsBridge({ id: "ses_carried" });
+  const handle = link.engineHandler(() => engine.at, { name: "lab" }, () => agents.at);
+  const ask = async (method, route, body) => {
+    let text = "";
+    for await (const part of handle({ method, path: route, headers: {}, body: body ? Buffer.from(JSON.stringify(body)) : Buffer.alloc(0), fromApp: true }, {}, undefined)) if (part.body) text += part.body.toString();
+    return JSON.parse(text);
+  };
+  assert.equal((await ask("POST", "kuvo/sessions/ses_stopped/stop")).paused, true);
+  // Another agent's letter, waiting on the box.
+  const letter = link.messageID();
+  assert.equal((await ask("POST", "kuvo/sessions/ses_stopped/queue/add", { id: letter, text: "[Letter] The build is green.", from: "Ada", words: "The build is green.", kept: true })).waits, true);
+
+  assert.equal((await link.carryToAgents("ses_stopped", sonnet, () => engine.at, agents.at, undefined)).status, 200);
+  const carried = link.queueOf("ses_carried");
+  assert.equal(carried.paused, true, "still stopped");
+  assert.deepEqual(carried.waiting?.map(each => [each.from, each.text]), [["Ada", "The build is green."]], "what waited goes with it");
+  assert.equal(link.queueOf("ses_stopped").waiting, undefined, "nothing left for the conversation it was");
+  assert.equal(agents.asked.filter(each => each.url.endsWith("/prompt")).length, 0, "nothing sent to the agents yet");
+  assert.equal(engine.asked.filter(each => each.url.endsWith("/prompt")).length, 0);
 });
 
 test("a bot's conversation becomes the new one, marked and told as its own, and the engine's goes", async t => {

@@ -75,7 +75,8 @@ final class ProjectChanges {
     }
 
     let directory: String
-    var scope = Scope.uncommitted
+    /// Another scope's list isn't this one's as last seen.
+    var scope = Scope.uncommitted { didSet { if scope != oldValue { hasRead = false } } }
     /// The branch this one comes from, for the Branch scope: a worktree's base, or the
     /// repository's default branch.
     var base: String?
@@ -89,6 +90,13 @@ final class ProjectChanges {
     /// A machine's box couldn't be asked before anything showed: not a folder without git, and
     /// Stage and Discard come back with the list.
     private(set) var isUnreachable = false
+    /// When the list was last read: what's said of it as last seen while its machine is away. Not
+    /// watched, so a look every few seconds doesn't redraw the panel (nothing reads it while away).
+    @ObservationIgnored private(set) var read: Date?
+    private var hasRead = false
+    /// Its machine isn't connected: its box isn't asked until it's back, and the list shows as last
+    /// seen. Set from the machine's engine.
+    var isAway = false
     private var signature = 0
     /// Each refresh's number: only the latest one's list shows.
     private var generation = 0
@@ -104,6 +112,10 @@ final class ProjectChanges {
         self.box = box
     }
 
+    /// The list as it is, as last seen under the away bar, or (never read) the machine's connection
+    /// in its place.
+    var shown: ChangesAway.Shown { ChangesAway.shown(isAway: isAway || isUnreachable, read: hasRead ? read : nil) }
+
     var additions: Int { files.reduce(0) { $0 + $1.additions } }
     var deletions: Int { files.reduce(0) { $0 + $1.deletions } }
 
@@ -112,6 +124,8 @@ final class ProjectChanges {
     /// session's edits changed.
     func refresh(fallback: [FileDiff] = [], edits: [FileDiff] = []) async {
         let directory = directory, scope = scope, base = base
+        // Not asked while it's away: its connection says when it's back.
+        if isAway { return }
         generation += 1
         let mine = generation
         if scope == .session {
@@ -119,6 +133,7 @@ final class ProjectChanges {
             isUnreachable = false
             apply(fallback.map { DiffParser.file(from: $0, directory: directory) })
             isLoaded = true
+            stamp()
             return
         }
         let found = await Git.found(in: directory, scope: scope, base: base, box: box)
@@ -150,6 +165,7 @@ final class ProjectChanges {
             apply((fallback.isEmpty ? edits : fallback).map { DiffParser.file(from: $0, directory: directory) })
         }
         isLoaded = true
+        stamp()
     }
 
     enum Action { case stage, unstage, discard }
@@ -159,6 +175,8 @@ final class ProjectChanges {
     /// A file git doesn't know yet goes to the Trash. Returns git's complaint, if any.
     func perform(_ action: Action, on file: ChangedFile) async -> String? {
         guard let root = file.root else { return nil }
+        // (Asked for before it went: its alert was open.)
+        if isAway { return ChangesAway.notBack(RemoteFolder.machine(of: directory) ?? "Its machine") }
         let failure = await Git.performing(action, on: file, root: root, scope: scope)
         await refresh()
         return failure
@@ -169,6 +187,7 @@ final class ProjectChanges {
     /// hooks, signing and pushing see what they do in Terminal.
     func commit(message: String, push: Bool, environment: [String: String]) async -> String? {
         let directory = directory
+        if isAway { return ChangesAway.notBack(RemoteFolder.machine(of: directory) ?? "Its machine") }
         let failure = await Git.committing(message: message, push: push, in: directory, environment: environment)
         if failure == nil { Analytics.shared.track("changes_committed", ["pushed": push]) }
         await refresh()
@@ -186,6 +205,11 @@ final class ProjectChanges {
         let directory = directory
         guard RemoteFolder.parse(directory) != nil else { return await Task.detached { Git.hasStaged(in: directory) }.value }
         return await Git.commitDiffing(in: directory).staged
+    }
+
+    private func stamp() {
+        read = .now
+        if !hasRead { hasRead = true }
     }
 
     /// Only publishes when something changed, so a refresh doesn't redraw the panel.

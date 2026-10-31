@@ -903,7 +903,14 @@ final class Machines {
     private(set) var list: [Machine] = Machines.load()
     private(set) var engines: [String: MachineEngine] = [:]
 
-    private static let key = "machines"
+    nonisolated private static let key = "machines"
+
+    /// Whether you have machines, as Kuvo Code keeps them (for this Mac's keeper, which keeps no
+    /// list of its own: with machines, this Mac's box meets them at the relay).
+    nonisolated static var anySaved: Bool {
+        guard let data = UserDefaults.standard.data(forKey: key), let list = try? JSONSerialization.jsonObject(with: data) as? [Any] else { return false }
+        return !list.isEmpty
+    }
 
     init() {
         for machine in list { engines[machine.id] = makeEngine(machine) }

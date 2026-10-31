@@ -267,6 +267,8 @@ export interface Agent {
   signOut?(): Promise<void>
   /** A process of its that runs turns was started outside the box's sandbox, and still runs (one its threads don't own). */
   outside?(): boolean
+  /** Stops those (`outside`) that nothing is at work in now, to start again in the sandbox (you said to restart them); whether one is still at work. */
+  restartOutside?(): boolean
   models(): Promise<Model[]>
   /**
    * Known to be signed out of, for an agent whose models run somewhere that drops a request it

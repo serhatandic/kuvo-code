@@ -17,6 +17,7 @@ import http from "node:http";
 import path from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { NO_BUN, testBun } from "./bun-for-tests.js";
 
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 // The box's folder, and the app's folders for its bots and sessions' wake-ups beside it on a Mac
@@ -119,17 +120,18 @@ const readEngine = () => ({ port: server.address().port, password: "engine", ver
 let agentsProcess, browserProcess;
 after(() => { agentsProcess?.kill(); browserProcess?.kill(); realBridge?.process.kill(); });
 
-// The coding agents' bridge as the app ships it (`kuvo-agents.js`), run by Bun (KUVO_TEST_BUN, or
-// `bun`), with its group chats in this box's folders: for what it alone decides (a group chat's
+// The coding agents' bridge as the app ships it (`kuvo-agents.js`), run by Bun (bun-for-tests.js), with its group chats in this box's folders: for what it alone decides (a group chat's
 // shapes and rules). One a scenario, as the box's folders are.
 let realBridge;
 const bundled = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-agents.js", import.meta.url));
 async function startRealBridge() {
   const password = crypto.randomBytes(12).toString("hex");
-  const child = spawn(process.env.KUVO_TEST_BUN || "bun", ["run", bundled], {
+  const bun = testBun();
+  assert.ok(bun, NO_BUN);
+  const child = spawn(bun, ["run", bundled], {
     stdio: ["pipe", "pipe", "pipe"],
     env: {
-      PATH: process.env.PATH, HOME: root, TMPDIR: path.join(root, "tmp") + "/", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+      PATH: process.env.PATH, HOME: root, TMPDIR: path.join(root, "tmp") + "/", BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
       KUVO_AGENTS_HOME: path.join(root, "agents"), OPENCODE_PASSWORD: password,
       KUVO_GROUPS: path.join(home, "groups"), KUVO_BOTS: botsRoot, KUVO_TRASH: path.join(home, "trash"),
       KUVO_ARTIFACTS: path.join(home, "artifacts"),

@@ -2358,6 +2358,41 @@ function feed() {
   });
 }
 
+// Packages/Box/src/shared/limits.ts
+function resetsIn(text, now = Date.now()) {
+  const found = text?.match(/(?:resets?|try again|available again)\s+in\s+((?:\d+(?:\.\d+)?\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])[\s,]*(?:and\s+)?)+)/i);
+  if (!found)
+    return;
+  const units = { d: 86400000, h: 3600000, m: 60000, s: 1000 };
+  let total = 0;
+  for (const part of found[1].matchAll(/(\d+(?:\.\d+)?)\s*([dhms])/gi))
+    total += Number(part[1]) * (units[part[2].toLowerCase()] ?? 0);
+  return total > 0 ? now + Math.min(total, 31 * 86400000) : undefined;
+}
+function zone() {
+  const name = process.env.KUVO_TZ;
+  if (!name)
+    return;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: name });
+    return name;
+  } catch {
+    return;
+  }
+}
+function resetTime(at) {
+  const timeZone = zone();
+  const day = (date) => date.toLocaleDateString("en-US", { timeZone });
+  const date = new Date(at);
+  const time = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone });
+  if (day(date) === day(new Date))
+    return time;
+  return `${date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone })}, ${time}`;
+}
+function isLimit(text) {
+  return Boolean(text && /\b429\b|rate.?limit|usage limit|limit (?:was |has been )?reached|reached (?:its|your|the) (?:usage )?limit|quota|too many requests|resets? in|try again in|overloaded|capacity/i.test(text));
+}
+
 // Packages/Box/src/agents/auto.ts
 var autoProvider = "auto";
 var firstList = "auto";
@@ -2475,36 +2510,6 @@ class Auto {
       console.error("Custom Auto not kept:", error);
     }
   }
-}
-function resetsIn(text, now = Date.now()) {
-  const found = text?.match(/(?:resets?|try again|available again)\s+in\s+((?:\d+(?:\.\d+)?\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])[\s,]*(?:and\s+)?)+)/i);
-  if (!found)
-    return;
-  const units = { d: 86400000, h: 3600000, m: 60000, s: 1000 };
-  let total = 0;
-  for (const part of found[1].matchAll(/(\d+(?:\.\d+)?)\s*([dhms])/gi))
-    total += Number(part[1]) * (units[part[2].toLowerCase()] ?? 0);
-  return total > 0 ? now + Math.min(total, 31 * 86400000) : undefined;
-}
-function zone() {
-  const name = process.env.KUVO_TZ;
-  if (!name)
-    return;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: name });
-    return name;
-  } catch {
-    return;
-  }
-}
-function resetTime(at) {
-  const timeZone = zone();
-  const day = (date) => date.toLocaleDateString("en-US", { timeZone });
-  const date = new Date(at);
-  const time = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone });
-  if (day(date) === day(new Date))
-    return time;
-  return `${date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone })}, ${time}`;
 }
 
 // Packages/Box/src/agents/deps.ts
@@ -3350,6 +3355,7 @@ function line(text, limit = 140) {
 }
 
 // Packages/Box/src/agents/goals.ts
+var unknownReset2 = 30 * 60000;
 var conditionLimit = 4000;
 var quietLimit = 3;
 var turnLimit = 100;
@@ -3374,6 +3380,7 @@ class Goals {
   onSettled;
   firstLooks = new Set;
   later = new Map;
+  resumes = new Map;
   constructor(file, places, now = Date.now) {
     this.file = file;
     this.places = places;
@@ -3387,6 +3394,8 @@ class Goals {
   }
   start() {
     for (const goal of this.goals.values()) {
+      if (goal.state === "paused" && goal.pausedBy === "limit" && goal.resumesAt)
+        this.resumeAt(goal.session, goal.resumesAt);
       this.follow(goal.session);
       if (goal.state === "working") {
         this.firstLooks.add(goal.session);
@@ -3402,7 +3411,7 @@ class Goals {
     const goal = this.goals.get(session);
     return goal && shown(goal);
   }
-  async set(session, condition) {
+  async set(session, condition, { long = false } = {}) {
     const text = condition.trim();
     if (!text)
       throw new GoalError(400, "Say what the goal is.");
@@ -3416,30 +3425,34 @@ class Goals {
     if (found?.data?.parentID)
       throw new GoalError(409, "A subagent's conversation can't have a goal of its own. Set it in the conversation it works for.");
     const messages = await this.messages(session, place).catch(unreachable);
-    const goal = { session, condition: text, state: "working", started: this.now(), turns: 0, checking: false, quiet: 0, limit: turnLimit, checkedIdle: lastIdle(messages)?.id, since: messages.at(-1)?.id, epoch: (this.goals.get(session)?.epoch ?? 0) + 1 };
+    this.cancelResume(session);
+    const goal = { session, condition: text, state: "working", started: this.now(), turns: 0, checking: false, quiet: 0, limit: turnLimit, checkedIdle: lastIdle(messages)?.id, since: messages.at(-1)?.id, epoch: (this.goals.get(session)?.epoch ?? 0) + 1, ...long ? { long: true } : {} };
     this.goals.set(session, goal);
     this.follow(session);
     this.changed(goal);
     if (!found?.data?.title)
       await place.api.request("PATCH", at2(session), { title: line2(text, 60) }).catch(() => {});
-    try {
-      await place.api.request("POST", at2(session) + "/synthetic", { text: brief(text), description: `Goal: ${line2(text)}` });
-    } catch (error) {
-      this.pause(goal, "error", `The goal couldn't be given to the agent: ${error?.message ?? error}`);
-    }
+    if (!long)
+      try {
+        await place.api.request("POST", at2(session) + "/synthetic", { text: brief(text), description: `Goal: ${line2(text)}` });
+      } catch (error) {
+        this.pause(goal, "error", `The goal couldn't be given to the agent: ${error?.message ?? error}`);
+      }
     return shown(goal);
   }
   pauseByYou(session) {
     const goal = this.found(session);
     if (goal.state === "met" || goal.state === "unmet")
       throw new GoalError(409, "That goal is over.");
-    if (goal.state === "working") {
+    if (goal.state === "working" || goal.state === "paused" && goal.pausedBy === "limit") {
       goal.epoch = (goal.epoch ?? 0) + 1;
+      this.cancelResume(session);
+      delete goal.resumesAt;
       this.pause(goal, "you", "You paused it.");
     }
     return shown(goal);
   }
-  async resume(session) {
+  async resume(session, { atLimit: onlyAtLimit = false } = {}) {
     const goal = this.found(session);
     if (goal.state === "met" || goal.state === "unmet")
       throw new GoalError(409, "That goal is over: set it again to carry on.");
@@ -3451,13 +3464,27 @@ class Goals {
         throw new GoalError(503, "The conversation can't be reached now.");
       if (this.goals.get(session) !== goal || goal.state !== "paused")
         return shown(goal);
+      if (onlyAtLimit && goal.pausedBy !== "limit")
+        return shown(goal);
+      const atLimit = goal.pausedBy === "limit" && goal.resumesAt !== undefined;
       goal.state = "working";
       goal.epoch = (goal.epoch ?? 0) + 1;
+      this.cancelResume(session);
       delete goal.note;
       delete goal.pausedBy;
+      delete goal.resumesAt;
       goal.quiet = 0;
       goal.limit = goal.turns + turnLimit;
       const idle = lastIdle(messages);
+      if (atLimit) {
+        if (idle)
+          goal.checkedIdle = idle.id;
+        this.follow(session);
+        this.changed(goal);
+        const words = goal.long ? "[Limit reset] The model's limit has reset. Carry on with the goal." : nudge(goal.condition, "The model's limit has reset: carry on where you stopped.");
+        await this.place(session).api.request("POST", at2(session) + "/synthetic", { text: words, description: "The limit has reset" }).catch(() => this.pauseUntil(goal, this.now() + unknownReset2, ""));
+        return shown(goal);
+      }
       if (idle && !atWork(messages, idle)) {
         goal.recheck = idle.id;
         delete goal.checkedIdle;
@@ -3471,18 +3498,19 @@ class Goals {
   clear(session) {
     this.found(session);
     this.goals.delete(session);
+    this.cancelResume(session);
     this.stops.get(session)?.();
     this.stops.delete(session);
     this.save();
     emit("kuvo.goal.updated", { sessionID: session, goal: null });
   }
   forget(session) {
-    if (this.goals.has(session))
+    if (!this.stopped && this.goals.has(session))
       this.clear(session);
   }
   async forgetIfGone(session) {
     await this.place(session).api.request("GET", at2(session)).catch((error) => {
-      if (error?.status === 404 && !this.stopped)
+      if (error?.status === 404)
         this.forget(session);
     });
   }
@@ -3491,6 +3519,9 @@ class Goals {
     for (const timer of this.later.values())
       clearTimeout(timer);
     this.later.clear();
+    for (const timer of this.resumes.values())
+      clearTimeout(timer);
+    this.resumes.clear();
     for (const stop of this.stops.values())
       stop();
     this.stops.clear();
@@ -3581,7 +3612,14 @@ class Goals {
     }
     if (!resumed && idle.outcome === "failed") {
       settle();
-      return this.pause(goal, "error", idle.error?.message ? `The turn failed: ${sentence(String(idle.error.message))}` : "The turn failed.");
+      const words = idle.error?.message ? String(idle.error.message) : "";
+      if (isLimit(words))
+        return this.pauseUntil(goal, resetsIn(words, Number(idle.time?.created) || this.now()) ?? this.now() + unknownReset2, words);
+      return this.pause(goal, "error", words ? `The turn failed: ${sentence(words)}` : "The turn failed.");
+    }
+    if (goal.long) {
+      settle();
+      return this.save();
     }
     const worked = turn.some((message) => message.type === "assistant" && (message.content ?? []).some((part) => part?.type === "tool"));
     const info = await sessionInfo(place.api, session).catch(() => ({ id: session }));
@@ -3602,7 +3640,10 @@ class Goals {
       if (!current())
         return void this.changed(goal);
       settle();
-      return this.pause(goal, "error", `The goal couldn't be checked: ${sentence(String(error?.message ?? error))}`);
+      const words = String(error?.message ?? error);
+      if (isLimit(words))
+        return this.pauseUntil(goal, resetsIn(words, this.now()) ?? this.now() + unknownReset2, words);
+      return this.pause(goal, "error", `The goal couldn't be checked: ${sentence(words)}`);
     }
     goal.checking = false;
     if (!current())
@@ -3659,6 +3700,43 @@ class Goals {
     goal.pausedBy = by;
     goal.note = note;
     this.changed(goal);
+  }
+  pauseUntil(goal, until, words) {
+    goal.resumesAt = until;
+    this.pause(goal, "limit", `Paused until ${resetTime(until)}: the model's limit${words ? ` (${line2(words, 120)})` : ""}. It carries on by itself then.`);
+    this.resumeAt(goal.session, until);
+  }
+  resumeAt(session, until) {
+    this.cancelResume(session);
+    if (this.stopped)
+      return;
+    const timer = setTimeout(() => {
+      this.resumes.delete(session);
+      const goal = this.goals.get(session);
+      if (!goal || goal.state !== "paused" || goal.pausedBy !== "limit")
+        return;
+      if (goal.resumesAt && goal.resumesAt > this.now())
+        return this.resumeAt(session, goal.resumesAt);
+      this.resume(session, { atLimit: true }).catch(() => {
+        const later = this.now() + unknownReset2;
+        goal.resumesAt = later;
+        this.changed(goal);
+        this.resumeAt(session, later);
+      });
+    }, Math.max(0, Math.min(until - this.now(), 2147000000)));
+    timer.unref?.();
+    this.resumes.set(session, timer);
+  }
+  cancelResume(session) {
+    const timer = this.resumes.get(session);
+    if (timer)
+      clearTimeout(timer);
+    this.resumes.delete(session);
+  }
+  resumeDue() {
+    for (const goal of this.goals.values())
+      if (goal.state === "paused" && goal.pausedBy === "limit" && goal.resumesAt && goal.resumesAt <= this.now())
+        this.resume(goal.session, { atLimit: true }).catch(() => {});
   }
   found(session) {
     const goal = this.goals.get(session);
@@ -3854,10 +3932,10 @@ async function goalRoutes(goals, method, parts, body) {
         return goal ? json({ data: goal }) : json({ message: "That conversation has no goal." }, 404);
       }
       if (method === "PUT") {
-        const { condition } = await body() ?? {};
+        const { condition, long } = await body() ?? {};
         if (typeof condition !== "string")
           return json({ message: "Say what the goal is." }, 400);
-        return json({ data: await goals.set(session, condition) });
+        return json({ data: await goals.set(session, condition, { long: long === true }) });
       }
       if (method === "DELETE") {
         goals.clear(session);
@@ -6224,7 +6302,7 @@ function noteAgentsInside(inside) {
   if (!where)
     return;
   const on = process.env.KUVO_SANDBOX === "off" ? "" : sandboxGeneration(join14(where, "on"));
-  const note = inside && on ? JSON.stringify({ pid: process.pid, on }) : "";
+  const note = on ? JSON.stringify({ pid: process.pid, on, ...inside ? {} : { outside: true } }) : "";
   if (note === noted)
     return;
   const record = join14(where, "agents");
@@ -6260,8 +6338,15 @@ function allowedFolders(directory) {
   const where = folder();
   if (!where)
     return [];
+  const work = real(directory);
+  const git = repositoryOf2(work);
+  let project = work;
   try {
-    return readFileSync13(join14(where, "allowed", sum(real(directory))), "utf8").split(`
+    if (statSync5(join14(work, ".git")).isFile() && git.endsWith("/.git"))
+      project = dirname6(git);
+  } catch {}
+  try {
+    return readFileSync13(join14(where, "allowed", sum(project)), "utf8").split(`
 `).filter((line) => line.startsWith("/") && real(line) === line).slice(0, 8);
   } catch {
     return [];
@@ -6314,19 +6399,6 @@ function repositoryOf2(folder) {
     }
   }
   return "";
-}
-function fenceShell(directory) {
-  const where = folder();
-  if (!where || !fenceRules())
-    return;
-  const mine = basename5(process.env.SHELL ?? "");
-  const shell = [mine, "zsh", "bash"].filter((name) => name === "zsh" || name === "bash").map((name) => join14(where, "shell", name)).find((place) => existsSync7(place));
-  if (!shell)
-    return;
-  const work = real(directory);
-  const temporary = join14(where, "tmp", sum(work));
-  mkdirSync8(temporary, { recursive: true, mode: 448 });
-  return { shell, work, git: repositoryOf2(work), temporary };
 }
 var AGENT_FOLDERS = 4;
 function fenceAgent(program, directory, mine) {
@@ -6420,10 +6492,15 @@ var server2;
 var keys = new Map;
 var sessionsByKey = new Map;
 var programs = new Map;
-function relayedTools(sessionID) {
+var holders = new Map;
+function relayedTools(sessionID, holder) {
   const tools = kuvoTools(sessionID);
   if (!tools)
     return;
+  let held = holders.get(sessionID);
+  if (!held)
+    holders.set(sessionID, held = new Set);
+  held.add(holder);
   server2 ??= Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: answer });
   let key = keys.get(sessionID);
   if (!key) {
@@ -6434,7 +6511,12 @@ function relayedTools(sessionID) {
   return { kind: "http", name: tools.name, key: tools.key, timeout: tools.timeout, url: `http://127.0.0.1:${server2.port}/mcp`, headers: { Authorization: `Bearer ${key}` } };
 }
 var relayPort = () => server2?.port;
-function dropRelayed(sessionID) {
+function dropRelayed(sessionID, holder) {
+  const held = holders.get(sessionID);
+  held?.delete(holder);
+  if (held?.size)
+    return;
+  holders.delete(sessionID);
   const key = keys.get(sessionID);
   if (key)
     sessionsByKey.delete(key);
@@ -6813,7 +6895,7 @@ class AcpThread {
       return;
     const directory = this.session.location.directory;
     const attached = fenceAttachments(directory);
-    const relayed = relayedTools(this.session.id);
+    const relayed = relayedTools(this.session.id, this);
     const started = cleanEnv ? env ?? {} : { ...process.env, ...env };
     const fence = fenceAgent(argv[0], directory, {
       homes: whole.homes(started),
@@ -6827,7 +6909,7 @@ class AcpThread {
     return { argv: [fence.command, ...argv.slice(1)], env: { ...env, ...whole.env, ...fence.env }, ended: fence.ended };
   }
   mcpServers(init) {
-    const tools = this.fenced ? relayedTools(this.session.id) : kuvoTools(this.session.id);
+    const tools = this.fenced ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
     if (!tools || tools.kind === "http" && !init?.agentCapabilities?.mcpCapabilities?.http)
       return [];
     loadKuvoTools();
@@ -7450,7 +7532,7 @@ ${others.map((path) => `- ${path}`).join(`
     this.rpc?.kill();
     this.rpc = undefined;
     if (this.fenced)
-      dropRelayed(this.session.id);
+      dropRelayed(this.session.id, this);
     this.fenced = false;
   }
 }
@@ -8607,6 +8689,7 @@ function unzipper() {
 }
 
 // Packages/Box/src/agents/agents/claude.ts
+import { spawn as spawn5 } from "child_process";
 import { randomUUID } from "crypto";
 import { existsSync as existsSync13, readFileSync as readFileSync18, statSync as statSync8 } from "fs";
 import { homedir } from "os";
@@ -8898,6 +8981,31 @@ async function stopShell(id) {
 var SDK = [{ name: "@anthropic-ai/claude-agent-sdk", version: "0.3.303" }];
 var places = [join19(homedir(), ".local/bin"), join19(homedir(), ".claude/local"), "/opt/homebrew/bin", "/usr/local/bin"];
 var outputLimit3 = 30000;
+var STATE_IN_HOME = [
+  "projects",
+  "sessions",
+  "file-history",
+  "todos",
+  "tasks",
+  "teams",
+  "plans",
+  "history.jsonl*",
+  "statsig",
+  "telemetry",
+  "debug",
+  "cache",
+  "paste-cache",
+  "image-cache",
+  "state",
+  "logs",
+  "uploads",
+  "stats-cache.json*",
+  "mcp-needs-auth-cache.json*",
+  ".credentials.json*",
+  ".claude.json*",
+  "*.lock"
+];
+var KEPT_IN_HOME = ["settings*.json", "hooks", ".mcp.json"];
 
 class ClaudeAgent {
   context;
@@ -9279,7 +9387,7 @@ class ClaudeThread {
     const modelID = input.model.id;
     const effort = input.model.variant;
     const append = hooks.instructions();
-    const tools = kuvoTools(this.session.id);
+    const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
     const skills = skillsFolder(await skillsFor(this.session.location.directory, this.agent.ownSkillFolders(this.session.location.directory), turnedOff(hooks)));
     const fence = fenceKey();
     if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence))
@@ -9303,7 +9411,7 @@ class ClaudeThread {
       return { outcome: "interrupted" };
     return new Promise((resolve) => {
       this.lastHooks = hooks;
-      const message = userMessage(input);
+      const message = userMessage(input, this.copies());
       this.active = this.turnFor(turn, hooks, resolve, input.auto, new Map([[message.uuid, ""]]));
       this.input.push(message);
     });
@@ -9490,8 +9598,9 @@ class ClaudeThread {
     }
     if (!resume)
       delete this.state.claudeCost;
+    const whole = this.whole(skills);
     this.input = new Queue;
-    const tools = kuvoTools(this.session.id);
+    const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
     this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() };
     this.query = sdk.query({
       prompt: this.input,
@@ -9508,26 +9617,52 @@ class ClaudeThread {
         systemPrompt: { type: "preset", preset: "claude_code", ...append ? { append } : {} },
         ...skills ? { plugins: [{ type: "local", path: skills, skipMcpDiscovery: true }] } : {},
         ...resume ? { resume: id } : { sessionId: id },
-        env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id, ...this.fenced() },
-        ...this.fenceShellMissing !== undefined ? { sandbox: { enabled: false } } : {},
+        env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id, ...whole?.env },
+        ...whole ? { sandbox: { enabled: false }, spawnClaudeCodeProcess: whole.spawn } : {},
         stderr: () => {}
       }
     });
     this.read(this.query);
   }
-  fenced() {
-    const fence = fenceShell(this.session.location.directory);
-    this.fenceShellMissing = fenceOn() ? !fence : undefined;
+  whole(skills) {
+    this.sandboxedNow = fenceOn() || undefined;
+    if (!this.sandboxedNow)
+      return;
+    const directory = this.session.location.directory;
+    const relayed = relayedTools(this.session.id, this);
+    const attached = fenceAttachments(directory);
+    const settings = this.agent.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join19(homedir(), ".claude");
+    const machineFolders = this.agent.env().CLAUDE_ENV_FILE;
+    const fence = fenceAgent(this.agent.executable(), directory, {
+      homes: [settings],
+      state: STATE_IN_HOME,
+      kept: KEPT_IN_HOME,
+      read: [...skills ? [skills] : [], ...attached ? [attached] : [], ...machineFolders ? [machineFolders] : []],
+      port: relayed ? relayPort() : undefined
+    });
     if (!fence)
-      return {};
-    return { CLAUDE_CODE_SHELL: fence.shell, CLAUDE_CODE_TMPDIR: fence.temporary, KUVO_FENCE_WORK: fence.work, KUVO_FENCE_GIT: fence.git };
+      throw new Error("Claude Code runs in the sandbox here, and it isn't ready: restart Kuvo Code.");
+    const env = { CLAUDE_CODE_TMPDIR: undefined, CLAUDE_CODE_SHELL: undefined, DISABLE_AUTOUPDATER: "1" };
+    return {
+      env,
+      spawn: (options) => {
+        const given = Object.fromEntries(Object.entries({ ...options.env, ...fence.env, KUVO_FENCE_SHELL: options.command, ...env }).filter((entry) => entry[1] !== undefined));
+        const child = spawn5(fence.command, options.args, { cwd: options.cwd ?? directory, env: given, signal: options.signal, stdio: ["pipe", "pipe", "ignore"] });
+        child.once("exit", () => fence.ended());
+        return child;
+      }
+    };
   }
-  fenceShellMissing;
+  copies() {
+    const directory = this.session.location.directory;
+    return this.sandboxedNow ? (path) => fenceCopy(directory, path) : undefined;
+  }
+  sandboxedNow;
   get sandboxed() {
-    return Boolean(this.query) && this.fenceShellMissing === false;
+    return Boolean(this.query) && this.sandboxedNow === true;
   }
   get outside() {
-    return Boolean(this.query) && this.fenceShellMissing === undefined;
+    return Boolean(this.query) && this.sandboxedNow === undefined;
   }
   async read(query) {
     let ended;
@@ -10001,9 +10136,6 @@ class ClaudeThread {
       return {};
     if (input.tool_name === "Bash" && typeof input.tool_use_id === "string" && typeof input.tool_input?.command === "string")
       this.commands.set(input.tool_use_id, input.tool_input.command);
-    if (input.tool_name === "Bash" && this.fenceShellMissing) {
-      return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "Commands run in the sandbox here, and it isn't ready for Claude Code yet: ask the user to restart Kuvo Code." } };
-    }
     await this.ownTaken();
     const hooks = this.active?.hooks ?? this.lastHooks;
     if (!hooks)
@@ -10103,7 +10235,7 @@ class ClaudeThread {
     const active = this.active;
     if (!active || !this.input || active.stopping)
       return false;
-    const message = { ...userMessage(input), priority: "next" };
+    const message = { ...userMessage(input, this.copies()), priority: "next" };
     active.steered.set(message.uuid, input.id);
     this.input.push(message);
     return true;
@@ -10147,6 +10279,8 @@ class ClaudeThread {
     this.query = undefined;
     this.input = undefined;
     this.leftRunning();
+    if (this.sandboxedNow)
+      dropRelayed(this.session.id, this);
   }
   leftRunning() {
     for (const task of this.tasks.values())
@@ -10387,7 +10521,7 @@ function reason(result) {
       return "Claude Code stopped with an error.";
   }
 }
-function userMessage(input) {
+function userMessage(input, copy = (path) => path) {
   const content = [];
   const others = [];
   for (const file of input.files) {
@@ -10396,7 +10530,7 @@ function userMessage(input) {
     if (isImage && data)
       content.push({ type: "image", source: { type: "base64", media_type: file.mime, data } });
     else if (file.path)
-      others.push(file.path);
+      others.push(copy(file.path));
   }
   let text = input.text;
   if (others.length)
@@ -10554,7 +10688,7 @@ function parse2(directive) {
 // Packages/Box/src/agents/agents/codex.ts
 var places2 = ["/opt/homebrew/bin", "/usr/local/bin", join20(homedir2(), ".local/bin"), join20(homedir2(), ".codex/bin")];
 var outputLimit4 = 30000;
-var STATE_IN_HOME = [
+var STATE_IN_HOME2 = [
   "sessions",
   "archived_sessions",
   "log",
@@ -10577,7 +10711,7 @@ var STATE_IN_HOME = [
   "thread_history_*.sqlite*",
   "memories_*.sqlite*"
 ];
-var KEPT_IN_HOME = ["*.toml", ".env", "hooks.json", "rules"];
+var KEPT_IN_HOME2 = ["*.toml", ".env", "hooks.json", "rules"];
 var noComputerUse = ["unified-computer-use@openai-bundled", "computer-use@openai-bundled"];
 var SHARED = "";
 var ACCOUNT = "account";
@@ -10658,6 +10792,20 @@ class CodexAgent {
       return true;
     return [...this.threads.values()].some((thread) => thread !== starting && thread.server === server && (thread.isRunning || thread.keepsWorking));
   }
+  restartOutside() {
+    let waiting = false;
+    for (const [key, slot] of this.slots) {
+      const server = slot.server;
+      if (!server || server.isClosed || !this.unfencedServers.has(server))
+        continue;
+      if (this.busy(key, server)) {
+        waiting = true;
+        continue;
+      }
+      this.stop(key);
+    }
+    return waiting;
+  }
   restartIfQuiet(key, starting) {
     const slot = this.slots.get(key);
     const server = slot?.outdated;
@@ -10718,13 +10866,13 @@ class CodexAgent {
     const skills = skillsRoot();
     if (skills)
       mkdirSync13(skills, { recursive: true, mode: 448 });
-    const relayed = sessionID ? relayedTools(sessionID) : undefined;
+    const relayed = sessionID ? relayedTools(sessionID, this) : undefined;
     const homes = [this.home, ...this.instance.home && !onMachine ? [this.yourCodex] : []];
     const attached = sessionID ? fenceAttachments(directory) : undefined;
     return fenceAgent(this.executable(), directory, {
       homes,
-      state: STATE_IN_HOME,
-      kept: KEPT_IN_HOME,
+      state: STATE_IN_HOME2,
+      kept: KEPT_IN_HOME2,
       read: [...skills ? [skills] : [], ...attached ? [attached] : []],
       port: relayed ? relayPort() : undefined
     });
@@ -10785,7 +10933,7 @@ class CodexAgent {
     for (const thread of this.threads.values())
       thread.serverStopped(server);
     if (key !== SHARED && key !== ACCOUNT)
-      dropRelayed(key);
+      dropRelayed(key, this);
   }
   notification(method, params, from) {
     if (method === "account/login/completed") {
@@ -11064,7 +11212,7 @@ class CodexAgent {
         this.spawned.delete(spawn);
     this.stop(sessionID);
     this.slots.delete(sessionID);
-    dropRelayed(sessionID);
+    dropRelayed(sessionID, this);
   }
 }
 var knownSpawns = 100;
@@ -11180,7 +11328,7 @@ class CodexThread {
     }
     const fenced = this.agent.isFenced(rpc);
     const instructions = hooks.instructions() || null;
-    const tools = fenced ? relayedTools(this.session.id) : kuvoTools(this.session.id);
+    const tools = fenced ? relayedTools(this.session.id, this.agent) : kuvoTools(this.session.id);
     const directory = this.session.location.directory;
     const own = this.agent.ownSkillFolders(directory);
     const off = turnedOff(hooks);
@@ -12780,7 +12928,7 @@ class CursorThread {
     const cwd = this.session.location.directory;
     const skills = skillsFolder(await skillsFor(cwd, this.owner.ownSkillFolders(cwd), turnedOff(hooks)));
     const fenced = Boolean(fenceRules());
-    const tools = fenced ? relayedTools(this.session.id) : kuvoTools(this.session.id);
+    const tools = fenced ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
     return {
       model: selection,
       name: `Kuvo Code: ${this.session.title ?? "session"}`,
@@ -13098,7 +13246,7 @@ ${text}`;
   }
   close() {
     this.stop();
-    dropRelayed(this.session.id);
+    dropRelayed(this.session.id, this);
   }
 }
 function limitOf2(message, error) {
@@ -13277,7 +13425,7 @@ import { homedir as homedir4 } from "os";
 import { mkdirSync as mkdirSync15, readFileSync as readFileSync22, writeFileSync as writeFileSync16 } from "fs";
 import { dirname as dirname11, join as join23 } from "path";
 var places3 = [join23(homedir4(), ".grok/bin"), join23(homedir4(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
-var STATE_IN_HOME2 = [
+var STATE_IN_HOME3 = [
   "sessions",
   "logs",
   "memtrace",
@@ -13293,7 +13441,7 @@ var STATE_IN_HOME2 = [
   "*.log",
   "sandbox-events.jsonl"
 ];
-var KEPT_IN_HOME2 = ["*.toml", "hooks-paths", "disabled-hooks", "*.sh"];
+var KEPT_IN_HOME3 = ["*.toml", "hooks-paths", "disabled-hooks", "*.sh"];
 
 class GrokAgent {
   context;
@@ -13435,7 +13583,7 @@ class GrokAgent {
       authMethod: () => process.env.XAI_API_KEY ? "xai.api_key" : "cached_token",
       restartAfterInterrupt: true,
       program: () => agent.program,
-      whole: { homes: (env) => [env.GROK_HOME ?? join23(homedir4(), ".grok")], state: STATE_IN_HOME2, kept: KEPT_IN_HOME2, env: { GROK_SANDBOX: "off", GROK_MEMORY: "0" } },
+      whole: { homes: (env) => [env.GROK_HOME ?? join23(homedir4(), ".grok")], state: STATE_IN_HOME3, kept: KEPT_IN_HOME3, env: { GROK_SANDBOX: "off", GROK_MEMORY: "0" } },
       async command({ approvesAll, plan, skills, whole }) {
         const executable = agent.executable();
         if (!executable)
@@ -16258,6 +16406,22 @@ ${live.agentPrompt}` : ""
   outside() {
     return [...this.live.values()].some((live) => [...live.threads.values()].some((thread) => thread.outside));
   }
+  restartOutside() {
+    let waiting = false;
+    for (const live of this.live.values()) {
+      for (const [providerID, thread] of live.threads) {
+        if (!thread.outside)
+          continue;
+        if (isBusy(live.doing) || thread.keepsWorking) {
+          waiting = true;
+          continue;
+        }
+        thread.close();
+        live.threads.delete(providerID);
+      }
+    }
+    return waiting;
+  }
   permissions(id) {
     this.record(id);
     return [...this.live.get(id)?.permissions.values() ?? []].map((pending) => pending.request);
@@ -17120,6 +17284,19 @@ The parts before yours are done. What they reported:
 
 Do your part here, with all your tools, as you would any task from the user. When it's done, end with a few lines on what you did and anything left over. That last message of yours goes to the chat as your report on its own, so don't send it anywhere; the others' parts start from it.`;
 }
+function partShown(text) {
+  if (!text.startsWith(opening3))
+    return {};
+  const head = text.indexOf(`]
+
+`);
+  if (head < 0)
+    return {};
+  const name = text.slice(opening3.length, head).replace(/ \u00B7 [^\u00B7]+$/, "");
+  const rest = text.slice(head + 3);
+  const end = rest.indexOf(divider);
+  return { from: name, words: (end < 0 ? rest : rest.slice(0, end)).trim() };
+}
 function plainError(error, provider, place) {
   if (!/authorization header|unauthori[sz]ed|\b401\b|\b403\b|forbidden|invalid api key/i.test(error))
     return error;
@@ -17267,7 +17444,8 @@ function seatRules(folder, askFirst, denies) {
     "kuvo-browser_browser_upload",
     "kuvo-browser_schedule_wake_up",
     "kuvo-browser_watch_for_change",
-    "kuvo-browser_set_job"
+    "kuvo-browser_set_job",
+    "kuvo-browser_sandbox_ask"
   ].map((action) => ({ action, resource: "*", effect: "deny" }));
   if (askFirst)
     rules.push({ action: "webfetch", resource: "*", effect: "deny" });
@@ -18272,6 +18450,136 @@ class SeatAPI {
   }
 }
 
+// Packages/Box/src/shared/queues.ts
+import fs3 from "fs";
+import path3 from "path";
+
+// Packages/Box/src/shared/json.ts
+var isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+// Packages/Box/src/shared/files.ts
+import fs2 from "fs";
+import path2 from "path";
+function writePrivate(file, text) {
+  fs2.mkdirSync(path2.dirname(file), { recursive: true, mode: 448 });
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs2.writeFileSync(temporary, text, { mode: 384 });
+  fs2.renameSync(temporary, file);
+}
+function take(lock, stale) {
+  try {
+    fs2.mkdirSync(lock);
+    return true;
+  } catch {
+    try {
+      if (Date.now() - fs2.statSync(lock).mtimeMs > stale)
+        fs2.rmdirSync(lock);
+    } catch {}
+    return false;
+  }
+}
+function hold(lock, stale, wait) {
+  fs2.mkdirSync(path2.dirname(lock), { recursive: true, mode: 448 });
+  const nap = new Int32Array(new SharedArrayBuffer(4));
+  for (let i = 0;i < wait / 10; i++) {
+    if (take(lock, stale))
+      return true;
+    Atomics.wait(nap, 0, 0, 10);
+  }
+  return false;
+}
+function locked(lock, work, { stale = 1e4, wait = 3000 } = {}) {
+  const held = hold(lock, stale, wait);
+  try {
+    return work();
+  } finally {
+    if (held)
+      try {
+        fs2.rmdirSync(lock);
+      } catch {}
+  }
+}
+var turns = new Map;
+
+// Packages/Box/src/shared/queues.ts
+var queueFiles = (run) => ({
+  file: path3.join(run, "queues.json"),
+  waiting: path3.join(run, "waiting"),
+  lock: path3.join(run, ".queues.lock")
+});
+var WAITING_ID = /^msg_[A-Za-z0-9]{1,80}$/;
+var keptWaiting = (value) => (Array.isArray(value) ? value : []).flatMap((item) => {
+  if (!isObject(item) || typeof item.id !== "string" || !WAITING_ID.test(item.id) || typeof item.text !== "string")
+    return [];
+  const files = Array.isArray(item.files) ? item.files.filter((name) => typeof name === "string") : [];
+  return [{ id: item.id, ...typeof item.from === "string" ? { from: item.from } : {}, text: item.text, ...files.length ? { files } : {}, at: typeof item.at === "number" ? item.at : 0 }];
+});
+var keptState = (value) => {
+  const waiting = keptWaiting(isObject(value) ? value.waiting : undefined);
+  return {
+    paused: isObject(value) && value.paused === true,
+    held: isObject(value) && Array.isArray(value.held) ? value.held.filter((id) => typeof id === "string") : [],
+    ...isObject(value) && typeof value.resumed === "number" ? { resumed: value.resumed } : {},
+    ...waiting.length ? { waiting } : {}
+  };
+};
+var showsQueue = (state) => state.paused || state.held.length > 0 || Boolean(state.waiting?.length);
+var RESUMED_FOR = 60000;
+function readQueues(files) {
+  let all = {};
+  try {
+    all = JSON.parse(fs3.readFileSync(files.file, "utf8"));
+  } catch {}
+  return isObject(all) ? Object.fromEntries(Object.entries(all).map(([session, state]) => [session, keptState(state)])) : {};
+}
+function changeQueue(files, session, change, changed) {
+  let made = false;
+  const after = locked(files.lock, () => {
+    const all = readQueues(files);
+    const before = all[session] ?? { paused: false, held: [] };
+    const state = keptState(change(before));
+    state.held = [...new Set(state.held)];
+    made = JSON.stringify(state) !== JSON.stringify(before);
+    if (!made)
+      return state;
+    all[session] = state;
+    for (const [id, each] of Object.entries(all)) {
+      if (each.resumed && Date.now() - each.resumed >= RESUMED_FOR)
+        delete each.resumed;
+      if (!showsQueue(each) && !each.resumed)
+        delete all[id];
+    }
+    try {
+      writePrivate(files.file, JSON.stringify(all));
+    } catch {}
+    return state;
+  });
+  if (made)
+    changed?.();
+  return after;
+}
+var waitingFile = (files, id) => path3.join(files.waiting, `${id}.json`);
+var fileNames = (files) => (files ?? []).flatMap((file) => {
+  if (!isObject(file))
+    return [];
+  if (typeof file.name === "string" && file.name)
+    return [file.name];
+  return typeof file.uri === "string" && !file.uri.startsWith("data:") ? [path3.basename(decodeURIComponent(file.uri.replace(/^file:\/\//, "")))] : ["file"];
+});
+function keepWaiting(files, session, message, { from, words, kept: keptText } = {}, changed) {
+  let kept = false;
+  changeQueue(files, session, (state) => {
+    if (!state.paused)
+      return state;
+    writePrivate(waitingFile(files, message.id), JSON.stringify(keptText === undefined ? message : { ...message, text: keptText }));
+    kept = true;
+    const names = fileNames(message.files);
+    const waiting = { id: message.id, ...from ? { from } : {}, text: words ?? message.text, ...names.length ? { files: names } : {}, at: Date.now() };
+    return { ...state, waiting: [...(state.waiting ?? []).filter((each) => each.id !== message.id), waiting] };
+  }, changed);
+  return kept;
+}
+
 // Packages/Box/src/agents/groups/seat.ts
 var seatKey = "kuvo.seat";
 var turnLimit2 = 600000;
@@ -18280,7 +18588,7 @@ class Cancelled extends Error {
 }
 class SeatGone extends Error {
 }
-var sleep = (ms, signal) => new Promise((done, fail) => {
+var sleep2 = (ms, signal) => new Promise((done, fail) => {
   if (signal?.aborted)
     return fail(new Cancelled);
   const stop = () => {
@@ -18312,7 +18620,7 @@ class Nudge {
     }
     const woken = new Promise((resolve) => this.waiting = resolve);
     try {
-      await Promise.race([sleep(ms, signal), woken]);
+      await Promise.race([sleep2(ms, signal), woken]);
     } finally {
       this.waiting = undefined;
     }
@@ -18633,14 +18941,21 @@ class Seats {
       throw new Error("the coding agents aren\u2019t running");
     const promptID = newID("msg");
     this.context.given?.(promptID, { chat, bot: bot.id });
+    const queues = this.context.queues;
+    if (queues && keepWaiting(queues, bot.sessionID, { id: promptID, text, delivery: "queue" }, partShown(text)))
+      return promptID;
     await api.prompt(bot.sessionID, promptID, text, "queue");
     return promptID;
+  }
+  waitsOnBox(session, promptID) {
+    const queues = this.context.queues;
+    return queues !== undefined && (readQueues(queues)[session]?.waiting ?? []).some((item) => item.id === promptID);
   }
   async follow(botID, promptID, started, wanted) {
     let misses = 0;
     let stoppedChecks = 0;
     for (;; ) {
-      await sleep(3000 * (this.context.pace ?? 1));
+      await sleep2(3000 * (this.context.pace ?? 1));
       if (!wanted())
         return;
       const bot = this.bot(botID);
@@ -18661,7 +18976,7 @@ class Seats {
         continue;
       const read = await this.messagesFrom(promptID, bot.sessionID, started, api);
       if (read.kind !== "found") {
-        if (read.kind === "missing" && !queued.some((item) => item.id === promptID)) {
+        if (read.kind === "missing" && !queued.some((item) => item.id === promptID) && !this.waitsOnBox(bot.sessionID, promptID)) {
           if (++misses >= 2)
             return { ok: false, why: `its message was taken back before ${bot.name} read it` };
         } else {
@@ -18801,7 +19116,7 @@ class Seats {
     let woken = false;
     for (;; ) {
       try {
-        await (nudge ? nudge.sleep(600 * pace, signal) : sleep(600 * pace, signal));
+        await (nudge ? nudge.sleep(600 * pace, signal) : sleep2(600 * pace, signal));
       } catch (error) {
         await api.interrupt(seat).catch(() => {});
         throw error;
@@ -21361,6 +21676,10 @@ function handler(context) {
           return json11({});
         }
       }
+      if (area === "kuvo" && a === "sandbox" && b === "restart" && !c && method === "POST") {
+        context.restartOutside?.();
+        return json11({});
+      }
       if (area === "kuvo" && a === "goals")
         return await goalRoutes(context.goals, method, parts.slice(3), body);
       if (area === "kuvo" && a === "btw")
@@ -21615,7 +21934,16 @@ function engineAgent(providerID) {
   return agent;
 }
 var sessions = new Sessions(store, roster, auto, engineAgent, (directory) => link2.policies(directory), (name, directory) => link2.agent(name, directory), new Snapshots(join27(home2, "snapshots")), (directory) => link2.titleModel(directory));
-var noteInside = () => noteAgentsInside(!sessions.outside() && !roster.all().some((agent) => agent.outside?.()));
+var restarting = false;
+var noteInside = () => {
+  if (restarting)
+    restarting = [sessions.restartOutside(), ...roster.all().map((agent) => agent.restartOutside?.() ?? false)].some(Boolean);
+  noteAgentsInside(!sessions.outside() && !roster.all().some((agent) => agent.outside?.()));
+};
+var restartOutside = () => {
+  restarting = true;
+  noteInside();
+};
 noteInside();
 setInterval(noteInside, 5000).unref?.();
 var self;
@@ -21626,7 +21954,8 @@ var groupMemoryKey = process.env.KUVO_GROUPS_MEMORY_KEY || undefined;
 var artifactsFolder = onMachine ? join27(machineHome, "artifacts") : process.env.KUVO_ARTIFACTS || undefined;
 var botsFolder = groupFolders?.bots ?? (onMachine ? join27(machineHome, "bots") : process.env.KUVO_BOTS || undefined);
 var agentsFile = onMachine ? join27(machineHome, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined;
-for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", ...onMachine ? [] : ["KUVO_BOTS"]])
+var runFolder = onMachine ? join27(machineHome, "run") : process.env.KUVO_RUN || undefined;
+for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", "KUVO_RUN", ...onMachine ? [] : ["KUVO_BOTS"]])
   delete process.env[name];
 if (groupFolders) {
   try {
@@ -21649,7 +21978,8 @@ if (groupFolders) {
         return { name: agent.name, signedOut: !account.signedIn && agent.methods().length > 0 };
       },
       peers: directory,
-      given: (prompt, part) => partGiven?.(prompt, part.chat)
+      given: (prompt, part) => partGiven?.(prompt, part.chat),
+      queues: runFolder ? queueFiles(runFolder) : undefined
     });
     const server = new SeatServer(runner.seats, post, { store, remembered: (from, memory) => runner.remembered(from, memory) });
     groups = { store, runner, peers: { post, directory, server, runner } };
@@ -21676,6 +22006,7 @@ var places4 = {
   }
 };
 var goals = new Goals(join27(home2, "goals.json"), places4);
+setInterval(() => goals.resumeDue(), 60000).unref?.();
 var sideQuestions = new SideQuestions(join27(home2, "side-questions.json"), places4);
 var handoffs = new Handoffs(places4);
 var reviews = new Reviews(join27(home2, "reviews.json"), places4);
@@ -21726,7 +22057,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link: link2, password, version: version3, groups, goals, sideQuestions, handoffs, places: places4, reviews, voice, artifacts, noted: noted2 })
+    fetch: handler({ roster, sessions, auto, link: link2, password, version: version3, groups, goals, sideQuestions, handoffs, places: places4, reviews, voice, artifacts, noted: noted2, restartOutside })
   });
 } catch (error) {
   console.error("couldn't listen:", error?.message ?? error);
@@ -21788,4 +22119,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 1d11668531821c53caccf81149f08c2ce633022cc90cbaa92795c878b9e013c8
+// Built from Packages/Box/src/agents b3b8feebc471f026eadb85c7c07fa237b08815be767bc2636604196f0aad3a82

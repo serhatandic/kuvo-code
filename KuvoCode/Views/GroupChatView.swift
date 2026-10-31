@@ -1,5 +1,6 @@
 import ClientDesign
 import ClientText
+import ClientVault
 import OpenCodeKit
 import SwiftUI
 
@@ -22,6 +23,12 @@ struct GroupChatView: View {
 
     private var members: [Bot] { group.members.compactMap { bots.bot($0) } }
     private var draftKey: String { BotGroups.tabKey(group.id) }
+    /// The computer it lives on, as its box is named.
+    private var box: String { groups.machine(of: group.id) ?? BoxClient.mac }
+    /// Where its bots take their seats: where it lives, and each one's own computer.
+    private var seatBoxes: [String] { Array(Set([box] + members.map(\.box))).sorted() }
+    /// What those seats ask of the vault now, to animate its cards by.
+    private var seatAsks: [String] { seatBoxes.flatMap { Vaults.shared[$0].asks.filter { $0.group == group.id }.map(\.id) } }
 
     var body: some View {
         let messages = groups.messages(in: group.id)
@@ -81,6 +88,8 @@ struct GroupChatView: View {
                     PausedBar { groups.keepGoing(group.id) }
                         .transition(.opacity.combined(with: .offset(y: 6)))
                 }
+                // What its bots' seats ask of their computers' vaults: no one opens a seat, so here.
+                ForEach(seatBoxes, id: \.self) { VaultAskCards(group: group.id, box: $0) }
                 GroupComposer(
                     text: Binding(get: { Drafts.shared[draftKey].text }, set: { Drafts.shared[draftKey].text = $0 }),
                     quotes: Binding(get: { Drafts.shared[draftKey].quotes }, set: { Drafts.shared[draftKey].quotes = $0 }),
@@ -96,12 +105,19 @@ struct GroupChatView: View {
             }
             .animation(.ui, value: groups.isPaused(group.id))
             .animation(.ui, value: groups.reach(group.id))
+            .animation(.ui, value: seatAsks)
             .padding(.horizontal, Metrics.gutter)
             .padding(.bottom, 16)
             .readableColumn()
         }
         // Seen only while you're here, as a session is: what's said while you're in another app
         // waits for you (its notifications too), and counts as seen when you come back.
+        // Its seats' asks of those vaults, followed while it's open (VaultAskCards).
+        .task(id: seatBoxes) {
+            await withTaskGroup(of: Void.self) { following in
+                for each in seatBoxes { following.addTask { await Vaults.shared.follow(each) } }
+            }
+        }
         .onAppear { if NSApp.isActive { groups.markViewed(group.id) } }
         .onChange(of: messages.count) { if NSApp.isActive { groups.markViewed(group.id) } }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in groups.markViewed(group.id) }

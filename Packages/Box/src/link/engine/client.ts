@@ -11,6 +11,16 @@ export const readEngineFile = (): EngineRecord => JSON.parse(fs.readFileSync(ENG
 // The coding agents' bridge beside the engine, when it runs: its port and password.
 export const readBridgeFile = (): BridgeRecord => JSON.parse(fs.readFileSync(BRIDGE_FILE, "utf8"));
 
+/** The coding agents' bridge beside the engine, while it runs; null otherwise. */
+export function bridgeTarget(): Target | null {
+  try {
+    const bridge = readBridgeFile();
+    return bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents") ? bridge : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Where a letter's agent can be here (`targets`): the engine, and the coding agents' bridge while
  * it runs; and whether it runs now (`bridge`), so one for a conversation the engine doesn't know may
  * be the bridge's, kept to try again. */
@@ -21,16 +31,10 @@ export interface PeerPlaces {
 
 export function peerPlaces(): PeerPlaces {
   const targets: Target[] = [];
-  let bridge = false;
   try { targets.push(readEngineFile()); } catch {}
-  try {
-    const record = readBridgeFile();
-    if (record?.port && record?.password && runs(record.pid, "kuvo-agents")) {
-      targets.push(record);
-      bridge = true;
-    }
-  } catch {}
-  return { targets, bridge };
+  const bridge = bridgeTarget();
+  if (bridge) targets.push(bridge);
+  return { targets, bridge: bridge !== null };
 }
 
 // Where a letter's agent can be here: the engine, and the coding agents' bridge while it runs.

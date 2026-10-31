@@ -58,6 +58,45 @@ test("a Mac that signs no documents yet (Kuvo Code 0.8.0-beta.1): its peers come
   assert.deepEqual(heard, [mac.pub]);
 });
 
+test("a machine that was off for weeks keeps both its Macs when one writes first: only time its box ran counts toward a Mac's 30 days", () => {
+  const other = box("mac"), phone = { key: k(crypto.randomBytes(32)), name: "Other iPhone", added: 1, from: "mac", mac: other.pub, pairing: "" };
+  const day = 24 * 3600 * 1000, now = Date.now(), then = now - 35 * day;
+  const macs = () => link.macsOf(link.readLink());
+  // Last running five weeks ago, when both Macs had just written; and the same from a box that
+  // noted no time running yet (its Macs' last words stand for it).
+  for (const noted of [true, false]) {
+    fresh({ macs: [mac.pub, other.pub], macSeen: { [mac.pub]: then, [other.pub]: then }, phones: [phone] });
+    if (noted) link.noteOnline(then);
+    link.receiveMail(mailFrom(mac, { agents: { at: 1, list: [] } }));
+    assert.deepEqual(macs(), [mac.pub, other.pub], noted ? "noted" : "not noted");
+    assert.deepEqual(link.readLink().phones.map(each => each.name), ["Other iPhone"]);
+  }
+  // Running all that time, the relay there or not, and not a word from the other Mac: it no longer
+  // counts, nor its phones.
+  fresh({ macs: [mac.pub, other.pub], macSeen: { [mac.pub]: then, [other.pub]: then }, phones: [phone] });
+  for (let at = then; at < now; at += 60_000 * 4) link.noteOnline(at);
+  assert.deepEqual(macs(), [mac.pub, other.pub], "only heard from as a Mac writes");
+  link.receiveMail(mailFrom(mac, { agents: { at: 1, list: [] } }));
+  assert.deepEqual(macs(), [mac.pub]);
+  assert.deepEqual(link.readLink().phones, []);
+});
+
+test("a machine's clock set wrong and then right (a board without a clock battery) moves no Mac nearer its 30 days, or past them", () => {
+  const other = box("mac"), day = 24 * 3600 * 1000, now = Date.now();
+  const seen = { [mac.pub]: now - 10 * day, [other.pub]: now - 20 * day };
+  for (const wrong of [now - 56 * 365 * day, now + 40 * day]) {
+    fresh({ macs: [mac.pub, other.pub], macSeen: { ...seen } });
+    link.noteOnline(now);
+    const before = link.readLink().macSeen;
+    link.noteOnline(wrong);
+    link.noteOnline(now + 60_000);
+    const after = link.readLink().macSeen;
+    for (const key of [mac.pub, other.pub]) assert.ok(Math.abs(after[key] - before[key]) <= 60_000, `moved ${after[key] - before[key]} ms`);
+    link.receiveMail(mailFrom(mac, { agents: { at: 1, list: [] } }));
+    assert.deepEqual(link.macsOf(link.readLink()), [mac.pub, other.pub]);
+  }
+});
+
 test("each box's agents: a newer list kept, and list_agents here names each by where it is", () => {
   fresh();
   const file = path.join(run, "told.json"), lock = path.join(run, ".told.lock");
@@ -127,6 +166,22 @@ async function engine(t) {
   t.after(() => server.close());
   return { prompts, target: { port: server.address().port, password: "pw" } };
 }
+
+test("a letter waiting for the coding agents there stops coming again once they've stayed down a while (stopped for good), and is refused as for no conversation", async t => {
+  fresh();
+  const { target } = await engine(t);
+  const said = [];
+  const letter = { id: "ltr_" + crypto.randomBytes(6).toString("hex"), from: "ses_sender", to: "ses_gone", text: "Still there?", at: Date.now() };
+  const take = now => link.takeLetter(second.peer, letter,
+    { send: (peer, message) => said.push(message.delivered), targets: [target], peers: [second.peer], told: {}, wait: 10, bridge: false, now });
+
+  const first = Date.now();
+  await take(first);
+  await take(first + 29 * 60_000);
+  assert.deepEqual(said.map(answer => answer.retry), [true, true]);
+  await take(first + 31 * 60_000);
+  assert.deepEqual([said[2].ok, said[2].retry, said[2].why], [false, undefined, "There's no such conversation here, and its coding agents aren't running."]);
+});
 
 test("a letter from a peer: delivered once, said to be there, by its sender's own name; one it can't verify comes from an agent there, with no way back; with wait, answered by a letter", async t => {
   fresh();
@@ -205,6 +260,23 @@ test("a letter from a peer: delivered once, said to be there, by its sender's ow
   assert.equal(prompts.length, prompted);
   await take(stranger.peer, moving);
   assert.equal(prompts.length, prompted + 1, "once it's there");
+});
+
+test("a letter from a peer for a conversation the user stopped waits there with its queue: delivered, and one waiting for its answer hears it's stopped", async t => {
+  fresh();
+  const { prompts, target } = await engine(t);
+  fs.writeFileSync(path.join(run, "queues.json"), JSON.stringify({ ses_target: { paused: true, held: [] } }));
+  const told = { [second.pub]: { at: 1, list: [{ session: "ses_sender", name: "API", kind: "session" }] } };
+  const said = [], answers = [];
+  const letter = { id: "ltr_" + crypto.randomBytes(6).toString("hex"), from: "ses_sender", to: "ses_target", text: "Can you check the build?", at: Date.now(), wait: true };
+  await link.takeLetter(second.peer, letter, { send: (peer, message) => said.push(message), targets: [target], answer: each => answers.push(each), told, peers: [mac.peer, second.peer], wait: 10 });
+  assert.deepEqual(prompts, [], "the engine would run everything waiting with it");
+  assert.deepEqual(said, [{ delivered: { id: letter.id, ok: true, answer: false, why: "That conversation is stopped: the user paused it. Your message waits there and goes once they resume it; its answer, if it writes one, comes to you as a message." } }]);
+  assert.deepEqual(answers, []);
+  const [waiting] = link.queueOf("ses_target").waiting;
+  assert.deepEqual([waiting.from, waiting.text], ["API", "Can you check the build?"]);
+  const kept = JSON.parse(fs.readFileSync(path.join(run, "waiting", `${waiting.id}.json`), "utf8"));
+  assert.equal(kept.text, link.composeLetter("API", "ses_sender", "Can you check the build?", false), "no one waits for its answer by then");
 });
 
 test("a letter for a coding agent's conversation that comes while their bridge isn't running is kept to try again, and reaches it once it runs; one no one here knows, with the bridge running, is refused", async t => {
@@ -724,6 +796,21 @@ test("an answer that came just as the tool waiting for it stopped reaches its co
   await link.deliverLeftAnswers(now + 20_000, [target]);
   assert.equal(prompts.length, count);
   assert.equal(fs.existsSync(path.join(replies, "ltr_asked2.json")), false, "not kept either");
+});
+
+test("an answer left for a conversation the engine doesn't know is kept while the coding agents' bridge isn't running (it may be the bridge's), and dropped once it runs and has none", async t => {
+  fresh({ peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } });
+  const { prompts, target } = await engine(t);
+  const replies = path.join(run, "replies");
+  fs.mkdirSync(replies, { recursive: true });
+  // Its tool stopped waiting as the answer came, for Scout's conversation (a coding agent's).
+  fs.writeFileSync(path.join(replies, "ltr_scout1.json"), JSON.stringify({ text: "Done.", to: "ses_scout", from: "ses_remote", name: "Remote" }));
+  fs.writeFileSync(path.join(replies, "ltr_scout1.gaveup"), "");
+  await link.deliverLeftAnswers(Date.now(), [target], false);
+  assert.equal(fs.existsSync(path.join(replies, "ltr_scout1.json")), true, "kept for when the bridge runs");
+  await link.deliverLeftAnswers(Date.now(), [target], true);
+  assert.equal(fs.existsSync(path.join(replies, "ltr_scout1.json")), false, "the bridge runs and has no such conversation: gone");
+  assert.deepEqual(prompts, []);
 });
 
 test("a conversation read by mail whose tool stopped waiting as it came is dropped, never delivered as a message", async () => {

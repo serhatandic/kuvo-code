@@ -322,40 +322,161 @@ const INLINE: Record<string, string[]> = {
 // project's: read by the script's name.
 const RUNS_SCRIPTS = new Set(["npm", "pnpm", "yarn", "bun"]);
 const LOCAL_URL = /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])([:/]|$)/i;
-// curl's and wget's options that send something, rather than fetch.
-const SENDS = /^(-[a-zA-Z]*[TFd]|--upload-file|--form.*|--data.*|--json|--post-(data|file)|--body-(data|file)|-X|--request|--method)$/;
+// curl's and wget's options that send something, rather than fetch (with what they send in the same
+// word, `-d@file`, or not).
+const SENDS = /^(-[a-zA-Z]*[TFdX]|--upload-file|--form|--data|--json|--post-(data|file)|--body-(data|file)|--request|--method)/;
+
+// Package runners' commands that run a package's program, which counts as the command's (`npm exec
+// vercel`, `pnpm dlx`, `bun x`).
+const RUNNERS: Record<string, string[]> = { npm: ["exec", "x"], pnpm: ["exec", "dlx"], yarn: ["exec", "dlx"], bun: ["x"] };
+// find's options that run a command of their own on what it finds.
+const FIND_RUNS = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
+// A program's commands that send beyond this computer, wherever they are among its words, whatever
+// options come before (`npm --prefix . publish`, `git --git-dir .git push`, `git subtree push`).
+const SENDING: Record<string, string> = {
+  push: "sending it beyond this computer", upload: "sending it beyond this computer", publish: "publishing", deploy: "releasing or deploying",
+  "send-pack": "pushing", "send-email": "pushing", "http-push": "pushing", dcommit: "pushing",
+};
+// Programs that only read or print their words, whatever they say (`grep -r deploy`).
+const QUIET = new Set(["grep", "rg", "ag", "echo", "printf", "cat", "ls", "head", "tail", "wc", "sort", "uniq", "diff", "file", "stat", "du", "which", "type", "man", "jq", "less", "tree"]);
+// The options a wrapper may have and still plainly run the program after it; any other (`env -u`,
+// `sudo -u`, `timeout -s`) takes a value that could be read as that program.
+const BARE: Record<string, RegExp> = {
+  npx: /^(-y|--yes|-q|--quiet)$/, bunx: /^--bun$/, timeout: /^([0-9.]+[smhd]?|--foreground|--preserve-status|-v|--verbose)$/,
+  nice: /^(-n|-?[0-9]+)$/, env: /^(-i|--ignore-environment)$/, time: /^-p$/, command: /^-p$/,
+};
+// git's own settings and hooks, which a command in the project can name or write (on Linux the
+// sandbox doesn't keep them, as macOS's does): what git runs next isn't on the line.
+const GIT_OWN = /(^|\/)\.git(\/|$)|(^|\/)\.git(config|modules)$/;
+// git's own options that take the next word as their value.
+const GIT_VALUED = /^(-C|-c|--git-dir|--work-tree|--namespace|--super-prefix|--config-env|--exec-path)$/;
+// What `git config` only reads with (`--get`, `--list`, or `git config get`), and what writes even then.
+const GIT_CONFIG_READS = /^(--get|--get-all|--get-regexp|--get-urlmatch|--get-color|--get-colorbool|--list|-l)$/;
+const GIT_CONFIG_WRITES = /^(--add|--replace-all|--unset|--unset-all|--rename-section|--remove-section|--edit|-e)$/;
+// `git config`'s own options that take the next word as their value (so `--default get` isn't `get`).
+const GIT_CONFIG_VALUED = /^(-f|--file|--blob|--type|--default|--comment|--value|--url)$/;
+
+/** Whether git's words set its own settings, or carry them in (a clone's `--config`, a template's
+ * hooks): what git runs next (`core.hooksPath`, `core.fsmonitor`, an alias) isn't on the line. */
+function setsGitSettings(rest: string[]): boolean {
+  let at = 0;
+  while (at < rest.length && rest[at].startsWith("-")) at += GIT_VALUED.test(rest[at]) ? 2 : 1;
+  const [sub, ...args] = rest.slice(at);
+  if (sub === "config") return gitConfigSets(args);
+  return (sub === "clone" || sub === "init" || sub === "submodule") && args.some(word => /^--(config|template)(=|$)/.test(word));
+}
+
+/** Whether `git config`'s words (past `config`) change a setting, rather than read one: in either
+ * syntax, past its options that take a value. */
+export function gitConfigSets(args: string[]): boolean {
+  const words: string[] = [];
+  let reads = false;
+  for (let at = 0; at < args.length; at++) {
+    const word = args[at];
+    if (word === "--") {
+      words.push(...args.slice(at + 1));
+      break;
+    }
+    if (GIT_CONFIG_VALUED.test(word)) at++;
+    else if (GIT_CONFIG_WRITES.test(word)) return true;
+    else if (GIT_CONFIG_READS.test(word)) reads = true;
+    else if (!word.startsWith("-")) words.push(word);
+  }
+  const [first] = words;
+  if (first === "get" || first === "list") return false;
+  if (["set", "unset", "rename-section", "remove-section", "edit"].includes(first)) return true;
+  // The older way: a key alone reads it, a key and a value set it.
+  return !reads && words.length > 1;
+}
 
 /** Why a bot can't allow a command even in the sandbox: it pushes, publishes, deploys, uploads or
  * reaches another computer, or runs code that can't be read (a shell's `-c`, `node -e`), or can't be
- * read plainly at all; or null. */
+ * read plainly at all; or null. Whatever it can't be sure of is the user's to answer. */
 export function outwardRefusal(line: string): string | null {
   const read = readLine(line, true);
   if ("unreadable" in read) return `${CANT} (${read.unreadable})`;
   for (const part of read.parts) {
-    let words = part.words;
-    while (words.length && (WRAPPERS.has(path.basename(words[0])) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]) || /^[-0-9]/.test(words[0]))) words = words.slice(1);
-    const [program, ...rest] = words;
-    if (!program) continue;
-    const name = path.basename(program);
-    if (OUTWARD[name]) return OUTWARD[name];
-    if (name === "eval") return "running a command it can't read";
-    if (SHELLS.has(name) && (rest.length === 0 || rest.some(word => /^-[a-zA-Z]*c/.test(word)))) return "running a command it can't read";
-    if (INLINE[name] && rest.some(word => INLINE[name].includes(word))) return "running code it can't read";
-    // A program or script named for releasing (`./deploy.sh`, `node scripts/release.js`).
-    if ([program, ...rest].some(word => !word.startsWith("-") && /(deploy|release|publish)/i.test(path.basename(word)) && (word === program || /\.[a-z]+$/i.test(word)))) return "releasing or deploying";
-    // Its subcommand: the first word that isn't an option (nor an option's value, for git's -C and -c).
-    const subs = rest.filter((word, at) => !word.startsWith("-") && !(name === "git" && ["-C", "-c"].includes(rest[at - 1] ?? "")));
-    const sub = subs[0];
-    if (name === "git" && sub === "push") return "pushing";
-    if (sub === "publish" || sub === "deploy" || (sub === "release" && name !== "git")) return sub === "publish" ? "publishing" : "releasing or deploying";
-    if (sub === "push" || sub === "upload") return "sending it beyond this computer";
-    if (name === "xcrun" && (sub === "altool" || sub === "notarytool")) return "sending to a store";
-    if (RUNS_SCRIPTS.has(name) && ["run", "run-script"].includes(sub ?? "") && /(deploy|release|publish|push|upload)/i.test(subs[1] ?? "")) return "releasing or deploying";
-    // (To this computer's own servers, as a test does, it may.)
-    if ((name === "curl" || name === "wget") && rest.some(word => SENDS.test(word))) {
-      const targets = rest.filter(word => /^[a-z][a-z0-9+.-]*:\/\//i.test(word) || LOCAL_URL.test(word) || /^[\w-]+(\.[\w-]+)+(:\d+)?(\/|$)/.test(word));
-      if (!targets.length || !targets.every(word => LOCAL_URL.test(word))) return "sending something beyond this computer";
+    if (part.writes.some(each => GIT_OWN.test(each))) return `${CANT} (it changes git's own settings)`;
+    const why = outwardWords(part.words);
+    if (why) return why;
+  }
+  return null;
+}
+
+// One command's words, as `outwardRefusal` reads them (and the command a runner or find runs, alike).
+function outwardWords(words: string[]): string | null {
+  for (;;) {
+    const first = words[0];
+    if (first === undefined) return null;
+    // git's settings, given before it, can name what it runs (an alias, an SSH command, a diff tool).
+    if (/^GIT_[A-Za-z0-9_]*=/.test(first)) return CANT;
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) {
+      words = words.slice(1);
+      continue;
     }
+    const wrapper = path.basename(first);
+    // (What xargs runs takes its words from elsewhere.)
+    if (wrapper === "xargs") return CANT;
+    if (!WRAPPERS.has(wrapper)) break;
+    words = words.slice(1);
+    for (; words.length && (words[0].startsWith("-") || /^[0-9]/.test(words[0])); words = words.slice(1)) {
+      if (words[0] === "--") continue;
+      if (!BARE[wrapper]?.test(words[0])) return CANT;
+    }
+  }
+  const [program, ...given] = words;
+  // (`git-config`, `/usr/lib/git-core/git-push`: git's own commands by their programs.)
+  const gitOwn = /^git-([a-z][a-z0-9-]*)$/.exec(path.basename(program));
+  const name = gitOwn ? "git" : path.basename(program);
+  const rest = gitOwn ? [gitOwn[1], ...given] : given;
+  if (OUTWARD[name]) return OUTWARD[name];
+  if (name === "eval") return "running a command it can't read";
+  if (SHELLS.has(name) && (rest.length === 0 || rest.some(word => /^-[a-zA-Z]*c/.test(word)))) return "running a command it can't read";
+  if (INLINE[name] && rest.some(word => INLINE[name].includes(word))) return "running code it can't read";
+  if (words.some(word => GIT_OWN.test(word))) return `${CANT} (it changes git's own settings)`;
+  // A program or script named for releasing (`./deploy.sh`, `node scripts/release.js`).
+  if ([program, ...rest].some(word => !word.startsWith("-") && /(deploy|release|publish)/i.test(path.basename(word)) && (word === program || /\.[a-z]+$/i.test(word)))) return "releasing or deploying";
+  // Building an image and sending it on (`docker buildx build --push`, `--output type=registry`).
+  if (rest.some(word => /^--push(=|$)/.test(word) || /(^|[=,])(type=registry|push=true)(,|$)/.test(word))) return "sending it beyond this computer";
+  // git's settings on its line can name what one of its commands runs.
+  if (name === "git" && rest.some(word => /^(-c|--config-env)/.test(word))) return CANT;
+  if (name === "git" && setsGitSettings(rest)) return `${CANT} (it changes git's own settings)`;
+  const subs = rest.filter(word => !word.startsWith("-"));
+  if (!QUIET.has(name)) {
+    // (`git stash push` keeps your changes aside, here.)
+    const sending = subs.find((word, at) => Object.hasOwn(SENDING, word) && !(name === "git" && subs[at - 1] === "stash"));
+    if (sending) return name === "git" ? "pushing" : SENDING[sending];
+  }
+  if (name === "git" && subs.includes("p4") && subs.includes("submit")) return "pushing";
+  if ((subs[0] === "release" && name !== "git") || (name === "xcrun" && subs.some(word => word === "altool" || word === "notarytool"))) return subs[0] === "release" ? "releasing or deploying" : "sending to a store";
+  // A project's script named for it (`npm run release`, `yarn --cwd app ship-release`).
+  if (RUNS_SCRIPTS.has(name) && subs.some(word => /(deploy|release|publish|push|upload)/i.test(word))) return "releasing or deploying";
+  // A package's program, run by a package runner: judged as that program; one given as a line of
+  // its own (`npm exec -c`) can't be read.
+  if (RUNNERS[name]) {
+    if (rest.some(word => /^(-c|--call)(=|$)/.test(word))) return "running a command it can't read";
+    const at = rest.findIndex(word => RUNNERS[name].includes(word));
+    if (at >= 0) {
+      let after = rest.slice(at + 1);
+      for (; after[0]?.startsWith("-"); after = after.slice(1)) if (!/^(-y|--yes|--)$/.test(after[0])) return CANT;
+      const why = outwardWords(after);
+      if (why) return why;
+    }
+  }
+  // What find runs on each thing it finds, up to its `;` or `+`.
+  if (name === "find") {
+    for (const [at, word] of rest.entries()) {
+      if (!FIND_RUNS.has(word)) continue;
+      const after = rest.slice(at + 1);
+      const end = after.findIndex(each => each === ";" || each === "+");
+      const why = outwardWords(end < 0 ? after : after.slice(0, end));
+      if (why) return why;
+    }
+  }
+  // (To this computer's own servers, as a test does, it may.)
+  if ((name === "curl" || name === "wget") && rest.some(word => SENDS.test(word))) {
+    const targets = rest.filter(word => /^[a-z][a-z0-9+.-]*:\/\//i.test(word) || LOCAL_URL.test(word) || /^[\w-]+(\.[\w-]+)+(:\d+)?(\/|$)/.test(word));
+    if (!targets.length || !targets.every(word => LOCAL_URL.test(word))) return "sending something beyond this computer";
   }
   return null;
 }

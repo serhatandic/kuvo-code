@@ -15,7 +15,7 @@ import path from "node:path";
 import { IS_MAC, RUN } from "../home";
 import { MOVED_FOR, movedAway } from "../moves/records";
 import { Frame, frame, relaySend } from "../relay/frames";
-import { macSign } from "../state";
+import { macSign, updateLink } from "../state";
 import type { LinkState } from "../state";
 
 /** A box a Mac names among its peers (PROTOCOL.md, "Documents": `peers`), as this box keeps it:
@@ -68,11 +68,59 @@ export const ADDRESS = /^[A-Za-z0-9_-]{22}$/;
 // The Macs that set this machine up (`setup`), whose documents and mail it takes.
 export const macsOf = (link: LinkState | null | undefined): string[] => [...new Set([...(Array.isArray(link?.macs) ? link.macs : []), ...(typeof link?.mac === "string" ? [link.mac] : [])])];
 
-// A Mac this machine hasn't heard from in 30 days, by its own clock (gone, or its key made anew):
-// it's no longer one of its Macs, and its documents no longer count. One back sets the machine up
-// again. `keep`, heard from now.
+// Only time this machine's box ran counts toward a Mac's 30 days: while it was off, no Mac could
+// reach it, so a machine back after five weeks off keeps the Mac that writes second. Its last
+// moment running is in run/online (a file of its own, so link.json isn't written each minute),
+// noted every few minutes and as a Mac is heard from; a longer gap since was time off, and each
+// Mac's last word moves on by it (back, by a clock set back, so the time between them stays).
+// Without a note yet (a bridge from before), its last word from a Mac stands for it.
+const ONLINE_FILE = path.join(RUN, "online");
+const AWAY_AFTER = 5 * 60_000;
+const notedOnline = (): number | undefined => {
+  try {
+    const at = Number(fs.readFileSync(ONLINE_FILE, "utf8"));
+    return Number.isFinite(at) && at > 0 ? at : undefined;
+  } catch {
+    return undefined;
+  }
+};
+const writeOnline = (now: number): void => {
+  try {
+    fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(`${ONLINE_FILE}.${process.pid}.tmp`, String(now), { mode: 0o600 });
+    fs.renameSync(`${ONLINE_FILE}.${process.pid}.tmp`, ONLINE_FILE);
+  } catch {}
+};
+// (Under link.json's lock: `forgetOldMacs` is, and `noteOnline` takes it.)
+function countAway(link: LinkState, now: number): void {
+  const seen = Object.values(link.macSeen ?? {});
+  const last = notedOnline() ?? (seen.length ? Math.max(...seen) : undefined);
+  const away = last === undefined ? 0 : now - last;
+  if (Math.abs(away) > AWAY_AFTER && link.macSeen) for (const mac of Object.keys(link.macSeen)) link.macSeen[mac]! += away;
+  writeOnline(now);
+}
+
+/** The box running (a machine's link, each minute): noted now and then, and where it was off
+ * since (or its clock moved), its Macs' last words moved on by that. */
+export function noteOnline(now = Date.now()): void {
+  const last = notedOnline();
+  if (last !== undefined && Math.abs(now - last) <= AWAY_AFTER) {
+    if (now - last >= AWAY_AFTER / 2) writeOnline(now);
+    return;
+  }
+  updateLink(link => {
+    if (!link || !macsOf(link).length) return void writeOnline(now);
+    countAway(link, now);
+    return link;
+  });
+}
+
+// A Mac this machine hasn't heard from in 30 days of its own time online (gone, or its key made
+// anew): it's no longer one of its Macs, and its documents no longer count. One back sets the
+// machine up again. `keep`, heard from now.
 const MAC_GONE_AFTER = 30 * 24 * 3600 * 1000;
 export function forgetOldMacs(link: LinkState, keep?: string, now = Date.now()): void {
+  countAway(link, now);
   link.macSeen ??= {};
   for (const mac of macsOf(link)) link.macSeen[mac] ??= now;
   if (keep) link.macSeen[keep] = now;

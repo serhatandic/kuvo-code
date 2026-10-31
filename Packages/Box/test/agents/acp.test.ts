@@ -3,9 +3,10 @@
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { AcpThread, acpTiming } from "../../src/agents/acp"
 import type { Agent } from "../../src/agents/agent"
 import { AntigravityAgent } from "../../src/agents/agents/antigravity"
@@ -165,9 +166,10 @@ process.stdin.on("data", (chunk) => {
   return path
 }
 
-/** The script as a program, run with what it's given (Grok's `grok`, Antigravity's server). */
+/** The script as a program, run with what it's given (Grok's `grok`, Antigravity's server). As Bun
+ * whatever runs the tests: on a machine that's its engine, Bun by `BUN_BE_BUN`, which the sandbox doesn't pass on. */
 function program(script: string, path: string): string {
-  writeFileSync(path, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`)
+  writeFileSync(path, `#!/bin/sh\nexport BUN_BE_BUN=1\nexec "${process.execPath}" "${script}" "$@"\n`)
   chmodSync(path, 0o755)
   return path
 }
@@ -736,6 +738,27 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
     expect(words(id)).toBe("elsewhere=noelsewhere=yes")
   })
 
+  test("in a session's worktree, a folder you let its project's commands write it writes from its next message, as the project's", async () => {
+    // The session's branch: a worktree of the project's repository.
+    const project = realpathSync(mkdtempSync(join(base, "project-")))
+    const git = (...args: string[]) => execFileSync("git", ["-C", project, ...args], { stdio: "ignore" })
+    git("init", "-q")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "first")
+    root = join(base, `branch-${basename(project)}`)
+    git("worktree", "add", "-q", root)
+    root = realpathSync(root)
+    const agent = trying({ elsewhere: ["write", join(elsewhere, "e.txt")] })
+    const id = await run(agent)
+    expect(words(id)).toBe("elsewhere=no")
+    // Also Allowed, as the box writes it for the project.
+    const allowed = join(kuvo, "run", "fence", "allowed", createHash("sha256").update(project).digest("hex").slice(0, 32))
+    mkdirSync(dirname(allowed), { recursive: true })
+    writeFileSync(allowed, elsewhere + "\n")
+    send(id, "again")
+    await settled(id, 2)
+    expect(words(id)).toBe("elsewhere=noelsewhere=yes")
+  })
+
   test("a link moved into its state inside a folder is taken away before it runs again, so your own Grok never writes through it", async () => {
     const moved = join(home, "sessions", "another")
     const agent = trying({ moved: ["move in", moved], there: ["linked", join(moved, "prompt_history.jsonl")] })
@@ -760,11 +783,14 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
     // The sandbox comes on, with Grok's process from before still running (it's kept for the next message).
     writeFileSync(join(fence, "on"), "set up again")
     noteAgentsInside(!sessions.outside())
-    expect(existsSync(join(fence, "agents"))).toBe(false)
+    // (The box asks you, once, to restart it, PROTOCOL.md "Sandbox".)
+    expect(JSON.parse(readFileSync(join(fence, "agents"), "utf8")).outside).toBe(true)
     // Done (its process closed): now every agent's process runs in it.
     sessions.closeAll()
     noteAgentsInside(!sessions.outside())
-    expect(JSON.parse(readFileSync(join(fence, "agents"), "utf8")).pid).toBe(process.pid)
+    const said = JSON.parse(readFileSync(join(fence, "agents"), "utf8"))
+    expect(said.pid).toBe(process.pid)
+    expect(said.outside).toBeUndefined()
   })
 
   test("with the sandbox off, it runs as before: its own program, its own sandbox as you set it", async () => {

@@ -420,7 +420,8 @@ test("a file's bytes stay hidden however a command prints them: whole, or wrappe
   const bytes = crypto.randomBytes(150);
   const added = await fromMac("POST", "kuvo/vault/items", { name: "Signing cert", kind: "file", fileName: "cert.der", values: { file: bytes.toString("base64") } }, key);
   await fromMac("POST", "kuvo/vault/grants", { item: added.value.item.id, who: { bot: "bot_ship" }, how: "own" }, key);
-  const ran = await tool("ses_ship", "vault_run", { command: 'node -e \'const b=require("fs").readFileSync(process.env.C).toString("base64");console.log(b);console.log(b.match(/.{1,76}/g).join("\\n"));console.log(b.match(/.{1,64}/g).join("\\n"))\'', variables: { C: "Signing cert" }, why: "x" });
+  // (This test's own runtime, by its path: a login shell's PATH may have no node.)
+  const ran = await tool("ses_ship", "vault_run", { command: `"${process.execPath}" -e 'const b=require("fs").readFileSync(process.env.C).toString("base64");console.log(b);console.log(b.match(/.{1,76}/g).join("\\n"));console.log(b.match(/.{1,64}/g).join("\\n"))'`, variables: { C: "Signing cert" }, why: "x" });
   const base64 = bytes.toString("base64");
   for (const width of [76, 64]) for (const line of base64.match(new RegExp(`.{1,${width}}`, "g")).filter(each => each.length >= 8)) assert.ok(!ran.value.text.includes(line), `a ${width}-wide line shows: ${ran.value.text}`);
   assert.ok(!ran.value.text.includes(base64));
@@ -594,7 +595,10 @@ const sshTool = (tool, args, socket) => new Promise(resolve => {
   child.on("close", status => resolve({ status, stdout, stderr }));
 });
 
-test("an SSH key you keep for a project signs through its conversations' own agent, as git over SSH uses it, and another project's agent doesn't offer it (on Linux, only a key you keep for everyone)", async () => {
+test("an SSH key you keep for a project signs through its conversations' own agent, as git over SSH uses it, and another project's agent doesn't offer it (on Linux, only a key you keep for everyone)", async t => {
+  // (A socket's path is at most 107 bytes on Linux: a machine's agents are in its own folder, which
+  // fits, but this test's may be too deep in its temporary folder.)
+  if (Buffer.byteLength(path.join(sshAgents, "x".repeat(33))) > (process.platform === "darwin" ? 103 : 107)) return t.skip("this test's folder is too deep for a socket's path: run it with a shorter TMPDIR");
   box = await start();
   let left = [];
   try {

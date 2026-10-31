@@ -417,6 +417,28 @@ import Testing
         #expect(model.review == nil)
     }
 
+    /// Picked from "/" (or typed) and sent with Return: the composer's Send hands over the
+    /// engine's commands as it lists them, and /review-quick still runs the engine's review rather
+    /// than going to the model as words.
+    @Test func reviewQuickSentFromTheComposerRunsTheEnginesReview() async throws {
+        defer { clean() }
+        serve(directory: "/tmp", answers: [])
+        engine.on("POST", "/api/session/\(id)/command", json: ["data": [:]])
+        engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
+        let model = try session()
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+        let engineCommands = try JSONDecoder().decode([Command].self, from: Data(#"[{"name": "review", "description": "Review changes"}]"#.utf8))
+
+        model.draftText = "/review-quick main"
+        model.submitDraft(for: nil, queue: false, commands: engineCommands)
+        try await until { !engine.requests("POST", "/api/session/\(id)/command").isEmpty || !engine.requests("POST", "/api/session/\(id)/prompt").isEmpty }
+        #expect(engine.requests("POST", "/api/session/\(id)/prompt").isEmpty, "not sent to the model as a message")
+        let ran = try #require(engine.requests("POST", "/api/session/\(id)/command").first)
+        #expect(ran.body["name"] as? String == "review")
+        #expect(ran.body["text"] as? String == "main")
+    }
+
     @Test func aHandoffCarriesTheWorkOnInANewConversation() async throws {
         defer { clean() }
         serve(directory: "/tmp", answers: ["## Handoff\nIt pauses on blur. Left: a test."])

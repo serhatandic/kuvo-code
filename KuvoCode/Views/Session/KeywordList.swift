@@ -26,6 +26,18 @@ enum SlashItem: Identifiable, Equatable {
         // `commands` are the project's less those a keyword hides (`Keyword.commands`).
         return words.map(SlashItem.keyword) + SlashCommands.matches(query, in: commands).map(SlashItem.command)
     }
+
+    /// Which of `items` is picked first for `query`: the one named exactly that (a project's
+    /// "/view", typed in full, over /review that only has it inside), else the first.
+    static func chosen(_ query: String, in items: [SlashItem]) -> Int {
+        let query = query.lowercased()
+        return items.firstIndex { item in
+            switch item {
+            case .keyword(let keyword): keyword.rawValue == query
+            case .command(let command): command.name.lowercased() == query
+            }
+        } ?? 0
+    }
 }
 
 /// The keywords and commands a "/" matches, above the message field: each keyword with its mark

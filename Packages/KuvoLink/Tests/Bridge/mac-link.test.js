@@ -253,6 +253,9 @@ test("a phone pairs with Settings › Phone's link, and the Mac's box answers it
   assert.equal((await it.request("GET", "kuvo/sign-in/return")).status, 405);
   assert.equal((await it.request("GET", "kuvo/accounts/credentials")).status, 503, "no engine here to list them");
   assert.equal((await it.request("POST", "kuvo/shell/sh_1/stop")).status, 503, "no engine here to stop it in");
+  // Search, and a project's Changes, as the app sends them here itself (PhoneLink's `boxRoutes`).
+  await it.request("GET", "kuvo/search?q=readme");
+  await it.request("GET", `kuvo/git/status?directory=${encodeURIComponent(support)}`);
   // And the engine's API and the coding agents', which it passes on itself (none run in this test).
   assert.equal((await it.request("GET", "api/session")).status, 503);
   assert.equal((await it.request("GET", "kuvo/agents/api/session")).status, 503);
@@ -273,6 +276,14 @@ test("a phone pairs with Settings › Phone's link, and the Mac's box answers it
   // The app follows its phones.
   const listed = await ask("GET", "kuvo/link/phones");
   assert.deepEqual(listed.json.phones.map(each => each.key), [it.public]);
+});
+
+test("every area the app sends to this Mac's box, the box answers a phone itself, not through the app (but the link's own routes, the app's alone)", () => {
+  const swift = fs.readFileSync(new URL("../../../../KuvoCode/Stores/PhoneLink.swift", import.meta.url), "utf8");
+  const listed = swift.match(/static let boxRoutes = \[([^\]]*)\]/)[1].match(/"[^"]+"/g).map(JSON.parse);
+  assert.ok(listed.length > 20);
+  assert.deepEqual(listed.filter(route => route !== "kuvo/link" && !link.macAnswers(`${route}/x`)), []);
+  assert.equal(link.macAnswers("kuvo/link/config"), false);
 });
 
 test("a phone asking for a pairing link leaves Settings › Phone's as it is: each lets in once", async () => {

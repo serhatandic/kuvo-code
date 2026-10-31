@@ -169,7 +169,7 @@ import Testing
     /// once the app stops answering.
     @Test func thisMacsBoxIsStartedAbleToSendWakeUpsAndReachYourKeychain() async throws {
         let app = AppModel()
-        let environment = await app.boxEnvironment(["PATH": "/usr/bin:/bin"])
+        let environment = await app.ownBox.boxEnvironment(["PATH": "/usr/bin:/bin"])
         defer { app.host.stop() }
         #expect(environment["PATH"] == "/usr/bin:/bin", "your shell's, as it was")
         #expect(environment["KUVO_WAKE_COMMAND"] == WakeUps.command.path)

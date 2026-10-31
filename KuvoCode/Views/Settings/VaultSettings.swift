@@ -401,14 +401,22 @@ struct VaultAskRow: View {
                 Button("Don’t Allow") { answer("no") }
                 switch asked.kind {
                 case .use:
-                    Button("Allow Once") { answer("once") }
-                    Button("Always Allow") { answer("always") }.buttonStyle(.borderedProminent)
+                    if asked.mayAllowAlways {
+                        Button("Allow Once") { answer("once") }
+                        Button("Always Allow") { answer("always") }.buttonStyle(.borderedProminent)
+                    } else {
+                        Button("Allow Once") { answer("once") }.buttonStyle(.borderedProminent)
+                    }
                 case .item:
                     Menu("Give…") {
                         ForEach(items) { item in
-                            Menu(item.name) {
-                                Button("This Once") { answer("once", item) }
-                                Button("From Now On") { answer("always", item) }
+                            if asked.mayAllowAlways {
+                                Menu(item.name) {
+                                    Button("This Once") { answer("once", item) }
+                                    Button("From Now On") { answer("always", item) }
+                                }
+                            } else {
+                                Button(item.name) { answer("once", item) }
                             }
                         }
                     }

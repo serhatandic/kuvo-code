@@ -27,6 +27,14 @@ import Testing
         #expect(older.on && older.reason == nil && older.action == nil)
     }
 
+    @Test func aBoxWithAgentsStartedBeforeItsSandboxAsksOnceToRestartThem() throws {
+        let asking = try JSONDecoder().decode(SandboxState.self, from: Data(#"{"on":true,"able":true,"agents":false,"restart":true}"#.utf8))
+        #expect(asking.restart == true)
+        // A box that doesn't ask, or one from before it could, shows no card.
+        let older = try JSONDecoder().decode(SandboxState.self, from: Data(#"{"on":true,"able":true,"agents":true}"#.utf8))
+        #expect(older.restart != true)
+    }
+
     @Test func anAskSaysWhatWasStoppedAndWhatAlwaysWouldKeep() throws {
         let asks = try JSONDecoder().decode(SandboxAsks.self, from: Data("""
         {"asks":[

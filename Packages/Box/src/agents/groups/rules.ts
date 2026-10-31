@@ -543,6 +543,17 @@ export function compose(task: GroupTask, chat: Group, wrapUp: GroupMessage, from
   )
 }
 
+/** A part as it's shown while it waits on the box (its bot's conversation stopped): from its chat, saying its part. */
+export function partShown(text: string): { from?: string; words?: string } {
+  if (!text.startsWith(opening)) return {}
+  const head = text.indexOf("]\n\n")
+  if (head < 0) return {}
+  const name = text.slice(opening.length, head).replace(/ · [^·]+$/, "")
+  const rest = text.slice(head + 3)
+  const end = rest.indexOf(divider)
+  return { from: name, words: (end < 0 ? rest : rest.slice(0, end)).trim() }
+}
+
 /**
  * A provider's refusal that means it isn't signed in (a request sent without its credentials, or
  * ones it turned down), in words saying what to do, for `provider`; any other error as it was said.
@@ -731,8 +742,9 @@ export interface Rule {
 
 /**
  * A seat's rules (BotGroups.seatRules): it talks and looks things up; it doesn't change anything,
- * and never waits for answers. No shell, subagents or messages to other agents either. With Ask
- * First on, no fetching pages; what Settings › Permissions denies (`denies`), it can't do either.
+ * and never waits for answers. No shell (nor a command outside the sandbox), subagents or messages
+ * to other agents either. With Ask First on, no fetching pages; what Settings › Permissions denies
+ * (`denies`), it can't do either.
  */
 export function seatRules(folder: string, askFirst: boolean, denies: Rule[]): Rule[] {
   const rules: Rule[] = [
@@ -751,6 +763,8 @@ export function seatRules(folder: string, askFirst: boolean, denies: Rule[]): Ru
     "kuvo-browser_watch_for_change",
     // A bot keeps its job in its own conversation, never from a chat.
     "kuvo-browser_set_job",
+    // Nor runs a command outside the sandbox: it runs none in it.
+    "kuvo-browser_sandbox_ask",
   ].map((action) => ({ action, resource: "*", effect: "deny" as const }))
   if (askFirst) rules.push({ action: "webfetch", resource: "*", effect: "deny" })
   rules.push({ action: "external_directory", resource: folder.replace(/\/+$/, "") + "/*", effect: "allow" })

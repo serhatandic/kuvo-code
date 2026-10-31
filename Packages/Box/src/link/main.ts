@@ -26,6 +26,7 @@ import { sleep } from "../shared/wait";
 import { joinPath, loginPath, saveLoginPath, savedLoginPath } from "../shared/platform";
 import { watchAsks } from "./areas/asks";
 import { watchWorkAsks } from "./work/asks";
+import { watchGoals } from "./work/goals";
 import { refreshBotsKeys } from "./areas/bot-keys";
 import { setBoxKey } from "./areas/box-keys";
 import { addMacDefaults, changeSettings, ownsSettings, readSettings } from "./areas/config";
@@ -44,7 +45,7 @@ import { docsNoted, noteDocsChanged, onDocsChanged } from "./documents/changed";
 import { docsChanged, macDocsChanged } from "./documents/exchange";
 import { newSigningSeed, ownSign, SIGN } from "./documents/format";
 import { docsWork, ownDocs, pruneDocs } from "./documents/work";
-import { peerPlaces, readBridgeFile, readEngineFile } from "./engine/client";
+import { peerPlaces, peerTargets, readBridgeFile, readEngineFile } from "./engine/client";
 import { engineConfigContent } from "./engine/compatibility";
 import { watchBox } from "./engine/watch";
 import { watchMoves } from "./moves/move";
@@ -65,7 +66,7 @@ import { setVaultTell } from "./vault/use";
 import { HELD_FILE, NoticeHold } from "./notices/hold";
 import { noticeJSON, pushTo } from "./notices/notice";
 import { announce, forgetMacsAgents, refreshOwn } from "./peers/agents";
-import { forgetOldMacs, KEY, leaveMac, macsOf, peersOf, takeLegacyPeers } from "./peers/known";
+import { forgetOldMacs, KEY, leaveMac, macsOf, noteOnline, peersOf, takeLegacyPeers } from "./peers/known";
 import { peerMail, receiveMail } from "./peers/mail";
 import { watchSeats } from "./peers/seats";
 import { changePersonalities, mergePersonalities, readPersonalities } from "./personalities/library";
@@ -102,6 +103,9 @@ export { forgetMovesInMemory, keepMoving, sendMovesWith, takeMoveMail, watchMove
 export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
 export { queueOf, queueWatcher, readQueues, scanQueues } from "./engine/queue";
 export { workWatcher } from "./work/wakes";
+export { lookAtGoals, periodOf, periodEnd } from "./work/goals";
+export { keptAwake, letGo } from "./work/awake";
+export { ALWAYS_ASK_RULES, PUBLISH_ASK_RULES, alwaysAsks, withAlwaysAsk } from "./work/always";
 export { macLink, readLink, updateLink, writeLink } from "./state";
 export { searchPlugins } from "./areas/plugins";
 export { listFolders, makeFolder } from "./areas/folders";
@@ -141,7 +145,7 @@ export { ASK_HOLD, LONGEST_LEASE, NEWS_HOLD, NoticeHold, RESTORED_WAIT, SHOWN_WI
 export { describeForm, describePermission, groupNotice, noticeFor, projectNameOf, settleHeld } from "./notices/news";
 export { STEER_AFTER, steering, watchBox, watchEvents } from "./engine/watch";
 export { answerBotKeys, refreshBotsKeys } from "./areas/bot-keys";
-export { forgetOldMacs, leaveMac, macsOf, mailFor, movedOf, openMail, peersOf, takeLegacyPeers } from "./peers/known";
+export { forgetOldMacs, leaveMac, macsOf, mailFor, movedOf, noteOnline, openMail, peersOf, takeLegacyPeers } from "./peers/known";
 export { noteDocsChanged } from "./documents/changed";
 export { authorizePhone, confirmPhone, foldPhones, newPairing, pairPhone, removeAsMac, removePhones } from "./phones";
 export { noLongerNeeded } from "./keeper";
@@ -315,6 +319,9 @@ async function run(): Promise<void> {
   watchSandboxAsks(tell, answered);
   // What its bots ask you before they do it (making a project): told the same way.
   watchWorkAsks(tell, { answered });
+  // Its bots' goals: carried on at limits' resets, what waits for you listed (and told quietly),
+  // digests and reports, and this computer kept awake while one is at work.
+  watchGoals(tell, peerTargets, { here: () => hold.inUse });
   // Your other computers: this box's agents told to them while the relay connection is up (and
   // listed here, relay or not), and its agents' letters sent; without the relay a while, those
   // not sent yet go to the Mac.
@@ -338,6 +345,8 @@ async function run(): Promise<void> {
   setInterval(() => {
     if (current?.welcomed) announce(current, readEngineFile).catch(() => {});
     else refreshOwn(readEngineFile).catch(() => {});
+    // Running: its Macs' 30 days go on, the relay there or not (time off doesn't count).
+    try { noteOnline(); } catch {}
   }, 60_000);
   setInterval(() => {
     if (current?.welcomed && docsNoted()) try { docsChanged(current, { tell: true }); } catch {}
@@ -427,7 +436,8 @@ async function box(command: string): Promise<void> {
       answerOnce();
       let given: { method?: unknown; path?: unknown; body?: unknown; bodyText?: unknown; headers?: unknown } | null = {};
       try { given = JSON.parse(await input()); } catch {}
-      const handle = engineHandler(readEngineFile, { name: os.hostname() });
+      // (The coding agents' bridge's sessions too: a wake-up held for one, say.)
+      const handle = engineHandler(readEngineFile, { name: os.hostname() }, readBridgeFile);
       // With the folder it's asked about (`x-opencode-directory`), as a phone's request has it.
       const folder = (given?.headers as Record<string, unknown> | undefined)?.["x-opencode-directory"];
       // And the Mac's proof for a request to this machine's vault (or its unlock key, to unlock it),
@@ -580,6 +590,9 @@ async function serve(): Promise<void> {
   // Its bots kept told what they are as their runs start, on the engine and with the coding agents;
   // on a Mac, its news for your phones too (while the phone link's on), and its sign-ins that ended.
   watchBox({ tell: macTell, hold: macLink.hold, bots: true, notices: IS_MAC });
+  // Its bots' goals: carried on at limits' resets, what waits for you listed (and told quietly to
+  // your phones), digests and reports, and this Mac kept awake while one is at work (on power).
+  if (IS_MAC) watchGoals(macTell, peerTargets, { here: () => macLink.hold?.inUse ?? false });
   // Its app gone (its stdin closed): so is it, once what its link has queued for the relay is out
   // (a notice sent as the app quit), a moment at most.
   const leave = async (): Promise<void> => {

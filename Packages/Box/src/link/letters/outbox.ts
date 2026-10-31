@@ -8,7 +8,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { plainName, prefixBytes } from "../../shared/text";
-import { asked, peerTargets, readEngineFile } from "../engine/client";
+import { asked, peerPlaces, peerTargets, readEngineFile } from "../engine/client";
+import { sendInto } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { listOf, writePrivate } from "../files";
 import { IS_MAC, RUN } from "../home";
@@ -227,9 +228,10 @@ export function answered(sender: { key: string; name?: string }, { answers: id, 
 // Answers a tool here was given but never took (its turn stopped as one came): to the conversation
 // that asked, as a message, once the tool's gone (it left `<id>.gaveup`, or stopped noting it
 // waits), if it still takes letters (not a subagent's, a group chat's seat, nor one put away). Each
-// once at most: taken out of the tool's way first, put back to try again if it can't go now; one
+// once at most: taken out of the tool's way first, put back to try again if it can't go now (or, a
+// day at most, while the coding agents' bridge whose conversation it may be isn't running); one
 // cut off as it's delivered (this bridge stopped) stays `.delivering`, and is dropped.
-export async function deliverLeftAnswers(now = Date.now(), targets: Target[] = peerTargets()): Promise<void> {
+export async function deliverLeftAnswers(now = Date.now(), targets: Target[] = peerTargets(), bridgeRuns = peerPlaces().bridge): Promise<void> {
   for (const name of listOf(REPLIES)) {
     if (!name.endsWith(".json")) continue;
     const id = name.slice(0, -5);
@@ -250,10 +252,11 @@ export async function deliverLeftAnswers(now = Date.now(), targets: Target[] = p
     try { fs.renameSync(file, taken); } catch { continue; }
     try {
       const place = await placeOfSession(answer.to, targets);
+      if (place === null && !bridgeRuns && now - fs.statSync(taken).mtimeMs <= LETTER_LIFE) throw new Error("Its coding agents aren't running here now.");
       const kuvo = place?.data?.metadata?.kuvo ?? {};
       if (place && !place.data?.parentID && !kuvo.seat && !isPutAway(place.data as PutAwayable)) {
-        await asked(place.target, "POST", `api/session/${encodeURIComponent(answer.to)}/prompt`,
-          { id: messageID(), text: composeLetter(String(answer.name ?? "another agent"), String(answer.from ?? "unknown"), answer.text, false), delivery: "steer" });
+        const name = String(answer.name ?? "another agent");
+        await sendInto(place.target, answer.to, { id: messageID(), text: composeLetter(name, String(answer.from ?? "unknown"), answer.text, false), delivery: "steer" }, { from: name, words: answer.text });
       }
       fs.rmSync(taken, { force: true });
       fs.rmSync(path.join(REPLIES, `${id}.gaveup`), { force: true });

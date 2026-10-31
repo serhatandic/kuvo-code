@@ -759,6 +759,23 @@ public enum Wakes {
         [ "$bots" != "$botsroot" ] && command -v curl >/dev/null 2>&1 || return 1
         printf 'user = "opencode:%s"\n' "$password" | curl -q -sf -m 5 --noproxy '*' -K - "http://127.0.0.1:$port/api/session/$session" 2>/dev/null | grep -qE "$archived"
       }
+      # A conversation you stopped, its queue paused on the box (`run/queues.json`, beside the
+      # engine's record): its wake-ups wait there, in the list you resume, as what else arrives
+      # does (`hold`); its watches wait until you resume it.
+      stopped() { grep -qF "\"$session\":{\"paused\":true" "${record%/*}/queues.json" 2>/dev/null; }
+      # A wake-up handed to the box to wait with the conversation's queue, through its own command
+      # (`box route`, which the box that runs this names: `KUVO_LINK_*`); true once it's taken.
+      # Sent, rather, if the conversation went on meanwhile.
+      hold() {
+        [ -n "${KUVO_LINK_SCRIPT-}" ] && [ -n "${KUVO_LINK_RUNTIME-}" ] || return 1
+        h_ms=$(date +%s%3N 2>/dev/null); case "$h_ms" in *[!0-9]*|'') h_ms=$((now * 1000));; esac
+        h_id=msg_$(printf '%012x' $(((h_ms * 4096 + 1) & 0xFFFFFFFFFFFF)))$(random 14)
+        h_asked="{\"method\":\"POST\",\"path\":\"kuvo/sessions/$session/queue/add\",\"body\":{\"id\":\"$h_id\",\"text\":\"$(json "[Wake-up] $1")\",\"delivery\":\"queue\",\"from\":\"Wake-up\",\"words\":\"$(json "$1")\",\"kept\":true}}"
+        # shellcheck disable=SC2086
+        printf '%s' "$h_asked" | KUVO_HOME="${record%/*/*}" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$KUVO_LINK_RUNTIME" ${KUVO_LINK_FLAGS-} "$KUVO_LINK_SCRIPT" box route 2>/dev/null | grep -qF '"status":200'
+      }
+      # Whether this wake-up waits on the box already (one that repeats, kept from last time).
+      held() { grep -qF "\"from\":\"Wake-up\",\"text\":\"$(json "$1")\"" "${record%/*}/queues.json" 2>/dev/null; }
       # A session's folder (not a bot's, in $botsroot) as its engine knows the
       # session now: one that's gone goes to the trash, rather than its wake-ups being tried for
       # ever; a subagent's goes to the conversation that started it (its bot's folder, if it's a
@@ -899,6 +916,9 @@ public enum Wakes {
         [ -n "$session" ] || continue
         reach || continue
         settle || continue
+        # Stopped: its wake-ups wait on the box (`hold`), or here, where the box can't take them.
+        paused=
+        if stopped; then [ -n "${KUVO_LINK_SCRIPT-}" ] || continue; paused=1; fi
         failed=
         for wake in "$bot"wakes/*; do
           stop
@@ -912,7 +932,12 @@ public enum Wakes {
           # before it kept those, the ones it was due at); others are done.
           # One that repeats and still waits from last time (the bot busy, or waiting on you) isn't
           # queued again: it just comes back at its next time.
-          if { [ -n "$every" ] && waiting "$(cat "$wake")"; } || deliver "$(cat "$wake")"; then
+          if [ -n "$paused" ]; then
+            { [ -n "$every" ] && { waiting "$(cat "$wake")" || held "$(cat "$wake")"; }; } || hold "$(cat "$wake")"
+          else
+            { [ -n "$every" ] && waiting "$(cat "$wake")"; } || deliver "$(cat "$wake")"
+          fi
+          if [ $? -eq 0 ]; then
             if [ -n "$every" ] && repeats "${every%@*}"; then
               tz=$(zone "$bot")
               again=$( [ -n "$tz" ] && export TZ="$tz"
@@ -954,6 +979,7 @@ public enum Wakes {
         [ -n "$session" ] || continue
         reach || continue
         archivedNow && continue
+        stopped && continue
         tz=$(zone "$bot")
         for letters in $( ( [ -n "$tz" ] && export TZ="$tz"; checks "${bot%/}" ) | sed -n 's/^KUVO-WATCH //p'); do
           w="${bot}watches/$letters"

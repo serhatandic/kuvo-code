@@ -146,6 +146,79 @@ struct SandboxAskCard: View {
     }
 }
 
+/// The box's one ask, the first time its sandbox is on, to restart the agents that started before
+/// it and still run outside it (`Sandboxes.asksToRestart`): a plain card in each of that computer's
+/// conversations, until it's answered here or on another device. Restart Agents, or Not Now.
+struct SandboxRestartCard: View {
+    let box: String
+    /// The answer on its way, for the spinner's words.
+    @State private var sent: Bool?
+
+    var body: some View {
+        if Sandboxes.shared.asksToRestart(on: box) {
+            card.modifier(ComposerSurface())
+        }
+    }
+
+    private var answering: Bool { Sandboxes.shared.answeringRestart(on: box) }
+
+    private var card: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.title3)
+                    .foregroundStyle(.tint)
+                    .frame(width: 24)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(SandboxRestart.title)
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                    Text(SandboxRestart.detail)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // Why the answer didn't go through: the card stays, to try again.
+            if let trouble = Sandboxes.shared.restartFailures[box] {
+                Text(trouble)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+            }
+
+            HStack(spacing: 8) {
+                Button(SandboxRestart.notNow, role: .cancel) { answer(false) }
+                    .help("They finish as they are, outside the sandbox")
+                Spacer()
+                if answering {
+                    Spinner()
+                        .accessibilityLabel(sent == false ? "Leaving the agents as they are" : "Restarting the agents")
+                }
+                Button(SandboxRestart.restart) { answer(true) }
+                    .buttonStyle(.glassProminent)
+                    .help("Each restarts in the sandbox once it finishes what it’s doing")
+            }
+            .buttonStyle(.glass)
+            .controlSize(.large)
+            .disabled(answering)
+        }
+        .padding(16)
+    }
+
+    private func answer(_ restart: Bool) {
+        sent = restart
+        Task {
+            do {
+                try await Sandboxes.shared.answerRestart(restart, on: box)
+            } catch {
+                if let trouble = Sandboxes.shared.restartFailures[box] { AccessibilityNotification.Announcement(trouble).post() }
+            }
+        }
+    }
+}
+
 /// One thing the sandbox stopped: its tag ("Write", "Error") and where, or in words.
 private struct StoppedRow: View {
     let tag: String
