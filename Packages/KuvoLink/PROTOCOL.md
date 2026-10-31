@@ -554,7 +554,7 @@ the same for every client and with none connected, and keeps them in `run/queues
   wins over the look at it. The box's `stop` pauses it whether anything waits or not (a bot's
   `stop_session` on its own work only when something does, as a failed run); once paused, it stays
   so until Resume, Send Now or a message of yours to go now, though nothing is left waiting.
-- **What arrives waits** (bridge 0.9.127, `queue.waits`): the engine would run everything waiting
+- **What arrives waits** (bridge 0.9.128, `queue.waits`): the engine would run everything waiting
   with the first thing to reach a stopped conversation, so while its queue is paused, what the box
   sends it on its own waits on the box instead: another agent's letter (from here or another
   computer; a sender waiting for the answer hears the conversation is stopped, and the answer comes
@@ -2166,7 +2166,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
-| `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.127) |
+| `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
 | `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |
 | `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
 | `search` | `kuvo/search` |
