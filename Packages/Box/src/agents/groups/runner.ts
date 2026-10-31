@@ -119,8 +119,8 @@ interface Live {
   resumed?: boolean
   /** Stops the lead's list of who does what: a message of yours is newer than the go-ahead it reads. */
   splitStop?: () => void
-  /** Its parts waiting on their bots' conversations, stopped by you: by part, its bot. */
-  stopped?: Map<string, string>
+  /** Its parts waiting on their bots' conversations, stopped by you: by part, its bot and wrap-up. */
+  stopped?: Map<string, { bot: string; wrapUp: string }>
 }
 
 type Outcome = "said" | "passed" | "absent"
@@ -257,7 +257,8 @@ export class GroupRunner {
 
   talk(id: string): TalkState {
     const live = this.state(id)
-    const stopped = [...new Set(live.stopped?.values() ?? [])]
+    // (Only parts still under way: one taken back meanwhile, say, by Undo, doesn't wait on anything.)
+    const stopped = [...new Set([...(live.stopped ?? [])].filter(([task, { wrapUp }]) => this.taskState(task, wrapUp, id)?.state === "working").map(([, { bot }]) => bot))]
     return {
       speaking: live.speaking ?? live.splitting,
       discussing: live.abort !== undefined,
@@ -1186,16 +1187,16 @@ export class GroupRunner {
     if (!task || task.state !== "working") return
     if (!task.prompt || !this.bot(task.bot)) return this.fail(taskID, wrapUpID, id, "the bot is gone")
     const result = await this.seats
-      .follow(task.bot, task.prompt, task.started, () => this.taskState(taskID, wrapUpID, id)?.state === "working", (stopped) => this.waitsOnStopped(taskID, id, task.bot, stopped))
-      .finally(() => this.waitsOnStopped(taskID, id, task.bot, false))
+      .follow(task.bot, task.prompt, task.started, () => this.taskState(taskID, wrapUpID, id)?.state === "working", (stopped) => this.waitsOnStopped(taskID, wrapUpID, id, task.bot, stopped))
+      .finally(() => this.waitsOnStopped(taskID, wrapUpID, id, task.bot, false))
     if (result) this.finish(taskID, wrapUpID, id, task.bot, result)
   }
 
   /** Whether a part waits on its bot's conversation, stopped by you: told to whoever follows the chat. */
-  private waitsOnStopped(taskID: string, id: string, botID: string, stopped: boolean) {
+  private waitsOnStopped(taskID: string, wrapUpID: string, id: string, botID: string, stopped: boolean) {
     const live = this.state(id)
     if (stopped === (live.stopped?.has(taskID) ?? false)) return
-    if (stopped) (live.stopped ??= new Map()).set(taskID, botID)
+    if (stopped) (live.stopped ??= new Map()).set(taskID, { bot: botID, wrapUp: wrapUpID })
     else live.stopped?.delete(taskID)
     this.told(id)
   }
@@ -1213,7 +1214,7 @@ export class GroupRunner {
       if (late) return this.changeTask(taskID, wrapUpID, id, (part) => delete part.lost)
       return this.fail(taskID, wrapUpID, id, result.why)
     }
-    this.waitsOnStopped(taskID, id, botID, false)
+    this.waitsOnStopped(taskID, wrapUpID, id, botID, false)
     this.changeTask(taskID, wrapUpID, id, (part) => {
       part.state = "done"
       part.finished = stamp()
@@ -1229,7 +1230,7 @@ export class GroupRunner {
   held(from: string, part: { task: string; wrapUp: string; chat: string; stopped: boolean }) {
     const task = this.taskState(part.task, part.wrapUp, part.chat)
     if (!task || task.prompt !== `peer:${from}`) return
-    this.waitsOnStopped(part.task, part.chat, task.bot, part.stopped === true && task.state === "working")
+    this.waitsOnStopped(part.task, part.wrapUp, part.chat, task.bot, part.stopped === true && task.state === "working")
   }
 
   /** What another computer says of a part its bot did (`from`: only the computer the part was given to, where the bot lived then). */
@@ -1272,7 +1273,7 @@ export class GroupRunner {
 
   /** `thenOthers`: parts that waited on it fail too. `lost`: as its letter was given up, so its report is still taken. */
   private fail(taskID: string, wrapUpID: string, id: string, why: string, thenOthers = true, lost = false) {
-    this.waitsOnStopped(taskID, id, "", false)
+    this.waitsOnStopped(taskID, wrapUpID, id, "", false)
     this.changeTask(taskID, wrapUpID, id, (part) => {
       part.state = "failed"
       part.finished = stamp()

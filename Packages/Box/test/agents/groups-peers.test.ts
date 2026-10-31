@@ -594,6 +594,30 @@ describe("a group chat with a bot on another of your computers", () => {
     expect(host.runner.talk(id).stopped).toBeUndefined()
   }, 20_000)
 
+  test("its part waiting on its conversation there, stopped by you, the word lost on the way: said again, so the chat still says so", async () => {
+    mkdirSync(join(home.root, "run"), { recursive: true })
+    writeFileSync(home.queues.file, JSON.stringify({ ses_own_Ben: { paused: true, held: [] } }))
+    host.engine.lines = { Ada: ["We'll split it.", "&Ben: fix the build\nGO"] }
+    relay.loses = [(each) => each.mail.kind === "held" && each.mail.stopped === true]
+    host.runner.put(team(), [], "active", false)
+    host.runner.send(id, "Split it and go ahead.")
+    await until(() => host.runner.talk(id).stopped !== undefined)
+    expect(relay.lost.map((each) => each.mail.kind)).toEqual(["held"])
+    expect(host.runner.talk(id).stopped).toEqual(["bot_ben"])
+  }, 20_000)
+
+  test("its part waiting on its conversation there, stopped by you, then taken back with Undo: the chat doesn't say it waits any more", async () => {
+    mkdirSync(join(home.root, "run"), { recursive: true })
+    writeFileSync(home.queues.file, JSON.stringify({ ses_own_Ben: { paused: true, held: [] } }))
+    host.engine.lines = { Ada: ["We'll split it.", "&Ben: fix the build\nGO"] }
+    host.runner.put(team(), [], "active", false)
+    host.runner.send(id, "Split it and go ahead.")
+    await until(() => host.runner.talk(id).stopped !== undefined)
+    const yours = said(host).find((message) => message.author === undefined && message.kind === "message")!
+    expect(host.runner.undo(id, yours.id)).toBe("Split it and go ahead.")
+    expect(host.runner.talk(id).stopped).toBeUndefined()
+  }, 20_000)
+
   test("a part given to its bot's computer before the bot moved, and before the chat's computer started again: given there again, and its report taken from there", async () => {
     home.engine.reports = { Ben: "Build fixed." }
     // Ben lives on spare now, as the chat's computer has heard; the part went to lokum.

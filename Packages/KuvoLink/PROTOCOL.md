@@ -344,10 +344,12 @@ connection.
     while it talks, and for Stop, Undo or a move. The home steers only once the turn's words are
     with its seat (`started`: the seat checked as the bot's, or made for it); one that comes before
     waits until then.
-  - **`held`** `{task, wrapUp, chat, stopped}` (home → host, as it changes, not kept to send
-    again): whether a part waits on its bot's conversation there, stopped by you (its queue
-    paused). The host takes it only from the box the part was given to, and says it in the chat's
-    `stopped` until the part ends. A host older than this turns it down, and shows the part working.
+  - **`held`** `{task, wrapUp, chat, stopped}` (home → host, sent now and lost when the host is
+    away): whether a part waits on its bot's conversation there, its queue paused (stopped by you,
+    or held after a run that failed). Said as it changes, then again each minute while it waits
+    (and once after), and again when the host gives the part again. The host takes it only from
+    the box the part was given to, and says it in the chat's `stopped` while the part is `working`.
+    A host older than this turns it down, and shows the part working.
   - Not to be lost (sent as letters are, the first time as the bridge hands it over, then each
     minute until `delivered`, for two days of the link online; never through a Mac): **`drop`** `{seat, agents, bot, chat}` (host
     → home: `bot`'s seat in `chat` gone, deleted only when its metadata says it's that),
@@ -1888,8 +1890,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `task`, `state` (`proposed`, `waiting`, `working`, `done` or `failed`), `started`/`finished`,
   and `after` (the bots whose parts come first; it waits for them);
   `…/start` (`{"message"}`, the wrap-up) hands each proposed part to its bot's own conversation.
-  One chat's `stopped` lists the bots whose `working` part waits on their own conversation,
-  stopped by you (left out for none): show "Waiting: Ada's conversation is stopped" on the part,
+  One chat's `stopped` lists the bots whose `working` part waits on their own conversation, its
+  queue paused (stopped by you, or held after a run that failed; left out for none): show "Waiting: Ada's conversation is stopped" on the part,
   with Resume, which resumes that conversation on the bot's computer (`POST
   kuvo/sessions/<its session>/queue/resume`), and the part goes on.
   While a bot talks, one chat's events carry `activity`, what it's doing, its last step:

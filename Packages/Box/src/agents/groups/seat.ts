@@ -535,11 +535,14 @@ export class Seats implements SeatHome {
    * it takes, waiting on you meanwhile if it asks something; then what it said, its report.
    * Undefined once it's no longer `wanted` (reported meanwhile, or stopped, from elsewhere).
    * `held` hears whether its conversation is stopped by you, as that changes: the part waits on it.
+   * Once it's been stopped, it hears it again each minute or so (until it's said it goes on, twice):
+   * whoever it tells may have missed it (another computer away, or started again meanwhile).
    */
   async follow(botID: string, promptID: string, started: string | undefined, wanted: () => boolean, held?: (stopped: boolean) => void): Promise<SeatResult | undefined> {
     let misses = 0
     let stoppedChecks = 0
     let wasStopped = false
+    let sinceSaid = 0
     for (;;) {
       await sleep(3000 * (this.context.pace ?? 1))
       if (!wanted()) return undefined
@@ -547,7 +550,13 @@ export class Seats implements SeatHome {
       if (!bot) return { ok: false, why: "the bot is gone" }
       const queues = this.context.queues
       const stopped = queues !== undefined && readQueues(queues)[bot.sessionID]?.paused === true
-      if (stopped !== wasStopped) held?.((wasStopped = stopped))
+      if (stopped !== wasStopped) {
+        held?.((wasStopped = stopped))
+        sinceSaid = 1
+      } else if (sinceSaid > 0 && ++sinceSaid > 20) {
+        held?.(stopped)
+        sinceSaid = stopped ? 1 : 0
+      }
       const api = this.ownAPI(bot)
       if (!api) continue
       const active = await api.active().catch(() => undefined)

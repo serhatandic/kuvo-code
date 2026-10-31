@@ -18956,6 +18956,7 @@ class Seats {
     let misses = 0;
     let stoppedChecks = 0;
     let wasStopped = false;
+    let sinceSaid = 0;
     for (;; ) {
       await sleep2(3000 * (this.context.pace ?? 1));
       if (!wanted())
@@ -18965,8 +18966,13 @@ class Seats {
         return { ok: false, why: "the bot is gone" };
       const queues = this.context.queues;
       const stopped = queues !== undefined && readQueues(queues)[bot.sessionID]?.paused === true;
-      if (stopped !== wasStopped)
+      if (stopped !== wasStopped) {
         held?.(wasStopped = stopped);
+        sinceSaid = 1;
+      } else if (sinceSaid > 0 && ++sinceSaid > 20) {
+        held?.(stopped);
+        sinceSaid = stopped ? 1 : 0;
+      }
       const api = this.ownAPI(bot);
       if (!api)
         continue;
@@ -19321,7 +19327,7 @@ class GroupRunner {
   }
   talk(id) {
     const live = this.state(id);
-    const stopped = [...new Set(live.stopped?.values() ?? [])];
+    const stopped = [...new Set([...live.stopped ?? []].filter(([task, { wrapUp }]) => this.taskState(task, wrapUp, id)?.state === "working").map(([, { bot }]) => bot))];
     return {
       speaking: live.speaking ?? live.splitting,
       discussing: live.abort !== undefined,
@@ -20182,16 +20188,16 @@ class GroupRunner {
       return;
     if (!task.prompt || !this.bot(task.bot))
       return this.fail(taskID, wrapUpID, id, "the bot is gone");
-    const result = await this.seats.follow(task.bot, task.prompt, task.started, () => this.taskState(taskID, wrapUpID, id)?.state === "working", (stopped) => this.waitsOnStopped(taskID, id, task.bot, stopped)).finally(() => this.waitsOnStopped(taskID, id, task.bot, false));
+    const result = await this.seats.follow(task.bot, task.prompt, task.started, () => this.taskState(taskID, wrapUpID, id)?.state === "working", (stopped) => this.waitsOnStopped(taskID, wrapUpID, id, task.bot, stopped)).finally(() => this.waitsOnStopped(taskID, wrapUpID, id, task.bot, false));
     if (result)
       this.finish(taskID, wrapUpID, id, task.bot, result);
   }
-  waitsOnStopped(taskID, id, botID, stopped) {
+  waitsOnStopped(taskID, wrapUpID, id, botID, stopped) {
     const live = this.state(id);
     if (stopped === (live.stopped?.has(taskID) ?? false))
       return;
     if (stopped)
-      (live.stopped ??= new Map).set(taskID, botID);
+      (live.stopped ??= new Map).set(taskID, { bot: botID, wrapUp: wrapUpID });
     else
       live.stopped?.delete(taskID);
     this.told(id);
@@ -20206,7 +20212,7 @@ class GroupRunner {
         return this.changeTask(taskID, wrapUpID, id, (part) => delete part.lost);
       return this.fail(taskID, wrapUpID, id, result.why);
     }
-    this.waitsOnStopped(taskID, id, botID, false);
+    this.waitsOnStopped(taskID, wrapUpID, id, botID, false);
     this.changeTask(taskID, wrapUpID, id, (part) => {
       part.state = "done";
       part.finished = stamp3();
@@ -20222,7 +20228,7 @@ class GroupRunner {
     const task = this.taskState(part.task, part.wrapUp, part.chat);
     if (!task || task.prompt !== `peer:${from}`)
       return;
-    this.waitsOnStopped(part.task, part.chat, task.bot, part.stopped === true && task.state === "working");
+    this.waitsOnStopped(part.task, part.wrapUp, part.chat, task.bot, part.stopped === true && task.state === "working");
   }
   reported(from, report) {
     const task = this.taskState(report.task, report.wrapUp, report.chat);
@@ -20253,7 +20259,7 @@ class GroupRunner {
       peers.home(to).remember({ chat: memory.chat, bot: memory.bot, at: this.memoryTime(), forget: true });
   }
   fail(taskID, wrapUpID, id, why, thenOthers = true, lost = false) {
-    this.waitsOnStopped(taskID, id, "", false);
+    this.waitsOnStopped(taskID, wrapUpID, id, "", false);
     this.changeTask(taskID, wrapUpID, id, (part) => {
       part.state = "failed";
       part.finished = stamp3();
@@ -20793,6 +20799,7 @@ class SeatServer {
   clock;
   turns = new Map;
   following = new Set;
+  stopped = new Set;
   anew = new Map;
   constructor(seats, transport, context, clock = realClock) {
     this.seats = seats;
@@ -20835,6 +20842,8 @@ class SeatServer {
     if (known) {
       if (known.done && known.result && known.host === host)
         this.tell(given.task, known, known.result);
+      else if (!known.done && known.host === host && this.stopped.has(given.task))
+        this.sayHeld(given.task, known, true);
       return;
     }
     const work = { host, chat: given.chat, wrapUp: given.wrapUp, bot: given.bot, started: given.started };
@@ -20859,10 +20868,20 @@ class SeatServer {
     this.seats.follow(work.bot, work.prompt, work.started, () => {
       const now = this.context?.store.peerWork()[task];
       return Boolean(now && !now.done);
-    }, (stopped) => this.transport.send(work.host, { kind: "held", task, wrapUp: work.wrapUp, chat: work.chat, stopped }, false)).then((result) => {
+    }, (stopped) => this.sayHeld(task, work, stopped)).then((result) => {
       if (result)
         this.report(task, work, result);
-    }).finally(() => this.following.delete(task));
+    }).finally(() => {
+      this.following.delete(task);
+      this.stopped.delete(task);
+    });
+  }
+  sayHeld(task, work, stopped) {
+    if (stopped)
+      this.stopped.add(task);
+    else
+      this.stopped.delete(task);
+    this.transport.send(work.host, { kind: "held", task, wrapUp: work.wrapUp, chat: work.chat, stopped }, false);
   }
   report(task, work, result) {
     const fitted = fitReport(result);
@@ -22152,4 +22171,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents ca0a8f0f4f652e157323c12784d803be91d6c994532041c67c6a2c198158154e
+// Built from Packages/Box/src/agents 782381cec39ff86d1e000452e3398e0071f14efa4438625c3fb8ec1778df19f2

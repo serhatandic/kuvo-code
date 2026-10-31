@@ -350,6 +350,8 @@ export class SeatServer {
   private turns = new Map<string, Running>()
   /** Parts being followed now, so none is followed twice. */
   private following = new Set<string>()
+  /** Of those, the parts waiting on their bots' conversations here, stopped by you, as last said. */
+  private stopped = new Set<string>()
   /** Turns whose seat went while this restarted, asked again with the whole chat (`anew`): by whom, when, and how often since without it. */
   private anew = new Map<string, { host: string; at: number; without: number }>()
 
@@ -397,6 +399,8 @@ export class SeatServer {
     const known = store.peerWork()[given.task]
     if (known) {
       if (known.done && known.result && known.host === host) this.tell(given.task, known, known.result)
+      // Still waiting on its conversation here, stopped by you: said again now, to a chat's computer started again.
+      else if (!known.done && known.host === host && this.stopped.has(given.task)) this.sayHeld(given.task, known, true)
       return
     }
     const work = { host, chat: given.chat, wrapUp: given.wrapUp, bot: given.bot, started: given.started }
@@ -425,12 +429,22 @@ export class SeatServer {
           const now = this.context?.store.peerWork()[task]
           return Boolean(now && !now.done)
         },
-        (stopped) => this.transport.send(work.host, { kind: "held", task, wrapUp: work.wrapUp, chat: work.chat, stopped }, false),
+        (stopped) => this.sayHeld(task, work, stopped),
       )
       .then((result) => {
         if (result) this.report(task, work, result)
       })
-      .finally(() => this.following.delete(task))
+      .finally(() => {
+        this.following.delete(task)
+        this.stopped.delete(task)
+      })
+  }
+
+  /** Whether a part waits on its bot's conversation here, stopped by you, to the chat's computer (said now, lost when it's away). */
+  private sayHeld(task: string, work: PeerWork, stopped: boolean) {
+    if (stopped) this.stopped.add(task)
+    else this.stopped.delete(task)
+    this.transport.send(work.host, { kind: "held", task, wrapUp: work.wrapUp, chat: work.chat, stopped }, false)
   }
 
   /** How a part went, noted here as done with it (to tell it again), and to the chat's computer (never lost on the way). */
