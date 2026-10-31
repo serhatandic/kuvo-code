@@ -53,8 +53,8 @@ public struct MessageBlock: Sendable {
 /// What a keyword sends as your message (/plan's words, /loop's when it sends now): its words,
 /// then a block with the keyword as you typed it, so the agent knows how it came, and your bubble
 /// draws the keyword as a token in front of them, as the composer did, wherever the conversation
-/// is read. Taken back (Undo, a draft, the history), it's the words alone: sent again, they don't
-/// set another loop.
+/// is read. Taken back (Undo, Edit, a branch, the history), it's the words alone, so sent again
+/// they don't set another loop; a goal's come back with /goal (`draft`).
 public enum SentWithKeyword {
     public static let heading = "The user sent this with a Kuvo Code keyword, which Kuvo Code has already done (switched to Plan, or set the message to repeat), so there's nothing for you to do about it:"
     /// /goal in a bot's chat, as every box sends it (`askGoal` in the box's work/goals.ts, in these
@@ -70,6 +70,14 @@ public enum SentWithKeyword {
         let typed = typed.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
             .replacingOccurrences(of: "&", with: "＆")
         return [text, "", block.start, heading, typed, block.end].joined(separator: "\n")
+    }
+
+    /// What goes back in the composer for words sent with `keyword` (Undo, Edit, a branch, ↑): a
+    /// goal as one, "/goal" and its words, as sending it again asks for the goal again; another
+    /// keyword's words alone, as sending those again shouldn't switch to Plan or set another loop.
+    public static func draft(_ words: String, keyword: String?) -> String {
+        guard keyword == "/goal" else { return words }
+        return words.isEmpty ? "/goal " : "/goal " + words
     }
 
     /// A message's words without the block, and the keyword it was sent with as typed ("/loop

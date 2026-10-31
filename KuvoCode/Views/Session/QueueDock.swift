@@ -1,5 +1,6 @@
 import ClientDesign
 import ClientSessions
+import ClientText
 import OpenCodeKit
 import SwiftUI
 
@@ -95,7 +96,7 @@ struct QueueDock: View {
     }
 }
 
-private struct QueueRow: View {
+struct QueueRow: View {
     let item: Transcript.Pending
     let isRunning: Bool
     let model: SessionModel
@@ -228,29 +229,35 @@ private struct QueueRow: View {
         })
     }
 
-    /// The summary, with the agents and files it names standing out, as in its bubble.
+    /// The summary, with the agents and files it names standing out and the keyword it was sent
+    /// with drawn in front, as in its bubble.
     private var styledSummary: AttributedString {
-        let summary = summary
-        var styled = AttributedString(summary)
+        let (keyword, line) = Self.line(of: item)
+        var styled = AttributedString(line)
         let references = SentMessage.split(item.text).references
         let folders = [model.session.location.directory]
         MessageMentions.apply(to: &styled, agents: MessageMentions.agents(references), folders: folders, links: false)
-        return styled
+        return keyword.map { MessageMentions.keyword($0, before: styled) } ?? styled
     }
 
-    private var summary: String { Self.summary(of: item) }
-
-    /// A message's first line, or what's attached when there's no text.
+    /// A message's first line, or what's attached when there's no text, after the keyword it was
+    /// sent with as typed ("/goal Summarize the commits weekly").
     static func summary(of item: Transcript.Pending) -> String {
+        let (keyword, line) = line(of: item)
+        return [keyword, line].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    private static func line(of item: Transcript.Pending) -> (keyword: String?, line: String) {
         // What the box told the agent: what happened, in a line.
-        if let note = BoxNote.of(text: item.text, metadata: item.metadata) { return note.line }
+        if let note = BoxNote.of(text: item.text, metadata: item.metadata) { return (nil, note.line) }
+        let keyword = SentMessage.keyword(of: item.text)
         let (text, comments, paths) = UserBubble.split(item.text)
         if let line = text.split(separator: "\n").first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
-            return String(line)
+            return (keyword, String(line))
         }
         let names = item.files.map(\.lastPathComponent) + Attachments.paths(paths, besides: item.files).map { ($0 as NSString).lastPathComponent }
-        if !names.isEmpty { return names.joined(separator: ", ") }
-        return comments.isEmpty ? "" : comments.count.counting("comment")
+        if !names.isEmpty { return (keyword, names.joined(separator: ", ")) }
+        return (keyword, comments.isEmpty ? "" : comments.count.counting("comment"))
     }
 }
 

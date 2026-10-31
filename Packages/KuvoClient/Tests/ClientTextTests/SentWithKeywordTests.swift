@@ -30,6 +30,16 @@ import ClientText
         #expect(SentWithKeyword.split(sent) == ("Write a short weekly summary of this repo's commits every Monday for a month", "/goal"))
     }
 
+    /// Taken back (Undo, ↑, Edit, a branch): a goal comes back as one, /goal and its words, so
+    /// sending it again asks for the goal again; /plan's and /loop's words come back alone, so they
+    /// don't switch to Plan or set another loop.
+    @Test func takenBackAGoalStaysAGoalAndOtherKeywordsLeaveTheirWords() {
+        #expect(SentWithKeyword.draft("Summarize the commits weekly", keyword: "/goal") == "/goal Summarize the commits weekly")
+        #expect(SentWithKeyword.draft("check CI", keyword: "/loop every hour") == "check CI")
+        #expect(SentWithKeyword.draft("Plan the move", keyword: "/plan") == "Plan the move")
+        #expect(SentWithKeyword.draft("just words", keyword: nil) == "just words")
+    }
+
     /// Words of yours that only look like it stay as you wrote them.
     @Test func yourOwnBracketsStayYours() {
         #expect(SentWithKeyword.split("[Goal] ship it") == ("[Goal] ship it", nil))

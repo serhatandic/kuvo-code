@@ -1,5 +1,6 @@
 import ClientDesign
 import ClientSessions
+import ClientText
 import Foundation
 import KuvoLink
 import OpenCodeKit
@@ -1381,8 +1382,10 @@ final class Workspace {
         let recent = (try? await api.messages(session: id, limit: 100).data) ?? []
         var stored = message
         for case .user(let user) in recent where user.id == message.id { stored = user }
-        // What it replied to comes back over the composer, as you wrote it, and so do its comments.
-        let (quotes, words) = Quoting.draft(of: text)
+        // What it replied to comes back over the composer, as you wrote it, and so do its comments
+        // (a goal as one).
+        let (quotes, written) = Quoting.draft(of: text)
+        let words = SentWithKeyword.draft(written, keyword: SentMessage.keyword(of: CommandMessages.shared.text(of: message)))
         let files = Attachments.restored(SessionModel.files(of: message, stored: stored), noting: paths)
         var draft = Drafts.Draft(text: words, files: files, quotes: quotes)
         draft.comments = comments

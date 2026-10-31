@@ -1,4 +1,5 @@
 import ClientSessions
+import ClientText
 import Foundation
 import OpenCodeKit
 import Testing
@@ -81,6 +82,22 @@ import Testing
         #expect(marked["kuvo.pinned"] == nil, "it starts unpinned")
         #expect(marked["kuvo"] as? [String: String] == ["branchedFrom": "ses_timer", "kuvoAgent": "claude"])
         #expect(Branches.tree(workspace.projects.flatMap(\.sessions)).under["ses_timer"]?.map(\.id) == ["ses_tried"])
+    }
+
+    /// Branched from a goal, the new conversation's composer has it as a goal: /goal and its words,
+    /// ready to ask for it another way (it had the words alone, a plain message).
+    @Test func aBranchFromAGoalStartsWithTheGoalInItsComposer() async throws {
+        defer {
+            clean()
+            Drafts.shared.remove("ses_tried")
+        }
+        engine.list([session("ses_timer", "Timer cycle", created: 1)])
+        engine.on("POST", "/api/session/ses_timer/fork", json: ["data": session("ses_tried", "Timer cycle", created: 5)])
+        engine.on("PATCH", "/api/session/ses_tried", json: ["data": [:]])
+        await workspace.refresh()
+        let message = Message.User(id: "msg_0002", time: .init(created: 3), text: "Summarize the commits weekly\n\n<sent-with>\n\(SentWithKeyword.goalHeading)\n/goal\n</sent-with>")
+        try await workspace.fork("ses_timer", from: message)
+        #expect(Drafts.shared["ses_tried"].text == "/goal Summarize the commits weekly")
     }
 
     @Test func branchesAndHandoffsNestAndSubagentsStayInTheirConversation() async throws {

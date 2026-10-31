@@ -333,7 +333,10 @@ final class SessionModel {
             switch message {
             // Not what the box told the agent.
             case .user(let user) where BoxNote.of(user) != nil: continue
-            case .user(let user): text = SentMessage.words(of: CommandMessages.shared.text(of: user))
+            // A goal comes back as one (`SentWithKeyword.draft`).
+            case .user(let user):
+                let sent = CommandMessages.shared.text(of: user)
+                text = SentWithKeyword.draft(SentMessage.words(of: sent), keyword: SentMessage.keyword(of: sent))
             // Commands you ran come back as you typed them.
             case .shell(let shell): text = "!" + shell.command
             default: continue
@@ -2076,10 +2079,11 @@ final class SessionModel {
 
     /// Puts a message back in the composer, ahead of anything already there: its text, its
     /// attached files (each once, and only those on this Mac), its comments on the changes and
-    /// what it replied to.
+    /// what it replied to; a goal as one (`SentWithKeyword.draft`).
     private func restoreDraft(_ message: String, files picked: [URL] = []) {
         let (quoted, comments, paths, _) = SentMessage.split(message)
-        let (quotes, text) = Quoting.draft(of: quoted)
+        let (quotes, words) = Quoting.draft(of: quoted)
+        let text = SentWithKeyword.draft(words, keyword: SentMessage.keyword(of: message))
         restore(text: text, files: Attachments.restored(picked, noting: paths), quotes: quotes, comments: comments)
     }
 

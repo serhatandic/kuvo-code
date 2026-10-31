@@ -1,3 +1,4 @@
+import ClientText
 import Foundation
 import OpenCodeKit
 import Testing
@@ -132,6 +133,31 @@ import Testing
         await reopened.load()
         reopened.apply(try engine.event("session.revert.committed", session: id, ["to": "msg_03"]))
         #expect(reopened.transcript.messages.map(\.id) == ["msg_01", "msg_02", "msg_04", "msg_05"])
+    }
+
+    /// A goal, undone or gone back to with ↑, comes back as one: /goal and its words, so sending it
+    /// again asks for the goal again (it came back as bare words, which went as a plain message).
+    /// /plan's words come back alone, as before: sent again, they don't switch to Plan again.
+    @Test func aGoalUndoneOrGoneBackToComesBackAsAGoal() async throws {
+        defer { done() }
+        let goal: [String: Any] = ["id": "msg_01", "type": "user", "time": ["created": 1],
+                                   "text": "Summarize the commits weekly\n\n<sent-with>\n\(SentWithKeyword.goalHeading)\n/goal\n</sent-with>"]
+        let plan: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": SentWithKeyword.message("Plan the move", typed: "/plan")]
+        engine.list([StubEngine.session(id, title: "Undo", directory: "/tmp/kuvo-tests-undo")])
+        engine.conversation(id, [goal, plan])
+        engine.on("POST", "/api/session/\(id)/revert/stage") { request in
+            StubWeb.json(["data": ["messageID": request.body["messageID"] as? String ?? ""]])
+        }
+        await workspace.refresh()
+        let model = try #require(workspace.model(for: id))
+        await model.load()
+        #expect(model.sentMessages == ["/goal Summarize the commits weekly", "Plan the move"], "↑ goes back through them as they were typed")
+        model.undo(from: try user(plan))
+        try await until { model.draftText == "Plan the move" }
+        model.draftText = ""
+        model.undo(from: try user(goal))
+        try await until { !model.draftText.isEmpty }
+        #expect(model.draftText == "/goal Summarize the commits weekly")
     }
 
     /// What Undo says it does before you confirm (B6): in a git repository (a folder inside one

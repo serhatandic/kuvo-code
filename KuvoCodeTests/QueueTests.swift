@@ -1,3 +1,4 @@
+import ClientText
 import Foundation
 import KuvoLink
 import OpenCodeKit
@@ -100,6 +101,15 @@ import Testing
 
     /// A queue its box keeps paused (it found it waiting as its engine started, a run failed): it
     /// shows under Paused, held first; Resume asks the box, which hands the agent what it held.
+    /// A message waiting that was sent with a keyword reads as you typed it, the keyword in front,
+    /// as its bubble does (it read as the words alone, so a waiting /goal looked like any message).
+    @Test func aMessageWaitingWithAKeywordReadsAsTyped() {
+        let goal = Transcript.Pending(id: "msg_8", text: "Summarize the commits weekly\n\n<sent-with>\n\(SentWithKeyword.goalHeading)\n/goal\n</sent-with>", delivery: .queue, isLocal: false)
+        let loop = Transcript.Pending(id: "msg_9", text: SentWithKeyword.message("check CI", typed: "/loop every hour"), delivery: .queue, isLocal: false)
+        #expect(QueueRow.summary(of: goal) == "/goal Summarize the commits weekly")
+        #expect(QueueRow.summary(of: loop) == "/loop every hour check CI")
+    }
+
     @Test func aQueueTheBoxPausedShowsPausedAndResumeGoesOnWithWhatItHeld() async throws {
         let (model, box, _) = try await open(running: false, inbox: [queued("msg_02", "Then update the docs"), queued("msg_03", "Also run the linter")],
                                              queues: #"{"ses_queue":{"paused":true,"held":["msg_03"]}}"#)
