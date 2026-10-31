@@ -48,7 +48,7 @@ export const SANDBOX_ASK = object({
   "always?": object({ kind: words("write"), path: string }),
   "machine?": string,
 });
-export const SANDBOX_ASKS = object({ asks: list(SANDBOX_ASK) });
+export const SANDBOX_ASKS = object({ asks: list(SANDBOX_ASK), "restart?": bool });
 
 /** The agents' sandbox tool (`sandbox_ask`), as a tool server lists it, and what a call answers. */
 export const SANDBOX_TOOL_LIST = object({ tools: list(any) });

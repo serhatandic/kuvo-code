@@ -17,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { script } from "./bot-keys-scenarios.js";
+import { runningAs } from "./running-as.js";
 import { NO_BUN, testBun } from "./bun-for-tests.js";
 
 // In the folder tests keep in your home (not the temporary folders, which commands may write), so
@@ -347,6 +348,41 @@ test("a group chat's seat runs no commands, so it can't have one run outside the
   assert.match(answer.text, /^In a group chat you don't run commands/);
   assert.deepEqual((await box.ask("GET", "kuvo/sandbox/asks")).value.asks, [], "nobody's asked");
 });
+
+// The box's one ask to restart the agents started before the sandbox was on comes with the asks a
+// client follows, so the card shows in that computer's conversations as it's asked, and goes once
+// it's answered (here, from another of the box's processes, as the Mac's over SSH would).
+test("the asks you follow carry the box's ask to restart the agents that started before the sandbox, until it's answered", async t => {
+  const on = fs.readFileSync(path.join(home, "run", "fence", "on"), "utf8").trim();
+  const pid = await runningAs("kuvo-agents", t);
+  // (Set up with no bridge running, it had nothing to ask: as if it had been, the first time.)
+  fs.rmSync(path.join(home, "run", "fence", "restart-asked"), { force: true });
+  fs.writeFileSync(path.join(home, "run", "bridge.json"), JSON.stringify({ port: 1, password: "b", pid }));
+  t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
+  const stop = new AbortController();
+  t.after(() => stop.abort());
+  const lines = followed(box, stop.signal);
+  assert.equal((await lines.next()).value.restart, undefined);
+  fs.writeFileSync(path.join(home, "run", "fence", "agents"), JSON.stringify({ pid, on, outside: true }));
+  assert.equal((await lines.next()).value.restart, true);
+  assert.equal((await fromMac("POST", "kuvo/sandbox/restart", { restart: false })).status, 200);
+  assert.equal((await lines.next()).value.restart, undefined);
+  assert.equal((await box.ask("GET", "kuvo/sandbox/asks")).value.restart, undefined);
+});
+
+// Each line of the asks' stream, as it comes.
+async function* followed(box, signal) {
+  const response = await fetch(`${box.url}/kuvo/sandbox/asks/events`, { headers: box.headers, signal });
+  let buffered = "";
+  try {
+    for await (const chunk of response.body) {
+      buffered += Buffer.from(chunk).toString("utf8");
+      for (let at; (at = buffered.indexOf("\n")) >= 0; buffered = buffered.slice(at + 1)) yield JSON.parse(buffered.slice(0, at));
+    }
+  } catch (error) {
+    if (!signal.aborted) throw error;
+  }
+}
 
 test("only a conversation's own call asks: one it isn't making, or a command naming it, gets nothing", async () => {
   calling.ses_shop = [];

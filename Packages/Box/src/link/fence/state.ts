@@ -175,6 +175,11 @@ export function asksToRestart(): boolean {
   return false;
 }
 
+/** Whether it's no longer to ask here: answered, or there was nothing to ask. */
+export function restartSettled(): boolean {
+  return fs.existsSync(RESTART_ASKED);
+}
+
 /** You answered whether to restart them (or there was nothing to ask): never asked again here. */
 export function answeredRestart(): void {
   try { writePrivate(RESTART_ASKED, ""); } catch {}

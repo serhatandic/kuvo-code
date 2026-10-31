@@ -5082,7 +5082,8 @@
          "machine?": "string"
         }
        }
-      }
+      },
+      "restart?": "bool"
      }
     }
    }

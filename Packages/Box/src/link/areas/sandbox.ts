@@ -9,7 +9,7 @@ import { isObject, parsed } from "../../shared/json";
 import type { SandboxState } from "../../shared/routes/sandbox";
 import { addRule, allowedFor, removeRule, RuleRefusal } from "../fence/allowed";
 import { answerSandboxAsk, callSandboxTool, listSandboxAsks, onSandboxAsksChanged, SANDBOX_TOOLS } from "../fence/outside";
-import { answeredRestart, fenceState, setUpFence, tellAgents } from "../fence/state";
+import { answeredRestart, asksToRestart, fenceState, restartSettled, setUpFence, tellAgents } from "../fence/state";
 import { bridgeTarget, call } from "../engine/client";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { readLink } from "../state";
@@ -115,19 +115,28 @@ export async function* sandboxRoute(context: RouteContext): AsyncGenerator<Answe
   }
   if (route === "kuvo/sandbox/asks" || route === "kuvo/sandbox/asks/events") {
     if (method !== "GET") return yield* json(405, {});
-    if (route === "kuvo/sandbox/asks") return yield* json(200, { asks: listSandboxAsks() });
+    // With the box's one ask to restart the agents started before the sandbox was on, while it asks.
+    const listed = () => ({ asks: listSandboxAsks(), ...(asksToRestart() ? { restart: true } : {}) });
+    if (route === "kuvo/sandbox/asks") return yield* json(200, listed());
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
     let wake: () => void = () => {};
     const stop = onSandboxAsksChanged(() => wake());
+    let sent = "";
+    // Until that's settled here (and said), looked at every few seconds too, as the agents bridge
+    // notes it and you answer it (perhaps through another of the box's processes).
+    const looks = setInterval(() => { if (!restartSettled() || sent.includes('"restart"')) wake(); }, 5_000);
     try {
       while (!signal?.aborted) {
-        yield { body: Buffer.from(JSON.stringify({ asks: listSandboxAsks() }) + "\n") };
+        const now = JSON.stringify(listed());
+        if (now !== sent) yield { body: Buffer.from(now + "\n") };
+        sent = now;
         await new Promise<void>(done => {
           wake = done;
           signal?.addEventListener("abort", () => done(), { once: true });
         });
       }
     } finally {
+      clearInterval(looks);
       stop();
     }
     return;

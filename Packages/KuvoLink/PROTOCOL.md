@@ -2925,7 +2925,8 @@ it's empty.
   bridge (`POST /api/kuvo/sandbox/restart`) close each agent's process started before the sandbox
   was on as its conversation is between turns, the rest as their turns end (what one left running
   stops with it); each starts again in the sandbox with its next turn, going on with its
-  conversation. False leaves them to finish as they are. Clients show it as a card in the
+  conversation. False leaves them to finish as they are. `kuvo/sandbox/asks` carries it too, so a
+  client following the asks hears it as it comes and goes. Clients show it as a card in the
   computer's conversations: "Restart agents in the sandbox?". It counts the
   agents' own processes, from their start: a command one of them started outside the sandbox that
   outlives it isn't followed, as with the engine's. Each runs whole in it, and so does all it
@@ -3016,8 +3017,9 @@ while the sandbox is `on`) and pass a call to `POST kuvo/sandbox/tools` `{sessio
 making that call. The asks, the tool and the answers live in the box's long-running process, as the
 vault does (`run/vault.sock`); another passes them on.
 
-- `GET kuvo/sandbox/asks` → `{asks: [ask]}`, oldest first; `kuvo/sandbox/asks/events`, NDJSON, the
-  same at once and on every change. An ask: `{id, at, session?, sessionName?, bot?, botName?,
+- `GET kuvo/sandbox/asks` → `{asks: [ask], restart?}`, oldest first, with `restart: true` while
+  the box asks you to restart its agents (the state's `restart`); `kuvo/sandbox/asks/events`, NDJSON,
+  the same at once and on every change. An ask: `{id, at, session?, sessionName?, bot?, botName?,
   project, command, why, stopped?, error?, always?, machine?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,

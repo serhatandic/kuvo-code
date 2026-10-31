@@ -13284,6 +13284,9 @@ function asksToRestart() {
     answeredRestart();
   return false;
 }
+function restartSettled() {
+  return fs52.existsSync(RESTART_ASKED);
+}
 function answeredRestart() {
   try {
     writePrivate(RESTART_ASKED, "");
@@ -19352,21 +19355,31 @@ async function* sandboxRoute(context) {
   if (route === "kuvo/sandbox/asks" || route === "kuvo/sandbox/asks/events") {
     if (method !== "GET")
       return yield* json(405, {});
+    const listed = () => ({ asks: listSandboxAsks(), ...asksToRestart() ? { restart: true } : {} });
     if (route === "kuvo/sandbox/asks")
-      return yield* json(200, { asks: listSandboxAsks() });
+      return yield* json(200, listed());
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
     let wake = () => {};
     const stop = onSandboxAsksChanged(() => wake());
+    let sent = "";
+    const looks = setInterval(() => {
+      if (!restartSettled() || sent.includes('"restart"'))
+        wake();
+    }, 5000);
     try {
       while (!signal?.aborted) {
-        yield { body: Buffer.from(JSON.stringify({ asks: listSandboxAsks() }) + `
+        const now = JSON.stringify(listed());
+        if (now !== sent)
+          yield { body: Buffer.from(now + `
 `) };
+        sent = now;
         await new Promise((done) => {
           wake = done;
           signal?.addEventListener("abort", () => done(), { once: true });
         });
       }
     } finally {
+      clearInterval(looks);
       stop();
     }
     return;
