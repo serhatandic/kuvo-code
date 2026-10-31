@@ -236,6 +236,8 @@ Ask the user before anything brand-related: app icons, logos and marks, favicons
 
 Releases come only from the pipeline: pushing an annotated `vX.Y.Z` tag on `main` runs `.github/workflows/release.yml`, which builds, signs with a Developer ID, notarizes and publishes `KuvoCode.dmg` and the update feed. Don't build or publish a release by hand. `Actions › Release › Run workflow` is a dry run that checks signing without publishing.
 
+Before any release or beta tag, the user tries its update first, the way people will get it: `scripts/try-update.sh` (the user, 2026-10-31: "I want to test new updates beforehand just like this from now on"). Run it in the background, tell the user to choose **Check for Updates…** in the copy in /Applications, and stop it once they've updated, so the real feed comes back.
+
 Betas are manual: an annotated `vX.Y.Z-beta.N` tag on `main` (the version it leads up to) goes through the same pipeline as a prerelease, with the changelog's Unreleased notes as they are (don't rename the heading). Only copies with **Settings › General › Get beta updates** on are offered it; the update feed keeps the newest release and any newer beta (`scripts/merge-appcast.py`). Its build version is `X.Y.ZbN`, which Sparkle orders before `X.Y.Z` (it ignores anything after a dash).
 
 ## Go easy on GitHub (strict)
