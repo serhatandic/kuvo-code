@@ -67,6 +67,9 @@ enum GoalSandbox {
         case readAgain
         /// The agents started before the sandbox, restarted in it (`POST kuvo/sandbox/restart`).
         case restartAgents
+        /// The box's sessions restarted (the route it names, "POST kuvo/engine/restart"), then
+        /// followed until they're back.
+        case restartSessions(method: String, path: String)
     }
 
     struct Button: Equatable {
@@ -102,10 +105,11 @@ enum GoalSandbox {
     /// The row for a goal that can't run alone on `computer` ("This Mac", or a machine's name).
     /// `codingAgent`: the bot runs on a coding agent (Claude Code), whose commands are in the sandbox
     /// once no coding agent's process started before it still runs there (`restarting`: you said to
-    /// restart them). None where there's nothing to fix: the sandbox is
-    /// on. It's always on; a box reports it not on with no reason only while it's switched off for
-    /// the rollout, with nothing here to press.
-    static func row(_ reading: Reading?, computer: String, onThisMac: Bool, bot: String, codingAgent: Bool, restarting: Bool = false) -> Row? {
+    /// restart them; `restartingSessions`: you said to restart the box's sessions, not back yet).
+    /// None where there's nothing to fix: the sandbox is on. It's always on; a box reports it not
+    /// on with no reason only while it's switched off for the rollout, with nothing here to press.
+    static func row(_ reading: Reading?, computer: String, onThisMac: Bool, bot: String, codingAgent: Bool, restarting: Bool = false,
+                    restartingSessions: Bool = false) -> Row? {
         let cant = "\(computer) can’t work on its own yet"
         let withYou = "Until then, \(bot) works while you’re here."
         let there = onThisMac ? "on this Mac" : "on \(computer)"
@@ -127,7 +131,10 @@ enum GoalSandbox {
         }
         let route = status.route.flatMap(Self.route)
         let retry = Button(label: "Try Again", action: route.map { .route(method: $0.method, path: $0.path) } ?? .readAgain)
-        let restart = Button(label: "Restart Sessions", action: .route(method: route?.method ?? "POST", path: route?.path ?? "kuvo/engine/restart"))
+        let restart = Button(label: "Restart Sessions", action: .restartSessions(method: route?.method ?? "POST", path: route?.path ?? "kuvo/engine/restart"))
+        if restartingSessions, sessionsHold(status) {
+            return Row(title: "Restarting sessions in the sandbox…", text: "\(bot) works while you’re here until they’re back.", buttons: [], checking: true)
+        }
         switch status.reason {
         case "kernel":
             return Row(title: "\(computer) can’t work on its own",
@@ -171,6 +178,9 @@ enum GoalSandbox {
             return Row(title: cant, text: [status.why, "\(bot) works while you’re here."].compactMap { $0 }.joined(separator: " "), buttons: [retry] + report(status))
         }
     }
+
+    /// The box's sessions are down, or started before the sandbox: what Restart Sessions fixes.
+    static func sessionsHold(_ status: Status) -> Bool { status.reason == "engineDown" || status.reason == "waiting" }
 
     /// Report a Problem, once a check has failed twice in a row.
     private static func report(_ status: Status) -> [Button] {

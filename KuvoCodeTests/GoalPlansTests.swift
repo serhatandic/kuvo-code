@@ -146,10 +146,23 @@ import Testing
 
         #expect(row(status("plugin", "POST kuvo/sandbox/check"), true, false)?.buttons == [.init(label: "Fix It", action: .route(method: "POST", path: "kuvo/sandbox/check"))])
         for reason in ["engineDown", "waiting"] {
-            #expect(row(status(reason, "POST kuvo/engine/restart"), true, false)?.buttons == [.init(label: "Restart Sessions", action: .route(method: "POST", path: "kuvo/engine/restart"))])
+            #expect(row(status(reason, "POST kuvo/engine/restart"), true, false)?.buttons == [.init(label: "Restart Sessions", action: .restartSessions(method: "POST", path: "kuvo/engine/restart"))])
         }
         #expect(row(status("waiting", "POST kuvo/engine/restart"), false, false)?.text.hasPrefix("Sessions on lokum started before the sandbox was set up") == true)
         #expect(row(status("checking", "POST kuvo/sandbox/check"), false, false)?.checking == true)
+        // Restart Sessions pressed (review of 8eb319e: it was posted and let go): it says they're
+        // restarting while the box says they're down or from before it, and nothing to press.
+        for reason in ["engineDown", "waiting"] {
+            let back = try #require(GoalSandbox.row(status(reason, "POST kuvo/engine/restart"), computer: "lokum", onThisMac: false, bot: "Pixel", codingAgent: false, restartingSessions: true))
+            #expect(back.title == "Restarting sessions in the sandbox…" && back.checking && back.buttons.isEmpty)
+            #expect(back.text == "Pixel works while you’re here until they’re back.")
+        }
+        #expect(GoalSandbox.row(status("checking", "POST kuvo/sandbox/check"), computer: "lokum", onThisMac: false, bot: "Pixel", codingAgent: false, restartingSessions: true)?.title == "Checking the sandbox…",
+                "back, the box checks its sandbox: it says that")
+        // A box that doesn't answer: it says so, and Try Again only reads it again.
+        let unreadable = try #require(row(.unreadable, false, false))
+        #expect(unreadable.text == "Its sandbox can’t be read now. Until then, Pixel works while you’re here.")
+        #expect(unreadable.buttons == [.init(label: "Try Again", action: .readAgain)] && !unreadable.checking)
 
         // A box from before the sandbox: the machine is updated from Machines; this Mac, as an app.
         #expect(row(.old, false, false)?.buttons == [.init(label: "Update lokum…", action: .updateMachine)])
@@ -160,7 +173,7 @@ import Testing
         // outside it (any agent's: the box can't say whose), holds it back: restarted in it, as the
         // box offers.
         #expect(row(.status(.init(on: true, agents: true)), true, true) == nil, "all in it: nothing to fix")
-        #expect(row(status("engineDown", "POST kuvo/engine/restart"), true, true)?.buttons == [.init(label: "Restart Sessions", action: .route(method: "POST", path: "kuvo/engine/restart"))])
+        #expect(row(status("engineDown", "POST kuvo/engine/restart"), true, true)?.buttons == [.init(label: "Restart Sessions", action: .restartSessions(method: "POST", path: "kuvo/engine/restart"))])
         let outside = try #require(row(.status(.init(on: true, agents: false, outside: true)), true, true))
         #expect(outside.title == "Agents started before the sandbox")
         #expect(outside.text == "Some coding agents on this Mac still run outside it, so Pixel works while you’re here. Restart them in the sandbox, and Pixel works on its own.")
