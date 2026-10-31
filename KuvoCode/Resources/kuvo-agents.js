@@ -12653,6 +12653,13 @@ class CursorWorker {
 }
 
 // Packages/Box/src/agents/agents/cursor.ts
+function readable(path) {
+  try {
+    return readFileSync21(path).toString("base64");
+  } catch {
+    return;
+  }
+}
 var effortParameters = ["effort", "reasoning", "reasoning_effort"];
 var SDK2 = [{ name: "@cursor/sdk", version: "1.0.35" }];
 var outputLimit5 = 30000;
@@ -12952,9 +12959,17 @@ class CursorThread {
       hooks.saveState();
     }
     await this.ensureAgent(sdk, options, hooks);
-    const images = input.files.filter((file) => file.mime.startsWith("image/")).map((file) => ({ data: file.data ?? (file.path ? readFileSync21(file.path).toString("base64") : ""), mimeType: file.mime })).filter((image) => image.data);
+    const images = [];
+    const byPath = [];
+    for (const file of input.files) {
+      const data = file.mime.startsWith("image/") ? file.data ?? (file.path ? readable(file.path) : undefined) : undefined;
+      if (data)
+        images.push({ data, mimeType: file.mime });
+      else if (file.path)
+        byPath.push(file.path);
+    }
     let text = input.text;
-    const others = input.files.filter((file) => !file.mime.startsWith("image/") && file.path).map((file) => this.worker ? fenceCopy(cwd, file.path) : file.path);
+    const others = byPath.map((path) => this.worker ? fenceCopy(cwd, path) : path);
     if (others.length)
       text += `
 
@@ -21891,4 +21906,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 5863e18aee91b09ee488be9e57d20194225c3a12a17ee13a459cb8632b16d756
+// Built from Packages/Box/src/agents 8d75640bc1342983d4e05d07d99cadf6f2d18720c5cff80bd2fdc539db18fb50

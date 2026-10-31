@@ -20,6 +20,15 @@ import type { Turn } from "../turn"
 import type { Model, OAuthStatus, Session } from "../wire"
 import { CursorWorker, cursorWorker } from "./cursor-worker"
 
+/** A file's bytes as base64, or nothing when it can't be read. */
+function readable(path: string): string | undefined {
+  try {
+    return readFileSync(path).toString("base64")
+  } catch {
+    return undefined
+  }
+}
+
 // T3 Code's tested version; newer ones resolve differently under Bun.
 /** What Cursor calls a model's effort setting, by model. */
 const effortParameters = ["effort", "reasoning", "reasoning_effort"]
@@ -395,13 +404,17 @@ class CursorThread implements Thread {
       hooks.saveState()
     }
     await this.ensureAgent(sdk, options, hooks)
-    const images = input.files
-      .filter((file) => file.mime.startsWith("image/"))
-      .map((file) => ({ data: file.data ?? (file.path ? readFileSync(file.path).toString("base64") : ""), mimeType: file.mime }))
-      .filter((image) => image.data)
+    // Pictures it sees; one it can't read here (gone since, say) goes by its path, as other files do.
+    const images: { data: string; mimeType: string }[] = []
+    const byPath: string[] = []
+    for (const file of input.files) {
+      const data = file.mime.startsWith("image/") ? (file.data ?? (file.path ? readable(file.path) : undefined)) : undefined
+      if (data) images.push({ data, mimeType: file.mime })
+      else if (file.path) byPath.push(file.path)
+    }
     let text = input.text
     // (In the sandbox, which hides where they're kept: copies it reads.)
-    const others = input.files.filter((file) => !file.mime.startsWith("image/") && file.path).map((file) => (this.worker ? fenceCopy(cwd, file.path!) : file.path!))
+    const others = byPath.map((path) => (this.worker ? fenceCopy(cwd, path) : path))
     if (others.length) text += `\n\nAttached files:\n${others.map((path) => `- ${path}`).join("\n")}`
     // The app's added instructions go with the first message, and again when they change.
     const instructions = hooks.instructions()
