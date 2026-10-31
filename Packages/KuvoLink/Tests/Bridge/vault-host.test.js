@@ -35,6 +35,10 @@ before(async () => {
   fs.mkdirSync(path.join(home, "bots", "bot_ship"), { recursive: true });
   fs.writeFileSync(path.join(home, "bots", "bot_ship", "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_ship", name: "Ship" }));
   fs.writeFileSync(path.join(home, "bots", "bot_ship", "session"), "ses_ship");
+  // (And another, whose grant a test takes away.)
+  fs.mkdirSync(path.join(home, "bots", "bot_scout"), { recursive: true });
+  fs.writeFileSync(path.join(home, "bots", "bot_scout", "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_scout", name: "Scout" }));
+  fs.writeFileSync(path.join(home, "bots", "bot_scout", "session"), "ses_scout");
   engine = http.createServer((request, response) => {
     // Its browser_sign_in, running as the fill comes (the box answers a fill only for one: vault/who.ts).
     if (request.url.startsWith("/api/session/ses_ship/message")) {

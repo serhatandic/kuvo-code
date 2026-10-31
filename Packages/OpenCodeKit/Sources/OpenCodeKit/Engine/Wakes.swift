@@ -778,8 +778,14 @@ public enum Wakes {
         # shellcheck disable=SC2086
         printf '%s' "$h_asked" | KUVO_HOME="${record%/*/*}" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$KUVO_LINK_RUNTIME" ${KUVO_LINK_FLAGS-} "$KUVO_LINK_SCRIPT" box route 2>/dev/null | grep -qF '"status":200'
       }
-      # Whether this wake-up waits on the box already (one that repeats, kept from last time).
-      held() { grep -qF "\"from\":\"Wake-up\",\"text\":\"$(json "$1")\"" "${record%/*}/queues.json" 2>/dev/null; }
+      # Whether this wake-up waits on the box already (one that repeats, kept from last time), in
+      # this conversation's own entry: another's may wait with the same words (bots made from one
+      # template). One entry to a line (a quote inside the words is escaped, so no `},"…":{"paused":`
+      # is in them).
+      held() {
+        sed 's/},"\([^"]*\)":{"paused":/}\
+    "\1":{"paused":/g' "${record%/*}/queues.json" 2>/dev/null | grep -F "\"$session\":{\"paused\":" | grep -qF "\"from\":\"Wake-up\",\"text\":\"$(json "$1")\""
+      }
       # A session's folder (not a bot's, in $botsroot) as its engine knows the
       # session now: one that's gone goes to the trash, rather than its wake-ups being tried for
       # ever; a subagent's goes to the conversation that started it (its bot's folder, if it's a

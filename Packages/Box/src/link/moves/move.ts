@@ -21,6 +21,7 @@ import { askGroups } from "../areas/groups";
 import { botHere, MOVING } from "../bots/here";
 import { settleBot } from "../bots/tell";
 import { call, readBridgeFile, readEngineFile } from "../engine/client";
+import { CantCarry, forgetQueue, packQueues, queueOf, resumeQueue, unpackQueues } from "../engine/queue";
 import { writePrivate } from "../files";
 import { HERE, IS_MAC, K } from "../home";
 import { readPeerAgents } from "../peers/directory";
@@ -327,12 +328,13 @@ function unhold(folder: string | undefined, wasPaused: boolean, pausedAs?: strin
   } catch {}
 }
 
-/** Until none of its conversations is at work and nothing waits to go to them: a minute at most. */
+/** Until none of its conversations is at work and nothing waits to go to them: a minute at most.
+ * What the engine holds for one you stopped waits for Resume, and goes with it (`packQueues`). */
 async function settle(engine: Target, sessions: readonly string[], name: string): Promise<void> {
   for (let tries = 0; tries < SETTLE_FOR; tries++) {
     const active = await call(engine, "GET", "/api/session/active").catch(() => ({}));
     const busy = isObject(active) && sessions.some(session => session in active);
-    const inbox = sessions[0] ? await call(engine, "GET", `/api/session/${encodeURIComponent(sessions[0])}/inbox`).catch(() => []) : [];
+    const inbox = sessions[0] && !queueOf(sessions[0]).paused ? await call(engine, "GET", `/api/session/${encodeURIComponent(sessions[0])}/inbox`).catch(() => []) : [];
     if (!busy && !(Array.isArray(inbox) && inbox.length)) return;
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
@@ -345,6 +347,18 @@ class Refused extends Error {
   }
 }
 
+/** What a move carries of its conversations, to see whether anything changed as it went: their
+ * messages, word for word (`conversationHash`), and their queues (what waits for them), but when
+ * each was read as waiting. */
+const fingerprint = (exports: unknown[], queues: Record<string, unknown>): string =>
+  `${conversationHash(exports)}.${crypto.createHash("sha256").update(JSON.stringify(queues, (key, value) => key === "at" ? undefined : value)).digest("base64url")}`;
+
+/** What waits for its conversations, as a move carries it (`packQueues`); one the engine held that
+ * can't go with it, and it doesn't go yet. */
+const queuesOf = (engine: Target, sessions: readonly string[], name: string) => packQueues(engine, sessions).catch(error => {
+  throw error instanceof CantCarry ? new Refused(say.waiting(name)) : error;
+});
+
 // What the box it leaves has of each move in memory: the parts the other box has, and those on
 // their way (by when they went).
 const outgoing = new Map<string, { got: Set<number>; flying: Map<number, number>; exports: string }>();
@@ -356,6 +370,7 @@ async function carryOn(id: string): Promise<void> {
   hold(record);
   saveMove(record);
   let exports: unknown[] = [];
+  let queues: Record<string, unknown> = {};
   const contents: Contents = { kind: record.kind, thing: record.thing, name: record.name, exports, wasPaused: record.wasPaused };
   if (record.kind === "group") {
     contents.group = await groupAction(readBridgeFile(), record.thing, "hold") as Contents["group"];
@@ -367,6 +382,9 @@ async function carryOn(id: string): Promise<void> {
     exports = await exportAll(engine, record.sessions[0]);
     contents.exports = exports;
     record.sessions = idsOf(exports);
+    // A conversation you stopped goes stopped, with what waits for it, here and in the engine.
+    queues = await queuesOf(engine, record.sessions, record.name);
+    if (Object.keys(queues).length) contents.queues = queues;
     if (record.folder) contents.folder = path.basename(record.folder);
     if (record.kind === "bot") {
       const keys = await keysOf(record.thing);
@@ -379,7 +397,7 @@ async function carryOn(id: string): Promise<void> {
   // Taken back meanwhile (as the box started again): it stays taken back.
   const still = readMove(id);
   if (!still || still.failed || still.stage !== "holding") return;
-  outgoing.set(id, { got: new Set(), flying: new Map(), exports: conversationHash(exports) });
+  outgoing.set(id, { got: new Set(), flying: new Map(), exports: fingerprint(exports, queues) });
   const now = changeMove(id, each => {
     Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now() });
   });
@@ -424,7 +442,7 @@ async function arrived(record: MoveRecord): Promise<void> {
     const before = outgoing.get(record.id)?.exports;
     // Taken back meanwhile (its copy there couldn't be set up, or it took too long): nothing more.
     if (!still()) return;
-    if (!before || conversationHash(again) !== before) {
+    if (!before || fingerprint(again, await queuesOf(engine, record.sessions, record.name)) !== before) {
       if (record.tries >= 2) throw new Refused(say.busy(record.name));
       changeMove(record.id, each => { each.tries += 1; each.stage = "holding"; each.step = undefined; });
       return drive(record.id);
@@ -469,6 +487,8 @@ async function finish(id: string): Promise<void> {
       }
     }
     for (const session of [...record.sessions].reverse()) await deleteSession(engine, session);
+    // What waited for them here went with them.
+    for (const session of record.sessions) forgetQueue(session);
     if (record.kind === "bot") await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).catch(() => {});
     await toTrash(place);
   }
@@ -693,6 +713,9 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
   // Its conversations, noted before they're brought in: any that came go if it's taken back.
   changeMove(record.id, each => { each.sessions = idsOf(contents.exports); });
   await importAll(engine, contents.exports, directory, signal);
+  // What waited for them, kept here paused until the switch.
+  const goOn = unpackQueues(contents.queues, idsOf(contents.exports));
+  if (goOn.length) changeMove(record.id, each => { each.queuesGoOn = goOn; });
   for (const [integration, keys] of Object.entries(contents.keys ?? {})) {
     const given = await answerBotKeys("PUT", `kuvo/bots/${record.thing}/keys/${encodeURIComponent(integration)}`, { keys }, null);
     if (given.status !== 200) console.error(`kuvo-link: a moved bot's own key for ${integration} didn't come with it (${given.status}).`);
@@ -708,6 +731,8 @@ async function switchHere(record: MoveRecord): Promise<void> {
   } else {
     unhold(folderOf(record.kind, record.thing) ?? undefined, record.wasPaused, record.pausedAs);
     forgetMovedAway(record.sessions);
+    // A queue that went on where it came from goes on here (one you stopped stays stopped).
+    for (const session of record.queuesGoOn ?? []) await resumeQueue(readEngineFile(), session).catch(() => {});
     if (record.kind === "bot") await settleBot(record.thing, readEngineFile, () => { try { return readBridgeFile(); } catch { return null; } }).catch(() => {});
   }
 }
@@ -731,6 +756,7 @@ async function clearCopy(record: MoveRecord): Promise<void> {
     let engine: Target | null = null;
     try { engine = readEngineFile(); } catch {}
     for (const session of [...record.sessions].reverse()) if (engine) await deleteSession(engine, session).catch(() => {});
+    for (const session of record.sessions) forgetQueue(session);
     const place = folderOf(record.kind, record.thing);
     // Only a copy this move placed, never one that lives here.
     if (place && record.placed) {

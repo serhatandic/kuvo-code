@@ -111,7 +111,8 @@ export function tripwire(item: VaultItem, caller: Caller, site: string): string 
   if (who) setPaused(true, who, why);
   note({ what: "refused", ...itemOf(item), ...whoOf(caller), site, how: "wrong site" });
   try {
-    tell({ title: caller.botName ? `${caller.botName} paused` : "A fill was refused", subtitle: machineName(), body: why, category: "message", thread: caller.root ?? "vault", data: caller.root ? { session: caller.root } : {} });
+    // (A seat's opens its group chat: no one opens the seat.)
+    tell({ title: caller.botName ? `${caller.botName} paused` : "A fill was refused", subtitle: machineName(), body: why, category: "message", thread: caller.group ?? caller.root ?? "vault", data: caller.group ? { group: caller.group } : caller.root ? { session: caller.root } : {} });
   } catch {}
   return `${why} Kuvo Code only fills it on ${item.sites.join(", ")}.${who ? ` The user has been told, and this ${caller.bot ? "bot" : "conversation"}'s use of the vault is paused until they look.` : ""}`;
 }

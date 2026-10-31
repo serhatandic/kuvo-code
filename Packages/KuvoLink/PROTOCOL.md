@@ -411,16 +411,23 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   its way, for a client to show how far it is. `away`: conversations this box's engine lists that don't live here (a copy not
   switched to yet, an original still going): clients leave them out.
 - While it moves, nothing reaches it: a prompt to one of its conversations through the link answers
-  `409 {message}`, a letter `retry`, its wake-ups and watches are held (`paused` says `moving`), and
+  `409 {message}`, as does a change to its queue (`…/queue/…`; reading it still works, and a Stop
+  works while the box it leaves waits for its turn to end), a letter `retry`, its wake-ups and watches are held (`paused` says `moving`), and
   changing or deleting the bot answers `409`. A client shows it as moving.
 
 Between the boxes, each `{"move": {op, id, …}}` (`id`: `mov_…`), each step sent again each minute
 until it's answered:
 
 1. The box it leaves holds it, waits until its conversations are settled (no turn running, nothing
-   in their inbox; a minute at most), and packs one file: `move.json` (its conversations as the
+   in their inbox but what a Stop held there; a minute at most), and packs one file: `move.json` (its conversations as the
    engine exports them, root first; a bot's own keys; a group chat as its bridge held it, `POST
-   api/kuvo/groups/<id>/hold`) and its folder (a bot's; a chat's wake-ups'), tar, gzip; at most 1 GB.
+   api/kuvo/groups/<id>/hold`; `queues`, by conversation, each one paused or with something
+   waiting on the box ("The queue"), bridge 0.9.137: `{paused, held, waiting: [{shown, message}]}`,
+   what waits as it's shown and whole, in the order it would go: what waits on the box, and for one
+   paused, what its engine held, carried as one waiting on the box (anything there but a message,
+   and it waits as for a turn); each file a message brings as a `data:` link with what's in it, read
+   on this box, or left out, and shown without it) and its folder (a bot's; a chat's wake-ups'),
+   tar, gzip; at most 1 GB.
 2. `offer {kind, thing, name, size, hash, wasPaused, pausedAs?, from, members?}` → `ready`, or
    `refused {message}`: its engine or group chats aren't running, too big, a group chat's bots
    (`members`) don't all live on that machine, one by that ID lives there already, or a move of it
@@ -436,17 +443,20 @@ until it's answered:
    in it or for it, or a `move.json` that isn't a file of its own, and it's refused), `paused` saying `moving`,
    a chat's `directory` its chats folder; each conversation imported under its own ID (noted first;
    they must be one conversation and its subagents', rooted at the chat or at the conversation a
-   bot's folder names, none of them on this box already); a bot's keys given; a group chat put there
+   bot's folder names, none of them on this box already); their `queues` kept paused in place of
+   any there (what waits, whole, in its order; a file only as a `data:` link); a bot's keys given; a group chat put there
    held (`PUT api/kuvo/groups/<id>`, `status: "held"`). → `arrived`, or `failed {message}`, what it
    set up gone again; the message says only what's wrong with what came, never what this box found.
    Setting it up for 30 minutes (its engine stuck) is given up on the same way.
-5. The box it leaves settles and reads it again. Anything new, and it all goes again (from 1, three
-   tries; then 409, `busy`).
+5. The box it leaves settles and reads it again, its queues too. Anything new, and it all goes again
+   (from 1, three tries; then 409, `busy`).
 6. It notes the switch, and sends `switch` → `switched`: the box it went to lets its wake-ups go (as
-   they were), starts a group chat (`activate`), and tells a bot what it is (as
-   `kuvo/bots/<id>/arrived` does).
+   they were), starts a group chat (`activate`), tells a bot what it is (as
+   `kuvo/bots/<id>/arrived` does), and lets a queue that wasn't paused go on (one you stopped
+   stays stopped, with what waits for it, until Resume there).
 7. Then the box it left lets the original go: its conversation saved in its folder (or
-   `moved-<id>` in the box's folder) as `conversation.json`, its conversations deleted, a bot's own
+   `moved-<id>` in the box's folder) as `conversation.json`, its conversations deleted with their
+   queues (what waited for them on this box went with them), a bot's own
    keys removed, the folder to Kuvo Code's trash (on a Mac, on to the Finder's Trash), a group chat
    released. It says for two days where those conversations live now ("Peers", `moved`).
 
@@ -565,8 +575,8 @@ the same for every client and with none connected, and keeps them in `run/queues
   conversation, from the chat (by its name; the coding agents' bridge keeps it in the same files,
   and the part goes on working until the bot reports, or fails once it's taken away). Each goes once the queue goes on, after what the engine holds, one at a time
   as runs end; kept in `run/queues.json` (`waiting`) and, whole, in `run/waiting/<message id>.json`,
-  across a restart. Send Now sends one at once; `DELETE …/queue/<item>` takes one away.
-- `GET kuvo/sessions/<id>/queue` → `{paused, held: [inboxID…], waiting?: [{id, from?, text, files?,
+  across a restart (one Undo put back goes where it was, below). Send Now sends one at once; `DELETE …/queue/<item>` takes one away.
+- `GET kuvo/sessions/<id>/queue` → `{paused, held: [id…], waiting?: [{id, from?, text, files?,
   at}]}`: `waiting`, left out when nothing waits on the box, first come first: who it's from (an
   agent's name, `Wake-up`, `Its sessions`, `Your answer`, `Goal`, a group chat's name; none for one of yours), what it
   says, the names of its files, when it came (ms). `GET kuvo/sessions/queues/events` follows them
@@ -577,16 +587,24 @@ the same for every client and with none connected, and keeps them in `run/queues
   as they went to the engine, go first, in that order. `POST …/queue/resume`: unpaused, and the
   next one goes now. `POST …/queue/<item>/now` (Send Now): unpaused, the item steered (one waiting
   on the box sent), and a run under way stopped to go on with it; 404 when it isn't waiting.
-  `POST …/queue/add` (`{id?, text, files?, delivery?, from?, words?}`, a prompt's body): a client's
+  `POST …/queue/add` (`{id?, text, files?, delivery?, from?, words?, before?}`, a prompt's body): a client's
   own message for the queue (every one sent after this run, and Undo), its files kept on the box
   as a message's are (a phone's also naming its agents and saying it's from the phone, as its
   prompt would), shown as `words` (as you wrote it, without what the client added for the agent),
   else as its text; while it's paused it waits on the box (`from` names who it was from, for one put
   back), else it goes to the engine as asked (`queue` by default); its answer says which,
   `waits: true|false`. `DELETE …/queue/<item>`: one waiting on the box taken away, its answer
-  carrying it as it was, `removed: {id, text, files?, delivery, from?, words}` (`words`, as it was
-  shown); 404 if it isn't. Undo adds it back with `…/queue/add` and `kept: true` (its body as it
-  was kept, its files not kept again, shown with its `words`). Each answers the queue as it is
+  carrying it as it was, `removed: {id, text, files?, delivery, from?, words, before?}` (`words`, as
+  it was shown; `before`, what came after it, left out when it was last); 404 if it isn't. Undo
+  adds it back with `…/queue/add` and `kept: true` (its body as it was kept, its files not kept
+  again, shown with its `words`). **Undo puts it back where it was** (bridge 0.9.137): `…/queue/add`
+  takes `before`, what came after it as the client showed it (for one the engine held, which the
+  client took away in the engine; `removed` carries it for one that waited on the box), and while
+  the queue is paused it waits just ahead of that one: in what waits on the box, or in `held` (so
+  `held` can name one waiting on the box, and holds what the engine had ahead of it too, in the
+  same order); with no `before`, or one that isn't waiting any more, last. The order it all goes
+  in, and clients show: `held` in its order (in the engine or on the box), then the engine's for
+  the next step, then its queue, then the rest of what waits on the box. Each answers the queue as it is
   now; 404 for no such session here, 503 with no engine, 502 when the engine refused. A run that
   fails pauses the queue again while anything waits on the box; a conversation deleted takes its
   queue and what waited for it with it.
@@ -1271,8 +1289,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   computer the conversation lives on. There the session's wake-ups and watches go
   with it, the engine's is marked `kuvo.carriedTo` (the new one's id) as it's archived, and once
   started it goes to its end, whatever becomes of the request. A client that carries one itself
-  marks it `kuvo.carriedTo` too: a session marked so takes its queue on the box with it (paused,
-  stopped by you, it stays so in the new one, with what waited on the box). Changing a machine's bot's model there to
+  marks it `kuvo.carriedTo` too, as it archives it: a session archived so takes its queue on the
+  box with it, once (paused, stopped by you, it stays so in the new one, with what waited on the
+  box). One brought back keeps the mark and its own queue, archived again too (the box keeps the
+  carries it made in `run/queues-carried.json`). Changing a machine's bot's model there to
   one of the agents' (`PATCH kuvo/bots/<id>`) carries its conversation on with them too; the Mac
   takes in its new conversation as it next connects.
 - `POST kuvo/sign-in/return` with `{"url"}`: where a sign-in's page sent the browser back to the
@@ -2774,14 +2794,15 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
   there's a vault, the state (`made: false`) whatever the key, so a client can tell whether to fetch
   one without making it.
 - `GET kuvo/vault` → `{state, items, grants}`. `state` is `{made, locked, paused, pausedBots:
-  {<bot, or a conversation that isn't a bot's>: why}, store: "keychain" | "encrypted", keptDays,
+  {<bot on this computer, or a conversation that isn't a bot's>: why}, store: "keychain" | "encrypted", keptDays,
   agents, agentsWaiting?, tampered?, generations: {items, grants, paused}}` (`agents`: whether agents may use it
   on this box, below; `agentsWaiting`: its sandbox is on, and they may once the coding agents
   started before it came on have finished, which clients say as “Locked for now: some agents started before the sandbox was on. The vault opens when they finish.”); an item is `{id, kind: "login" |
   "key" | "file" | "note", name, sites, username?, fields, fileName?, readable?, signInOnly?,
   created, changed, used?}` (`sites`: hosts, a site's own and those under it; `fields`: the names of the values it
   holds, a sign-in's `password`, a file's `file` (base64), a note's `text`, a key's own); a grant
-  is `{item, who: {bot} | {project: <folder>} | {everyone: true}, how: "own" | "ask", at}`.
+  is `{item, who: {bot} | {project: <folder>} | {everyone: true}, how: "own" | "ask", at}`; a bot's
+  only while the bot is on this computer (one deleted or moved away can't use it, and isn't shown).
 - `POST kuvo/vault/items {kind, name, sites?, username?, fileName?, readable?, signInOnly?, values}`
   → `{item, key?}`: `key` when this item made a machine's vault. A sign-in needs a site (a host, or a
   name without dots on your network); names are unique; a value has at least 4 characters, so it can
@@ -2820,6 +2841,11 @@ bridge) has a tool call of that name running in it (`api/session/<id>/message`, 
 only the conversation's own call uses its grants. (On a machine its browser, and anything that runs
 as you there outside the sandbox, can still reach a value a fill puts in a page.)
 
+A call is a bot's when its conversation (or the one a subagent works for) is the bot's own, its seat
+in a group chat (`kuvo.seat`), or a session it started for its work, or one of those started in
+turn (`kuvo.by`): it uses the bot's grants, an Always gives the item to the bot, and the bot's pause
+holds it.
+
 Agents use the vault only on a box whose agents' commands are all in the sandbox (below: its state's
 `on` and `agents`; the tests open it with `KUVO_VAULT_AGENTS=1`, which a Mac's app never passes its box, and which a box
 takes only in a test's own folder, never the account's own `~/.kuvo-code` or a Mac's
@@ -2846,7 +2872,8 @@ has the vault sends `agents`; a client reads its absence as `true`, a box from b
   page (`400`), only on one of the item's sites. A sign-in without an item takes the one sign-in
   for the site the caller may use on its own (`404` for none or more, and the browser asks you as
   before). An item named for another site is refused (`403`) and pauses that bot's use of the
-  vault (a conversation's that isn't a bot's, by its root session), telling your phones.
+  vault (a conversation's that isn't a bot's, by its root session), telling your phones
+  (`category: "message"`, `data: {session}`, or a seat's `{group}`).
 
 Every use first checks Pause, then the grant: `own` goes ahead, `ask` (or no grant, for an item
 named) asks you and waits. An item you give through `vault_ask` "always" is granted on its own

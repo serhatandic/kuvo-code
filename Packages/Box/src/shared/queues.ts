@@ -24,8 +24,9 @@ export const queueFiles = (run: string): QueueFiles => ({
   lock: path.join(run, ".queues.lock"),
 });
 
-/** A session's queue as the box keeps it: whether it waits for Resume, and what Stop held for the
- * next step, in the order it goes (ahead of the queue). */
+/** A session's queue as the box keeps it: whether it waits for Resume, and what goes first, in its
+ * order (ahead of the queue): what Stop held for the next step, and one Undo put back where it was
+ * (in the engine, or waiting on the box). */
 export interface QueueState {
   paused: boolean;
   held: string[];
@@ -66,7 +67,8 @@ export interface Shown {
 // (A message's id names its file in `waiting`.)
 const WAITING_ID = /^msg_[A-Za-z0-9]{1,80}$/;
 
-const keptWaiting = (value: unknown): Waiting[] => (Array.isArray(value) ? value : []).flatMap(item => {
+/** What waits on the box, as a list in a file (or another box's move) gives it: each that's whole. */
+export const keptWaiting = (value: unknown): Waiting[] => (Array.isArray(value) ? value : []).flatMap(item => {
   if (!isObject(item) || typeof item.id !== "string" || !WAITING_ID.test(item.id) || typeof item.text !== "string") return [];
   const files = Array.isArray(item.files) ? item.files.filter((name): name is string => typeof name === "string") : [];
   return [{ id: item.id, ...(typeof item.from === "string" ? { from: item.from } : {}), text: item.text, ...(files.length ? { files } : {}), at: typeof item.at === "number" ? item.at : 0 }];
@@ -126,9 +128,14 @@ const fileNames = (files: unknown[] | undefined): string[] => (files ?? []).flat
   return typeof file.uri === "string" && !file.uri.startsWith("data:") ? [path.basename(decodeURIComponent(file.uri.replace(/^file:\/\//, "")))] : ["file"];
 });
 
-/** `message` kept on the box while `session`'s queue is paused (see `Shown`): true. Not paused,
- * false: it isn't kept. `changed`: as `changeQueue`'s. */
-export function keepWaiting(files: QueueFiles, session: string, message: Outgoing & { id: string }, { from, words, kept: keptText }: Shown = {}, changed?: () => void): boolean {
+/** Where one kept waiting goes in `state` (`waiting` without it): last, unless it's put back where
+ * it was (Undo, `link/engine/queue.ts`). */
+export type Place = (state: QueueState, item: Waiting) => QueueState;
+const last: Place = (state, item) => ({ ...state, waiting: [...(state.waiting ?? []), item] });
+
+/** `message` kept on the box while `session`'s queue is paused (see `Shown`), where `place` puts
+ * it: true. Not paused, false: it isn't kept. `changed`: as `changeQueue`'s. */
+export function keepWaiting(files: QueueFiles, session: string, message: Outgoing & { id: string }, { from, words, kept: keptText }: Shown = {}, changed?: () => void, place: Place = last): boolean {
   let kept = false;
   changeQueue(files, session, state => {
     if (!state.paused) return state;
@@ -136,7 +143,7 @@ export function keepWaiting(files: QueueFiles, session: string, message: Outgoin
     kept = true;
     const names = fileNames(message.files);
     const waiting: Waiting = { id: message.id, ...(from ? { from } : {}), text: words ?? message.text, ...(names.length ? { files: names } : {}), at: Date.now() };
-    return { ...state, waiting: [...(state.waiting ?? []).filter(each => each.id !== message.id), waiting] };
+    return place({ ...state, waiting: (state.waiting ?? []).filter(each => each.id !== message.id) }, waiting);
   }, changed);
   return kept;
 }

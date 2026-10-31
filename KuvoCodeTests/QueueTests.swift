@@ -187,35 +187,37 @@ import Testing
         #expect(!model.isQueuePaused)
     }
 
-    /// After Stop, a message removed and brought back with Undo: it waits for Resume on the box, at
-    /// the queue's end, rather than reaching the engine, which would run all it holds at once;
-    /// Resume goes on with the queue.
+    /// After Stop, a message removed and brought back with Undo: it waits for Resume on the box,
+    /// where it was (first, ahead of the one after it), rather than reaching the engine, which
+    /// would run all it holds at once; Resume sends it first, and the rest waits its turn.
     @Test func aMessagePutBackAfterStopWaitsForResume() async throws {
         let (model, box, _) = try await open(running: false, inbox: [queued("msg_02", "Fix the docs"), queued("msg_03", "Then update the changelog")],
                                              queues: #"{"ses_queue":{"paused":true,"held":[]}}"#)
         defer { box.stop(); engine.stop() }
         try await until { model.isQueuePaused }
         let item = try #require(model.waiting.first)
+        let before = model.next(after: item)
         model.cancelPending(item)
         try await until { !engine.requests("DELETE", "/inbox/msg_02").isEmpty }
         model.apply(try engine.event("session.inbox.cancelled", session: id, ["inboxID": "msg_02"]))
+        try await until { model.waiting.map(\.text) == ["Then update the changelog"] }
 
-        model.requeue(item, for: nil, paused: true)
-        try await until { model.waiting.map(\.text) == ["Then update the changelog", "Fix the docs"] && model.waiting.last.map(model.isOnBox) == true }
+        model.requeue(item, for: nil, paused: true, before: before)
+        try await until { model.waiting.map(\.text) == ["Fix the docs", "Then update the changelog"] && model.waiting.first.map(model.isOnBox) == true }
         #expect(engine.requests("POST", "/prompt").isEmpty, "held on the box, not sent to the engine")
         #expect(model.isQueuePaused)
-        #expect(model.sender(of: try #require(model.waiting.last)) == nil, "yours")
+        #expect(model.sender(of: try #require(model.waiting.first)) == nil, "yours")
 
         model.resumeQueue()
-        try await until { !deliveries(of: "msg_03").isEmpty }
-        #expect(deliveries(of: "msg_03") == ["steer"], "what the engine holds goes first")
-        #expect(engine.requests("POST", "/prompt").isEmpty, "what was put back waits its turn")
+        try await until { !engine.requests("POST", "/prompt").isEmpty }
+        #expect(engine.requests("POST", "/prompt").first?.body["text"] as? String == "Fix the docs", "back where it was: it goes first")
+        #expect(deliveries(of: "msg_03").isEmpty, "the one after it waits its turn")
     }
 
     /// A stopped conversation stays stopped while others write to it: another agent's letter waits
     /// on the box and shows in the queue with who it's from; a message you send for after this run
-    /// waits after it; Remove takes the letter away and Undo puts it back as it was, from the same
-    /// agent; Resume sends the first, and nothing went to the engine before.
+    /// waits after it; Remove takes the letter away and Undo puts it back as it was, where it was,
+    /// from the same agent; Resume sends the first, and nothing went to the engine before.
     @Test func whatArrivesWhileStoppedWaitsShownWithWhoItsFrom() async throws {
         let (model, box, _) = try await open(running: true, inbox: [])
         defer { box.stop(); engine.stop() }
@@ -244,14 +246,14 @@ import Testing
         model.cancelPending(letter)
         try await until { model.waiting.map(\.text) == ["Also run the tests"] }
         model.requeue(letter, for: nil, paused: true)
-        try await until { model.waiting.map(\.text) == ["Also run the tests", "The build is green on main."] }
-        #expect(model.sender(of: model.waiting[1]) == "Ada", "back as it was")
+        try await until { model.waiting.map(\.text) == ["The build is green on main.", "Also run the tests"] }
+        #expect(model.sender(of: model.waiting[0]) == "Ada", "back as it was, where it was")
         #expect(engine.requests("POST", "/prompt").isEmpty, "nothing reached the engine while it was stopped")
 
         model.resumeQueue()
         try await until { !engine.requests("POST", "/prompt").isEmpty }
         let sent = try #require(engine.requests("POST", "/prompt").first)
-        #expect(sent.body["text"] as? String == "Also run the tests")
+        #expect(sent.body["text"] as? String == "The build is green on main.")
         #expect(sent.body["delivery"] as? String == "steer")
         #expect(engine.requests("POST", "/prompt").count == 1, "one run at a time")
     }
