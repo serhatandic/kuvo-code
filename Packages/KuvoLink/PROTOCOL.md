@@ -999,7 +999,8 @@ your phone doesn't buzz for what you're already looking at, were shown, or answe
   seconds, for ten minutes; this Mac's box holds what it makes before its app says whether the
   phone link's on, and sends it once it's on. A permission or question held while the box couldn't
   hear its engine (it restarted, the stream dropped) is looked up when it hears it again, and let
-  go if it isn't asked any more. A box keeps what it holds in `run/held-notices.json` (with when
+  go if it isn't asked any more; so is a session's permission when its run ends (the engine lets
+  what a stopped run asked go without a word). A box keeps what it holds in `run/held-notices.json` (with when
   each was made, by the date, whether it was seen, and whether a client was in use), so the next
   one sends it if it stops first: what was held only because the relay wasn't there goes at once;
   what was held for a client in use keeps the rest of its hold, and a seen ask keeps waiting, for
