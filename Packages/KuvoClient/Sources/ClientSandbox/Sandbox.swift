@@ -314,6 +314,18 @@ extension SandboxAsk {
         alwaysPath.map { "Always for \($0)" + (alwaysScope.map { " " + $0 } ?? "") }
     }
 
+    /// What Always does, for VoiceOver only (nothing under the card says it): "Runs it, and from
+    /// now on lets Scout’s commands write there too, in the sandbox."
+    public var alwaysHint: String? {
+        guard alwaysPath != nil else { return nil }
+        let whose = switch owner?.kind {
+        case .bot: "\(owner?.name ?? asker)’s commands"
+        case .chats: "every chat’s commands"
+        case .project, nil: "\(projectName)’s commands"
+        }
+        return "Runs it, and from now on lets \(whose) write there too, in the sandbox."
+    }
+
     /// "Scout is waiting for you · 12 min", once it's waited a minute (`now` and `at` in
     /// milliseconds).
     public func waiting(now: Double) -> String? {

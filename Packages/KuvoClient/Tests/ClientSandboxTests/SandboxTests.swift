@@ -86,12 +86,14 @@ import Testing
         fromScout.owner = SandboxOwner(kind: .bot, id: "bot_scout", name: "Scout")
         #expect(fromScout.subtitle == "The sandbox stopped it from changing a file outside Scout’s folder.")
         #expect(fromScout.alwaysTitle == "Always for ~/.zshrc")
+        #expect(fromScout.alwaysHint == "Runs it, and from now on lets Scout’s commands write there too, in the sandbox.")
         var fromChat = ask
         fromChat.botName = nil
         fromChat.project = "/home/me/.kuvo-code/chats"
         fromChat.owner = .chats
         #expect(fromChat.subtitle == "The sandbox stopped it from changing a file outside Chats.")
         #expect(fromChat.alwaysScope == "in every chat" && fromChat.alwaysTitle == "Always for ~/.zshrc in every chat")
+        #expect(fromChat.alwaysHint == "Runs it, and from now on lets every chat’s commands write there too, in the sandbox.")
         // A box before owners: by the folder's name, as before.
         var before = fromChat
         before.owner = nil
