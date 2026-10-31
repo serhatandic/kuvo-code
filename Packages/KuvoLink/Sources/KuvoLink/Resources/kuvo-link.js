@@ -13280,7 +13280,7 @@ function asksToRestart() {
   const said = bridgeSays();
   if (said === "outside")
     return true;
-  if (said)
+  if (said === "inside")
     answeredRestart();
   return false;
 }

@@ -205,7 +205,7 @@ public enum SandboxRoutes {
 /// on a plain card in that computer's conversations (`SandboxState.restart`).
 public enum SandboxRestart {
     public static let title = "Restart agents in the sandbox?"
-    public static let detail = "Some agents started before the sandbox was on and still run outside it. Each restarts after its current turn and picks up where it left off. Commands they left running stop."
+    public static let detail = "Some agents started before the sandbox was on and still run outside it. Each restarts once it finishes what it’s doing, and picks up where it left off."
     public static let restart = "Restart Agents"
     public static let notNow = "Not Now"
 }

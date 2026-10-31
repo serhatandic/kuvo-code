@@ -355,8 +355,9 @@ test("a group chat's seat runs no commands, so it can't have one run outside the
 test("the asks you follow carry the box's ask to restart the agents that started before the sandbox, until it's answered", async t => {
   const on = fs.readFileSync(path.join(home, "run", "fence", "on"), "utf8").trim();
   const pid = await runningAs("kuvo-agents", t);
-  // (Set up with no bridge running, it had nothing to ask: as if it had been, the first time.)
-  fs.rmSync(path.join(home, "run", "fence", "restart-asked"), { force: true });
+  // No bridge running yet, as while one starts, settles nothing: it asks once one says some are outside.
+  assert.equal((await box.ask("GET", "kuvo/sandbox")).value.restart, undefined);
+  assert.equal(fs.existsSync(path.join(home, "run", "fence", "restart-asked")), false);
   fs.writeFileSync(path.join(home, "run", "bridge.json"), JSON.stringify({ port: 1, password: "b", pid }));
   t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
   const stop = new AbortController();

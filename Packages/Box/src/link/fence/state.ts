@@ -160,7 +160,8 @@ function bridgeSays(): "inside" | "outside" | "none" | undefined {
 }
 
 // Asked once whether to restart them: the first time it's on with some still outside it (or was
-// once all were in it, when there was nothing to ask).
+// once the bridge said all were in it, when there was nothing to ask; none running yet, as while
+// the bridge starts, settles nothing).
 const RESTART_ASKED = path.join(FOLDER, "restart-asked");
 
 /**
@@ -171,7 +172,7 @@ export function asksToRestart(): boolean {
   if (fs.existsSync(RESTART_ASKED)) return false;
   const said = bridgeSays();
   if (said === "outside") return true;
-  if (said) answeredRestart();
+  if (said === "inside") answeredRestart();
   return false;
 }
 

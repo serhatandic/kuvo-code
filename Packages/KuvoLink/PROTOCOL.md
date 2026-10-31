@@ -2923,8 +2923,8 @@ it's empty.
   answer with `POST kuvo/sandbox/restart` `{restart}`, which answers the state anew (400 without
   a true or false; 503 when the agents bridge doesn't answer, and it stays asked). True has the
   bridge (`POST /api/kuvo/sandbox/restart`) close each agent's process started before the sandbox
-  was on as its conversation is between turns, the rest as their turns end (what one left running
-  stops with it); each starts again in the sandbox with its next turn, going on with its
+  was on once its conversation is between turns and nothing it left going (commands, subagents)
+  still runs, the rest as they get there; each starts again in the sandbox with its next turn, going on with its
   conversation. False leaves them to finish as they are. `kuvo/sandbox/asks` carries it too, so a
   client following the asks hears it as it comes and goes. Clients show it as a card in the
   computer's conversations: "Restart agents in the sandbox?". It counts the

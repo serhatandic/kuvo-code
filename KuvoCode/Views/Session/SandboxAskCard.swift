@@ -196,7 +196,7 @@ struct SandboxRestartCard: View {
                 }
                 Button(SandboxRestart.restart) { answer(true) }
                     .buttonStyle(.glassProminent)
-                    .help("Each restarts in the sandbox after its current turn")
+                    .help("Each restarts in the sandbox once it finishes what it’s doing")
             }
             .buttonStyle(.glass)
             .controlSize(.large)

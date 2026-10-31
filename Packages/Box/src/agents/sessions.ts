@@ -2494,7 +2494,8 @@ export class Sessions {
     for (const live of this.live.values()) {
       for (const [providerID, thread] of live.threads) {
         if (!thread.outside) continue
-        if (isBusy(live.doing)) {
+        // (Its turn, and what it left going, commands or subagents, as when it closes idle.)
+        if (isBusy(live.doing) || thread.keepsWorking) {
           waiting = true
           continue
         }

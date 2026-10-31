@@ -693,6 +693,23 @@ describe("Claude Code in the box's sandbox", () => {
     expect(fake.options.resume).toBe(conversation)
   })
 
+  test("restarted as you said to, a Claude Code started before the sandbox was on lets a command it left running finish first", async () => {
+    const { id, first } = await begin()
+    turnOn()
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "t1", task_type: "local_bash", description: "Start the dev server", tool_use_id: "tool1", is_backgrounded: true })
+    fake.out.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "t1", task_type: "local_bash", description: "Start the dev server" }] })
+    fake.streams([first], [{ type: "text", text: "It's running." }])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    // Between turns, but its command still runs: it waits.
+    expect(sessions.restartOutside()).toBe(true)
+    expect(fake.closed).toBe(false)
+    fake.out.push({ type: "system", subtype: "background_tasks_changed", tasks: [] })
+    await until(() => sessions.restartOutside() === false)
+    expect(fake.closed).toBe(true)
+    expect(sessions.outside()).toBe(false)
+  })
+
   test("a worktree's commits go to its repository's own folder, which its commands write; a .git that names a folder not naming it back gives none", () => {
     const repository = join(root, "repo")
     spawnSync("git", ["init", "-q", repository])

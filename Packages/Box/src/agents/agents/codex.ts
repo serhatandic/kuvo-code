@@ -186,8 +186,7 @@ export class CodexAgent implements Agent {
     for (const [key, slot] of this.slots) {
       const server = slot.server
       if (!server || server.isClosed || !this.unfencedServers.has(server)) continue
-      const working = [...this.threads.values()].some((thread) => thread.server === server && thread.isRunning)
-      if (working || ((key === SHARED || key === ACCOUNT) && (this.logins.size || [...this.oneOffs.values()].some((oneOff) => oneOff.rpc === server)))) {
+      if (this.busy(key, server)) {
         waiting = true
         continue
       }
