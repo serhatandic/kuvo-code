@@ -13,6 +13,10 @@ import Testing
         try #require(KeeperRecord.read() == nil, "no keeper runs for the tests")
         BackgroundWork.shared.refresh()
         try #require(BackgroundWork.shared.state != .on, "this copy's background work isn't on, so no keeper is coming")
+        // With no keeper to start, the follower says background work didn't start, which Settings
+        // (and a phone's kuvo/mac) would show for every test after this one.
+        let didntStart = BackgroundWork.shared.didntStart
+        defer { BackgroundWork.shared.didntStart = didntStart }
         let follower = KeeperFollower(box: BoxProcess(), agents: OutsideAgents())
         await follower.start()
         var heard: [String] = []
