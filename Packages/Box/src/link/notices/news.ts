@@ -218,12 +218,13 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
 }
 
 // What `hold` keeps of `engine`'s that it asked you (a permission, a question) and isn't asked any
-// more: answered while its events couldn't be heard, so it never goes. One it can't tell about
-// stays as it is.
-export async function settleHeld(engine: Target, hold: NoticeHold): Promise<void> {
+// more: answered while its events couldn't be heard, or let go as its run ended, so it never goes.
+// `only`: just what that session asked. One it can't tell about stays as it is.
+export async function settleHeld(engine: Target, hold: NoticeHold, only?: string): Promise<void> {
   for (const entry of [...hold.held]) {
     const { request, requestSession, session } = entry.notice?.data ?? {};
     const kind = ({ permission: "permission", question: "form" } as Partial<Record<NoticeCategory, string>>)[entry.notice?.category];
+    if (only !== undefined && (requestSession ?? session) !== only) continue;
     // A form an MCP server asks for is filed under no session ("global"), where the engine lists
     // none without its folder: one it can't tell about.
     if (!kind || typeof request !== "string" || typeof (requestSession ?? session) !== "string" || (requestSession ?? session) === "global") continue;
@@ -238,6 +239,8 @@ export const NEWS = new Set(["permission.asked", "form.created", "session.execut
 export const GROUP_NEWS = new Set(["kuvo.group.met", "kuvo.group.done"]);
 // A permission or a form answered (or cancelled): its notice, if it waits, never goes.
 export const ANSWERED = new Set(["permission.replied", "form.replied", "form.cancelled"]);
+// A run's end, which takes what it asked with it.
+export const RUN_ENDS = new Set(["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"]);
 
 // A group chat's news, as the Mac tells it: its meeting held (who spoke last, or no one could take
 // part), or a bot done with the part it took on.

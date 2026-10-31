@@ -154,7 +154,7 @@ async function macBox({ config = { phones: true, machines: false }, before = () 
     assert.equal(parts[0].head.status, 200);
   };
   return {
-    time, phone, hold, app,
+    time, phone, hold, app, engine,
     async finished() {
       engine.send({ type: "session.execution.succeeded", data: { sessionID: "ses_a" } });
       await next(made.length + 1);
@@ -335,6 +335,20 @@ test("what was answered while the box couldn't hear its engine never reaches you
   assert.deepEqual(mac.hold.held.map(entry => entry.notice.data.request), ["per_2"]);
   await mac.app({ for: 0 });
   assert.deepEqual(mac.phone.map(notice => notice.data.request), ["per_2"]);
+});
+
+test("a permission held when you stop the run never reaches your phone: the engine lets it go without a word", async () => {
+  const asking = { ses_a: ["per_1"] };
+  const mac = await macBox({ asking });
+  await mac.app(here());
+  await mac.asked("per_1");
+  assert.equal(mac.hold.count, 1);
+  // Stopped: the engine has it no more, and says only that the run ended. Then it's run again.
+  asking.ses_a = [];
+  mac.engine.send({ type: "session.execution.interrupted", data: { sessionID: "ses_a", reason: "user" } });
+  await mac.finished();
+  await mac.app({ for: 0 });
+  assert.deepEqual(mac.phone.map(notice => notice.category), ["finished"]);
 });
 
 test("an MCP server's form held while the box couldn't hear its engine stays held: the engine can't say without its folder", async () => {
