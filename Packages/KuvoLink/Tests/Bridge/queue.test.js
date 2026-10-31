@@ -468,6 +468,21 @@ test("a conversation brought back after it was carried on keeps its own queue wh
   assert.deepEqual(prompted, []);
 });
 
+test("a conversation carried on, brought back and archived again keeps its own queue, and the one it was carried to goes on", async () => {
+  inboxes.ses_1 = [];
+  // Carried on to ses_3 once (nothing waiting then).
+  box().hear("session.metadata.updated", { metadata: { "kuvo.archived": true, "kuvo.carriedTo": "ses_3" } });
+  // Brought back, stopped, a letter waits; then archived again, the old mark sent with it.
+  box().hear("session.metadata.updated", { metadata: { "kuvo.archived": false, "kuvo.carriedTo": "ses_3" } });
+  await ask("POST", "kuvo/sessions/ses_1/stop");
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w1", text: "[Letter] The build is green.", from: "Ada", words: "The build is green.", kept: true });
+  box().hear("session.metadata.updated", { metadata: { "kuvo.archived": true, "kuvo.carriedTo": "ses_3" } });
+  assert.equal(link.queueOf("ses_3").paused, false, "the conversation it was carried to before isn't stopped");
+  assert.deepEqual(link.queueOf("ses_3").waiting ?? [], []);
+  assert.deepEqual(link.queueOf("ses_1").waiting?.map(each => each.from), ["Ada"], "its own waits with it");
+  assert.deepEqual(prompted, []);
+});
+
 test("your own message waits shown as you wrote it, though what goes to the agent says more (its files' notes)", async () => {
   inboxes.ses_1 = [];
   await ask("POST", "kuvo/sessions/ses_1/stop");

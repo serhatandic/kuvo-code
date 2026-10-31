@@ -881,6 +881,23 @@ function takeWaiting(session, item, resume = false) {
   return { shown, message };
 }
 function carryQueue(from, to, renamed) {
+  const again = locked(FILES.lock, () => {
+    let carried = {};
+    try {
+      carried = JSON.parse(fs8.readFileSync(CARRIED_FILE, "utf8")) ?? {};
+    } catch {}
+    if (carried[from] === to)
+      return true;
+    delete carried[from];
+    carried[from] = to;
+    const kept = Object.entries(carried).slice(-MOST_CARRIED);
+    try {
+      writePrivate(CARRIED_FILE, JSON.stringify(Object.fromEntries(kept)));
+    } catch {}
+    return false;
+  });
+  if (again)
+    return;
   let was = { paused: false, held: [] };
   changeQueue2(from, (state) => {
     was = state;
@@ -896,6 +913,8 @@ function carryQueue(from, to, renamed) {
     ...was.waiting?.length ? { waiting: [...state.waiting ?? [], ...was.waiting] } : {}
   }));
 }
+var CARRIED_FILE = path7.join(RUN, "queues-carried.json");
+var MOST_CARRIED = 300;
 function forgetQueue(session) {
   let gone = [];
   changeQueue2(session, (state) => {

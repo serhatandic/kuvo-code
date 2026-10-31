@@ -117,6 +117,19 @@ function takeWaiting(session: string, item?: string, resume = false): { shown: W
  * coding agents): stopped, it stays stopped, and what waited on the box goes with it. `renamed`:
  * what the engine held, by its id where the conversation goes on. */
 export function carryQueue(from: string, to: string, renamed: Record<string, string>): void {
+  // Once for each carry: a conversation brought back keeps its mark, which comes again as it's
+  // archived again (a client sends its metadata whole), and its queue is its own by then.
+  const again = locked(FILES.lock, () => {
+    let carried: Record<string, unknown> = {};
+    try { carried = JSON.parse(fs.readFileSync(CARRIED_FILE, "utf8")) ?? {}; } catch {}
+    if (carried[from] === to) return true;
+    delete carried[from];
+    carried[from] = to;
+    const kept = Object.entries(carried).slice(-MOST_CARRIED);
+    try { writePrivate(CARRIED_FILE, JSON.stringify(Object.fromEntries(kept))); } catch {}
+    return false;
+  });
+  if (again) return;
   let was: QueueState = { paused: false, held: [] };
   changeQueue(from, state => { was = state; return { paused: false, held: [] }; });
   if (!showsQueue(was)) return;
@@ -124,6 +137,10 @@ export function carryQueue(from: string, to: string, renamed: Record<string, str
   changeQueue(to, state => ({ ...state, paused: state.paused || was.paused, held: [...state.held, ...held],
     ...(was.waiting?.length ? { waiting: [...(state.waiting ?? []), ...was.waiting] } : {}) }));
 }
+
+// The carries made, from one session to the one it went on in, the latest few hundred.
+const CARRIED_FILE = path.join(RUN, "queues-carried.json");
+const MOST_CARRIED = 300;
 
 /** `session`'s queue forgotten, and what waited on the box for it (its conversation is gone). */
 export function forgetQueue(session: string): void {

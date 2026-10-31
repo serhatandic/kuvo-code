@@ -1271,9 +1271,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   computer the conversation lives on. There the session's wake-ups and watches go
   with it, the engine's is marked `kuvo.carriedTo` (the new one's id) as it's archived, and once
   started it goes to its end, whatever becomes of the request. A client that carries one itself
-  marks it `kuvo.carriedTo` too, as it archives it: a session archived so takes its queue on the box with it (one brought
-  back keeps the mark, and its own queue; paused,
-  stopped by you, it stays so in the new one, with what waited on the box). Changing a machine's bot's model there to
+  marks it `kuvo.carriedTo` too, as it archives it: a session archived so takes its queue on the
+  box with it, once (paused, stopped by you, it stays so in the new one, with what waited on the
+  box). One brought back keeps the mark and its own queue, archived again too (the box keeps the
+  carries it made in `run/queues-carried.json`). Changing a machine's bot's model there to
   one of the agents' (`PATCH kuvo/bots/<id>`) carries its conversation on with them too; the Mac
   takes in its new conversation as it next connects.
 - `POST kuvo/sign-in/return` with `{"url"}`: where a sign-in's page sent the browser back to the
