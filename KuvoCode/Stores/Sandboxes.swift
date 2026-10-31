@@ -23,6 +23,14 @@ final class Sandboxes {
     /// Asks answered here: closed on their box, so a list it sent before the answer doesn't bring
     /// them back.
     @ObservationIgnored private var answered: Set<String> = []
+    /// Boxes asking you, once, to restart their agents started before the sandbox was on: a card
+    /// in each of their conversations, until it's answered here or elsewhere.
+    private(set) var restarting: Set<String> = []
+    /// Boxes whose restart is being answered here, or was: the card's gone, whatever the box still
+    /// lists until it hears.
+    @ObservationIgnored private var restartAnswered: Set<String> = []
+    /// Why the answer to a box's restart didn't go through.
+    private(set) var restartFailures: [String: String] = [:]
     /// Each conversation's commands whose asks were seen open and then closed (answered here or
     /// elsewhere), by box and conversation: only those may be running outside the sandbox.
     private(set) var released: [String: Set<String>] = [:]
@@ -112,6 +120,7 @@ final class Sandboxes {
                     for try await line in client.follow(SandboxRoutes.asks + "/events") {
                         guard let list = try? JSONDecoder().decode(SandboxAsks.self, from: line) else { continue }
                         take(list.asks, from: box)
+                        takeRestart(list.restart == true, from: box)
                     }
                 } catch let refusal as BoxRefusal where [404, 405].contains(refusal.status) {
                     return
@@ -125,6 +134,7 @@ final class Sandboxes {
         following[box] = nil
         asks[box] = nil
         heard.remove(box)
+        restarting.remove(box)
         released = released.filter { !$0.key.hasPrefix(box + "\n") }
         changed()
     }
@@ -163,7 +173,51 @@ final class Sandboxes {
         for gone in asks[box] ?? [] { Notifier.shared.clear(request: gone.id) }
         asks[box] = nil
         heard.remove(box)
+        restarting.remove(box)
         changed()
+    }
+
+    // MARK: Restarting the agents started before the sandbox
+
+    #if DEBUG
+    /// KUVO_DEMO_SANDBOX_RESTART=1: every box asks to restart its agents, for a look at the card.
+    static let demoRestart = ProcessInfo.processInfo.environment["KUVO_DEMO_SANDBOX_RESTART"] == "1"
+    #endif
+
+    /// Whether `box` asks you to restart its agents started before its sandbox was on.
+    func asksToRestart(on box: String) -> Bool {
+        #if DEBUG
+        if Self.demoRestart { return !restartAnswered.contains(box) }
+        #endif
+        return restarting.contains(box)
+    }
+
+    /// Whether `box` asks it now, as its asks say.
+    func takeRestart(_ asking: Bool, from box: String) {
+        if asking && !restartAnswered.contains(box) { restarting.insert(box) } else { restarting.remove(box) }
+    }
+
+    /// Your answer: restart them (each after its current turn) or leave them be. The box asks once,
+    /// so the card goes either way, here and on your other devices.
+    func answerRestart(_ restart: Bool, on box: String) async throws {
+        guard restartAnswered.insert(box).inserted else { return }
+        restartFailures[box] = nil
+        #if DEBUG
+        if Self.demoRestart { return }
+        #endif
+        do {
+            _ = try await ask(Nothing.self, "POST", SandboxRoutes.restart, body: ["restart": restart], on: box)
+            restarting.remove(box)
+        } catch {
+            restartAnswered.remove(box)
+            restartFailures[box] = (error as? BoxRefusal)?.message ?? error.localizedDescription
+            throw error
+        }
+    }
+
+    /// Whether the answer to `box`'s restart is going now.
+    func answeringRestart(on box: String) -> Bool {
+        restartAnswered.contains(box) && restarting.contains(box)
     }
 
     /// Your answer: once, always (where the ask names a place) or no. One that's no longer open
