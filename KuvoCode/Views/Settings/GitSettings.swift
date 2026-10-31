@@ -60,8 +60,13 @@ struct WorktreesSettings: View {
     @Environment(AppModel.self) private var app
     @Environment(Workspace.self) private var workspace
     @Environment(\.settingsBox) private var box
-    @State private var sizes: [String: Int64] = [:]
+    /// Each worktree as its box last listed it, by root: the room it takes, what isn't committed.
+    @State private var listed: [String: Workspace.BoxWorktree] = [:]
     @State private var removing: Workspace.Worktree?
+    /// What Remove's question says of the worktree, read again as Remove… is clicked; the one
+    /// being read meanwhile.
+    @State private var removalNote = ""
+    @State private var checking: String?
     @State private var failure: String?
     /// Choosing a machine's folder for new worktrees, or new projects, in the page's place.
     @State private var choosingFolder = false
@@ -105,7 +110,7 @@ struct WorktreesSettings: View {
                     let sessions = workspace.sessions.filter { workspace.worktrees[$0.location.directory]?.root == item.tree.root }
                     LabeledContent {
                         HStack(spacing: 6) {
-                            if let size = sizes[item.tree.root] {
+                            if let size = listed[item.tree.root]?.size {
                                 Text(StorageSettings.format(size))
                                     .foregroundStyle(.secondary)
                                     .monospacedDigit()
@@ -119,7 +124,8 @@ struct WorktreesSettings: View {
                                 .buttonStyle(IconButtonStyle(width: 28, height: 24))
                                 .help("Show in Finder")
                             }
-                            Button("Remove…") { removing = item.tree }
+                            Button("Remove…") { Task { await askToRemove(item.tree) } }
+                                .disabled(checking == item.tree.root)
                         }
                     } label: {
                         Text(item.tree.branch)
@@ -145,10 +151,10 @@ struct WorktreesSettings: View {
         // Again once this Mac's box is up, if it wasn't when the page opened.
         .task(id: "\(box.machine ?? BoxClient.mac) \(app.box.endpoint != nil)") {
             reading = true
-            let read = await workspace.takeWorktrees(from: box.machine ?? BoxClient.mac, sizes: true)
+            let read = await workspace.takeWorktrees(from: box.machine ?? BoxClient.mac, details: true)
             reading = false
             unreached = read == nil
-            sizes = read ?? [:]
+            listed = read ?? [:]
         }
         #if DEBUG
         // KUVO_DEMO_WORKTREES_FOLDER=browse: Choose a Folder's browser open, as a machine's page opens it.
@@ -174,12 +180,28 @@ struct WorktreesSettings: View {
             Button("Remove", role: .destructive) {
                 guard let folder = workspace.worktrees.first(where: { $0.value.root == tree.root })?.key else { return }
                 Task {
-                    do { try await workspace.removeWorktree(folder) } catch { failure = error.localizedDescription }
+                    do {
+                        try await workspace.removeWorktree(folder)
+                        failure = nil
+                    } catch {
+                        failure = error.localizedDescription
+                    }
                 }
             }
         } message: { _ in
-            Text("Its folder and anything in it that isn’t committed are deleted. Its sessions stay, without a folder to run in.")
+            Text(removalNote)
         }
+    }
+
+    /// Asks before removing `tree`, saying what's in it now: changes made since the list was read
+    /// count. When the box can't say, the question says what's lost without guessing.
+    private func askToRemove(_ tree: Workspace.Worktree) async {
+        checking = tree.root
+        let read = await workspace.takeWorktrees(from: box.machine ?? BoxClient.mac, details: true)
+        checking = nil
+        if let read { listed = read }
+        removalNote = (read?[tree.root] ?? Workspace.BoxWorktree(project: tree.project, root: tree.root, folder: nil, branch: tree.branch, base: tree.base)).removalNote
+        removing = tree
     }
 }
 

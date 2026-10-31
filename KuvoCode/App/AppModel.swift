@@ -15,7 +15,21 @@ final class AppModel {
         case failed(String)
     }
 
-    private(set) var engine = EngineState.preparing
+    private(set) var engine = EngineState.preparing {
+        didSet {
+            if engine == .ready { engineWentDown = false } else if case .failed = engine { engineWentDown = true }
+        }
+    }
+    /// It stopped after running, or couldn't start, and isn't back yet (starting over by itself or
+    /// from Try Again meanwhile): what needs it, like a sign-in, can't work until it is.
+    var engineIsDown: Bool {
+        #if DEBUG
+        // KUVO_DEMO_ENGINE_STOPPED: said stopped over the accounts, for a look at it.
+        if ProcessInfo.processInfo.environment["KUVO_DEMO_ENGINE_STOPPED"] != nil { return true }
+        #endif
+        return engineWentDown && engine != .ready
+    }
+    private var engineWentDown = false
     private(set) var api: OpenCodeAPI?
     /// False while the live event feed is down (the UI shows it, and re-syncs after).
     private(set) var isLive = false
@@ -250,7 +264,9 @@ final class AppModel {
 
     private var eventTask: Task<Void, Never>?
     /// The engine had been running when it failed (it stopped, rather than couldn't start).
-    private(set) var engineStoppedWhileRunning = false
+    private(set) var engineStoppedWhileRunning = false {
+        didSet { if engineStoppedWhileRunning { engineWentDown = true } }
+    }
     /// This start of the engine, new with each start and each stop: an earlier engine's exit,
     /// coming in late as it stops, isn't taken for this one's, and a start that was stopped or
     /// started over while it waited gives up.

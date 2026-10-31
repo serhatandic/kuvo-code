@@ -379,6 +379,37 @@ import Testing
         #expect(remembered.worktrees[folder] == tree)
     }
 
+    /// Settings › Worktrees asks before removing one with what's in it: changes not committed,
+    /// which go, and commits not merged, which its branch keeps.
+    @Test func removingOneSaysWhatsInIt() async throws {
+        defer { done() }
+        let session = try await workspace.createSession(in: repository.path, model: nil, agent: "build", worktree: true)
+        let folder = session.location.directory
+        let tree = try #require(workspace.worktrees[folder])
+        #expect(try #require(await workspace.takeWorktrees(from: BoxClient.mac, details: true)?[tree.root]).removalNote.hasPrefix("Its folder is deleted. Everything in it is committed."))
+
+        try Data("total = 1\n".utf8).write(to: URL(filePath: folder).appending(path: "a.py"))
+        _ = try git("add", "-A", in: folder)
+        _ = try git("commit", "-q", "-m", "A", in: folder)
+        try Data("total = 2\n".utf8).write(to: URL(filePath: folder).appending(path: "b.py"))
+        let note = try #require(await workspace.takeWorktrees(from: BoxClient.mac, details: true)?[tree.root]).removalNote
+        #expect(note == "Its folder is deleted, with changes in it that aren’t committed. \(tree.branch) keeps its 1 commit not merged yet. Its sessions stay, without a folder to run in.")
+    }
+
+    /// This Mac's worktree while its engine is down: removing it says why, rather than nothing
+    /// happening, and it stays.
+    @Test func thisMacsWorktreeWhileItsEngineIsDownSaysSo() async throws {
+        defer { done() }
+        let session = try await workspace.createSession(in: repository.path, model: nil, agent: "build", worktree: true)
+        let folder = session.location.directory
+        workspace.api = nil
+        StubWeb.route(Self.engine + "/api/session/active") { _ in StubWeb.json([:], status: 503) }
+        let said = await #expect(throws: BoxRefusal.self) { try await workspace.removeWorktree(folder) }
+        #expect(said?.status == 503)
+        #expect(workspace.worktrees[folder] != nil)
+        #expect(FileManager.default.fileExists(atPath: folder))
+    }
+
     /// While its agent works there, the worktree stays, whatever you were told.
     @Test func notRemovedWhileItsAgentWorks() async throws {
         defer { done() }
