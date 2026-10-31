@@ -434,6 +434,10 @@ export function keepFence(): void {
   // Set up, or found it can't run here: the agents bridge starts the coding agents from now, never
   // before (it may have started first: this Mac's app starts it as the engine starts).
   try { writePrivate(DECIDED, JSON.stringify({ pid: process.pid })); } catch {}
+  // And no longer once it stops: a bridge started before the next box waits for that one.
+  process.once("exit", () => {
+    try { if (JSON.parse(fs.readFileSync(DECIDED, "utf8")).pid === process.pid) fs.rmSync(DECIDED, { force: true }); } catch {}
+  });
   let rounds = 0;
   setInterval(() => {
     const round = rounds++;

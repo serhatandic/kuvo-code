@@ -465,6 +465,23 @@ import { delimiter, join as join3 } from "path";
 import { execFileSync, spawn } from "child_process";
 import fs from "fs";
 import path from "path";
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function processRuns(pid, name, proc = "/proc") {
+  if (!Number.isInteger(pid) || pid <= 1 || !alive(pid))
+    return false;
+  try {
+    return fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").includes(name);
+  } catch {
+    return !fs.existsSync(proc);
+  }
+}
 function loginShell(env = process.env, platform = process.platform) {
   const given = env.SHELL && path.isAbsolute(env.SHELL) ? env.SHELL : undefined;
   if (platform === "darwin")
@@ -6307,13 +6324,10 @@ async function untilSandboxDecided(bound = 30000) {
   const where = folder();
   if (!where || process.env.KUVO_SANDBOX === "off")
     return;
-  const decided = () => {
-    try {
-      return alive(JSON.parse(readFileSync13(join14(where, "decided"), "utf8")).pid);
-    } catch {
-      return false;
-    }
-  };
+  const run = dirname6(where);
+  if (!process.env.KUVO_FENCE && !existsSync7(join14(run, "link.needed")) && !boxRuns(join14(run, "link.pid")))
+    return;
+  const decided = () => boxRuns(join14(where, "decided"));
   if (decided())
     return;
   console.error("Waiting for the box to set up its sandbox before starting any coding agent.");
@@ -6329,12 +6343,10 @@ async function untilSandboxDecided(bound = 30000) {
     }, 100);
   });
 }
-var alive = (pid) => {
-  if (!Number.isInteger(pid) || pid <= 1)
-    return false;
+var boxRuns = (record) => {
   try {
-    process.kill(pid, 0);
-    return true;
+    const text = readFileSync13(record, "utf8");
+    return processRuns(/^\d+$/.test(text.trim()) ? Number(text) : JSON.parse(text).pid, "kuvo-link");
   } catch {
     return false;
   }
@@ -22550,4 +22562,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 5f089270db86bce368ef66b4f875f0780535e06c71579ca47694497317862770
+// Built from Packages/Box/src/agents 866e4811b2015396dee776416842501e4278d5bcd1509c2ee451cb29c1f3674c

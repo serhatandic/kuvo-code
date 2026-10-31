@@ -3,7 +3,7 @@
 // said whether the sandbox is on, so none is left running outside it.
 
 import { afterAll, afterEach, expect, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { canFence, realFence } from "./support/fence"
@@ -15,9 +15,11 @@ const main = join(import.meta.dir, "..", "..", "src", "agents", "main.ts")
 const password = "startup-test"
 const auth = { authorization: "Basic " + Buffer.from(`opencode:${password}`).toString("base64") }
 let bridge: ReturnType<typeof Bun.spawn> | undefined
+let box: ReturnType<typeof Bun.spawn> | undefined
 afterEach(() => {
   bridge?.kill()
-  bridge = undefined
+  box?.kill()
+  bridge = box = undefined
 })
 
 /** A Codex that says in its account whether it runs in the sandbox: there, Kuvo Code's folder (`kuvo`) can't be read. */
@@ -52,8 +54,9 @@ process.stdin.on("data", (chunk) => {
   chmodSync(join(bin, "codex"), 0o755)
 }
 
-/** The bridge, started with the box's sandbox folder empty: the box hasn't set it up yet. */
-function start(root: string) {
+/** The bridge, started with the box's sandbox folder empty: the box hasn't set it up yet. This Mac's
+ * (the app names the folder), or a `machine`'s (in its Kuvo Code folder). */
+function start(root: string, machine = false) {
   const kuvo = join(root, "kuvo")
   const fence = join(kuvo, "run", "fence")
   mkdirSync(fence, { recursive: true })
@@ -63,7 +66,8 @@ function start(root: string) {
   for (const folder of ["home", "tmp", "agents"]) mkdirSync(join(root, folder), { recursive: true })
   const env: Record<string, string> = {
     PATH: `${bin}:/usr/bin:/bin`, HOME: join(root, "home"), TMPDIR: join(root, "tmp") + "/", BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
-    KUVO_AGENTS_HOME: join(root, "agents"), OPENCODE_PASSWORD: password, KUVO_FENCE: fence,
+    KUVO_AGENTS_HOME: join(root, "agents"), OPENCODE_PASSWORD: password,
+    ...(machine ? { KUVO_HOME: kuvo } : { KUVO_FENCE: fence }),
   }
   const child = (bridge = Bun.spawn([process.execPath, "run", main], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" }))
   const lines = (stream: ReadableStream<Uint8Array>, found: (text: string) => boolean) =>
@@ -77,12 +81,18 @@ function start(root: string) {
     })()
   const url = lines(child.stdout as ReadableStream<Uint8Array>, (text) => text.includes("\n")).then((text) => (text ? new URL(JSON.parse(text.split("\n")[0]).url) : null))
   // What it says while it waits for the box.
-  const waiting = lines(child.stderr as ReadableStream<Uint8Array>, (text) => /sandbox/.test(text))
+  const waiting = lines(child.stderr as ReadableStream<Uint8Array>, (text) => text.includes("Waiting for the box to set up its sandbox before starting any coding agent."))
   return { kuvo, fence, url, waiting }
 }
 
-/** The box, having set its sandbox up (or found it can't run here): it says so as it runs. */
-const boxDecides = (fence: string) => writeFileSync(join(fence, "decided"), JSON.stringify({ pid: process.pid }))
+/** The box (a stand-in, by its script's name), having set its sandbox up (or found it can't run
+ * here): it says so as it runs. */
+function boxDecides(fence: string) {
+  const script = join(fence, "..", "..", "kuvo-link.js")
+  writeFileSync(script, "process.stdin.resume()\n")
+  box = Bun.spawn([process.execPath, script], { env: { BUN_BE_BUN: "1" }, stdin: "pipe" })
+  writeFileSync(join(fence, "decided"), JSON.stringify({ pid: box.pid }))
+}
 
 /** Codex's account as the bridge lists it: whose words say where Codex runs. */
 async function codexAccount(url: URL) {
@@ -113,4 +123,45 @@ test("where the box can't run the sandbox, it says so, and the bridge starts the
   const address = await url
   expect(address).not.toBeNull()
   expect(await codexAccount(address!)).toContain("outside-sandbox@test")
+}, 60_000)
+
+test("a box that said so before it stopped (a restart, a crash) doesn't count: the bridge waits for the one that runs now", async () => {
+  const root = join(base, "gone")
+  const kuvo = join(root, "kuvo")
+  const fence = join(kuvo, "run", "fence")
+  mkdirSync(fence, { recursive: true })
+  const gone = Bun.spawn([process.execPath, "-e", "0"], { env: { BUN_BE_BUN: "1" } })
+  await gone.exited
+  writeFileSync(join(fence, "decided"), JSON.stringify({ pid: gone.pid }))
+  const { url, waiting } = start(root)
+  expect(await Promise.race([url, waiting.then(() => "waits")])).toBe("waits")
+  boxDecides(fence)
+  expect(await codexAccount((await url)!)).toContain("outside-sandbox@test")
+}, 60_000)
+
+test.skipIf(!existsSync("/proc"))("on Linux, another program that took a gone box's number doesn't count either", async () => {
+  const root = join(base, "taken")
+  const fence = join(root, "kuvo", "run", "fence")
+  mkdirSync(fence, { recursive: true })
+  writeFileSync(join(fence, "decided"), JSON.stringify({ pid: process.pid }))
+  const { url, waiting } = start(root)
+  expect(await Promise.race([url, waiting.then(() => "waits")])).toBe("waits")
+  boxDecides(fence)
+  expect(await url).not.toBeNull()
+}, 60_000)
+
+test("on a machine whose box doesn't run (nothing for it to answer), the bridge doesn't wait for it; while its keeper starts it, it does", async () => {
+  const alone = start(join(base, "machine-alone"), true)
+  const address = await Promise.race([alone.url, alone.waiting.then(() => "waits")])
+  expect(address).toBeInstanceOf(URL)
+  expect(await codexAccount(address as URL)).toContain("outside-sandbox@test")
+  bridge?.kill()
+
+  const root = join(base, "machine-needed")
+  mkdirSync(join(root, "kuvo", "run", "fence"), { recursive: true })
+  writeFileSync(join(root, "kuvo", "run", "link.needed"), "")
+  const needed = start(root, true)
+  expect(await Promise.race([needed.url, needed.waiting.then(() => "waits")])).toBe("waits")
+  boxDecides(needed.fence)
+  expect(await needed.url).not.toBeNull()
 }, 60_000)

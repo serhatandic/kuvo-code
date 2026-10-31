@@ -6093,6 +6093,12 @@ function keepFence() {
   try {
     writePrivate(DECIDED, JSON.stringify({ pid: process.pid }));
   } catch {}
+  process.once("exit", () => {
+    try {
+      if (JSON.parse(fs26.readFileSync(DECIDED, "utf8")).pid === process.pid)
+        fs26.rmSync(DECIDED, { force: true });
+    } catch {}
+  });
   let rounds = 0;
   setInterval(() => {
     const round = rounds++;
@@ -18328,7 +18334,7 @@ import fs68 from "node:fs";
 import path70 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.144";
+var BRIDGE_VERSION = "0.9.145";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

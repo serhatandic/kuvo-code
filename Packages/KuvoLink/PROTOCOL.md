@@ -3033,10 +3033,12 @@ it's empty.
   bridge running, it's true). `outside`: one still runs outside it (`agents` is false then; while
   it's false without `outside`, the bridge hasn't noted it yet). No agent starts outside it as the
   box starts: the box writes `run/fence/decided` (`{pid}`, its own) once its first setup has put
-  the sandbox on or found it can't be here, and the agents bridge waits for that (a pid that's
-  running) before it listens, a while at most, so one started before the box (as a Mac's keeper
-  and a machine's launch do) starts none outside it. A bridge with no sandbox folder, or started
-  with `KUVO_SANDBOX=off`, doesn't wait. `restart`: the box asks you, once, to restart those: true the first
+  the sandbox on or found it can't be here, and removes it as it stops; the agents bridge waits for
+  that (the pid running the box's `kuvo-link`, by its command line on Linux, so not one a stopped
+  box left) before it listens, a while at most, so one started before the box (as a machine's
+  launch may) starts none outside it. This Mac's keeper starts its bridge once its box is up. A
+  bridge with no sandbox folder, started with `KUVO_SANDBOX=off`, or on a machine whose box neither
+  runs (`run/link.pid`) nor is wanted (`run/link.needed`), doesn't wait. `restart`: the box asks you, once, to restart those: true the first
   time it's on with one still running (never if it was on with all inside it first), until you
   answer with `POST kuvo/sandbox/restart` `{restart}`, which answers the state anew (400 without
   a true or false; 503 when the agents bridge doesn't answer, and it stays asked). True has the

@@ -5,7 +5,7 @@
 import { createHash, randomBytes } from "node:crypto"
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, type Dirent } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
-import { sandboxGeneration } from "../shared/platform"
+import { processRuns, sandboxGeneration } from "../shared/platform"
 import { machineHome } from "./machine"
 
 /** What commands may do: everything read but `hidden`; written only in the session's folder and
@@ -49,19 +49,19 @@ export function fenceOn(): boolean {
 /**
  * Until the box that runs here now has set up its sandbox, or found it can't run here
  * (`run/fence/decided`, naming it): a coding agent started before then would run outside it until
- * it stops. Not while it's off (Kuvo Code's kill switch) or there's no sandbox folder, and no longer
- * than `bound`, for a box that doesn't start: then the agents start as the sandbox is.
+ * it stops. Not while it's off (Kuvo Code's kill switch), there's no sandbox folder, or on a machine
+ * no box runs or starts, and no longer than `bound`, for a box that doesn't start: then the agents
+ * start as the sandbox is.
  */
 export async function untilSandboxDecided(bound = 30_000): Promise<void> {
   const where = folder()
   if (!where || process.env.KUVO_SANDBOX === "off") return
-  const decided = () => {
-    try {
-      return alive(JSON.parse(readFileSync(join(where, "decided"), "utf8")).pid)
-    } catch {
-      return false
-    }
-  }
+  const run = dirname(where)
+  // On a machine, only while its box runs or its keeper starts it (`run/link.needed`): one with
+  // nothing to answer doesn't run, so nothing would say. (This Mac's app starts its box first.)
+  if (!process.env.KUVO_FENCE && !existsSync(join(run, "link.needed")) && !boxRuns(join(run, "link.pid"))) return
+  // Said by the box that runs now: not one that stopped since (a restart, a crash).
+  const decided = () => boxRuns(join(where, "decided"))
   if (decided()) return
   console.error("Waiting for the box to set up its sandbox before starting any coding agent.")
   const until = Date.now() + bound
@@ -75,11 +75,11 @@ export async function untilSandboxDecided(bound = 30_000): Promise<void> {
   })
 }
 
-const alive = (pid: unknown) => {
-  if (!Number.isInteger(pid) || (pid as number) <= 1) return false
+/** Whether the process a record names (`{pid}`, or the number alone) is the box's link. */
+const boxRuns = (record: string) => {
   try {
-    process.kill(pid as number, 0)
-    return true
+    const text = readFileSync(record, "utf8")
+    return processRuns(/^\d+$/.test(text.trim()) ? Number(text) : JSON.parse(text).pid, "kuvo-link")
   } catch {
     return false
   }
