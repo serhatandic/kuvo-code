@@ -168,7 +168,12 @@ public struct SandboxRule: Codable, Equatable, Identifiable, Sendable {
 /// The answers' envelopes.
 public struct SandboxAsks: Codable, Equatable, Sendable {
     public var asks: [SandboxAsk]
-    public init(asks: [SandboxAsk]) { self.asks = asks }
+    /// The box asks you, once, to restart the agents started before its sandbox was on (`SandboxState.restart`).
+    public var restart: Bool?
+    public init(asks: [SandboxAsk], restart: Bool? = nil) {
+        self.asks = asks
+        self.restart = restart
+    }
 }
 
 public struct SandboxAllowed: Codable, Equatable, Sendable {
