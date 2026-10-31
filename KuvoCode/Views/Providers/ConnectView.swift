@@ -1,3 +1,4 @@
+import ClientAccounts
 import ClientDesign
 import OpenCodeKit
 import SwiftUI
@@ -223,6 +224,13 @@ struct ConnectView: View {
                     .wellField()
                     .onSubmit { connectKey(method) }
                     .onChange(of: key) { keyError = nil }
+                // A key that comes with a subscription says so, so it doesn't read as pay-as-you-go.
+                if let page = KeyPage.page(for: integrationID) {
+                    Text(Self.keyLine(page))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             if !method.form.isEmpty {
                 FormFieldsView(fields: method.form, answers: $answers)
@@ -243,6 +251,13 @@ struct ConnectView: View {
             .controlSize(.large)
         }
         .animation(.ui, value: keyError)
+    }
+
+    /// Where the key comes from, and a link to the page that has it.
+    private static func keyLine(_ page: KeyPage) -> AttributedString {
+        var link = AttributedString("Get Your Key")
+        link.link = page.url
+        return AttributedString(page.line + " ") + link
     }
 
     /// Getting ready (an agent downloading first, its page not there yet): what it's doing, not
