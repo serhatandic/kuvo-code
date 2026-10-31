@@ -561,12 +561,14 @@ the same for every client and with none connected, and keeps them in `run/queues
   as a message), an answer to a letter, a wake-up sent now, a bot's work news, an ask's late answer
   and a goal's notes. A scheduled wake-up that comes due waits there too, as a `Wake-up` (`kuvo-wake
   fire` reads `run/queues.json` and hands it over with `box route`, `queue/add`; one that repeats is
-  kept once); a watch waits in its folder. Each goes once the queue goes on, after what the engine holds, one at a time
+  kept once); a watch waits in its folder. So does a group chat's part for a bot's own
+  conversation, from the chat (by its name; the coding agents' bridge keeps it in the same files,
+  and the part goes on working until the bot reports, or fails once it's taken away). Each goes once the queue goes on, after what the engine holds, one at a time
   as runs end; kept in `run/queues.json` (`waiting`) and, whole, in `run/waiting/<message id>.json`,
   across a restart. Send Now sends one at once; `DELETE …/queue/<item>` takes one away.
 - `GET kuvo/sessions/<id>/queue` → `{paused, held: [inboxID…], waiting?: [{id, from?, text, files?,
   at}]}`: `waiting`, left out when nothing waits on the box, first come first: who it's from (an
-  agent's name, `Wake-up`, `Its sessions`, `Your answer`, `Goal`; none for one of yours), what it
+  agent's name, `Wake-up`, `Its sessions`, `Your answer`, `Goal`, a group chat's name; none for one of yours), what it
   says, the names of its files, when it came (ms). `GET kuvo/sessions/queues/events` follows them
   all (ndjson: `{"queues": {<session>: {paused, held, waiting?}}}` now and at each change; a session
   neither paused nor holding anything is left out).
@@ -1268,7 +1270,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   the Mac. A machine's bridge does the same for its own, with the Mac closed: a phone asks the
   computer the conversation lives on. There the session's wake-ups and watches go
   with it, the engine's is marked `kuvo.carriedTo` (the new one's id) as it's archived, and once
-  started it goes to its end, whatever becomes of the request. Changing a machine's bot's model there to
+  started it goes to its end, whatever becomes of the request. A client that carries one itself
+  marks it `kuvo.carriedTo` too: a session marked so takes its queue on the box with it (paused,
+  stopped by you, it stays so in the new one, with what waited on the box). Changing a machine's bot's model there to
   one of the agents' (`PATCH kuvo/bots/<id>`) carries its conversation on with them too; the Mac
   takes in its new conversation as it next connects.
 - `POST kuvo/sign-in/return` with `{"url"}`: where a sign-in's page sent the browser back to the

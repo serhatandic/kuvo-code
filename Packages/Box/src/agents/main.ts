@@ -40,6 +40,7 @@ import { SeatServer } from "./groups/peer"
 import { LinkDirectory, PeerPost, type PeerParts } from "./groups/post"
 import { GroupRunner } from "./groups/runner"
 import { GroupStore } from "./groups/store"
+import { queueFiles } from "../shared/queues"
 
 const version = "1"
 const home = process.env.KUVO_AGENTS_HOME
@@ -167,8 +168,10 @@ const artifactsFolder = onMachine ? join(machineHome!, "artifacts") : process.en
 const botsFolder = groupFolders?.bots ?? (onMachine ? join(machineHome!, "bots") : process.env.KUVO_BOTS || undefined)
 // Who there is to name with "&" in a chat: the agents the box's link lists (on the Mac, where the app says).
 const agentsFile = onMachine ? join(machineHome!, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined
+// The box's queues, where a chat's part for a conversation you stopped waits (on the Mac, the box's run folder the app says).
+const runFolder = onMachine ? join(machineHome!, "run") : process.env.KUVO_RUN || undefined
 // Nor do the agents get these.
-for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", ...(onMachine ? [] : ["KUVO_BOTS"])]) delete process.env[name]
+for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", "KUVO_RUN", ...(onMachine ? [] : ["KUVO_BOTS"])]) delete process.env[name]
 if (groupFolders) {
   try {
     const store = new GroupStore(groupFolders.root, groupFolders.bots, agentsFile)
@@ -192,6 +195,7 @@ if (groupFolders) {
       },
       peers: directory,
       given: (prompt, part) => partGiven?.(prompt, part.chat),
+      queues: runFolder ? queueFiles(runFolder) : undefined,
     })
     const server = new SeatServer(runner.seats, post, { store, remembered: (from, memory) => runner.remembered(from, memory) })
     groups = { store, runner, peers: { post, directory, server, runner } }

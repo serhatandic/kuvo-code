@@ -440,6 +440,20 @@ test("a conversation deleted while stopped takes what waited on the box with it"
   assert.equal("ses_1" in link.readQueues(), false);
 });
 
+test("a conversation carried on in another session while stopped (a client moved it to the coding agents) stays stopped there, with what waited on the box", async () => {
+  inboxes.ses_1 = [];
+  await ask("POST", "kuvo/sessions/ses_1/stop");
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w1", text: "[Letter] The build is green.", from: "Ada", words: "The build is green.", kept: true });
+  // Its engine's session archived as carried on, as the client that moved it marks it.
+  box().hear("session.metadata.updated", { metadata: { "kuvo.archived": true, "kuvo.carriedTo": "ses_2" } });
+  const carried = link.queueOf("ses_2");
+  assert.equal(carried.paused, true);
+  assert.deepEqual(carried.waiting?.map(each => [each.from, each.text]), [["Ada", "The build is green."]]);
+  assert.deepEqual(fs.readdirSync(path.join(home, "run", "waiting")), ["msg_w1.json"], "kept, whole, to go there");
+  assert.equal("ses_1" in link.readQueues(), false);
+  assert.deepEqual(prompted, []);
+});
+
 test("your own message waits shown as you wrote it, though what goes to the agent says more (its files' notes)", async () => {
   inboxes.ses_1 = [];
   await ask("POST", "kuvo/sessions/ses_1/stop");
