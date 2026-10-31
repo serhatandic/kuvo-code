@@ -47,13 +47,14 @@ export async function browserHost() {
   const build = path.join(home, "browser", "builds", "test");
   fs.mkdirSync(build, { recursive: true });
   fs.symlinkSync(build, path.join(home, "browser", "current"));
-  fs.writeFileSync(path.join(build, "chrome"), `#!${process.execPath}
-const fs = require("node:fs"), net = require("node:net");
+  fs.writeFileSync(path.join(build, "chrome.js"), `const fs = require("node:fs"), net = require("node:net");
 const socket = net.createConnection(process.env.KUVO_TEST_CHROME);
 fs.createReadStream(null, { fd: 3 }).pipe(socket);
 socket.pipe(fs.createWriteStream(null, { fd: 4 }));
 socket.on("close", () => process.exit(0));
-`, { mode: 0o755 });
+`);
+  // (Through a shell: the keeper starts it without BUN_BE_BUN, which the engine's Bun needs to be one.)
+  fs.writeFileSync(path.join(build, "chrome"), `#!/bin/sh\nBUN_BE_BUN=1 exec ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(build, "chrome.js"))}\n`, { mode: 0o755 });
 
   const chrome = new Heard();
   let toKeeper;
