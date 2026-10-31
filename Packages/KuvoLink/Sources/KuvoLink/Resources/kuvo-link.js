@@ -7752,17 +7752,12 @@ function goalHolds(targets, file = GOALS_FILE) {
 async function settleGoalHolds(bridge, follow, file = GOALS_FILE) {
   const sessions = new Set([
     ...Object.entries(readQueues2()).filter(([, state]) => state.heldFor === "goal").map(([session]) => session),
-    ...readKept2(file).filter((each) => each.state === "running" && each.heldByYou).map((each) => each.session)
+    ...readKept2(file).filter((each) => each.state === "running" && (each.heldByYou || botHere(each.bot))).map((each) => each.session)
   ]);
   for (const session of sessions) {
     const goal = await asked(bridge, "GET", `api/kuvo/goals/${encodeURIComponent(session)}`).then((answer) => isObject(answer) && isObject(answer.data) ? answer.data : null, (error) => /\b404\b/.test(error.message) ? null : undefined);
     if (goal !== undefined)
       await follow({ type: "kuvo.goal.updated", data: { sessionID: session, goal } });
-  }
-  const listed = await asked(bridge, "GET", "api/kuvo/goals").then((answer) => isObject(answer) && Array.isArray(answer.data) ? answer.data.filter(isObject) : [], () => []);
-  for (const goal of listed) {
-    if (typeof goal.session === "string" && !sessions.has(goal.session) && pausedByYou(goal))
-      await follow({ type: "kuvo.goal.updated", data: { sessionID: goal.session, goal } });
   }
 }
 var pausedByYou = (goal) => goal?.state === "paused" && goal.pausedBy === "you" && goal.note === PAUSED_BY_YOU;

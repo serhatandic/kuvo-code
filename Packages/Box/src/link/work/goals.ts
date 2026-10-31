@@ -486,13 +486,16 @@ export function goalHolds(targets: () => Target[], file = GOALS_FILE): (event: {
   };
 }
 
-/** What the bridge says now of each conversation this box holds for its goal, and of each goal
- * paused by you, read once it's found again (it, or this box, restarted, or the stream dropped and
- * a change went by unheard). */
+/** What the bridge says now of each conversation this box holds for its goal, and of each of its
+ * bots' goals, read once it's found again (it, or this box, restarted, or the stream dropped and a
+ * change went by unheard). */
 export async function settleGoalHolds(bridge: Target, follow: (event: { type?: string; data?: any }) => Promise<void>, file = GOALS_FILE): Promise<void> {
+  // (A bot's goal here, held or not: its hold goes only with its Resume, so one paused by you that
+  // isn't held was missed. A conversation's own goal isn't caught up: you may have carried on in it
+  // since, which lets its hold go while its goal stays paused.)
   const sessions = new Set([
     ...Object.entries(readQueues()).filter(([, state]) => state.heldFor === "goal").map(([session]) => session),
-    ...readKept(file).filter(each => each.state === "running" && each.heldByYou).map(each => each.session),
+    ...readKept(file).filter(each => each.state === "running" && (each.heldByYou || botHere(each.bot))).map(each => each.session),
   ]);
   for (const session of sessions) {
     const goal = await asked(bridge, "GET", `api/kuvo/goals/${encodeURIComponent(session)}`).then(
@@ -500,11 +503,6 @@ export async function settleGoalHolds(bridge: Target, follow: (event: { type?: s
       (error: Error) => (/\b404\b/.test(error.message) ? null : undefined),
     );
     if (goal !== undefined) await follow({ type: "kuvo.goal.updated", data: { sessionID: session, goal } });
-  }
-  // And each one you paused meanwhile, which nothing here holds yet.
-  const listed = await asked(bridge, "GET", "api/kuvo/goals").then(answer => (isObject(answer) && Array.isArray(answer.data) ? answer.data.filter(isObject) : []), () => []);
-  for (const goal of listed) {
-    if (typeof goal.session === "string" && !sessions.has(goal.session) && pausedByYou(goal)) await follow({ type: "kuvo.goal.updated", data: { sessionID: goal.session, goal } });
   }
 }
 

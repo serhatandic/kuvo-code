@@ -126,7 +126,7 @@ atEnd(() => { engine.closeAllConnections(); engine.close(); });
 const target = () => [{ port: engine.address().port, password: "p" }];
 
 // The agents bridge, beside the engine: the conversation's goal (its loop), as it's set, taken away
-// and read.
+// and read, and every goal it keeps.
 let loops;
 const bridge = http.createServer((request, response) => {
   let body = "";
@@ -555,6 +555,19 @@ test("a goal paused while the box wasn't listening is held once it finds the bri
   active.clear();
   await look(Date.now() + 3 * 3_600_000);
   assert.deepEqual(prompts.slice(before), [], "held: no reminder");
+});
+
+test("a conversation whose goal you paused, then carried on in, isn't stopped again when the box finds the bridge again", async () => {
+  active.add("ses_site");
+  await link.goalHolds(target)(goalEvent("ses_site", "paused", "you"));
+  // Resume on the conversation itself (not its goal): it goes on, its goal still paused.
+  assert.equal((await route("POST", "kuvo/sessions/ses_site/queue/resume")).status, 200);
+  loops.set("ses_site", goalEvent("ses_site", "paused", "you").data.goal);
+  active.add("ses_site");
+  const stops = interrupted.length;
+  await link.settleGoalHolds({ port: bridge.address().port, password: "p" }, link.goalHolds(target));
+  assert.equal(interrupted.length, stops, "its turn under way goes on");
+  assert.equal(link.queueOf("ses_site").paused, false);
 });
 
 test("a conversation whose goal is taken away while paused stays stopped for you to Resume, from then on as any", async () => {
