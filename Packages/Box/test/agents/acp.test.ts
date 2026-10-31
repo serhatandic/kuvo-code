@@ -783,11 +783,14 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
     // The sandbox comes on, with Grok's process from before still running (it's kept for the next message).
     writeFileSync(join(fence, "on"), "set up again")
     noteAgentsInside(!sessions.outside())
-    expect(existsSync(join(fence, "agents"))).toBe(false)
+    // (The box asks you, once, to restart it, PROTOCOL.md "Sandbox".)
+    expect(JSON.parse(readFileSync(join(fence, "agents"), "utf8")).outside).toBe(true)
     // Done (its process closed): now every agent's process runs in it.
     sessions.closeAll()
     noteAgentsInside(!sessions.outside())
-    expect(JSON.parse(readFileSync(join(fence, "agents"), "utf8")).pid).toBe(process.pid)
+    const said = JSON.parse(readFileSync(join(fence, "agents"), "utf8"))
+    expect(said.pid).toBe(process.pid)
+    expect(said.outside).toBeUndefined()
   })
 
   test("with the sandbox off, it runs as before: its own program, its own sandbox as you set it", async () => {

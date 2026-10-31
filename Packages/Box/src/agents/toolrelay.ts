@@ -15,11 +15,19 @@ const keys = new Map<string, string>()
 const sessionsByKey = new Map<string, string>()
 /** On a machine: each session's program, started as its agent first reaches its tools. */
 const programs = new Map<string, Program>()
+/** What reaches each session's tools through the relay now (its agents' threads): its key stays while any does. */
+const holders = new Map<string, Set<object>>()
 
-/** Kuvo Code's tools as an agent in the sandbox reaches them for `sessionID`, through the relay; none until the app says where they are. */
-export function relayedTools(sessionID: string): Extract<KuvoTools, { kind: "http" }> | undefined {
+/**
+ * Kuvo Code's tools as an agent in the sandbox reaches them for `sessionID`, through the relay,
+ * held by `holder` (the agent's thread) until it drops them; none until the app says where they are.
+ */
+export function relayedTools(sessionID: string, holder: object): Extract<KuvoTools, { kind: "http" }> | undefined {
   const tools = kuvoTools(sessionID)
   if (!tools) return undefined
+  let held = holders.get(sessionID)
+  if (!held) holders.set(sessionID, (held = new Set()))
+  held.add(holder)
   server ??= Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: answer })
   let key = keys.get(sessionID)
   if (!key) {
@@ -33,8 +41,15 @@ export function relayedTools(sessionID: string): Extract<KuvoTools, { kind: "htt
 /** The relay's port, once it listens. */
 export const relayPort = (): number | undefined => server?.port
 
-/** A session's agent is done with its tools: its key goes, and its program stops. */
-export function dropRelayed(sessionID: string) {
+/**
+ * `holder` is done with a session's tools: once nothing else holds them (another of its agents'
+ * threads, an account's or a provider's), its key goes, and its program stops.
+ */
+export function dropRelayed(sessionID: string, holder: object) {
+  const held = holders.get(sessionID)
+  held?.delete(holder)
+  if (held?.size) return
+  holders.delete(sessionID)
   const key = keys.get(sessionID)
   if (key) sessionsByKey.delete(key)
   keys.delete(sessionID)

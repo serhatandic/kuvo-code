@@ -83,6 +83,37 @@ import Testing
         #expect(app.workspace.needsAttention("ses_scout"))
     }
 
+    /// The first time a computer's sandbox is on with agents that started before it, its box asks
+    /// once to restart them: a card in its conversations until it's answered, here or elsewhere.
+    @Test func aComputerAsksOnceToRestartItsAgentsAndTheCardGoesOnceAnswered() async throws {
+        let (_, sent) = box(answering: 500)
+        sandboxes.takeRestart(true, from: BoxClient.mac)
+        #expect(sandboxes.asksToRestart(on: BoxClient.mac))
+        #expect(!sandboxes.asksToRestart(on: "lokum"), "only that computer's conversations show it")
+
+        // It didn't go through: the card stays, saying why, to try again.
+        await #expect(throws: BoxRefusal.self) { try await sandboxes.answerRestart(true, on: BoxClient.mac) }
+        #expect(sandboxes.asksToRestart(on: BoxClient.mac))
+        #expect(sandboxes.restartFailures[BoxClient.mac] == "The command's folder is gone.")
+
+        let (_, again) = box(answering: 200)
+        try await sandboxes.answerRestart(true, on: BoxClient.mac)
+        let answer = try #require(again.all.last)
+        #expect(answer.method == "POST" && answer.path == "kuvo/sandbox/restart")
+        #expect((try JSONSerialization.jsonObject(with: answer.body) as? [String: Bool])?["restart"] == true)
+        #expect(!sandboxes.asksToRestart(on: BoxClient.mac) && sandboxes.restartFailures[BoxClient.mac] == nil)
+        // What the box listed before it heard doesn't bring it back.
+        sandboxes.takeRestart(true, from: BoxClient.mac)
+        #expect(!sandboxes.asksToRestart(on: BoxClient.mac))
+        #expect(sent.all.count == 1)
+
+        // Answered on a phone: the box stops asking, and the card goes here too.
+        sandboxes.takeRestart(true, from: "lokum")
+        #expect(sandboxes.asksToRestart(on: "lokum"))
+        sandboxes.takeRestart(false, from: "lokum")
+        #expect(!sandboxes.asksToRestart(on: "lokum"))
+    }
+
     @Test func aMachineRemovedTakesItsAsksWithIt() {
         #expect(sandboxes.stoppedCommands(for: "ses_scout", on: "lokum") == nil, "not heard yet: unknown, not nothing")
         sandboxes.take([ask], from: "lokum")

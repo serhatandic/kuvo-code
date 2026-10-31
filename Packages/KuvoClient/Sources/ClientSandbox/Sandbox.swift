@@ -35,8 +35,11 @@ public struct SandboxState: Codable, Equatable, Sendable {
     public var check: Check?
     /// Checks failed in a row.
     public var failures: Int?
+    /// It asks you, once, to restart the agents started before it was on (`SandboxRoutes.restart`).
+    public var restart: Bool?
 
-    public init(on: Bool, why: String? = nil, able: Bool = true, agents: Bool = false, reason: Reason? = nil, action: Action? = nil, route: String? = nil, needs: String? = nil, check: Check? = nil, failures: Int? = nil) {
+    public init(on: Bool, why: String? = nil, able: Bool = true, agents: Bool = false, reason: Reason? = nil, action: Action? = nil, route: String? = nil, needs: String? = nil, check: Check? = nil, failures: Int? = nil, restart: Bool? = nil) {
+        self.restart = restart
         self.on = on
         self.why = why
         self.able = able
@@ -61,6 +64,7 @@ public struct SandboxState: Codable, Equatable, Sendable {
         needs = try keys.decodeIfPresent(String.self, forKey: .needs)
         check = try? keys.decodeIfPresent(Check.self, forKey: .check)
         failures = try keys.decodeIfPresent(Int.self, forKey: .failures)
+        restart = try? keys.decodeIfPresent(Bool.self, forKey: .restart)
     }
 }
 
@@ -164,7 +168,12 @@ public struct SandboxRule: Codable, Equatable, Identifiable, Sendable {
 /// The answers' envelopes.
 public struct SandboxAsks: Codable, Equatable, Sendable {
     public var asks: [SandboxAsk]
-    public init(asks: [SandboxAsk]) { self.asks = asks }
+    /// The box asks you, once, to restart the agents started before its sandbox was on (`SandboxState.restart`).
+    public var restart: Bool?
+    public init(asks: [SandboxAsk], restart: Bool? = nil) {
+        self.asks = asks
+        self.restart = restart
+    }
 }
 
 public struct SandboxAllowed: Codable, Equatable, Sendable {
@@ -176,6 +185,8 @@ public struct SandboxAllowed: Codable, Equatable, Sendable {
 public enum SandboxRoutes {
     public static let state = "kuvo/sandbox"
     public static let check = "kuvo/sandbox/check"
+    /// Your answer to its one ask to restart the agents started before it was on: `{restart}`, true or false.
+    public static let restart = "kuvo/sandbox/restart"
     public static let asks = "kuvo/sandbox/asks"
     public static let askEvents = "kuvo/sandbox/asks/events"
     public static func ask(_ id: String) -> String { "kuvo/sandbox/asks/\(id)" }
@@ -186,6 +197,17 @@ public enum SandboxRoutes {
         return "kuvo/sandbox/allowed?project=" + (project.addingPercentEncoding(withAllowedCharacters: query) ?? project)
     }
     public static func rule(_ id: String) -> String { "kuvo/sandbox/allowed/\(id)" }
+}
+
+// MARK: The restart card's words
+
+/// How both apps word the box's one ask to restart the agents started before its sandbox was on,
+/// on a plain card in that computer's conversations (`SandboxState.restart`).
+public enum SandboxRestart {
+    public static let title = "Restart agents in the sandbox?"
+    public static let detail = "Some agents started before the sandbox was on and still run outside it. Each restarts once it finishes what it’s doing, and picks up where it left off."
+    public static let restart = "Restart Agents"
+    public static let notNow = "Not Now"
 }
 
 // MARK: The card's words

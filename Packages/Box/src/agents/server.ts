@@ -39,6 +39,8 @@ export interface Context {
   version: string
   /** The group chats that live on this computer (groups/runner.ts), and its part in those on your others; none where they don't run here. */
   groups?: { runner: GroupRunner; store: GroupStore; peers?: PeerParts }
+  /** Restarts the agents' processes started before the box's sandbox was on, as you said to (main.ts). */
+  restartOutside?: () => void
   /** Goals that conversations here and on the engine work toward (goals.ts). */
   goals?: Goals
   /** The record of what this computer's agents made (artifacts/store.ts); none where it couldn't start. */
@@ -465,6 +467,11 @@ export function handler(context: Context) {
 
       // Where Kuvo Code's own tools are (the app says each time they start), for every agent here.
       // The group chats that live on this machine.
+      // You said to restart the agents started before the box's sandbox was on (`kuvo/sandbox/restart`, from the box's link).
+      if (area === "kuvo" && a === "sandbox" && b === "restart" && !c && method === "POST") {
+        context.restartOutside?.()
+        return json({})
+      }
       if (area === "kuvo" && a === "goals") return await goalRoutes(context.goals, method, parts.slice(3), body)
       if (area === "kuvo" && a === "btw") return await sideQuestionRoutes(context.sideQuestions, method, parts.slice(3), body)
       if (area === "kuvo" && a === "handoff") return await handoffRoutes(context.handoffs, method, parts.slice(3), body)

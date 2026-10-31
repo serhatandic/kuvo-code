@@ -651,7 +651,8 @@ client shows it from the same routes.
   accounts, and whatever it can't be sure isn't (any part, past `sudo`, `env`, `npx` and the like,
   with no option but a bare flag before the program, and the program a package runner runs, `npm
   exec`, `pnpm dlx`, `bun x`, or `find -exec` does; `xargs`, a runner's `-c`, git's settings on the
-  line, `-c` and `GIT_…=`, and naming or writing git's own files, `.git/…`, aren't): a `push`,
+  line, `-c` and `GIT_…=`, setting them (`git config` but its reads, in either syntax, a clone's `--config`, a
+  `--template`; git's own programs, `git-config`, count as git), and naming or writing git's own files, `.git/…`, aren't): a `push`,
   `send-pack`, `send-email`, `dcommit` or `upload` anywhere among a program's words but the ones
   that only read or print them (`grep`, `echo`…; `git stash push` stays here), `docker push`,
   `--push`, a registry output, publishing (`npm publish`,
@@ -2757,7 +2758,7 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
   {<bot, or a conversation that isn't a bot's>: why}, store: "keychain" | "encrypted", keptDays,
   agents, agentsWaiting?, tampered?, generations: {items, grants, paused}}` (`agents`: whether agents may use it
   on this box, below; `agentsWaiting`: its sandbox is on, and they may once the coding agents
-  started before it came on have finished); an item is `{id, kind: "login" |
+  started before it came on have finished, which clients say as “Locked for now: some agents started before the sandbox was on. The vault opens when they finish.”); an item is `{id, kind: "login" |
   "key" | "file" | "note", name, sites, username?, fields, fileName?, readable?, signInOnly?,
   created, changed, used?}` (`sites`: hosts, a site's own and those under it; `fields`: the names of the values it
   holds, a sign-in's `password`, a file's `file` (base64), a note's `text`, a key's own); a grant
@@ -2946,10 +2947,28 @@ it's empty.
   engine) run in it too: each starts its next turn in it once it's set up and checked here, and
   `agents` is true once no agent process the bridge started before it was on still runs (the
   agents bridge notes it, `{pid, on}`, in `run/fence/agents`, for the sandbox as it is: `on` is the
-  token each setup writes in `run/fence/on`; with no bridge running, it's true). It counts the
+  token each setup writes in `run/fence/on`, with `outside: true` while one still runs; with no
+  bridge running, it's true). `restart`: the box asks you, once, to restart those: true the first
+  time it's on with one still running (never if it was on with all inside it first), until you
+  answer with `POST kuvo/sandbox/restart` `{restart}`, which answers the state anew (400 without
+  a true or false; 503 when the agents bridge doesn't answer, and it stays asked). True has the
+  bridge (`POST /api/kuvo/sandbox/restart`) close each agent's process started before the sandbox
+  was on once its conversation is between turns and nothing it left going (commands, subagents)
+  still runs, the rest as they get there; each starts again in the sandbox with its next turn, going on with its
+  conversation. False leaves them to finish as they are. `kuvo/sandbox/asks` carries it too, so a
+  client following the asks hears it as it comes and goes. Clients show it as a card in the
+  computer's conversations: "Restart agents in the sandbox?". It counts the
   agents' own processes, from their start: a command one of them started outside the sandbox that
-  outlives it isn't followed, as with the engine's. How each does: Claude Code runs its commands through the
-  box's shell for it (`run/fence/shell/zsh` or `bash`); Codex runs whole in the sandbox
+  outlives it isn't followed, as with the engine's. Each runs whole in it, and so does all it
+  starts: its commands, and its hooks and MCP servers, yours and a project's. Claude Code through
+  `run/fence/shell/run` (the SDK's own start of it, `spawnClaudeCodeProcess`), in the conversation's
+  folder, its own sandbox off; of its settings folder (`~/.claude`, or an added account's) it writes,
+  on a Mac, only what's named as its state (its conversations, their files, todos and plans, shell
+  snapshots, history, caches and logs, its sign-in, an added account's `.claude.json`), and in
+  those never settings (`settings*.json`, `hooks`, `.mcp.json`); never your `~/.claude.json` (it
+  goes on without saving to it), nor its own updates (`DISABLE_AUTOUPDATER`; Update does them,
+  outside); Kuvo Code's tools through the relay, and files you attach as copies, as for Codex.
+  Codex runs whole in the sandbox
   (`run/fence/shell/run`), an app-server for each session in that session's folder (and your
   account's in its `sessions` folder), its own sandbox off, asking as it does, and Kuvo Code's tools
   through the agents bridge's relay on 127.0.0.1, a key for each session. Of its home it writes, on
@@ -3028,8 +3047,9 @@ while the sandbox is `on`) and pass a call to `POST kuvo/sandbox/tools` `{sessio
 making that call. The asks, the tool and the answers live in the box's long-running process, as the
 vault does (`run/vault.sock`); another passes them on.
 
-- `GET kuvo/sandbox/asks` → `{asks: [ask]}`, oldest first; `kuvo/sandbox/asks/events`, NDJSON, the
-  same at once and on every change. An ask: `{id, at, session?, sessionName?, bot?, botName?,
+- `GET kuvo/sandbox/asks` → `{asks: [ask], restart?}`, oldest first, with `restart: true` while
+  the box asks you to restart its agents (the state's `restart`); `kuvo/sandbox/asks/events`, NDJSON,
+  the same at once and on every change. An ask: `{id, at, session?, sessionName?, bot?, botName?,
   project, command, why, stopped?, error?, always?, machine?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,

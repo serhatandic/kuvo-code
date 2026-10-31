@@ -960,6 +960,19 @@ describe("Codex's agents in the background", () => {
     expect(sessions.messages(child).at(-1)).toMatchObject({ type: "idle", outcome: "interrupted" })
   })
 
+  test("restarted as you said to, a Codex started before the sandbox was on lets an agent it spawned finish first, then stops", async () => {
+    const { id, child } = await spawn(true)
+    expect(codex!.outside()).toBe(true)
+    // Its turn is over, but the agent it spawned still works: it waits.
+    expect(codex!.restartOutside()).toBe(true)
+    expect(sessions.active()).toContain(child)
+    sessions.replyPermission(id, sessions.permissions(id)[0].id, "once")
+    await until(() => sessions.messages(child).some((message) => message.type === "idle"))
+    expect(sessions.messages(child).at(-1)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    expect(codex!.restartOutside()).toBe(false)
+    await until(() => !codex!.outside())
+  })
+
   test("one still at work when Codex stops ends with it", async () => {
     const { child } = await spawn(false)
     codex!.shutdown()

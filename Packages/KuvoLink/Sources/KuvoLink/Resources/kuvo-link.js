@@ -2723,6 +2723,44 @@ var BARE = {
   command: /^-p$/
 };
 var GIT_OWN = /(^|\/)\.git(\/|$)|(^|\/)\.git(config|modules)$/;
+var GIT_VALUED = /^(-C|-c|--git-dir|--work-tree|--namespace|--super-prefix|--config-env|--exec-path)$/;
+var GIT_CONFIG_READS = /^(--get|--get-all|--get-regexp|--get-urlmatch|--get-color|--get-colorbool|--list|-l)$/;
+var GIT_CONFIG_WRITES = /^(--add|--replace-all|--unset|--unset-all|--rename-section|--remove-section|--edit|-e)$/;
+var GIT_CONFIG_VALUED = /^(-f|--file|--blob|--type|--default|--comment|--value|--url)$/;
+function setsGitSettings(rest) {
+  let at = 0;
+  while (at < rest.length && rest[at].startsWith("-"))
+    at += GIT_VALUED.test(rest[at]) ? 2 : 1;
+  const [sub, ...args] = rest.slice(at);
+  if (sub === "config")
+    return gitConfigSets(args);
+  return (sub === "clone" || sub === "init" || sub === "submodule") && args.some((word) => /^--(config|template)(=|$)/.test(word));
+}
+function gitConfigSets(args) {
+  const words = [];
+  let reads = false;
+  for (let at = 0;at < args.length; at++) {
+    const word = args[at];
+    if (word === "--") {
+      words.push(...args.slice(at + 1));
+      break;
+    }
+    if (GIT_CONFIG_VALUED.test(word))
+      at++;
+    else if (GIT_CONFIG_WRITES.test(word))
+      return true;
+    else if (GIT_CONFIG_READS.test(word))
+      reads = true;
+    else if (!word.startsWith("-"))
+      words.push(word);
+  }
+  const [first] = words;
+  if (first === "get" || first === "list")
+    return false;
+  if (["set", "unset", "rename-section", "remove-section", "edit"].includes(first))
+    return true;
+  return !reads && words.length > 1;
+}
 function outwardRefusal(line) {
   const read = readLine(line, true);
   if ("unreadable" in read)
@@ -2760,8 +2798,10 @@ function outwardWords(words) {
         return CANT;
     }
   }
-  const [program, ...rest] = words;
-  const name = path15.basename(program);
+  const [program, ...given] = words;
+  const gitOwn = /^git-([a-z][a-z0-9-]*)$/.exec(path15.basename(program));
+  const name = gitOwn ? "git" : path15.basename(program);
+  const rest = gitOwn ? [gitOwn[1], ...given] : given;
   if (OUTWARD[name])
     return OUTWARD[name];
   if (name === "eval")
@@ -2778,6 +2818,8 @@ function outwardWords(words) {
     return "sending it beyond this computer";
   if (name === "git" && rest.some((word) => /^(-c|--config-env)/.test(word)))
     return CANT;
+  if (name === "git" && setsGitSettings(rest))
+    return `${CANT} (it changes git's own settings)`;
   const subs = rest.filter((word) => !word.startsWith("-"));
   if (!QUIET.has(name)) {
     const sending = subs.find((word, at) => Object.hasOwn(SENDING2, word) && !(name === "git" && subs[at - 1] === "stash"));
@@ -2921,7 +2963,7 @@ var PROGRAMS2 = {
   "git-credential": "credentials"
 };
 var SUBCOMMANDS = [
-  [/^git$/, /^(config\s+(?!(--get|--get-all|--get-regexp|--list|-l)\b)\S+\s+\S|config\s+--(add|unset|unset-all|replace-all|rename-section|remove-section|edit|one-off)\b|config\s+-e\b|remote\s+(add|set-url|remove|rm)\b|credential\b)/, "gitConfig"],
+  [/^git$/, /^(config\s+--one-off\b|remote\s+(add|set-url|remove|rm)\b|credential\b)/, "gitConfig"],
   [/^git$/, /^(clean\s+(?!.*(-n|--dry-run)\b)|reset\s+.*--hard|branch\s+.*-D\b|push\s+.*(--delete\b|--force\b|--force-with-lease\b|\s-f\b|\s-d\b|\s:\S|\s\+\S)|stash\s+(drop|clear)\b|reflog\s+expire\b|gc\s+.*--prune)/, "delete"],
   [/^gh$/, /^(issue\s+(create|comment)|pr\s+(create|comment|review)|gist\s+create|discussion|release\s+create)\b/, "message"],
   [/^gh$/, /^api\b.*(\s(-X|--method)[\s=]*(POST|PATCH|PUT|DELETE)\b|\s-[fF]\s|\s--(raw-)?field\b|\s--input\b)/i, "message"],
@@ -3006,13 +3048,19 @@ function commandAlways(line) {
       if (kind)
         return kind;
     }
-    const words = commandWords(part.words);
+    let words = commandWords(part.words);
     if (!words.length)
       continue;
+    const gitOwn = /^git-([a-z][a-z0-9-]*)$/.exec(programOf(words[0]));
+    if (gitOwn)
+      words = ["git", gitOwn[1], ...words.slice(1)];
     const program = programOf(words[0]);
     if (PROGRAMS2[program])
       return PROGRAMS2[program];
-    const rest = (program === "git" ? gitRest(words.slice(1)) : words.slice(1)).join(" ");
+    const given = program === "git" ? gitRest(words.slice(1)) : words.slice(1);
+    if (program === "git" && given[0] === "config" && gitConfigSets(given.slice(1)))
+      return "gitConfig";
+    const rest = given.join(" ");
     for (const [name, sub, kind] of SUBCOMMANDS)
       if (name.test(program) && sub.test(rest))
         return kind;
@@ -3200,7 +3248,7 @@ var ALWAYS_ASK_RULES = [
     "*.netrc*",
     "*.git-credentials*"
   ].map((resource) => ({ action: "shell", resource, effect: "ask" })),
-  ...["git config --get*", "git config --list*", "git config -l*", "git config --get-all*", "git config --get-regexp*"].map((resource) => ({ action: "shell", resource, effect: "allow" })),
+  ...["git config --get*", "git config --list*", "git config -l*", "git config --get-all*", "git config --get-regexp*", "git config get *", "git config list", "git config list -*"].map((resource) => ({ action: "shell", resource, effect: "allow" })),
   ...["*.env", "*.env.*", "*/.ssh/*", "*/.gitconfig", "*/.gitmodules", "*/.git/config", "*/.netrc", "*/.npmrc", "*/.pypirc", "*/.git-credentials", "*/.aws/credentials", "*/.docker/config.json", "*/.kube/config"].map((resource) => ({ action: "edit", resource, effect: "ask" })),
   { action: "edit", resource: "*.env.example", effect: "allow" }
 ];
@@ -13157,11 +13205,11 @@ function launcherScript(places) {
 `) + `
 `;
 }
-function agentShellScript(places, shell) {
+function agentShellScript(places) {
   return [
     "#!/bin/sh",
     "# Kuvo Code writes this each time its box starts: changes here don't last.",
-    `${shell ? `KUVO_FENCE_SHELL=${sh(shell)} ` : ""}exec ${sh(places.launcher)} "$@"`,
+    `exec ${sh(places.launcher)} "$@"`,
     ""
   ].join(`
 `);
@@ -13405,7 +13453,7 @@ var checked = { able: false, passed: false, why: "It hasn't been checked yet.", 
 var failures = 0;
 var lastProfiles = "";
 function fenceState() {
-  const base = { able: checked.able, agents: agentsAllInside() };
+  const base = { able: checked.able, agents: agentsAllInside(), ...asksToRestart() ? { restart: true } : {} };
   if (!fenceWanted())
     return { ...base, on: false, why: "Kuvo Code has it turned off on this computer for now." };
   if (!checked.passed)
@@ -13438,21 +13486,46 @@ function engineCommandsInSandbox() {
 }
 var agentsCommandsInSandbox = () => fenceWanted() && fs52.existsSync(ON);
 function agentsAllInside() {
+  const said = bridgeSays();
+  return said === "none" || said === "inside";
+}
+function bridgeSays() {
   if (!agentsCommandsInSandbox())
-    return false;
+    return;
   let bridge = null;
   try {
     bridge = JSON.parse(fs52.readFileSync(BRIDGE_FILE, "utf8"));
   } catch {}
   if (!bridge?.pid || !processRuns(bridge.pid, "kuvo-agents"))
-    return true;
+    return "none";
   try {
     const said = JSON.parse(fs52.readFileSync(path54.join(FOLDER, "agents"), "utf8"));
     const on = sandboxGeneration(ON);
-    return Boolean(on) && said.pid === bridge.pid && said.on === on;
+    if (!on || said.pid !== bridge.pid || said.on !== on)
+      return;
+    return said.outside === true ? "outside" : "inside";
   } catch {
-    return false;
+    return;
   }
+}
+var RESTART_ASKED = path54.join(FOLDER, "restart-asked");
+function asksToRestart() {
+  if (fs52.existsSync(RESTART_ASKED))
+    return false;
+  const said = bridgeSays();
+  if (said === "outside")
+    return true;
+  if (said === "inside")
+    answeredRestart();
+  return false;
+}
+function restartSettled() {
+  return fs52.existsSync(RESTART_ASKED);
+}
+function answeredRestart() {
+  try {
+    writePrivate(RESTART_ASKED, "");
+  } catch {}
 }
 function cannot(why) {
   const said = why.why ? { why: why.why } : {};
@@ -13522,10 +13595,6 @@ function writeProfiles() {
     writePrivate(path54.join(FOLDER, name), body);
   lastProfiles = text;
 }
-var AGENT_SHELLS = [
-  ["zsh", ["/bin/zsh", "/usr/bin/zsh"].find((shell) => fs52.existsSync(shell))],
-  ["bash", ["/bin/bash", "/usr/bin/bash"].find((shell) => fs52.existsSync(shell))]
-];
 function writeExecutable(file, text) {
   if (textOf(file) === text)
     return;
@@ -13633,9 +13702,8 @@ function setUpFence() {
     if (platform === "linux")
       writeExecutable(places.runner, LANDLOCK_RUNNER);
     fs52.mkdirSync(path54.join(FOLDER, "shell"), { recursive: true, mode: 448 });
-    for (const [name, real] of AGENT_SHELLS)
-      if (real)
-        writeExecutable(path54.join(FOLDER, "shell", name), agentShellScript(places, real));
+    for (const name of ["zsh", "bash"])
+      fs52.rmSync(path54.join(FOLDER, "shell", name), { force: true });
     writeExecutable(path54.join(FOLDER, "shell", "run"), agentShellScript(places));
     lastProfiles = "";
     writeProfiles();
@@ -17897,7 +17965,7 @@ import fs67 from "node:fs";
 import path69 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.128";
+var BRIDGE_VERSION = "0.9.129";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -19533,6 +19601,20 @@ async function* sandboxRoute(context) {
   }
   const body = parsed(request.body);
   const given = isObject(body) ? body : {};
+  if (route === "kuvo/sandbox/restart") {
+    if (method !== "POST")
+      return yield* json(405, {});
+    if (typeof given.restart !== "boolean")
+      return yield* json(400, { message: "Say whether to restart them: restart, true or false." });
+    const bridge = given.restart ? bridgeTarget() : null;
+    if (bridge) {
+      const told = await call(bridge, "POST", "/api/kuvo/sandbox/restart", {}, AbortSignal.timeout(1e4)).then(() => true, () => false);
+      if (!told)
+        return yield* json(503, { message: "The coding agents' bridge didn't answer: try again in a moment." });
+    }
+    answeredRestart();
+    return yield* json(200, shown2());
+  }
   const parts = route.split("/");
   if (!heldHere(route))
     return yield* json(404, {});
@@ -19585,21 +19667,31 @@ async function* sandboxRoute(context) {
   if (route === "kuvo/sandbox/asks" || route === "kuvo/sandbox/asks/events") {
     if (method !== "GET")
       return yield* json(405, {});
+    const listed = () => ({ asks: listSandboxAsks(), ...asksToRestart() ? { restart: true } : {} });
     if (route === "kuvo/sandbox/asks")
-      return yield* json(200, { asks: listSandboxAsks() });
+      return yield* json(200, listed());
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
     let wake = () => {};
     const stop = onSandboxAsksChanged(() => wake());
+    let sent = "";
+    const looks = setInterval(() => {
+      if (!restartSettled() || sent.includes('"restart"'))
+        wake();
+    }, 5000);
     try {
       while (!signal?.aborted) {
-        yield { body: Buffer.from(JSON.stringify({ asks: listSandboxAsks() }) + `
+        const now = JSON.stringify(listed());
+        if (now !== sent)
+          yield { body: Buffer.from(now + `
 `) };
+        sent = now;
         await new Promise((done) => {
           wake = done;
           signal?.addEventListener("abort", () => done(), { once: true });
         });
       }
     } finally {
+      clearInterval(looks);
       stop();
     }
     return;

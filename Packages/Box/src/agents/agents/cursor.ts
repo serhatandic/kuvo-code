@@ -312,7 +312,7 @@ class CursorThread implements Thread {
     const fenced = Boolean(fenceRules())
     // Kuvo Code's own tools (the panel's browser, show_in_panel, messages to other agents), as the
     // other agents have them: what they do goes to this conversation (through the relay, in the sandbox).
-    const tools = fenced ? relayedTools(this.session.id) : kuvoTools(this.session.id)
+    const tools = fenced ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
     return {
       model: selection,
       name: `Kuvo Code: ${this.session.title ?? "session"}`,
@@ -637,7 +637,7 @@ class CursorThread implements Thread {
 
   close() {
     this.stop()
-    dropRelayed(this.session.id)
+    dropRelayed(this.session.id, this)
   }
 }
 

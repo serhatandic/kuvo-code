@@ -1,7 +1,6 @@
 // The box's sandbox, as the coding agents' own programs run their commands in it (PROTOCOL.md,
 // "Sandbox"): the rules the box writes for its launcher (`run/fence/policy.json`), while it has the
-// sandbox on here (`run/fence/on`). Claude Code runs its commands through the launcher, as the
-// engine does; Codex runs whole in it.
+// sandbox on here (`run/fence/on`). The coding agents run whole in it, through its launcher.
 
 import { createHash, randomBytes } from "node:crypto"
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, type Dirent } from "node:fs"
@@ -49,15 +48,15 @@ export function fenceOn(): boolean {
 
 /**
  * Tells the box's link whether every agent's process here runs in the sandbox (`run/fence/agents`:
- * this bridge, for the sandbox as it is now), which opens the vault to agents; gone while one
- * started before it was on still runs, or it's off.
+ * this bridge, for the sandbox as it is now), which opens the vault to agents; `outside` while one
+ * started before it was on still runs (the box asks you once to restart them); gone while it's off.
  */
 let noted = ""
 export function noteAgentsInside(inside: boolean) {
   const where = folder()
   if (!where) return
   const on = process.env.KUVO_SANDBOX === "off" ? "" : sandboxGeneration(join(where, "on"))
-  const note = inside && on ? JSON.stringify({ pid: process.pid, on }) : ""
+  const note = on ? JSON.stringify({ pid: process.pid, on, ...(inside ? {} : { outside: true }) }) : ""
   if (note === noted) return
   const record = join(where, "agents")
   try {
@@ -167,33 +166,6 @@ export function repositoryOf(folder: string): string {
   return ""
 }
 
-/** A conversation's folder's temporary folder, as the launcher names it: on this Mac, in the app's
- * own temporary folder by a name made with the box's key (`temporary`, link/fence/state.ts); else
- * the sandbox's `tmp`. */
-function temporaryFolder(where: string, work: string): string {
-  const [root, key] = (() => { try { return readFileSync(join(where, "temporary"), "utf8").split("\n") } catch { return [] } })()
-  if (!root?.startsWith("/") || !/^[0-9a-f]{64}$/.test(key ?? "")) return join(where, "tmp", sum(work))
-  return join(root, createHash("sha256").update(`${key}\n${work}`).digest("hex").slice(0, 8))
-}
-
-/**
- * For an agent whose commands run through a shell it's given (Claude Code): the box's shell that
- * runs them in the sandbox (the user's own, zsh or bash, by name), what the launcher's told (the
- * conversation's folder and its repository), and the commands' temporary folder, which they write.
- * Undefined while the sandbox is off here.
- */
-export function fenceShell(directory: string): { shell: string; work: string; git: string; temporary: string } | undefined {
-  const where = folder()
-  if (!where || !fenceRules()) return undefined
-  const mine = basename(process.env.SHELL ?? "")
-  const shell = [mine, "zsh", "bash"].filter((name) => name === "zsh" || name === "bash").map((name) => join(where, "shell", name)).find((place) => existsSync(place))
-  if (!shell) return undefined
-  const work = real(directory)
-  const temporary = temporaryFolder(where, work)
-  mkdirSync(temporary, { recursive: true, mode: 0o700 })
-  return { shell, work, git: repositoryOf(work), temporary }
-}
-
 /** How many homes of its own, and folders it only reads, an agent run whole has (each; link/fence/seatbelt.ts). */
 const AGENT_FOLDERS = 4
 
@@ -212,7 +184,7 @@ export interface AgentPlaces {
 }
 
 /**
- * For an agent run whole in the sandbox (Codex, Grok, Cursor): the launcher that runs it
+ * For an agent run whole in the sandbox (Claude Code, Codex, Grok, Cursor): the launcher that runs it
  * (`run/fence/shell/run`) and what it's told: its program, the conversation's folder and
  * repository, and its own places. (On a Mac, its homes only read but their state: what runs
  * outside the sandbox when you use it yourself, its settings, plugins and skills, stays as it was.

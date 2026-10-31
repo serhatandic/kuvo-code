@@ -173,16 +173,13 @@ export function launcherScript(places: FencePlaces): string {
   ].filter(line => line !== "").join("\n") + "\n";
 }
 
-/** `run/fence/shell/<zsh|bash>`: the shell Claude Code runs its commands with while the sandbox is on
- * (`CLAUDE_CODE_SHELL`), the launcher with the real one. Named as the shell it stands for: Claude
- * Code takes a shell only by its name. Its process names the conversation's folder and repository.
- * With no shell, `run/fence/shell/run`: the launcher as the agents' bridge runs a whole agent in the
- * sandbox (Grok, Cursor, Antigravity), naming the program. */
-export function agentShellScript(places: FencePlaces, shell?: string): string {
+/** `run/fence/shell/run`: the launcher as the agents' bridge runs a coding agent whole in the
+ * sandbox (Claude Code, Codex, Grok, Cursor, Antigravity), naming the program. */
+export function agentShellScript(places: FencePlaces): string {
   return [
     "#!/bin/sh",
     "# Kuvo Code writes this each time its box starts: changes here don't last.",
-    `${shell ? `KUVO_FENCE_SHELL=${sh(shell)} ` : ""}exec ${sh(places.launcher)} "$@"`,
+    `exec ${sh(places.launcher)} "$@"`,
     "",
   ].join("\n");
 }
