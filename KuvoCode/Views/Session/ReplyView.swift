@@ -195,7 +195,7 @@ final class ReplyPieceView: NSView {
 // MARK: - Prose
 
 /// Prose, as TextKit lays it out: selectable, its links clickable.
-final class ReplyTextView: NSTextView, NSTextViewDelegate {
+final class ReplyTextView: PointerAwareTextView, NSTextViewDelegate {
     var openURL: (URL) -> Bool = { _ in false }
     nonisolated(unsafe) private var siteIcons: NSObjectProtocol?
 
@@ -623,7 +623,7 @@ final class ReplyCodeView: NSView {
 }
 
 /// The code itself: selectable, its lines never wrapping.
-final class ReplyCodeTextView: NSTextView {
+final class ReplyCodeTextView: PointerAwareTextView {
     convenience init() {
         let storage = NSTextStorage()
         let layout = ReplyCodeLayoutManager()
@@ -741,19 +741,43 @@ class ReplyChipButton: NSButton {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        let area = PointerClaim.trackingArea(owner: self, in: self)
         addTrackingArea(area)
         tracking = area
     }
 
+    // The pointing hand, as on the app's other borderless buttons (`clickablePointer`), where
+    // it's on top (not under a bar over the code) and can be clicked.
+    private let claim = PointerClaim()
+
+    private func claimPointer(for event: NSEvent) {
+        claim.show(isEnabled && PointerClaim.isTopmost(self, at: event.locationInWindow) ? .pointingHand : nil)
+    }
+
+    override func cursorUpdate(with event: NSEvent) { claimPointer(for: event) }
+    override func mouseMoved(with event: NSEvent) { claimPointer(for: event) }
+
     override func mouseEntered(with event: NSEvent) {
         isHovering = true
         show(title: current)
+        claimPointer(for: event)
     }
 
     override func mouseExited(with event: NSEvent) {
         isHovering = false
         show(title: current)
+        claim.show(nil)
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        guard newWindow == nil else { return }
+        claim.show(nil)
+        // No `mouseExited` comes: back without the hover's fill.
+        if isHovering {
+            isHovering = false
+            show(title: current)
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {

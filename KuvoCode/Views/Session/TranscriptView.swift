@@ -1721,9 +1721,7 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
                                 .truncationMode(.tail)
                         }
                     }
-                    // A fill under the pointer that reaches past the words without moving them,
-                    // and the pointing hand, which the conversation's selection layer on top
-                    // would otherwise turn into an I-beam.
+                    // A fill under the pointer that reaches past the words without moving them.
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
                     .background(isHoveringHeader ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 6))
@@ -1734,6 +1732,7 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
                     .animation(.easeOut(duration: 0.12), value: isHoveringHeader)
                 }
                 .buttonStyle(.plain)
+                .clickablePointer()
                 .help(open ? "Fold it to its first line" : "Show all of it")
                 Spacer(minLength: 8)
                 accessory

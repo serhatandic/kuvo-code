@@ -7,8 +7,8 @@
   //
   // The modifier receives a `TextSelectionModel` and places it in the environment so selection highlights
   // and attachment dimming can access it. An overlay hosts `AppKitTextInteractionOverlay`, which wraps an
-  // `NSView` that handles selection gestures and context menus. The modifier also manages cursor updates,
-  // switching between I-beam and pointing hand based on hover position over text or links.
+  // `NSView` that handles selection gestures and context menus, and shows the I-beam or a link's
+  // pointing hand where it's what's under the pointer (`PointerClaim`).
 
   typealias PlatformTextSelectionInteraction = AppKitTextSelectionInteraction
 
@@ -37,8 +37,6 @@
   }
 
   struct AppKitTextSelectionInteraction: ViewModifier {
-    @State private var cursorPushed = false
-
     private let model: TextSelectionModel
 
     init(model: TextSelectionModel) {
@@ -51,37 +49,9 @@
         // text selection background and selected attachment dimming
         .environment(model)
         .overlayPreferenceValue(OverflowFrameKey.self) { frames in
+          // It shows the pointer itself (I-beam, a link's hand), where it's on top.
           AppKitTextInteractionOverlay(model: model, overflowFrames: frames)
-            .onContinuousHover { phase in
-              updateCursor(for: phase, model: model)
-            }
         }
-    }
-
-    private func updateCursor(for phase: HoverPhase, model: TextSelectionModel) {
-      switch phase {
-      case .active(let location):
-        // The pointer rests on it, in the app you're using, not scrolling past: selecting may
-        // come, so its text tells where it's laid out from now on.
-        if !model.isActive, NSApp.isActive, ScrollWatch.isIdle {
-          model.isActive = true
-        }
-        let cursor =
-          model.url(for: location) != nil
-          ? NSCursor.pointingHand
-          : NSCursor.iBeam
-        if !cursorPushed {
-          cursor.push()
-          cursorPushed = true
-        } else {
-          cursor.set()
-        }
-      case .ended:
-        if cursorPushed {
-          NSCursor.pop()
-          cursorPushed = false
-        }
-      }
     }
   }
 #endif
