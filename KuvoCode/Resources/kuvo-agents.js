@@ -18110,7 +18110,8 @@ function chat(runner, id, withMessages = true) {
     speaking: state.speaking,
     discussing: Boolean(state.discussing),
     paused: Boolean(state.paused),
-    ...state.activity?.length ? { activity: state.activity } : {}
+    ...state.activity?.length ? { activity: state.activity } : {},
+    ...state.stopped?.length ? { stopped: state.stopped } : {}
   };
 }
 function following(read, chat, signal) {
@@ -18309,7 +18310,7 @@ async function make(runner, store, given, here) {
 import { existsSync as existsSync17, readFileSync as readFileSync26, renameSync as renameSync12, writeFileSync as writeFileSync18 } from "fs";
 
 // Packages/Box/src/shared/seats.ts
-var SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "report", "memory"];
+var SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "held", "report", "memory"];
 
 // Packages/Box/src/agents/groups/api.ts
 function server3(url, password) {
@@ -18951,9 +18952,10 @@ class Seats {
     const queues = this.context.queues;
     return queues !== undefined && (readQueues(queues)[session]?.waiting ?? []).some((item) => item.id === promptID);
   }
-  async follow(botID, promptID, started, wanted) {
+  async follow(botID, promptID, started, wanted, held) {
     let misses = 0;
     let stoppedChecks = 0;
+    let wasStopped = false;
     for (;; ) {
       await sleep2(3000 * (this.context.pace ?? 1));
       if (!wanted())
@@ -18961,6 +18963,10 @@ class Seats {
       const bot = this.bot(botID);
       if (!bot)
         return { ok: false, why: "the bot is gone" };
+      const queues = this.context.queues;
+      const stopped = queues !== undefined && readQueues(queues)[bot.sessionID]?.paused === true;
+      if (stopped !== wasStopped)
+        held?.(wasStopped = stopped);
       const api = this.ownAPI(bot);
       if (!api)
         continue;
@@ -19315,7 +19321,14 @@ class GroupRunner {
   }
   talk(id) {
     const live = this.state(id);
-    return { speaking: live.speaking ?? live.splitting, discussing: live.abort !== undefined, paused: live.paused, ...live.speaking && live.activity ? { activity: live.activity } : {} };
+    const stopped = [...new Set(live.stopped?.values() ?? [])];
+    return {
+      speaking: live.speaking ?? live.splitting,
+      discussing: live.abort !== undefined,
+      paused: live.paused,
+      ...live.speaking && live.activity ? { activity: live.activity } : {},
+      ...stopped.length ? { stopped } : {}
+    };
   }
   list() {
     return [...this.chats.values()].map((kept) => {
@@ -20169,9 +20182,19 @@ class GroupRunner {
       return;
     if (!task.prompt || !this.bot(task.bot))
       return this.fail(taskID, wrapUpID, id, "the bot is gone");
-    const result = await this.seats.follow(task.bot, task.prompt, task.started, () => this.taskState(taskID, wrapUpID, id)?.state === "working");
+    const result = await this.seats.follow(task.bot, task.prompt, task.started, () => this.taskState(taskID, wrapUpID, id)?.state === "working", (stopped) => this.waitsOnStopped(taskID, id, task.bot, stopped)).finally(() => this.waitsOnStopped(taskID, id, task.bot, false));
     if (result)
       this.finish(taskID, wrapUpID, id, task.bot, result);
+  }
+  waitsOnStopped(taskID, id, botID, stopped) {
+    const live = this.state(id);
+    if (stopped === (live.stopped?.has(taskID) ?? false))
+      return;
+    if (stopped)
+      (live.stopped ??= new Map).set(taskID, botID);
+    else
+      live.stopped?.delete(taskID);
+    this.told(id);
   }
   finish(taskID, wrapUpID, id, botID, result) {
     const task = this.taskState(taskID, wrapUpID, id);
@@ -20183,6 +20206,7 @@ class GroupRunner {
         return this.changeTask(taskID, wrapUpID, id, (part) => delete part.lost);
       return this.fail(taskID, wrapUpID, id, result.why);
     }
+    this.waitsOnStopped(taskID, id, botID, false);
     this.changeTask(taskID, wrapUpID, id, (part) => {
       part.state = "done";
       part.finished = stamp3();
@@ -20193,6 +20217,12 @@ class GroupRunner {
     const kept = this.chats.get(id);
     if (kept)
       emit("kuvo.group.done", { id, name: kept.group.name, bot: botID, who: this.name(botID), text: result.text });
+  }
+  held(from, part) {
+    const task = this.taskState(part.task, part.wrapUp, part.chat);
+    if (!task || task.prompt !== `peer:${from}`)
+      return;
+    this.waitsOnStopped(part.task, part.chat, task.bot, part.stopped === true && task.state === "working");
   }
   reported(from, report) {
     const task = this.taskState(report.task, report.wrapUp, report.chat);
@@ -20223,6 +20253,7 @@ class GroupRunner {
       peers.home(to).remember({ chat: memory.chat, bot: memory.bot, at: this.memoryTime(), forget: true });
   }
   fail(taskID, wrapUpID, id, why, thenOthers = true, lost = false) {
+    this.waitsOnStopped(taskID, id, "", false);
     this.changeTask(taskID, wrapUpID, id, (part) => {
       part.state = "failed";
       part.finished = stamp3();
@@ -20828,7 +20859,7 @@ class SeatServer {
     this.seats.follow(work.bot, work.prompt, work.started, () => {
       const now = this.context?.store.peerWork()[task];
       return Boolean(now && !now.done);
-    }).then((result) => {
+    }, (stopped) => this.transport.send(work.host, { kind: "held", task, wrapUp: work.wrapUp, chat: work.chat, stopped }, false)).then((result) => {
       if (result)
         this.report(task, work, result);
     }).finally(() => this.following.delete(task));
@@ -21165,6 +21196,8 @@ function receive(parts, from, mail) {
     parts.directory.existing(from)?.take(from, mail);
   else if (mail.kind === "report")
     parts.runner.reported(from, mail);
+  else if (mail.kind === "held")
+    parts.runner.held(from, mail);
   else
     parts.server.take(from, mail);
 }
@@ -22119,4 +22152,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents b3b8feebc471f026eadb85c7c07fa237b08815be767bc2636604196f0aad3a82
+// Built from Packages/Box/src/agents ca0a8f0f4f652e157323c12784d803be91d6c994532041c67c6a2c198158154e

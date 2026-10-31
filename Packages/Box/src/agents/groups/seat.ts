@@ -534,15 +534,20 @@ export class Seats implements SeatHome {
    * Until the bot's run on a part (its message `promptID`, given at `started`) ends, however long
    * it takes, waiting on you meanwhile if it asks something; then what it said, its report.
    * Undefined once it's no longer `wanted` (reported meanwhile, or stopped, from elsewhere).
+   * `held` hears whether its conversation is stopped by you, as that changes: the part waits on it.
    */
-  async follow(botID: string, promptID: string, started: string | undefined, wanted: () => boolean): Promise<SeatResult | undefined> {
+  async follow(botID: string, promptID: string, started: string | undefined, wanted: () => boolean, held?: (stopped: boolean) => void): Promise<SeatResult | undefined> {
     let misses = 0
     let stoppedChecks = 0
+    let wasStopped = false
     for (;;) {
       await sleep(3000 * (this.context.pace ?? 1))
       if (!wanted()) return undefined
       const bot = this.bot(botID)
       if (!bot) return { ok: false, why: "the bot is gone" }
+      const queues = this.context.queues
+      const stopped = queues !== undefined && readQueues(queues)[bot.sessionID]?.paused === true
+      if (stopped !== wasStopped) held?.((wasStopped = stopped))
       const api = this.ownAPI(bot)
       if (!api) continue
       const active = await api.active().catch(() => undefined)

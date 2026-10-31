@@ -65,6 +65,8 @@ export type SeatMail =
   | { kind: "drop"; seat: string; agents: boolean; bot?: string; chat?: string }
   /** Host → home: a part of the work, for the bot's own conversation, followed there until it reports. Not to be lost. */
   | { kind: "work"; work: WorkGiven }
+  /** Home → host: whether a part waits on its bot's conversation, stopped by you, as that changes. */
+  | { kind: "held"; task: string; wrapUp: string; chat: string; stopped: boolean }
   /** Home → host: how a part went, its report or why it couldn't be done. Not to be lost. */
   | { kind: "report"; task: string; wrapUp: string; chat: string; result: SeatResult }
   /** Host → home: what a bot remembers of a chat (its recap and latest messages), or that it forgets it. Not to be lost. */
@@ -415,10 +417,16 @@ export class SeatServer {
     if (this.following.has(task) || !work.prompt) return
     this.following.add(task)
     void this.seats
-      .follow(work.bot, work.prompt, work.started, () => {
-        const now = this.context?.store.peerWork()[task]
-        return Boolean(now && !now.done)
-      })
+      .follow(
+        work.bot,
+        work.prompt,
+        work.started,
+        () => {
+          const now = this.context?.store.peerWork()[task]
+          return Boolean(now && !now.done)
+        },
+        (stopped) => this.transport.send(work.host, { kind: "held", task, wrapUp: work.wrapUp, chat: work.chat, stopped }, false),
+      )
       .then((result) => {
         if (result) this.report(task, work, result)
       })

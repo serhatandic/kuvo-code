@@ -88,13 +88,15 @@ export const ACTIVITY = oneOf(
   object({ kind: literal("writing") }),
 );
 /** One chat: its latest messages, who's talking, whether a discussion is under way or paused,
- * and what the bot talking is doing now (left out when nothing is said of it). */
+ * what the bot talking is doing now (left out when nothing is said of it), and the bots whose
+ * part of the work waits on their conversation, stopped by you (left out for none). */
 export const CHAT = object({
   messages: list(MESSAGE),
   "speaking?": string,
   discussing: bool,
   paused: bool,
   "activity?": list(ACTIVITY),
+  "stopped?": list(string),
 });
 
 /** Who can be in a chat made here: this box's bots, the first made first, then those of your
