@@ -46,9 +46,16 @@ async function serve(list: unknown[], posted: unknown[] = []): Promise<Target> {
   return { port: (server.address() as AddressInfo).port, password: "secret" }
 }
 
-function opencode(entries: Record<string, unknown>) {
-  const file = opencodeAuthFile(root);
+/** opencode's auth.json in the test's own home, wherever the run's own data folder is
+ * (`XDG_DATA_HOME`): the test never reads or writes one outside its folder. */
+function ownAuthFile() {
+  const file = opencodeAuthFile(root, {});
   mkdirSync(join(root, ".local", "share", "opencode"), { recursive: true });
+  return file;
+}
+
+function opencode(entries: Record<string, unknown>) {
+  const file = ownAuthFile();
   writeFileSync(file, JSON.stringify(entries));
   return file;
 }
@@ -162,8 +169,7 @@ test("opencode's sign-ins are found in your own data folder, also on a machine w
 });
 
 test("a damaged auth.json is nothing found, not an error", async () => {
-  const file = opencodeAuthFile(root);
-  mkdirSync(join(root, ".local", "share", "opencode"), { recursive: true });
+  const file = ownAuthFile();
   writeFileSync(file, "{ not json");
   expect((await found({ engine: null, bridge: null, authFile: file })).opencode).toEqual([]);
 });
