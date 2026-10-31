@@ -104,7 +104,7 @@ public enum WidgetAnswer {
         return (before.trimmingCharacters(in: .whitespacesAndNewlines), lines.dropFirst().joined(separator: " ").trimmingCharacters(in: .whitespaces))
     }
 
-    /// What a widget is called, in its caption and in the chip over what it sent: its title, or
+    /// What a widget is called, to VoiceOver and in the chip over what it sent: its title, or
     /// words of our own.
     public static func name(_ title: String?) -> String {
         title.flatMap { $0.isEmpty ? nil : $0 } ?? "Made for you"

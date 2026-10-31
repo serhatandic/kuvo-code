@@ -25,42 +25,21 @@ struct WidgetCard: View {
     /// Sends what the page wrote back, as your message.
     let send: (String) -> Void
     @State private var height: CGFloat
-    /// Where the widget ends, from its left edge, and the reply's width: where its pill goes.
-    @State private var right: CGFloat?
-    @State private var width: CGFloat = 0
-
-    #if DEBUG
-    /// KUVO_DEMO_WIDGET_PILL: each widget's pill shown, as with the pointer over it.
-    private static let pillShown = ProcessInfo.processInfo.environment["KUVO_DEMO_WIDGET_PILL"] != nil
-    #else
-    private static let pillShown = false
-    #endif
 
     /// Each page's height when last drawn, by call. The conversation makes a row again when you
     /// scroll back to it, and a page coming back short, then growing, would push everything
     /// under it down as you scroll.
     private static var heights: [String: CGFloat] = [:]
-    /// And where it ended, for its pill.
-    private static var rights: [String: CGFloat] = [:]
 
     init(call: Message.ToolCall, send: @escaping (String) -> Void) {
         self.call = call
         self.send = send
         _height = State(initialValue: Self.heights[call.id] ?? 0)
-        _right = State(initialValue: Self.rights[call.id])
     }
-    @State private var isHovering = false
     /// Its page didn't load, or stopped: one line in its place, and a way to try again.
     @State private var failed = false
     @State private var attempt = 0
     @Environment(\.colorScheme) private var scheme
-    @Environment(\.cardIsFocused) private var cardIsFocused
-    @Environment(\.showWidgetLarge) private var showLarge
-
-    /// Over its conversation's card, as the panel grows over the window.
-    private func openLarge(html: String, title: String?) {
-        showLarge?(LargeWidget(id: call.id, html: html, title: title, send: answer(from: title)))
-    }
 
     /// What the page writes back, sent with which widget it came from (`WidgetAnswer`).
     private func answer(from title: String?) -> (String) -> Void {
@@ -68,16 +47,13 @@ struct WidgetCard: View {
     }
 
     private static let shape = RoundedRectangle(cornerRadius: 12)
-    #if DEBUG
-    private static var openedLarge = false
-    #endif
 
     var body: some View {
         // One card while it's written and once it's done, so the page carries on from its draft.
         if case .failed = call.state {
             ToolCallView(call: call, directory: "")
         } else if let content {
-            card(html: content.html, title: content.title, draft: content.draft)
+            card(html: content.html, title: content.title, isDraft: content.draft != nil)
         } else if case .streaming(let input) = call.state {
             HStack(spacing: 8) {
                 Spinner(size: 12)
@@ -146,17 +122,16 @@ struct WidgetCard: View {
         return html
     }
 
-    /// The page itself, part of the reply: no frame, no caption. Open Larger and Copy come in a
-    /// small pill at its corner while the pointer's over it; while it's written, the pill shows
-    /// that instead. Its name is the larger view's title, and what VoiceOver calls it.
-    /// `draft`: still being written, this many bytes so far.
-    private func card(html: String, title: String?, draft: Int? = nil) -> some View {
-        page(html: html, title: title, draft: draft)
+    /// The page itself, part of the reply, as the agent made it: no frame, no caption, and nothing
+    /// over it or around it. A widget is final as shown, made for the width it's at, so it can't be
+    /// opened larger or copied. Its name is what VoiceOver calls it. `isDraft`: still being written.
+    private func card(html: String, title: String?, isDraft: Bool) -> some View {
+        page(html: html, title: title, isDraft: isDraft)
             // Something new to show gets a try of its own.
             .onChange(of: html) { failed = false }
     }
 
-    @ViewBuilder private func page(html: String, title: String?, draft: Int?) -> some View {
+    @ViewBuilder private func page(html: String, title: String?, isDraft: Bool) -> some View {
         if failed {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle")
@@ -170,95 +145,17 @@ struct WidgetCard: View {
             .font(.callout)
             .foregroundStyle(.secondary)
         } else {
-            WidgetPage(html: html, accent: NSColor.controlAccentColor, height: $height, right: $right, isDraft: draft != nil,
+            WidgetPage(html: html, accent: NSColor.controlAccentColor, height: $height, isDraft: isDraft,
                        send: answer(from: title), failed: { failed = true })
                 .id(attempt)
                 .frame(height: max(height, 60))
                 .onChange(of: height) { if height > 0 { Self.heights[call.id] = height } }
-                .onChange(of: right) { if let right { Self.rights[call.id] = right } }
-                .onGeometryChange(for: CGFloat.self, of: \.size.width) { width = $0 }
                 .clipShape(Self.shape)
-                // At the widget's own corner, however narrow it is: never over the reply's words.
-                .overlay(alignment: .topLeading) {
-                    corner(html: html, title: title, draft: draft)
-                        .alignmentGuide(.leading) { pill in -Self.pillX(widgetRight: right, width: width, pill: pill.width) }
-                }
-                .onHover { hovering in withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering } }
-                // The page is read in it; its name and its actions are the widget's.
+                // The page is read in it; its name is the widget's.
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel(WidgetAnswer.name(title))
-                .accessibilityValue(draft != nil ? "Being made" : "")
-                .accessibilityActions {
-                    if draft == nil {
-                        if showLarge != nil { Button("Open Larger") { openLarge(html: html, title: title) } }
-                        Button("Copy Its HTML") { Clipboard.copy(html) }
-                    }
-                }
-                #if DEBUG
-                // KUVO_DEMO_WIDGET_LARGE: the first widget shown opens larger.
-                .onAppear {
-                    guard ProcessInfo.processInfo.environment["KUVO_DEMO_WIDGET_LARGE"] != nil, !Self.openedLarge else { return }
-                    Self.openedLarge = true
-                    Task {
-                        try? await Task.sleep(for: .seconds(2))
-                        openLarge(html: html, title: title)
-                    }
-                }
-                #endif
+                .accessibilityValue(isDraft ? "Being made" : "")
         }
-    }
-
-    /// Where the pill starts, from the page's left edge: beside a widget narrower than the reply,
-    /// level with its top, so it covers neither the reply's words nor the widget's own controls;
-    /// inside the corner of one as wide as the reply. `widgetRight`: where the widget ends (nil
-    /// until measured: the reply's width).
-    static func pillX(widgetRight: CGFloat?, width: CGFloat, pill: CGFloat) -> CGFloat {
-        let edge = min(widgetRight.flatMap { $0 > 0 ? $0 : nil } ?? width, width)
-        if edge + gap + pill <= width { return edge + gap }
-        return max(0, width - pill - gap)
-    }
-
-    /// Between the pill and the widget's edge.
-    private static let gap: CGFloat = 6
-
-    /// The pill at the widget's top corner: how much is written while it's made; then, on hover,
-    /// Open Larger and Copy.
-    @ViewBuilder private func corner(html: String, title: String?, draft: Int?) -> some View {
-        let pill = Capsule()
-        // The pointer over the page holds it, the pill included: it's over the page's frame.
-        let shown = draft != nil || isHovering || Self.pillShown
-        Group {
-            if let draft {
-                HStack(spacing: 5) {
-                    Spinner(size: 10)
-                    if let size = Self.written(draft) {
-                        Text(size)
-                            .foregroundStyle(.tertiary)
-                            .monospacedDigit()
-                    }
-                }
-                .font(.caption)
-                .padding(.horizontal, 8)
-                .frame(minHeight: 24)
-            } else {
-                HStack(spacing: 0) {
-                    // Only where there's a card for it to cover.
-                    if showLarge != nil {
-                        MessageActionButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Open Larger") { openLarge(html: html, title: title) }
-                    }
-                    CopyButton(text: html, help: "Copy Its HTML")
-                }
-                .padding(.horizontal, 2)
-            }
-        }
-        .background(Surface.cardFill(scheme, focused: cardIsFocused), in: pill)
-        .overlay(pill.strokeBorder(Color.primary.opacity(0.1), lineWidth: 1))
-        .shadow(color: .black.opacity(scheme == .dark ? 0.3 : 0.08), radius: 4, y: 1)
-        .padding(.top, Self.gap)
-        .opacity(shown ? 1 : 0)
-        // Out of reach while they're hidden, Tab's too; VoiceOver has them as the widget's actions.
-        .disabled(!shown)
-        .accessibilityHidden(true)
     }
 }
 
@@ -283,99 +180,6 @@ extension EnvironmentValues {
     /// Sends text to the agent of the conversation in view, as your message (a widget's
     /// `kuvo.send`).
     @Entry var answerAgent: (String) -> Void = { _ in }
-    /// Shows a widget large, over the card of the conversation it's in (`largeWidgetHost`).
-    @Entry var showWidgetLarge: ((LargeWidget) -> Void)? = nil
-}
-
-/// A widget shown large, over its conversation.
-struct LargeWidget: Equatable {
-    let id: String
-    let html: String
-    let title: String?
-    let send: (String) -> Void
-
-    static func == (a: LargeWidget, b: LargeWidget) -> Bool { a.id == b.id && a.html == b.html }
-}
-
-extension View {
-    /// Where a widget opened larger shows: over this, the conversation's part of its card.
-    func largeWidgetHost() -> some View {
-        modifier(LargeWidgetHost())
-    }
-}
-
-private struct LargeWidgetHost: ViewModifier {
-    @State private var large: LargeWidget?
-
-    func body(content: Content) -> some View {
-        content
-            .environment(\.showWidgetLarge) { widget in withAnimation(.ui) { large = widget } }
-            .overlay {
-                if let large {
-                    LargeWidgetView(widget: large) { withAnimation(.ui) { self.large = nil } }
-                        .transition(.opacity.combined(with: .scale(0.985)))
-                }
-            }
-            // Over all of the card's content: its header doesn't fade the widget's own.
-            .preference(key: CardTopIsFixed.self, value: large != nil)
-    }
-}
-
-/// The widget over the whole conversation, with its name, a way back, and its HTML to copy. What
-/// it writes back goes to the agent, and the conversation comes back to show it.
-private struct LargeWidgetView: View {
-    let widget: LargeWidget
-    let close: () -> Void
-    @Environment(\.colorScheme) private var scheme
-    @State private var failed = false
-    @State private var attempt = 0
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles.rectangle.stack")
-                    .foregroundStyle(.tint)
-                Text(WidgetAnswer.name(widget.title))
-                    .fontWeight(.medium)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                CopyButton(text: widget.html, help: "Copy Its HTML")
-                MessageActionButton(symbol: "arrow.down.right.and.arrow.up.left", help: "Back to the Conversation (Esc)", action: close)
-                    .accessibilityLabel("Back to the Conversation")
-            }
-            .font(.callout)
-            .padding(.leading, 14)
-            .padding(.trailing, 8)
-            .frame(height: 36)
-            Divider()
-            if failed {
-                VStack(spacing: 8) {
-                    Text("It couldn't show.")
-                        .foregroundStyle(.secondary)
-                    Button("Try Again") {
-                        failed = false
-                        attempt += 1
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                WidgetPage(html: widget.html, accent: NSColor.controlAccentColor, height: .constant(0), scrollsInside: true,
-                           send: { text in
-                               close()
-                               widget.send(text)
-                           }, failed: { failed = true })
-                    .id(attempt)
-            }
-        }
-        .background(Surface.cardFill(scheme, focused: true))
-        .background {
-            Button("Back to the Conversation", action: close)
-                .keyboardShortcut(.cancelAction)
-                .opacity(0)
-                .frame(width: 0, height: 0)
-                .accessibilityHidden(true)
-        }
-    }
 }
 
 /// Words that change while a widget is on its way and its name isn't written yet.
@@ -406,10 +210,6 @@ struct WidgetPage: NSViewRepresentable {
     let html: String
     let accent: NSColor
     @Binding var height: CGFloat
-    /// Where its content ends, from its left edge, once drawn.
-    var right: Binding<CGFloat?> = .constant(nil)
-    /// It has room of its own (larger, in a sheet): it always scrolls in itself.
-    var scrollsInside = false
     /// Still being written: drawn without its scripts, a couple of times a second.
     var isDraft = false
     let send: (String) -> Void
@@ -443,13 +243,10 @@ struct WidgetPage: NSViewRepresentable {
     func updateNSView(_ view: WidgetWebView, context: Context) {
         let coordinator = context.coordinator
         coordinator.height = $height
-        coordinator.right = right
         coordinator.send = send
         coordinator.failed = failed
         coordinator.view = view
-        coordinator.scrollsInside = scrollsInside
-        if scrollsInside { view.fits = false }
-        coordinator.show(Self.page(html, accent: accent, inset: scrollsInside), draft: isDraft)
+        coordinator.show(Self.page(html, accent: accent), draft: isDraft)
     }
 
     /// Libraries from the usual places, pictures from anywhere; nothing it can send to.
@@ -504,10 +301,8 @@ struct WidgetPage: NSViewRepresentable {
     """
 
     /// `html` as a page: a fragment in a page of its own, or a whole page as it is; either way
-    /// with the policy above, and the window's look to start from.
-    /// `inset`: in room of its own (larger), away from the edges; in the conversation, its words line
-    /// up with the reply's.
-    static func page(_ html: String, accent: NSColor, inset: Bool = false) -> String {
+    /// with the policy above, and the window's look to start from. Its words line up with the reply's.
+    static func page(_ html: String, accent: NSColor) -> String {
         let hex = accent.usingColorSpace(.sRGB).map { String(format: "#%02X%02X%02X", Int($0.redComponent * 255), Int($0.greenComponent * 255), Int($0.blueComponent * 255)) } ?? "#0A84FF"
         let head = """
         <meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="\(policy)">
@@ -515,7 +310,7 @@ struct WidgetPage: NSViewRepresentable {
         <style>
         :root { --kuvo-accent: \(hex); }
         \(starter)
-        body { font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; color: CanvasText; padding: \(inset ? "12px" : "4px 2px"); box-sizing: border-box; }
+        body { font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; color: CanvasText; padding: 4px 2px; box-sizing: border-box; }
         </style>
         """
         if let range = html.range(of: "<head>", options: .caseInsensitive) {
@@ -575,43 +370,23 @@ struct WidgetPage: NSViewRepresentable {
     })();
     """
 
-    /// Its height, whenever it changes, and where its content ends (`right`, from its left
-    /// edge): a widget narrower than the reply has its own corner there.
+    /// Its height, whenever it changes.
     static let measure = """
     (() => {
-      const report = () => {
-        const page = document.documentElement;
-        let right = 0;
-        for (const element of document.body ? document.body.children : []) {
-          const box = element.getBoundingClientRect();
-          if (box.width > 0 && box.height > 0) right = Math.max(right, box.right);
-        }
-        // Words straight in the page, or nothing measured: its whole width.
-        if (right === 0 || document.body && [...document.body.childNodes].some((node) => node.nodeType === 3 && node.textContent.trim())) right = page.clientWidth;
-        window.webkit.messageHandlers.kuvo.postMessage({ type: "height", value: Math.ceil(page.scrollHeight), right: Math.ceil(Math.min(right, page.clientWidth)) });
-      };
-      // The page, and each of its parts: a part can grow wider while the page keeps its height.
-      const sizes = new ResizeObserver(report);
-      const watch = () => {
-        sizes.observe(document.documentElement);
-        for (const element of document.body ? document.body.children : []) sizes.observe(element);
-      };
-      if (document.body) new MutationObserver(watch).observe(document.body, { childList: true });
-      watch();
+      const report = () => window.webkit.messageHandlers.kuvo.postMessage({ type: "height", value: Math.ceil(document.documentElement.scrollHeight) });
+      new ResizeObserver(report).observe(document.documentElement);
       report();
     })();
     """
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var height: Binding<CGFloat>?
-        var right: Binding<CGFloat?>?
         var send: (String) -> Void = { _ in }
         var failed: () -> Void = {}
         weak var view: WidgetWebView?
         /// WebKit stopped its page and it hasn't drawn since (it does stop pages, to free memory): stopping again is a failure.
         private var restarted = false
         var loaded: String?
-        var scrollsInside = false
         /// What's shown is a draft: no scripts.
         private(set) var isDraft = false
         private var lastDraft = Date.distantPast
@@ -659,16 +434,12 @@ struct WidgetPage: NSViewRepresentable {
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
             guard let body = message.body as? [String: Any] else { return }
             switch body["type"] as? String {
-            // Its height, and where its content ends (`right`).
             case "height":
                 guard let value = body["value"] as? Double else { return }
-                if let right = (body["right"] as? Double).map({ CGFloat($0) }), abs((self.right?.wrappedValue ?? -1) - right) > 0.5 {
-                    self.right?.wrappedValue = right
-                }
                 // Drawn again: a later stop gets its own reload.
                 restarted = false
                 let fits = CGFloat(value) <= WidgetPage.tallest
-                view?.fits = fits && !scrollsInside
+                view?.fits = fits
                 let new = min(CGFloat(value), WidgetPage.tallest)
                 measured = new
                 let current = height?.wrappedValue ?? 0

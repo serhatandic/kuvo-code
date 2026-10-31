@@ -120,7 +120,6 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Agents make a live chart or something to try in the conversation when it shows something better than words (numbers they measured, options side by side, a value to tune), and not for what a sentence says; a plain choice comes as a question card instead. On your phone, they keep it narrow and tappable.
 - Diagrams an agent writes in a reply (Mermaid) are drawn as diagrams, on your Mac and your phone, with **Code** to see what one is written in; on your phone, open one larger to zoom in. While it's still being written, it shows as code.
 - What agents make live in the conversation starts in Kuvo Code's look, light and dark: buttons, fields, tables and chart colors that match the app.
-- What agents make live in the conversation shows on its own, with its name in a small caption under it; Open Larger and Copy come at the end of the caption when you point at it (on your phone, they're always there).
 - What you click in something an agent made live goes to the agent saying which one it came from, and your message shows that over your words.
 - Scroll to the End takes you to the newest message while the conversation still glides on from a flick of the trackpad, rather than the rest of the glide carrying it away again.
 - The bars over the composer (wake-ups, subagents, commands in the background) fold their rows up into the bar, rather than leaving them to fade out below it for a moment. A step's details, the thinking and messages between agents open and fold under their line, rather than fading or sliding over what's around them.
@@ -196,9 +195,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - With a coding agent, Send Now on a message the agent is just being handed starts it next if the agent doesn't take it, rather than leaving it waiting for another nudge.
 - Stop also stops a coding agent that carries on by itself (a command it left running ended) just as its turn ends, rather than letting that go on once the turn's over.
 - No more lighter band across a conversation behind the composer, as when you hovered a bar's button or opened the / list: the conversation fades out under the composer in the card's own color.
-- A widget opened larger shows its title clearly, rather than faded out like the conversation under a card's header.
 - A subagent's conversation shows the line under its title (whose it is, the way back, what it's doing) clearly, rather than faded like the conversation under a card's header.
-- What an agent draws for you (a chart, a small app) is part of its reply, with no frame or caption: Open Larger and Copy show at its corner when you point at it, and one that can't show says so, with Try Again.
+- What an agent draws for you (a chart, a small app) is part of its reply, shown exactly as it was made, at the reply's width, with nothing over it: no frame, caption or buttons. One that can't show says so, with Try Again.
 - Popovers, like a session's wake-ups (All), list their rows on the popover itself, without a card inside it.
 - With VoiceOver, removing a message or putting a goal away takes you to its Undo line, which undoes it; stopping a goal says the messages waiting stay paused.
 - The servers behind Outlook and Microsoft 365, Todoist, CalDAV calendars, Apple Calendar and Reminders, and Chrome DevTools are updated to their latest versions, with their makers' fixes.
