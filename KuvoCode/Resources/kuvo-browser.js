@@ -1185,16 +1185,33 @@ const notes = [];
 const noteOnce = (note) => {
   if (!notes.includes(note)) notes.push(note);
 };
-// What a conversation's downloads did while none of its calls was at work, for its next one.
+// What each conversation's downloads did, until one of its calls says so (one that says nothing
+// of its page, a screenshot say, leaves them for the next). Every helper hears every download, so
+// only the latest conversations' and their latest news are kept.
 const downloadNotes = new Map();
-/// A download's news goes to the conversation it's for: its call at work, or its next one. One
-/// that's nobody's (yours, a page no agent was in) goes to no agent.
+/// A download's news, for the conversation it's for. One that's nobody's (yours, a page no agent
+/// was in) goes to no agent, except one at work that can't say whose it is.
 function noteDownload(note, session = null) {
-  if (busy && session === (caller ?? null)) return noteOnce(note);
-  if (!session) return;
+  if (!session) {
+    if (busy && !caller) noteOnce(note);
+    return;
+  }
   const waiting = downloadNotes.get(session) ?? [];
+  downloadNotes.delete(session);
   if (!waiting.includes(note)) waiting.push(note);
-  downloadNotes.set(session, waiting);
+  downloadNotes.set(session, waiting.slice(-20));
+  if (downloadNotes.size > 100) downloadNotes.delete(downloadNotes.keys().next().value);
+}
+
+/// What the agent hears ahead of a call's result: what happened on the way, and its conversation's
+/// downloads.
+function heard() {
+  const said = notes.splice(0);
+  if (caller && downloadNotes.has(caller)) {
+    for (const note of downloadNotes.get(caller)) if (!said.includes(note)) said.push(note);
+    downloadNotes.delete(caller);
+  }
+  return said.length ? said.join("\n") + "\n\n" : "";
 }
 let busy = false;
 // The tool at work, and the page it works in.
@@ -1238,10 +1255,6 @@ async function takeTurn(call) {
   currentTool = call.name;
   workingIn = null;
   notes.unshift(...call.notes.splice(0));
-  if (call.session && downloadNotes.has(call.session)) {
-    for (const note of downloadNotes.get(call.session)) noteOnce(note);
-    downloadNotes.delete(call.session);
-  }
   link?.notify("Kuvo.setStatus", { working: true, tool: call.name });
 }
 
@@ -2272,7 +2285,7 @@ async function afterControl(wait) {
   // A page closed meanwhile: it goes on in another.
   const open = (await pages()).some((info) => info.targetId === wait.target);
   const p = await readyPage(open ? await use(wait.target) : await page());
-  const moved = notes.length ? notes.splice(0).join("\n") + "\n\n" : "";
+  const moved = heard();
   return text("The user took over the browser while you worked, and has handed it back. The page may have changed: this is where it is now. Go on from here.\n\n" + moved + (await snapshot(p)));
 }
 
@@ -2470,7 +2483,7 @@ async function tool(name, args) {
       return text(`Closed tab [${number}]. ` + list((await pages())));
     }
     const chosenPage = await readyPage(await use(chosen.targetId));
-    const said = notes.length ? notes.splice(0).join("\n") + "\n\n" : "";
+    const said = heard();
     return text(said + (await snapshot(chosenPage)));
   }
 
@@ -2491,7 +2504,7 @@ async function tool(name, args) {
   }
 
   let p = await readyPage(await page(), ["browser_navigate", "browser_back", "browser_forward"].includes(name));
-  const note = () => (notes.length ? notes.splice(0).join("\n") + "\n\n" : "");
+  const note = heard;
   const withNote = async (promise) => {
     const result = await promise;
     return text(note() + result);
