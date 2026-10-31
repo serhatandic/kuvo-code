@@ -1064,8 +1064,7 @@ final class Workspace {
     /// This Mac's sessions' queues as its box carries them, from now on (one it paused as its engine
     /// started, after a session here was read, shows Paused). A machine's session reads its own.
     func followQueues() async {
-        struct Queue: Decodable { var paused: Bool; var held: [String] }
-        struct Listed: Decodable { var queues: [String: Queue] }
+        struct Listed: Decodable { var queues: [String: SessionModel.BoxQueue] }
         while !Task.isCancelled {
             if let client = boxes?(BoxClient.mac) {
                 do {
@@ -1073,7 +1072,7 @@ final class Workspace {
                         guard let listed = try? JSONDecoder().decode(Listed.self, from: line) else { continue }
                         for (id, model) in models where RemoteFolder.machine(of: model.session.location.directory) == nil {
                             let queue = listed.queues[id]
-                            model.takeQueue(paused: queue?.paused ?? false, held: queue?.held ?? [])
+                            model.takeQueue(paused: queue?.paused ?? false, held: queue?.held ?? [], waiting: queue?.waiting ?? [])
                         }
                     }
                 } catch {}
