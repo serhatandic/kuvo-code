@@ -10,6 +10,8 @@ import UniformTypeIdentifiers
 /// go as paths in a note, for the agent to open with its tools.
 nonisolated enum Attachments {
     static let maxBytes = 20 * 1024 * 1024
+    /// The most text the coding agents' bridge puts in a message (the box's `AGENTS_TEXT_BYTES`).
+    static let agentsTextBytes = 200_000
     private static let engineImageTypes: [UTType] = [.png, .jpeg, .gif, .webP]
 
     enum Kind { case text, image, pdf, folder, other }
@@ -72,10 +74,14 @@ nonisolated enum Attachments {
         let name = model?.name ?? "This model"
         let size = (try? target(of: url).resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
         let tooBig = Route.path(reason: "It's over 20 MB, so the agent gets its path and opens it with its tools.", isWarning: true)
+        // The coding agents' bridge puts a text file in the message only up to its limit, and
+        // never a folder's listing: those go by path.
+        let agents = OutsideAgents.runsInBridge(model?.providerID)
         switch kind(of: url) {
         case .folder:
-            return .content
+            return agents ? .path(reason: "The agent gets the folder's path and looks inside with its tools.", isWarning: false) : .content
         case .text:
+            if agents, size > agentsTextBytes { return .path(reason: "It's long, so the agent gets its path and opens it with its tools.", isWarning: false) }
             return size <= maxBytes ? .content : tooBig
         case .pdf:
             if input.map({ !$0.contains("pdf") }) == true { return .path(reason: "\(name) can't read PDFs, so the agent gets its path and opens it with its tools.", isWarning: true) }

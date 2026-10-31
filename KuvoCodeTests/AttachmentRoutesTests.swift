@@ -24,9 +24,9 @@ import Testing
         try png.write(to: folder.appending(path: "shot.png"))
     }
 
-    private func model(input: [String]) throws -> Model {
+    private func model(input: [String], provider: String = "p") throws -> Model {
         try JSONDecoder().decode(Model.self, from: JSONSerialization.data(withJSONObject: [
-            "id": "m-\(input.joined())", "modelID": "m", "providerID": "p", "name": "Test Model",
+            "id": "m-\(input.joined())", "modelID": "m", "providerID": provider, "name": "Test Model",
             "capabilities": ["tools": true, "input": input, "output": ["text"]], "variants": [],
             "time": ["released": 1], "cost": [["input": 1, "output": 1]], "status": "active", "enabled": true,
             "limit": ["context": 1000, "output": 100]]))
@@ -60,6 +60,21 @@ import Testing
         #expect(prepared.files.map(\.name) == ["notes.txt", "shot.png"])
         #expect(prepared.included == [url("notes.txt").path, url("shot.png").path])
         #expect(prepared.paths == [url("blob.bin").path])
+    }
+
+    /// A coding agent's session: its bridge puts a text file in the message only up to its limit,
+    /// and never a folder, so a long log and a folder go by path, and the message doesn't say
+    /// they're in it. A short file is, and the engine's models still get the long one whole.
+    @Test func aCodingAgentGetsLongTextAndFoldersByPath() throws {
+        let log = url("build.log")
+        try Data(repeating: UInt8(ascii: "a"), count: 200_001).write(to: log)  // over the bridge's limit
+        let agent = try model(input: ["text", "image"], provider: "claude-code")
+        let prepared = Attachments.prepare([url("notes.txt"), log, url("src")], for: agent)
+        #expect(prepared.included == [url("notes.txt").path])
+        #expect(prepared.paths == [log.path, url("src").path])
+        guard case .path(let reason, let warns) = Attachments.route(log, for: agent) else { Issue.record("a long log went in a coding agent's message"); return }
+        #expect(reason.contains("gets its path") && !warns)
+        #expect(isContent("build.log", for: try model(input: ["text"])))
     }
 
     /// On a machine, which can't read this Mac's files: what the model reads goes inline, a
