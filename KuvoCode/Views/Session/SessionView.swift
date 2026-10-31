@@ -788,7 +788,7 @@ struct DraftSessionView: View {
                 // Attempts made before one failed go too: they'd never get the message, and
                 // sending again makes them all anew.
                 for session in sessions {
-                    await workspace.delete(session.id)
+                    try? await workspace.delete(session.id)
                     if inWorktrees { await workspace.discardWorktree(session.location.directory) }
                 }
                 Analytics.shared.firstMessageBlocked("session_failed_" + Analytics.trouble(error))

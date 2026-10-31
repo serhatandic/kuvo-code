@@ -79,7 +79,7 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   // What you let this project's commands write (Also Allowed), before what follows takes back
   // Kuvo Code's folders, git's hooks and the agents' settings in it.
   allow("file-write*", ...Array.from({ length: MOST_FOLDERS }, (_, at) => param(`ALLOW${at}`)));
-  deny("file-write*", ...policy.readOnly.map(subpath));
+  deny("file-write*", ...policy.readOnly.map(subpath), ...(policy.readOnlyPatterns ?? []).map(regex));
 
   // What's in them is neither read (nor listed) nor written; a path through them is still looked up,
   // so a command can go to its own folder inside them. (A carve-out overrides a refusal only of
@@ -98,6 +98,8 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   allow("file-write*", ...homes.flatMap(home => ["$", "/"].flatMap(after => ["REGULAR-FILE", "DIRECTORY"].map(type =>
     `(require-all ${inHome(home, `"/(" (param "STATE") ")${after}"`)} (vnode-type ${type}))`))));
   allow(HIDDEN, param("TMP"));
+  // Kuvo Code's own caches for commands (npm's, pnpm's, uv's, corepack's), in its folders.
+  allow(HIDDEN, ...policy.commandCaches.map(subpath));
   if (options.inside) allow(HIDDEN, param("WORK"));
   // Its conversation's wake-ups and watches (kuvo-wake): what's kept there is read, and only its
   // inbox written, which the box takes in, out of its reach (kuvo-wake's `take`).

@@ -7,12 +7,13 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
+import { removeAtEnd } from "./at-end.js";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-config-"));
 const home = path.join(root, "machine");
 process.env.KUVO_HOME = home;
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+removeAtEnd(root);
 const script = new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url);
 const link = await import(script);
 

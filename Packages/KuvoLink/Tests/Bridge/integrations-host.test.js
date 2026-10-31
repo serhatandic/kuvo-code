@@ -4,13 +4,14 @@
 // the agent uses there. Here a stand-in for the app keeps them in memory. The scenarios in
 // integrations-scenarios.js, then what's this Mac's own: nothing kept in the box's folder, its
 // browser's sign-ins, and the app not answering said plainly, with nothing half removed.
-import { test, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { script, standInHost } from "./bot-keys-scenarios.js";
 import { integrationScenarios } from "./integrations-scenarios.js";
+import { removeAtEnd } from "./at-end.js";
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-integrations-host-")));
 const home = path.join(root, "box");
@@ -23,7 +24,7 @@ const keyFiles = path.join(root, "app-temp", "integration-keys");
 const data = path.join(root, "integrations");
 Object.assign(process.env, { KUVO_HOME: home, KUVO_BOX: "mac", KUVO_ENGINE_CONFIG: engineConfig, KUVO_KEYS: keyFiles, KUVO_INTEGRATIONS: data, KUVO_KEYS_ON_HOST: "1", KUVO_HOST_URL: host.url, KUVO_HOST_PASSWORD: PASSWORD });
 const link = await import(script);
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+removeAtEnd(root);
 
 integrationScenarios({ link, home, mac: true, store: {
   settingsFile: path.join(engineConfig, "opencode", "opencode.json"),

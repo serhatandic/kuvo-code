@@ -3,7 +3,7 @@
 // unlock key. Here a stand-in for the app keeps them in memory. (A machine's: vault.test.js.)
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/vault-host.test.js`.
-import { test, after, before } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
@@ -12,6 +12,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { script, standInHost } from "./bot-keys-scenarios.js";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "kvh-"));
 const home = path.join(root, "box");
@@ -21,7 +22,7 @@ const host = await standInHost(PASSWORD);
 host.vaultSecret = crypto.randomBytes(32).toString("hex");
 const env = { ...process.env, HOME: root, KUVO_HOME: home, KUVO_HOST_URL: host.url, KUVO_HOST_PASSWORD: PASSWORD, KUVO_HOST_VAULT_SECRET: host.vaultSecret, KUVO_VAULT_FILE_KEY: crypto.randomBytes(32).toString("base64url"), KUVO_VAULT_AGENTS: "1" };
 for (const name of ["KUVO_KEYS", "KUVO_KEYS_ON_HOST", "KUVO_BOX"]) delete env[name];
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+removeAtEnd(root);
 
 const SECRET = "mac-secret-sauce-42";
 let engine;
@@ -34,6 +35,10 @@ before(async () => {
   fs.mkdirSync(path.join(home, "bots", "bot_ship"), { recursive: true });
   fs.writeFileSync(path.join(home, "bots", "bot_ship", "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_ship", name: "Ship" }));
   fs.writeFileSync(path.join(home, "bots", "bot_ship", "session"), "ses_ship");
+  // (And another, whose grant a test takes away.)
+  fs.mkdirSync(path.join(home, "bots", "bot_scout"), { recursive: true });
+  fs.writeFileSync(path.join(home, "bots", "bot_scout", "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_scout", name: "Scout" }));
+  fs.writeFileSync(path.join(home, "bots", "bot_scout", "session"), "ses_scout");
   engine = http.createServer((request, response) => {
     // Its browser_sign_in, running as the fill comes (the box answers a fill only for one: vault/who.ts).
     if (request.url.startsWith("/api/session/ses_ship/message")) {
@@ -62,7 +67,7 @@ async function startBox() {
   };
   return { route, stop: () => { child.stdin.end(); return new Promise(resolve => child.once("exit", resolve)); } };
 }
-after(async () => { await box?.stop(); engine?.closeAllConnections(); engine?.close(); });
+atEnd(async () => { await box?.stop(); engine?.closeAllConnections(); engine?.close(); });
 
 let item;
 

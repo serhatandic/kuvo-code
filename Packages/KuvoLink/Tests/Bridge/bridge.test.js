@@ -8,9 +8,10 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { EventEmitter, once } from "node:events";
-import { after, test } from "node:test";
+import { test } from "node:test";
 import { runningAs } from "./running-as.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { removeAtEnd } from "./at-end.js";
 
 // The bridge keeps its state in KUVO_HOME, so give it a folder of its own before loading it.
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-test-"));
@@ -19,10 +20,8 @@ process.env.KUVO_HOME = home;
 // home would be), so the box names its paths whole wherever the tests run.
 const user = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-user-"));
 process.env.HOME = user;
-after(() => {
-  fs.rmSync(home, { recursive: true, force: true });
-  fs.rmSync(user, { recursive: true, force: true });
-});
+removeAtEnd(home);
+removeAtEnd(user);
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // A phone's key as a phone has one (32 bytes, base64url), named for a test.
@@ -422,6 +421,19 @@ test("a Mac's files for a machine take the phone's path: kept on the machine's b
   assert.deepEqual(prompted["/api/session/ses_unknown1/prompt"].files, files);
   await ask("kuvo/agents/api/session/ses_unknown1/prompt", { id: "msg_4", text: "Read it", files });
   assert.equal(prompted["/api/session/ses_unknown1/prompt"].files, undefined);
+
+  // A long log: the engine's model reads it in the message, but the coding agents get only as
+  // much text as their bridge puts in one, so they open this one from where it's kept.
+  const log = Buffer.from("GET /health 200\n".repeat(20_000));
+  const logs = [{ uri: `data:text/plain;base64,${log.toString("base64")}`, name: "server.log" }];
+  await ask("api/session/ses_mac1/prompt", { id: "msg_5", text: "Why did it fail?", files: logs });
+  assert.deepEqual(prompted["/api/session/ses_mac1/prompt"].files, logs);
+  await ask("kuvo/agents/api/session/ses_mac1/prompt", { id: "msg_6", text: "Why did it fail?", files: logs });
+  const longLog = prompted["/api/session/ses_mac1/prompt"];
+  assert.equal(longLog.files, undefined);
+  const opens = longLog.text.split("\n");
+  assert.equal(opens[3], "Open these attached files with your tools if you need them:");
+  assert.deepEqual(fs.readFileSync(opens[4]), log);
 });
 
 test("requests go to the engine with its password, all of its API; paths that aren't what they seem don't", async t => {

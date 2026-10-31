@@ -153,7 +153,9 @@ import Testing
 
         model.draftText = "/btw what does parseDuration match?"
         model.submitDraft(for: nil, queue: false, commands: [])
-        try await until { model.sideThreads.count == 2 && model.shownSideThread?.latest.state == .answered }
+        // (The new thread, by its question: the first is answered already, and shows until it does.)
+        try await until { model.shownSideThread?.latest.question == "what does parseDuration match?" && model.shownSideThread?.latest.state == .answered }
+        #expect(model.sideThreads.count == 2)
         #expect(model.shownSideThread?.questions.count == 1)
 
         model.removeSideThread(thread)

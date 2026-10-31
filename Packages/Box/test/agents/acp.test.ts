@@ -2,7 +2,7 @@
 // it asks is answered as the session's rules and modes say; Stop stops it; what it costs is counted.
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -18,6 +18,8 @@ import { Sessions } from "../../src/agents/sessions"
 import { Store } from "../../src/agents/store"
 import { setToolServer } from "../../src/agents/kuvotools"
 import { canFence, realFence } from "./support/fence"
+import { computerServers, KEYS, SERVER_COMMAND } from "./support/servers"
+import { forgetServers } from "../../src/agents/servers"
 import { noteAgentsInside } from "../../src/agents/fence"
 import type { PermissionRule } from "../../src/agents/wire"
 
@@ -51,6 +53,13 @@ interface Script {
    * (a server's address, straight), `env` (a variable's value, or `none`).
    */
   tries?: Record<string, [string, string]>
+  /**
+   * As it starts, it reads the folder it's started in, as Google's agent does (Python's
+   * `os.getcwd()`); one it can't read ends it there, with `fails` (a traceback) on its stderr.
+   * `fails` alone ends it there whatever it finds.
+   */
+  readsItsFolder?: boolean
+  fails?: string
 }
 
 /**
@@ -69,7 +78,8 @@ function fakeAcp(updates: [string, any][], later: [string, any][] = [], request?
   writeFileSync(
     path,
     `const { appendFileSync, readFileSync } = require("node:fs")
-const log = (entry) => appendFileSync(${JSON.stringify(log)}, JSON.stringify(entry) + "\\n")
+// (Signing in, the sandbox keeps it out of the test's folder, where it writes this down.)
+const log = (entry) => { try { appendFileSync(${JSON.stringify(log)}, JSON.stringify(entry) + "\\n") } catch {} }
 log({ argv: process.argv.slice(2) })
 let buffer = ""
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n")
@@ -79,6 +89,16 @@ const setup = ${JSON.stringify({ sessionId: "s1", ...script.setup })}
 const refuses = ${JSON.stringify(script.refuses ?? [])}
 const later = ${JSON.stringify(later)}
 const tries = ${JSON.stringify(script.tries ?? null)}
+const fails = ${JSON.stringify(script.fails ?? "Traceback (most recent call last):\nPermissionError: [Errno 1] Operation not permitted")}
+if (${JSON.stringify(Boolean(script.readsItsFolder || script.fails))}) {
+  try {
+    require("node:fs").readdirSync(".")
+    if (${JSON.stringify(script.fails !== undefined)}) throw new Error()
+  } catch {
+    process.stderr.write(fails + "\\n")
+    process.exit(1)
+  }
+}
 let servers = []
 async function attempt(how, place) {
   if (how === "env") return process.env[place] ?? "none"
@@ -95,6 +115,20 @@ async function attempt(how, place) {
       const staged = fs.mkdtempSync(path.join(process.cwd(), "staged-"))
       fs.symlinkSync("/", path.join(staged, "prompt_history.jsonl"))
       fs.renameSync(staged, place)
+    }
+    else if (how === "server") {
+      // One of the computer's servers it was given, by name: started, then its tool called
+      // ("<server> [<tool> [<path or name>]]", its key told by default).
+      const [named, tool = "reveal", argument] = place.split(" ")
+      const server = servers.find((each) => each.name === named)
+      if (!server) return "none"
+      const headers = { ...Object.fromEntries(server.headers.map((each) => [each.name, each.value])), "Content-Type": "application/json", Accept: "application/json, text/event-stream" }
+      const started = await fetch(server.url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "agent", version: "1" } } }) })
+      if (!started.ok) return "no"
+      const session = started.headers.get("mcp-session-id")
+      const response = await fetch(server.url, { method: "POST", headers: { ...headers, ...(session ? { "mcp-session-id": session } : {}) }, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: tool, arguments: tool === "env" ? { name: argument } : { path: argument } } }) })
+      if (!response.ok) return "no"
+      return (await response.json()).result?.content?.[0]?.text ?? "no"
     }
     else if (how === "tools" || how === "app") {
       const server = how === "tools" ? servers.find((each) => each.type === "http") : { url: place, headers: [] }
@@ -800,6 +834,75 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
   })
 })
 
+describe.skipIf(!canFence)("The computer's MCP servers, for an ACP agent in the box's sandbox", () => {
+  let kuvo: string
+  let servers: ReturnType<typeof computerServers>
+  beforeEach(async () => {
+    kuvo = realpathSync(mkdtempSync(join(base, "kuvo-")))
+    writeFileSync(join(kuvo, "secret"), "s")
+    // The integrations' folder, in Kuvo Code's, where one keeps its sign-in.
+    mkdirSync(join(kuvo, "integrations", "files"), { recursive: true })
+    process.env.KUVO_INTEGRATIONS = join(kuvo, "integrations")
+    process.env.GROK_HOME = realpathSync(mkdtempSync(join(base, "grok-home-")))
+    process.env.KUVO_FENCE = realFence(kuvo)
+    servers = computerServers(root)
+    await servers.serve()
+  })
+  afterEach(() => {
+    servers.stop()
+    delete process.env.KUVO_FENCE
+    delete process.env.GROK_HOME
+    delete process.env.KUVO_INTEGRATIONS
+  })
+
+  const trying = (tries: Record<string, [string, string]>) => new TestGrok(program(fakeAcp([], [], undefined, { tries }), join(root, "grok")), root)
+  const everyKind: Record<string, [string, string]> = { files: ["server", "files"], notes: ["server", "notes"], tracker: ["server", "tracker"], off: ["server", "off"] }
+
+  test("each reaches it through the bridge with what it needs: a command's server, found on the PATH, with its key; a URL's with its headers or your sign-in; one turned off isn't there", async () => {
+    const id = await run(trying(everyKind))
+    expect(words(id)).toBe(`files=key:${KEYS.shared} notes=auth:none,key:${KEYS.notes},at:/notes tracker=auth:Bearer ${KEYS.tracker},key:none,at:/tracker off=none`)
+  })
+
+  test("a command's server runs in the sandbox as the conversation's commands do: Kuvo Code's folder hidden, but its integration's own folder, where it keeps its sign-in, its to write", async () => {
+    const token = join(kuvo, "integrations", "files", "token.json")
+    servers.filesEnvironment = { TOKEN_CACHE: token }
+    const id = await run(trying({ secret: ["server", `files read ${join(kuvo, "secret")}`], token: ["server", `files write ${token}`], project: ["server", `files write ${join(root, "made.txt")}`] }))
+    expect(words(id)).toBe("secret=no token=yes project=yes")
+  })
+
+  test("the agent is given only the bridge's address for each and its own key to it, never the servers' keys, commands or addresses", async () => {
+    await run(trying(everyKind))
+    const given = received().find((message) => message.method === "session/new").params.mcpServers as any[]
+    expect(given.map((server) => server.name)).toEqual(expect.arrayContaining(["files", "notes", "tracker"]))
+    const text = JSON.stringify(given)
+    for (const key of Object.values(KEYS)) expect(text).not.toContain(key)
+    expect(text).not.toContain(SERVER_COMMAND)
+    // Each the bridge's own address, one port for all.
+    const relay = new URL(given[0].url).port
+    for (const server of given) expect(server.url).toBe(`http://127.0.0.1:${relay}/mcp/${server.name}`)
+  })
+
+  test("a bot's own key (Edit Bot › Keys) is the one its server gets, in place of yours, from the agent's next message on", async () => {
+    const agent = trying({ files: ["server", "files"] })
+    const id = await run(agent)
+    expect(words(id)).toBe(`files=key:${KEYS.shared}`)
+    // Given to the bot now, while the same Grok goes on.
+    servers.botLayer = servers.botFiles()
+    forgetServers()
+    send(id, "again")
+    await settled(id, 2)
+    expect(words(id)).toBe(`files=key:${KEYS.shared}files=key:${KEYS.bot}`)
+  })
+
+  test("a call that doesn't carry the conversation's key to the bridge reaches none of them", async () => {
+    await run(trying(everyKind))
+    const given = received().find((message) => message.method === "session/new").params.mcpServers as any[]
+    const files = given.find((server) => server.name === "files")
+    const response = await fetch(files.url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer guessed" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }) })
+    expect(response.status).toBe(401)
+  })
+})
+
 describe.skipIf(!canFence)("Antigravity in the box's sandbox", () => {
   /** Kuvo Code's folder, the bridge's (where Antigravity's agent and home are), and a folder elsewhere. */
   let kuvo: string, home: string, elsewhere: string
@@ -837,6 +940,41 @@ describe.skipIf(!canFence)("Antigravity in the box's sandbox", () => {
     // Kuvo Code would read and write outside the sandbox for it: it isn't offered to.
     const initialize = received().find((message) => message.method === "initialize")
     expect(initialize.params.clientCapabilities.fs).toEqual({ readTextFile: false, writeTextFile: false })
+  })
+
+  /** How signing in ends, once it has (Google's page answered at once, as the fake does). */
+  const signedIn = async (agent: TestAntigravity) => {
+    const attempt = await agent.signIn()
+    await until(() => attempt.status().status !== "pending")
+    return attempt.status()
+  }
+
+  test("signing in starts it where it can read its own folder, with the bridge's folders inside Kuvo Code's, as on a Mac", async () => {
+    // (The bridge's home and temporary folder are inside Kuvo Code's, which the sandbox hides.)
+    const agent = new TestAntigravity(fakeAcp([], [], undefined, { readsItsFolder: true }), join(kuvo, "agents"))
+    expect(await signedIn(agent)).toEqual({ status: "complete" })
+    // Nothing left of where it ran, once it's gone.
+    await until(() => readdirSync(join(kuvo, "agents", "temporary", "antigravity")).length === 0)
+  })
+
+  test("an agent that stops as it starts says why in a line, and leaves its traceback for the log", async () => {
+    const traceback = 'Traceback (most recent call last):\n  File "agy_acp_server.py", line 12, in <module>\nPermissionError: [Errno 1] Operation not permitted'
+    const logged: string[] = []
+    const log = console.error
+    console.error = (...said: unknown[]) => void logged.push(said.join(" "))
+    try {
+      const ended = await signedIn(new TestAntigravity(fakeAcp([], [], undefined, { fails: traceback }), home))
+      expect(ended.status).toBe("failed")
+      expect(ended.message).not.toContain("Traceback")
+      expect(ended.message).not.toContain("\n")
+      expect(ended.message).toContain("wasn't allowed")
+      expect(logged.join("\n")).toContain(traceback)
+      // Google's own refusal, said as it stops, still reads as one.
+      const refused = await signedIn(new TestAntigravity(fakeAcp([], [], undefined, { fails: "google.auth.Error: SUBSCRIPTION_REQUIRED" }), home))
+      expect(refused.message).toBe("Google says this account needs an Antigravity subscription.")
+    } finally {
+      console.error = log
+    }
   })
 
   test("with the sandbox off, it runs as before, reading and writing files through Kuvo Code", async () => {

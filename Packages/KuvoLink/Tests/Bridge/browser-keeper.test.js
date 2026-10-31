@@ -12,8 +12,9 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 // (Short: the keeper's socket is in it.)
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kvk-")));
@@ -41,10 +42,10 @@ fs.createReadStream(null, { fd: 3, encoding: "utf8" }).on("data", (chunk) => {
 `);
 fs.writeFileSync(path.join(build, "chrome"), `#!/bin/sh\nBUN_BE_BUN=1 exec ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(build, "chrome.js"))}\n`, { mode: 0o755 });
 
-after(() => {
+removeAtEnd(home);
+atEnd(() => {
   // The keeper the live view started, in a session of its own.
   try { process.kill(Number(fs.readFileSync(path.join(home, "run", "browser.pid"), "utf8")), "SIGKILL"); } catch {}
-  fs.rmSync(home, { recursive: true, force: true });
 });
 
 const reachable = () => new Promise(resolve => {

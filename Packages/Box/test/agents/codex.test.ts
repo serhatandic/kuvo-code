@@ -5,12 +5,13 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
-import { existsSync, mkdirSync, readdirSync, realpathSync, symlinkSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, realpathSync, symlinkSync, watch } from "node:fs"
 import { createHash } from "node:crypto"
 import { createServer } from "node:net"
 import { CodexAgent } from "../../src/agents/agents/codex"
 import { Auto } from "../../src/agents/auto"
 import { canFence, realFence } from "./support/fence"
+import { callServer, computerServers, KEYS } from "./support/servers"
 import { fencePolicy } from "../../src/link/fence/policy"
 import type { Roster } from "../../src/agents/roster"
 import { Sessions } from "../../src/agents/sessions"
@@ -180,6 +181,19 @@ async function until(condition: () => boolean, ms = 10_000) {
   }
 }
 
+/** Once `file` is there, as its folder says it changed: no clock, so as slow as the Mac is. */
+function made(file: string): Promise<void> {
+  return new Promise((resolve) => {
+    const watcher = watch(dirname(file), () => there())
+    const there = () => {
+      if (!existsSync(file)) return
+      watcher.close()
+      resolve()
+    }
+    there()
+  })
+}
+
 /** A session on a Codex whose turn sends `events`, with your message sent: Codex at work on it. */
 function start(events: [string, any][], session: { agent?: string; permissions?: PermissionRule[] } = {}, later?: [string, any][]) {
   codex = new TestCodex(fakeCodex(root, events, later), root)
@@ -238,11 +252,38 @@ process.stdin.on("data", (chunk) => {
     await until(() => !pids.some(running))
   })
 
+  test("a Codex stopped while it's still starting isn't left running", async () => {
+    const script = join(root, "never.js")
+    const pidFile = join(root, "pid")
+    // It starts, says so (its pid, whole: written aside, then named), and never answers being started.
+    writeFileSync(script, `const fs = require("node:fs")
+fs.writeFileSync(${JSON.stringify(pidFile + ".new")}, String(process.pid))
+fs.renameSync(${JSON.stringify(pidFile + ".new")}, ${JSON.stringify(pidFile)})
+process.stdin.on("end", () => process.exit(0))
+process.stdin.resume()
+`)
+    const launcher = join(root, "codex")
+    writeFileSync(launcher, `#!/bin/sh\nexport BUN_BE_BUN=1\nexec "${process.execPath}" "${script}" "$@"\n`)
+    chmodSync(launcher, 0o755)
+    const agent = (codex = new TestCodex(launcher, root))
+    const starting = agent.rpc()
+    starting.catch(() => {})
+    await made(pidFile)
+    const pid = Number(readFileSync(pidFile, "utf8"))
+    // (As when the session it's for closes, or the bridge stops.)
+    agent.shutdown()
+    // Its start fails as it ends (long before the 30 s it's given to answer), and nothing of it runs.
+    await expect(starting).rejects.toThrow()
+    expect(() => process.kill(pid, 0)).toThrow()
+  })
+
   test("one still starting outside the sandbox counts as outside it (agents keep off the vault) from its start until it stops", async () => {
     const go = join(root, "go")
     const script = join(root, "slow.js")
     writeFileSync(script, `const fs = require("node:fs")
 fs.writeFileSync(${JSON.stringify(join(root, "started"))}, "")
+// (Gone when its input ends, as Codex's app-server is: never outliving the tests.)
+process.stdin.on("end", () => process.exit(0))
 process.stdin.on("data", (chunk) => {
   for (const line of String(chunk).split("\\n").filter(Boolean)) {
     const message = JSON.parse(line)
@@ -887,6 +928,25 @@ describe("Codex's tools", () => {
     const overrides = argv().flatMap((arg, at, all) => (all[at - 1] === "-c" ? [arg] : []))
     expect(overrides).toContain("plugins.unified-computer-use@openai-bundled.enabled=false")
     expect(overrides).toContain("plugins.computer-use@openai-bundled.enabled=false")
+  })
+})
+
+describe("Codex and the computer's MCP servers", () => {
+  test("its thread gets them through the bridge, without their keys, and a call reaches each with what it needs", async () => {
+    const servers = computerServers(root)
+    await servers.serve()
+    try {
+      await run([["item/completed", { item: { type: "agentMessage", id: "m1", text: "Done." } }]])
+      const config = sent().find((message) => message.method === "thread/start").params.config as Record<string, any>
+      const given = Object.fromEntries(Object.entries(config).filter(([name]) => name.startsWith("mcp_servers.")).map(([name, server]) => [name.slice("mcp_servers.".length), server]))
+      expect(Object.keys(given).sort()).toEqual(["files", "notes", "tracker"])
+      const text = JSON.stringify(given)
+      for (const key of Object.values(KEYS)) expect(text).not.toContain(key)
+      expect(await callServer({ url: given.files.url, headers: given.files.http_headers })).toBe(`key:${KEYS.shared}`)
+      expect(await callServer({ url: given.tracker.url, headers: given.tracker.http_headers })).toBe(`auth:Bearer ${KEYS.tracker},key:none,at:/tracker`)
+    } finally {
+      servers.stop()
+    }
   })
 })
 

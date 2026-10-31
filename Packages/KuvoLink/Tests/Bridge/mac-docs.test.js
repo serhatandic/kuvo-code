@@ -12,10 +12,11 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-mac-docs-")));
-after(() => fs.rmSync(support, { recursive: true, force: true }));
+removeAtEnd(support);
 
 // This Mac's app: its keys, as your Keychain keeps them.
 const appHost = http.createServer((request, response) => {
@@ -33,7 +34,7 @@ const appHost = http.createServer((request, response) => {
   });
 });
 await new Promise(resolve => appHost.listen(0, "127.0.0.1", resolve));
-after(() => appHost.close());
+atEnd(() => appHost.close());
 
 Object.assign(process.env, {
   KUVO_HOME: path.join(support, "box"),

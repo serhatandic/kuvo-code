@@ -349,6 +349,26 @@ import UsageKit
         #expect(agents.installFailures["claude-code"] == "curl: (6) Could not resolve host: claude.ai")
     }
 
+    /// Install, then Continue while it runs: once it's installed, its sign-in opens in Settings ›
+    /// Accounts, as the step that would have opened it is gone. Installed while the step shows, it
+    /// signs in there.
+    @Test func anInstallThatFinishesAfterYouWentOnSignsInFromSettings() async throws {
+        defer { done() }
+        StubWeb.handle(bridge + "/api/integration/claude-code/install") { _, _ in StubWeb.json(["data": ["installed": true]]) }
+        StubWeb.handle(bridge + "/api/integration/codex-cli/install") { _, _ in StubWeb.json(["data": ["installed": true]]) }
+        let (claude, codex) = try await rows()
+
+        #expect(await install(codex), "signs in on the step")
+        #expect(agents.signInsAfterInstall.isEmpty)
+
+        let signInHere = await withCheckedContinuation { finished in
+            onboarding.install(claude, with: agents) { finished.resume(returning: $0) }
+            onboarding.advance()
+        }
+        #expect(!signInHere, "not on a step that's gone")
+        #expect(agents.signInsAfterInstall == ["claude-code"], "Settings › Accounts opens it")
+    }
+
     /// One the step had but you hadn't seen yet, when you go on: Settings › Accounts says it.
     @Test func anUnseenFailureGoesToSettingsWithTheStep() async throws {
         defer { done() }

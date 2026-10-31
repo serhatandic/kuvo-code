@@ -10,9 +10,10 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { runningAs } from "./running-as.js";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-updates-"));
 process.env.KUVO_HOME = home;
@@ -20,11 +21,11 @@ const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-release-"));
 const engines = new Set();
-after(() => {
+removeAtEnd(home);
+removeAtEnd(scratch);
+atEnd(() => {
   for (const pid of engines) try { process.kill(pid); } catch {}
   stopEngine();
-  fs.rmSync(home, { recursive: true, force: true });
-  fs.rmSync(scratch, { recursive: true, force: true });
 });
 
 // The engine: answers as one does, notes itself as the keeper's start does, runs until stopped.
@@ -108,7 +109,7 @@ const server = http.createServer((request, response) => {
   response.end(body ?? "");
 });
 await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-after(() => server.close());
+atEnd(() => server.close());
 const base = `http://127.0.0.1:${server.address().port}`;
 
 function release({ version = "0.10.0", released = new Date(Date.now() - 10 * 86_400_000), breaks = false, tamper = false, key = privateKey } = {}) {

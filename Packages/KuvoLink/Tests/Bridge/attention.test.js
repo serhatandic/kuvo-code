@@ -9,12 +9,13 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
+import { removeAtEnd } from "./at-end.js";
 
 // The bridge keeps its state in KUVO_HOME: a folder of this test's own.
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-attention-"));
 process.env.KUVO_HOME = home;
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+removeAtEnd(home);
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // A clock that moves only when the test moves it, and the timers it runs.

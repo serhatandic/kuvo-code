@@ -9,10 +9,11 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const support = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-mac-wakes-"));
-after(() => fs.rmSync(support, { recursive: true, force: true }));
+removeAtEnd(support);
 // As the app starts its box: KUVO_HOME is the box's folder, and the app's own are beside it.
 process.env.KUVO_HOME = path.join(support, "box");
 process.env.KUVO_BOTS = path.join(support, "bots");
@@ -65,7 +66,7 @@ const engine = http.createServer((request, response) => {
   reply(404, {});
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
-after(() => { engine.closeAllConnections(); engine.close(); });
+atEnd(() => { engine.closeAllConnections(); engine.close(); });
 const handle = link.engineHandler(() => ({ port: engine.address().port, password: "p" }), { name: "Mac" }, () => null);
 async function ask(method, p, body) {
   const parts = [];
@@ -237,6 +238,34 @@ test("a wake-up due in a conversation you stopped waits on the box, shown as a w
   await fire();
   assert.deepEqual(waiting(), [["Wake-up", "Send the weekly summary"], ["Wake-up", "Check the build"]]);
   assert.deepEqual(prompted.filter(each => each.session === "ses_stopped"), []);
+});
+
+test("two conversations you stopped, with the same wake-up (bots made from one template), each keep theirs", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const first = conversation(t, "ses_inbox1", { folder: true });
+  const second = conversation(t, "ses_inbox2", { folder: true });
+  const queues = path.join(support, "box", "run", "queues.json");
+  t.after(() => fs.rmSync(queues, { force: true }));
+  fs.writeFileSync(queues, JSON.stringify({ ses_inbox1: { paused: true, held: [] }, ses_inbox2: { paused: true, held: [] } }));
+  fs.writeFileSync(path.join(first, "wakes", `${now() - 5}-abcdef-1d`), "Check the inbox");
+  const fire = async () => {
+    const stop = link.sendWakes();
+    try {
+      t.mock.timers.tick(500);
+    } finally {
+      await stop();
+    }
+  };
+  await fire();
+  // The second's comes due once the first's waits on the box.
+  fs.writeFileSync(path.join(second, "wakes", `${now() - 5}-ghijkl-1d`), "Check the inbox");
+  await fire();
+  const waiting = session => (link.queueOf(session).waiting ?? []).map(each => [each.from, each.text]);
+  // (What there is, said when it isn't so: once, under a whole suite's load, the second's came back empty.)
+  const found = () => JSON.stringify({ queues: fs.readFileSync(queues, "utf8"), second: fs.readdirSync(second, { recursive: true }), prompted: prompted.filter(each => each.session.startsWith("ses_inbox")) });
+  assert.deepEqual(waiting("ses_inbox1"), [["Wake-up", "Check the inbox"]], found());
+  assert.deepEqual(waiting("ses_inbox2"), [["Wake-up", "Check the inbox"]], `the other's waiting isn't this one's: ${found()}`);
+  assert.deepEqual(prompted.filter(each => each.session.startsWith("ses_inbox")), []);
 });
 
 test("one an agent's kuvo-wake writes beside the box goes at its time, not at the next minute", async t => {

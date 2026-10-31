@@ -15,9 +15,10 @@ import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { NO_BUN, testBun } from "./bun-for-tests.js";
+import { atEnd } from "./at-end.js";
 
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 // The box's folder, and the app's folders for its bots and sessions' wake-ups beside it on a Mac
@@ -114,11 +115,11 @@ const server = http.createServer((request, response) => {
   });
 });
 await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-after(() => { server.closeAllConnections(); server.close(); });
+atEnd(() => { server.closeAllConnections(); server.close(); });
 const readEngine = () => ({ port: server.address().port, password: "engine", version: "0.0.0" });
 
 let agentsProcess, browserProcess;
-after(() => { agentsProcess?.kill(); browserProcess?.kill(); realBridge?.process.kill(); });
+atEnd(() => { agentsProcess?.kill(); browserProcess?.kill(); realBridge?.process.kill(); });
 
 // The coding agents' bridge as the app ships it (`kuvo-agents.js`), run by Bun (bun-for-tests.js), with its group chats in this box's folders: for what it alone decides (a group chat's
 // shapes and rules). One a scenario, as the box's folders are.

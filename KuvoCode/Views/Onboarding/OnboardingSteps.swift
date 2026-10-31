@@ -10,6 +10,7 @@ import SwiftUI
 struct SubscriptionsStep: View {
     @Environment(AppModel.self) private var app
     @Environment(Catalog.self) private var catalog
+    @Environment(\.colorScheme) private var scheme
     @State private var signingIn: SignIn?
     /// Add Another, open on a tab.
     @State private var adding: Adding?
@@ -47,6 +48,13 @@ struct SubscriptionsStep: View {
             } else {
                 OnboardingPage(title: "Bring your subscriptions", detail: "Use the plans you pay for. Everything else works with free models.") {
                     VStack(alignment: .leading, spacing: 6) {
+                        if app.engineIsDown {
+                            EngineStoppedBar()
+                                .background(Surface.cardFill(scheme, focused: scheme == .light), in: .rect(cornerRadius: 12))
+                                .specularRim(RoundedRectangle(cornerRadius: 12))
+                                .environment(\.backgroundMaterial, nil)
+                                .transition(.opacity)
+                        }
                         heading("Plans")
                         switch onboarding.agents(failure: app.agents.failure) {
                         case .listed: EmptyView()
@@ -68,6 +76,7 @@ struct SubscriptionsStep: View {
                         failure
                     }
                     .animation(.ui, value: showsKeys)
+                    .animation(.ui, value: app.engineIsDown)
                 } buttons: {
                     Spacer()
                     Button("Continue") { onboarding.advance() }
@@ -151,6 +160,9 @@ struct SubscriptionsStep: View {
 
     private func row(for row: Offers.Row) -> some View {
         OfferRow(row: row, isBusy: isBusy(row)) { _ in perform(row) { signingIn = SignIn(id: $0) } }
+            // What's found stays in view; what needs the engine waits for it (the coding agents
+            // run beside it, through its restarts).
+            .waitsForEngine(app.engineIsDown && !OutsideAgents.isAgent(row.integrationID))
     }
 
     private func isBusy(_ row: Offers.Row) -> Bool {
@@ -170,10 +182,10 @@ struct SubscriptionsStep: View {
                 await app.usage.sync()
             }
         case .install(let id):
-            onboarding.install(row, with: app.agents) { installed in
+            onboarding.install(row, with: app.agents) { signInHere in
                 await catalog.refreshAgents(fresh: true)
                 await onboarding.look(in: box, agentsUp: app.agents.api != nil)
-                if installed { signIn(id) }
+                if signInHere { signIn(id) }
             }
         }
     }
@@ -385,7 +397,10 @@ struct ScreenAccessStep: View {
                 permissionRow(.screenRecording, title: "Screen Recording", detail: "Screenshots and windows", symbol: "rectangle.dashed.badge.record")
                 permissionRow(.accessibility, title: "Accessibility", detail: "Clicking and typing in other apps", symbol: "accessibility")
                 if !screen.refused.isEmpty {
-                    Text("Not allowed yet. You can do it later in System Settings › Privacy & Security.")
+                    // macOS can tell an app it has Screen Recording only once it's opened again.
+                    Text(screen.refused.contains(.screenRecording)
+                        ? "Not allowed yet. If you just allowed Screen Recording, quit and reopen \(AppInfo.name). You can also do it later in System Settings › Privacy & Security."
+                        : "Not allowed yet. You can do it later in System Settings › Privacy & Security.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 4)

@@ -49,8 +49,11 @@ export class RPC {
       return code
     })
     void this.read()
-    void this.readErrors()
+    this.errorsRead = this.readErrors().catch(() => {})
   }
+
+  /** Once all it wrote to stderr is in `stderr` (after it's gone). */
+  readonly errorsRead: Promise<void>
 
   private readonly jsonrpc: boolean
   private readonly filter?: (line: string) => boolean

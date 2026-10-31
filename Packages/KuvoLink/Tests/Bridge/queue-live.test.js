@@ -10,18 +10,19 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const binary = process.env.OPENCODE_TEST_BINARY;
 const model = process.env.KUVO_TEST_FREE_MODEL ?? "big-pickle";
 
 test("Stop holds on the real engine: what arrives while stopped waits on the box, and Resume sends what Stop held, then what arrived, a run at a time", { skip: !binary && "OPENCODE_TEST_BINARY isn't set", timeout: 600_000 }, async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-queue-live-")));
-  after(() => fs.rmSync(root, { recursive: true, force: true }));
+  removeAtEnd(root);
   for (const folder of ["home", "tmp", "work", "box/run", "xdg/config", "xdg/data", "xdg/state", "xdg/cache"]) fs.mkdirSync(path.join(root, folder), { recursive: true });
   const env = { PATH: process.env.PATH, HOME: `${root}/home`, TMPDIR: `${root}/tmp/`, XDG_CONFIG_HOME: `${root}/xdg/config`, XDG_DATA_HOME: `${root}/xdg/data`, XDG_STATE_HOME: `${root}/xdg/state`, XDG_CACHE_HOME: `${root}/xdg/cache`, OPENCODE_PASSWORD: "pw" };
   const engine = spawn(binary, ["serve", "--stdio", "--port", "0"], { env, cwd: `${root}/work`, stdio: ["pipe", "pipe", "pipe"] });
-  after(() => { engine.stdin.end(); engine.kill(); });
+  atEnd(() => { engine.stdin.end(); engine.kill(); });
   const port = await new Promise((resolve, reject) => {
     let said = "";
     const look = chunk => { said += chunk; const found = said.match(/127\.0\.0\.1:(\d+)/); if (found) resolve(Number(found[1])); };
@@ -52,7 +53,7 @@ test("Stop holds on the real engine: what arrives while stopped waits on the box
   let waiters = [];
   const hear = link.queueWatcher(target, { schedule: (run, ms) => setTimeout(run, ms), cancel: timer => clearTimeout(timer) });
   const events = new AbortController();
-  after(() => events.abort());
+  atEnd(() => events.abort());
   const stream = await fetch(`http://127.0.0.1:${port}/api/event`, { headers: { ...auth, accept: "text/event-stream" }, signal: events.signal });
   (async () => {
     let buffer = "";

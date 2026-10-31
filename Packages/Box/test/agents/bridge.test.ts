@@ -18,7 +18,7 @@ import { kuvoToolName, loadKuvoTools, setToolServer } from "../../src/agents/kuv
 import { pictureData, pictureFile, withPictures } from "../../src/agents/pictures"
 import { expandCommand } from "../../src/agents/server"
 import { commandParts, parseCommands, withTextFiles } from "../../src/agents/sessions"
-import { refreshLoginPath, which } from "../../src/agents/proc"
+import { refreshLoginPath, run, which } from "../../src/agents/proc"
 import { commandSignIn } from "../../src/agents/signin"
 
 describe("diffs", () => {
@@ -138,6 +138,19 @@ describe("keeping an agent's program current", () => {
       rmSync(folder, { recursive: true, force: true })
     }
   })
+
+  test("an agent's program that hangs, deaf to being asked to stop (checking its sign-in), is stopped when its time is up, not waited on for ever", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "kuvo-hang-"))
+    const pidFile = join(folder, "pid")
+    try {
+      const ran = await run("/bin/sh", ["-c", `trap '' TERM; echo $$ >"${pidFile}"; exec sleep 30`], { timeout: 500 })
+      expect(ran.timedOut).toBe(true)
+      expect(() => process.kill(Number(readFileSync(pidFile, "utf8")), 0)).toThrow()
+    } finally {
+      try { process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL") } catch {}
+      rmSync(folder, { recursive: true, force: true })
+    }
+  }, 20_000)
 
   test("installing with its maker's command: there after it, with its version, or why not", async () => {
     const folder = mkdtempSync(join(tmpdir(), "kuvo-install-"))

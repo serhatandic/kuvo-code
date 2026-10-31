@@ -187,35 +187,37 @@ import Testing
         #expect(!model.isQueuePaused)
     }
 
-    /// After Stop, a message removed and brought back with Undo: it waits for Resume on the box, at
-    /// the queue's end, rather than reaching the engine, which would run all it holds at once;
-    /// Resume goes on with the queue.
+    /// After Stop, a message removed and brought back with Undo: it waits for Resume on the box,
+    /// where it was (first, ahead of the one after it), rather than reaching the engine, which
+    /// would run all it holds at once; Resume sends it first, and the rest waits its turn.
     @Test func aMessagePutBackAfterStopWaitsForResume() async throws {
         let (model, box, _) = try await open(running: false, inbox: [queued("msg_02", "Fix the docs"), queued("msg_03", "Then update the changelog")],
                                              queues: #"{"ses_queue":{"paused":true,"held":[]}}"#)
         defer { box.stop(); engine.stop() }
         try await until { model.isQueuePaused }
         let item = try #require(model.waiting.first)
+        let before = model.next(after: item)
         model.cancelPending(item)
         try await until { !engine.requests("DELETE", "/inbox/msg_02").isEmpty }
         model.apply(try engine.event("session.inbox.cancelled", session: id, ["inboxID": "msg_02"]))
+        try await until { model.waiting.map(\.text) == ["Then update the changelog"] }
 
-        model.requeue(item, for: nil, paused: true)
-        try await until { model.waiting.map(\.text) == ["Then update the changelog", "Fix the docs"] && model.waiting.last.map(model.isOnBox) == true }
+        model.requeue(item, for: nil, paused: true, before: before)
+        try await until { model.waiting.map(\.text) == ["Fix the docs", "Then update the changelog"] && model.waiting.first.map(model.isOnBox) == true }
         #expect(engine.requests("POST", "/prompt").isEmpty, "held on the box, not sent to the engine")
         #expect(model.isQueuePaused)
-        #expect(model.sender(of: try #require(model.waiting.last)) == nil, "yours")
+        #expect(model.sender(of: try #require(model.waiting.first)) == nil, "yours")
 
         model.resumeQueue()
-        try await until { !deliveries(of: "msg_03").isEmpty }
-        #expect(deliveries(of: "msg_03") == ["steer"], "what the engine holds goes first")
-        #expect(engine.requests("POST", "/prompt").isEmpty, "what was put back waits its turn")
+        try await until { !engine.requests("POST", "/prompt").isEmpty }
+        #expect(engine.requests("POST", "/prompt").first?.body["text"] as? String == "Fix the docs", "back where it was: it goes first")
+        #expect(deliveries(of: "msg_03").isEmpty, "the one after it waits its turn")
     }
 
     /// A stopped conversation stays stopped while others write to it: another agent's letter waits
     /// on the box and shows in the queue with who it's from; a message you send for after this run
-    /// waits after it; Remove takes the letter away and Undo puts it back as it was, from the same
-    /// agent; Resume sends the first, and nothing went to the engine before.
+    /// waits after it; Remove takes the letter away and Undo puts it back as it was, where it was,
+    /// from the same agent; Resume sends the first, and nothing went to the engine before.
     @Test func whatArrivesWhileStoppedWaitsShownWithWhoItsFrom() async throws {
         let (model, box, _) = try await open(running: true, inbox: [])
         defer { box.stop(); engine.stop() }
@@ -244,14 +246,14 @@ import Testing
         model.cancelPending(letter)
         try await until { model.waiting.map(\.text) == ["Also run the tests"] }
         model.requeue(letter, for: nil, paused: true)
-        try await until { model.waiting.map(\.text) == ["Also run the tests", "The build is green on main."] }
-        #expect(model.sender(of: model.waiting[1]) == "Ada", "back as it was")
+        try await until { model.waiting.map(\.text) == ["The build is green on main.", "Also run the tests"] }
+        #expect(model.sender(of: model.waiting[0]) == "Ada", "back as it was, where it was")
         #expect(engine.requests("POST", "/prompt").isEmpty, "nothing reached the engine while it was stopped")
 
         model.resumeQueue()
         try await until { !engine.requests("POST", "/prompt").isEmpty }
         let sent = try #require(engine.requests("POST", "/prompt").first)
-        #expect(sent.body["text"] as? String == "Also run the tests")
+        #expect(sent.body["text"] as? String == "The build is green on main.")
         #expect(sent.body["delivery"] as? String == "steer")
         #expect(engine.requests("POST", "/prompt").count == 1, "one run at a time")
     }
@@ -273,14 +275,48 @@ import Testing
         #expect(model.isQueuePaused, "as the box says")
     }
 
+    /// Remove, Undo and Resume at once, as quick hands do: Resume waits for the one Undo brings
+    /// back, so the queue goes on one message at a time, the one brought back among them, rather
+    /// than going on without it and the one brought back going to the agent too as it arrives.
+    @Test func resumeRightAfterUndoGoesOnOneAtATime() async throws {
+        let (model, box, _) = try await open(running: true, inbox: [])
+        defer { box.stop(); engine.stop() }
+        let following = Task { await workspace.followQueues() }
+        defer { following.cancel() }
+        model.stop()
+        try await until { !engine.requests("POST", "/interrupt").isEmpty }
+        stopped()
+        model.apply(try engine.event("session.execution.interrupted", session: id, ["reason": "user"]))
+        try await until { model.isQueuePaused }
+
+        struct Letter: Encodable { var id: String; var text: String; var from: String }
+        struct Added: Decodable { var waits: Bool }
+        let added = try await box.client(engine: engine.url).value(Added.self, "POST", "kuvo/sessions/\(id)/queue/add", body: Letter(id: "msg_ada1", text: "The build is green on main.", from: "Ada"))
+        #expect(added.waits)
+        try await until { model.waiting.count == 1 }
+        model.send("Also run the tests", for: nil, queue: true)
+        try await until { model.waiting.map(\.text) == ["The build is green on main.", "Also run the tests"] && model.waiting.allSatisfy(model.isOnBox) }
+        let letter = try #require(model.waiting.first)
+
+        model.cancelPending(letter)
+        model.requeue(letter, for: nil, paused: true)
+        model.resumeQueue()
+        // One went; the other waits for it, or went too.
+        let prompts = { engine.requests("POST", "/prompt").compactMap { $0.body["text"] as? String } }
+        try await until { prompts().count > 1 || prompts().count == 1 && model.waiting.count == 1 && model.waiting[0].text != prompts()[0] }
+        #expect(prompts().count == 1, "one run at a time")
+        #expect(Set(prompts() + model.waiting.map(\.text)) == ["The build is green on main.", "Also run the tests"], "the one brought back still there")
+    }
+
     /// Resume its box can't take (it's not running now): the queue shows Paused again, and why.
     @Test func resumeTheBoxDidntTakeStaysPaused() async throws {
         let (model, box, _) = try await open(running: false, inbox: [queued("msg_02", "Then update the docs")], queues: #"{"ses_queue":{"paused":true,"held":[]}}"#)
         defer { engine.stop() }
         try await until { model.isQueuePaused }
         box.stop()
-        model.resumeQueue()
-        try await until { model.isQueuePaused && model.failure != nil }
+        // (Said, for what Resume was pressed under to show where it says why: a group chat's part.)
+        #expect(await model.resumeQueue().value == false)
+        #expect(model.isQueuePaused && model.failure != nil)
         #expect(deliveries(of: "msg_02").isEmpty)
     }
 
@@ -386,5 +422,44 @@ import Testing
         let back = try #require(engine.requests("POST", "/prompt").first)
         #expect(back.body["text"] as? String == "Then update the docs")
         #expect(back.body["delivery"] as? String == "queue", "it should wait behind the run, as it did")
+    }
+
+    /// A queued message that carries its file in itself (one queued from the phone, or for a
+    /// machine, read again after a relaunch): its bubble shows the file, and Edit and Undo bring
+    /// it back with the file, rather than the words alone.
+    @Test func aMessageCarryingItsFileKeepsItThroughEditAndUndo() async throws {
+        let notes = "Weekly numbers: 12, 15, 9\n"
+        func carrying(_ message: String, _ text: String) -> [String: Any] {
+            ["id": message, "sessionID": id, "type": "user", "delivery": "queue",
+             "payload": ["text": text, "files": [["uri": "data:text/plain;base64,\(Data(notes.utf8).base64EncodedString())", "name": "numbers.csv", "mime": "text/plain"]]]]
+        }
+        let (model, box, _) = try await open(running: true, inbox: [carrying("msg_02", "Sum these up"), carrying("msg_03", "Then chart them")])
+        defer { box.stop(); engine.stop() }
+        let removed = try #require(model.waiting.first { $0.id == "msg_02" })
+        #expect(removed.inlineFiles.count == 1)
+
+        // Undo after Remove: it goes back with its file.
+        model.cancelPending(removed)
+        try await until { !engine.requests("DELETE", "/inbox/msg_02").isEmpty }
+        model.apply(try engine.event("session.inbox.cancelled", session: id, ["inboxID": "msg_02"]))
+        model.requeue(removed, for: nil, paused: false)
+        try await until { !engine.requests("POST", "/prompt").isEmpty }
+        let back = try #require(engine.requests("POST", "/prompt").first)
+        let sent = (back.body["files"] as? [[String: Any]] ?? []).compactMap { ($0["uri"] as? String).flatMap(URL.init(string:)) }
+        #expect(sent.count == 1, "\(back.body)")
+        #expect(sent.first.flatMap { try? String(contentsOf: $0, encoding: .utf8) } == notes)
+        #expect(sent.first?.pathExtension == "csv", "as its own kind, not as the text/plain it went to the machine as")
+
+        // Edit: the composer has it, file and all.
+        model.edit(try #require(model.waiting.first { $0.id == "msg_03" }))
+        try await until { !engine.requests("DELETE", "/inbox/msg_03").isEmpty }
+        model.apply(try engine.event("session.inbox.cancelled", session: id, ["inboxID": "msg_03"]))
+        try await until { !model.draftText.isEmpty }
+        #expect(model.draftText == "Then chart them")
+        #expect(model.draftFiles.count == 1)
+        #expect(model.draftFiles.first.flatMap { try? String(contentsOf: $0, encoding: .utf8) } == notes)
+        #expect(model.draftFiles.first?.pathExtension == "csv")
+        model.draftText = ""
+        model.draftFiles = []
     }
 }

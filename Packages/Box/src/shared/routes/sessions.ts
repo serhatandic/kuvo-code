@@ -31,8 +31,9 @@ export const QUEUE = object({ paused: bool, held: list(string), "waiting?": list
 /** `queue/add`'s answer: the queue, and whether the message waits on the box (else it went on). */
 const ADDED = object({ paused: bool, held: list(string), "waiting?": list(WAITING), waits: bool });
 
-/** What `DELETE …/queue/<item>` took away, whole, for Undo to add back (`queue/add` with `kept`). */
-const REMOVED = object({ id: string, text: string, "files?": list(any), delivery: oneOf(literal("steer"), literal("queue")), "from?": string, words: string });
+/** What `DELETE …/queue/<item>` took away, whole, for Undo to add back (`queue/add` with `kept`),
+ * where it was: ahead of `before`, what came after it (none: it was last). */
+const REMOVED = object({ id: string, text: string, "files?": list(any), delivery: oneOf(literal("steer"), literal("queue")), "from?": string, words: string, "before?": string });
 
 export type SessionQueue = Infer<typeof QUEUE>;
 

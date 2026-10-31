@@ -4,10 +4,20 @@
 // which runs here, outside the sandbox: it talks to the machine's browser, in Kuvo Code's folder,
 // which the sandbox hides. Each call is its session's, whatever it says (a command in the sandbox
 // could name another's).
+//
+// And the computer's MCP servers, for every agent, in the sandbox or not (servers.ts), each at
+// `/mcp/<name>`: a command's server started for each of the agent's connections, in the box's
+// sandbox (in the conversation's folder, as its commands are) with its keys in its environment; a
+// URL's reached with its headers and sign-in added. The agent is given only the relay's address
+// and its session's key.
 
 import { randomBytes } from "node:crypto"
 import { spawn, type ChildProcess } from "node:child_process"
+import { dirname, join, relative } from "node:path"
+import { fenceRules, fenceServer } from "./fence"
 import { kuvoTools, type KuvoTools } from "./kuvotools"
+import { onMachine, ownEnvironment } from "./machine"
+import { computerServers, type ComputerServer, type ComputerServers } from "./servers"
 
 let server: ReturnType<typeof Bun.serve> | undefined
 /** Each session's key, and the session each key is for. */
@@ -17,6 +27,40 @@ const sessionsByKey = new Map<string, string>()
 const programs = new Map<string, Program>()
 /** What reaches each session's tools through the relay now (its agents' threads): its key stays while any does. */
 const holders = new Map<string, Set<object>>()
+/** Each session's servers of the computer's, by name, and the folder its commands run in. */
+const served = new Map<string, { directory: string; servers: Map<string, ComputerServer> }>()
+/** The command servers running, each for one of an agent's connections: by session, name and connection. */
+const running = new Map<string, Program>()
+
+/** A command's server no connection has used for an hour is stopped (an agent that started again
+ * has a new one), as the engine stops its own; one it comes back to it starts again. */
+const IDLE = 60 * 60_000
+setInterval(() => {
+  for (const program of running.values()) if (Date.now() - program.used > IDLE) program.stop()
+}, 5 * 60_000).unref()
+
+/** An MCP server over HTTP, as an agent is given it. */
+export interface RelayedServer {
+  name: string
+  url: string
+  headers: Record<string, string>
+  timeout: number
+}
+
+/** `holder` reaches `sessionID`'s tools or servers through the relay: its key (the relay listening). */
+function hold(sessionID: string, holder: object): string {
+  let held = holders.get(sessionID)
+  if (!held) holders.set(sessionID, (held = new Set()))
+  held.add(holder)
+  relayPort()
+  let key = keys.get(sessionID)
+  if (!key) {
+    key = randomBytes(24).toString("hex")
+    keys.set(sessionID, key)
+    sessionsByKey.set(key, sessionID)
+  }
+  return key
+}
 
 /**
  * Kuvo Code's tools as an agent in the sandbox reaches them for `sessionID`, through the relay,
@@ -25,25 +69,32 @@ const holders = new Map<string, Set<object>>()
 export function relayedTools(sessionID: string, holder: object): Extract<KuvoTools, { kind: "http" }> | undefined {
   const tools = kuvoTools(sessionID)
   if (!tools) return undefined
-  let held = holders.get(sessionID)
-  if (!held) holders.set(sessionID, (held = new Set()))
-  held.add(holder)
-  server ??= Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: answer })
-  let key = keys.get(sessionID)
-  if (!key) {
-    key = randomBytes(24).toString("hex")
-    keys.set(sessionID, key)
-    sessionsByKey.set(key, sessionID)
-  }
-  return { kind: "http", name: tools.name, key: tools.key, timeout: tools.timeout, url: `http://127.0.0.1:${server.port}/mcp`, headers: { Authorization: `Bearer ${key}` } }
+  const key = hold(sessionID, holder)
+  return { kind: "http", name: tools.name, key: tools.key, timeout: tools.timeout, url: `http://127.0.0.1:${relayPort()}/mcp`, headers: { Authorization: `Bearer ${key}` } }
 }
 
-/** The relay's port, once it listens. */
-export const relayPort = (): number | undefined => server?.port
+/**
+ * The computer's servers for `sessionID`, whose commands run in `directory`, as its agent reaches
+ * them through the relay, held by `holder` until it drops them: the relay's address for each, and
+ * the session's key. What each runs or reaches is the latest given (a key you changed, a sign-in
+ * renewed): a command's server already running for a connection goes on as it started.
+ */
+export function relayedServers(sessionID: string, holder: object, directory: string, found: ComputerServers): RelayedServer[] {
+  if (!found.servers.length) {
+    served.delete(sessionID)
+    return []
+  }
+  const key = hold(sessionID, holder)
+  served.set(sessionID, { directory, servers: new Map(found.servers.map((each) => [each.name, each])) })
+  return found.servers.map((each) => ({ name: each.name, url: `http://127.0.0.1:${relayPort()}/mcp/${encodeURIComponent(each.name)}`, headers: { Authorization: `Bearer ${key}` }, timeout: each.timeout }))
+}
+
+/** The relay's port (listening from then on). */
+export const relayPort = (): number => (server ??= Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: answer })).port!
 
 /**
  * `holder` is done with a session's tools: once nothing else holds them (another of its agents'
- * threads, an account's or a provider's), its key goes, and its program stops.
+ * threads, an account's or a provider's), its key goes, and its programs and servers stop.
  */
 export function dropRelayed(sessionID: string, holder: object) {
   const held = holders.get(sessionID)
@@ -55,12 +106,24 @@ export function dropRelayed(sessionID: string, holder: object) {
   keys.delete(sessionID)
   programs.get(sessionID)?.stop()
   programs.delete(sessionID)
+  served.delete(sessionID)
+  for (const [at, program] of running) if (at.startsWith(sessionID + "\n")) program.stop()
 }
 
 async function answer(request: Request): Promise<Response> {
   const key = /^Bearer (\S+)$/.exec(request.headers.get("authorization") ?? "")?.[1]
   const sessionID = key ? sessionsByKey.get(key) : undefined
   if (!sessionID) return new Response("Not allowed.", { status: 401 })
+  const path = new URL(request.url).pathname
+  if (path.startsWith("/mcp/")) {
+    let name: string
+    try {
+      name = decodeURIComponent(path.slice("/mcp/".length))
+    } catch {
+      return new Response("No such server here.", { status: 404 })
+    }
+    return answerServer(request, sessionID, name)
+  }
   const tools = kuvoTools(sessionID)
   if (!tools) return new Response("Kuvo Code's tools aren't here now.", { status: 503 })
   let body: any
@@ -71,31 +134,12 @@ async function answer(request: Request): Promise<Response> {
       return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, { status: 400 })
     }
   }
-  if (tools.kind === "http") {
-    const headers: Record<string, string> = { ...tools.headers, Accept: request.headers.get("accept") ?? "application/json, text/event-stream" }
-    for (const name of ["content-type", "mcp-session-id", "mcp-protocol-version", "last-event-id"]) {
-      const value = request.headers.get(name)
-      if (value) headers[name] = value
-    }
-    try {
-      // Given up with the agent's own request; a call, not a stream of what comes, after the tools' time.
-      const signal = request.method === "POST" ? AbortSignal.any([request.signal, AbortSignal.timeout(tools.timeout)]) : request.signal
-      const response = await fetch(tools.url, { method: request.method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal })
-      const back = new Headers()
-      for (const name of ["content-type", "mcp-session-id"]) {
-        const value = response.headers.get(name)
-        if (value) back.set(name, value)
-      }
-      return new Response(response.body, { status: response.status, headers: back })
-    } catch {
-      return new Response("Kuvo Code's tools didn't answer.", { status: 502 })
-    }
-  }
+  if (tools.kind === "http") return forward(request, tools.url, tools.headers, tools.timeout, body === undefined ? undefined : JSON.stringify(body), "Kuvo Code's tools didn't answer.")
   if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } })
   let program = programs.get(sessionID)
   if (!program || program.stopped || program.key !== tools.key) {
     program?.stop()
-    program = new Program(tools)
+    program = new Program({ key: tools.key, command: tools.command, args: tools.args, env: { ...process.env, ...tools.env }, name: "Kuvo Code's tools" })
     programs.set(sessionID, program)
   }
   const messages: any[] = Array.isArray(body) ? body : [body]
@@ -103,11 +147,145 @@ async function answer(request: Request): Promise<Response> {
   // their requests are told apart by it.
   const starts = messages.some((message) => message?.method === "initialize")
   const connection = starts ? randomBytes(12).toString("hex") : (request.headers.get("mcp-session-id") ?? "")
-  const answers = await Promise.all(messages.map((message) => program!.send(message, tools.timeout, connection)))
+  return sendAll(program, body, tools.timeout, connection, starts)
+}
+
+/** A request on to a server over HTTP, with `headers`; what it answers, back. */
+async function forward(request: Request, url: string, headers: Record<string, string>, timeout: number, body: string | undefined, failed: string): Promise<Response> {
+  const sent: Record<string, string> = { ...headers, Accept: request.headers.get("accept") ?? "application/json, text/event-stream" }
+  for (const name of ["content-type", "mcp-session-id", "mcp-protocol-version", "last-event-id"]) {
+    const value = request.headers.get(name)
+    if (value) sent[name] = value
+  }
+  try {
+    // Given up with the agent's own request; a call, not a stream of what comes, after the server's time.
+    const signal = request.method === "POST" ? AbortSignal.any([request.signal, AbortSignal.timeout(timeout)]) : request.signal
+    const response = await fetch(url, { method: request.method, headers: sent, body, signal })
+    const back = new Headers()
+    for (const name of ["content-type", "mcp-session-id"]) {
+      const value = response.headers.get(name)
+      if (value) back.set(name, value)
+    }
+    return new Response(response.body, { status: response.status, headers: back })
+  } catch {
+    return new Response(failed, { status: 502 })
+  }
+}
+
+/** A message (or several) to a program, for one of its connections; its answers back. */
+async function sendAll(program: Program, body: any, timeout: number, connection: string, starts: boolean): Promise<Response> {
+  const messages: any[] = Array.isArray(body) ? body : [body]
+  const answers = await Promise.all(messages.map((message) => program.send(message, timeout, connection)))
   const replies = answers.filter((each) => each !== undefined)
   const headers = starts ? { "mcp-session-id": connection } : undefined
   if (!replies.length) return new Response(null, { status: 202, headers })
   return Response.json(Array.isArray(body) ? replies : replies[0], { headers })
+}
+
+/** A request to one of the computer's servers, from a session's agent. */
+async function answerServer(request: Request, sessionID: string, name: string): Promise<Response> {
+  const session = served.get(sessionID)
+  const entry = session?.servers.get(name)
+  if (!session || !entry) return new Response("No such server here.", { status: 404 })
+  const failed = `The ${name} server didn't answer.`
+  if (entry.kind === "remote") {
+    const body = request.method === "POST" ? await request.text() : undefined
+    // Your sign-in to it running out (in a long turn): renewed by the engine first; one it turned
+    // down, renewed and tried once more.
+    const current = entry.expires !== undefined && entry.expires < Date.now() + 60_000 ? ((await renewed(sessionID, session, name)) ?? entry) : entry
+    const answer = await forward(request, current.url, current.headers, current.timeout, body, failed)
+    if (answer.status !== 401 || current.expires === undefined) return answer
+    const again = await renewed(sessionID, session, name)
+    return again ? forward(request, again.url, again.headers, again.timeout, body, failed) : answer
+  }
+  const connection = request.headers.get("mcp-session-id") ?? ""
+  const at = `${sessionID}\n${name}\n${connection}`
+  if (request.method === "DELETE") {
+    running.get(at)?.stop()
+    return new Response(null, { status: 200 })
+  }
+  if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST, DELETE" } })
+  let body: any
+  try {
+    body = await request.json()
+  } catch {
+    return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, { status: 400 })
+  }
+  const messages: any[] = Array.isArray(body) ? body : [body]
+  if (messages.some((message) => message?.method === "initialize")) {
+    // Each connection a server of its own, as an agent that starts it itself has it.
+    const started = startServer(entry, sessionID, session.directory)
+    if (typeof started === "string") return Response.json(failure(messages.find((message) => message?.method === "initialize").id, started))
+    const fresh = randomBytes(12).toString("hex")
+    const key = `${sessionID}\n${name}\n${fresh}`
+    running.set(key, started)
+    started.whenStopped(() => running.get(key) === started && running.delete(key))
+    return sendAll(started, body, entry.timeout, fresh, true)
+  }
+  const program = running.get(at)
+  // (One that stopped, or a connection it doesn't know: the agent connects again.)
+  if (!program || program.stopped) return new Response("No such connection here.", { status: 404 })
+  return sendAll(program, body, entry.timeout, connection, false)
+}
+
+/** A URL's server of a session's as the engine has it now (your sign-in renewed), for the rest of its calls. */
+async function renewed(sessionID: string, session: { directory: string; servers: Map<string, ComputerServer> }, name: string) {
+  const found = (await computerServers(session.directory, true)).servers.find((each) => each.name === name)
+  if (found?.kind !== "remote") return undefined
+  if (served.get(sessionID) === session) session.servers.set(name, found)
+  return found
+}
+
+/**
+ * The folders a command's server keeps what it needs in, as the engine runs it: its caches
+ * (kuvo-npx's, npm's and Bun's), the engine's, in Kuvo Code's folder. A machine's bridge has them
+ * already, as its engine does; on this Mac, beside the engine's data.
+ */
+function engineFolders(): Record<string, string> {
+  const data = process.env.KUVO_ENGINE_DATA
+  if (process.env.XDG_CACHE_HOME || !data) return {}
+  const root = dirname(dirname(data))
+  return { XDG_CACHE_HOME: join(root, "cache"), npm_config_cache: join(root, "cache", "npm"), BUN_INSTALL: join(root, "cache", "bun") }
+}
+
+/** The integrations' folders (`KUVO_INTEGRATIONS/<one>`) a server's settings name, where it keeps its own sign-in. */
+function integrationFolders(entry: Extract<ComputerServer, { kind: "local" }>): string[] {
+  const integrations = process.env.KUVO_INTEGRATIONS
+  if (!integrations) return []
+  const folders = new Set<string>()
+  for (const value of [...entry.command, ...Object.values(entry.env)]) {
+    for (const part of value.split(/[=:,\s]/)) {
+      const inside = relative(integrations, part)
+      if (part.startsWith("/") && inside && !inside.startsWith("..")) folders.add(join(integrations, inside.split("/")[0]!))
+    }
+  }
+  return [...folders]
+}
+
+/**
+ * A command's server for one of a session's connections: in the box's sandbox while it's on, as
+ * the conversation's commands are, with its keys in its environment (and npx's own cache in it:
+ * kuvo-npx's, the engine's, is in Kuvo Code's folder); as the engine runs it while it's off. Or why
+ * it can't start.
+ */
+function startServer(entry: Extract<ComputerServer, { kind: "local" }>, sessionID: string, directory: string): Program | string {
+  const [named, ...args] = entry.command
+  const env: Record<string, string | undefined> = { ...process.env, ...engineFolders(), ...entry.env, OPENCODE_SESSION_ID: sessionID }
+  const cwd = entry.cwd ?? directory
+  // By its name on the PATH, as a shell finds it (Linux's sandbox runs it by its path).
+  const command = named!.includes("/") ? named! : Bun.which(named!, { PATH: env.PATH ?? "" })
+  if (!command) return `The ${entry.name} server can't start: ${named} isn't installed here.`
+  if (!fenceRules()) return new Program({ key: "", command, args, env, cwd, name: `The ${entry.name} server` })
+  // In the sandbox, as the conversation's commands are: Kuvo Code's folder hidden but its
+  // integration's own (where it keeps its sign-in) and the engine (Bun, for kuvo-npx without
+  // Node), with npm's and Bun's caches the sandbox's and, on a machine, its own folders back.
+  // (Bun's cache in the sandbox's npm cache, which the launcher names: never yours in your home.)
+  const fence = fenceServer("/bin/sh", directory, { homes: integrationFolders(entry), read: [dirname(process.execPath)] })
+  if (!fence) return "The sandbox isn't ready here, so this server can't start: restart Kuvo Code."
+  for (const name of ["XDG_CACHE_HOME", "npm_config_cache", "BUN_INSTALL"]) delete env[name]
+  if (onMachine) for (const [name, value] of Object.entries(ownEnvironment())) if (name !== "XDG_CACHE_HOME") value === undefined ? delete env[name] : (env[name] = value)
+  const inside = ["-c", 'BUN_INSTALL_CACHE_DIR="$npm_config_cache/_bun" exec "$0" "$@"', command, ...args]
+  return new Program({ key: "", command: fence.command, args: inside, env: { ...env, ...fence.env }, cwd, name: `The ${entry.name} server`, ended: fence.ended })
 }
 
 /** A message with its calls named as the session's own, whatever they said. */
@@ -120,21 +298,31 @@ function ownSession(body: any, sessionID: string): any {
 }
 
 /**
- * A session's program (`kuvo-browser.js mcp`), which each of its agent's connections share (Codex
- * has one a thread): their requests numbered anew here, so theirs never meet.
+ * A program spoken to over its input and output: a session's Kuvo Code tools (`kuvo-browser.js
+ * mcp`), which each of its agent's connections share (Codex has one a thread), their requests
+ * numbered anew here so theirs never meet; or one of the computer's servers, one a connection.
  */
 class Program {
   readonly key: string
   stopped = false
+  /** When a connection last used it. */
+  used = Date.now()
   private child: ChildProcess
   private next = 1
   private waiting = new Map<number, { id: unknown; done: (message: unknown) => void }>()
   /** Each connection's request, as the program knows it (for a cancel). */
   private ours = new Map<string, number>()
 
-  constructor(tools: Extract<KuvoTools, { kind: "stdio" }>) {
-    this.key = tools.key
-    this.child = spawn(tools.command, tools.args, { env: { ...process.env, ...tools.env }, stdio: ["pipe", "pipe", "ignore"] })
+  /** What it's called where it says it stopped ("Kuvo Code's tools"). */
+  private readonly name: string
+  private stopping: (() => void)[] = []
+
+  constructor(spec: { key: string; command: string; args: string[]; env: Record<string, string | undefined>; cwd?: string; name: string; ended?: () => void }) {
+    this.key = spec.key
+    this.name = spec.name
+    if (spec.ended) this.stopping.push(spec.ended)
+    // (What it says on stderr isn't kept: a server's own can have its keys in it.)
+    this.child = spawn(spec.command, spec.args, { env: spec.env, cwd: spec.cwd, stdio: ["pipe", "pipe", "ignore"] })
     this.child.on("error", () => this.stop())
     this.child.on("exit", () => this.stop())
     let buffered = ""
@@ -151,6 +339,12 @@ class Program {
         } catch {
           continue
         }
+        // What it asks the agent (its folders, a question, a model's words) isn't passed on: it's
+        // told so at once, rather than waiting.
+        if (typeof message?.method === "string") {
+          if (message.id !== undefined && message.id !== null) this.write({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Kuvo Code doesn't pass this on to the agent." } })
+          continue
+        }
         const waiting = typeof message?.id === "number" ? this.waiting.get(message.id) : undefined
         if (!waiting) continue
         this.waiting.delete(message.id)
@@ -161,7 +355,8 @@ class Program {
 
   /** Sends a connection's message; a request's answer comes back (undefined for a notification). */
   send(message: any, timeout: number, connection: string): Promise<unknown> {
-    if (this.stopped) return Promise.resolve(message?.id === undefined ? undefined : failed(message.id, "Kuvo Code's tools stopped."))
+    this.used = Date.now()
+    if (this.stopped) return Promise.resolve(message?.id === undefined ? undefined : failure(message.id, `${this.name} stopped.`))
     if (message?.id === undefined || message.id === null) {
       // A cancel names the request as the program knows it.
       const requestId = message?.params?.requestId
@@ -178,7 +373,7 @@ class Program {
         this.waiting.delete(id)
         this.ours.delete(known)
         this.write({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id, reason: "Took too long." } })
-        resolve(failed(message.id, "Kuvo Code's tools took too long."))
+        resolve(failure(message.id, `${this.name} took too long.`))
       }, timeout)
       this.waiting.set(id, {
         id: message.id,
@@ -198,13 +393,20 @@ class Program {
     } catch {}
   }
 
+  /** `then` once it has stopped. */
+  whenStopped(then: () => void) {
+    if (this.stopped) then()
+    else this.stopping.push(then)
+  }
+
   stop() {
     if (this.stopped) return
     this.stopped = true
     this.child.kill()
-    for (const [, waiting] of this.waiting) waiting.done(failed(waiting.id, "Kuvo Code's tools stopped."))
+    for (const [, waiting] of this.waiting) waiting.done(failure(waiting.id, `${this.name} stopped.`))
     this.waiting.clear()
+    for (const then of this.stopping.splice(0)) then()
   }
 }
 
-const failed = (id: unknown, message: string) => ({ jsonrpc: "2.0", id, error: { code: -32603, message } })
+const failure = (id: unknown, message: string) => ({ jsonrpc: "2.0", id, error: { code: -32603, message } })

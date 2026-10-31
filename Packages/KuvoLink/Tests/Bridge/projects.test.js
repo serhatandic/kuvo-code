@@ -6,15 +6,16 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, beforeEach, test } from "node:test";
+import { beforeEach, test } from "node:test";
+import { removeAtEnd } from "./at-end.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-projects-"));
 process.env.KUVO_HOME = home;
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+removeAtEnd(home);
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 const work = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-work-")));
-after(() => fs.rmSync(work, { recursive: true, force: true }));
+removeAtEnd(work);
 const shop = path.join(work, "shop");
 const blog = path.join(work, "blog");
 const tree = path.join(work, "trees", "brave-otter");

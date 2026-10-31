@@ -60,7 +60,7 @@ const TAB_IDLE = Number(process.env.KUVO_BROWSER_TAB_IDLE || 3600) * 1000;
 
 // Goes up with every change to the keeper (host mode): a newer one replaces one that's running
 // (its pages close, its sign-ins stay), and an older one never replaces a newer.
-const KEEPER = 40;
+const KEEPER = 42;
 // Passkeys: none yet, as in the panel's browser on the Mac (Passkeys.swift, the same script).
 const NO_PASSKEYS = "(() => {\n  try {\n    // Says a passkey was asked for with an event only this launch's listener, in a world of its\n    // own, knows the name of: nothing of it is left in the page's world. (Taken before the page\n    // can change them.)\n    const dispatch = EventTarget.prototype.dispatchEvent, Made = Event;\n    const tell = () => {\n      try {\n        dispatch.call(window, new Made(\"KUVO_PASSKEY_EVENT\"));\n      } catch {}\n    };\n    const none = (options) => {\n      // Asked of you, not looked for quietly as the page loads.\n      if (options.mediation !== \"conditional\") tell();\n      return Promise.reject(new DOMException(\"Passkeys can't be used in this browser.\", \"NotAllowedError\"));\n    };\n    const Container = window.CredentialsContainer;\n    if (Container && Container.prototype) {\n      const prototype = Container.prototype, get = prototype.get, create = prototype.create;\n      if (get) prototype.get = function (options) { return options && options.publicKey ? none(options) : get.call(this, options); };\n      if (create) prototype.create = function (options) { return options && options.publicKey ? none(options) : create.call(this, options); };\n    }\n    const Credential = window.PublicKeyCredential;\n    if (Credential) {\n      Credential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);\n      if (Credential.isConditionalMediationAvailable) Credential.isConditionalMediationAvailable = () => Promise.resolve(false);\n    }\n  } catch {}\n})();";
 // The event it fires when a passkey is asked for (a name of this keeper's, which only the
@@ -573,6 +573,10 @@ async function host() {
   // Each frame's target, and the page it's in, by its session.
   const frameTargets = new Map();
   const pageOf = (sessionId) => frameTargets.get(sessionId)?.page ?? [...own].find(([, each]) => each === sessionId)?.[0];
+  // The page each frame of a page's own site is in (it runs in the page, no target of its own),
+  // and the page that opened each page: where a download from one of them began.
+  const framePages = new Map();
+  const openers = new Map();
   // Sites that asked for a passkey lately (which this browser can't use), by host: an ask for
   // one says so, to tell you to choose another way to sign in.
   const passkeySites = new Map();
@@ -808,31 +812,42 @@ async function host() {
       return;
     }
     if (message.method === "Target.detachedFromTarget" && (ownFrames.delete(message.params.sessionId) || [...own.values()].includes(message.params.sessionId))) return;
+    if (message.method === "Page.frameAttached" && message.sessionId && isOwn(message.sessionId)) framePages.set(message.params.frameId, pageOf(message.sessionId));
+    if (message.method === "Page.frameDetached" && message.sessionId && isOwn(message.sessionId)) framePages.delete(message.params.frameId);
     if (message.method === "Browser.downloadWillBegin" && !downloads.has(message.params.guid)) {
       // Whose it is: the conversation at work in the page it started in (a page's main frame's ID
-      // is the page's), now or in the last two minutes, unless you'd taken the page over. Anyone
-      // else's (yours, a frame's in a page, a page an agent left) is nobody's.
-      const page = message.params.frameId;
-      const worker = everyStatus().workers.find((each) => each.targetId === page && each.session);
-      const claim = claims.get(page);
-      const session = held.has(page) ? undefined : worker?.session ?? (claim && Date.now() - claim.at < 2 * 60_000 ? claim.session : undefined);
+      // is the page's; a frame's is its page's), now or in the last two minutes, unless you'd
+      // taken the page over. One a page began as it opened (a link to a new tab) is that of the
+      // page that opened it. Anyone else's (yours, a page an agent left) is nobody's.
+      const pageWith = (frame) => framePages.get(frame) ?? [...frameTargets.values()].find((each) => each.targetId === frame)?.page ?? frame;
+      const whose = (page) => {
+        const worker = everyStatus().workers.find((each) => each.targetId === page && each.session);
+        const claim = claims.get(page);
+        return held.has(page) ? undefined : worker?.session ?? (claim && Date.now() - claim.at < 2 * 60_000 ? claim.session : undefined);
+      };
+      const page = pageWith(message.params.frameId);
+      const opener = openers.get(page);
+      const session = whose(page) ?? (opener && !held.has(page) ? whose(pageWith(opener)) : undefined);
       downloads.set(message.params.guid, { name: message.params.suggestedFilename || "download", session });
-      broadcast({ method: "Kuvo.downloading", params: { name: downloads.get(message.params.guid).name } });
+      broadcast({ method: "Kuvo.downloading", params: { name: downloads.get(message.params.guid).name, session } });
     }
     if (message.method === "Browser.downloadProgress" && message.params.state !== "inProgress") {
       const { name, session } = downloads.get(message.params.guid) ?? {};
       downloads.delete(message.params.guid);
       if (message.params.state === "completed" && name) {
         const file = finishDownload(message.params.guid, name);
-        if (file) broadcast({ method: "Kuvo.downloaded", params: { name: path.basename(file), path: file, size: message.params.totalBytes } });
-        else broadcast({ method: "Kuvo.downloadFailed", params: { name } });
+        if (file) broadcast({ method: "Kuvo.downloaded", params: { name: path.basename(file), path: file, size: message.params.totalBytes, session } });
+        else broadcast({ method: "Kuvo.downloadFailed", params: { name, session } });
         // Kept in the record of what agents made, as that conversation's (none running: not kept).
         if (file && session) engine("POST", "api/kuvo/artifacts/noted", { path: file, session, via: "download" }, "bridge").catch(() => {});
       } else if (name) {
-        broadcast({ method: "Kuvo.downloadFailed", params: { name } });
+        broadcast({ method: "Kuvo.downloadFailed", params: { name, session } });
       }
     }
-    if (message.method === "Target.targetCreated" && message.params.targetInfo.type === "page") targets.add(message.params.targetInfo.targetId);
+    if (message.method === "Target.targetCreated" && message.params.targetInfo.type === "page") {
+      targets.add(message.params.targetInfo.targetId);
+      if (message.params.targetInfo.openerId) openers.set(message.params.targetInfo.targetId, message.params.targetInfo.openerId);
+    }
     if ((message.method === "Target.targetCreated" || message.method === "Target.targetInfoChanged") && message.params.targetInfo.type === "page") {
       addresses.set(message.params.targetInfo.targetId, message.params.targetInfo.url);
       firstPage ??= message.params.targetInfo.targetId;
@@ -842,6 +857,8 @@ async function host() {
     }
     if (message.method === "Target.targetDestroyed") {
       targets.delete(message.params.targetId);
+      openers.delete(message.params.targetId);
+      for (const [frame, page] of framePages) if (page === message.params.targetId) framePages.delete(frame);
       addresses.delete(message.params.targetId);
       passkeyCleared(message.params.targetId);
       own.delete(message.params.targetId);
@@ -1185,6 +1202,34 @@ const notes = [];
 const noteOnce = (note) => {
   if (!notes.includes(note)) notes.push(note);
 };
+// What each conversation's downloads did, until one of its calls says so (one that says nothing
+// of its page, a screenshot say, leaves them for the next). Every helper hears every download, so
+// only the latest conversations' and their latest news are kept.
+const downloadNotes = new Map();
+/// A download's news, for the conversation it's for. One that's nobody's (yours, a page no agent
+/// was in) goes to no agent, except one at work that can't say whose it is.
+function noteDownload(note, session = null) {
+  if (!session) {
+    if (busy && !caller) noteOnce(note);
+    return;
+  }
+  const waiting = downloadNotes.get(session) ?? [];
+  downloadNotes.delete(session);
+  if (!waiting.includes(note)) waiting.push(note);
+  downloadNotes.set(session, waiting.slice(-20));
+  if (downloadNotes.size > 100) downloadNotes.delete(downloadNotes.keys().next().value);
+}
+
+/// What the agent hears ahead of a call's result: what happened on the way, and its conversation's
+/// downloads.
+function heard() {
+  const said = notes.splice(0);
+  if (caller && downloadNotes.has(caller)) {
+    for (const note of downloadNotes.get(caller)) if (!said.includes(note)) said.push(note);
+    downloadNotes.delete(caller);
+  }
+  return said.length ? said.join("\n") + "\n\n" : "";
+}
 let busy = false;
 // The tool at work, and the page it works in.
 let currentTool = null;
@@ -1316,13 +1361,13 @@ async function openLink() {
         else dialogs.set(message.sessionId, message.params);
         break;
       case "Kuvo.downloading":
-        noteOnce(`The page started downloading ${message.params.name}.`);
+        noteDownload(`The page started downloading ${message.params.name}.`, message.params.session);
         break;
       case "Kuvo.downloaded":
-        noteOnce(`Downloaded ${message.params.name} to ${message.params.path}.`);
+        noteDownload(`Downloaded ${message.params.name} to ${message.params.path}.`, message.params.session);
         break;
       case "Kuvo.downloadFailed":
-        noteOnce(`Downloading ${message.params.name} failed.`);
+        noteDownload(`Downloading ${message.params.name} failed.`, message.params.session);
         break;
       case "Page.fileChooserOpened":
         choosers.get(message.sessionId)?.(message.params);
@@ -1487,10 +1532,12 @@ async function settle(p, expectNavigation) {
 async function settleAfterClick(p, before, pagesBefore) {
   const start = Date.now();
   while (Date.now() - start < 1000 && (await readyState(p)) !== "loading" && (await address(p)) === before) await sleep(100);
-  const opened = (await pages()).find((info) => !pagesBefore.has(info.targetId));
-  if (opened) {
-    // The page it opened (a sign-in window, say) is this conversation's to go on in.
-    if (caller) await (await browser()).send("Kuvo.claim", { targetId: opened.targetId, session: caller }).catch(() => {});
+  // The page it opened (a sign-in window, say) is this conversation's to go on in: one this page
+  // opened (Chrome names its opener, with noopener too), not one another conversation or you
+  // opened meanwhile, nor one another conversation's agent has.
+  const opened = (await pages()).find((info) => !pagesBefore.has(info.targetId) && info.openerId === p.target);
+  const ours = opened && (!caller || (await (await browser()).send("Kuvo.claim", { targetId: opened.targetId, session: caller }).catch(() => ({ ok: false }))).ok);
+  if (ours) {
     const next = await use(opened.targetId);
     await settle(next, true);
     return next;
@@ -1542,6 +1589,8 @@ function destination(input) {
     const url = new URL(text);
     if (["http:", "https:", "file:", "about:"].includes(url.protocol)) return url.href;
   } catch {}
+  // A file's path on this machine ("/home/me/report.html", "~/site/index.html"), as on the Mac.
+  if (text.startsWith("/") || text.startsWith("~/")) return pathToFileURL(text.startsWith("~/") ? path.join(os.homedir(), text.slice(2)) : text).href;
   const looksLikeHost = !text.includes(" ") && (text.includes(".") || text.startsWith("localhost") || text.includes(":"));
   if (looksLikeHost) return (text.startsWith("localhost") || text.startsWith("127.") ? "http://" : "https://") + text;
   const search = process.env.KUVO_SEARCH || "https://www.google.com/search?q=%s";
@@ -1580,6 +1629,9 @@ function integrationNote(address, caller) {
   sentAway.set(key, Date.now());
   return site.note;
 }
+
+// What a navigation that didn't open says first: the step failed (its line doesn't read "Opened").
+const notOpened = (said) => said.startsWith("Couldn't open ") || said.startsWith("Not an address or search: ");
 
 async function navigate(p, url) {
   const target = destination(url);
@@ -1756,6 +1808,18 @@ function realPath(place) {
   } catch {
     return path.resolve(place);
   }
+}
+
+/// Where a file that may not be there yet would be: its nearest folder that is, with links
+/// followed, and the rest of its path.
+function realTarget(file) {
+  let folder = file;
+  const rest = [];
+  while (!fs.existsSync(folder) && path.dirname(folder) !== folder) {
+    rest.unshift(path.basename(folder));
+    folder = path.dirname(folder);
+  }
+  return path.join(realPath(folder), ...rest);
 }
 
 /// The file `address` (a whole URL) is, when it's one outside `access`'s places, links followed
@@ -2238,7 +2302,7 @@ async function afterControl(wait) {
   // A page closed meanwhile: it goes on in another.
   const open = (await pages()).some((info) => info.targetId === wait.target);
   const p = await readyPage(open ? await use(wait.target) : await page());
-  const moved = notes.length ? notes.splice(0).join("\n") + "\n\n" : "";
+  const moved = heard();
   return text("The user took over the browser while you worked, and has handed it back. The page may have changed: this is where it is now. Go on from here.\n\n" + moved + (await snapshot(p)));
 }
 
@@ -2436,7 +2500,7 @@ async function tool(name, args) {
       return text(`Closed tab [${number}]. ` + list((await pages())));
     }
     const chosenPage = await readyPage(await use(chosen.targetId));
-    const said = notes.length ? notes.splice(0).join("\n") + "\n\n" : "";
+    const said = heard();
     return text(said + (await snapshot(chosenPage)));
   }
 
@@ -2452,11 +2516,12 @@ async function tool(name, args) {
     const { targetId } = await c.send("Target.createTarget", { url: "about:blank", newWindow: true });
     if (caller) await c.send("Kuvo.claim", { targetId, session: caller });
     const p = await use(targetId);
-    return text(url ? await navigate(p, url) : await snapshot(p));
+    const said = url ? await navigate(p, url) : await snapshot(p);
+    return text(said, notOpened(said));
   }
 
   let p = await readyPage(await page(), ["browser_navigate", "browser_back", "browser_forward"].includes(name));
-  const note = () => (notes.length ? notes.splice(0).join("\n") + "\n\n" : "");
+  const note = heard;
   const withNote = async (promise) => {
     const result = await promise;
     return text(note() + result);
@@ -2466,7 +2531,8 @@ async function tool(name, args) {
     case "browser_navigate": {
       const url = string("url");
       if (!url) return text("Missing url.", true);
-      return withNote(navigate(p, url));
+      const said = await navigate(p, url);
+      return text(note() + said, notOpened(said));
     }
     case "browser_snapshot":
       return withNote(snapshot(p));
@@ -2528,8 +2594,14 @@ async function tool(name, args) {
       return withNote(Promise.resolve(value.length > 30_000 ? value.slice(0, 30_000) + "\n… (cut)" : value || "(no text)"));
     }
     case "browser_save_pdf": {
-      const file = string("path");
-      if (!file || !file.startsWith("/") || !file.toLowerCase().endsWith(".pdf")) return text("Give a full path ending in .pdf.", true);
+      const given = string("path");
+      const file = given && path.resolve(given.replace(/^~(?=$|\/)/, os.homedir()));
+      if (!given || !/^~?\//.test(given) || !file.toLowerCase().endsWith(".pdf")) return text("Give a full path ending in .pdf.", true);
+      // Saved outside the conversation's folder, it would replace what's there without asking,
+      // where a command would have asked (as on the Mac).
+      if (outsideFile(pathToFileURL(realTarget(file)).href, await fileAccess(caller))) {
+        return text(`Not saved: ${file} is outside this conversation's folder, and this session asks before writing files elsewhere. Save it in the folder; if the user wants it elsewhere, ask them first, then move it there (a command, which asks them).`, true);
+      }
       if (isEmpty(await address(p))) return text("The browser is empty. Open the page first: for a document, write it as an HTML file and open it (file:///…).", true);
       try {
         // On the paper the Mac prints on, with the page's colors.
@@ -2749,7 +2821,7 @@ async function mcp() {
         // Showing something in Kuvo Code's panel needs no browser, nor a turn in the line.
         // Nor does writing to another agent.
         if (WAKE_TOOLS.has(params.name)) {
-          wake(params.name, params.arguments || {}, params._meta?.["ai.opencode/sessionID"] ?? null).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
+          wake(params.name, params.arguments || {}, call.session).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
           return;
         }
         // The vault's and the sandbox's, which this machine's box carries out (and may ask you).

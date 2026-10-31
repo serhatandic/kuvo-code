@@ -4,12 +4,13 @@
 // for the app keeps them in memory. The scenarios in bot-keys-scenarios.js, then what's this Mac's
 // own: only `KUVO_KEY_…` names asked for, a key or the password never in its output, and the app
 // not answering said plainly.
-import { test, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { botKeyScenarios, fixtures, own, script, served, standInHost } from "./bot-keys-scenarios.js";
+import { removeAtEnd } from "./at-end.js";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-bot-keys-host-"));
 process.env.HOME = root;
@@ -22,7 +23,7 @@ const keyFiles = path.join(root, "app-temp", "integration-keys");
 const hostEnv = { KUVO_HOST_URL: host.url, KUVO_HOST_PASSWORD: PASSWORD, KUVO_KEYS: keyFiles };
 Object.assign(process.env, hostEnv);
 const link = await import(script);
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+removeAtEnd(root);
 
 test("the box takes its app's password out of its environment, so nothing it runs has it", () => {
   assert.equal(process.env.KUVO_HOST_PASSWORD, undefined);

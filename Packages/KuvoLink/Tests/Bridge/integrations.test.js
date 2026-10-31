@@ -1,13 +1,14 @@
 // Settings › Integrations on a machine, from a phone or a Mac with the Mac closed: from the catalog
 // the Mac leaves there, its keys in files only you can read (`box/keys`, a bot's own in
 // `box/bot-keys`), all on the machine itself. The scenarios are in integrations-scenarios.js.
-import { after, test } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { boxRoute } from "./bot-keys-scenarios.js";
 import { integrationScenarios, standInEngine } from "./integrations-scenarios.js";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-integrations-")));
 process.env.KUVO_HOME = home;
@@ -17,10 +18,8 @@ const user = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-user-"));
 process.env.HOME = user;
 delete process.env.KUVO_INTEGRATIONS;
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
-after(() => {
-  fs.rmSync(home, { recursive: true, force: true });
-  fs.rmSync(user, { recursive: true, force: true });
-});
+removeAtEnd(home);
+removeAtEnd(user);
 
 const keyFile = name => path.join(home, "box", name.includes("__") ? "bot-keys" : "keys", name);
 
@@ -39,7 +38,7 @@ integrationScenarios({ link, home, mac: false, store: {
 // there, as `~/…`, the same on macOS and Linux, whatever the home is called.
 test("a box in your home names its keys from your home, as ~/", async () => {
   const yours = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-home-")));
-  after(() => fs.rmSync(yours, { recursive: true, force: true }));
+  removeAtEnd(yours);
   const box = path.join(yours, ".kuvo-code");
   fs.mkdirSync(path.join(box, "bin"), { recursive: true });
   fs.mkdirSync(path.join(box, "box"), { recursive: true });

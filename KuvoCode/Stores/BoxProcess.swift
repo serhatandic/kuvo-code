@@ -313,19 +313,38 @@ final class BoxProcess {
     /// Started or stopped again, it isn't given up on.
     static func engineChanged(_ endpoint: ServerEndpoint?, version: String?, pid: Int32?) {
         write(endpoint.map { Record(pid: pid, port: $0.url.port, password: $0.password, version: version) }, to: "engine.json")
-        try? FileManager.default.removeItem(at: run.appending(path: "engine-stopped"))
+        forgetEngineStopped()
     }
 
     /// The engine stopped and isn't started again until you say (`run/engine-stopped`): why, in
-    /// the words the window shows (their first paragraph), for the box to tell whoever asks it.
+    /// the words the window shows (their first paragraph), for the box to tell whoever asks it;
+    /// and what the engine wrote last, which the window shows under it (`run/engine-output`), for
+    /// the app to show as it shows its own engine's when it follows the keeper's.
     static func engineGaveUp(_ reason: String) {
-        let why = reason.components(separatedBy: "\n\n").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let paragraphs = reason.components(separatedBy: "\n\n")
+        let why = paragraphs.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // As it is, so a client shows the reason in the same words.
+        let output = paragraphs.dropFirst().joined(separator: "\n\n")
         do {
             try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            // The output first: the reason appearing is what a client reads both on.
+            if output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                try? FileManager.default.removeItem(at: run.appending(path: "engine-output"))
+            } else {
+                // (Without it, the reason still: never neither.)
+                try? Data(output.utf8).write(to: run.appending(path: "engine-output"), options: .atomic)
+            }
             try Data(why.utf8).write(to: run.appending(path: "engine-stopped"), options: .atomic)
         } catch {
             log.error("Couldn't tell this Mac's box its engine stopped: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// The engine isn't given up on any more (it's up, or starting again): why it was, and what it
+    /// wrote then, gone.
+    static func forgetEngineStopped() {
+        try? FileManager.default.removeItem(at: run.appending(path: "engine-stopped"))
+        try? FileManager.default.removeItem(at: run.appending(path: "engine-output"))
     }
 
     /// The coding agents' bridge, as it records itself on a machine (`run/bridge.json`).

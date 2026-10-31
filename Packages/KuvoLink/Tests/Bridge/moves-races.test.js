@@ -14,7 +14,8 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, test as nodeTest } from "node:test";
+import { test as nodeTest } from "node:test";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 // Each fails, rather than hangs, when what it waits for never comes.
 const test = (name, run) => nodeTest(name, { timeout: 30_000 }, run);
@@ -65,10 +66,11 @@ const server = http.createServer((request, response) => {
       }
       return session ? send(200, { info: { id: session.id, title: session.title, ...(session.parentID ? { parentID: session.parentID } : {}) }, messages: session.messages }) : send(404, null);
     }
-    const match = url.pathname.match(/^\/api\/session\/([^/]+)(\/inbox)?$/);
+    const match = url.pathname.match(/^\/api\/session\/([^/]+)(\/inbox|\/interrupt|\/prompt)?$/);
     const session = match && engine.sessions.get(match[1]);
     if (!session) return send(404, null);
-    if (match[2]) return send(200, []);
+    if (match[2] === "/inbox") return send(200, []);
+    if (match[2]) return send(200, true);
     if (request.method === "DELETE") {
       if (engine.down || engine.downFor === session.id) {
         engine.refused += 1;
@@ -102,12 +104,12 @@ link.sendMovesWith((_peer, move) => {
 const say = move => link.takeMoveMail(lab, move);
 const stop = new AbortController();
 link.watchMoves(() => ({ send() {} }), stop.signal);
-after(() => {
+removeAtEnd(support);
+atEnd(() => {
   stop.abort();
   link.sendMovesWith(null);
   server.closeAllConnections();
   server.close();
-  fs.rmSync(support, { recursive: true, force: true });
 });
 
 const handle = link.engineHandler(link.readEngineFile, { name: "Mac" }, link.readBridgeFile, () => {}, null);
@@ -335,6 +337,37 @@ test("one that keeps getting messages while it moves goes again with them, and a
   assert.equal(offers, 3, "sent again with what came, three times");
   assert.equal(engine.sessions.get("ses_busy1").messages.length, 4, "nothing lost here");
   await asItWas("ses_busy1");
+});
+
+test("while it moves, what waits for it stays as it is: a Remove, an Undo or a Resume is refused, and taken back it's all there, still stopped", async () => {
+  chat("ses_qmove");
+  assert.equal((await ask("POST", "kuvo/sessions/ses_qmove/stop")).json?.paused, true);
+  for (const [id, text] of [["msg_q1", "First."], ["msg_q2", "Second."]]) assert.equal((await ask("POST", "kuvo/sessions/ses_qmove/queue/add", { id, text })).json?.waits, true);
+  // Asked to change it as its copy arrives there, then the copy there fails.
+  let tried = null;
+  script = move => {
+    if (move.op === "offer") say({ op: "ready", id: move.id });
+    if (move.op === "part") {
+      say({ op: "got", id: move.id, i: move.i });
+      if (move.i === move.of - 1) tried = Promise.all([
+        ask("DELETE", "kuvo/sessions/ses_qmove/queue/msg_q1"),
+        ask("POST", "kuvo/sessions/ses_qmove/queue/add", { id: "msg_q3", text: "Third.", before: "msg_q1" }),
+        ask("POST", "kuvo/sessions/ses_qmove/queue/resume"),
+      ]).finally(() => say({ op: "failed", id: move.id, message: "Its disk is full." }));
+    }
+  };
+  const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_qmove", to: peerKey });
+  assert.equal(moved.status, 409, JSON.stringify(moved.json));
+  const answers = await tried;
+  assert.deepEqual(answers.map(each => each.status), [409, 409, 409]);
+  for (const each of answers) assert.match(each.json.message, /moving to another computer/);
+  const queue = (await ask("GET", "kuvo/sessions/ses_qmove/queue")).json;
+  assert.equal(queue.paused, true, "still stopped");
+  assert.deepEqual(queue.waiting.map(each => each.id), ["msg_q1", "msg_q2"]);
+  for (const id of ["msg_q1", "msg_q2"]) assert.ok(fs.existsSync(path.join(home, "run", "waiting", `${id}.json`)), id);
+  // And it can be changed again.
+  assert.equal((await ask("DELETE", "kuvo/sessions/ses_qmove/queue/msg_q1")).status, 200);
+  assert.deepEqual((await ask("GET", "kuvo/sessions/ses_qmove/queue")).json.waiting.map(each => each.id), ["msg_q2"]);
 });
 
 test("where a moved conversation lives: by the computer that moved it, lately, and never one of this box's own", () => {

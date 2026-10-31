@@ -342,10 +342,41 @@ enum OpencodeImport {
 
     // MARK: Bringing it over
 
-    /// Adds the plan's settings to `config` and its accounts to the engine behind `api`. Returns
-    /// how many things came over.
+    /// What bringing a plan over came to.
+    struct Outcome {
+        /// Settings that came over: none when they weren't saved (`notSaved`).
+        var settings = 0
+        /// Why the settings weren't saved where the box keeps them, when they weren't.
+        var notSaved: String?
+        /// API keys the engine took.
+        var accounts = 0
+        /// The integrations whose keys it didn't take.
+        var failedAccounts: [String] = []
+
+        var count: Int { settings + accounts }
+    }
+
+    /// Brings the plan over and says how it went, in words: only what got there is counted, and
+    /// what didn't is said. `renews`: something came over, for the engine to start again to use.
     @MainActor
-    static func apply(_ plan: Plan, to config: EngineConfig, api: OpenCodeAPI) async -> Int {
+    static func bringOver(_ plan: Plan, to config: EngineConfig, api: OpenCodeAPI, name: (String) -> String) async -> (note: String, renews: Bool) {
+        let outcome = await apply(plan, to: config, api: api)
+        let count = outcome.count
+        var note = switch count {
+        case 0: "Nothing came over from opencode."
+        case 1: "Brought over 1 thing from opencode."
+        default: "Brought over \(count) things from opencode."
+        }
+        if let notSaved = outcome.notSaved { note += " Its settings didn’t come over. \(notSaved)" }
+        if !outcome.failedAccounts.isEmpty {
+            note += " The API keys for \(ListFormatter.localizedString(byJoining: outcome.failedAccounts.map(name))) couldn’t be copied; add them in Settings › Accounts."
+        }
+        return (note, count > 0)
+    }
+
+    /// Adds the plan's settings to `config` and its accounts to the engine behind `api`.
+    @MainActor
+    static func apply(_ plan: Plan, to config: EngineConfig, api: OpenCodeAPI) async -> Outcome {
         var count = 0
         // All in one write, so the engine reloads its settings once.
         var changes: [(path: [String], value: JSONValue?)] = []
@@ -377,11 +408,28 @@ enum OpencodeImport {
             changes.append((["skills"], .array(ours + plan.skillFolders.map(JSONValue.string))))
             count += plan.skillFolders.count
         }
-        if !changes.isEmpty { config.set(changes) }
-        for account in plan.accounts {
-            if (try? await api.storeCredential(value: account.value, label: account.label, for: account.integration)) != nil { count += 1 }
+        var outcome = Outcome(settings: count)
+        if !changes.isEmpty {
+            if let problem = config.problem {
+                outcome.notSaved = problem
+            } else if !config.isLoaded {
+                outcome.notSaved = "Kuvo Code’s settings haven’t been read yet. Try again in a moment."
+            } else {
+                config.set(changes)
+                // Saved where the box keeps them (before the engine starts again to read them), or
+                // why not, as it answers this change.
+                outcome.notSaved = await config.settled()
+            }
+            if outcome.notSaved != nil { outcome.settings = 0 }
         }
-        Analytics.shared.track("opencode_imported", ["things": count, "accounts": plan.accounts.count])
-        return count
+        for account in plan.accounts {
+            if (try? await api.storeCredential(value: account.value, label: account.label, for: account.integration)) != nil {
+                outcome.accounts += 1
+            } else {
+                outcome.failedAccounts.append(account.integration)
+            }
+        }
+        Analytics.shared.track("opencode_imported", ["things": outcome.count, "accounts": plan.accounts.count])
+        return outcome
     }
 }

@@ -24,6 +24,7 @@ struct AddAnotherSheet: View {
     let done: () -> Void
 
     @Environment(Catalog.self) private var catalog
+    @Environment(AppModel.self) private var app
     /// A sign-in open in the sheet; `keysOnly`: from API Keys, its key only.
     @State private var connecting: String?
     @State private var keysOnly = false
@@ -114,6 +115,8 @@ struct AddAnotherSheet: View {
         }
         ForEach(morePlans) { row in
             OfferRow(row: row, isBusy: isBusy(row)) { _ in perform(row) { open($0, keysOnly: false) } }
+                // The coding agents work while this Mac's engine is down; the rest waits for it.
+                .waitsForEngine(app.engineIsDown && !OutsideAgents.isAgent(row.integrationID))
         }
     }
 
@@ -127,6 +130,7 @@ struct AddAnotherSheet: View {
             heading("On Your Mac")
             ForEach(offers.keys) { row in
                 OfferRow(row: row, isBusy: isBusy(row)) { _ in perform(row) { open($0, keysOnly: true) } }
+                    .waitsForEngine(app.engineIsDown)
             }
             heading("Another Provider")
         }
@@ -163,6 +167,7 @@ struct AddAnotherSheet: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .waitsForEngine(app.engineIsDown)
         }
     }
 

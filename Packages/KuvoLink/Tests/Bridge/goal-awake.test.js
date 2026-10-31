@@ -10,7 +10,8 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-goal-awake-")));
 process.env.KUVO_HOME = home;
@@ -42,13 +43,13 @@ await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
 const target = () => [{ port: engine.address().port, password: "p" }];
 // The caffeinate this box holds, by its process: what keeps the Mac awake.
 const holding = () => spawnSync("pgrep", ["-f", `caffeinate -s -w ${process.pid}`], { encoding: "utf8" }).stdout.trim();
-after(async () => {
+removeAtEnd(home);
+atEnd(async () => {
   write(goalsFile, JSON.stringify({ goals: [] }));
   await link.lookAtGoals(() => true, () => []);
   await link.letGo();
   engine.closeAllConnections();
   engine.close();
-  fs.rmSync(home, { recursive: true, force: true });
 });
 
 test("the Mac stays awake while a goal's work runs, and may sleep while it waits or once it's done; a machine has nothing to do", async () => {

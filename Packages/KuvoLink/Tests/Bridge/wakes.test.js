@@ -7,11 +7,12 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-wakes-"));
 process.env.KUVO_HOME = home;
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+removeAtEnd(home);
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // kuvo-wake, as Wakes.swift has it and BoxFiles puts it in every box's bin.
@@ -30,7 +31,7 @@ const engine = http.createServer((request, response) => {
   reply(404, {});
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
-after(() => { engine.closeAllConnections(); engine.close(); });
+atEnd(() => { engine.closeAllConnections(); engine.close(); });
 const handle = link.engineHandler(() => ({ port: engine.address().port, password: "p" }), { name: "lab" }, () => null);
 async function ask(method, p, body) {
   const parts = [];

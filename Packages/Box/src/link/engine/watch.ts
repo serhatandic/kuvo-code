@@ -6,7 +6,7 @@ import { pause } from "../../shared/wait";
 import { noteSignIn } from "../areas/accounts";
 import { nameWorktreeBranch, tellWorktree } from "../areas/worktrees";
 import { freshenBot, freshenBots } from "../bots/tell";
-import { ANSWERED, GROUP_NEWS, NEWS, groupNotice, noticeFor, settleHeld } from "../notices/news";
+import { ANSWERED, GROUP_NEWS, NEWS, RUN_ENDS, groupNotice, noticeFor, settleHeld } from "../notices/news";
 import { engineGet, peerTargets, readBridgeFile, readEngineFile } from "./client";
 import { learnCompatibility } from "./compatibility";
 import { workWatcher } from "../work/wakes";
@@ -284,6 +284,9 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         }
         if (!notices) continue;
         if (ANSWERED.has(event.type)) answered(event.data?.requestID ?? event.data?.id);
+        // A run's end: what it asked the engine let go with it, without a word (stopped, say). Looked
+        // up before what comes next, which may be its news.
+        if (RUN_ENDS.has(event.type) && hold && typeof event.data?.sessionID === "string") await settleHeld(source, hold, event.data.sessionID).catch(() => {});
         if (!NEWS.has(event.type) && !GROUP_NEWS.has(event.type)) continue;
         if (GROUP_NEWS.has(event.type)) {
           const notice = groupNotice(event);

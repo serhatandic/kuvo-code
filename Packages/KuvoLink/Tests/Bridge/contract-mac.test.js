@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { after } from "node:test";
+import { removeAtEnd } from "./at-end.js";
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-contract-mac-")));
 // As BoxProcess starts it, in the app's folder (`support` stands in for Application Support).
@@ -21,7 +21,7 @@ Object.assign(process.env, {
   KUVO_WAKE_COMMAND: path.join(support, "bin", "kuvo-wake"),
   GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "Tests", GIT_AUTHOR_EMAIL: "tests@example.com", GIT_COMMITTER_NAME: "Tests", GIT_COMMITTER_EMAIL: "tests@example.com",
 });
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+removeAtEnd(root);
 const { contract } = await import("./contract-runner.js");
 
 // The areas this Mac's box answers (PhoneLink.boxRoutes) that are written as scenarios here.

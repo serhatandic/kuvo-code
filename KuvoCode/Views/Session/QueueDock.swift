@@ -56,7 +56,7 @@ struct QueueDock: View {
                     Text("Paused")
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 8)
-                    Button("Resume", action: model.resumeQueue)
+                    Button("Resume") { model.resumeQueue() }
                         .buttonStyle(TextButtonStyle())
                         .help("Send the waiting messages, one after another")
                 }
@@ -214,14 +214,16 @@ private struct QueueRow: View {
         .disabled(item.isLocal)
     }
 
-    /// Removed at once, as the agent would take it meanwhile; Undo puts it back, at the queue's end.
+    /// Removed at once, as the agent would take it meanwhile; Undo puts it back: where it was while
+    /// it's held for Resume, else at the queue's end.
     private func remove() {
-        // Held for Resume, after a Stop: it comes back the same way.
+        // Held for Resume, after a Stop: it comes back the same way, ahead of what came after it.
         let paused = model.isQueuePaused && !model.isRunning
+        let before = model.next(after: item)
         model.cancelPending(item)
         let item = item, model = model, catalog = catalog
         model.putAways.put(.message, text: "Message removed", undo: {
-            model.requeue(item, for: catalog.model(model.session.model), paused: paused)
+            model.requeue(item, for: catalog.model(model.session.model), paused: paused, before: before)
         })
     }
 

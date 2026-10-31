@@ -8,7 +8,7 @@
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/sandbox-asks.test.js`; on Linux, with Bun (the
 // engine's: `BUN_BE_BUN=1 <engine> test sandbox-asks.test.js`).
-import { test, after, before } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -19,13 +19,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { script } from "./bot-keys-scenarios.js";
 import { runningAs } from "./running-as.js";
 import { NO_BUN, testBun } from "./bun-for-tests.js";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 // In the folder tests keep in your home (not the temporary folders, which commands may write), so
 // what a command mustn't write is somewhere it otherwise couldn't. (Short: the vault's socket,
 // which the box's long-running process holds, lives in it.)
 fs.mkdirSync(path.join(os.homedir(), ".kuvo-code-test"), { recursive: true });
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".kuvo-code-test", "sa-")));
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+removeAtEnd(root);
 const linux = process.platform === "linux";
 const home = path.join(root, ".kuvo-code");
 const env = { ...process.env, HOME: root, KUVO_HOME: home };
@@ -45,6 +46,9 @@ const sessions = {
   ses_blog: { id: "ses_blog", title: "Write a post", location: { directory: blog } },
   // A worktree of the repository `kept`, for a branch of its own.
   ses_branch: { id: "ses_branch", title: "Try a branch", location: { directory: path.join(root, "kept-branch") } },
+  // A bot's own conversation, in its folder's workspace, and a chat, in the chats' folder.
+  ses_scout: { id: "ses_scout", title: "Scout", location: { directory: path.join(home, "bots", "bot_scout", "workspace") } },
+  ses_chat: { id: "ses_chat", title: "Quick question", location: { directory: path.join(home, "chats") } },
   // A bot's seat in a group chat.
   ses_seat: { id: "ses_seat", title: "Standup", location: { directory: shop }, metadata: { kuvo: { seat: "seat_1" } } },
 };
@@ -68,7 +72,7 @@ before(async () => {
   await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
   fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify({ pid: process.pid, port: engine.address().port, password: "engine-pw", version: "test" }));
 });
-after(() => { engine?.closeAllConnections(); engine?.close(); });
+atEnd(() => { engine?.closeAllConnections(); engine?.close(); });
 
 // The box's long-running process.
 async function start() {
@@ -169,7 +173,7 @@ before(async () => {
   const state = (await box.ask("GET", "kuvo/sandbox")).value;
   assert.equal(state.on, true, state.why);
 });
-after(() => box?.stop());
+atEnd(() => box?.stop());
 
 // An agent on a machine: its tool server there (`kuvo-browser.js mcp`, as the engine starts it), which
 // passes sandbox_ask to the box's long-running process through `box route`.
@@ -199,7 +203,7 @@ function machineTools() {
 test("an agent on a machine has sandbox_ask while the sandbox is on, and its call asks you there and runs once allowed", async () => {
   assert.deepEqual((await box.ask("GET", "kuvo/sandbox/tools")).value.tools.map(tool => tool.name), ["sandbox_ask"]);
   const tools = machineTools();
-  after(() => tools.stop());
+  atEnd(() => tools.stop());
   const listed = (await tools.ask("tools/list", {})).tools;
   const tool = listed.find(each => each.name === "sandbox_ask");
   assert.ok(tool, "listed with the browser's tools");
@@ -442,4 +446,82 @@ test("only a conversation's own call asks: one it isn't making, or a command nam
   const refused = (await box.ask("POST", "kuvo/sandbox/tools", { session: "ses_shop", name: "sandbox_ask", arguments: { command: "id", why: "x" } })).value;
   assert.equal(refused.isError, true);
   assert.deepEqual((await box.ask("GET", "kuvo/sandbox/asks")).value.asks, []);
+});
+
+// A bot here, as the app writes it: `project`, the project it works in rather than its own folder.
+function botHere(id, name, session, project) {
+  const folder = path.join(home, "bots", id);
+  fs.mkdirSync(path.join(folder, "workspace"), { recursive: true });
+  fs.writeFileSync(path.join(folder, "bot.json"), JSON.stringify({ kuvo: 1, id, name, ...(project ? { project } : {}) }));
+  fs.writeFileSync(path.join(folder, "session"), session);
+}
+
+test("Also Allowed lists every rule by whose it is (a project, a bot's own folder, the chats), and whom else one can be added for", async () => {
+  botHere("bot_scout", "Scout", "ses_scout");
+  botHere("bot_nova", "Nova", "ses_nova", shop);
+  botHere("bot_juno", "Juno", "ses_juno");
+  // (No chat yet: the chats' folder isn't there.)
+  fs.rmSync(path.join(home, "chats"), { recursive: true, force: true });
+  const reports = path.join(outside, "reports"), exports = path.join(outside, "exports"), dist = path.join(outside, "dist");
+  for (const folder of [reports, exports, dist]) fs.mkdirSync(folder, { recursive: true });
+  assert.equal((await box.ask("POST", "kuvo/sandbox/allowed", { project: shop, kind: "write", path: dist })).status, 200);
+  const forScout = await box.ask("POST", "kuvo/sandbox/allowed?all", { owner: { kind: "bot", id: "bot_scout" }, kind: "write", path: reports });
+  assert.equal(forScout.status, 200, JSON.stringify(forScout.value));
+  const forChats = await box.ask("POST", "kuvo/sandbox/allowed?all", { owner: { kind: "chats" }, kind: "write", path: exports });
+  assert.equal(forChats.status, 200, JSON.stringify(forChats.value));
+  // Made for it, so the rule is kept where the folder really is, and isn't shown gone.
+  assert.ok(fs.existsSync(path.join(home, "chats")));
+  assert.equal(forChats.value.allowed.at(-1).project, fs.realpathSync(path.join(home, "chats")));
+  // A bot that works in a project has no folder of its own to give: its project's rules are its.
+  const forNova = await box.ask("POST", "kuvo/sandbox/allowed", { owner: { kind: "bot", id: "bot_nova" }, kind: "write", path: reports });
+  assert.equal(forNova.status, 400);
+  assert.match(forNova.value.message, /Nova works in a project/);
+
+  // One request lists them all, each saying whose it is, as an add or a removal with `?all` answers.
+  const all = (await box.ask("GET", "kuvo/sandbox/allowed")).value;
+  const whose = all.allowed.map(rule => [rule.owner.kind, rule.owner.name, rule.path]);
+  assert.deepEqual(whose, [["project", "shop", dist], ["bot", "Scout", reports], ["chats", "Chats", exports]]);
+  assert.equal(all.allowed[1].owner.id, "bot_scout");
+  assert.deepEqual(forChats.value.allowed.map(rule => rule.path), [dist, reports, exports]);
+  assert.deepEqual(all.owners, [{ kind: "bot", id: "bot_juno", name: "Juno" }, { kind: "bot", id: "bot_scout", name: "Scout" }, { kind: "chats", name: "Chats" }], "Nova works in a project");
+  assert.ok(all.allowed.every(rule => !rule.gone));
+
+  // A project's own still answers as before.
+  assert.deepEqual((await box.ask("GET", `kuvo/sandbox/allowed?project=${encodeURIComponent(shop)}`)).value.allowed.map(rule => rule.path), [dist]);
+  const removed = await box.ask("DELETE", `kuvo/sandbox/allowed/${all.allowed[0].id}?all`);
+  assert.deepEqual(removed.value.allowed.map(rule => rule.owner.kind), ["bot", "chats"]);
+
+  // An ask from the bot's own conversation, and from a chat, says whose folder Always would give to.
+  const fromScout = sandboxAsk(box, "ses_scout", { command: "make report", why: "The weekly report.", error: "Permission denied" });
+  const [scoutAsk] = await asked(box, fromScout);
+  assert.deepEqual(scoutAsk.owner, { kind: "bot", id: "bot_scout", name: "Scout" });
+  await box.ask("POST", `kuvo/sandbox/asks/${scoutAsk.id}`, { answer: "no" });
+  await fromScout;
+  const fromChat = sandboxAsk(box, "ses_chat", { command: "make export", why: "The export.", error: "Permission denied" });
+  const [chatAsk] = await asked(box, fromChat);
+  assert.deepEqual(chatAsk.owner, { kind: "chats", name: "Chats" });
+  await box.ask("POST", `kuvo/sandbox/asks/${chatAsk.id}`, { answer: "no" });
+  await fromChat;
+
+  // Moved to another computer, a bot's rules go with it.
+  assert.equal((await box.ask("POST", "kuvo/sandbox/allowed", { owner: { kind: "bot", id: "bot_juno" }, kind: "write", path: reports })).status, 200);
+  fs.rmSync(path.join(home, "bots", "bot_juno"), { recursive: true });
+  assert.deepEqual((await box.ask("GET", "kuvo/sandbox/allowed")).value.allowed.map(rule => rule.owner.name), ["Scout", "Chats"]);
+
+  // Deleted, a bot's rules go with it; the chats' stay.
+  assert.equal((await box.ask("DELETE", "kuvo/bots/bot_scout")).status, 200);
+  assert.deepEqual((await box.ask("GET", "kuvo/sandbox/allowed")).value.allowed.map(rule => rule.owner.kind), ["chats"]);
+  assert.ok(!(await box.ask("GET", "kuvo/sandbox/allowed")).value.owners.some(owner => owner.id === "bot_scout"));
+  for (const rule of (await box.ask("GET", "kuvo/sandbox/allowed")).value.allowed) await box.ask("DELETE", `kuvo/sandbox/allowed/${rule.id}`);
+});
+
+test("a rule whose folder is gone still shows, so it can be removed", async () => {
+  const old = path.join(root, "old-site"), cache = path.join(outside, "old-cache");
+  for (const folder of [old, cache]) fs.mkdirSync(folder, { recursive: true });
+  assert.equal((await box.ask("POST", "kuvo/sandbox/allowed", { project: old, kind: "write", path: cache })).status, 200);
+  fs.rmSync(old, { recursive: true });
+  const [rule] = (await box.ask("GET", "kuvo/sandbox/allowed")).value.allowed;
+  assert.deepEqual([rule.owner, rule.gone, rule.path], [{ kind: "project", name: "old-site" }, true, cache]);
+  assert.equal((await box.ask("DELETE", `kuvo/sandbox/allowed/${rule.id}?all`)).status, 200);
+  assert.deepEqual((await box.ask("GET", "kuvo/sandbox/allowed")).value.allowed, []);
 });

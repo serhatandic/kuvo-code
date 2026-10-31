@@ -8,7 +8,7 @@ import { parsed } from "../../shared/json";
 import type { Fields } from "../../shared/json";
 import type { EngineRecord, Target } from "../../shared/records";
 import type { ListedWorktree, WorktreeRecordShape, Worktrees, WorktreesWhere } from "../../shared/routes/worktrees";
-import { call, engineGet } from "../engine/client";
+import { bridgeTarget, call, engineGet } from "../engine/client";
 import type { EngineAnswer } from "../engine/client";
 import { isHiddenRun } from "../engine/sessions";
 import type { EngineSession } from "../engine/sessions";
@@ -92,20 +92,26 @@ async function projectOf(engine: Target, folder: string, signal: AbortSignal | u
   return id;
 }
 
-/** Sessions by the folder they run in, and which are at work, as its engine has them; none when it can't say. */
-async function sessionsHere(engine: Target | null, signal: AbortSignal | undefined): Promise<SessionsHere> {
-  if (!engine?.port) return { sessions: [], active: new Set() };
-  const headers = { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` };
-  try {
-    const listed = await fetch(`http://127.0.0.1:${engine.port}/api/session?parentID=null&limit=200&order=desc`, { headers, signal: AbortSignal.timeout(10_000) });
-    // (As the engine answers it: its sessions, each whole.)
-    const sessions = listed.ok ? ((await listed.json()) as { data?: EngineSession[] } | null)?.data ?? [] : [];
-    const busy = await fetch(`http://127.0.0.1:${engine.port}/api/session/active`, { headers, signal: AbortSignal.timeout(10_000) });
-    const active = new Set(Object.keys(busy.ok ? ((await busy.json()) as { data?: Record<string, unknown> } | null)?.data ?? {} : {}));
-    return { sessions, active };
-  } catch {
-    return { sessions: [], active: new Set() };
+/** Sessions by the folder they run in, and which are at work, as its engine and the coding agents'
+ * bridge (while it runs) have them; null when one of them can't say. */
+async function sessionsHere(engine: Target | null, signal: AbortSignal | undefined, bridge: Target | null = bridgeTarget()): Promise<SessionsHere | null> {
+  if (!engine?.port) return null;
+  const here: SessionsHere = { sessions: [], active: new Set() };
+  for (const target of bridge?.port ? [engine, bridge] : [engine]) {
+    const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
+    try {
+      const listed = await fetch(`http://127.0.0.1:${target.port}/api/session?parentID=null&limit=200&order=desc`, { headers, signal: AbortSignal.timeout(10_000) });
+      const busy = await fetch(`http://127.0.0.1:${target.port}/api/session/active`, { headers, signal: AbortSignal.timeout(10_000) });
+      if (!listed.ok || !busy.ok) return null;
+      // (As they answer it: their sessions, each whole; those at work, by id or as a list.)
+      here.sessions.push(...(((await listed.json()) as { data?: EngineSession[] } | null)?.data ?? []));
+      const active = ((await busy.json()) as { data?: string[] | Record<string, unknown> } | null)?.data ?? {};
+      for (const id of Array.isArray(active) ? active : Object.keys(active)) here.active.add(id);
+    } catch {
+      return null;
+    }
   }
+  return here;
 }
 
 const inside = (folder: string | undefined, root: string) => folder === root || folder?.startsWith(root + "/");
@@ -146,7 +152,7 @@ export async function nameWorktreeBranch(engine: Target, sessionID: unknown): Pr
 async function nameDueWorktrees(engine: Target | null, signal: AbortSignal | undefined): Promise<void> {
   const due = readWorktrees().filter(tree => tree.made && tree.branch === tree.made);
   if (!due.length || !engine?.port) return;
-  const { sessions } = await sessionsHere(engine, signal);
+  const sessions = (await sessionsHere(engine, signal))?.sessions ?? [];
   for (const tree of due) {
     const titled = sessions.find(session => (session.location?.directory ?? session.directory) === (tree.folder ?? tree.root) && !isHiddenRun(session) && branchSlug(session.title ?? ""));
     if (titled) await nameWorktreeBranch(engine, titled.id).catch(() => {});
@@ -166,7 +172,7 @@ export async function tellWorktree(target: Target, sessionID: unknown): Promise<
 }
 
 /** `kuvo/worktrees…`, for this box's own. */
-export async function answerWorktrees(method: string, requestPath: string, body: WorktreesBody | null | undefined, engine: Target | null, signal: AbortSignal | undefined): Promise<WorktreesAnswer> {
+export async function answerWorktrees(method: string, requestPath: string, body: WorktreesBody | null | undefined, engine: Target | null, signal: AbortSignal | undefined, bridge: Target | null = bridgeTarget()): Promise<WorktreesAnswer> {
   const route = requestPath.split("?")[0];
   const message = (text: string) => ({ message: text });
   const list = readWorktrees();
@@ -177,7 +183,7 @@ export async function answerWorktrees(method: string, requestPath: string, body:
       await nameDueWorktrees(engine, signal);
       return { status: 200, value: { worktrees: readWorktrees() } satisfies Worktrees };
     }
-    const { sessions, active } = await sessionsHere(engine, signal);
+    const { sessions, active } = await sessionsHere(engine, signal, bridge) ?? { sessions: [], active: new Set<string>() };
     const worktrees: ListedWorktree[] = [];
     for (const tree of list) {
       const here = sessions.filter(session => inside(session.location?.directory ?? session.directory, tree.root));
@@ -210,6 +216,7 @@ export async function answerWorktrees(method: string, requestPath: string, body:
     // Where the project is in its repository, as git sees it (through any links in its path).
     const subpath = gitIn(project, ["rev-parse", "--show-prefix"]);
     if (subpath === null) return { status: 409, value: message("That folder isn't in a git repository.") };
+    if (gitIn(project, ["rev-parse", "--verify", "--quiet", "HEAD"]) === null) return { status: 409, value: message("This repository has no commits yet. Make a first commit, then start a session in a worktree.") };
     const base = gitIn(project, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
     let id: string | undefined, root: string | undefined;
     try {
@@ -223,7 +230,8 @@ export async function answerWorktrees(method: string, requestPath: string, body:
     const branch = freeBranch(root, prefix + path.basename(root));
     if (!branch || gitIn(root, ["switch", "--quiet", "-c", branch]) === null && gitIn(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]) !== branch) {
       await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: root, force: true }, signal, project).catch(() => {});
-      return { status: 502, value: message("Its branch couldn't be made.") };
+      // (Most often a prefix git can't use there: `me/` beside a branch named `me`.)
+      return { status: 502, value: message(prefix ? `A branch starting with “${prefix}” couldn’t be made in this repository. Change the branch prefix in Settings › Git, then try again.` : "Its branch couldn't be made.") };
     }
     // The prefix it was made with, kept for a client that gives none, once a branch with it was made.
     if (prefix !== kept) writePrivate(BRANCH_PREFIX_FILE, JSON.stringify({ branchPrefix: prefix }));
@@ -246,8 +254,11 @@ export async function answerWorktrees(method: string, requestPath: string, body:
   const tree = list.find(each => each.root === body?.path);
   if (!tree) return { status: 404, value: message("That worktree isn't on this machine any more.") };
   if (route === "kuvo/worktrees/remove") {
-    // Not while an agent works there; with changes not committed only when they're to go.
-    const { sessions, active } = await sessionsHere(engine, signal);
+    // Not while an agent works there (nor while that can't be told); with changes not committed
+    // only when they're to go.
+    const here = await sessionsHere(engine, signal, bridge);
+    if (!here) return { status: 503, value: message(engine?.port ? `It couldn't be told whether an agent is working in the worktree of ${tree.branch}, so it stays. Try again in a moment.` : `The engine isn't running, so the worktree of ${tree.branch} stays. Try again once it's started.`) };
+    const { sessions, active } = here;
     if (sessions.some(session => inside(session.location?.directory ?? session.directory, tree.root) && active.has(session.id))) {
       return { status: 409, value: message(`An agent is still working in the worktree of ${tree.branch}, so it stays. Stop it first, then remove the worktree.`) };
     }
@@ -260,9 +271,22 @@ export async function answerWorktrees(method: string, requestPath: string, body:
       return { status: 409, value: message(`The worktree of ${tree.branch} has changes that aren’t committed, so it stays. Commit them, or remove it in Settings › Worktrees, which throws them away.`) };
     }
     if (!engine?.port) return { status: 503, value: message("The engine isn't running.") };
+    const gone = !fs.existsSync(tree.root);
+    // Commits on no branch (an agent stopped mid-rebase, say): kept on a branch of their own, as
+    // its branch's are.
+    const head = gone || gitIn(tree.root, ["symbolic-ref", "--quiet", "HEAD"]) !== null ? null : gitIn(tree.root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+    if (head && !gitIn(tree.root, ["for-each-ref", "--contains", head, "--format=%(refname)", "refs/heads"])) {
+      const kept = freeBranch(tree.root, `${tree.branch}-kept`);
+      if (!kept || gitIn(tree.root, ["branch", kept, head]) === null) return { status: 409, value: message(`The worktree of ${tree.branch} has commits on no branch, and they couldn’t be kept on one, so it stays.`) };
+    }
     try {
-      const id = await projectOf(engine, tree.project, signal);
-      await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: tree.root, force: discard }, signal, tree.project);
+      if (gone) {
+        // Its folder deleted by hand: the engine won't remove what isn't there, so git forgets it.
+        if (fs.existsSync(tree.project)) gitIn(tree.project, ["worktree", "prune"]);
+      } else {
+        const id = await projectOf(engine, tree.project, signal);
+        await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: tree.root, force: discard }, signal, tree.project);
+      }
     } catch (error) {
       return { status: 502, value: message((error as Error | null)?.message ?? String(error)) };
     }

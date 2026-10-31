@@ -9,11 +9,12 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-shells-"));
 process.env.KUVO_HOME = home;
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+removeAtEnd(home);
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // A server that runs commands, `running` by id: what it was asked to remove.
@@ -31,7 +32,7 @@ async function runner(running) {
     return json(200, { data: { id, status: "running" } });
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  after(() => server.close());
+  atEnd(() => server.close());
   return { removed, target: { port: server.address().port, password: "pw" } };
 }
 

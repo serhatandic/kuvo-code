@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import "./at-end.js";
 
 const repo = fileURLToPath(new URL("../../../../", import.meta.url));
 const protocol = fs.readFileSync(path.join(repo, "Packages/KuvoLink/PROTOCOL.md"), "utf8");

@@ -30,6 +30,7 @@ import { Turn, type Outcome } from "./turn"
 import type { AssistantMessage, Attachment, Decision, FormAnswer, FormRequest, Message, ModelRef, PermissionRequest, PermissionRule, Session, ShellMessage, FileDiff, StructuredError } from "./wire"
 import { plain } from "./proc"
 import type { Snapshots } from "./snapshots"
+import { AGENTS_TEXT_BYTES } from "../shared/text"
 import { noTokens } from "./wire"
 
 type Delivery = "steer" | "queue"
@@ -2680,7 +2681,7 @@ function mime(uri: string): string {
 }
 
 /** How much of a text file you attach goes in the message. */
-const textFileLimit = 200_000
+const textFileLimit = AGENTS_TEXT_BYTES
 
 /** Text files you attached, in the message (as the engine puts them), and the other files. */
 export function withTextFiles(text: string, files: PromptFile[]): { text: string; files: PromptFile[] } {

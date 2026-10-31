@@ -15,7 +15,21 @@ final class AppModel {
         case failed(String)
     }
 
-    private(set) var engine = EngineState.preparing
+    private(set) var engine = EngineState.preparing {
+        didSet {
+            if engine == .ready { engineWentDown = false } else if case .failed = engine { engineWentDown = true }
+        }
+    }
+    /// It stopped after running, or couldn't start, and isn't back yet (starting over by itself or
+    /// from Try Again meanwhile): what needs it, like a sign-in, can't work until it is.
+    var engineIsDown: Bool {
+        #if DEBUG
+        // KUVO_DEMO_ENGINE_STOPPED: said stopped over the accounts, for a look at it.
+        if ProcessInfo.processInfo.environment["KUVO_DEMO_ENGINE_STOPPED"] != nil { return true }
+        #endif
+        return engineWentDown && engine != .ready
+    }
+    private var engineWentDown = false
     private(set) var api: OpenCodeAPI?
     /// False while the live event feed is down (the UI shows it, and re-syncs after).
     private(set) var isLive = false
@@ -88,6 +102,9 @@ final class AppModel {
     /// This Mac's worktrees and projects followed from its box, once started.
     @ObservationIgnored private var boxFollowed: Task<Void, Never>?
     @ObservationIgnored private var agentsActivation: (any NSObjectProtocol)?
+    /// This Mac's bridge connected before the stores were told of each other: its group chats
+    /// are read once they are.
+    @ObservationIgnored private var chatsWaitForStores = false
     /// Your time zone and how you write dates, followed for this Mac's group chats.
     @ObservationIgnored private var clockObservers: [any NSObjectProtocol] = []
     /// This Mac's engine settings, for Settings, as its box keeps them (in the engine's settings
@@ -250,7 +267,9 @@ final class AppModel {
 
     private var eventTask: Task<Void, Never>?
     /// The engine had been running when it failed (it stopped, rather than couldn't start).
-    private(set) var engineStoppedWhileRunning = false
+    private(set) var engineStoppedWhileRunning = false {
+        didSet { if engineStoppedWhileRunning { engineWentDown = true } }
+    }
     /// This start of the engine, new with each start and each stop: an earlier engine's exit,
     /// coming in late as it stops, isn't taken for this one's, and a start that was stopped or
     /// started over while it waited gives up.
@@ -297,6 +316,15 @@ final class AppModel {
         moves.app = self
         // What this Mac's box says is moving, as it changes.
         Task { [moves] in await moves.follow() }
+        // This Mac's bridge connected before now, when its group chats couldn't be read: read now,
+        // after what's moving there (a chat moving away isn't taken for gone).
+        if chatsWaitForStores {
+            chatsWaitForStores = false
+            Task { [moves, boxGroups] in
+                await moves.reload(BoxClient.mac)
+                await boxGroups.connected(nil)
+            }
+        }
         workspace.onMovedToAgents = { [weak self] from, to in await self?.movedToAgents(from: from, to: to) ?? false }
         workspace.onBotToAgents = { [weak self] id, model in try await self?.bots.moveToAgents(session: id, model: model) }
         workspace.runsOnAgents(bots.agentSessionIDs)
@@ -402,12 +430,17 @@ final class AppModel {
         var downloaded = false
         do {
             async let environment = ShellEnvironment.load()
-            let binary: URL
+            let binary: URL?
             if let override = Self.engineOverride {
                 binary = URL(filePath: override)
             } else if let installed = await Task.detached(operation: { [installer] in installer.installed() }).value {
                 // Checking its signature reads all of it, a second or so: off the main thread.
                 binary = installed
+            } else if KeeperRecord.read()?.isOtherVersion == true {
+                // An older keeper making way for this version's runs the engine it came with, which
+                // a download here would take away (one keeps only its own version): the keeper that
+                // replaces it downloads this version's.
+                binary = nil
             } else {
                 engine = .downloading(progress: 0)
                 downloaded = true
@@ -536,18 +569,24 @@ final class AppModel {
     @ObservationIgnored private(set) lazy var ownBox = MacBoxRunner(box: box, agents: agents, host: host)
     /// This Mac's keeper's box, followed: nil while the app runs its own.
     private(set) var keeperBox: KeeperFollower?
+    /// The keeper running now is an older app's, making way for this one's the first moment nothing
+    /// is under way (a running session is never stopped for an update): until then the app follows
+    /// it, and Settings › General and the menu bar's card say the update waits.
+    private(set) var keeperMakesWay = false
 
     /// Whether quitting leaves this Mac's work going (the keeper runs it): Quit takes Kuvo Code to
     /// the menu bar (`InBackground`), and Stop Background Work is there.
     /// The keeper's turned on while the app ran its own box counts too: the app's goes on in the
     /// menu bar until it quits for real, and the keeper takes over then.
-    /// Switched off in Login Items & Extensions, it's off at once, keeper followed or not.
+    /// Switched off in Login Items & Extensions, it's off at once, keeper followed or not; and so
+    /// is one launchd couldn't start this time, or a demo's, test's or measurement's copy's.
     var keepsWorkingAfterQuit: Bool {
         #if DEBUG
         // A test's keeper, followed without asking macOS.
         if keeperBox != nil, ProcessInfo.processInfo.environment["KUVO_KEEPER"] == "follow" { return true }
         #endif
-        return BackgroundWork.shared.state == .on
+        let work = BackgroundWork.shared
+        return work.state == .on && work.registersHere && !work.didntStart
     }
     /// The own box was started this launch (restarting it is starting its engine over).
     @ObservationIgnored private var ownBoxStarted = false
@@ -563,9 +602,16 @@ final class AppModel {
             follower.onEngine = { [weak self] state in self?.boxEngineChanged(state) }
             follower.onKeeper = { [weak self] in Task { await self?.tellKeeper() } }
             follower.onGone = { [weak self] in self?.keeperGone() }
+            follower.onMakingWay = { [weak self] makingWay in self?.keeperMakesWay = makingWay }
             host.tellsBox = false
+            // The keeper keeps this Mac awake while agents work, so the app holds nothing besides.
+            Awake.shared.keeper = { (try? await KeeperControl.send(.status))?["awake"] as? Bool ?? false }
             keeperBox = follower
-            await follower.start()
+            if !(await follower.start()) {
+                keeperBox = nil
+                Awake.shared.keeper = nil
+                host.tellsBox = true
+            }
         }
         if let keeperBox { return try await keeperBox.ready() }
         if !ownBoxStarted {
@@ -595,6 +641,9 @@ final class AppModel {
         log.notice("Background work is off: this Mac's box runs in the app")
         keeperBox.stop()
         self.keeperBox = nil
+        keeperMakesWay = false
+        // The app keeps this Mac awake itself now, while it runs the box.
+        Awake.shared.keeper = nil
         box.unfollow()
         agents.unfollow()
         host.tellsBox = true
@@ -696,10 +745,13 @@ final class AppModel {
         NSApplication.shared.terminate(nil)
     }
 
-    /// The app quits: its own box stops with it; the keeper's goes on.
+    /// The app quits: its own box stops with it; the keeper's goes on, and keeps this Mac awake
+    /// while agents work there.
     func stopBox() {
         keeperBox?.stop()
         if keeperBox == nil { ownBox.stop() }
+        Awake.shared.agentsWork(false)
+        Awake.shared.keeper = nil
     }
 
     /// This Mac's settings read from its box and brought up to date (integrations' and servers'
@@ -752,7 +804,7 @@ final class AppModel {
 
     /// The coding agents' bridge, as this Mac's box runs it (`MacBoxRunner`): what it says reaches the
     /// window's stores. Wired once; the bridge stays up through the engine's restarts.
-    private func followAgents() {
+    func followAgents() {
         workspace.agents = agents
         catalog.outsideAgents = agents
         usage.follow(catalog)
@@ -770,11 +822,14 @@ final class AppModel {
             self?.boxGroups.disconnected(nil)
         }
         agents.onConnected = { [weak self] in
-            Task {
-                // This Mac's group chats first: they're what shows from the cache meanwhile.
-                await self?.boxGroups.connected(nil)
-                await self?.catalog.refreshAgents()
-                await self?.workspace.refreshAgents()
+            Task { [weak self] in
+                guard let self else { return }
+                // This Mac's group chats first: they're what shows from the cache meanwhile. Up
+                // before this Mac's engine (it usually is), they're read once the stores are told
+                // of each other (`wireStores`).
+                if boxGroups.app == nil { chatsWaitForStores = true } else { await boxGroups.connected(nil) }
+                await catalog.refreshAgents()
+                await workspace.refreshAgents()
             }
         }
         // Your time zone or how you write dates changed: meetings go by the new ones.

@@ -68,6 +68,12 @@ struct StorageSettings: View {
                 }
             } header: {
                 Text("This Mac")
+            } footer: {
+                // Each machine keeps its own, which this page can't measure yet.
+                if !app.machines.list.isEmpty {
+                    Text(Self.machinesNote)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section {
@@ -162,10 +168,10 @@ struct StorageSettings: View {
                 }
                 LabeledContent {
                     Button("Delete…") { confirmingDownloads = true }
-                        .disabled((report?.linuxEngine ?? 0) == 0)
+                        .disabled((report?.linuxEngine ?? 0) == 0 || machineInstalling)
                 } label: {
                     Text("Downloads for machines")
-                    Text("The Linux engine and browser, kept to set up another machine without downloading them again.")
+                    Text(machineInstalling ? "A machine is being set up with them now." : "The Linux engine and browser, kept to set up another machine without downloading them again.")
                 }
             } header: {
                 Text("Files You Can Delete")
@@ -197,12 +203,26 @@ struct StorageSettings: View {
         }
         .confirmationDialog("Delete the downloads for machines?", isPresented: $confirmingDownloads) {
             Button("Delete", role: .destructive) {
-                try? FileManager.default.removeItem(at: StorageReport.linuxEngineFolder)
-                try? FileManager.default.removeItem(at: MachineBrowser.cache)
-                Task { await load() }
+                let folders = [StorageReport.linuxEngineFolder, MachineBrowser.cache]
+                Task {
+                    // Often hundreds of MB: not on the main thread.
+                    await Task.detached { for folder in folders { try? FileManager.default.removeItem(at: folder) } }.value
+                    await load()
+                }
             }
         } message: {
             Text("Machines you’ve added keep their engine and browser. A new one downloads them again.")
+        }
+    }
+
+    static let machinesNote = "Only this Mac. A machine’s sessions and logs aren’t shown here yet."
+
+    /// A machine being set up reads the downloads meanwhile: they stay until it's done.
+    private var machineInstalling: Bool {
+        app.machines.engines.values.contains { engine in
+            if engine.connection == .installing { return true }
+            if case .installing = engine.browser.setup { return true }
+            return false
         }
     }
 
@@ -254,10 +274,13 @@ struct StorageSettings: View {
         await loadMade(keepsFailure: true)
     }
 
+    /// This Mac's measured beside what agents made on the picked computer: a machine slow to
+    /// answer, or away, doesn't hold this Mac's numbers back.
     private func load() async {
-        await loadMade()
+        async let madeLoaded: Void = loadMade()
         let worktrees = Array(Set(workspace.worktrees.values.map(\.root))).filter { !RemoteFolder.isRemote($0) }
         report = await Task.detached { StorageReport.measure(worktrees: worktrees) }.value
+        await madeLoaded
     }
 
     static func format(_ bytes: Int64) -> String {
@@ -283,6 +306,8 @@ private struct StorageBar: View {
         .frame(height: 14)
         .background(.quaternary)
         .clipShape(.capsule)
+        // Each part is listed beside it, with its size.
+        .accessibilityHidden(true)
     }
 }
 
@@ -434,6 +459,8 @@ private struct OldSessions: View {
     @State private var days = 90
     @State private var keepsPinned = true
     @State private var isDeleting = false
+    /// Why some couldn't be deleted, the last time: they stay listed.
+    @State private var failure: String?
 
     /// This Mac's sessions, not a machine's, unused for the chosen time. Not a bot's conversation
     /// (the bot lives on in it, wake-ups and all, however long it's been quiet), nor one with a
@@ -475,18 +502,35 @@ private struct OldSessions: View {
                     .foregroundStyle(.secondary)
             }
         } footer: {
-            EditorFooter(primary: old.isEmpty ? "Delete Sessions" : "Delete " + old.count.counting("Session"), canDoPrimary: !old.isEmpty, onPrimary: delete, isDestructive: true,
-                         onCancel: done, working: isDeleting ? "Deleting…" : nil)
+            VStack(alignment: .leading, spacing: 10) {
+                if let failure {
+                    Text(failure)
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                EditorFooter(primary: old.isEmpty ? "Delete Sessions" : "Delete " + old.count.counting("Session"), canDoPrimary: !old.isEmpty && !isDeleting, onPrimary: delete,
+                             isDestructive: true, onCancel: done, working: isDeleting ? "Deleting…" : nil)
+            }
         }
     }
 
+    /// Back to Storage once they're all gone; any that couldn't be stay listed here, and why is said.
     private func delete() {
         isDeleting = true
+        failure = nil
         let ids = old.map(\.id)
         Task {
-            for id in ids { await workspace.delete(id) }
+            var failed: [Error] = []
+            for id in ids {
+                do { try await workspace.delete(id) } catch { failed.append(error) }
+            }
             isDeleting = false
-            done()
+            if let first = failed.first {
+                failure = "Couldn’t delete \(failed.count.counting("session")): \(first.localizedDescription)"
+            } else {
+                done()
+            }
         }
     }
 }
