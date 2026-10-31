@@ -574,7 +574,7 @@ class ClaudeThread implements Thread {
     // What the app adds to its instructions changed (a worktree, the project's folders), or Claude
     // Code was updated: it starts again, going on with the same conversation. (Run whole in the
     // box's sandbox, through the relay, the one way out of it to them.)
-    const tools = fenceOn() ? relayedTools(this.session.id) : kuvoTools(this.session.id)
+    const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
     // Settings › Skills' skills, as a plugin of its own (but those it reads itself).
     const skills = skillsFolder(await skillsFor(this.session.location.directory, this.agent.ownSkillFolders(this.session.location.directory), turnedOff(hooks)))
     // So does it when the box's sandbox was turned on or off, or its rules changed.
@@ -800,7 +800,7 @@ class ClaudeThread implements Thread {
     // commands, its hooks and MCP servers (yours, and a project's).
     const whole = this.whole(skills)
     this.input = new Queue()
-    const tools = fenceOn() ? relayedTools(this.session.id) : kuvoTools(this.session.id)
+    const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
     this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() }
     this.query = sdk.query({
       prompt: this.input,
@@ -841,7 +841,7 @@ class ClaudeThread implements Thread {
     this.sandboxedNow = fenceOn() || undefined
     if (!this.sandboxedNow) return undefined
     const directory = this.session.location.directory
-    const relayed = relayedTools(this.session.id)
+    const relayed = relayedTools(this.session.id, this)
     const attached = fenceAttachments(directory)
     const settings = this.agent.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
     // (On a machine, the script that gives its commands the machine's own folders back, in Kuvo Code's.)
@@ -1511,7 +1511,7 @@ class ClaudeThread implements Thread {
     this.input = undefined
     this.leftRunning()
     // Its key to its tools through the relay goes with it.
-    if (this.sandboxedNow) dropRelayed(this.session.id)
+    if (this.sandboxedNow) dropRelayed(this.session.id, this)
   }
 
   /** What it left running ends with it. */

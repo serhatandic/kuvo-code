@@ -268,7 +268,7 @@ export class CodexAgent implements Agent {
   private fenced(directory: string, sessionID?: string) {
     const skills = skillsRoot()
     if (skills) mkdirSync(skills, { recursive: true, mode: 0o700 })
-    const relayed = sessionID ? relayedTools(sessionID) : undefined
+    const relayed = sessionID ? relayedTools(sessionID, this) : undefined
     const homes = [this.home, ...(this.instance.home && !onMachine ? [this.yourCodex] : [])]
     // The files you attach in the session, copied where only the box writes (`fenceCopy`).
     const attached = sessionID ? fenceAttachments(directory) : undefined
@@ -336,7 +336,7 @@ export class CodexAgent implements Agent {
     server.kill()
     for (const thread of this.threads.values()) thread.serverStopped(server)
     // Its Kuvo Code tools' program too (started again with it).
-    if (key !== SHARED && key !== ACCOUNT) dropRelayed(key)
+    if (key !== SHARED && key !== ACCOUNT) dropRelayed(key, this)
   }
 
 
@@ -647,7 +647,7 @@ export class CodexAgent implements Agent {
     for (const [spawn, owner] of this.spawned) if (owner === thread) this.spawned.delete(spawn)
     this.stop(sessionID)
     this.slots.delete(sessionID)
-    dropRelayed(sessionID)
+    dropRelayed(sessionID, this)
   }
 }
 
@@ -857,7 +857,7 @@ class CodexThread implements Thread {
     const instructions = hooks.instructions() || null
     // Loaded again with what the app adds to its instructions, when that changed. (In the box's
     // sandbox, through the bridge's relay: the sandbox hides where they are.)
-    const tools = fenced ? relayedTools(this.session.id) : kuvoTools(this.session.id)
+    const tools = fenced ? relayedTools(this.session.id, this.agent) : kuvoTools(this.session.id)
     // Settings › Skills' skills, as extra ones (but those it reads itself), and those of its own
     // you turned off, off for this thread.
     const directory = this.session.location.directory

@@ -366,7 +366,7 @@ export class AcpThread implements Thread {
     if (!whole || !fenceRules()) return undefined
     const directory = this.session.location.directory
     const attached = fenceAttachments(directory)
-    const relayed = relayedTools(this.session.id)
+    const relayed = relayedTools(this.session.id, this)
     const started = cleanEnv ? (env ?? {}) : { ...process.env, ...env }
     const fence = fenceAgent(argv[0], directory, {
       homes: whole.homes(started),
@@ -381,7 +381,7 @@ export class AcpThread implements Thread {
 
   /** Kuvo Code's own tools, for an agent that takes MCP servers over HTTP (through the relay, run whole in the sandbox). */
   private mcpServers(init: any): unknown[] {
-    const tools = this.fenced ? relayedTools(this.session.id) : kuvoTools(this.session.id)
+    const tools = this.fenced ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
     if (!tools || (tools.kind === "http" && !init?.agentCapabilities?.mcpCapabilities?.http)) return []
     // Their names and arguments, to know their calls when they come.
     void loadKuvoTools()
@@ -996,7 +996,7 @@ export class AcpThread implements Thread {
     this.rpc?.kill()
     this.rpc = undefined
     // Its key to Kuvo Code's tools goes with it (a new one for the next).
-    if (this.fenced) dropRelayed(this.session.id)
+    if (this.fenced) dropRelayed(this.session.id, this)
     this.fenced = false
   }
 }
