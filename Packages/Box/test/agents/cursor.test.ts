@@ -634,7 +634,8 @@ describe.skipIf(!canFence)("Cursor in the box's sandbox", () => {
     await send(opened, id, "again")
     expect(idles(opened, id).at(-1)?.outcome).toBe("succeeded")
     expect(words(opened, id)).toBe("project=yes")
-  })
+    // (Two starts of Cursor in the sandbox: real work, slow on a loaded Mac.)
+  }, 30_000)
 
   test("with the sandbox off, it runs as before: in the bridge, in Cursor's own sandbox", async () => {
     delete process.env.KUVO_FENCE
