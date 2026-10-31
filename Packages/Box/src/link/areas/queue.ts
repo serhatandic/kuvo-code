@@ -38,8 +38,12 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
   }
   if (item && !now) {
     if (method !== "DELETE") return yield* json(405, {});
-    if (!dropWaiting(session, decodeURIComponent(item))) return yield* json(404, { message: "That message isn't waiting any more." });
-    return yield* json(200, shownQueue(queueOf(session)));
+    const dropped = dropWaiting(session, decodeURIComponent(item));
+    if (!dropped) return yield* json(404, { message: "That message isn't waiting any more." });
+    // What it was, whole, for Undo to add back as it was (`queue/add` with `kept`).
+    const { from, text: words } = dropped.shown;
+    const removed = dropped.message ? { ...dropped.message, ...(from ? { from } : {}), words } : undefined;
+    return yield* json(200, { ...shownQueue(queueOf(session)), ...(removed ? { removed } : {}) });
   }
   if (method !== "POST") return yield* json(405, {});
   const place = await placeOfSession(session, targetsOf({ readEngine, bridge })).catch(() => undefined);
@@ -65,6 +69,7 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
 // A client's own message for the queue (Undo, or one sent after this run while it's paused): its
 // files kept on the box as a message's are (`attachedIn`), then waiting there while the queue is
 // paused, else to the engine as it asked. `{id?, text, files?, delivery?, from?}`; `waits` says which.
+// `kept`: one a DELETE gave back (Undo), as it was kept already, shown with its `words`.
 async function* add({ request, bridge, json, signal }: RouteContext, target: Target, session: string): AsyncGenerator<AnswerPiece> {
   const given = parsed(request.body);
   if (!isObject(given) || typeof given.text !== "string" || (!given.text.trim() && !(Array.isArray(given.files) && given.files.length))) return yield* json(400, { message: "Send {\"text\": …}." });
@@ -74,9 +79,11 @@ async function* add({ request, bridge, json, signal }: RouteContext, target: Tar
   const base = new URL(`http://127.0.0.1:${target.port}/`);
   const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
   const toAgents = bridge()?.port === target.port;
-  const body = await attachedIn(Buffer.from(JSON.stringify({ id, text: given.text, ...(Array.isArray(given.files) ? { files: given.files } : {}), delivery })), session, modelInput(base, headers, signal), request.fromMac === true, !toAgents);
+  const asGiven = Buffer.from(JSON.stringify({ id, text: given.text, ...(Array.isArray(given.files) ? { files: given.files } : {}), delivery }));
+  const body = given.kept === true ? asGiven : await attachedIn(asGiven, session, modelInput(base, headers, signal), request.fromMac === true, !toAgents);
   const message = parsed(body) as { id: string; text: string; files?: unknown[]; delivery: "steer" | "queue" };
-  if (keepWaiting(session, message, { from })) return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
+  const words = given.kept === true && typeof given.words === "string" ? given.words : undefined;
+  if (keepWaiting(session, message, { from, words })) return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
   await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message);
   return yield* json(200, { ...shownQueue(queueOf(session)), waits: false });
 }

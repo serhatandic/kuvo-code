@@ -578,7 +578,10 @@ the same for every client and with none connected, and keeps them in `run/queues
   message for the queue (Undo, or one sent after this run), its files kept on the box as a
   message's are; while it's paused it waits on the box (`from` names who it was from, for one put
   back), else it goes to the engine as asked (`queue` by default); its answer says which,
-  `waits: true|false`. `DELETE …/queue/<item>`: one waiting on the box taken away; 404 if it isn't. Each answers the queue as it is
+  `waits: true|false`. `DELETE …/queue/<item>`: one waiting on the box taken away, its answer
+  carrying it as it was, `removed: {id, text, files?, delivery, from?, words}` (`words`, as it was
+  shown); 404 if it isn't. Undo adds it back with `…/queue/add` and `kept: true` (its body as it
+  was kept, its files not kept again, shown with its `words`). Each answers the queue as it is
   now; 404 for no such session here, 503 with no engine, 502 when the engine refused.
 - Clients show what's held and whether it's paused from these; the in-flight record of a message
   still on its way (and that Stop held it) stays with the client that sends it, which waits for its

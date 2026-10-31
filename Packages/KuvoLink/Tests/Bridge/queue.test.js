@@ -357,6 +357,21 @@ test("paused, the queue stays so once what waited is taken away: what arrives af
   assert.equal((await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_late", text: "One more thing." })).json.waits, true);
 });
 
+test("Undo puts one taken away from what waits back as it was: its whole words, who it's from, and how it was shown", async () => {
+  inboxes.ses_1 = [];
+  await ask("POST", "kuvo/sessions/ses_1/stop");
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w1", text: "From Ada: the build is green.", from: "Ada" });
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w2", text: "Second." });
+  const { removed } = (await ask("DELETE", "kuvo/sessions/ses_1/queue/msg_w1")).json;
+  assert.deepEqual(removed, { id: "msg_w1", text: "From Ada: the build is green.", delivery: "queue", from: "Ada", words: "From Ada: the build is green." });
+  const back = await ask("POST", "kuvo/sessions/ses_1/queue/add", { ...removed, words: "the build is green.", kept: true });
+  assert.equal(back.json.waits, true);
+  assert.deepEqual(back.json.waiting.map(each => [each.id, each.from ?? null, each.text]), [["msg_w2", null, "Second."], ["msg_w1", "Ada", "the build is green."]]);
+  assert.deepEqual(prompted, [], "nothing reached the engine");
+  await ask("POST", "kuvo/sessions/ses_1/queue/msg_w1/now");
+  assert.deepEqual(prompted.map(each => [each.id, each.text]), [["msg_w1", "From Ada: the build is green."]], "whole, as it would have gone");
+});
+
 test("Send Now sends one waiting on the box at once, the queue going again; one taken away doesn't go", async () => {
   inboxes.ses_1 = [];
   running.add("ses_1");

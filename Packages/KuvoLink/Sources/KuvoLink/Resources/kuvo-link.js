@@ -871,7 +871,7 @@ function takeWaiting(session, item, resume = false) {
   return { shown, message };
 }
 function dropWaiting(session, item) {
-  return takeWaiting(session, item) !== null;
+  return takeWaiting(session, item);
 }
 async function drain(target, session) {
   if (queueOf(session).paused || await isRunning(target, session))
@@ -17945,9 +17945,12 @@ async function* queueRoute(context, match) {
   if (item && !now) {
     if (method !== "DELETE")
       return yield* json(405, {});
-    if (!dropWaiting(session, decodeURIComponent(item)))
+    const dropped = dropWaiting(session, decodeURIComponent(item));
+    if (!dropped)
       return yield* json(404, { message: "That message isn't waiting any more." });
-    return yield* json(200, shownQueue(queueOf(session)));
+    const { from, text: words } = dropped.shown;
+    const removed = dropped.message ? { ...dropped.message, ...from ? { from } : {}, words } : undefined;
+    return yield* json(200, { ...shownQueue(queueOf(session)), ...removed ? { removed } : {} });
   }
   if (method !== "POST")
     return yield* json(405, {});
@@ -17987,9 +17990,11 @@ async function* add({ request, bridge, json, signal }, target, session) {
   const base = new URL(`http://127.0.0.1:${target.port}/`);
   const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
   const toAgents = bridge()?.port === target.port;
-  const body = await attachedIn(Buffer.from(JSON.stringify({ id, text: given.text, ...Array.isArray(given.files) ? { files: given.files } : {}, delivery })), session, modelInput(base, headers, signal), request.fromMac === true, !toAgents);
+  const asGiven = Buffer.from(JSON.stringify({ id, text: given.text, ...Array.isArray(given.files) ? { files: given.files } : {}, delivery }));
+  const body = given.kept === true ? asGiven : await attachedIn(asGiven, session, modelInput(base, headers, signal), request.fromMac === true, !toAgents);
   const message = parsed(body);
-  if (keepWaiting(session, message, { from }))
+  const words = given.kept === true && typeof given.words === "string" ? given.words : undefined;
+  if (keepWaiting(session, message, { from, words }))
     return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
   await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message);
   return yield* json(200, { ...shownQueue(queueOf(session)), waits: false });

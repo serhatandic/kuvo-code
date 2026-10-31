@@ -210,9 +210,10 @@ function takeWaiting(session: string, item?: string, resume = false): { shown: W
   return { shown, message };
 }
 
-/** One taken away from what waits on the box (Remove, or Edit): false when it isn't there. */
-export function dropWaiting(session: string, item: string): boolean {
-  return takeWaiting(session, item) !== null;
+/** One taken away from what waits on the box (Remove, or Edit): how it was shown and what would
+ * have gone (for Undo to put back as it was); null when it isn't there. */
+export function dropWaiting(session: string, item: string): ReturnType<typeof takeWaiting> {
+  return takeWaiting(session, item);
 }
 
 /** `session`'s next waiting message started, unless its queue is paused or a run is under way: a
