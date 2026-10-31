@@ -1,3 +1,4 @@
+import ClientSandbox
 import Foundation
 
 /// Why a box can't work on a bot's goal on its own, for the row on the goal's card: what its
@@ -12,6 +13,8 @@ enum GoalSandbox {
         var able: Bool?
         /// The coding agents' own commands are in it too.
         var agents: Bool?
+        /// One of their processes started before it was on, and still runs outside it.
+        var outside: Bool?
         var reason: String?
         var action: String?
         /// The box's route that does the action: "POST kuvo/sandbox/check".
@@ -20,12 +23,13 @@ enum GoalSandbox {
         var check: String?
         var failures: Int?
 
-        init(on: Bool, why: String? = nil, able: Bool? = nil, agents: Bool? = nil, reason: String? = nil, action: String? = nil,
+        init(on: Bool, why: String? = nil, able: Bool? = nil, agents: Bool? = nil, outside: Bool? = nil, reason: String? = nil, action: String? = nil,
              route: String? = nil, needs: String? = nil, check: String? = nil, failures: Int? = nil) {
             self.on = on
             self.why = why
             self.able = able
             self.agents = agents
+            self.outside = outside
             self.reason = reason
             self.action = action
             self.route = route
@@ -60,6 +64,8 @@ enum GoalSandbox {
         case editBot
         /// Read again.
         case readAgain
+        /// The agents started before the sandbox, restarted in it (`POST kuvo/sandbox/restart`).
+        case restartAgents
     }
 
     struct Button: Equatable {
@@ -93,18 +99,14 @@ enum GoalSandbox {
     }
 
     /// The row for a goal that can't run alone on `computer` ("This Mac", or a machine's name).
-    /// `agent`: the coding agent the bot runs on ("Claude Code"), nil for one on the engine. None
-    /// where there's nothing to fix: the sandbox is on. It's always on; a box reports it not on with
-    /// no reason only while it's switched off for the rollout, with nothing here to press.
-    static func row(_ reading: Reading?, computer: String, onThisMac: Bool, bot: String, agent: String?) -> Row? {
+    /// `agent`: the coding agent the bot runs on ("Claude Code"), nil for one on the engine; its
+    /// commands are in the sandbox too, once none of its processes started before it still runs
+    /// (`restarting`: you said to restart them). None where there's nothing to fix: the sandbox is
+    /// on. It's always on; a box reports it not on with no reason only while it's switched off for
+    /// the rollout, with nothing here to press.
+    static func row(_ reading: Reading?, computer: String, onThisMac: Bool, bot: String, agent: String?, restarting: Bool = false) -> Row? {
         let cant = "\(computer) can’t work on its own yet"
         let withYou = "Until then, \(bot) works while you’re here."
-        // A coding agent's commands aren't in the sandbox, whatever it says: the engine is the way.
-        if let agent, !coversAgents(reading) {
-            return Row(title: "\(bot) can’t work on its own yet",
-                       text: "\(bot) runs on \(agent), and the sandbox doesn’t cover \(agent)’s commands yet. \(bot) works while you’re here.",
-                       buttons: [Button(label: "Use the Engine…", action: .editBot)])
-        }
         guard let reading else {
             return Row(title: "Checking the sandbox…", text: "", buttons: [], checking: true)
         }
@@ -148,19 +150,23 @@ enum GoalSandbox {
         case "waiting":
             return Row(title: cant, text: "The engine hasn’t loaded the sandbox yet. \(withYou)", buttons: [restart])
         case nil where status.on:
-            return nil
+            // A box from before it said `agents` has none of theirs outside it.
+            guard let agent, status.agents == false else { return nil }
+            guard status.outside == true else {
+                return Row(title: "Checking the sandbox…", text: "\(bot) works while you’re here until it’s checked.", buttons: [], checking: true)
+            }
+            if restarting {
+                return Row(title: "Restarting \(agent) in the sandbox…", text: "It restarts once it finishes what it’s doing. \(bot) works while you’re here until then.", buttons: [], checking: true)
+            }
+            return Row(title: "\(agent) started before the sandbox",
+                       text: "It still runs outside it, so \(bot) works while you’re here. Restart it in the sandbox, and \(bot) works on its own.",
+                       buttons: [Button(label: SandboxRestart.restart, action: .restartAgents)])
         case nil:
             return Row(title: cant, text: "\(bot) works while you’re here.", buttons: [])
         default:
             // A reason this app doesn't know yet: the box's own words, and checking again.
             return Row(title: cant, text: [status.why, "\(bot) works while you’re here."].compactMap { $0 }.joined(separator: " "), buttons: [retry] + report(status))
         }
-    }
-
-    /// Whether the box's sandbox takes in the coding agents' own commands too.
-    private static func coversAgents(_ reading: Reading?) -> Bool {
-        if case .status(let status) = reading { return status.agents == true }
-        return false
     }
 
     /// Report a Problem, once a check has failed twice in a row.
@@ -199,9 +205,9 @@ extension GoalPlans {
     }
 
     /// A route of `box`'s sandbox (check again, fix, restart the engine).
-    func sandboxRoute(_ method: String, _ path: String, on box: String) async throws {
+    func sandboxRoute(_ method: String, _ path: String, body: [String: Bool] = [:], on box: String) async throws {
         guard let client = client(box) else { throw BoxRefusal(status: 503, message: "Its computer can’t be reached now.") }
-        let (status, data) = try await client.send(method, path, body: method == "GET" ? nil : Data("{}".utf8))
+        let (status, data) = try await client.send(method, path, body: method == "GET" ? nil : try JSONEncoder().encode(body))
         guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
     }
 }

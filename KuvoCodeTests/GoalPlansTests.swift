@@ -154,11 +154,21 @@ import Testing
         #expect(row(.old, false, nil)?.buttons == [.init(label: "Update lokum…", action: .updateMachine)])
         #expect(row(.old, true, nil)?.buttons == [.init(label: "Check for Updates…", action: .checkForUpdates)])
 
-        // A bot on a coding agent: the sandbox doesn't cover its commands, whatever the box says.
-        let agents = try #require(row(.status(.init(on: true, agents: false)), true, "Claude Code"))
-        #expect(agents.title == "Pixel can’t work on its own yet")
-        #expect(agents.text.contains("runs on Claude Code"))
-        #expect(agents.buttons == [.init(label: "Use the Engine…", action: .editBot)])
+        // A bot on a coding agent: its commands are in the sandbox as the engine's are, so the row
+        // is the box's own. Only one of its processes started before the sandbox, still running
+        // outside it, holds it back: restarted in it, as the box offers.
+        #expect(row(.status(.init(on: true, agents: true)), true, "Claude Code") == nil, "all in it: nothing to fix")
+        #expect(row(status("engineDown", "POST kuvo/engine/restart"), true, "Claude Code")?.buttons == [.init(label: "Restart Engine", action: .route(method: "POST", path: "kuvo/engine/restart"))])
+        let outside = try #require(row(.status(.init(on: true, agents: false, outside: true)), true, "Claude Code"))
+        #expect(outside.title == "Claude Code started before the sandbox")
+        #expect(outside.text == "It still runs outside it, so Pixel works while you’re here. Restart it in the sandbox, and Pixel works on its own.")
+        #expect(outside.buttons == [.init(label: "Restart Agents", action: .restartAgents)])
+        let restarting = try #require(GoalSandbox.row(.status(.init(on: true, agents: false, outside: true)), computer: "This Mac", onThisMac: true, bot: "Pixel", agent: "Claude Code", restarting: true))
+        #expect(restarting.checking && restarting.buttons.isEmpty, "restarting: it says so until the box has it in the sandbox")
+        #expect(row(.status(.init(on: true, agents: false)), true, "Claude Code")?.checking == true, "the agents bridge hasn't said yet: still checking")
+        for each in [outside, restarting, notOn, kernel] {
+            #expect(!"\(each.title) \(each.text)".contains("doesn’t cover"))
+        }
     }
 
     @Test func startSendsTheCardsSwitchesDeadlineAndChangedLimits() throws {
