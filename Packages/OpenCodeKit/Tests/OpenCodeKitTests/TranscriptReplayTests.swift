@@ -94,6 +94,102 @@ struct TranscriptReplayTests {
         #expect(!transcript.isStale)
     }
 
+    /// "Retrying (attempt 2)…" goes once the step it was for is over: stopped during the wait, or
+    /// the engine going on in a new step, as the engine's own reading of the conversation has it.
+    @Test func aRetryGoesWithItsStep() throws {
+        func event(_ number: Int, _ type: String, _ fields: String) throws -> ServerEvent {
+            try ServerEvent(json: Data(#"""
+            {"id":"evt_\#(number)","created":\#(number),"type":"\#(type)","data":{"sessionID":"ses_1",\#(fields)}}
+            """#.utf8))
+        }
+        func retries(_ transcript: Transcript) -> [String: Int] {
+            Dictionary(uniqueKeysWithValues: transcript.messages.compactMap { message in
+                if case .assistant(let step) = message, let retry = step.retry { (step.id, retry.attempt) } else { nil }
+            })
+        }
+        let waiting = try [
+            event(1, "session.execution.started", #""inputID":"in_1""#),
+            event(2, "session.step.started", #""assistantMessageID":"msg_1","agent":"build","model":{"id":"m","providerID":"p"}"#),
+            event(3, "session.retry.scheduled", #""assistantMessageID":"msg_1","attempt":2,"at":9000,"error":{"type":"overloaded","message":"Overloaded"}"#),
+        ]
+
+        var stopped = Transcript(sessionID: "ses_1")
+        for event in waiting { stopped.apply(event) }
+        #expect(retries(stopped) == ["msg_1": 2])
+        stopped.apply(try event(4, "session.execution.interrupted", #""reason":"user""#))
+        #expect(retries(stopped) == [:])
+
+        var goneOn = Transcript(sessionID: "ses_1")
+        for event in waiting { goneOn.apply(event) }
+        goneOn.apply(try event(4, "session.step.started", #""assistantMessageID":"msg_2","agent":"build","model":{"id":"m","providerID":"p"}"#))
+        #expect(retries(goneOn) == [:])
+    }
+
+    /// Instructions changed mid-conversation (a project's folders, say) and the engine's own notices
+    /// show as they happen, as reading the conversation has them: what changed, and what it's about.
+    @Test func noticesShowAsTheyHappenAsAReadHasThem() throws {
+        var transcript = Transcript(sessionID: "ses_1")
+        transcript.apply(try ServerEvent(json: Data(#"""
+        {"id":"evt_1","created":1,"type":"session.instructions.updated","metadata":{"by":"kuvo"},"data":{"sessionID":"ses_1","delta":{"kuvo/project-folders":"Also /src/web"},"text":"Folders: /src/web"}}
+        """#.utf8)))
+        transcript.apply(try ServerEvent(json: Data(#"""
+        {"id":"evt_2","created":2,"type":"session.instructions.updated","data":{"sessionID":"ses_1","delta":{"core/x":"y"}}}
+        """#.utf8)))
+        transcript.apply(try ServerEvent(json: Data(#"""
+        {"id":"evt_3","created":3,"type":"session.synthetic","data":{"sessionID":"ses_1","text":"Exited 0","description":"npm test","metadata":{"source":"shell","state":"completed","exit":0}}}
+        """#.utf8)))
+
+        guard transcript.messages.count == 2,
+              case .system(let instructions) = transcript.messages[0],
+              case .synthetic(let ended) = transcript.messages[1] else {
+            Issue.record("Expected the instructions' notice and the command's, got \(transcript.messages)")
+            return
+        }
+        #expect(instructions.id == "msg_1")
+        #expect(instructions.text == "Folders: /src/web")
+        #expect(instructions.description == "Instructions updated: kuvo/project-folders")
+        #expect(instructions.instructionSources == ["kuvo/project-folders"])
+        #expect(instructions.metadata?["by"]?.string == "kuvo")
+        #expect(ended.backgroundEnd == "Background command finished: npm test")
+    }
+
+    /// Stopped while it asks you something: the engine lets the ask go without a word, and its card
+    /// goes with the run. A subagent's ask stays while the subagent's own run goes on.
+    @Test func anAskGoesWithItsRun() throws {
+        func event(_ number: Int, _ type: String, _ data: String) throws -> ServerEvent {
+            try ServerEvent(json: Data(#"{"id":"evt_\#(number)","created":\#(number),"type":"\#(type)","data":{\#(data)}}"#.utf8))
+        }
+        var transcript = Transcript(sessionID: "ses_1")
+        transcript.helpers = ["ses_helper"]
+        transcript.asksEndWithRuns = true
+        transcript.apply(try event(1, "session.execution.started", #""sessionID":"ses_1","inputID":"in_1""#))
+        transcript.apply(try event(2, "permission.asked", #""id":"per_1","sessionID":"ses_1","action":"shell","resources":["npm test"]"#))
+        transcript.apply(try event(3, "permission.asked", #""id":"per_2","sessionID":"ses_helper","action":"shell","resources":["curl example.com"]"#))
+        transcript.apply(try event(4, "session.execution.interrupted", #""sessionID":"ses_1","reason":"user""#))
+        #expect(transcript.permissions.map(\.id) == ["per_2"])
+        transcript.apply(try event(5, "session.execution.failed", #""sessionID":"ses_helper","error":{"type":"aborted","message":"Aborted"}"#))
+        #expect(transcript.permissions.isEmpty)
+    }
+
+    /// A reply cut off (its stream broke, or it ran out of room) that the engine carries on: the
+    /// conversation says so in a few words, not with the engine's word to the model.
+    @Test func aReplyCarriedOnSaysSoPlainly() throws {
+        var transcript = Transcript(sessionID: "ses_1")
+        for (number, text) in [
+            (1, "The previous response was interrupted. Continue from where you left off without repeating completed content."),
+            (2, "Your last response hit the output token limit (stop reason: length). Do not apologize, recap, or repeat yourself. Break the remaining work into smaller pieces."),
+            (3, "Command `npm test` finished"),
+        ] {
+            transcript.apply(try ServerEvent(json: Data(#"""
+            {"id":"evt_\#(number)","created":\#(number),"type":"session.synthetic","data":{"sessionID":"ses_1","text":"\#(text)"}}
+            """#.utf8)))
+        }
+        let words: [String?] = transcript.messages.map { message in
+            if case .synthetic(let notice) = message { notice.carriedOn } else { nil }
+        }
+        #expect(words == ["The reply was cut off, so it carried on", "Hit the length limit for one reply, so it carried on", nil])
+    }
+
     /// The engine's own notice (a background command finished) waiting to go in when the
     /// conversation was read: it shows when it goes in, once, as one that waited while it was open does.
     @Test func aNoticeWaitingWhenReadShowsWhenItGoesIn() throws {

@@ -4725,10 +4725,12 @@ async function noticeFor(event, get) {
       return null;
   }
 }
-async function settleHeld(engine, hold) {
+async function settleHeld(engine, hold, only) {
   for (const entry of [...hold.held]) {
     const { request, requestSession, session } = entry.notice?.data ?? {};
     const kind = { permission: "permission", question: "form" }[entry.notice?.category];
+    if (only !== undefined && (requestSession ?? session) !== only)
+      continue;
     if (!kind || typeof request !== "string" || typeof (requestSession ?? session) !== "string" || (requestSession ?? session) === "global")
       continue;
     const asked = (await engineGet(engine, `api/session/${encodeURIComponent(requestSession ?? session)}/${kind}`).catch(() => null))?.data;
@@ -4739,6 +4741,7 @@ async function settleHeld(engine, hold) {
 var NEWS = new Set(["permission.asked", "form.created", "session.execution.succeeded", "session.execution.failed"]);
 var GROUP_NEWS = new Set(["kuvo.group.met", "kuvo.group.done"]);
 var ANSWERED = new Set(["permission.replied", "form.replied", "form.cancelled"]);
+var RUN_ENDS = new Set(["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"]);
 function groupNotice(event) {
   const data = event.data ?? {};
   if (typeof data.id !== "string")
@@ -11637,6 +11640,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
           continue;
         if (ANSWERED.has(event.type))
           answered(event.data?.requestID ?? event.data?.id);
+        if (RUN_ENDS.has(event.type) && hold && typeof event.data?.sessionID === "string")
+          await settleHeld(source, hold, event.data.sessionID).catch(() => {});
         if (!NEWS.has(event.type) && !GROUP_NEWS.has(event.type))
           continue;
         if (GROUP_NEWS.has(event.type)) {
@@ -18299,7 +18304,7 @@ import fs68 from "node:fs";
 import path70 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.140";
+var BRIDGE_VERSION = "0.9.141";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
