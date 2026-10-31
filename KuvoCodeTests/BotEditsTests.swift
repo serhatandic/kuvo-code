@@ -152,6 +152,7 @@ import Testing
         defer { done(machine) }
         app.bots.boxes = { box in box == "lab" ? machine.client : BoxClient(box: box, transport: LocalBox { _ in AsyncThrowingStream { $0.finish() } }) }
         app.bots.reachable = { $0 == "lab" }
+        app.bots.machineFollowPause = .zero
         let following = Task { await app.bots.follow("lab") }
         defer { following.cancel() }
         try await until { app.bots.bot("bot_ada000001") != nil }
