@@ -7246,6 +7246,7 @@
              "list": "string"
             },
             "resumes?": "number",
+            "until?": "number",
             "began?": "number",
             "ended?": "number"
            }
@@ -7402,6 +7403,7 @@
          "watching": {
           "list": "string"
          },
+         "next?": "number",
          "lastDigest?": {
           "object": {
            "at": "number",
@@ -7488,6 +7490,7 @@
              "list": "string"
             },
             "resumes?": "number",
+            "until?": "number",
             "began?": "number",
             "ended?": "number"
            }
@@ -7644,6 +7647,7 @@
          "watching": {
           "list": "string"
          },
+         "next?": "number",
          "lastDigest?": {
           "object": {
            "at": "number",
@@ -7749,6 +7753,7 @@
             "list": "string"
            },
            "resumes?": "number",
+           "until?": "number",
            "began?": "number",
            "ended?": "number"
           }
@@ -7905,6 +7910,7 @@
         "watching": {
          "list": "string"
         },
+        "next?": "number",
         "lastDigest?": {
          "object": {
           "at": "number",

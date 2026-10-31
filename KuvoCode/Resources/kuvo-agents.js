@@ -3429,6 +3429,9 @@ function line(text, limit = 140) {
   return first.length > limit ? first.slice(0, limit - 1).trimEnd() + "\u2026" : first;
 }
 
+// Packages/Box/src/shared/goals.ts
+var PAUSED_BY_YOU = "You paused it.";
+
 // Packages/Box/src/agents/goals.ts
 var unknownReset2 = 30 * 60000;
 var conditionLimit = 4000;
@@ -3523,7 +3526,7 @@ class Goals {
       goal.epoch = (goal.epoch ?? 0) + 1;
       this.cancelResume(session);
       delete goal.resumesAt;
-      this.pause(goal, "you", "You paused it.");
+      this.pause(goal, "you", PAUSED_BY_YOU);
     }
     return shown(goal);
   }
@@ -15851,7 +15854,7 @@ class Sessions {
       id: input.id,
       sessionID: id,
       type: input.synthetic ? "synthetic" : "user",
-      payload: input.synthetic ? { text: input.text, description: input.synthetic.description } : { text: input.text, files: input.files },
+      payload: input.synthetic ? { text: input.text, description: input.synthetic.description } : { text: input.text, files: input.files, metadata: input.metadata },
       delivery: input.delivery
     }));
   }
@@ -15882,7 +15885,7 @@ class Sessions {
     const delivery = into || nothingRuns && (input.delivery !== "queue" || !queue.length) ? "steer" : "queue";
     queue.push({ ...input, delivery });
     this.store.save(id, true);
-    const item = input.synthetic ? { type: "synthetic", payload: { text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata } } : { type: "user", payload: { text: input.text, files: input.files } };
+    const item = input.synthetic ? { type: "synthetic", payload: { text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata } } : { type: "user", payload: { text: input.text, files: input.files, metadata: input.metadata } };
     emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { ...item, delivery } }, record.session.location.directory);
     if (into)
       this.steerNow(id, live, into, input);
@@ -15955,10 +15958,10 @@ ${others.join(`
   }
   showMessage(id, record, input) {
     const directory = record.session.location.directory;
-    emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "user", payload: { text: input.text, files: input.files }, delivery: "steer" } }, directory);
+    emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "user", payload: { text: input.text, files: input.files, metadata: input.metadata }, delivery: "steer" } }, directory);
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory);
     const attachments = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }));
-    record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined });
+    record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined, metadata: input.metadata });
     record.session.time.updated = Date.now();
     this.store.save(id, true);
   }
@@ -16041,7 +16044,7 @@ ${others.join(`
     if (input.synthetic)
       record.messages.push({ type: "synthetic", id: input.id, time: { created: Date.now() }, text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata });
     else
-      record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined });
+      record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined, metadata: input.metadata });
     record.session.time.updated = Date.now();
     if (note?.before && runOf(live.doing) === run) {
       this.notes(record)[input.id] = note;
@@ -16226,7 +16229,7 @@ ${text.slice(0, 4000)}
     if (input.synthetic)
       record.messages.push({ type: "synthetic", id: input.id, time: { created: Date.now() }, text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata });
     else
-      record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined });
+      record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined, metadata: input.metadata });
     session.time.updated = Date.now();
     this.store.save(id, true);
     if (!input.synthetic && !session.title && !session.parentID && record.messages.filter((message) => message.type === "user").length === 1)
@@ -19011,7 +19014,8 @@ var keptState = (value) => {
     paused: isObject(value) && value.paused === true,
     held: isObject(value) && Array.isArray(value.held) ? value.held.filter((id) => typeof id === "string") : [],
     ...isObject(value) && typeof value.resumed === "number" ? { resumed: value.resumed } : {},
-    ...waiting.length ? { waiting } : {}
+    ...waiting.length ? { waiting } : {},
+    ...isObject(value) && value.paused === true && value.heldFor === "goal" ? { heldFor: "goal" } : {}
   };
 };
 var showsQueue = (state) => state.paused || state.held.length > 0 || Boolean(state.waiting?.length);
@@ -22111,7 +22115,7 @@ function handler(context) {
             return json11({ data: sessions.inbox(id) });
           case "prompt": {
             const input = await body();
-            sessions.prompt(id, { id: input.id ?? newID("msg"), text: String(input.text ?? ""), files: input.files ?? [], delivery: input.delivery ?? "steer" });
+            sessions.prompt(id, { id: input.id ?? newID("msg"), text: String(input.text ?? ""), files: input.files ?? [], delivery: input.delivery ?? "steer", metadata: input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata) ? input.metadata : undefined });
             return json11({});
           }
           case "fork":
@@ -22666,4 +22670,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 9fce67ca15b067d65850e1c25d4dc2757afeec696dd788840247ef6886597192
+// Built from Packages/Box/src/agents ae7744568018558da91ea033df990e68f5baddfb606520a01d6ba674b003b3ce

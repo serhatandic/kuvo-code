@@ -754,6 +754,19 @@ var queueFiles = (run) => ({
   waiting: path6.join(run, "waiting"),
   lock: path6.join(run, ".queues.lock")
 });
+var boxNote = (from, line) => ({ kuvo: { note: { from, line } } });
+var isBoxNote = (metadata) => isObject(metadata) && isObject(metadata.kuvo) && isObject(metadata.kuvo.note);
+var BOX_NOTE_OPENINGS = [
+  "[Goal started] The user approved the plan.",
+  "[Not now] The user didn't start this goal.",
+  "[Goal changed] The user changed the goal's limits.",
+  "[Goal's end] The end the user set has come.",
+  "[Goal] Nothing of the goal is at work now.",
+  "[Goal resumed] The user resumed the goal you paused.",
+  "[The user answered] "
+];
+var BOX_NOTE_PATTERNS = [/^\[Limit reset\] .+? has reset\. Carry on/, /^\[Session (finished|failed|asks)\] "/];
+var isBoxWritten = (text, metadata) => isBoxNote(metadata) || BOX_NOTE_OPENINGS.some((start) => text.startsWith(start)) || BOX_NOTE_PATTERNS.some((pattern) => pattern.test(text));
 var WAITING_ID = /^msg_[A-Za-z0-9]{1,80}$/;
 var keptWaiting = (value) => (Array.isArray(value) ? value : []).flatMap((item) => {
   if (!isObject(item) || typeof item.id !== "string" || !WAITING_ID.test(item.id) || typeof item.text !== "string")
@@ -767,7 +780,8 @@ var keptState = (value) => {
     paused: isObject(value) && value.paused === true,
     held: isObject(value) && Array.isArray(value.held) ? value.held.filter((id) => typeof id === "string") : [],
     ...isObject(value) && typeof value.resumed === "number" ? { resumed: value.resumed } : {},
-    ...waiting.length ? { waiting } : {}
+    ...waiting.length ? { waiting } : {},
+    ...isObject(value) && value.paused === true && value.heldFor === "goal" ? { heldFor: "goal" } : {}
   };
 };
 var showsQueue = (state) => state.paused || state.held.length > 0 || Boolean(state.waiting?.length);
@@ -912,7 +926,7 @@ function takeWaiting(session, item, resume = false, inbox = []) {
     whole = JSON.parse(fs8.readFileSync(waitingFile2(shown.id), "utf8"));
   } catch {}
   fs8.rmSync(waitingFile2(shown.id), { force: true });
-  const message = isObject(whole) && typeof whole.text === "string" && (whole.delivery === "steer" || whole.delivery === "queue") ? { id: shown.id, text: whole.text, delivery: whole.delivery, ...Array.isArray(whole.files) ? { files: whole.files } : {} } : null;
+  const message = isObject(whole) && typeof whole.text === "string" && (whole.delivery === "steer" || whole.delivery === "queue") ? { id: shown.id, text: whole.text, delivery: whole.delivery, ...Array.isArray(whole.files) ? { files: whole.files } : {}, ...isObject(whole.metadata) ? { metadata: whole.metadata } : {} } : null;
   return { shown, message, held, ...before ? { before } : {} };
 }
 function carryQueue(from, to, renamed) {
@@ -1033,7 +1047,7 @@ async function packQueues(target, sessions) {
       const { from, words } = shownOfHeld(text);
       return [{
         shown: { id: ownID, ...from ? { from } : {}, text: words ?? text, ...carried.length ? { files: fileNamesOf(carried) } : {}, at: Date.now() },
-        message: { id: ownID, text, delivery: "queue", ...carried.length ? { files: carried } : {} }
+        message: { id: ownID, text, delivery: "queue", ...carried.length ? { files: carried } : {}, ...isObject(held.payload?.metadata) ? { metadata: held.payload.metadata } : {} }
       }];
     });
     const ids = new Set(waiting.map((each) => each.shown.id));
@@ -1182,8 +1196,8 @@ async function sendNow(target, session, item) {
     await interrupt(target, session, true);
   return true;
 }
-var NOT_YOURS = ["[Message from ", "[Wake-up]", "[Work from ", "[Session "];
-var isYours = (item) => item.type === "user" && !NOT_YOURS.some((start) => String(item.payload?.text ?? "").startsWith(start));
+var NOT_YOURS = ["[Message from ", "[Wake-up]", "[Work from ", "[Session ", "[Goal started]", "[Goal changed]", "[Goal's end]", "[Goal resumed]", "[Not now]", "[Limit reset]", "[The user answered]"];
+var isYours = (item) => item.type === "user" && !isBoxNote(item.payload?.metadata) && !NOT_YOURS.some((start) => String(item.payload?.text ?? "").startsWith(start));
 function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, cancel = clearTimeout } = {}) {
   const drains = new Map;
   const stops = new Map;
@@ -2390,7 +2404,7 @@ async function tellLate(id, targets, file, bridgeRuns = () => peerPlaces().bridg
   if (place !== null) {
     if (!place)
       return;
-    const sent = await sendInto(place.target, ask.session, { id: messageID(), text: `[The user answered] ${ask.answered.text}`, delivery: "queue" }, { from: "Your answer", words: ask.answered.text }).then(() => true, () => false);
+    const sent = await sendInto(place.target, ask.session, { id: messageID(), text: `[The user answered] ${ask.answered.text}`, delivery: "queue", metadata: boxNote("Your answer", `You answered: ${ask.answered.text}`) }, { from: "Your answer", words: ask.answered.text }).then(() => true, () => false);
     if (!sent)
       return;
   }
@@ -2470,6 +2484,9 @@ function resetTime(at) {
 function isLimit(text) {
   return Boolean(text && /\b429\b|rate.?limit|usage limit|limit (?:was |has been )?reached|reached (?:its|your|the) (?:usage )?limit|quota|too many requests|resets? in|try again in|overloaded|capacity/i.test(text));
 }
+
+// Packages/Box/src/shared/goals.ts
+var PAUSED_BY_YOU = "You paused it.";
 
 // Packages/Box/src/link/work/policy.ts
 import fs17 from "node:fs";
@@ -6891,6 +6908,7 @@ var GOAL_STEP = object({
   "after?": list(string),
   "sessions?": list(string),
   "resumes?": number,
+  "until?": number,
   "began?": number,
   "ended?": number
 });
@@ -6937,6 +6955,7 @@ var GOAL_PLAN = object({
   paused: list(object({ why: string, "until?": number, "session?": string })),
   waited: number,
   watching: list(string),
+  "next?": number,
   "lastDigest?": object({ at: number, text: string }),
   "report?": string,
   alone: bool
@@ -7147,6 +7166,15 @@ ${reply ? cut(reply, 1200) : "(It ended without a reply.)"}`;
 var wakeText = (lines) => lines.join(`
 
 `);
+function wakeLineShown(lines) {
+  if (lines.length !== 1)
+    return `${lines.length} updates from its sessions`;
+  const said = /^\[Session (finished|failed|asks)\] "([^"\n]*)"/.exec(lines[0]);
+  if (!said)
+    return "News from a session";
+  const what = said[1] === "finished" ? "finished" : said[1] === "failed" ? "stopped with an error" : "asks something";
+  return `“${said[2] || "New Session"}” ${what}`;
+}
 var LATE_AGAIN = 300000;
 var ARCHIVED_FOR = 7 * 86400000;
 var readTold = (file) => {
@@ -7207,7 +7235,8 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
           return;
         throw new Error("Archived.");
       }
-      await sendInto(place.target, starter, { id: messageID(), text: wakeText(waiting.lines), delivery: waiting.asks ? "steer" : "queue" }, { from: "Its sessions" });
+      const line = wakeLineShown(waiting.lines);
+      await sendInto(place.target, starter, { id: messageID(), text: wakeText(waiting.lines), delivery: waiting.asks ? "steer" : "queue", metadata: boxNote("Its sessions", line) }, { from: "Its sessions", words: line });
       failures.delete(starter);
     } catch {
       putBack(starter, waiting);
@@ -7404,7 +7433,7 @@ function boxChecks(goal) {
   return checks;
 }
 var shown = (goal) => {
-  const { periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, ...rest } = goal;
+  const { periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, nudgedPlan: ______________, ...rest } = goal;
   const steps = goal.steps.map((step) => {
     const paused = goal.state === "running" && step.state !== "done" && step.state !== "skipped" ? goal.paused.find((each) => each.session && step.sessions?.includes(each.session)) : undefined;
     return paused ? { ...step, state: "paused", ...paused.until ? { resumes: paused.until } : {} } : step;
@@ -7619,10 +7648,10 @@ async function answerGoal(id, given, targets, file = GOALS_FILE) {
     await stopBotWork(changed.bot, targets()).catch(() => 0);
     await setGoalLoop(changed, null, targets);
   } else if (action === "decline") {
-    await tellBot2(changed, "[Not now] The user didn't start this goal. Don't start its work: ask them in a line what they'd like instead, if anything.", targets);
+    await tellBot2(changed, "[Not now] The user didn't start this goal. Don't start its work: ask them in a line what they'd like instead, if anything.", "You said not now", targets);
   } else {
     await setGoalLoop(changed, loopCondition(changed), targets);
-    await tellBot2(changed, startWords(changed), targets);
+    await tellBot2(changed, startWords(changed), "Goal started", targets);
   }
   return { goal: shown(changed) };
 }
@@ -7672,7 +7701,7 @@ async function changeGoal(id, action, given, targets, file) {
     return { refused: changed };
   noteWorkChanged(changed.bot);
   if (action === "change")
-    await tellBot2(changed, `[Goal changed] The user changed the goal's limits. ${changed.spend.length ? `What you may spend now: ${changed.spend.map((each) => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}. ` : ""}Switched on: ${changed.public.filter((each) => each.on).map((each) => `"${each.text}"`).join(", ") || "nothing"}.${changed.ends ? ` It ends at ${resetTime(changed.ends)}.` : ""}`, targets);
+    await tellBot2(changed, `[Goal changed] The user changed the goal's limits. ${changed.spend.length ? `What you may spend now: ${changed.spend.map((each) => `${each.what}, up to ${each.cap} ${each.currency}${each.per === "goal" ? "" : ` a ${each.per}`}`).join("; ")}. ` : ""}Switched on: ${changed.public.filter((each) => each.on).map((each) => `"${each.text}"`).join(", ") || "nothing"}.${changed.ends ? ` It ends at ${resetTime(changed.ends)}.` : ""}`, "You changed the goal's limits", targets);
   return { goal: shown(changed) };
 }
 var loopCondition = (goal) => `${goal.goal}
@@ -7708,12 +7737,92 @@ function startWords(goal) {
   return lines.filter(Boolean).join(`
 `);
 }
-async function tellBot2(goal, said, targets) {
+var goalWork = (goal, sessions) => ofBot(goal.bot, sessions).filter((each) => (each.data.time?.created ?? 0) >= (goal.started ?? goal.proposed) - 60000);
+function goalHolds(targets, file = GOALS_FILE) {
+  let order = Promise.resolve();
+  return (event) => {
+    const session = event.data?.sessionID;
+    if (event.type !== "kuvo.goal.updated" || typeof session !== "string")
+      return order;
+    const goal = isObject(event.data?.goal) ? event.data.goal : null;
+    order = order.then(() => followGoal(session, goal, targets, file)).catch(() => {});
+    return order;
+  };
+}
+async function settleGoalHolds(bridge, follow, file = GOALS_FILE) {
+  const sessions = new Set([
+    ...Object.entries(readQueues2()).filter(([, state]) => state.heldFor === "goal").map(([session]) => session),
+    ...readKept2(file).filter((each) => each.state === "running" && each.heldByYou).map((each) => each.session)
+  ]);
+  for (const session of sessions) {
+    const goal = await asked(bridge, "GET", `api/kuvo/goals/${encodeURIComponent(session)}`).then((answer) => isObject(answer) && isObject(answer.data) ? answer.data : null, (error) => /\b404\b/.test(error.message) ? null : undefined);
+    if (goal !== undefined)
+      await follow({ type: "kuvo.goal.updated", data: { sessionID: session, goal } });
+  }
+}
+var pausedByYou = (goal) => goal?.state === "paused" && goal.pausedBy === "you" && goal.note === PAUSED_BY_YOU;
+var heldForGoal = (session, file) => queueOf(session).heldFor === "goal" || readKept2(file).some((each) => each.session === session && each.state === "running" && each.heldByYou);
+async function followGoal(session, goal, targets, file) {
+  const held = heldForGoal(session, file);
+  if (pausedByYou(goal)) {
+    if (!held)
+      await holdForGoal(session, targets, file);
+  } else if (held && goal?.state === "working") {
+    await letGoForGoal(session, targets, file);
+  } else if (held && goal?.state !== "paused") {
+    forgetHold(session, file);
+  }
+}
+async function holdForGoal(session, targets, file) {
+  const place = await placeOfSession(session, targets()).catch(() => null);
+  if (place) {
+    await stopSession(place.target, session).catch(() => {});
+    changeQueue2(session, (current) => ({ ...current, paused: true, heldFor: "goal" }));
+  }
+  const goal = changeKept2((all) => {
+    const kept = all.find((each) => each.session === session && each.state === "running" && botHere(each.bot));
+    if (kept)
+      kept.heldByYou = Date.now();
+    return kept ?? null;
+  }, file);
+  if (!goal)
+    return;
+  const [sessions, working] = await Promise.all([workSessions(targets()).catch(() => []), workingNow(targets()).catch(() => new Set)]);
+  for (const each of goalWork(goal, sessions)) {
+    if (working.has(each.data.id))
+      await stopSession(each.target, each.data.id, false).catch(() => {});
+  }
+  noteWorkChanged(goal.bot);
+}
+async function letGoForGoal(session, targets, file) {
+  const place = await placeOfSession(session, targets()).catch(() => null);
+  if (place)
+    await resumeQueue(place.target, session).catch(() => {});
+  const goal = forgetHold(session, file);
+  if (!goal)
+    return;
+  await tellBot2(goal, "[Goal resumed] The user resumed the goal you paused. Carry on from where it stopped: goal_progress shows the plan as it stands, and a session of it that stopped as it paused needs telling to carry on. Once it's all done, end with finish_goal.", "Goal resumed", targets);
+}
+function forgetHold(session, file) {
+  changeQueue2(session, ({ heldFor: _, ...rest }) => rest);
+  const goal = changeKept2((all) => {
+    const kept = all.find((each) => each.session === session && each.state === "running" && each.heldByYou);
+    if (kept)
+      delete kept.heldByYou;
+    return kept ?? null;
+  }, file);
+  if (goal)
+    noteWorkChanged(goal.bot);
+  return goal;
+}
+var resetLine = (why) => `${why.charAt(0).toUpperCase()}${why.slice(1)} reset`;
+async function tellBot2(goal, said, line, targets) {
   const place = await placeOfSession(goal.session, targets()).catch(() => null);
   if (!place)
     return false;
-  return sendInto(place.target, goal.session, { id: messageID(), text: said, delivery: "queue" }, { from: "Goal" }).then(() => true, () => false);
+  return sendInto(place.target, goal.session, { id: messageID(), text: said, delivery: "queue", metadata: boxNote("Goal", line) }, { from: "Goal", words: line }).then(() => true, () => false);
 }
+var GOAL_ASKED = "The user sent this as a goal, with Kuvo Code's /goal. Plan it, check what it needs, and put it to them with propose_goal before doing any of the work:";
 async function askGoal(session, words, targets) {
   const said = text(words, 2000);
   if (!said)
@@ -7724,9 +7833,8 @@ async function askGoal(session, words, targets) {
   changeQueue2(session, (state) => ({ ...state, paused: false }));
   const sent = await asked(place.target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, {
     id: messageID(),
-    text: `[Goal] ${said}
-
-(The user asked for this as a goal: plan it, check what it needs, and put it to them with propose_goal before doing any of the work.)`,
+    text: [said, "", "<sent-with>", GOAL_ASKED, "/goal", "</sent-with>"].join(`
+`),
     delivery: "queue"
   }).then(() => true, () => false);
   return sent ? { text: "Asked for a plan." } : { refused: { status: 404, message: "The conversation can't be reached now." } };
@@ -7780,11 +7888,15 @@ function linkSession(bot, step, session, file = GOALS_FILE) {
   return linked;
 }
 var presence = () => isHere() ? "The user is here now." : "The user is away now: prepare anything public or sent as a draft, unless its switch is on, and carry on with what doesn't need them.";
+function untilOf(value) {
+  const at = typeof value === "number" ? value < 1000000000000 ? value * 1000 : value : typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value.trim()) ? Date.parse(value.trim()) : NaN;
+  return Number.isFinite(at) && at > 0 ? at : null;
+}
 function goalProgress(bot, given, file = GOALS_FILE) {
   const running = runningGoal(bot, file);
   if (!running)
     return { refused: "No goal is running: propose one with propose_goal, and the user starts it." };
-  const marks = Array.isArray(given.steps) ? given.steps : given.step !== undefined ? [{ step: given.step, state: given.state, progress: given.progress, note: given.note }] : [];
+  const marks = Array.isArray(given.steps) ? given.steps : given.step !== undefined ? [{ step: given.step, state: given.state, progress: given.progress, note: given.note, until: given.until }] : [];
   const added = (Array.isArray(given.add) ? given.add : []).map(stepGiven).filter((each) => Boolean(each));
   const stepAt = (step, steps) => typeof step === "number" ? step - 1 : typeof step === "string" ? steps.findIndex((each) => each.id === step) : -1;
   for (const mark of marks) {
@@ -7796,6 +7908,8 @@ function goalProgress(bot, given, file = GOALS_FILE) {
       return { refused: "A step's progress is a share from 0 to 1, given only where you can measure it (3 of 8 pages is 0.375)." };
     if (typeof mark.progress === "number" && mark.progress < 1 && !text(mark.note, 300))
       return { refused: 'Say what you counted with the share, in note: progress 0.375 with note "3 of 8 pages". The user sees the count.' };
+    if (mark.until !== undefined && mark.until !== null && untilOf(mark.until) === null)
+      return { refused: "until is when the step can start, as a time like 2026-11-02T09:00 (or null to take it away)." };
   }
   if (isObject(given.waiting) && (!text(given.waiting.text, 300) || !WAITING_KINDS.includes(given.waiting.kind)))
     return { refused: "What waits needs its kind (you, judgment or outside) and what it is (text)." };
@@ -7834,8 +7948,13 @@ function goalProgress(bot, given, file = GOALS_FILE) {
         delete next.note;
       if (next.state !== "paused")
         delete next.resumes;
+      const until = mark.until === null ? null : untilOf(mark.until);
+      if (until !== null)
+        next.until = until;
+      else if (mark.until === null || mark.state !== undefined && next.state !== "todo")
+        delete next.until;
       goal.steps[at] = next;
-      notes.push(`step ${at + 1} ${next.state}`);
+      notes.push(`step ${at + 1} ${next.state}${next.until ? ` until ${new Date(next.until).toISOString()}` : ""}`);
     }
     for (const step of keptSteps(added, goal.steps.length)) {
       goal.steps.push(step);
@@ -7963,6 +8082,7 @@ function digestWords(goal, now) {
     parts.push(`paused: ${goal.paused.map((each) => `${each.why}${each.until ? ` until ${resetTime(each.until)}` : ""}`).join(", ")}`);
   return `${goal.digest === "week" ? `Week ${Math.max(1, Math.floor(day / 7))}` : `Day ${day}`}: ${parts.join(", ")}.`;
 }
+var planNow = (goal) => JSON.stringify([goal.steps.map((step) => [step.id, step.state, step.progress ?? null, step.until ?? null, step.sessions?.length ?? 0]), goal.waiting.map((item) => item.id)]);
 var NUDGE_AFTER = [10, 30, 60, 120, 240, 480, 720].map((minutes) => minutes * 60000);
 async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.now(), signal } = {}) {
   if (here) {
@@ -7977,7 +8097,7 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
         if (kept)
           kept.endTold = now;
       }, file);
-      await tellBot2(goal, "[Goal's end] The end the user set has come. Finish the step under way, start nothing new, and end with finish_goal and your report.", targets);
+      await tellBot2(goal, "[Goal's end] The end the user set has come. Finish the step under way, start nothing new, and end with finish_goal and your report.", "The goal's end came", targets);
     } else if (now - goal.endTold >= WRAP_UP) {
       const ended = changeKept2((all) => {
         const kept = all.find((each) => each.id === goal.id && each.state === "running");
@@ -8018,7 +8138,7 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
   const running = readKept2(file).filter((goal) => goal.state === "running" && botHere(goal.bot));
   const sessions = running.length ? await workSessions(targets(), signal).catch(() => []) : [];
   const working = running.length ? await workingNow(targets(), signal).catch(() => new Set) : new Set;
-  const workOf = (goal) => ofBot(goal.bot, sessions).filter((each) => (each.data.time?.created ?? 0) >= (goal.started ?? goal.proposed) - 60000);
+  const workOf = (goal) => goalWork(goal, sessions);
   keepAwake(running.some((goal) => working.has(goal.session) || workOf(goal).some((each) => working.has(each.data.id))));
   for (const goal of running) {
     const work = workOf(goal);
@@ -8040,7 +8160,7 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
       pauseGoal(goal.bot, { why: limitName(each.data.model), until: resetsIn(failed.error, failed.at ?? now) ?? now + UNKNOWN_RESET, session: each.data.id }, file);
     }
     const kept = readKept2(file).find((each) => each.id === goal.id);
-    for (const paused of kept?.paused ?? []) {
+    for (const paused of kept?.heldByYou ? [] : kept?.paused ?? []) {
       if (paused.session === goal.session)
         continue;
       if (paused.session) {
@@ -8053,14 +8173,14 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
         }
         if (!paused.until || now < paused.until || !place)
           continue;
-        const carried = await sendInto(place.target, paused.session, { id: messageID(), text: `[Limit reset] ${paused.why} has reset. Carry on where you stopped.`, delivery: "queue" }, { from: "Goal" }).then(() => true, () => false);
+        const carried = await sendInto(place.target, paused.session, { id: messageID(), text: `[Limit reset] ${paused.why} has reset. Carry on where you stopped.`, delivery: "queue", metadata: boxNote("Goal", resetLine(paused.why)) }, { from: "Goal", words: resetLine(paused.why) }).then(() => true, () => false);
         if (carried)
           unpause(goal.id, paused.session, now, file);
         continue;
       }
       if (!paused.until || now < paused.until)
         continue;
-      if (await tellBot2(goal, `[Limit reset] ${paused.why} has reset. Carry on with the goal.`, targets))
+      if (await tellBot2(goal, `[Limit reset] ${paused.why} has reset. Carry on with the goal.`, resetLine(paused.why), targets))
         unpause(goal.id, undefined, now, file);
     }
     const asksSeen = {};
@@ -8080,7 +8200,14 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
     const atWork = working.has(goal.session) || work.some((each) => working.has(each.data.id));
     const left = (live?.steps ?? []).filter((step) => step.state !== "done" && step.state !== "skipped");
     const pausedSessions = new Set((live?.paused ?? []).map((each) => each.session).filter(Boolean));
-    const canGoOn = !(live?.paused ?? []).some((each) => !each.session || each.session === goal.session) && left.some((step) => step.state !== "waiting" && !(step.sessions?.length && step.sessions.every((id) => pausedSessions.has(id))));
+    const doable = left.filter((step) => (step.state === "todo" || step.state === "doing") && !(step.sessions?.length && step.sessions.every((id) => pausedSessions.has(id))));
+    const nowDoable = doable.filter((step) => !(step.until && step.until > now));
+    const wakes = readWakes(path34.join(BOTS, goal.bot));
+    const woken = wakes.paused ? undefined : wakes.wakes.filter((each) => !each.every || !nowDoable.length).map((each) => each.due * 1000).find((due) => due > now);
+    const putOff = nowDoable.length ? [] : doable.map((step) => step.until).filter((until) => until > now);
+    const next = [woken, ...putOff].filter((at) => at !== undefined).sort((a, b) => a - b)[0];
+    const canGoOn = !live?.heldByYou && !(live?.paused ?? []).some((each) => !each.session || each.session === goal.session) && nowDoable.length > 0 && woken === undefined;
+    const failed = !atWork && canGoOn && live?.nudgedPlan && own ? await failedTurn(own.target, goal.session, signal) : null;
     let nudge = false;
     changeKept2((all) => {
       const kept = all.find((each) => each.id === goal.id);
@@ -8091,13 +8218,27 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
       kept.waiting = kept.waiting.filter((item) => item.kind !== "ask" || open.has(item.id.replace(/^ask:/, "")));
       if (freshPeriods(kept, now))
         noteWorkChanged(kept.bot);
-      if (atWork || !canGoOn) {
-        if (atWork) {
-          delete kept.idleSince;
-          kept.nudges = 0;
-        }
+      const shownNext = atWork || kept.heldByYou ? undefined : next;
+      if (kept.next !== shownNext) {
+        if (shownNext === undefined)
+          delete kept.next;
+        else
+          kept.next = shownNext;
+        noteWorkChanged(kept.bot);
+      }
+      if (atWork) {
+        delete kept.idleSince;
+        kept.nudges = 0;
         return;
       }
+      if (next !== undefined) {
+        kept.idleSince = next;
+        kept.nudges = 0;
+        delete kept.nudgedPlan;
+      } else if (kept.idleSince !== undefined && kept.idleSince > now)
+        kept.idleSince = now;
+      if (!canGoOn)
+        return;
       if (kept.idleSince === undefined) {
         kept.idleSince = now;
         return;
@@ -8105,12 +8246,16 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
       const wait = NUDGE_AFTER[Math.min(kept.nudges ?? 0, NUDGE_AFTER.length - 1)];
       if (now - kept.idleSince < wait)
         return;
+      const plan = planNow(kept);
+      if (kept.nudgedPlan === plan && !failed)
+        return;
       kept.idleSince = now;
       kept.nudges = (kept.nudges ?? 0) + 1;
+      kept.nudgedPlan = plan;
       nudge = true;
     }, file);
     if (nudge)
-      await tellBot2(goal, "[Goal] Nothing of the goal is at work now. Carry on with the next step that doesn't wait on the user (goal_progress shows the plan as it stands). If all that's left waits on them, say so in a line and stop until they answer. Once it's all done, end with finish_goal.", targets);
+      await tellBot2(goal, "[Goal] Nothing of the goal is at work now. Carry on with the next step that doesn't wait on the user (goal_progress shows the plan as it stands). If all that's left waits on them, say so in a line and stop until they answer. If what's next can only start at a time, put it off with goal_progress (until) and a wake-up for then, and stop. Once it's all done, end with finish_goal.", "Reminded to carry on", targets);
   }
   for (const goal of readKept2(file).filter((each) => botHere(each.bot) && each.state !== "proposed" && each.state !== "declined")) {
     const told = new Set(goal.told ?? []);
@@ -12799,9 +12944,9 @@ function backgroundTools(engine, session) {
 function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn, learned } = {}) {
   const answered = (id) => hold?.resolve(id);
   watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: true });
-  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: true });
+  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: true, goals: true });
 }
-async function watchEvents(read, tell, signal, answered = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {}, queues = false, work = false } = {}) {
+async function watchEvents(read, tell, signal, answered = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {}, queues = false, work = false, goals = false } = {}) {
   let attempt = 0;
   let lastLearned = 0;
   const learn = (source) => {
@@ -12819,6 +12964,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
       const steer = steers ? steering((session) => backgroundTools(source, session).catch(() => {}), { after: steerAfter, signal: connection.signal }) : null;
       const queue = queues ? queueWatcher(source) : null;
       const followWork = work ? workWatcher(source, peerTargets, { signal: connection.signal }) : null;
+      const goalHeld = goals ? goalHolds(peerTargets) : null;
       const response = await fetch(`http://127.0.0.1:${source.port}/api/event`, {
         headers: { authorization: `Basic ${Buffer.from(`opencode:${source.password}`).toString("base64")}`, accept: "text/event-stream" },
         signal
@@ -12833,6 +12979,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
       learn(source);
       if (queues)
         scanQueues(source).catch(() => {});
+      if (goalHeld)
+        settleGoalHolds(source, goalHeld).catch(() => {});
       for await (const event of serverEvents(response.body)) {
         if (event.type === "session.execution.started")
           freshenBot(source, event.data?.sessionID).catch(() => {});
@@ -12840,6 +12988,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         steer?.(event);
         queue?.(event);
         followWork?.(event);
+        goalHeld?.(event).catch(() => {});
         if (signIns)
           noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (!bots) {
@@ -17674,6 +17823,8 @@ function searchText(messages, directory) {
       const written = String(message.text ?? "");
       const mail = /^\[Message from (.*) · (ses_\S+|unknown)\] \([^\n]*\)\n\n([\s\S]*)$/.exec(written);
       const work = /^\[Work from (.*) · [^\]\n]+\]\n\n([\s\S]*?)(\n\n---\n[\s\S]*)?$/.exec(written);
+      if (isBoxWritten(written, message.metadata))
+        continue;
       if (mail)
         blocks.push(mail[3]);
       else if (written.startsWith("[Wake-up] "))
@@ -17711,6 +17862,11 @@ function searchText(messages, directory) {
 }
 function ownWords(written) {
   let words = written.trim();
+  const oldGoal = `
+
+(The user asked for this as a goal: plan it, check what it needs, and put it to them with propose_goal before doing any of the work.)`;
+  if (words.startsWith("[Goal] ") && words.endsWith(oldGoal))
+    return words.slice("[Goal] ".length, -oldGoal.length).trim();
   const kept = [];
   for (;; ) {
     const block = [["<attached-files>", "</attached-files>"], ["<review-comments>", "</review-comments>"], ["<named-agents>", "</named-agents>"], ["<sent-with>", "</sent-with>"], ["<from-widget>", "</from-widget>"], ["<from-phone>", "</from-phone>"]].find(([, end]) => words.endsWith(`
@@ -18491,7 +18647,7 @@ import fs68 from "node:fs";
 import path70 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.147";
+var BRIDGE_VERSION = "0.9.148";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -22566,6 +22722,7 @@ export {
   freshenBots,
   fromPhone,
   fromRelay,
+  goalHolds,
   greetWork,
   groupNotice,
   holdArchived,
@@ -22696,6 +22853,7 @@ export {
   setBoxKey,
   setMacPeers,
   settleBot,
+  settleGoalHolds,
   settleHeld,
   showsAll,
   signDoc,
