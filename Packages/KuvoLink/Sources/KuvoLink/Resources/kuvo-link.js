@@ -17797,11 +17797,11 @@ var EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 var AUTHOR = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"];
 var SCOPES = ["uncommitted", "unstaged", "staged", "branch"];
 var STATUSES = ["added", "deleted", "modified", "renamed"];
-function git(folder, args, changing = false, more = {}, program = "git") {
+function git(folder, args, changing = false, more = {}, program = "git", timeout = 600000) {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...changing ? {} : { GIT_OPTIONAL_LOCKS: "0" }, ...more };
   if (!changing) {
     return new Promise((resolve) => {
-      execFile4(program, args, { cwd: folder, env, encoding: "buffer", maxBuffer: 1024 * 1024 * 1024, timeout: 600000 }, (error, stdout, stderr) => resolve({ ok: !error, out: stdout ?? Buffer.alloc(0), said: String(stderr ?? "").trim() }));
+      execFile4(program, args, { cwd: folder, env, encoding: "buffer", maxBuffer: 1024 * 1024 * 1024, timeout }, (error, stdout, stderr) => resolve({ ok: !error, out: stdout ?? Buffer.alloc(0), said: String(stderr ?? "").trim() }));
     });
   }
   return new Promise((resolve) => {
@@ -18032,25 +18032,28 @@ async function unready(directory, branch, target) {
     return `There’s no branch ${target} to compare with.`;
   return ahead === "0" ? `${branch} has nothing ${target} doesn’t have yet.` : null;
 }
-async function mergeInto(directory, into) {
+function worktreeOf(directory) {
+  const real = realOr2(directory);
+  return readWorktrees().find((tree) => real === realOr2(tree.root) || real.startsWith(realOr2(tree.root) + path68.sep));
+}
+async function mergeInto(directory, into, author = {}) {
+  const tree = worktreeOf(directory);
+  if (!tree || !fs66.existsSync(tree.project))
+    return { status: 409, failed: "Only a worktree’s branch is merged here. Create a pull request instead." };
   const branch = await branchOf(directory);
   if (!branch)
     return { status: 409, failed: "This folder isn’t on a branch." };
-  if (branch === into)
-    return { status: 409, failed: `This folder is on ${into} itself.` };
+  const target = tree.project;
+  const checkedOut = await branchOf(target);
+  if (checkedOut !== into) {
+    return { status: 409, failed: checkedOut ? `The project’s folder is on ${checkedOut} now. Switch it back to ${into} to merge, or create a pull request.` : "The project’s folder isn’t on a branch." };
+  }
+  if ((await git(target, ["rev-parse", "-q", "--verify", "MERGE_HEAD"])).ok)
+    return { status: 409, failed: "The project’s folder is in the middle of a merge. Finish it there first." };
   const why = await unready(directory, branch, into);
   if (why)
     return { status: 409, failed: why };
-  const listed = await text2(directory, ["worktree", "list", "--porcelain", "-z"]) ?? "";
-  let target;
-  for (const entry of listed.split("\x00\x00")) {
-    const lines = entry.split("\x00");
-    if (lines.includes(`branch refs/heads/${into}`))
-      target = lines.find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
-  }
-  if (!target || !fs66.existsSync(target))
-    return { status: 409, failed: `${into} isn’t checked out in the project’s folder. Check it out there to merge, or create a pull request.` };
-  const said = refusal(target);
+  const said = refusal(target, author);
   const failed = await said(["merge", "--no-edit", branch]);
   if (!failed)
     return null;
@@ -18104,29 +18107,38 @@ function comparePage(remote, branch, base, title, body) {
     query.set("title", title);
   if (body)
     query.set("body", body);
-  return `${at}/compare/${(base ? `${encodeURIComponent(base)}...` : "") + encodeURIComponent(branch)}?${query}`;
+  const named = (branch) => encodeURIComponent(branch).replace(/%2F/g, "/");
+  return `${at}/compare/${(base ? `${named(base)}...` : "") + named(branch)}?${query}`;
 }
 async function pullRequest(directory, title, body) {
   const branch = await branchOf(directory);
   if (!branch)
     return { status: 409, failed: "This folder isn’t on a branch." };
-  const real = realOr2(directory);
-  const base = readWorktrees().find((tree) => real === realOr2(tree.root) || real.startsWith(realOr2(tree.root) + path68.sep))?.base;
-  if (base) {
-    const why = await unready(directory, branch, base);
-    if (why)
-      return { status: 409, failed: why };
-  }
   const root = (await text2(directory, ["rev-parse", "--show-toplevel"]))?.trim() ?? directory;
+  const recorded = worktreeOf(directory)?.base;
+  const main = recorded ? undefined : (await text2(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]))?.trim().replace(/^origin\//, "") || undefined;
+  const base = recorded ?? main;
+  if (base === branch || !base && ["main", "master"].includes(branch))
+    return { status: 409, failed: `${branch} is the branch a pull request goes into. Make one from a branch of its own.` };
+  const against = base && ((await git(root, ["rev-parse", "--verify", "-q", base])).ok ? base : (await git(root, ["rev-parse", "--verify", "-q", `origin/${base}`])).ok ? `origin/${base}` : undefined);
+  if (against) {
+    const why = await unready(directory, branch, against);
+    if (why)
+      return { status: 409, failed: why.replace(`origin/${base}`, base) };
+  }
   const pushed = await refusal(root)(["push", "-u", "origin", "HEAD"]);
   if (pushed)
     return { status: 422, failed: pushed };
-  const made = await git(root, ["pr", "create", "--head", branch, ...base ? ["--base", base] : [], ...title ? ["--title", title, "--body", body ?? ""] : ["--fill"]], true, { GH_PROMPT_DISABLED: "1", NO_COLOR: "1" }, "gh");
-  const url = (made.out.toString("utf8") + `
-` + made.said).match(/https:\/\/\S+\/(?:pull|merge_requests)\/\d+/)?.[0];
-  if (url)
-    return { url };
   const remote = (await text2(root, ["remote", "get-url", "origin"]))?.trim();
+  const page = remote ? webPage(remote) : null;
+  if (page?.hostname.includes("github")) {
+    const repository = page.hostname + page.pathname.replace(/\/$/, "");
+    const made = await git(root, ["pr", "create", "--repo", repository, "--head", branch, ...base ? ["--base", base] : [], ...title ? ["--title", title, "--body", body ?? ""] : ["--fill"]], false, { GH_PROMPT_DISABLED: "1", NO_COLOR: "1" }, "gh", 120000);
+    const url = (made.out.toString("utf8") + `
+` + made.said).match(/https:\/\/\S+\/pull\/\d+/)?.[0];
+    if (url)
+      return { url };
+  }
   const compareURL = remote ? comparePage(remote, branch, base, title, body) : null;
   return compareURL ? { compareURL } : {};
 }
@@ -18146,6 +18158,10 @@ New files:
   }
   return { diff: diff.length > limit ? diff.slice(0, limit) + `
 …` : diff, staged };
+}
+function authorOf(body) {
+  const given = body.author ?? {};
+  return Object.fromEntries(AUTHOR.flatMap((key) => typeof given[key] === "string" ? [[key, given[key]]] : []));
 }
 async function* changesRoute(context) {
   const { request, route, json } = context;
@@ -18200,9 +18216,7 @@ async function* changesRoute(context) {
     const message = typeof body.message === "string" ? body.message : "";
     if (!message.trim())
       return yield* json(400, { message: "Write a commit message." });
-    const given = body.author ?? {};
-    const author = Object.fromEntries(AUTHOR.flatMap((key) => typeof given[key] === "string" ? [[key, given[key]]] : []));
-    const done = await commit(directory, message, body.push === true, author);
+    const done = await commit(directory, message, body.push === true, authorOf(body));
     return yield* done ? json(422, { message: done.failed, ...done.committed ? { committed: true, pushed: false } : {} }) : json(200, {});
   }
   if (route === "kuvo/git/push" || route === "kuvo/git/merge" || route === "kuvo/git/pull-request") {
@@ -18220,7 +18234,7 @@ async function* changesRoute(context) {
       const into = body.into;
       if (typeof into !== "string" || !into || into.startsWith("-"))
         return yield* json(400, { message: "Name the branch to merge into." });
-      const failed = await mergeInto(directory, into);
+      const failed = await mergeInto(directory, into, authorOf(body));
       return yield* failed ? json(failed.status, { message: failed.failed, ...failed.conflicts ? { conflicts: failed.conflicts } : {} }) : json(200, {});
     }
     const words = (value) => typeof value === "string" && value.trim() ? value.trim() : undefined;

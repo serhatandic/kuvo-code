@@ -1177,7 +1177,8 @@ final class PhoneLink {
             } else {
                 username = given.username.flatMap { $0.isEmpty ? nil : $0 }
                 password = given.password.flatMap { $0.isEmpty ? nil : $0 }
-                savedPassword = nil
+                // A saved account's password typed anew is kept too, as the card keeps it.
+                savedPassword = Passwords.logins(for: host).first { $0.account == (username ?? "") }.flatMap(Passwords.password(for:))
                 guard username != nil || password != nil else { return (400, Data()) }
             }
             asks.answer(id, .signIn(username: username, password: password))

@@ -1620,21 +1620,24 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     message.
   - `POST kuvo/git/push {"directory"}` (`git.push`, bridge 0.9.143) pushes what the folder has
     checked out (a new branch pushed and tracked) → `200 {}`, or `422 {"message"}` with git's words.
-  - `POST kuvo/git/merge {"directory", "into"}` (`git.merge`, bridge 0.9.143): Merge into…, what's
-    committed on the folder's branch merged into `into` (a worktree's `base` in `kuvo/worktrees`),
-    in the folder that has `into` checked out (the project's) → `200 {}`. `409 {"message"}` when it
-    can't go yet (changes not committed, nothing `into` doesn't have, `into` checked out nowhere,
-    the folder on no branch), and for a merge that would conflict, `409 {"message", "conflicts":
-    [path]}`: the merge taken back and nothing merged. `422 {"message"}` with git's words when it
-    stopped for another reason (taken back too).
+  - `POST kuvo/git/merge {"directory", "into", "author"?}` (`git.merge`, bridge 0.9.143): Merge
+    into…, what's committed on a worktree's branch (`directory`, a folder in one of the box's
+    worktrees) merged into `into` (its `base` in `kuvo/worktrees`), in the project's folder, which
+    must have `into` checked out → `200 {}`. `author` as for a commit, for a merge commit. `409
+    {"message"}` when it can't go: not a worktree's folder, the project's folder on another branch
+    or in the middle of a merge of yours (left as it is), changes not committed, or nothing `into`
+    doesn't have; and for a merge that would conflict, `409 {"message", "conflicts": [path]}`, the
+    merge taken back and nothing merged. `422 {"message"}` with git's words when it stopped for
+    another reason (taken back too).
   - `POST kuvo/git/pull-request {"directory", "title"?, "body"?}` (`git.pull-request`, bridge
-    0.9.143): Create Pull Request. The folder's branch is pushed to `origin` (and tracked), then
-    made a pull request with GitHub's `gh` when it's there and signed in → `{"url"}` (also for
-    one already open for the branch); otherwise → `{"compareURL"}`, the GitHub or GitLab page that
-    opens one, with the title and description filled in; `{}` for another host (pushed, to open
-    one there). Without a title, `gh` takes it from the commits. Its base is the worktree's, from
-    the box's worktrees (none: the host's main branch); with one, `409 {"message"}` as for a
-    merge when it can't go yet. `422 {"message"}` for a push that didn't go through.
+    0.9.143): Create Pull Request. Its base is the worktree's, from the box's worktrees, else
+    origin's main branch. `409 {"message"}` from the base itself, with changes not committed, or
+    with nothing the base doesn't have. The branch is pushed to `origin` (and tracked); on GitHub,
+    made a pull request on origin's repository with GitHub's `gh` when it's there and signed in →
+    `{"url"}` (also for one already open for the branch); otherwise → `{"compareURL"}`, the GitHub
+    or GitLab page that opens one, with the title and description filled in; `{}` for another
+    host (pushed, to open one there). Without a title, `gh` takes the title and description from
+    the commits. `422 {"message"}` for a push that didn't go through.
 - `GET kuvo/folders[?path=<folder>&hidden=1]` (`folders`): the folders in one of this box's folders,
   for a client to choose one (Settings › Worktrees' folder) as a folder panel does → `{"path",
   "home", "parent", "folders": [{name, repository?}]}`, ordered as Finder orders names, without

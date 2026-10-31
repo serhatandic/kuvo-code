@@ -38,6 +38,27 @@ import Testing
         #expect(!repo.exists(".git/MERGE_HEAD"))
     }
 
+    /// A merge you're in the middle of in the folder is yours: refused, and left as it is (never
+    /// taken back with this one).
+    @Test func aMergeOfYoursUnderWayIsLeftBe() throws {
+        let repo = try TestRepository()
+        try repo.write("a.txt", "one\n")
+        try repo.commitAll()
+        try repo.git("checkout", "-q", "-b", "work")
+        try repo.write("a.txt", "theirs\n")
+        try repo.commitAll("Work")
+        try repo.git("checkout", "-q", "-b", "other", "main")
+        try repo.write("b.txt", "other\n")
+        try repo.commitAll("Other")
+        try repo.git("checkout", "-q", "main")
+        try repo.write("a.txt", "ours\n")
+        try repo.commitAll("Main")
+        #expect(throws: (any Error).self) { try repo.git("merge", "--no-edit", "work") }
+        #expect(Git.merge("other", into: repo.path, environment: [:]) == .failed("The project’s folder is in the middle of a merge. Finish it there first."))
+        #expect(repo.exists(".git/MERGE_HEAD"), "your merge still under way")
+        #expect(!repo.exists("b.txt"))
+    }
+
     /// Where a remote's pull requests are made, whichever way the remote is written; without the
     /// name, password or port it may carry.
     @Test(arguments: [

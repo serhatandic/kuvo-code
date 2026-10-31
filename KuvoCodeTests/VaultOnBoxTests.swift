@@ -111,8 +111,9 @@ import WebKit
         let link = PhoneLink()
         link.browserAsks = asks
         func ask(_ host: String) -> String {
+            // Each in a conversation of its own: one asking again soon after is answered as before.
             let id = UUID().uuidString
-            asks.add(BrowserAsks.Ask(id: id, kind: .signIn(username: true, password: true), host: host, machine: nil, session: "ses_a")) { _ in }
+            asks.add(BrowserAsks.Ask(id: id, kind: .signIn(username: true, password: true), host: host, machine: nil, session: "ses_\(id)")) { _ in }
             return id
         }
         func phone(_ path: String, _ body: [String: Any]? = nil) async throws -> (status: Int, json: [String: Any]?) {
@@ -150,6 +151,13 @@ import WebKit
         let github = ask("github.com")
         #expect(try await phone("kuvo/asks/\(github)", ["answer": "signIn", "saved": "kuvo-bots", "agents": true]).status == 200)
         #expect(agentsOwn("github.com") == "kuvo-bots", "agents allowed for a saved account (the phone asked for Face ID)")
+
+        // Its password typed anew (the account saved, so nothing offered to save): kept, or agents
+        // would sign in with the old one.
+        let changed = ask("github.com")
+        #expect(try await listed(changed)?["offersToSave"] as? Bool == false)
+        #expect(try await phone("kuvo/asks/\(changed)", ["answer": "signIn", "username": "kuvo-bots", "password": "new-bots-password", "save": false]).status == 200)
+        #expect(Passwords.logins(for: "github.com").first.flatMap(Passwords.password(for:)) == "new-bots-password")
 
         // A saved account whose password this Mac can't read: says so, and the card stays.
         let item = try #require(Vaults.shared[BoxClient.mac].vault?.signIns(for: "github.com").first)

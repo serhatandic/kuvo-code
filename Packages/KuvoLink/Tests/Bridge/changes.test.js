@@ -306,17 +306,18 @@ test("Commit and Push whose push doesn't go through says it committed, and Push 
   assert.equal(git("status", "--porcelain").trim(), "", "nothing committed twice");
 });
 
-/** A worktree of the project on a branch of its own, as a session in one has. */
-function worktree(branch = "kuvo/feature") {
+/** A worktree of the project on a branch of its own, as a session in one has, kept by the box. */
+async function worktree(branch = "kuvo/feature") {
   const folder = path.join(fs.mkdtempSync(path.join(root, "tree-")), "app");
   git("worktree", "add", "-q", "-b", branch, folder);
+  assert.equal((await route("POST", "kuvo/worktrees/record", { project: repo, root: folder, branch, base: "main" })).status, 200);
   const there = (...args) => execFileSync("git", args, { cwd: folder, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
   return { folder, there, write: (name, text) => fs.writeFileSync(path.join(folder, name), text) };
 }
 
-test("Merge into…: a worktree's commits go into the project's branch; work not committed, nothing new and a conflict are refused with why, the project left as it was", async () => {
-  const tree = worktree();
-  const merge = () => route("POST", "kuvo/git/merge", { directory: tree.folder, into: "main" });
+test("Merge into…: a worktree's commits go into the project's branch; work not committed, nothing new, a conflict and a merge of yours under way are refused with why, the project left as it was", async () => {
+  const tree = await worktree();
+  const merge = (body = {}) => route("POST", "kuvo/git/merge", { directory: tree.folder, into: "main", ...body });
   tree.write("README.md", "Hello\nFrom the worktree\n");
   let answer = await merge();
   assert.equal(answer.status, 409);
@@ -328,6 +329,23 @@ test("Merge into…: a worktree's commits go into the project's branch; work not
   answer = await merge();
   assert.equal(answer.status, 409);
   assert.equal(answer.json.message, "kuvo/feature has nothing main doesn’t have yet.");
+
+  // Both moved on, on a box with no git name of its own: a merge commit, by your shell's author.
+  write("CHANGELOG.md", "On main\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "Main's");
+  tree.write("NOTES.md", "On the branch\n");
+  tree.there("add", "-A");
+  tree.there("commit", "-q", "-m", "The branch's");
+  git("config", "--unset", "user.name");
+  git("config", "--unset", "user.email");
+  const author = { GIT_AUTHOR_NAME: "Grace", GIT_AUTHOR_EMAIL: "grace@example.com", GIT_COMMITTER_NAME: "Grace", GIT_COMMITTER_EMAIL: "grace@example.com" };
+  assert.equal((await merge({ author })).status, 200);
+  assert.equal(git("log", "-1", "--format=%an %P").split(" ").length, 3, "a merge commit");
+  assert.equal(git("log", "-1", "--format=%an").trim(), "Grace");
+  assert.equal(read("NOTES.md"), "On the branch\n");
+  git("config", "user.name", "Ada");
+  git("config", "user.email", "ada@example.com");
 
   // main and the branch change the same line.
   write("src/app.js", "let a = 2\n");
@@ -341,18 +359,27 @@ test("Merge into…: a worktree's commits go into the project's branch; work not
   assert.equal(read("src/app.js"), "let a = 2\n");
   assert.equal(git("status", "--porcelain").trim(), "", "taken back: not left in the middle of a merge");
 
-  assert.equal((await route("POST", "kuvo/git/merge", { directory: tree.folder, into: "elsewhere" })).status, 409);
+  // A merge you're in the middle of in the project's folder is yours: left as it is.
+  assert.throws(() => git("merge", "--no-edit", "kuvo/feature"));
+  answer = await merge();
+  assert.equal(answer.status, 409);
+  assert.equal(answer.json.message, "The project’s folder is in the middle of a merge. Finish it there first.");
+  assert.match(git("status", "--porcelain"), /UU src\/app\.js/, "your merge still under way");
+  git("merge", "--abort");
+
+  answer = await route("POST", "kuvo/git/merge", { directory: tree.folder, into: "elsewhere" });
+  assert.equal(answer.status, 409);
+  assert.equal(answer.json.message, "The project’s folder is on main now. Switch it back to elsewhere to merge, or create a pull request.");
   assert.equal((await route("POST", "kuvo/git/merge", { directory: tree.folder, into: "--abort" })).status, 400);
 });
 
 test("Create Pull Request pushes the branch and makes it with gh against the worktree's base, or gives the host's page without gh", async () => {
-  const tree = worktree();
+  const tree = await worktree();
   const remote = fs.mkdtempSync(path.join(root, "remote-"));
   execFileSync("git", ["init", "-q", "--bare", remote]);
   git("remote", "add", "origin", "git@github.com:kuvo-test/app.git");
   // Pushed here, while the remote reads as GitHub's.
   git("config", "remote.origin.pushurl", remote);
-  assert.equal((await route("POST", "kuvo/worktrees/record", { project: repo, root: tree.folder, branch: "kuvo/feature", base: "main" })).status, 200);
   // gh stands in for GitHub's own program: one not signed in, then one that makes it (and says what it was asked).
   const bin = fs.mkdtempSync(path.join(root, "bin-"));
   const asked = path.join(bin, "asked");
@@ -368,14 +395,42 @@ test("Create Pull Request pushes the branch and makes it with gh against the wor
 
   answer = await pullRequest({ title: "Say reviewed", body: "Why & how" });
   assert.equal(answer.status, 200);
-  assert.equal(answer.json.compareURL, "https://github.com/kuvo-test/app/compare/main...kuvo%2Ffeature?expand=1&title=Say+reviewed&body=Why+%26+how");
+  assert.equal(answer.json.compareURL, "https://github.com/kuvo-test/app/compare/main...kuvo/feature?expand=1&title=Say+reviewed&body=Why+%26+how");
   assert.equal(execFileSync("git", ["--git-dir", remote, "log", "-1", "--format=%s", "kuvo/feature"], { encoding: "utf8" }).trim(), "Reviewed");
 
   fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' "$@" > '${asked}'\necho https://github.com/kuvo-test/app/pull/7\n`, { mode: 0o755 });
   answer = await pullRequest({ title: "Say reviewed", body: "Why" });
   assert.equal(answer.status, 200);
   assert.deepEqual(answer.json, { url: "https://github.com/kuvo-test/app/pull/7" });
-  assert.deepEqual(fs.readFileSync(asked, "utf8").trim().split("\n"), ["pr", "create", "--head", "kuvo/feature", "--base", "main", "--title", "Say reviewed", "--body", "Why"]);
+  assert.deepEqual(fs.readFileSync(asked, "utf8").trim().split("\n"), ["pr", "create", "--repo", "github.com/kuvo-test/app", "--head", "kuvo/feature", "--base", "main", "--title", "Say reviewed", "--body", "Why"]);
+
+  // gh says one is already open for the branch: that one.
+  fs.writeFileSync(path.join(bin, "gh"), "#!/bin/sh\necho 'a pull request for branch \"kuvo/feature\" into branch \"main\" already exists:' >&2\necho https://github.com/kuvo-test/app/pull/7 >&2\nexit 1\n", { mode: 0o755 });
+  assert.deepEqual((await pullRequest({})).json, { url: "https://github.com/kuvo-test/app/pull/7" });
+});
+
+test("Create Pull Request outside a worktree goes into origin's main branch, never from it, and gives GitLab's page", async () => {
+  const remote = fs.mkdtempSync(path.join(root, "remote-"));
+  execFileSync("git", ["init", "-q", "--bare", remote]);
+  git("remote", "add", "origin", "https://gitlab.com/kuvo-test/app.git");
+  git("config", "remote.origin.pushurl", remote);
+  git("push", "-q", "-u", "origin", "main");
+  git("update-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  const pullRequest = () => route("POST", "kuvo/git/pull-request", { directory: repo, title: "Fix" });
+  let answer = await pullRequest();
+  assert.equal(answer.status, 409);
+  assert.equal(answer.json.message, "main is the branch a pull request goes into. Make one from a branch of its own.");
+  git("checkout", "-q", "-b", "fix/typo");
+  answer = await pullRequest();
+  assert.equal(answer.status, 409);
+  assert.equal(answer.json.message, "fix/typo has nothing main doesn’t have yet.");
+  write("README.md", "Hello!\n");
+  git("commit", "-q", "-am", "Fix");
+  answer = await pullRequest();
+  assert.equal(answer.status, 200);
+  assert.equal(answer.json.compareURL, "https://gitlab.com/kuvo-test/app/-/merge_requests/new?merge_request%5Bsource_branch%5D=fix%2Ftypo&merge_request%5Btarget_branch%5D=main&merge_request%5Btitle%5D=Fix");
+  assert.equal(execFileSync("git", ["--git-dir", remote, "log", "-1", "--format=%s", "fix/typo"], { encoding: "utf8" }).trim(), "Fix");
 });
 
 test("Discard on a submodule with edits of its own says to discard them there, and leaves them", async () => {
