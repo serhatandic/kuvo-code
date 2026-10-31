@@ -13,7 +13,8 @@ import { newID } from "./ids"
 import { RPC, RPCError } from "./rpc"
 import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules } from "./fence"
 import { isKuvoTool, kuvoToolName, kuvoTools, loadKuvoTools, toolServerName } from "./kuvotools"
-import { dropRelayed, relayedTools, relayPort } from "./toolrelay"
+import { computerServers, type ComputerServers } from "./servers"
+import { dropRelayed, relayedServers, relayedTools, relayPort } from "./toolrelay"
 import { pictureData, withPictures } from "./pictures"
 import { elicitationField } from "./forms"
 import type { Turn } from "./turn"
@@ -184,6 +185,8 @@ export class AcpThread implements Thread {
   private stale?: RPC
   /** Whether the process runs whole in the box's sandbox (`whole`). */
   private fenced = false
+  /** The computer's MCP servers it was started with. */
+  private computer: ComputerServers = { servers: [], key: "" }
   /** Whether it reads and writes files through the bridge: as its flavor says, but never run whole. */
   private get files() {
     return this.flavor.fileSystem && !this.fenced
@@ -215,7 +218,12 @@ export class AcpThread implements Thread {
     // So does the box's sandbox changing, for one run whole in it (its rules, the folders you let
     // this project's commands write).
     const fence = this.flavor.whole && fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) : ""
-    const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence })
+    // And the computer's MCP servers, another set of them (one you added, or took away).
+    const computer = await computerServers(this.session.location.directory)
+    const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence, servers: computer.key })
+    this.computer = computer
+    // (What each reaches, a key you changed, a sign-in renewed, for the same agent going on too.)
+    if (this.rpc && !this.rpc.isClosed) relayedServers(this.session.id, this, this.session.location.directory, computer)
     if (this.rpc && !this.rpc.isClosed && this.spawnedWith === key && this.rpc !== this.stale) return this.rpc
     // Started again for another approval mode (the agent takes it as it starts), or an updated program.
     this.close()
@@ -366,27 +374,35 @@ export class AcpThread implements Thread {
     if (!whole || !fenceRules()) return undefined
     const directory = this.session.location.directory
     const attached = fenceAttachments(directory)
-    const relayed = relayedTools(this.session.id, this)
     const started = cleanEnv ? (env ?? {}) : { ...process.env, ...env }
     const fence = fenceAgent(argv[0], directory, {
       homes: whole.homes(started),
       state: whole.state,
       kept: whole.kept,
       read: [...(skills?.startsWith("/") ? [skills] : []), ...(attached ? [attached] : []), ...(whole.read?.(started) ?? [])],
-      port: relayed ? relayPort() : undefined,
+      port: relayPort(),
     })
     if (!fence) throw new Error(`${this.name} runs in the sandbox here, and it isn't ready: restart Kuvo Code.`)
     return { argv: [fence.command, ...argv.slice(1)], env: { ...env, ...whole.env, ...fence.env }, ended: fence.ended }
   }
 
-  /** Kuvo Code's own tools, for an agent that takes MCP servers over HTTP (through the relay, run whole in the sandbox). */
+  /**
+   * Kuvo Code's own tools (through the relay, run whole in the sandbox), and the computer's MCP
+   * servers (through the relay always), for an agent that takes MCP servers over HTTP.
+   */
   private mcpServers(init: any): unknown[] {
+    const http = Boolean(init?.agentCapabilities?.mcpCapabilities?.http)
+    const listed = (headers: Record<string, string>) => Object.entries(headers).map(([name, value]) => ({ name, value }))
+    const servers: unknown[] = []
     const tools = this.fenced ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
-    if (!tools || (tools.kind === "http" && !init?.agentCapabilities?.mcpCapabilities?.http)) return []
-    // Their names and arguments, to know their calls when they come.
-    void loadKuvoTools()
-    if (tools.kind === "stdio") return [{ name: tools.name, command: tools.command, args: tools.args, env: Object.entries(tools.env).map(([name, value]) => ({ name, value })) }]
-    return [{ type: "http", name: tools.name, url: tools.url, headers: Object.entries(tools.headers).map(([name, value]) => ({ name, value })) }]
+    if (tools && (tools.kind === "stdio" || http)) {
+      // Their names and arguments, to know their calls when they come.
+      void loadKuvoTools()
+      if (tools.kind === "stdio") servers.push({ name: tools.name, command: tools.command, args: tools.args, env: Object.entries(tools.env).map(([name, value]) => ({ name, value })) })
+      else servers.push({ type: "http", name: tools.name, url: tools.url, headers: listed(tools.headers) })
+    }
+    if (http) for (const server of relayedServers(this.session.id, this, this.session.location.directory, this.computer)) servers.push({ type: "http", name: server.name, url: server.url, headers: listed(server.headers) })
+    return servers
   }
 
   /**
@@ -995,8 +1011,8 @@ export class AcpThread implements Thread {
   close() {
     this.rpc?.kill()
     this.rpc = undefined
-    // Its key to Kuvo Code's tools goes with it (a new one for the next).
-    if (this.fenced) dropRelayed(this.session.id, this)
+    // Its key to Kuvo Code's tools and the computer's servers goes with it (a new one for the next).
+    dropRelayed(this.session.id, this)
     this.fenced = false
   }
 }

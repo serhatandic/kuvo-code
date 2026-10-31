@@ -8,6 +8,7 @@ import { dirname, join } from "node:path"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
 import { repositoryOf } from "../../src/agents/fence"
 import { setToolServer } from "../../src/agents/kuvotools"
+import { callServer, computerServers, KEYS } from "./support/servers"
 import { Auto } from "../../src/agents/auto"
 import { Queue } from "../../src/agents/queue"
 import type { Roster } from "../../src/agents/roster"
@@ -570,6 +571,27 @@ const toolCalls = (id: string) => steps(id).flatMap((message) => message.content
 
 /** Ask First, as the composer's menu sets it. */
 const askFirst: PermissionRule[] = ["edit", "write", "patch", "shell", "webfetch", "external_directory"].map((action) => ({ action, resource: "*", effect: "ask" }))
+
+describe("Claude Code and the computer's MCP servers", () => {
+  test("it's told them over its pipe, through the bridge, without their keys, and a call reaches each with what it needs", async () => {
+    const servers = computerServers(root)
+    await servers.serve()
+    try {
+      await begin()
+      const given = fake.mcpServers as Record<string, any>
+      expect(Object.keys(given).sort()).toEqual(["files", "notes", "tracker"])
+      const text = JSON.stringify(given)
+      for (const key of Object.values(KEYS)) expect(text).not.toContain(key)
+      for (const server of Object.values(given)) expect(server.type).toBe("http")
+      expect(await callServer(given.files)).toBe(`key:${KEYS.shared}`)
+      expect(await callServer(given.notes)).toBe(`auth:none,key:${KEYS.notes},at:/notes`)
+      // (On the same pipe as before: its conversation goes on.)
+      expect(fake.closed).toBe(false)
+    } finally {
+      servers.stop()
+    }
+  })
+})
 
 describe("Claude Code in the box's sandbox", () => {
   // The box's sandbox folder, as the box sets it up (link/fence/state.ts): its rules, and its

@@ -34,6 +34,7 @@ import { Sessions } from "./sessions"
 import { noteAgentsInside } from "./fence"
 import { useSavedLoginPath } from "./proc"
 import { setSkillSource } from "./skills"
+import { setServerSource } from "./servers"
 import { Store } from "./store"
 import { server as requester } from "./groups/api"
 import { SeatServer } from "./groups/peer"
@@ -116,6 +117,7 @@ const link = new EngineLink()
 if (machineEngine) link.configure(machineEngine.url, machineEngine.password)
 // The skills Settings › Skills lists, for the agents too (the engine lists them).
 setSkillSource(link, home)
+setServerSource(link)
 const engineAgents = new Map<string, EngineAgent>()
 function engineAgent(providerID: string): EngineAgent | undefined {
   if (!link.ready || parseProvider(providerID)) return undefined

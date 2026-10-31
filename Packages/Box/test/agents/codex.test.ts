@@ -11,6 +11,7 @@ import { createServer } from "node:net"
 import { CodexAgent } from "../../src/agents/agents/codex"
 import { Auto } from "../../src/agents/auto"
 import { canFence, realFence } from "./support/fence"
+import { callServer, computerServers, KEYS } from "./support/servers"
 import { fencePolicy } from "../../src/link/fence/policy"
 import type { Roster } from "../../src/agents/roster"
 import { Sessions } from "../../src/agents/sessions"
@@ -917,6 +918,25 @@ describe("Codex's tools", () => {
     const overrides = argv().flatMap((arg, at, all) => (all[at - 1] === "-c" ? [arg] : []))
     expect(overrides).toContain("plugins.unified-computer-use@openai-bundled.enabled=false")
     expect(overrides).toContain("plugins.computer-use@openai-bundled.enabled=false")
+  })
+})
+
+describe("Codex and the computer's MCP servers", () => {
+  test("its thread gets them through the bridge, without their keys, and a call reaches each with what it needs", async () => {
+    const servers = computerServers(root)
+    await servers.serve()
+    try {
+      await run([["item/completed", { item: { type: "agentMessage", id: "m1", text: "Done." } }]])
+      const config = sent().find((message) => message.method === "thread/start").params.config as Record<string, any>
+      const given = Object.fromEntries(Object.entries(config).filter(([name]) => name.startsWith("mcp_servers.")).map(([name, server]) => [name.slice("mcp_servers.".length), server]))
+      expect(Object.keys(given).sort()).toEqual(["files", "notes", "tracker"])
+      const text = JSON.stringify(given)
+      for (const key of Object.values(KEYS)) expect(text).not.toContain(key)
+      expect(await callServer({ url: given.files.url, headers: given.files.http_headers })).toBe(`key:${KEYS.shared}`)
+      expect(await callServer({ url: given.tracker.url, headers: given.tracker.http_headers })).toBe(`auth:Bearer ${KEYS.tracker},key:none,at:/tracker`)
+    } finally {
+      servers.stop()
+    }
   })
 })
 

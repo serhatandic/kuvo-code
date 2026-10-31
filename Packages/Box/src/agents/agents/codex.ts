@@ -14,7 +14,8 @@ import { fileDiff, fromPatch } from "../diff"
 import { emit } from "../events"
 import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules } from "../fence"
 import { kuvoTools, toolServerName } from "../kuvotools"
-import { dropRelayed, relayedTools, relayPort } from "../toolrelay"
+import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
+import { computerServers } from "../servers"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import { elicitationField } from "../forms"
 import { newID } from "../ids"
@@ -269,7 +270,6 @@ export class CodexAgent implements Agent {
   private fenced(directory: string, sessionID?: string) {
     const skills = skillsRoot()
     if (skills) mkdirSync(skills, { recursive: true, mode: 0o700 })
-    const relayed = sessionID ? relayedTools(sessionID, this) : undefined
     const homes = [this.home, ...(this.instance.home && !onMachine ? [this.yourCodex] : [])]
     // The files you attach in the session, copied where only the box writes (`fenceCopy`).
     const attached = sessionID ? fenceAttachments(directory) : undefined
@@ -278,7 +278,7 @@ export class CodexAgent implements Agent {
       state: STATE_IN_HOME,
       kept: KEPT_IN_HOME,
       read: [...(skills ? [skills] : []), ...(attached ? [attached] : [])],
-      port: relayed ? relayPort() : undefined,
+      port: relayPort(),
     })
   }
 
@@ -758,6 +758,8 @@ class CodexThread implements Thread {
   private waiting?: { abort: AbortController; typed?: MessageInput }
   /** Where Kuvo Code's tools were when it was loaded. */
   private toolsKey?: string
+  /** The computer's servers it was loaded with (their names). */
+  private serversKey?: string
   private skillsKey?: string
   /** The agents it spawned, by their thread: their sessions, across turns, kept with the conversation. */
   private get spawnedSessions(): Record<string, KnownSpawn> {
@@ -873,10 +875,15 @@ class CodexThread implements Thread {
     await this.agent.useSkills(this.session.id, skills, rpc)
     const turnedOffHere = (await engineSkills(directory)).filter((skill) => within(skill.folder, own) && off(skill.name)).map((skill) => ({ path: join(skill.folder, "SKILL.md"), enabled: false }))
     const skillsKey = JSON.stringify([skills, turnedOffHere])
+    // The computer's MCP servers (yours, the integrations', a bot's with its own keys), through the
+    // relay, which keeps their keys.
+    const computer = await computerServers(directory)
+    const servers = relayedServers(this.session.id, this.agent, directory, computer)
     // Loaded again when Kuvo Code's tools moved (the app started again), to reach them, or the
-    // skills changed.
-    if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey) return rpc
+    // skills or the servers changed.
+    if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey && computer.key === this.serversKey) return rpc
     this.toolsKey = tools?.key
+    this.serversKey = computer.key
     this.skillsKey = skillsKey
     this.instructions = instructions
     // Kuvo Code's own tools, as the engine's models have them (a setting for this thread alone).
@@ -890,6 +897,8 @@ class CodexThread implements Thread {
       "shell_environment_policy.set.OPENCODE_SESSION_ID": this.session.id,
       ...(onMachine ? ownFoldersConfig() : {}),
       ...(tools && server ? { [`mcp_servers.${tools.name}`]: server } : {}),
+      // (A command's server can take a while to start the first time, fetching its package.)
+      ...Object.fromEntries(servers.map((each) => [`mcp_servers.${each.name}`, { url: each.url, http_headers: each.headers, tool_timeout_sec: Math.ceil(each.timeout / 1000), startup_timeout_sec: 120 }])),
       ...(turnedOffHere.length ? { "skills.config": [...this.agent.ownSkillSettings(), ...turnedOffHere] } : {}),
     }
     const common = { cwd: this.session.location.directory, model: input.model.id, developerInstructions: instructions, config }

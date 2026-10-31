@@ -15,7 +15,8 @@ import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenc
 import { kuvoTools } from "../kuvotools"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
-import { dropRelayed, relayedTools, relayPort } from "../toolrelay"
+import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
+import { computerServers } from "../servers"
 import type { Turn } from "../turn"
 import type { Model, OAuthStatus, Session } from "../wire"
 import { CursorWorker, cursorWorker } from "./cursor-worker"
@@ -313,6 +314,11 @@ class CursorThread implements Thread {
     // Kuvo Code's own tools (the panel's browser, show_in_panel, messages to other agents), as the
     // other agents have them: what they do goes to this conversation (through the relay, in the sandbox).
     const tools = fenced ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
+    // And the computer's MCP servers (yours, the integrations', a bot's with its own keys), through
+    // the relay, which keeps their keys.
+    const servers = relayedServers(this.session.id, this, cwd, await computerServers(cwd))
+    const mcpServers: Record<string, unknown> = Object.fromEntries(servers.map((each) => [each.name, { type: "http", url: each.url, headers: each.headers }]))
+    if (tools) mcpServers[tools.name] = tools.kind === "http" ? { type: "http", url: tools.url, headers: tools.headers } : { type: "stdio", command: tools.command, args: tools.args, env: tools.env }
     return {
       model: selection,
       name: `Kuvo Code: ${this.session.title ?? "session"}`,
@@ -332,13 +338,7 @@ class CursorThread implements Thread {
         enableAgentRetries: true,
         store: this.owner.agentStore(fenced ? CursorWorker : sdk),
       },
-      ...(tools
-        ? {
-            mcpServers: {
-              [tools.name]: tools.kind === "http" ? { type: "http", url: tools.url, headers: tools.headers } : { type: "stdio", command: tools.command, args: tools.args, env: tools.env },
-            },
-          }
-        : {}),
+      ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
     }
   }
 
@@ -346,9 +346,10 @@ class CursorThread implements Thread {
   private async ensureAgent(sdk: any, options: any, hooks: TurnHooks) {
     const approvesAll = hooks.approvesAll(false)
     // Its sandbox, review, folders and Kuvo Code's tools are set as it starts: another approval
-    // mode, other skills or other tools start it again.
+    // mode, other skills or other tools (Kuvo Code's, or another set of the computer's servers)
+    // start it again.
     const skills = options.local?.dirs?.[0] as string | undefined
-    const tools = kuvoTools(this.session.id)?.key
+    const tools = JSON.stringify([kuvoTools(this.session.id)?.key, Object.keys(options.mcpServers ?? {}).sort()])
     // In the sandbox: its rules and the folders Also Allowed gives the project, as it starts.
     const fence = fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) : ""
     // (And the worker it runs in, as it starts again, or once it has stopped.)
@@ -606,7 +607,7 @@ class CursorThread implements Thread {
       state: ["*"],
       kept: [],
       read: [runtime, dirname(process.execPath), ...(options.local?.dirs ?? []), ...(attached ? [attached] : [])],
-      port: options.mcpServers ? relayPort() : undefined,
+      port: relayPort(),
     })
     if (!fence) throw new Error("Cursor runs in the sandbox here, and it isn't ready: restart Kuvo Code.")
     return new CursorWorker([fence.command, "--config=/dev/null", "--no-env-file", cursorWorker(runtime)], {
