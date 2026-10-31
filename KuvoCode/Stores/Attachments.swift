@@ -301,9 +301,10 @@ nonisolated enum Attachments {
     /// Writes out a file that came as data (a picture a tool returned, a file sent from the
     /// phone) to open it: with the extension of `type`, not the one its name says, and marked as
     /// downloaded, so Gatekeeper checks it like one.
-    static func writeReceived(_ data: Data, named name: String, type: UTType?) -> URL? {
+    static func writeReceived(_ data: Data, named name: String, type: UTType?, keepingExtension: Bool = false) -> URL? {
         let base = (fileName(name) as NSString).deletingPathExtension
-        guard let url = write(data, named: base, extension: type?.preferredFilenameExtension ?? "dat") else { return nil }
+        let own = (fileName(name) as NSString).pathExtension
+        guard let url = write(data, named: base, extension: keepingExtension && !own.isEmpty ? own : type?.preferredFilenameExtension ?? "dat") else { return nil }
         var values = URLResourceValues()
         values.quarantineProperties = [kLSQuarantineTypeKey as String: kLSQuarantineTypeOtherDownload as String]
         var quarantined = url
@@ -316,7 +317,8 @@ nonisolated enum Attachments {
     static func writeCarried(_ files: [Message.User.Attachment]) -> [URL] {
         files.compactMap { file in
             guard file.fileURL == nil, let bytes = file.bytes else { return nil }
-            return writeReceived(bytes, named: file.name ?? "Attachment", type: UTType(mimeType: file.mime))
+            // By its own name: a text file goes to a machine as text/plain, whatever kind it is.
+            return writeReceived(bytes, named: file.name ?? "Attachment", type: UTType(mimeType: file.mime), keepingExtension: true)
         }
     }
 

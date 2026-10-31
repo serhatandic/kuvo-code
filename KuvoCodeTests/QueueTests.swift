@@ -337,7 +337,7 @@ import Testing
         let notes = "Weekly numbers: 12, 15, 9\n"
         func carrying(_ message: String, _ text: String) -> [String: Any] {
             ["id": message, "sessionID": id, "type": "user", "delivery": "queue",
-             "payload": ["text": text, "files": [["uri": "data:text/plain;base64,\(Data(notes.utf8).base64EncodedString())", "name": "numbers.txt", "mime": "text/plain"]]]]
+             "payload": ["text": text, "files": [["uri": "data:text/plain;base64,\(Data(notes.utf8).base64EncodedString())", "name": "numbers.csv", "mime": "text/plain"]]]]
         }
         let (model, box, _) = try await open(running: true, inbox: [carrying("msg_02", "Sum these up"), carrying("msg_03", "Then chart them")])
         defer { box.stop(); engine.stop() }
@@ -354,6 +354,7 @@ import Testing
         let sent = (back.body["files"] as? [[String: Any]] ?? []).compactMap { ($0["uri"] as? String).flatMap(URL.init(string:)) }
         #expect(sent.count == 1, "\(back.body)")
         #expect(sent.first.flatMap { try? String(contentsOf: $0, encoding: .utf8) } == notes)
+        #expect(sent.first?.pathExtension == "csv", "as its own kind, not as the text/plain it went to the machine as")
 
         // Edit: the composer has it, file and all.
         model.edit(try #require(model.waiting.first { $0.id == "msg_03" }))
@@ -363,6 +364,7 @@ import Testing
         #expect(model.draftText == "Then chart them")
         #expect(model.draftFiles.count == 1)
         #expect(model.draftFiles.first.flatMap { try? String(contentsOf: $0, encoding: .utf8) } == notes)
+        #expect(model.draftFiles.first?.pathExtension == "csv")
         model.draftText = ""
         model.draftFiles = []
     }
