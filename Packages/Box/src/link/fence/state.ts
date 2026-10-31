@@ -19,7 +19,7 @@ import { BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_FILE, K, RUN, SANDBOX_N
 import { tellLauncher } from "./allowed";
 import { agentShellScript, agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
 import { LANDLOCK_RUNNER, landlockPolicy } from "./landlock";
-import { appTemporary, fencePolicy, realish, sandboxNpmCache } from "./policy";
+import { appTemporary, fencePolicy, realish, sandboxCaches } from "./policy";
 import { seatbeltProfile } from "./seatbelt";
 
 export interface FenceState {
@@ -76,7 +76,7 @@ const places: FencePlaces = {
   key: SOCKET_KEY_FILE,
   sshFor: SSH_FOR,
   sshAgents: SSH_AGENTS,
-  npm: realish(sandboxNpmCache()),
+  caches: sandboxCaches(),
   platform,
 };
 const VERSION = crypto.createHash("sha256")

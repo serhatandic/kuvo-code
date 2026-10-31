@@ -13011,12 +13011,13 @@ var RUNS_LATER = [
   ".gradle/gradle.properties",
   ".m2/settings.xml",
   ".npm/_npx",
-  ".cache/pre-commit",
   ".rustup/settings.toml",
   ".rustup/toolchains",
   ".pub-cache/bin",
   "go/bin"
 ];
+var TOOL_CACHES = ["pre-commit", "pnpm", "uv", "node/corepack"];
+var MAC_RUNS_LATER = ["Library/Caches/pnpm"];
 var SECRETS = [
   ".aws",
   ".config/gcloud",
@@ -13085,9 +13086,10 @@ function appTemporary() {
   const tmp = path53.dirname(path53.resolve(os5.tmpdir()));
   return path53.basename(tmp) === path53.basename(path53.dirname(path53.resolve(K))) ? tmp : null;
 }
-function sandboxNpmCache() {
+function sandboxCaches() {
   const tmp = appTemporary();
-  return tmp ? path53.join(os5.userInfo().homedir, "Library", "Caches", path53.basename(tmp), "sandbox-npm") : path53.join(K, "cache", "sandbox-npm");
+  const root = realish(tmp ? path53.join(os5.userInfo().homedir, "Library", "Caches", path53.basename(tmp)) : path53.join(K, "cache"));
+  return { npm: path53.join(root, "sandbox-npm"), pnpm: path53.join(root, "sandbox-pnpm"), uv: path53.join(root, "sandbox-uv"), corepack: path53.join(root, "sandbox-corepack") };
 }
 function macFolders(home) {
   const app = path53.dirname(path53.resolve(K));
@@ -13112,16 +13114,21 @@ function fencePolicy(ports = []) {
   const own = IS_MAC ? macFolders(home) : { kuvo: [K, path53.join(home, ".kuvo-code")], readable: [path53.join(K, "bin")] };
   const kuvo = [...new Set(own.kuvo.map(realish))];
   const kuvoReadable = own.readable.map(realish);
-  const readOnly = inHome(RUNS_LATER);
-  const commandCaches = [realish(sandboxNpmCache())];
+  const commandCaches = Object.values(sandboxCaches());
+  const ownCache = "KUVO_OWN_XDG_CACHE_HOME" in process.env ? process.env.KUVO_OWN_XDG_CACHE_HOME : process.env.XDG_CACHE_HOME;
+  const yourCaches = [realish(path53.join(home, ".cache"))];
+  if (ownCache && path53.isAbsolute(ownCache) && !kuvo.some((folder) => realish(ownCache) === folder || realish(ownCache).startsWith(folder + "/")))
+    yourCaches.push(realish(ownCache));
+  const runsLater = [...inHome(RUNS_LATER), ...new Set(yourCaches.flatMap((folder) => TOOL_CACHES.map((name) => path53.join(folder, name))))];
   if (process.platform === "darwin") {
     return {
       home,
       kuvo,
       kuvoReadable,
-      readOnly,
+      readOnly: [...runsLater, ...inHome(MAC_RUNS_LATER)],
       ports,
       commandCaches,
+      readOnlyPatterns: userTemporary().map((folder) => `^${escapeRegex(folder)}/T/bunx-`),
       kuvoPatterns: [
         `^${escapeRegex(home)}/Library/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
         `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`
@@ -13135,7 +13142,7 @@ function fencePolicy(ports = []) {
     home,
     kuvo,
     kuvoReadable,
-    readOnly,
+    readOnly: runsLater,
     ports,
     commandCaches,
     kuvoPatterns: [],
@@ -13401,7 +13408,7 @@ function seatbeltProfile(policy, options) {
   deny("file-write*", subpath("/"));
   allow("file-write*", ...policy.writable.map(subpath), param("WORK"), param("GIT"));
   allow("file-write*", ...Array.from({ length: MOST_FOLDERS }, (_, at) => param(`ALLOW${at}`)));
-  deny("file-write*", ...policy.readOnly.map(subpath));
+  deny("file-write*", ...policy.readOnly.map(subpath), ...(policy.readOnlyPatterns ?? []).map(regex));
   out.push(";; Kuvo Code's own folders: neither read nor written; its helpers run");
   const HIDDEN = "file-read-data file-write*";
   deny(HIDDEN, ...policy.kuvo.map(subpath), ...policy.kuvoPatterns.map(regex));
@@ -13506,7 +13513,9 @@ function launcherScript(places) {
     `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; ${places.platform === "darwin" ? `eval "r$i=\\$(escaped \\"\\$line\\")"; ` : ""}i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
     `export PRE_COMMIT_HOME="$TMPDIR"pre-commit`,
-    `(umask 077; mkdir -p ${sh(places.npm)}) && export npm_config_cache=${sh(places.npm)}`,
+    `(umask 077; mkdir -p ${[places.caches.npm, places.caches.pnpm, `${places.caches.uv}/cache`, `${places.caches.uv}/tools`, places.caches.corepack].map(sh).join(" ")})`,
+    `export npm_config_cache=${sh(places.caches.npm)} pnpm_config_cache_dir=${sh(places.caches.pnpm)} UV_CACHE_DIR=${sh(`${places.caches.uv}/cache`)} UV_TOOL_DIR=${sh(`${places.caches.uv}/tools`)} COREPACK_HOME=${sh(places.caches.corepack)}`,
+    ...places.platform === "linux" ? ["export UV_LINK_MODE=copy"] : [],
     ...places.platform === "darwin" ? [`tmp=$(cd "$tmp" 2>/dev/null && pwd -P) || { echo "This command can't run: its temporary folder isn't there." >&2; exit 126; }`] : [],
     `own=$F/none`,
     `case \${OPENCODE_SESSION_ID-} in`,
@@ -13641,7 +13650,7 @@ function agentsNote(platform) {
       "- Commands can't open apps (`open`) or start launchd jobs."
     ] : [],
     "",
-    "`npx` and `npm` use a cache of Kuvo Code's own here (`$npm_config_cache`): leave it as it is, and `npx -y <package>` fetches what it needs.",
+    "`npm`, `pnpm`, `uv` and corepack use caches of Kuvo Code's own here (`$npm_config_cache`, `$pnpm_config_cache_dir`, `$UV_CACHE_DIR`, `$COREPACK_HOME`): leave them as they are, and `npx -y <package>`, `pnpm dlx` and `uvx` fetch what they need (`uvx` with a Python that's installed).",
     "",
     "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
     "",
@@ -13780,7 +13789,7 @@ var places = {
   key: SOCKET_KEY_FILE,
   sshFor: SSH_FOR,
   sshAgents: SSH_AGENTS,
-  npm: realish(sandboxNpmCache()),
+  caches: sandboxCaches(),
   platform
 };
 var VERSION = crypto23.createHash("sha256").update(launcherScript(places)).update(LANDLOCK_RUNNER).update(pluginScript(places, "")).digest("hex").slice(0, 16);

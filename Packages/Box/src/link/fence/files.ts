@@ -34,8 +34,8 @@ export interface FencePlaces {
    * (vault/ssh.ts): there only while agents may use the vault. */
   sshFor: string;
   sshAgents: string;
-  /** npm's cache for commands (`sandboxNpmCache`). */
-  npm: string;
+  /** npm's, pnpm's, uv's and corepack's caches for commands (`sandboxCaches`). */
+  caches: { npm: string; pnpm: string; uv: string; corepack: string };
   platform: "darwin" | "linux";
 }
 
@@ -132,9 +132,17 @@ export function launcherScript(places: FencePlaces): string {
     // pre-commit's hooks set their tools up in its own folder as they first run, which runs later
     // outside the sandbox, so commands only read it: theirs go in their temporary folder instead.
     `export PRE_COMMIT_HOME="$TMPDIR"pre-commit`,
-    // npm's, likewise: npx fetches a package there and runs it from it, so its cache is Kuvo Code's
-    // own for commands, never used outside the sandbox (yours runs outside it, so its `_npx` is only read).
-    `(umask 077; mkdir -p ${sh(places.npm)}) && export npm_config_cache=${sh(places.npm)}`,
+    // npm's, pnpm's, uv's and corepack's, likewise: npx, `pnpm dlx` and uvx fetch a package there
+    // and run it from it, and corepack the pnpm and yarn it runs, so their caches are Kuvo Code's own
+    // for commands, never used outside the sandbox (yours run outside it, so commands only read
+    // them); and uv's tools folder, which uvx writes in as it runs one. (pnpm 11 and later read
+    // `pnpm_config_cache_dir`; pnpm 10 only an `npm_config_` one, which npm warns of in every
+    // command, so it's left out: pnpm 10's `pnpm dlx` is refused, as it would write in yours.)
+    `(umask 077; mkdir -p ${[places.caches.npm, places.caches.pnpm, `${places.caches.uv}/cache`, `${places.caches.uv}/tools`, places.caches.corepack].map(sh).join(" ")})`,
+    `export npm_config_cache=${sh(places.caches.npm)} pnpm_config_cache_dir=${sh(places.caches.pnpm)} UV_CACHE_DIR=${sh(`${places.caches.uv}/cache`)} UV_TOOL_DIR=${sh(`${places.caches.uv}/tools`)} COREPACK_HOME=${sh(places.caches.corepack)}`,
+    // On Linux uv links what it installs to its cache's files, which every conversation's commands
+    // write: a project's environment it makes copies them instead. (macOS clones them, apart.)
+    ...(places.platform === "linux" ? ["export UV_LINK_MODE=copy"] : []),
     // (As the sandbox compares paths: through links, `/var` being `/private/var`.)
     ...(places.platform === "darwin" ? [`tmp=$(cd "$tmp" 2>/dev/null && pwd -P) || { echo "This command can't run: its temporary folder isn't there." >&2; exit 126; }`] : []),
     // Its conversation's wake-ups and watches (kuvo-wake): its bot's folder, or its own in the
@@ -288,7 +296,7 @@ export function agentsNote(platform: "darwin" | "linux"): string {
         ]
       : []),
     "",
-    "`npx` and `npm` use a cache of Kuvo Code's own here (`$npm_config_cache`): leave it as it is, and `npx -y <package>` fetches what it needs.",
+    "`npm`, `pnpm`, `uv` and corepack use caches of Kuvo Code's own here (`$npm_config_cache`, `$pnpm_config_cache_dir`, `$UV_CACHE_DIR`, `$COREPACK_HOME`): leave them as they are, and `npx -y <package>`, `pnpm dlx` and `uvx` fetch what they need (`uvx` with a Python that's installed).",
     "",
     "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
     "",

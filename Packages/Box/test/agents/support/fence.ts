@@ -16,9 +16,9 @@ export function realFence(kuvo: string, sockets: string[] = []) {
   const platform = process.platform === "darwin" ? "darwin" : "linux"
   const places: FencePlaces = {
     folder, launcher: join(kuvo, "bin", "kuvo-fence"), runner: join(kuvo, "bin", "kuvo-fence.js"), inside: [join(kuvo, "bots")], probe: join(folder, "probe"),
-    bots: join(kuvo, "bots"), wakes: join(kuvo, "wakes"), key: join(kuvo, "run", "socket.key"), sshFor: join(kuvo, "run", "ssh-for"), sshAgents: join(kuvo, "run", "ssh"), npm: join(kuvo, "cache", "sandbox-npm"), platform,
+    bots: join(kuvo, "bots"), wakes: join(kuvo, "wakes"), key: join(kuvo, "run", "socket.key"), sshFor: join(kuvo, "run", "ssh-for"), sshAgents: join(kuvo, "run", "ssh"), caches: { npm: join(kuvo, "cache", "sandbox-npm"), pnpm: join(kuvo, "cache", "sandbox-pnpm"), uv: join(kuvo, "cache", "sandbox-uv"), corepack: join(kuvo, "cache", "sandbox-corepack") }, platform,
   }
-  const policy: FencePolicy = { home: kuvo, kuvo: [kuvo], kuvoPatterns: [], kuvoReadable: [join(kuvo, "bin")], writable: ["/dev"], readOnly: [], secrets: [], ports: [], sockets, commandCaches: [join(kuvo, "cache", "sandbox-npm")] }
+  const policy: FencePolicy = { home: kuvo, kuvo: [kuvo], kuvoPatterns: [], kuvoReadable: [join(kuvo, "bin")], writable: ["/dev"], readOnly: [], secrets: [], ports: [], sockets, commandCaches: ["sandbox-npm", "sandbox-pnpm", "sandbox-uv", "sandbox-corepack"].map(name => join(kuvo, "cache", name)) }
   mkdirSync(join(folder, "shell"), { recursive: true })
   const write = (file: string, text: string, mode = 0o600) => {
     mkdirSync(dirname(file), { recursive: true })

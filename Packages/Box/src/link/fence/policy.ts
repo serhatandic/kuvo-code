@@ -29,11 +29,14 @@ export interface FencePolicy {
   /** Written besides WORK, GIT and TMP: the system's temporary folders, devices, tools' caches. */
   writable: string[];
   /** Kuvo Code's own caches for commands, inside its folders: written, and never used outside the
-   * sandbox (`sandboxNpmCache`). */
+   * sandbox (`sandboxCaches`). */
   commandCaches: string[];
   /** Inside those, what's only read: what runs later outside the sandbox (tools' own programs and
    * settings, scripts they run as they start). */
   readOnly: string[];
+  /** On macOS, more of them by name: regular expressions over whole paths (bunx's packages in your
+   * temporary folder). */
+  readOnlyPatterns?: string[];
   /** Never read: your secrets (folders or files). */
   secrets: string[];
   /** Kuvo Code's own servers on 127.0.0.1, refused where the system can (macOS); everywhere their
@@ -53,7 +56,12 @@ const LINUX_CACHES = [".local/share/pnpm/store"];
 // settings that name programs, scripts they run as they start, packages npx runs as they are.
 const RUNS_LATER = [".cargo/bin", ".cargo/config", ".cargo/config.toml", ".bun/bin", ".bun/install/global", ".deno/bin",
   ".dotnet/tools", ".gradle/init.d", ".gradle/init.gradle", ".gradle/init.gradle.kts", ".gradle/gradle.properties",
-  ".m2/settings.xml", ".npm/_npx", ".cache/pre-commit", ".rustup/settings.toml", ".rustup/toolchains", ".pub-cache/bin", "go/bin"];
+  ".m2/settings.xml", ".npm/_npx", ".rustup/settings.toml", ".rustup/toolchains", ".pub-cache/bin", "go/bin"];
+// In your cache folder (`~/.cache`, and your own `XDG_CACHE_HOME`), tools' caches whole: pre-commit's
+// hooks, what `pnpm dlx` and uvx fetched, and the pnpm and yarn corepack fetched run from them, and
+// what's installed from them is linked to their files. (pnpm's own on a Mac is in `Library/Caches`.)
+const TOOL_CACHES = ["pre-commit", "pnpm", "uv", "node/corepack"];
+const MAC_RUNS_LATER = ["Library/Caches/pnpm"];
 
 // Your secrets (each a folder or a file in your home folder).
 const SECRETS = [".aws", ".config/gcloud", ".azure", ".kube", ".docker/config.json", ".oci", ".config/doctl",
@@ -109,14 +117,16 @@ export function appTemporary(): string | null {
 }
 
 /**
- * npm's cache for commands in the sandbox, Kuvo Code's own: npx fetches a package there and runs it
- * from it, so nothing it fetches runs outside the sandbox, as it would from yours (whose `_npx`
- * commands only read). In this Mac's app's cache folder, on its box; in `cache` elsewhere (a
- * machine's `~/.kuvo-code`). Never the engine's own (`cache/npm`), which runs outside it.
+ * The caches of npm, pnpm and uv for commands in the sandbox, Kuvo Code's own: npx, `pnpm dlx` and
+ * uvx fetch a package there and run it from it, so nothing they fetch runs outside the sandbox, as
+ * it would from yours (which commands only read). In this Mac's app's cache folder, on its box; in
+ * `cache` elsewhere (a machine's `~/.kuvo-code`). Never the engine's own (`cache/npm`), which runs
+ * outside it.
  */
-export function sandboxNpmCache(): string {
+export function sandboxCaches(): { npm: string; pnpm: string; uv: string; corepack: string } {
   const tmp = appTemporary();
-  return tmp ? path.join(os.userInfo().homedir, "Library", "Caches", path.basename(tmp), "sandbox-npm") : path.join(K, "cache", "sandbox-npm");
+  const root = realish(tmp ? path.join(os.userInfo().homedir, "Library", "Caches", path.basename(tmp)) : path.join(K, "cache"));
+  return { npm: path.join(root, "sandbox-npm"), pnpm: path.join(root, "sandbox-pnpm"), uv: path.join(root, "sandbox-uv"), corepack: path.join(root, "sandbox-corepack") };
 }
 
 /** This Mac's app's folders, around its box's (`…/Application Support/<bundle>/box`). */
@@ -144,11 +154,19 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
   const own = IS_MAC ? macFolders(home) : { kuvo: [K, path.join(home, ".kuvo-code")], readable: [path.join(K, "bin")] };
   const kuvo = [...new Set(own.kuvo.map(realish))];
   const kuvoReadable = own.readable.map(realish);
-  const readOnly = inHome(RUNS_LATER);
-  const commandCaches = [realish(sandboxNpmCache())];
+  const commandCaches = Object.values(sandboxCaches());
+  // Your cache folder, and your own if you set one (on a machine, what its launch kept: the box's
+  // own is in Kuvo Code's folder), with the tools' caches in it.
+  const ownCache = "KUVO_OWN_XDG_CACHE_HOME" in process.env ? process.env.KUVO_OWN_XDG_CACHE_HOME : process.env.XDG_CACHE_HOME;
+  const yourCaches = [realish(path.join(home, ".cache"))];
+  if (ownCache && path.isAbsolute(ownCache) && !kuvo.some(folder => realish(ownCache) === folder || realish(ownCache).startsWith(folder + "/"))) yourCaches.push(realish(ownCache));
+  const runsLater = [...inHome(RUNS_LATER), ...new Set(yourCaches.flatMap(folder => TOOL_CACHES.map(name => path.join(folder, name))))];
   if (process.platform === "darwin") {
     return {
-      home, kuvo, kuvoReadable, readOnly, ports, commandCaches,
+      home, kuvo, kuvoReadable, readOnly: [...runsLater, ...inHome(MAC_RUNS_LATER)], ports, commandCaches,
+      // bunx's packages, in your temporary folder (`T/bunx-<uid>-<package>`), which it runs again
+      // as they are. (A command's own bunx is in its own temporary folder.)
+      readOnlyPatterns: userTemporary().map(folder => `^${escapeRegex(folder)}/T/bunx-`),
       // Every copy's (`run.kuvo.code…`), wherever the system keeps an app's.
       kuvoPatterns: [
         `^${escapeRegex(home)}/Library/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
@@ -160,7 +178,7 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
     };
   }
   return {
-    home, kuvo, kuvoReadable, readOnly, ports, commandCaches,
+    home, kuvo, kuvoReadable, readOnly: runsLater, ports, commandCaches,
     kuvoPatterns: [],
     writable: ["/tmp", "/var/tmp", "/dev", "/dev/shm", ...inHome([...CACHES, ...LINUX_CACHES])],
     secrets: [...inHome([...SECRETS, ...LINUX_SECRETS]), ...sshKeys(home), ...ghHosts(home)],
