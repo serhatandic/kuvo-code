@@ -96,6 +96,19 @@ struct GoalTimelineTests {
         #expect(GoalPlanWords.service("www.namecheap.com") == "Namecheap")
     }
 
+    /// A goal whose next step waits for a time (its bot's wake-up on Monday) says when it goes on,
+    /// as the box says it, rather than that it's working.
+    @Test func aGoalWaitingForATimeSaysWhenItGoesOn() throws {
+        let json = #"{"id": "goal_1", "bot": "bot_1", "name": "Pixel", "session": "ses_1", "goal": "Weekly summaries", "state": "running", "steps": [], "proposed": 1, "next": 1793599200000, "alone": true}"#
+        let goal = try JSONDecoder().decode(GoalPlan.self, from: Data(json.utf8))
+        let istanbul = try #require(TimeZone(identifier: "Europe/Istanbul"))
+        let saturday = Date(timeIntervalSince1970: 1793599200 - 2 * 86_400)
+        #expect(GoalPlanWords.next(goal, now: saturday, timeZone: istanbul, locale: Locale(identifier: "en_GB")) == "Next: Mon 09:00")
+        #expect(GoalPlanWords.next(goal, now: saturday.addingTimeInterval(-21 * 86_400), timeZone: istanbul, locale: Locale(identifier: "en_GB")) == "Next: Mon 2 Nov at 09:00",
+                "three weeks out, with its date")
+        #expect(GoalPlanWords.next(plan([])) == nil, "one that can go on now")
+    }
+
     @Test func aGoalThatEndedIsLaidOutAtItsEndNotNow() {
         let ended = start.addingTimeInterval(3 * 3600)
         let timeline = GoalTimeline(plan([.init(id: "s1", text: "Site", state: .done, began: at(0), ended: at(2)),

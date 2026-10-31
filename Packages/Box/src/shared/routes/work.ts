@@ -95,7 +95,8 @@ export const WORK_CHANGED = object({ changed: map(number) });
 /** A step of a goal's plan, a track of its own: where it stands, how far along where the bot can
  * measure it (0 to 1; left out where it can't, never guessed), a word on it, the phase it's in, the
  * service it's done at (`site`, its address, for its icon), the steps it comes after (by id), the sessions working on it, while it waits for a limit to reset
- * until when, and when it began and ended (ms), for a time axis. */
+ * until when, when the bot put it off until (`until`, a step that starts at a time), and when it
+ * began and ended (ms), for a time axis. */
 export const GOAL_STEP = object({
   id: string,
   text: string,
@@ -107,6 +108,7 @@ export const GOAL_STEP = object({
   "after?": list(string),
   "sessions?": list(string),
   "resumes?": number,
+  "until?": number,
   "began?": number,
   "ended?": number,
 });
@@ -149,7 +151,8 @@ export const GOAL_SPEND = object({ what: string, cap: number, currency: string, 
  * each (off until you turn it on), the projects it may make, whether what needs you wakes you, how
  * often you hear how it goes (`digest`), when it ends if you set an end, where it stands, what waits
  * for you, what's paused at a limit and until when, how long it has waited at limits (ms), what's
- * still watched, the last digest and the final report. Proposed by the bot; only you start it,
+ * still watched, when it goes on next while nothing of it can before a time (`next`: its bot's
+ * wake-up, or the steps it put off), the last digest and the final report. Proposed by the bot; only you start it,
  * decline it or stop it. `alone`: whether this box may work on it on its own (else it runs with you
  * there). Times in ms since 1970. */
 export const GOAL_PLAN = object({
@@ -175,6 +178,7 @@ export const GOAL_PLAN = object({
   paused: list(object({ why: string, "until?": number, "session?": string })),
   waited: number,
   watching: list(string),
+  "next?": number,
   "lastDigest?": object({ at: number, text: string }),
   "report?": string,
   alone: bool,

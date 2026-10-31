@@ -258,12 +258,15 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
     /// How long it has waited at limits, in ms.
     public let waited: Double
     public let watching: [String]
+    /// When it goes on next (ms since 1970), while nothing of it is at work and nothing can be
+    /// before a time: its bot's wake-up, or the steps it put off.
+    public let next: Double?
     public let lastDigest: Digest?
     public let report: String?
     /// Whether its box may work on it alone (else it runs with you there).
     public let alone: Bool
 
-    public init(id: String, bot: String, name: String, session: String, goal: String, title: String? = nil, state: State, steps: [Step], checks: [Check] = [], spend: [Spend] = [], public: [Public] = [], projects: [String] = [], wake: Bool = false, digest: Cadence = .none, ends: Double? = nil, proposed: Double, started: Double? = nil, ended: Double? = nil, waiting: [Waiting] = [], paused: [Paused] = [], waited: Double = 0, watching: [String] = [], lastDigest: Digest? = nil, report: String? = nil, alone: Bool) {
+    public init(id: String, bot: String, name: String, session: String, goal: String, title: String? = nil, state: State, steps: [Step], checks: [Check] = [], spend: [Spend] = [], public: [Public] = [], projects: [String] = [], wake: Bool = false, digest: Cadence = .none, ends: Double? = nil, proposed: Double, started: Double? = nil, ended: Double? = nil, waiting: [Waiting] = [], paused: [Paused] = [], waited: Double = 0, watching: [String] = [], next: Double? = nil, lastDigest: Digest? = nil, report: String? = nil, alone: Bool) {
         self.id = id
         self.bot = bot
         self.name = name
@@ -286,12 +289,13 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         self.paused = paused
         self.waited = waited
         self.watching = watching
+        self.next = next
         self.lastDigest = lastDigest
         self.report = report
         self.alone = alone
     }
 
-    private enum CodingKeys: String, CodingKey { case id, bot, name, session, goal, title, state, steps, checks, spend, `public`, projects, wake, digest, ends, proposed, started, ended, waiting, paused, waited, watching, lastDigest, report, alone }
+    private enum CodingKeys: String, CodingKey { case id, bot, name, session, goal, title, state, steps, checks, spend, `public`, projects, wake, digest, ends, proposed, started, ended, waiting, paused, waited, watching, next, lastDigest, report, alone }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -317,6 +321,7 @@ public struct GoalPlan: Decodable, Sendable, Hashable, Identifiable {
         paused = (try? container.decode([Lenient<Paused>].self, forKey: .paused))?.compactMap(\.value) ?? []
         waited = (try? container.decode(Double.self, forKey: .waited)) ?? 0
         watching = (try? container.decode([String].self, forKey: .watching)) ?? []
+        next = try? container.decodeIfPresent(Double.self, forKey: .next)
         lastDigest = try? container.decodeIfPresent(Digest.self, forKey: .lastDigest)
         report = try container.decodeIfPresent(String.self, forKey: .report)
         alone = (try? container.decode(Bool.self, forKey: .alone)) ?? false
@@ -429,6 +434,17 @@ public enum GoalPlanWords {
 
     /// "2 of 5".
     public static func progress(_ goal: GoalPlan) -> String { "\(goal.done) of \(goal.steps.count)" }
+
+    /// While it waits for a time, when it goes on: "Next: Mon 09:00", with the date beyond a week
+    /// ("Next: Mon 23 Nov at 09:00"); nil while it can go on now.
+    public static func next(_ goal: GoalPlan, now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String? {
+        guard goal.state == .running, let next = goal.next else { return nil }
+        let at = Date(timeIntervalSince1970: next / 1000)
+        var style = Date.FormatStyle(timeZone: timeZone).weekday(.abbreviated).hour().minute()
+        if at.timeIntervalSince(now) > 6 * 86_400 { style = style.day().month(.abbreviated) }
+        style.locale = locale
+        return "Next: \(at.formatted(style))"
+    }
 
     /// The plan in a few words, for its card: "6 steps", "12 steps in 3 phases".
     public static func summary(_ goal: GoalPlan) -> String {

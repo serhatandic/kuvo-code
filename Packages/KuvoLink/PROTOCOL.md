@@ -786,7 +786,8 @@ beside it.
   day|week|milestones|none}`) puts the card up, replacing one it proposed before (refused while one
   runs; `digest` is a day's for a plan in phases or of more than 12 steps unless it says);
   `goal_progress` (`{steps: [{step, state?: todo|doing|done|waiting|paused|skipped, progress?: 0–1,
-  note?}]}`, `add?: [text | {text, phase?, after?}]`, `waiting?: {kind: you|judgment|outside, text,
+  note?, until?}]}`, `until` a time like `2026-11-02T09:00` that a step can only start at (null
+  takes it away; taken up, it goes), `add?: [text | {text, phase?, after?}]`, `waiting?: {kind: you|judgment|outside, text,
   detail?, url?}`, `resolved?: [id or words]` (what waited and is dealt with), `spent?: [{what,
   amount}]` (one on no spend line is kept as waiting, kind `outside`), `watching?: [text]}`; all
   checked before any is kept; it says whether you're here); `may_publish` (`{step}`: yes only for a public step you switched on); `may_spend` (`{what,
@@ -814,13 +815,14 @@ beside it.
   as the plan's (`paused` with `session` the bot's conversation).
 - **`GET kuvo/work/goals`** and **`GET kuvo/work/goals/events`** (ndjson, now and at each change) →
   `{goals: [{id, bot, name, session, goal, title?, state: proposed|running|done|stopped|declined, steps:
-  [{id, text, state, progress?, note?, phase?, site?, after?, sessions?, resumes?,
+  [{id, text, state, progress?, note?, phase?, site?, after?, sessions?, resumes?, until?,
   began?, ended?}], checks: [{id, text,
   detail?, state: ok|needs|failed, by: bot|box, site?, action?: {kind: open|projectsFolder, label, url?}}], spend:
   [{what, cap, currency, per, spent, until?}], public: [{id, text, on}], projects, wake, digest,
   ends?, proposed, started?, ended?, waiting: [{id, kind: you|judgment|outside|ask, text, detail?,
-  url?, site?, session?, at}], paused: [{why, until?, session?}], waited, watching, lastDigest?: {at, text},
-  report?, alone}]}`: each bot's latest, while it's proposed or running, or ended within a day. Kept
+  url?, site?, session?, at}], paused: [{why, until?, session?}], waited, watching, next?, lastDigest?: {at, text},
+  report?, alone}]}` (`next`: when it goes on next, while nothing of it is at work and nothing can be
+  before a time: the bot's soonest wake-up, or the steps it put off; clients say "Next: Mon 09:00"): each bot's latest, while it's proposed or running, or ended within a day. Kept
   in `run/work/goals.json`; `kuvo/work/events` moves too. While it's proposed, the box's own checks
   come first: `alone` (failed where this box can't work on it alone yet), `power` (a Mac on battery),
   `projectsFolder` (needs, when the plan makes a project and none is picked). `progress` is given only
@@ -838,7 +840,13 @@ beside it.
   started before isn't the goal's.
 - **Carrying on**: once nothing of the goal has been at work (the bot or its sessions) for 10
   minutes, then 30, an hour, two, four, eight and twelve, the bot is told `[Goal] Nothing of the goal
-  is at work now…`, unless all that's left waits for you or a limit. Anything at work, or a
+  is at work now…` (a box note), unless all that's left waits for you, a limit or a time: a wake-up
+  the bot set (bridge 0.9.144; one that comes back, a daily check, only once nothing can be done
+  now), or steps it put off (`until`, seconds or ms or an ISO time) or paused itself. The wait then
+  starts over at that time, so it's told only if what came then started nothing; a wait taken away
+  leaves none ahead. Told once, it isn't told again until the plan changes (a step's state,
+  progress, time or sessions, or what waits), a time it waited for comes and goes, or its turn
+  failed, so a bot that answers and changes nothing is never looped. Anything at work, or a
   `goal_progress`, starts the wait over.
 - **Present or away**: you're here while a client is in use (`kuvo/attention`); the box keeps it in
   `run/work/here.json` for the tools. Whether you're here or not, unattended rules hold:

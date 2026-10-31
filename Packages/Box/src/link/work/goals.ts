@@ -25,8 +25,9 @@ import { PAUSED_BY_YOU } from "../../shared/goals";
 import { boxNote } from "../../shared/queues";
 import { messageID } from "../engine/sessions";
 import { locked, textOf, writePrivate } from "../files";
-import { HERE } from "../home";
+import { BOTS, HERE } from "../home";
 import { placeOfSession } from "../letters/letter";
+import { readWakes } from "../areas/wakes";
 import { asksAlways, withAlwaysAsk } from "./always";
 import { periodEnd, periodOf, startOfDay, timeGiven } from "./clock";
 import { asksIn, permissionWords } from "./answers";
@@ -86,6 +87,9 @@ export interface KeptGoal extends Omit<GoalPlanShape, "alone" | "steps" | "spend
   /** Since when nothing of it has been at work, and how many times the bot was told to carry on. */
   idleSince?: number;
   nudges?: number;
+  /** The plan as it stood when the bot was last told to carry on (`planNow`): not told again
+   * until it changes, so a bot that answers and changes nothing is never looped. */
+  nudgedPlan?: string;
   /** Its conversation's goal (the agents bridge's) is set: taken away once the plan ends. */
   loop?: boolean;
   /** Since when you've had it paused (its conversation's goal, from any app): nothing of it goes
@@ -141,7 +145,7 @@ export function boxChecks(goal: Pick<KeptGoal, "projects" | "name" | "bot">): Go
 }
 
 const shown = (goal: KeptGoal): GoalPlanShape => {
-  const { periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, ...rest } = goal;
+  const { periods: _, asksSeen: __, limitsSeen: ___, told: ____, reportTold: _____, endTold: ______, phasesDone: _______, doneAtDigest: ________, pausedSince: _________, idleSince: __________, nudges: ___________, loop: ____________, heldByYou: _____________, nudgedPlan: ______________, ...rest } = goal;
   // A step whose session waits for a limit to reset is paused, until then.
   const steps = goal.steps.map(step => {
     const paused = goal.state === "running" && step.state !== "done" && step.state !== "skipped" ? goal.paused.find(each => each.session && step.sessions?.includes(each.session)) : undefined;
@@ -642,12 +646,19 @@ export function linkSession(bot: string, step: unknown, session: string, file = 
 // Where you are, in a line, for what the bot does next.
 const presence = () => (isHere() ? "The user is here now." : "The user is away now: prepare anything public or sent as a draft, unless its switch is on, and carry on with what doesn't need them.");
 
+// A time a step waits for, as goal_progress takes it (ISO words, or ms; seconds, as wake-ups give
+// it, read as such): null for one it can't read.
+function untilOf(value: unknown): number | null {
+  const at = typeof value === "number" ? (value < 1e12 ? value * 1000 : value) : typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value.trim()) ? Date.parse(value.trim()) : NaN;
+  return Number.isFinite(at) && at > 0 ? at : null;
+}
+
 /** goal_progress: steps marked (and added as the plan changes), something waiting for you, what's
  * spent, what's still watched. */
 export function goalProgress(bot: string, given: Record<string, unknown>, file = GOALS_FILE): { said: string } | { refused: string } {
   const running = runningGoal(bot, file);
   if (!running) return { refused: "No goal is running: propose one with propose_goal, and the user starts it." };
-  const marks = Array.isArray(given.steps) ? given.steps : given.step !== undefined ? [{ step: given.step, state: given.state, progress: given.progress, note: given.note }] : [];
+  const marks = Array.isArray(given.steps) ? given.steps : given.step !== undefined ? [{ step: given.step, state: given.state, progress: given.progress, note: given.note, until: given.until }] : [];
   const added = (Array.isArray(given.add) ? given.add : []).map(stepGiven).filter((each): each is NonNullable<typeof each> => Boolean(each));
   // All of it checked first: nothing's kept of a call that's wrong somewhere.
   const stepAt = (step: unknown, steps: readonly GoalStepShape[]) => (typeof step === "number" ? step - 1 : typeof step === "string" ? steps.findIndex(each => each.id === step) : -1);
@@ -657,6 +668,7 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
     if (mark.progress !== undefined && mark.progress !== null && !(typeof mark.progress === "number" && mark.progress >= 0 && mark.progress <= 1)) return { refused: "A step's progress is a share from 0 to 1, given only where you can measure it (3 of 8 pages is 0.375)." };
     // The user sees what was counted, and the track fills by it: never a bare share.
     if (typeof mark.progress === "number" && mark.progress < 1 && !text(mark.note, 300)) return { refused: "Say what you counted with the share, in note: progress 0.375 with note \"3 of 8 pages\". The user sees the count." };
+    if (mark.until !== undefined && mark.until !== null && untilOf(mark.until) === null) return { refused: "until is when the step can start, as a time like 2026-11-02T09:00 (or null to take it away)." };
   }
   if (isObject(given.waiting) && (!text(given.waiting.text, 300) || !WAITING_KINDS.includes(given.waiting.kind as (typeof WAITING_KINDS)[number]))) return { refused: "What waits needs its kind (you, judgment or outside) and what it is (text)." };
   const spent = Array.isArray(given.spent) ? given.spent : isObject(given.spent) ? [given.spent] : [];
@@ -683,8 +695,12 @@ export function goalProgress(bot: string, given: Record<string, unknown>, file =
       if (text(mark.note, 300)) next.note = text(mark.note, 300)!;
       else if (mark.note === null || mark.note === "") delete next.note;
       if (next.state !== "paused") delete next.resumes;
+      // Put off until a time, or no longer: taken up (or set aside), it's at it now.
+      const until = mark.until === null ? null : untilOf(mark.until);
+      if (until !== null) next.until = until;
+      else if (mark.until === null || (mark.state !== undefined && next.state !== "todo")) delete next.until;
       goal.steps[at] = next;
-      notes.push(`step ${at + 1} ${next.state}`);
+      notes.push(`step ${at + 1} ${next.state}${next.until ? ` until ${new Date(next.until).toISOString()}` : ""}`);
     }
     for (const step of keptSteps(added, goal.steps.length)) {
       goal.steps.push(step);
@@ -811,6 +827,10 @@ function digestWords(goal: KeptGoal, now: number): string {
   return `${goal.digest === "week" ? `Week ${Math.max(1, Math.floor(day / 7))}` : `Day ${day}`}: ${parts.join(", ")}.`;
 }
 
+// The plan as it stands, for whether anything changed since the bot was told to carry on: each
+// step's state, progress, put-off time and sessions, and what waits.
+const planNow = (goal: KeptGoal) => JSON.stringify([goal.steps.map(step => [step.id, step.state, step.progress ?? null, step.until ?? null, step.sessions?.length ?? 0]), goal.waiting.map(item => item.id)]);
+
 /** How long a goal with nothing at work waits before its bot is told to carry on: longer each time. */
 const NUDGE_AFTER = [10, 30, 60, 120, 240, 480, 720].map(minutes => minutes * 60_000);
 
@@ -935,13 +955,25 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
         if (each.id === goal.session || now - asksSeen[key] >= ASK_SETTLES) addWaiting(goal.bot, { kind: "ask", text: `${each.title}: ${ask.what}`, session: each.id }, file, `ask:${key}`);
       }
     }
-    // Nothing of it at work a while, and something it can do: the bot is told to carry on.
+    // Nothing of it at work a while, and something it can do now: the bot is told to carry on. Not
+    // while all that's left waits for you, a limit or a time (a wake-up the bot set itself, or the
+    // steps it put off until then): the goal says when it goes on next, and the wait for a nudge
+    // starts from that time, so one comes only if what came then started nothing.
     const live = readKept(file).find(each => each.id === goal.id);
     const atWork = working.has(goal.session) || work.some(each => working.has(each.data.id));
     const left = (live?.steps ?? []).filter(step => step.state !== "done" && step.state !== "skipped");
     const pausedSessions = new Set((live?.paused ?? []).map(each => each.session).filter(Boolean));
+    const doable = left.filter(step => (step.state === "todo" || step.state === "doing") && !(step.sessions?.length && step.sessions.every(id => pausedSessions.has(id))));
+    const nowDoable = doable.filter(step => !(step.until && step.until > now));
+    // (A wake-up that comes back, a daily check, holds nothing back while there's work to do now.)
+    const wakes = readWakes(path.join(BOTS, goal.bot));
+    const woken = wakes.paused ? undefined : wakes.wakes.filter(each => !each.every || !nowDoable.length).map(each => each.due * 1000).find(due => due > now);
+    const putOff = nowDoable.length ? [] : doable.map(step => step.until!).filter(until => until > now);
+    const next = [woken, ...putOff].filter((at): at is number => at !== undefined).sort((a, b) => a - b)[0];
     const canGoOn = !live?.heldByYou && !(live?.paused ?? []).some(each => !each.session || each.session === goal.session)
-      && left.some(step => step.state !== "waiting" && !(step.sessions?.length && step.sessions.every(id => pausedSessions.has(id))));
+      && nowDoable.length > 0 && woken === undefined;
+    // Told already and nothing changed, but its turn failed: told again, after a while as before.
+    const failed = !atWork && canGoOn && live?.nudgedPlan && own ? await failedTurn(own.target, goal.session, signal) : null;
     let nudge = false;
     changeKept(all => {
       const kept = all.find(each => each.id === goal.id);
@@ -951,24 +983,41 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
       // Asks answered since (here, on a phone, by the bot) leave the list.
       kept.waiting = kept.waiting.filter(item => item.kind !== "ask" || open.has(item.id.replace(/^ask:/, "")));
       if (freshPeriods(kept, now)) noteWorkChanged(kept.bot);
-      if (atWork || !canGoOn) {
-        if (atWork) {
-          delete kept.idleSince;
-          kept.nudges = 0;
-        }
+      const shownNext = atWork || kept.heldByYou ? undefined : next;
+      if (kept.next !== shownNext) {
+        if (shownNext === undefined) delete kept.next;
+        else kept.next = shownNext;
+        noteWorkChanged(kept.bot);
+      }
+      if (atWork) {
+        delete kept.idleSince;
+        kept.nudges = 0;
         return;
       }
+      // Waiting on a time: quiet from then on, as if it went quiet as the time came, and told (as
+      // soon as the first time) if what came then started nothing, though the plan's the same. A
+      // wait taken away leaves no quiet time ahead.
+      if (next !== undefined) {
+        kept.idleSince = next;
+        kept.nudges = 0;
+        delete kept.nudgedPlan;
+      } else if (kept.idleSince !== undefined && kept.idleSince > now) kept.idleSince = now;
+      if (!canGoOn) return;
       if (kept.idleSince === undefined) {
         kept.idleSince = now;
         return;
       }
       const wait = NUDGE_AFTER[Math.min(kept.nudges ?? 0, NUDGE_AFTER.length - 1)];
       if (now - kept.idleSince < wait) return;
+      // Told already, and nothing changed since: it said what it could; never told it again.
+      const plan = planNow(kept);
+      if (kept.nudgedPlan === plan && !failed) return;
       kept.idleSince = now;
       kept.nudges = (kept.nudges ?? 0) + 1;
+      kept.nudgedPlan = plan;
       nudge = true;
     }, file);
-    if (nudge) await tellBot(goal, "[Goal] Nothing of the goal is at work now. Carry on with the next step that doesn't wait on the user (goal_progress shows the plan as it stands). If all that's left waits on them, say so in a line and stop until they answer. Once it's all done, end with finish_goal.", "Reminded to carry on", targets);
+    if (nudge) await tellBot(goal, "[Goal] Nothing of the goal is at work now. Carry on with the next step that doesn't wait on the user (goal_progress shows the plan as it stands). If all that's left waits on them, say so in a line and stop until they answer. If what's next can only start at a time, put it off with goal_progress (until) and a wake-up for then, and stop. Once it's all done, end with finish_goal.", "Reminded to carry on", targets);
   }
   // What's new, to your phones.
   for (const goal of readKept(file).filter(each => botHere(each.bot) && each.state !== "proposed" && each.state !== "declined")) {

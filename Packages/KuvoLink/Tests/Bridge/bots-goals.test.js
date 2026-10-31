@@ -703,28 +703,156 @@ test("the goal is the conversation's own goal: set as it starts (briefed by the 
   assert.equal(loops.has("ses_pixel"), false, "stopped, its conversation's goal goes too");
 });
 
-test("with nothing of the goal at work, the bot is told to carry on after a while, longer each time, and not at all while all that's left waits for you", async () => {
+const nudges = () => prompts.filter(each => each.to === "ses_pixel" && each.text.startsWith("[Goal] Nothing of the goal is at work"));
+
+test("with nothing of the goal at work, the bot is told to carry on after a while; told once with nothing changing after, it isn't told again until something does, and never while all that's left waits for you", async () => {
   await startedGoal();
-  const nudges = () => prompts.filter(each => each.to === "ses_pixel" && each.text.startsWith("[Goal] Nothing of the goal is at work"));
   const now = Date.now();
   await look(now);
   await look(now + 5 * 60_000);
   assert.equal(nudges().length, 0, "a quiet moment isn't a stall");
   await look(now + 11 * 60_000);
   assert.equal(nudges().length, 1);
-  await look(now + 31 * 60_000);
-  assert.equal(nudges().length, 1, "the next waits longer");
-  await look(now + 42 * 60_000);
+  assert.equal(nudges()[0].metadata?.kuvo?.note?.line, "Reminded to carry on");
+  // It answered and changed nothing: never told again for the same plan, over days.
+  for (const hours of [1, 3, 8, 24, 48, 96]) await look(now + hours * 3_600_000);
+  assert.equal(nudges().length, 1, "a bot is never looped");
+  // Something changes, then it goes quiet again: told once more.
+  await tool("goal_progress", { steps: [{ step: 1, state: "doing" }] });
+  const later = now + 97 * 3_600_000;
+  await look(later);
+  await look(later + 11 * 60_000);
   assert.equal(nudges().length, 2);
-  // At work again: the wait starts over.
-  active.add("ses_pixel");
-  await look(now + 50 * 60_000);
-  active.delete("ses_pixel");
   // All that's left waits for you: nothing to tell it.
   await tool("goal_progress", { steps: [1, 2, 3, 4, 5].map(step => ({ step, state: "waiting" })) });
-  await look(now + 10 * 3_600_000);
-  await look(now + 30 * 3_600_000);
+  await look(later + 10 * 3_600_000);
+  await look(later + 30 * 3_600_000);
   assert.equal(nudges().length, 2);
+});
+
+// A wake-up of the bot's, as kuvo-wake keeps it: a file in its folder named for when it's due.
+const wakeUp = (due, note = "Write this week's summary.") => write(path.join(pixelFolder, "wakes", `${Math.round(due / 1000)}-wk${String(due).slice(-6)}`), note);
+
+test("a goal whose next step waits two days for a wake-up isn't nudged meanwhile, shows when it goes on next, and is nudged after only if the wake-up started nothing", async () => {
+  await startedGoal();
+  await tool("goal_progress", { steps: [{ step: 1, state: "done" }] });
+  const now = Date.now();
+  const monday = now + 2 * 86_400_000;
+  wakeUp(monday);
+  for (const hours of [0, 1, 6, 12, 24, 36, 47]) await look(now + hours * 3_600_000);
+  assert.equal(nudges().length, 0, "nothing goes to a bot that set itself a time");
+  assert.equal((await goals())[0].next, Math.round(monday / 1000) * 1000, "the goal says when it goes on next");
+  // The wake-up comes and starts work: nothing to tell it, and nothing waits on a time now.
+  fs.rmSync(path.join(pixelFolder, "wakes"), { recursive: true });
+  active.add("ses_pixel");
+  await look(monday + 60_000);
+  active.delete("ses_pixel");
+  assert.equal((await goals())[0].next, undefined);
+  await tool("goal_progress", { steps: [{ step: 2, state: "doing" }] });
+  // Another week's wake-up, which comes and starts nothing: told to carry on a while after it.
+  const next = monday + 7 * 86_400_000;
+  wakeUp(next);
+  await look(monday + 2 * 3_600_000);
+  await look(next - 60_000);
+  assert.equal(nudges().length, 0);
+  fs.rmSync(path.join(pixelFolder, "wakes"), { recursive: true });
+  await look(next + 5 * 60_000);
+  assert.equal(nudges().length, 0, "the wake-up has its moment");
+  await look(next + 11 * 60_000);
+  assert.equal(nudges().length, 1);
+});
+
+test("a bot told to carry on that only sets a wake-up, changing nothing of the plan, is told once more if the wake-up starts nothing", async () => {
+  await startedGoal();
+  const now = Date.now();
+  await look(now);
+  await look(now + 11 * 60_000);
+  assert.equal(nudges().length, 1);
+  const tomorrow = now + 86_400_000;
+  wakeUp(tomorrow);
+  await look(now + 12 * 3_600_000);
+  assert.equal(nudges().length, 1);
+  fs.rmSync(path.join(pixelFolder, "wakes"), { recursive: true });
+  await look(tomorrow + 5 * 60_000);
+  assert.equal(nudges().length, 1, "the wake-up has its moment");
+  await look(tomorrow + 11 * 60_000);
+  assert.equal(nudges().length, 2, "its time came and went: told again, as soon as the first time");
+  for (const hours of [1, 6, 24]) await look(tomorrow + hours * 3_600_000);
+  assert.equal(nudges().length, 2, "and then not again for the same plan");
+});
+
+test("a wake-up that comes back (a daily check) doesn't hold back a goal with work to do now; once all that's left is put off, it's when the goal goes on next", async () => {
+  await startedGoal();
+  const now = Date.now();
+  const tomorrow = now + 86_400_000;
+  write(path.join(pixelFolder, "wakes", `${Math.round(tomorrow / 1000)}-wkdaily-1d`), "Check the inbox.");
+  await look(now);
+  await look(now + 11 * 60_000);
+  assert.equal(nudges().length, 1, "work it can do now isn't put off by a check that comes daily");
+  assert.equal((await goals())[0].next, undefined);
+  const monday = new Date(now + 3 * 86_400_000).toISOString();
+  await tool("goal_progress", { steps: [1, 2, 3, 4, 5].map(step => ({ step, until: monday })) });
+  await look(now + 3_600_000);
+  assert.equal((await goals())[0].next, Math.round(tomorrow / 1000) * 1000, "the soonest time it's woken");
+});
+
+test("a wait taken away (the wake-up cancelled to do it today) doesn't hold the nudge back until the old time", async () => {
+  await startedGoal();
+  const now = Date.now();
+  const monday = now + 2 * 86_400_000;
+  wakeUp(monday);
+  await look(now);
+  await look(now + 3_600_000);
+  assert.ok((await goals())[0].next);
+  fs.rmSync(path.join(pixelFolder, "wakes"), { recursive: true });
+  await look(now + 2 * 3_600_000);
+  assert.equal((await goals())[0].next, undefined);
+  await look(now + 2 * 3_600_000 + 11 * 60_000);
+  assert.equal(nudges().length, 1, "told to carry on a while after, not on Monday");
+});
+
+test("a bot told to carry on whose turn failed (not at a limit) is told again later, though the plan's the same", async () => {
+  await startedGoal();
+  const now = Date.now();
+  await look(now);
+  await look(now + 11 * 60_000);
+  assert.equal(nudges().length, 1);
+  failures.set("ses_pixel", "The provider answered 500.");
+  await look(now + 20 * 60_000);
+  assert.equal(nudges().length, 1, "after a while, as before");
+  await look(now + 42 * 60_000);
+  assert.equal(nudges().length, 2);
+  failures.delete("ses_pixel");
+  for (const hours of [2, 12, 48]) await look(now + hours * 3_600_000);
+  assert.equal(nudges().length, 2, "answered, changing nothing: not again");
+});
+
+test("a step put off with a time in seconds since 1970 (as wake-ups give it) is put off until then", async () => {
+  await startedGoal();
+  const monday = Math.round((Date.now() + 2 * 86_400_000) / 1000);
+  const put = await tool("goal_progress", { steps: [{ step: 1, until: monday }] });
+  assert.equal(put.isError, false, put.text);
+  assert.equal((await goals())[0].steps[0].until, monday * 1000);
+});
+
+test("a step put off until a time with goal_progress waits for it: no nudges before, the plan shows when, and once the time comes it's the bot's to carry on", async () => {
+  await startedGoal();
+  const monday = new Date(Date.now() + 2 * 86_400_000);
+  monday.setSeconds(0, 0);
+  const put = await tool("goal_progress", { steps: [{ step: 1, state: "done" }, ...[2, 3, 4, 5].map(step => ({ step, until: monday.toISOString() }))] });
+  assert.equal(put.isError, false, put.text);
+  const [goal] = await goals();
+  assert.deepEqual(goal.steps.slice(1).map(step => [step.state, step.until]), [2, 3, 4, 5].map(() => ["todo", monday.getTime()]));
+  assert.equal(goal.next, undefined, "shown from the box's next look");
+  const now = Date.now();
+  for (const hours of [0, 1, 12, 24, 47]) await look(now + hours * 3_600_000);
+  assert.equal(nudges().length, 0);
+  assert.equal((await goals())[0].next, monday.getTime());
+  await look(monday.getTime() + 5 * 60_000);
+  assert.equal(nudges().length, 0);
+  await look(monday.getTime() + 11 * 60_000);
+  assert.equal(nudges().length, 1, "the time came and nothing started: told to carry on");
+  assert.equal((await tool("goal_progress", { steps: [{ step: 2, until: "next Monday" }] })).isError, true, "a time it can read");
 });
 
 test("only the goal's own sessions are its: an old session that failed at a limit isn't brought back", async () => {
