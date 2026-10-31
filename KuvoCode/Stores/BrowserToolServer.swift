@@ -569,7 +569,9 @@ enum BrowserTools {
             guard let url = string("url") else { return text("Missing url.", error: true) }
             if let note = fileNote(for: url, caller: caller) { return text(note, error: true) }
             if let note = integrationNote(for: url, caller: caller) { return text(note) }
-            return text(await agent.navigate(url))
+            let said = await agent.navigate(url)
+            // One that didn't open is a failed step: its line doesn't read "Opened".
+            return text(said, error: BrowserAgent.notOpened(said))
         case "browser_snapshot":
             return text(await agent.snapshot())
         case "browser_click":

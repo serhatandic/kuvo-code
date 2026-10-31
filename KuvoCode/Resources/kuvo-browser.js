@@ -1600,6 +1600,9 @@ function integrationNote(address, caller) {
   return site.note;
 }
 
+// What a navigation that didn't open says first: the step failed (its line doesn't read "Opened").
+const notOpened = (said) => said.startsWith("Couldn't open ") || said.startsWith("Not an address or search: ");
+
 async function navigate(p, url) {
   const target = destination(url);
   if (!target) return `Not an address or search: ${url}`;
@@ -2483,7 +2486,8 @@ async function tool(name, args) {
     const { targetId } = await c.send("Target.createTarget", { url: "about:blank", newWindow: true });
     if (caller) await c.send("Kuvo.claim", { targetId, session: caller });
     const p = await use(targetId);
-    return text(url ? await navigate(p, url) : await snapshot(p));
+    const said = url ? await navigate(p, url) : await snapshot(p);
+    return text(said, notOpened(said));
   }
 
   let p = await readyPage(await page(), ["browser_navigate", "browser_back", "browser_forward"].includes(name));
@@ -2497,7 +2501,8 @@ async function tool(name, args) {
     case "browser_navigate": {
       const url = string("url");
       if (!url) return text("Missing url.", true);
-      return withNote(navigate(p, url));
+      const said = await navigate(p, url);
+      return text(note() + said, notOpened(said));
     }
     case "browser_snapshot":
       return withNote(snapshot(p));

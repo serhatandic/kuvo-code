@@ -80,6 +80,11 @@ final class BrowserAgent {
 
     // MARK: Actions
 
+    /// Whether what `navigate` said is that the page didn't open.
+    static func notOpened(_ said: String) -> Bool {
+        said.hasPrefix("Couldn't open ") || said.hasPrefix("Not an address or search: ")
+    }
+
     func navigate(_ address: String) async -> String {
         let browser = browser()
         guard BrowserSession.url(from: address) != nil else { return "Not an address or search: \(address)" }
