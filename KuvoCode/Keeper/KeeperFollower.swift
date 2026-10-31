@@ -38,6 +38,10 @@ final class KeeperFollower {
 
     private var watch: DispatchSourceFileSystemObject?
     private var tick: Task<Void, Never>?
+    /// Followed, from `start` until `stop`: a read still under way as it stops (one waiting on the
+    /// keeper, or one its folder's change set going) says nothing after, so an app that quit never
+    /// hears the keeper is gone and starts a box of its own.
+    private var following = false
     /// When the app last asked launchd to start the keeper, for how long it's given to come up.
     private var askedToStart: Date?
     /// When the engine was last asked to start over: a reason it stopped from before then is the
@@ -75,6 +79,7 @@ final class KeeperFollower {
     /// Followed from now on: the keeper started if it isn't running (after Stop Background Work),
     /// or asked to make way for this app's own if it came with another version (as it's read).
     func start() async {
+        following = true
         if KeeperRecord.read() == nil {
             askedToStart = .now
             BackgroundWork.shared.start()
@@ -84,6 +89,7 @@ final class KeeperFollower {
     }
 
     func stop() {
+        following = false
         watch?.cancel()
         watch = nil
         tick?.cancel()
@@ -128,6 +134,7 @@ final class KeeperFollower {
 
     /// What the records say now.
     func read() async {
+        guard following else { return }
         if reading {
             readAgain = true
             return
@@ -136,7 +143,7 @@ final class KeeperFollower {
         repeat {
             readAgain = false
             await readOnce()
-        } while readAgain
+        } while readAgain && following
         reading = false
     }
 
@@ -155,6 +162,7 @@ final class KeeperFollower {
                 }
             }
         }
+        guard following else { return }
         makingWay = record?.isOtherVersion ?? false
         let engineRecord = Self.record("engine.json")
         let serve = Self.record("serve.json")
@@ -167,6 +175,8 @@ final class KeeperFollower {
             answered = said != nil
             status = said ?? [:]
         }
+        // Stopped while the keeper was asked (above too).
+        guard following else { return }
         // A keeper that runs but doesn't answer (hung): since when, for how long the window waits.
         if engineRecord != nil || answered || KeeperRecord.read() == nil {
             silentSince = nil
