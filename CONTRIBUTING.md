@@ -55,6 +55,17 @@ prerelease, and only copies with **Settings › General › Get beta updates** o
 are offered it. Its build version is `X.Y.ZbN` (`scripts/build-version.sh`),
 which Sparkle orders before the release.
 
+Before tagging one, try its update the way people will get it:
+
+```sh
+./scripts/try-update.sh            # the next beta after the newest tag, or name a version
+```
+
+It builds this checkout as that version, signed with your Developer ID and the update key from
+your keychain, serves it from `127.0.0.1`, and points the Kuvo Code in /Applications at it. Choose
+**Check for Updates…** there to go through the update window, the install, the restart and
+What's New. Ctrl-C stops the server and puts the real feed back.
+
 A release also carries what remote machines run, for them to update themselves
 with, once the `KUVO_BOX_SIGNING_KEY` secret (an Ed25519 key) is set
 (`scripts/set-box-key.sh` makes it once, keeps it in your login keychain, uploads
