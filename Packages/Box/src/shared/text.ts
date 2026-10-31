@@ -3,6 +3,10 @@
 
 import crypto from "node:crypto";
 
+// How much of a text file attached to a message the coding agents get in it, as the agents' bridge
+// puts it in; a bigger one goes by its path, for the agent to open.
+export const AGENTS_TEXT_BYTES = 200_000;
+
 // On one line, cut to `limit` characters, as the Mac lists a machine's.
 export const oneLine = (text: unknown, limit: number) => Array.from(String(text).replace(/[\t\r\n]/g, " ")).slice(0, limit).join("");
 // As Swift writes dates: to the second.

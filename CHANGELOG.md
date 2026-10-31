@@ -235,6 +235,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - The agent's browser on a machine opens a file's path, like /home/you/report.html or ~/site/index.html, as the file, as it does on your Mac, rather than as a broken web address.
 - In a session that asks before touching files outside its folder, the agent's browser no longer saves a PDF over a file elsewhere: it saves in the folder, or asks you first.
 - A page the agent's browser couldn't open shows as a failed step in the conversation, rather than as **Opened** that address.
+- A long text file, like a log, attached to a Claude Code, Codex, Cursor, Grok or Antigravity session on a machine goes to the agent as a file to open, rather than whole in the message, where it could make the turn fail as too long.
 - A reply the agent is still writing keeps its words when its conversation is read again, after the network or a machine comes back: they no longer vanish until the paragraph ends, or show twice in a coding agent's reply.
 - A note the agent's engine adds by itself, like a background command finishing, shows even when it was waiting as you opened the conversation.
 - A conversation on a machine goes on updating after the machine reconnects, even when the machine is slow to answer at first; and when your Mac wakes, its own conversations no longer wait on a machine that's still reconnecting.

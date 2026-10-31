@@ -95,7 +95,7 @@ export async function* forward(target: Target, path: string, request: LinkReques
   const outgoing = async (): Promise<Buffer | undefined> => {
     if (!sending) return request.body;
     const session = decodeURIComponent(sending[1]!);
-    const body = await attachedIn(request.body, session, modelInput(url, headers, signal), request.fromMac === true, !toAgents);
+    const body = await attachedIn(request.body, session, modelInput(url, headers, signal), request.fromMac === true, toAgents);
     return prompt ? fromPhone(await namedIn(body, session, naming)) : body;
   };
   let response: Response;

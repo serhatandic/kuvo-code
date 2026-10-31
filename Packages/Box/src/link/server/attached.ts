@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { K } from "../home";
 import { withAttachedNote } from "../peers/naming";
+import { AGENTS_TEXT_BYTES } from "../../shared/text";
 
 // What the session's model takes as input ("text", "image", "pdf"…), or null when that can't be
 // found out (then it gets every file, as before).
@@ -18,9 +19,10 @@ interface PromptFile { uri?: unknown; name?: unknown }
 // `body` with its inline files kept on the box and only what the model reads left as files;
 // anything else as it is. A note the message ends with already joins this one only when it's the
 // Mac's own (`joinsNote`), never words a phone's message ends with. When the model's input can't
-// be found out, a PDF or a picture goes to it anyway (`guesses`), except for the coding agents,
-// who open files from where they're kept.
-export async function attachedIn(body: Buffer | undefined, session: string, modelInput: ModelInput, joinsNote = false, guesses = true): Promise<Buffer | undefined> {
+// be found out, a PDF or a picture goes to it anyway, except for the coding agents (`toAgents`), who
+// open files from where they're kept, and get text in the message only as much as their bridge
+// puts in it.
+export async function attachedIn(body: Buffer | undefined, session: string, modelInput: ModelInput, joinsNote = false, toAgents = false): Promise<Buffer | undefined> {
   let prompt: { text?: unknown; files?: unknown } | null;
   try { prompt = JSON.parse(Buffer.from(body ?? "").toString()); } catch { return body; }
   if (!prompt || !Array.isArray(prompt.files)) return body;
@@ -37,7 +39,7 @@ export async function attachedIn(body: Buffer | undefined, session: string, mode
       continue;
     }
     const saved = save(attachments, data.bytes, typeof file.name === "string" ? file.name : "");
-    if (reads(data.mime, data.bytes.length, input, guesses)) {
+    if (reads(data.mime, data.bytes.length, input, !toAgents, toAgents ? AGENTS_TEXT_BYTES : MODEL_BYTES)) {
       // Text the engine reads as words only when it's `text/plain`; any other type goes to the
       // model as a file it can't open (Markdown, JSON).
       sent.push(isText(data.mime) && data.mime !== "text/plain" ? { ...file, uri: `data:text/plain;base64,${data.bytes.toString("base64")}` } : file);
@@ -70,10 +72,10 @@ const TEXT_TYPES = new Set(["application/json", "application/javascript", "appli
 const isText = (mime: string): boolean => mime.startsWith("text/") || TEXT_TYPES.has(mime);
 
 // Whether a model with `input` reads a file of type `mime`, `size` bytes, as it is; one whose
-// input isn't known, as `guess` says.
-function reads(mime: string, size: number, input: string[] | null, guess: boolean): boolean {
+// input isn't known, as `guess` says. Text over `textBytes` it opens itself.
+function reads(mime: string, size: number, input: string[] | null, guess: boolean, textBytes: number): boolean {
   if (size > MODEL_BYTES) return false;
-  if (isText(mime)) return true;
+  if (isText(mime)) return size <= textBytes;
   if (mime === "application/pdf") return input?.includes("pdf") ?? guess;
   if (mime.startsWith("image/")) return input?.includes("image") ?? guess;
   return false;

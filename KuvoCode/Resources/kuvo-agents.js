@@ -14185,6 +14185,9 @@ function safeJSON(text) {
   }
 }
 
+// Packages/Box/src/shared/text.ts
+var AGENTS_TEXT_BYTES = 200000;
+
 // Packages/Box/src/agents/sessions.ts
 function isBusy(doing) {
   return doing.kind !== "idle" && doing.kind !== "deleting";
@@ -16523,7 +16526,7 @@ function mime(uri) {
     json: "application/json"
   }[extension] ?? "application/octet-stream";
 }
-var textFileLimit = 200000;
+var textFileLimit = AGENTS_TEXT_BYTES;
 function withTextFiles(text, files) {
   const others = [];
   const parts = [];
@@ -21888,4 +21891,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 8768eb16daff1ea78e6cf60659b5f5d9d832c5ad83ddd7c8341f49b9b7597bf4
+// Built from Packages/Box/src/agents 5863e18aee91b09ee488be9e57d20194225c3a12a17ee13a459cb8632b16d756
