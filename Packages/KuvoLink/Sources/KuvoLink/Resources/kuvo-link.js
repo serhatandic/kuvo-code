@@ -12786,11 +12786,14 @@ var RUNS_LATER = [
   ".m2/settings.xml",
   ".npm/_npx",
   ".cache/pre-commit",
+  ".cache/pnpm",
+  ".cache/uv",
   ".rustup/settings.toml",
   ".rustup/toolchains",
   ".pub-cache/bin",
   "go/bin"
 ];
+var MAC_RUNS_LATER = ["Library/Caches/pnpm"];
 var SECRETS = [
   ".aws",
   ".config/gcloud",
@@ -12859,9 +12862,10 @@ function appTemporary() {
   const tmp = path53.dirname(path53.resolve(os5.tmpdir()));
   return path53.basename(tmp) === path53.basename(path53.dirname(path53.resolve(K))) ? tmp : null;
 }
-function sandboxNpmCache() {
+function sandboxCaches() {
   const tmp = appTemporary();
-  return tmp ? path53.join(os5.userInfo().homedir, "Library", "Caches", path53.basename(tmp), "sandbox-npm") : path53.join(K, "cache", "sandbox-npm");
+  const root = tmp ? path53.join(os5.userInfo().homedir, "Library", "Caches", path53.basename(tmp)) : path53.join(K, "cache");
+  return { npm: path53.join(root, "sandbox-npm"), pnpm: path53.join(root, "sandbox-pnpm"), uv: path53.join(root, "sandbox-uv") };
 }
 function macFolders(home) {
   const app = path53.dirname(path53.resolve(K));
@@ -12886,14 +12890,13 @@ function fencePolicy(ports = []) {
   const own = IS_MAC ? macFolders(home) : { kuvo: [K, path53.join(home, ".kuvo-code")], readable: [path53.join(K, "bin")] };
   const kuvo = [...new Set(own.kuvo.map(realish))];
   const kuvoReadable = own.readable.map(realish);
-  const readOnly = inHome(RUNS_LATER);
-  const commandCaches = [realish(sandboxNpmCache())];
+  const commandCaches = Object.values(sandboxCaches()).map(realish);
   if (process.platform === "darwin") {
     return {
       home,
       kuvo,
       kuvoReadable,
-      readOnly,
+      readOnly: inHome([...RUNS_LATER, ...MAC_RUNS_LATER]),
       ports,
       commandCaches,
       kuvoPatterns: [
@@ -12909,7 +12912,7 @@ function fencePolicy(ports = []) {
     home,
     kuvo,
     kuvoReadable,
-    readOnly,
+    readOnly: inHome(RUNS_LATER),
     ports,
     commandCaches,
     kuvoPatterns: [],
@@ -13221,7 +13224,8 @@ function launcherScript(places) {
     `if [ -f "$allowed" ]; then i=0; while IFS= read -r line && [ $i -lt ${MOST_FOLDERS} ]; do case $line in /*) eval "a$i=\\$line"; ${places.platform === "darwin" ? `eval "r$i=\\$(escaped \\"\\$line\\")"; ` : ""}i=$((i + 1)) ;; esac; done <"$allowed"; else allowed=$F/none; fi`,
     `(umask 077; mkdir -p "$tmp") && touch "$tmp" && export TMPDIR="$tmp/"`,
     `export PRE_COMMIT_HOME="$TMPDIR"pre-commit`,
-    `(umask 077; mkdir -p ${sh(places.npm)}) && export npm_config_cache=${sh(places.npm)}`,
+    `(umask 077; mkdir -p ${sh(places.caches.npm)} ${sh(places.caches.pnpm)} ${sh(`${places.caches.uv}/cache`)} ${sh(`${places.caches.uv}/tools`)})`,
+    `export npm_config_cache=${sh(places.caches.npm)} pnpm_config_cache_dir=${sh(places.caches.pnpm)} UV_CACHE_DIR=${sh(`${places.caches.uv}/cache`)} UV_TOOL_DIR=${sh(`${places.caches.uv}/tools`)}`,
     ...places.platform === "darwin" ? [`tmp=$(cd "$tmp" 2>/dev/null && pwd -P) || { echo "This command can't run: its temporary folder isn't there." >&2; exit 126; }`] : [],
     `own=$F/none`,
     `case \${OPENCODE_SESSION_ID-} in`,
@@ -13356,7 +13360,7 @@ function agentsNote(platform) {
       "- Commands can't open apps (`open`) or start launchd jobs."
     ] : [],
     "",
-    "`npx` and `npm` use a cache of Kuvo Code's own here (`$npm_config_cache`): leave it as it is, and `npx -y <package>` fetches what it needs.",
+    "`npm`, `pnpm` and `uv` use caches of Kuvo Code's own here (`$npm_config_cache`, `$pnpm_config_cache_dir`, `$UV_CACHE_DIR`): leave them as they are, and `npx -y <package>`, `pnpm dlx` and `uvx` fetch what they need.",
     "",
     "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
     "",
@@ -13495,7 +13499,7 @@ var places = {
   key: SOCKET_KEY_FILE,
   sshFor: SSH_FOR,
   sshAgents: SSH_AGENTS,
-  npm: realish(sandboxNpmCache()),
+  caches: (({ npm, pnpm, uv }) => ({ npm: realish(npm), pnpm: realish(pnpm), uv: realish(uv) }))(sandboxCaches()),
   platform
 };
 var VERSION = crypto22.createHash("sha256").update(launcherScript(places)).update(LANDLOCK_RUNNER).update(pluginScript(places, "")).digest("hex").slice(0, 16);
@@ -18018,7 +18022,7 @@ import fs68 from "node:fs";
 import path70 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.137";
+var BRIDGE_VERSION = "0.9.138";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
