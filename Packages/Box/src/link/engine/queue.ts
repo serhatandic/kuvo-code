@@ -327,9 +327,11 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
         break;
       case "session.metadata.updated": {
         // Carried on in another session (moved to the coding agents, by a client or this box): its
-        // queue goes on there.
-        const to = event.data?.metadata?.["kuvo.carriedTo"];
-        if (typeof to === "string" && to.startsWith("ses_") && to !== session) carryQueue(session, to, {});
+        // queue goes on there. (Only while it's put away as carried: one brought back keeps the
+        // mark, which a client sends again with every later change, and its queue is its own.)
+        const metadata = event.data?.metadata;
+        const to = metadata?.["kuvo.carriedTo"];
+        if (metadata?.["kuvo.archived"] === true && typeof to === "string" && to.startsWith("ses_") && to !== session) carryQueue(session, to, {});
         break;
       }
       case "session.deleted":

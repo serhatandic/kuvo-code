@@ -1057,8 +1057,9 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
           later(drains, session, () => drain(target, session));
         break;
       case "session.metadata.updated": {
-        const to = event.data?.metadata?.["kuvo.carriedTo"];
-        if (typeof to === "string" && to.startsWith("ses_") && to !== session)
+        const metadata = event.data?.metadata;
+        const to = metadata?.["kuvo.carriedTo"];
+        if (metadata?.["kuvo.archived"] === true && typeof to === "string" && to.startsWith("ses_") && to !== session)
           carryQueue(session, to, {});
         break;
       }

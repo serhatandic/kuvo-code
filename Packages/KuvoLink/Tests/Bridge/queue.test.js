@@ -454,6 +454,20 @@ test("a conversation carried on in another session while stopped (a client moved
   assert.deepEqual(prompted, []);
 });
 
+test("a conversation brought back after it was carried on keeps its own queue when its marks change later (pinned, say)", async () => {
+  inboxes.ses_1 = [];
+  await ask("POST", "kuvo/sessions/ses_1/stop");
+  await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w1", text: "[Letter] The build is green.", from: "Ada", words: "The build is green.", kept: true });
+  // Brought back, then pinned: a client sends its metadata whole, the old carry's mark with it.
+  box().hear("session.metadata.updated", { metadata: { "kuvo.archived": false, "kuvo.carriedTo": "ses_2" } });
+  box().hear("session.metadata.updated", { metadata: { "kuvo.archived": false, "kuvo.pinned": true, "kuvo.carriedTo": "ses_2" } });
+  const own = link.queueOf("ses_1");
+  assert.equal(own.paused, true, "still stopped");
+  assert.deepEqual(own.waiting?.map(each => [each.from, each.text]), [["Ada", "The build is green."]]);
+  assert.equal("ses_2" in link.readQueues(), false, "nothing of it went to the session it was carried to before");
+  assert.deepEqual(prompted, []);
+});
+
 test("your own message waits shown as you wrote it, though what goes to the agent says more (its files' notes)", async () => {
   inboxes.ses_1 = [];
   await ask("POST", "kuvo/sessions/ses_1/stop");
