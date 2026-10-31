@@ -34,7 +34,7 @@ import { engineConnect } from "./areas/engine";
 import { answerOnce, reconnectEverywhere } from "./areas/integrations";
 import { keepSkillTrashClear } from "./areas/skills";
 import { sendWakes } from "./areas/wakes";
-import { forgetLeftKeys } from "./bots/edit";
+import { finishDeletes, forgetLeftKeys } from "./bots/edit";
 import { keepJobs } from "./bots/jobs";
 import { forgetOldKit, readKit } from "./bots/kit";
 import { adoptBox } from "./compat/adopt-settings";
@@ -45,7 +45,7 @@ import { docsNoted, noteDocsChanged, onDocsChanged } from "./documents/changed";
 import { docsChanged, macDocsChanged } from "./documents/exchange";
 import { newSigningSeed, ownSign, SIGN } from "./documents/format";
 import { docsWork, ownDocs, pruneDocs } from "./documents/work";
-import { peerPlaces, peerTargets, readBridgeFile, readEngineFile } from "./engine/client";
+import { bridgeTarget, peerPlaces, peerTargets, readBridgeFile, readEngineFile } from "./engine/client";
 import { engineConfigContent } from "./engine/compatibility";
 import { keepEngineDefaults } from "./engine/defaults";
 import { watchBox } from "./engine/watch";
@@ -142,7 +142,7 @@ export { botInstructions, botTemplates, readKit, readWords } from "./bots/kit";
 export { freshenBot, freshenBots, refreshedRules, settleBot } from "./bots/tell";
 export { makeBot } from "./bots/make";
 export { carryToAgents } from "./areas/carry";
-export { changeBot, deleteBot, forgetLeftKeys } from "./bots/edit";
+export { changeBot, deleteBot, finishDeletes, forgetLeftKeys } from "./bots/edit";
 export { ASK_HOLD, LONGEST_LEASE, NEWS_HOLD, NoticeHold, RESTORED_WAIT, SHOWN_WITHIN, attentionGiven, holdFor } from "./notices/hold";
 export { describeForm, describePermission, groupNotice, noticeFor, projectNameOf, settleHeld } from "./notices/news";
 export { STEER_AFTER, steering, watchBox, watchEvents } from "./engine/watch";
@@ -580,6 +580,8 @@ async function serve(): Promise<void> {
   refreshBotsKeys().catch(() => {});
   // Keys of bots deleted while they couldn't be reached.
   forgetLeftKeys().catch(() => {});
+  // And their conversations and places in group chats, where those weren't answering.
+  finishDeletes(readEngineFile, bridgeTarget).catch(() => {});
   // Its wake-ups and watches, sent while it runs, with the app's window closed too.
   sendWakes();
   // This Mac's link to your phones and machines, once its app says it's wanted.

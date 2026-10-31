@@ -86,18 +86,20 @@ export async function startingModelHere(named: BotModel | null, readEngine: () =
 // New Bot sent again with the same `request` (the phone's connection dropped, and it tried again,
 // while the first was made all the same): answered as the first was, while it's being made and for
 // an hour after, rather than made twice. One that wasn't made is tried again.
+// It's made whatever becomes of the request that asked (every one sent again waits on it): each step
+// has its own time limit, and none goes with the phone's connection.
 const REQUEST = /^[A-Za-z0-9_-]{8,64}$/;
 const MADE_FOR = 3600_000;
 const madeFor = new Map<string, { answer: Promise<MadeAnswer>; at: number }>();
 
-export function makeBot(given: GivenBot | null | undefined, readEngine: () => Target, readBridge: () => Target | null, machine?: string, signal?: AbortSignal): Promise<MadeAnswer> {
+export function makeBot(given: GivenBot | null | undefined, readEngine: () => Target, readBridge: () => Target | null, machine?: string): Promise<MadeAnswer> {
   const request = typeof given?.request === "string" && REQUEST.test(given.request) ? given.request : null;
-  if (!request) return makeOnce(given, readEngine, readBridge, machine, signal);
+  if (!request) return makeOnce(given, readEngine, readBridge, machine);
   const now = Date.now();
   for (const [id, made] of madeFor) if (now - made.at > MADE_FOR) madeFor.delete(id);
   const before = madeFor.get(request);
   if (before) return before.answer;
-  const answer = makeOnce(given, readEngine, readBridge, machine, signal).then(made => {
+  const answer = makeOnce(given, readEngine, readBridge, machine).then(made => {
     if (made.status === 201) madeFor.set(request, { answer, at: Date.now() });
     else madeFor.delete(request);
     return made;
@@ -106,7 +108,7 @@ export function makeBot(given: GivenBot | null | undefined, readEngine: () => Ta
   return answer;
 }
 
-async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Target, readBridge: () => Target | null, machine?: string, signal?: AbortSignal): Promise<MadeAnswer> {
+async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Target, readBridge: () => Target | null, machine?: string): Promise<MadeAnswer> {
   const no = (status: OtherStatus, message: string): MadeAnswer => ({ status, value: { message } });
   const kit = readKit();
   if (!kit) return no(409, NO_KIT);
@@ -134,7 +136,7 @@ async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Ta
   const looks = kit.looks;
   const pick = (list: string[]): string => list[crypto.randomInt(list.length)];
   const look = fitsLook(looks, given.look) ? botLook(given.look) : template?.look ?? { color: pick(looks.colors), shape: pick(looks.shapes), face: pick(looks.faces) };
-  const model = isModel(given.model) ? botModel(given.model) : await startingModelHere(kit.startingModel ?? null, readEngine, signal);
+  const model = isModel(given.model) ? botModel(given.model) : await startingModelHere(kit.startingModel ?? null, readEngine);
   if (!model) return no(422, `There’s no model to start it on here: sign in to an account on ${HERE} first.`);
   const agents = runsWithAgents(model);
   let target: Target | null | undefined;
@@ -143,7 +145,7 @@ async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Ta
   } catch {}
   if (!target) return no(503, agents ? `The coding agents aren’t running on ${HERE}.` : "The engine isn’t running.");
   if (!agents) {
-    const refused = await signInRefusal(model, target, signal);
+    const refused = await signInRefusal(model, target, AbortSignal.timeout(BOT_STEP));
     if (refused) return no(422, refused);
   }
 
@@ -160,12 +162,11 @@ async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Ta
     // What always comes to you, asked whatever its approval.
     const rules = [...withAlwaysAsk(kit.rules ?? []), { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }];
     // The session it made, as far as its id.
-    const made = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules }, signal) as Fields<"id"> | null;
+    const made = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules }, AbortSignal.timeout(BOT_STEP)) as Fields<"id"> | null;
     if (typeof made?.id !== "string" || !made.id) throw new Error("No conversation was made.");
     session = { id: made.id };
-    // From here it's made whole (or undone), whatever becomes of the phone's request: a phone that
-    // left finds it listed.
-    await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { kuvo: { bot: id } } }, AbortSignal.timeout(BOT_STEP)).catch(() => {});
+    // Marked as a bot's (without it, what it does would be news of an ordinary conversation).
+    await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { kuvo: { bot: id } } }, AbortSignal.timeout(BOT_STEP));
     const told = botInstructions(kit, name, folder, personality?.instruction, project as string | undefined);
     await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, AbortSignal.timeout(BOT_STEP));
     fs.writeFileSync(path.join(folder, "session"), session.id);

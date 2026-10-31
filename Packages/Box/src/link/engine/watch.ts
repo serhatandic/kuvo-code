@@ -5,9 +5,10 @@
 import { pause } from "../../shared/wait";
 import { noteSignIn } from "../areas/accounts";
 import { nameDueWorktrees, nameWorktreeBranch, settleNewSession } from "../areas/worktrees";
+import { finishDeletes } from "../bots/edit";
 import { freshenBot, freshenBots } from "../bots/tell";
 import { ANSWERED, GROUP_NEWS, NEWS, RUN_ENDS, groupNotice, noticeFor, settleHeld } from "../notices/news";
-import { engineGet, peerTargets, readBridgeFile, readEngineFile } from "./client";
+import { bridgeTarget, engineGet, peerTargets, readBridgeFile, readEngineFile } from "./client";
 import { learnCompatibility } from "./compatibility";
 import { goalHolds, settleGoalHolds } from "../work/goals";
 import { workWatcher } from "../work/wakes";
@@ -279,6 +280,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       // Found it (it started, or this did): its bots told what they are now, before their next turn,
       // and a queue it left waiting held for Resume.
       freshenBots(source).catch(() => {});
+      // What bots deleted while it wasn't answering left of it.
+      finishDeletes(readEngineFile, bridgeTarget).catch(() => {});
       lastLearned = 0;
       learn(source);
       if (queues) scanQueues(source, found).catch(() => {});
