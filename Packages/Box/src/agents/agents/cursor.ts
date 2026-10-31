@@ -8,7 +8,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { providerID, type AgentAccount } from "../accounts"
 import type { Agent, AgentContext, Account, RunInput, RunResult, SignInAttempt, SubagentRun, Thread, TurnHooks } from "../agent"
-import { accountName, failure, model } from "../agent"
+import { accountName, failure, KnownAccount, model, TookTooLong } from "../agent"
 import type { Limit } from "../auto"
 import { fileDiff, fromPatch } from "../diff"
 import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules } from "../fence"
@@ -45,7 +45,6 @@ export class CursorAgent implements Agent {
   get name() {
     return accountName("Cursor", this.instance)
   }
-  private accountCache?: { at: number; account: Account }
   private modelList?: { at: number; key: string; models: Model[] }
   private primed = false
 
@@ -117,24 +116,28 @@ export class CursorAgent implements Agent {
     if ((this.instance.home || !process.env.CURSOR_API_KEY) && !existsSync(this.authFile)) {
       return { installed: true, signedIn: false, message: "Sign in with your Cursor account. Kuvo Code downloads Cursor's agent the first time." }
     }
-    if (!fresh && this.accountCache && Date.now() - this.accountCache.at < 60_000) return this.accountCache.account
-    const sdk = await this.sdk()
-    const apiKey = await this.apiKey(sdk)
-    let account: Account
-    if (!apiKey) {
-      account = { installed: true, signedIn: false, message: "Your Cursor sign-in expired. Sign in again." }
-    } else {
-      try {
-        const me: any = await withTimeout(sdk.Cursor.me({ apiKey }), 15_000)
-        account = { installed: true, signedIn: true, label: me?.userEmail ?? (process.env.CURSOR_API_KEY ? "Cursor API key" : "Cursor account") }
-      } catch (error: any) {
-        const rejected = error instanceof sdk.AuthenticationError || error?.status === 401
-        account = rejected ? { installed: true, signedIn: false, message: "Cursor turned the sign-in down. Sign in again." } : { installed: true, signedIn: true, label: "Cursor account" }
+    return this.known.read(fresh, async () => {
+      const sdk = await this.sdk()
+      const apiKey = await this.apiKey(sdk)
+      let account: Account
+      if (!apiKey) {
+        account = { installed: true, signedIn: false, message: "Your Cursor sign-in expired. Sign in again." }
+      } else {
+        try {
+          const me: any = await withTimeout(sdk.Cursor.me({ apiKey }), 15_000)
+          account = { installed: true, signedIn: true, label: me?.userEmail ?? (process.env.CURSOR_API_KEY ? "Cursor API key" : "Cursor account") }
+        } catch (error: any) {
+          // Only Cursor turning it down is a sign-out (not Cursor out of reach, or slow to answer).
+          if (!(error instanceof sdk.AuthenticationError || error?.status === 401)) throw error
+          account = { installed: true, signedIn: false, message: "Cursor turned the sign-in down. Sign in again." }
+        }
       }
-    }
-    this.accountCache = { at: Date.now(), account }
-    return account
+      return account
+    })
   }
+
+  /** Its sign-in as Cursor last said, for a minute (a check that fails isn't a sign-out). */
+  private known = new KnownAccount(60_000)
 
   /** Cursor's page finishes by itself, wherever it's opened (its SDK waits on Cursor, not on this computer). */
   readonly signsInRemotely = true
@@ -153,7 +156,7 @@ export class CursorAgent implements Agent {
         const credentials = await pending.load()
         if (!credentials) throw new Error("Cursor didn't hand over the sign-in.")
         await (await this.store(sdk)).save(credentials)
-        this.accountCache = undefined
+        this.known.reset()
         this.modelList = undefined
         status = { status: "complete" }
       })
@@ -174,13 +177,13 @@ export class CursorAgent implements Agent {
     const sdk = await this.sdk()
     await withTimeout(sdk.Cursor.me({ apiKey: key }), 15_000)
     await (await this.store(sdk)).save({ version: 1, backendUrl: "https://api2.cursor.sh", apiKey: key, createdAtMs: Date.now() })
-    this.accountCache = undefined
+    this.known.reset()
     this.modelList = undefined
   }
 
   async signOut() {
     rmSync(this.authFile, { force: true })
-    this.accountCache = undefined
+    this.known.reset()
     this.modelList = undefined
   }
 
@@ -189,7 +192,14 @@ export class CursorAgent implements Agent {
     const apiKey = await this.apiKey(sdk)
     if (!apiKey) return []
     if (this.modelList && this.modelList.key === apiKey && Date.now() - this.modelList.at < 30 * 60_000) return this.modelList.models
-    const list: any[] = await withTimeout(sdk.Cursor.models.list({ apiKey }), 15_000)
+    let list: any[]
+    try {
+      list = await withTimeout(sdk.Cursor.models.list({ apiKey }), 15_000)
+    } catch (error) {
+      // Cursor couldn't list them just now: the ones it listed last for this sign-in.
+      if (this.modelList?.key === apiKey) return this.modelList.models
+      throw error
+    }
     const seen = new Set<string>()
     const models = list
       .filter((info) => info?.id && !seen.has(info.id) && seen.add(info.id))
@@ -820,5 +830,5 @@ export const cursorUpdates = new Set([
 export const cursorTools = new Set(["shell", "write", "delete", "glob", "grep", "read", "edit", "ls", "readLints", "mcp", "generateImage", "recordScreen", "semSearch", "createPlan", "updateTodos", "task"])
 
 function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
-  return Promise.race([promise, Bun.sleep(milliseconds).then(() => Promise.reject(new Error("Cursor didn't answer in time.")))])
+  return Promise.race([promise, Bun.sleep(milliseconds).then(() => Promise.reject(new TookTooLong("Cursor didn't answer in time.")))])
 }

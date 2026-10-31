@@ -3,6 +3,7 @@
 // own (an approval, a question), answered by `onRequest`.
 
 import type { Subprocess } from "bun"
+import { TookTooLong } from "./agent"
 
 export class RPCError extends Error {
   constructor(
@@ -136,7 +137,7 @@ export class RPC {
         setTimeout(() => {
           if (!this.pending.has(id)) return
           this.pending.delete(id)
-          reject(new Error(`${method} took too long.`))
+          reject(new TookTooLong(`${method} took too long.`))
         }, timeout)
       }
     })

@@ -80,7 +80,7 @@ const located = (value: unknown) => json({ location: { directory: process.cwd() 
 const error = (status: number, message: string) => json({ message }, status)
 
 /** What each agent's account looked like when last asked: a change means other models. */
-const lastSeen = new Map<string, string>()
+const lastSeen = new Map<string, { installed: boolean; signedIn: boolean; label?: string }>()
 /** Each agent's program's version and the newest, as last known. */
 const lastMaintained = new Map<string, Maintenance>()
 
@@ -110,10 +110,12 @@ export async function integration(agent: Agent, fresh = false, auto?: Auto): Pro
     agent.account(fresh).catch((error): Account => ({ installed: false, signedIn: false, message: String(error?.message ?? error) })),
     maintainedSoon(agent, fresh),
   ])
-  const seen = JSON.stringify([account.installed, account.signedIn, account.label])
   const before = lastSeen.get(agent.providerID)
-  lastSeen.set(agent.providerID, seen)
-  if (before !== undefined && before !== seen) {
+  // Who's signed in, as last said (one not said yet, or not now, is no other account).
+  const label = account.signedIn ? (account.label ?? before?.label) : undefined
+  lastSeen.set(agent.providerID, { installed: account.installed, signedIn: account.signedIn, label })
+  const changed = before && (before.installed !== account.installed || before.signedIn !== account.signedIn || (before.label !== undefined && before.label !== label))
+  if (changed) {
     agent.forgetModels?.()
     emit("integration.updated", { integrationID: agent.providerID })
     // Signed in anew (or as someone else): Custom Auto tries it again.
@@ -131,6 +133,8 @@ export async function integration(agent: Agent, fresh = false, auto?: Auto): Pro
       installed: account.installed,
       message: account.message,
       signInEnded: account.ended ?? false,
+      // Its sign-in couldn't be checked just now, and is as it last said.
+      unchecked: account.unchecked ?? false,
       account: account.label,
       install: agent.install,
       signsOut: Boolean(agent.signOut),
@@ -145,7 +149,7 @@ export async function integration(agent: Agent, fresh = false, auto?: Auto): Pro
     },
     methods: agent.methods(),
     connections: account.signedIn
-      ? [{ type: "agent", label: account.label, method: "oauth", status: { status: "connected", message: account.label ? `Signed in as ${account.label}` : "Signed in" } }]
+      ? [{ type: "agent", label: account.label, method: "oauth", status: { status: "connected", message: account.label ? `Signed in as ${account.label}` : account.unchecked ? "Couldn't check the sign-in just now" : "Signed in" } }]
       : [],
   }
 }

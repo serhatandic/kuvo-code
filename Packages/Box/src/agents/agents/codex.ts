@@ -9,7 +9,7 @@ import { join } from "node:path"
 import { providerID, type AgentAccount } from "../accounts"
 import type { Agent, AgentContext, Account, MessageInput, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
 import type { Limit } from "../auto"
-import { accountName, ContextWindows, failure, model } from "../agent"
+import { accountName, ContextWindows, failure, KnownAccount, model } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
 import { emit } from "../events"
 import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules } from "../fence"
@@ -96,7 +96,6 @@ export class CodexAgent implements Agent {
   /** One-off answers under way (`generate`), by their thread: what each is told. */
   private oneOffs = new Map<string, { rpc: RPC; notify: (method: string, params: any) => void; fail: (error: Error) => void }>()
   private logins = new Map<string, (status: OAuthStatus) => void>()
-  private accountCache?: { at: number; account: Account }
   private modelList?: { at: number; models: Model[] }
   /**
    * Each session's folder of Settings › Skills' skills. Codex takes extra skills for its whole
@@ -165,7 +164,7 @@ export class CodexAgent implements Agent {
    */
   programUpdated() {
     this.modelList = undefined
-    this.accountCache = undefined
+    this.known.stale()
     for (const [key, slot] of this.slots) {
       slot.outdated = slot.server
       // One starting now may be the old program's too.
@@ -353,11 +352,11 @@ export class CodexAgent implements Agent {
         this.logins.delete(params.loginId)
         done(params.success ? { status: "complete" } : { status: "failed", message: params.error ?? "Signing in didn't work." })
       }
-      this.accountCache = undefined
+      this.known.reset()
       return
     }
     if (method === "account/updated") {
-      this.accountCache = undefined
+      this.known.reset()
       return
     }
     if (method === "account/rateLimits/updated") {
@@ -454,23 +453,27 @@ export class CodexAgent implements Agent {
   /** What threads not known yet said, for a little while (a spawned agent's first words can come before its spawn is). */
   private early = new Map<string, { at: number; events: [string, any][] }>()
 
+  /** Its sign-in as Codex last said, for 30 seconds (one it couldn't say, starting or busy, isn't a sign-out). */
+  private known = new KnownAccount(30_000)
+
   async account(fresh = false): Promise<Account> {
     if (!this.executable()) return { installed: false, signedIn: false, message: "Install Codex, then sign in here." }
-    if (!fresh && this.accountCache && Date.now() - this.accountCache.at < 30_000) return this.accountCache.account
-    const rpc = await this.rpc()
-    const result: any = await rpc.request("account/read", {}, 20_000)
-    const info = result?.account
-    let account: Account
-    if (!info) {
-      account = { installed: true, signedIn: false, message: "Sign in to Codex with ChatGPT or an OpenAI API key." }
-    } else if (info.type === "chatgpt") {
-      const plan = info.planType ? `ChatGPT ${String(info.planType).charAt(0).toUpperCase()}${String(info.planType).slice(1)}` : "ChatGPT"
-      account = { installed: true, signedIn: true, label: [info.email, plan].filter(Boolean).join(" · ") }
-    } else {
-      account = { installed: true, signedIn: true, label: info.type === "apiKey" ? "OpenAI API key" : String(info.type) }
-    }
-    this.accountCache = { at: Date.now(), account }
-    return account
+    return this.known.read(fresh, async () => {
+      const rpc = await this.rpc()
+      const result: any = await rpc.request("account/read", {}, 20_000)
+      if (!result || typeof result !== "object") throw new Error("Codex couldn't say whether it's signed in.")
+      const info = result.account
+      let account: Account
+      if (!info) {
+        account = { installed: true, signedIn: false, message: "Sign in to Codex with ChatGPT or an OpenAI API key." }
+      } else if (info.type === "chatgpt") {
+        const plan = info.planType ? `ChatGPT ${String(info.planType).charAt(0).toUpperCase()}${String(info.planType).slice(1)}` : "ChatGPT"
+        account = { installed: true, signedIn: true, label: [info.email, plan].filter(Boolean).join(" · ") }
+      } else {
+        account = { installed: true, signedIn: true, label: info.type === "apiKey" ? "OpenAI API key" : String(info.type) }
+      }
+      return account
+    })
   }
 
   /** ChatGPT's device code works wherever its page is opened. */
@@ -513,11 +516,21 @@ export class CodexAgent implements Agent {
   async signInWithKey(key: string) {
     const rpc = await this.rpc()
     await rpc.request("account/login/start", { type: "apiKey", apiKey: key }, 30_000)
-    this.accountCache = undefined
+    this.known.reset()
   }
 
   async models(): Promise<Model[]> {
     if (this.modelList && Date.now() - this.modelList.at < 30 * 60_000) return this.modelList.models
+    try {
+      return await this.listModels()
+    } catch (error) {
+      // Codex couldn't list them just now (busy, or starting): the ones it listed last.
+      if (this.modelList) return this.modelList.models
+      throw error
+    }
+  }
+
+  private async listModels(): Promise<Model[]> {
     const rpc = await this.rpc()
     const models: Model[] = []
     let cursor: string | undefined

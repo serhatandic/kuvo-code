@@ -1198,7 +1198,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     `claude`, `codex`, `cursor`, `grok`, `antigravity`) → `{data: {providerID}}`, then sign in as
     any; `PATCH …/accounts/<provider> {label}`; `DELETE …/accounts/<provider>`.
     `metadata.signInEnded` true: its maker ended the sign-in; mark the account (the Mac says
-    "Sign-in ended") and offer to sign in again.
+    "Sign-in ended") and offer to sign in again. `metadata.unchecked` true: the agent couldn't
+    say just now whether it's signed in (its check failed or took too long, on a busy computer);
+    the account and its models are as it last said, and its connection's message says so when
+    nothing was known yet. Only the agent's own word that it's signed out is a sign-out.
   - Installing and updating an agent's program (Claude Code, Codex, Grok), on the computer the
     bridge is on: `metadata.installed` false, with `metadata.install` the maker's installer
     command; `POST kuvo/agents/api/integration/<provider>/install` runs it (a few minutes at most)
