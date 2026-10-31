@@ -2370,17 +2370,40 @@ var GIT_OWN = /(^|\/)\.git(\/|$)|(^|\/)\.git(config|modules)$/;
 var GIT_VALUED = /^(-C|-c|--git-dir|--work-tree|--namespace|--super-prefix|--config-env|--exec-path)$/;
 var GIT_CONFIG_READS = /^(--get|--get-all|--get-regexp|--get-urlmatch|--get-color|--get-colorbool|--list|-l)$/;
 var GIT_CONFIG_WRITES = /^(--add|--replace-all|--unset|--unset-all|--rename-section|--remove-section|--edit|-e)$/;
+var GIT_CONFIG_VALUED = /^(-f|--file|--blob|--type|--default|--comment|--value|--url)$/;
 function setsGitSettings(rest) {
   let at = 0;
   while (at < rest.length && rest[at].startsWith("-"))
     at += GIT_VALUED.test(rest[at]) ? 2 : 1;
   const [sub, ...args] = rest.slice(at);
-  if (sub === "config") {
-    const first = args.find((word) => !word.startsWith("-"));
-    const reads = first === "get" || first === "list" || args.some((word) => GIT_CONFIG_READS.test(word)) && first !== "set" && first !== "unset";
-    return !reads || args.some((word) => GIT_CONFIG_WRITES.test(word));
-  }
+  if (sub === "config")
+    return gitConfigSets(args);
   return (sub === "clone" || sub === "init" || sub === "submodule") && args.some((word) => /^--(config|template)(=|$)/.test(word));
+}
+function gitConfigSets(args) {
+  const words = [];
+  let reads = false;
+  for (let at = 0;at < args.length; at++) {
+    const word = args[at];
+    if (word === "--") {
+      words.push(...args.slice(at + 1));
+      break;
+    }
+    if (GIT_CONFIG_VALUED.test(word))
+      at++;
+    else if (GIT_CONFIG_WRITES.test(word))
+      return true;
+    else if (GIT_CONFIG_READS.test(word))
+      reads = true;
+    else if (!word.startsWith("-"))
+      words.push(word);
+  }
+  const [first] = words;
+  if (first === "get" || first === "list")
+    return false;
+  if (["set", "unset", "rename-section", "remove-section", "edit"].includes(first))
+    return true;
+  return !reads && words.length > 1;
 }
 function outwardRefusal(line) {
   const read = readLine(line, true);
@@ -2419,8 +2442,10 @@ function outwardWords(words) {
         return CANT;
     }
   }
-  const [program, ...rest] = words;
-  const name = path14.basename(program);
+  const [program, ...given] = words;
+  const gitOwn = /^git-([a-z][a-z0-9-]*)$/.exec(path14.basename(program));
+  const name = gitOwn ? "git" : path14.basename(program);
+  const rest = gitOwn ? [gitOwn[1], ...given] : given;
   if (OUTWARD[name])
     return OUTWARD[name];
   if (name === "eval")
@@ -2582,7 +2607,7 @@ var PROGRAMS2 = {
   "git-credential": "credentials"
 };
 var SUBCOMMANDS = [
-  [/^git$/, /^(config\s+(?!((--get|--get-all|--get-regexp|--list|-l)\b|(get|list)(\s|$)))\S+\s+\S|config\s+--(add|unset|unset-all|replace-all|rename-section|remove-section|edit|one-off)\b|config\s+-e\b|remote\s+(add|set-url|remove|rm)\b|credential\b)/, "gitConfig"],
+  [/^git$/, /^(config\s+--one-off\b|remote\s+(add|set-url|remove|rm)\b|credential\b)/, "gitConfig"],
   [/^git$/, /^(clean\s+(?!.*(-n|--dry-run)\b)|reset\s+.*--hard|branch\s+.*-D\b|push\s+.*(--delete\b|--force\b|--force-with-lease\b|\s-f\b|\s-d\b|\s:\S|\s\+\S)|stash\s+(drop|clear)\b|reflog\s+expire\b|gc\s+.*--prune)/, "delete"],
   [/^gh$/, /^(issue\s+(create|comment)|pr\s+(create|comment|review)|gist\s+create|discussion|release\s+create)\b/, "message"],
   [/^gh$/, /^api\b.*(\s(-X|--method)[\s=]*(POST|PATCH|PUT|DELETE)\b|\s-[fF]\s|\s--(raw-)?field\b|\s--input\b)/i, "message"],
@@ -2667,13 +2692,19 @@ function commandAlways(line) {
       if (kind)
         return kind;
     }
-    const words = commandWords(part.words);
+    let words = commandWords(part.words);
     if (!words.length)
       continue;
+    const gitOwn = /^git-([a-z][a-z0-9-]*)$/.exec(programOf(words[0]));
+    if (gitOwn)
+      words = ["git", gitOwn[1], ...words.slice(1)];
     const program = programOf(words[0]);
     if (PROGRAMS2[program])
       return PROGRAMS2[program];
-    const rest = (program === "git" ? gitRest(words.slice(1)) : words.slice(1)).join(" ");
+    const given = program === "git" ? gitRest(words.slice(1)) : words.slice(1);
+    if (program === "git" && given[0] === "config" && gitConfigSets(given.slice(1)))
+      return "gitConfig";
+    const rest = given.join(" ");
     for (const [name, sub, kind] of SUBCOMMANDS)
       if (name.test(program) && sub.test(rest))
         return kind;
