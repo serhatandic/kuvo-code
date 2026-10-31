@@ -58,6 +58,10 @@ public struct Transcript: Sendable, Equatable {
     /// The sessions of subagents working for this one: what they ask (a permission, a question)
     /// shows here, as this conversation's, and is answered in their session.
     public var helpers: Set<String> = []
+    /// Whether what a run asks goes with it, unanswered: the engine's, which lets an ask go without
+    /// a word when its run is stopped. The coding agents' bridge says itself when one goes (a
+    /// subagent of theirs at work in the background still asks once the session's turn is over).
+    public var asksEndWithRuns = false
 
     public init(sessionID: String) {
         self.sessionID = sessionID
@@ -269,8 +273,8 @@ public struct Transcript: Sendable, Equatable {
         "session.step.started", "session.step.streamed", "session.step.ended", "session.step.failed", "session.retry.scheduled",
         "session.text.started", "session.text.ended", "session.reasoning.started", "session.reasoning.ended",
         "session.tool.input.started", "session.tool.input.ended", "session.tool.called", "session.tool.success", "session.tool.failed",
-        "session.agent.selected", "session.model.selected", "session.synthetic", "session.shell.started", "session.shell.ended",
-        "session.compaction.started", "session.compaction.ended", "session.compaction.failed", "session.revert.committed",
+        "session.agent.selected", "session.model.selected", "session.synthetic", "session.instructions.updated",
+        "session.shell.started", "session.shell.ended", "session.compaction.started", "session.compaction.ended", "session.compaction.failed", "session.revert.committed",
     ]
 
     /// Applies one event. Events for other sessions are ignored. One that a read since has already
@@ -347,6 +351,9 @@ public struct Transcript: Sendable, Equatable {
             let settled = try event.payload(as: EventPayload.FormSettled.self)
             forms.removeAll { $0.id == settled.id }
             return
+        case "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted":
+            // What a run asked goes with it: this session's, or a subagent's when its own run ends.
+            if asksEndWithRuns, let ended = event.sessionID { permissions.removeAll { $0.sessionID == ended } }
         default:
             break
         }
@@ -576,9 +583,22 @@ public struct Transcript: Sendable, Equatable {
             let selected = try event.payload(as: EventPayload.ModelSelected.self)
             append(.modelSwitched(Message.ModelSwitch(id: messageID, time: Message.Time(created: now), model: selected.model, previous: selected.previous)))
         case "session.synthetic":
-            struct Synthetic: Decodable { var text: String; var description: String? }
+            struct Synthetic: Decodable { var text: String; var description: String?; var metadata: JSONValue? }
             let synthetic = try event.payload(as: Synthetic.self)
-            append(.synthetic(Message.Notice(id: messageID, time: Message.Time(created: now), text: synthetic.text, description: synthetic.description)))
+            append(.synthetic(Message.Notice(id: messageID, time: Message.Time(created: now), text: synthetic.text,
+                                             description: synthetic.description, metadata: synthetic.metadata)))
+        case "session.instructions.updated":
+            // Only a change the model is told of has words, and a notice, as the engine keeps it.
+            struct Updated: Decodable { var delta: [String: JSONValue]; var text: String? }
+            struct Head: Decodable { var metadata: [String: JSONValue]? }
+            let updated = try event.payload(as: Updated.self)
+            guard let text = updated.text else { break }
+            let sources = updated.delta.keys.sorted()
+            var metadata = (try? HTTPClient.decoder.decode(Head.self, from: event.raw).metadata) ?? [:]
+            metadata["notice"] = .string("instructions")
+            metadata["instructionSources"] = .array(sources.map(JSONValue.string))
+            append(.system(Message.Notice(id: messageID, time: Message.Time(created: now), text: text,
+                                          description: "Instructions updated: \(sources.joined(separator: ", "))", metadata: .object(metadata))))
         case "session.shell.started":
             struct Started: Decodable { var shell: ShellInfo }
             let shell = try event.payload(as: Started.self).shell
@@ -710,12 +730,14 @@ public struct Transcript: Sendable, Equatable {
         if !found { isStale = true }
     }
 
-    /// A new step or the end of a run closes any step still marked open.
+    /// A new step or the end of a run closes any step still marked open, and a retry it waited on
+    /// goes with it (as the engine's own reading has it).
     private mutating func closeOpenSteps(at time: Milliseconds) {
         for index in messages.indices.reversed() {
             guard case .assistant(var message) = messages[index] else { continue }
             guard message.time.completed == nil else { break }
             message.time.completed = time
+            message.retry = nil
             messages[index] = .assistant(message)
         }
     }

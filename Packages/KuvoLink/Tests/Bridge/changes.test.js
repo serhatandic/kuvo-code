@@ -1,19 +1,20 @@
 // A project's Changes on a box, as a Mac asks a machine's over SSH (`box route`) and a phone through
 // the relay: what's changed, new files with their stamps, staging and unstaging, Discard putting a
 // file back with anything in its way in Kuvo Code's trash, a picture's old side whole, and a commit.
-import { test, after, beforeEach } from "node:test";
+import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { removeAtEnd } from "./at-end.js";
 
 const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-changes-")));
 const home = path.join(root, "box");
 const trash = path.join(root, "trash");
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+removeAtEnd(root);
 const picture = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00, 0xc3, 0x28]);
 
 let repo;

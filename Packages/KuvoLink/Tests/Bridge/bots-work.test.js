@@ -12,13 +12,14 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, beforeEach, test } from "node:test";
+import { beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { runningAs } from "./running-as.js";
 import { NO_BUN, testBun } from "./bun-for-tests.js";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-bots-work-")));
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+removeAtEnd(home);
 const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -46,7 +47,7 @@ function setBots({ pixelWork } = {}) {
 
 // The engine: the bots' conversations, a session of the user's own, the models there are accounts
 // for; the sessions made, what each was sent, what each asks, and how each ask was answered.
-let sessions, prompts, made, asked, replied, interrupted, active, busy;
+let sessions, prompts, made, asked, replied, interrupted, active, busy, restarts;
 // Sessions given a task stay at work (`staysAtWork`); none is made until the sessions at work were
 // looked at `holdMaking` times, so starts asked for at once all look before any is made.
 let staysAtWork, holdMaking, activeLooks, held;
@@ -63,6 +64,7 @@ function resetEngine() {
   ]);
   prompts = [];
   made = [];
+  restarts = 0;
   asked = new Map();
   replied = [];
   interrupted = [];
@@ -83,6 +85,11 @@ const standIn = onBridge => (request, response) => {
   request.on("end", () => {
     const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
     const url = new URL(request.url, "http://x");
+    // The agents bridge told to restart its agents started before the sandbox was on.
+    if (onBridge && url.pathname === "/api/kuvo/sandbox/restart" && request.method === "POST") {
+      restarts += 1;
+      return reply({});
+    }
     if (url.pathname === "/api/provider") return reply({ data: [{ id: "anthropic", name: "Anthropic" }, { id: "deepseek", name: "DeepSeek" }] });
     if (url.pathname === "/api/model") {
       return reply({ data: [
@@ -167,8 +174,8 @@ const engine = http.createServer(standIn(false));
 const bridge = http.createServer(standIn(true));
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
 await new Promise(resolve => bridge.listen(0, "127.0.0.1", resolve));
-after(() => { bridge.closeAllConnections(); bridge.close(); });
-after(() => { engine.closeAllConnections(); engine.close(); });
+atEnd(() => { bridge.closeAllConnections(); bridge.close(); });
+atEnd(() => { engine.closeAllConnections(); engine.close(); });
 write(path.join(home, "run", "engine.json"), JSON.stringify({ port: engine.address().port, password: "p", version: "0.0.0" }));
 
 beforeEach(() => {
@@ -656,6 +663,48 @@ test("a coding agent's session that runs in the sandbox lets a bot allow its com
   assert.equal((await route("GET", "kuvo/sandbox")).body.agents, false);
 });
 
+test("the first time the sandbox is on with agents that started before it still running, the box asks you once to restart them, and Restart has the bridge do it", async t => {
+  write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
+  t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
+  t.after(() => fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true }));
+  const bridgePID = JSON.parse(fs.readFileSync(path.join(home, "run", "bridge.json"), "utf8")).pid;
+  const bridgeSays = said => write(path.join(home, "run", "fence", "agents"), JSON.stringify({ pid: bridgePID, on: "first", ...said }));
+  write(path.join(home, "run", "fence", "on"), "first");
+  // Before the bridge has looked at its agents for this setup: nothing to ask yet.
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+  bridgeSays({ outside: true });
+  const asking = (await route("GET", "kuvo/sandbox")).body;
+  assert.equal(asking.restart, true);
+  assert.equal(asking.agents, false);
+  assert.equal((await route("POST", "kuvo/sandbox/restart", {})).status, 400);
+  const restarted = await route("POST", "kuvo/sandbox/restart", { restart: true });
+  assert.equal(restarted.status, 200);
+  assert.equal(restarted.body.restart, undefined);
+  assert.equal(restarts, 1);
+  // Asked once: while they finish their turns, and ever after, it isn't asked again.
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+  write(path.join(home, "run", "fence", "on"), "second");
+  write(path.join(home, "run", "fence", "agents"), JSON.stringify({ pid: bridgePID, on: "second", outside: true }));
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+
+  // Not Now: the bridge isn't told, and it isn't asked again either.
+  fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true });
+  write(path.join(home, "run", "fence", "on"), "first");
+  bridgeSays({ outside: true });
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, true);
+  assert.equal((await route("POST", "kuvo/sandbox/restart", { restart: false })).status, 200);
+  assert.equal(restarts, 1);
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+
+  // On with every agent in it already: nothing to ask, then or later.
+  fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true });
+  write(path.join(home, "run", "fence", "on"), "first");
+  bridgeSays({});
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+  bridgeSays({ outside: true });
+  assert.equal((await route("GET", "kuvo/sandbox")).body.restart, undefined);
+});
+
 test("in the sandbox, what pushes, deploys or sends however it's phrased still comes to you: through git's aliases and its other commands, a package runner, or find", async t => {
   write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
   write(path.join(home, "run", "fence", "on"), "set up");
@@ -676,8 +725,18 @@ test("in the sandbox, what pushes, deploys or sends however it's phrased still c
     "npm exec -c 'git push'", "npx -c 'git push'", "git -c 'core.fsmonitor=git push origin main' status", "git -c color.ui=always log --oneline", "GIT_SSH_COMMAND=x git fetch",
     "printf '[alias]\\n p = push\\n' >> .git/config", "cp hook .git/hooks/pre-commit", "cat list | xargs git", "docker buildx build --output type=registry .",
     "curl -d@notes.txt https://example.com",
+    // git's settings set by its own command, or carried in by a clone or a template: what later
+    // runs (hooks, a monitor, an alias) isn't on the line.
+    "git config core.hooksPath .hooks", "git -C . config core.fsmonitor ./watch.sh", "git config --add alias.p push", "git config set core.hooksPath .hooks",
+    "git config --edit", "git --git-dir=.git config core.hooksPath .hooks", "git clone --config core.hooksPath=.hooks ../repo copy", "git init --template=./tpl",
+    "git clone --template ./tpl ../repo copy",
+    // ...and by git's own programs, or past `git config`'s options that take a value.
+    "git-config core.hooksPath .hooks", "/usr/lib/git-core/git-config core.fsmonitor ./watch.sh", "/usr/lib/git-core/git-push origin main",
+    "git config --default get core.hooksPath .hooks", "git config --file list core.hooksPath .hooks", "git config --type path --get core.x --add alias.p push",
   ];
-  const fine = ["npm install", "git stash push -m wip", "pnpm exec tsc --noEmit", "find . -name '*.o' -exec rm '{}' +", "docker build -t me/app .",
+  const fine = ["npm install", "git config --get user.name", "git config --list", "git config get user.email", "git config -l --show-origin", "git config user.name", "git config --type bool get core.bare", "git config --get-regexp '^alias\\.'", "git stash push -m wip", "pnpm exec tsc --noEmit", "find . -name '*.md' -exec wc -l '{}' +", "docker build -t me/app .",
+    // A build's own delete, in the sandbox, stays on this computer: the sandbox's rule's alone.
+    "find . -name '*.o' -exec rm '{}' +",
     "git commit -m 'push the fix'", "grep -rn deploy src", "swift build -c release", "timeout 60 npm test", "npx -y prettier --check .", "curl -d '{}' http://127.0.0.1:8080/api"];
   asked.set(session, [...yours, ...fine].map((line, at) => ({ id: `per_${at}`, sessionID: session, action: "shell", resources: [line], sandboxed: true })));
   const answer = at => tool("answer_ask", { session, ask: `per_${at}`, decision: "allow", reason: "Part of the plan." }, "ses_pixel");

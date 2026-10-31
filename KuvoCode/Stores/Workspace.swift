@@ -396,12 +396,13 @@ final class Workspace {
 
     private static let pinnedKey = "kuvo.pinned"
 
-    /// Archives a session, or brings it back.
-    /// Whether the engine took it.
+    /// Archives a session, or brings it back. `carriedTo`: archived as it carries on in that
+    /// session, which its metadata says, as a box marks one it carried (its box's queue goes on
+    /// there). Whether the engine took it.
     @discardableResult
-    func setArchived(_ id: String, _ archived: Bool) async -> Bool {
+    func setArchived(_ id: String, _ archived: Bool, carriedTo: String? = nil) async -> Bool {
         // Not archived if the engine didn't take it: its wake-ups aren't held for it.
-        guard await setFlag(Self.archivedKey, archived, of: id) else { return false }
+        guard await setFlag(Self.archivedKey, archived, of: id, also: carriedTo.map { ["kuvo.carriedTo": .string($0)] } ?? [:]) else { return false }
         onArchived?(id, archived, nil)
         return true
     }
@@ -437,13 +438,14 @@ final class Workspace {
     /// Sets a flag in a session's metadata, shown at once; put back as it was if the engine
     /// doesn't take it (it would come back so with the next read). Whether it did.
     @discardableResult
-    private func setFlag(_ key: String, _ value: Bool, of id: String) async -> Bool {
+    private func setFlag(_ key: String, _ value: Bool, of id: String, also: [String: JSONValue] = [:]) async -> Bool {
         guard !Moves.isFrozen(id) else { return false }
         guard let index = sessions.firstIndex(where: { $0.id == id }), let api = api(for: sessions[index]) else { return false }
         let before = sessions[index].metadata
         var metadata = before?.object ?? [:]
         // Written either way: the engine may merge metadata rather than replace it.
         metadata[key] = .bool(value)
+        metadata.merge(also) { $1 }
         sessions[index].metadata = .object(metadata)
         if let machine = RemoteFolder.machine(of: sessions[index].location.directory) { keepList(of: machine) }
         do {
@@ -1438,7 +1440,7 @@ final class Workspace {
         let kept = await onMovedToAgents?(id, moved) == true
         // With no tab of it, it opens as any session does; a bot's that wasn't open stays so.
         if !swapped, !kept, opens { tabs?.open(.session(moved.id)) }
-        if !kept { await setArchived(id, true) }
+        if !kept { await setArchived(id, true, carriedTo: moved.id) }
         return moved
     }
 
@@ -2231,7 +2233,10 @@ final class Workspace {
         }
         // A subagent's asks: shown in the conversation it works for (found first, for one at work
         // before the app knew of it, its asks and answers kept in order meanwhile).
-        if Self.asksEvents.contains(event.type), let id = event.sessionID ?? Self.formSessionID(event), session(id) == nil, parents[id] == nil, models[id] == nil, id != FormRequest.anySession {
+        if SessionModel.runEnds.contains(event.type), let id = event.sessionID, helperEvents[id] != nil {
+            // Its run ended while it's being found: what it asked goes with it.
+            helperEvents[id]?.append(event)
+        } else if Self.asksEvents.contains(event.type), let id = event.sessionID ?? Self.formSessionID(event), session(id) == nil, parents[id] == nil, models[id] == nil, id != FormRequest.anySession {
             if helperEvents[id] != nil {
                 helperEvents[id]?.append(event)
             } else {
@@ -2243,7 +2248,8 @@ final class Workspace {
                     if parent != id, let model = models[parent] { for event in events { model.applyHelper(event, from: id) } }
                 }
             }
-        } else if Self.asksEvents.contains(event.type), let id = event.sessionID ?? Self.formSessionID(event), case let parent = root(of: id), parent != id, let model = models[parent] {
+        } else if Self.asksEvents.contains(event.type) || SessionModel.runEnds.contains(event.type), let id = event.sessionID ?? Self.formSessionID(event),
+                  case let parent = root(of: id), parent != id, let model = models[parent] {
             model.applyHelper(event, from: id)
         }
         noteQuestions(event)
@@ -2503,6 +2509,14 @@ final class Workspace {
             if let settled = try? event.payload(as: EventPayload.FormSettled.self) {
                 asking[settled.id] = nil
                 Notifier.shared.clear(request: settled.id)
+            }
+        case _ where SessionModel.runEnds.contains(event.type):
+            // The engine lets what a run asked go with it, without a word (the coding agents'
+            // bridge says itself). Its permissions are named `per_…`.
+            guard let ended = event.sessionID, !isBridgeSession(ended) else { return }
+            for (request, session) in asking where session == ended && request.hasPrefix("per_") {
+                asking[request] = nil
+                Notifier.shared.clear(request: request)
             }
         default:
             break

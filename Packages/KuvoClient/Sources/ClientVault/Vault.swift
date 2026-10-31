@@ -67,12 +67,15 @@ public struct VaultState: Codable, Equatable, Sendable {
         self.tampered = tampered
     }
 
+    /// While agents started before the sandbox was on still run: the same words everywhere.
+    public static let lockedForOlderAgents = "Locked for now: some agents started before the sandbox was on. The vault opens when they finish."
+
     /// What its Vault page says while agents can't use its keys, files and notes; nil while they
     /// can.
     public func agentsNote(computer: String) -> String? {
         guard agents == false else { return nil }
         if agentsWaiting == true {
-            return "Agents can use keys, files and notes from \(computer)’s vault once the ones that started before its sandbox came on have finished. Sign-ins you let them use on their own still fill."
+            return Self.lockedForOlderAgents
         }
         return "Agents can’t use keys, files and notes from \(computer)’s vault yet. Sign-ins you let them use on their own still fill."
     }
@@ -81,7 +84,7 @@ public struct VaultState: Codable, Equatable, Sendable {
     public var botAgentsNote: String? {
         guard agents == false else { return nil }
         if agentsWaiting == true {
-            return "For now it only fills sign-ins set to On Its Own. It can use keys, files and notes once the agents that started before the sandbox came on have finished."
+            return Self.lockedForOlderAgents
         }
         return "For now it only fills sign-ins set to On Its Own. It can’t use keys, files or notes yet."
     }

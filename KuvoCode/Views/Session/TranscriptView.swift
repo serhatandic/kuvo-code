@@ -433,9 +433,9 @@ struct TranscriptView: View {
                 } else if notice.text.hasPrefix(Goal.marker) {
                     // The box keeping the agent at its goal: given it, or told what's left.
                     rows.append(.notice(notice.id, "scope", notice.description ?? String(notice.text.dropFirst(Goal.marker.count))))
-                } else if notice.text.hasPrefix("Your last response hit the output token limit") {
-                    // The engine asking the model to go on after a reply ran out of room.
-                    rows.append(.notice(notice.id, "arrow.turn.down.right", "Hit the length limit for one reply, so it carried on"))
+                } else if let words = notice.carriedOn {
+                    // The engine asking the model to go on after a reply was cut off or ran out of room.
+                    rows.append(.notice(notice.id, "arrow.turn.down.right", words))
                 } else {
                     rows.append(.notice(notice.id, "info.circle", notice.description ?? notice.text))
                 }
@@ -751,7 +751,8 @@ private struct RowView: View, Equatable {
                         isOffline: isOffline)
         case .pending(let item):
             let (text, comments, paths, references) = SentMessage.split(item.text)
-            UserBubble(text: text, references: references, folders: folders(), attachments: item.files.map(AttachmentItem.local) + Attachments.paths(paths, besides: item.files).map(AttachmentItem.path), comments: comments,
+            UserBubble(text: text, references: references, folders: folders(), attachments: item.files.map(AttachmentItem.local) + item.inlineFiles.enumerated().map { AttachmentItem.stored($1, id: "\(item.id)#\(item.files.count + $0)") }
+                           + Attachments.paths(paths, besides: item.files).map(AttachmentItem.path), comments: comments,
                        widget: SentMessage.widget(of: item.text), keyword: SentMessage.keyword(of: item.text), status: item.isLocal ? "Sending" : item.delivery == .queue ? "Queued" : "Sending")
                 .contextMenu { Button("Cancel", role: .destructive) { cancel(item) }.disabled(isOffline) }
         case .assistant(let message, let showsError):

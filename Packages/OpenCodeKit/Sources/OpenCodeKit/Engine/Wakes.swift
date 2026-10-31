@@ -653,6 +653,15 @@ public enum Wakes {
       esac
     }
 
+    # A session the engine has as archived: Kuvo Code's mark in its metadata, or the engine's own.
+    archived='"kuvo\.archived" *: *true|"archived" *: *[0-9]'
+    # Whether the session $3 is archived, as the engine (or the agents' bridge) answering on port
+    # $1, to password $2, has it now; not when it can't be asked.
+    archivedAt() {
+      [ -n "$1" ] && [ -n "$2" ] && command -v curl >/dev/null 2>&1 || return 1
+      printf 'user = "opencode:%s"\n' "$2" | curl -q -sf -m 5 --noproxy '*' -K - "http://127.0.0.1:$1/api/session/$3" 2>/dev/null | grep -qE "$archived"
+    }
+
     # The box's sandbox, while it's on (`fenced`, its launcher): its folder is the first of those
     # given that has a `run` folder (beside the engine's record; this Mac's box keeps its own in
     # `box`, beside the bots' folder). Set up and checked (`ready`) but not on yet, or its launcher
@@ -752,13 +761,8 @@ public enum Wakes {
         if [ "$(cat "${bot}via" 2>/dev/null)" = bridge ]; then port=$bport password=$bpassword tools=1; else port=$eport password=$epassword; fi
         [ -n "$port" ] && [ -n "$password" ]
       }
-      # A session the engine has as archived: Kuvo Code's mark in its metadata, or the engine's own.
-      archived='"kuvo\.archived" *: *true|"archived" *: *[0-9]'
       # A session's watches wait too while it's archived (its wake-ups do, in `settle`).
-      archivedNow() {
-        [ "$bots" != "$botsroot" ] && command -v curl >/dev/null 2>&1 || return 1
-        printf 'user = "opencode:%s"\n' "$password" | curl -q -sf -m 5 --noproxy '*' -K - "http://127.0.0.1:$port/api/session/$session" 2>/dev/null | grep -qE "$archived"
-      }
+      archivedNow() { [ "$bots" != "$botsroot" ] && archivedAt "$port" "$password" "$session"; }
       # A conversation you stopped, its queue paused on the box (`run/queues.json`, beside the
       # engine's record): its wake-ups wait there, in the list you resume, as what else arrives
       # does (`hold`); its watches wait until you resume it.
@@ -774,8 +778,14 @@ public enum Wakes {
         # shellcheck disable=SC2086
         printf '%s' "$h_asked" | KUVO_HOME="${record%/*/*}" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$KUVO_LINK_RUNTIME" ${KUVO_LINK_FLAGS-} "$KUVO_LINK_SCRIPT" box route 2>/dev/null | grep -qF '"status":200'
       }
-      # Whether this wake-up waits on the box already (one that repeats, kept from last time).
-      held() { grep -qF "\"from\":\"Wake-up\",\"text\":\"$(json "$1")\"" "${record%/*}/queues.json" 2>/dev/null; }
+      # Whether this wake-up waits on the box already (one that repeats, kept from last time), in
+      # this conversation's own entry: another's may wait with the same words (bots made from one
+      # template). One entry to a line (a quote inside the words is escaped, so no `},"…":{"paused":`
+      # is in them).
+      held() {
+        sed 's/},"\([^"]*\)":{"paused":/}\
+    "\1":{"paused":/g' "${record%/*}/queues.json" 2>/dev/null | grep -F "\"$session\":{\"paused\":" | grep -qF "\"from\":\"Wake-up\",\"text\":\"$(json "$1")\""
+      }
       # A session's folder (not a bot's, in $botsroot) as its engine knows the
       # session now: one that's gone goes to the trash, rather than its wake-ups being tried for
       # ever; a subagent's goes to the conversation that started it (its bot's folder, if it's a
@@ -803,14 +813,15 @@ public enum Wakes {
         esac
         s_body=$(printf '%s' "$s_out" | sed '$d')
         # One held (`held`) is only let go once it's gone, or, held as archived, once it's back
-        # (its bringing back didn't reach this computer): its wake-ups go from the next minute.
+        # (its bringing back didn't reach this computer): then it goes on as any other.
         if [ -n "$held" ]; then
           [ "$(cat "${bot}paused" 2>/dev/null)" = archived ] && ! printf '%s' "$s_body" | grep -qE "$archived" && rm -f "${bot}paused"
           return 1
         fi
         # Archived, from any app (a Mac's, a phone's: they mark the session itself), wherever it
-        # was done: its wake-ups wait, as when paused, until it's brought back.
-        printf '%s' "$s_body" | grep -qE "$archived" && return 1
+        # was done, or a folder made since (by the box's sandbox, say): held as archiving holds
+        # them (`paused`), so it shows held wherever it's listed, until it's brought back.
+        printf '%s' "$s_body" | grep -qE "$archived" && { printf archived >"${bot}paused"; return 1; }
         s_dir=$(printf '%s' "$s_body" | sed -n 's/.*"location" *: *{[^}]*"directory" *: *"\([^"]*\)".*/\1/p' | head -n 1)
         [ -n "$s_dir" ] && [ "$s_dir" != "$(cat "${bot}directory" 2>/dev/null)" ] && printf '%s' "$s_dir" >"${bot}directory"
         s_parent=$(printf '%s' "$s_body" | sed -n 's/.*"parentID" *: *"\(ses_[A-Za-z0-9]*\)".*/\1/p' | head -n 1)
@@ -900,7 +911,8 @@ public enum Wakes {
           if [ "$(cat "${bot}paused" 2>/dev/null)" != moving ] && session=$(cat "$bot/session" 2>/dev/null) && [ -n "$session" ] && reach; then
             held=1; settle; held=
           fi
-          continue
+          # (One let go as its session is back goes on now, as any other.)
+          [ -e "${bot}paused" ] || [ ! -d "$bot" ] && continue
         fi
         # One whose last wake-up couldn't go waits before it's tried again (`.retry`: when, and how
         # long it waited): a minute, then twice as long each time, up to half an hour.
@@ -1041,6 +1053,17 @@ public enum Wakes {
       [ -n "$fresh" ] || return 0
       (umask 077; mkdir -p "$bot") && printf '%s' "$session" >"$bot/session" && printf '%s' "$PWD" >"$bot/directory" \
         && { [ "$KUVO_WAKE_VIA" != bridge ] || printf bridge >"$bot/via"; } || { echo "Couldn't keep it in $bot." >&2; exit 2; }
+      # An archived session's is held from the start (`paused`), as archiving holds the wake-ups a
+      # session has, until it's brought back: as the Mac's app makes one (WakeUps.makeFolder) and the
+      # box's routes do, so too for this Mac's keeper with the app closed, a machine's tools and an
+      # agent's own kuvo-wake. Asked of its engine (a coding agent's, of the agents' bridge), found
+      # by its record in the box's `run` folder, beside the wakes folder: this Mac's is in `box`.
+      m_home=${bot%/*}; m_home=${m_home%/*}; m_record=
+      for m_k in "$m_home/box" "$m_home"; do [ -f "$m_k/run/engine.json" ] && m_record=$m_k/run/engine.json && break; done
+      [ -n "$m_record" ] && [ "$KUVO_WAKE_VIA" = bridge ] && m_record=${m_record%/*}/bridge.json
+      if [ -n "$m_record" ] && archivedAt "$(listens "$m_record" port)" "$(listens "$m_record" password)" "$session"; then
+        printf archived >"$bot/paused"
+      fi
     }
     # The user's time zone, when the bot lives on a machine whose clock may be in another.
     z=$(zone "$bot/"); if [ -n "$z" ]; then TZ=$z; export TZ; fi

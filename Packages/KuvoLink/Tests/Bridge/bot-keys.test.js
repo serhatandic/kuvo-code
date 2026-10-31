@@ -2,12 +2,13 @@
 // from a phone with the Mac closed or from the Mac (through `box route`): the scenarios in
 // bot-keys-scenarios.js, then what's a machine's own: its settings naming them as they always have,
 // and its bots' settings refreshed as its box starts. (This Mac's app's keys: bot-keys-host.test.js.)
-import { test, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { botKeyScenarios, own, script, served } from "./bot-keys-scenarios.js";
+import { removeAtEnd } from "./at-end.js";
 
 // The box at `~/.kuvo-code`, as on a machine, so its settings name keys as a machine's do.
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-bot-keys-"));
@@ -16,7 +17,7 @@ const home = path.join(root, ".kuvo-code");
 process.env.KUVO_HOME = home;
 for (const name of ["KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "KUVO_KEYS"]) delete process.env[name];
 const link = await import(script);
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+removeAtEnd(root);
 
 const keyFile = name => path.join(home, "box", name.includes("__") ? "bot-keys" : "keys", name);
 const { writeCatalog, bot, settings } = botKeyScenarios({ link, home, store: {

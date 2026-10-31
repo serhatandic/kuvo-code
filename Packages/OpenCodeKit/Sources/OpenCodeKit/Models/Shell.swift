@@ -59,3 +59,18 @@ extension Message.Notice {
         return short.isEmpty ? outcome : "\(outcome): \(short)"
     }
 }
+
+extension Message.Notice {
+    /// For the engine's word to the model to go on with a reply that was cut off (its stream
+    /// broke, or it ran out of room): what happened, in a few words, as both apps show it. Nil for
+    /// any other notice.
+    public var carriedOn: String? {
+        if text.hasPrefix("The previous response was interrupted. Continue from where you left off") {
+            return "The reply was cut off, so it carried on"
+        }
+        if text.hasPrefix("Your last response hit the output token limit") {
+            return "Hit the length limit for one reply, so it carried on"
+        }
+        return nil
+    }
+}

@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
 import { masked, showsAll } from "../../Sources/KuvoLink/Resources/kuvo-link.js";
+import "./at-end.js";
 
 const { cases } = JSON.parse(fs.readFileSync(new URL("../../Vectors/masking.json", import.meta.url), "utf8"));
 

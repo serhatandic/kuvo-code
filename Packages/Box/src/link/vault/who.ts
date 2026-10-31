@@ -9,6 +9,7 @@ import type { VaultGrant, VaultItem } from "../../shared/routes/vault";
 import { listBots } from "../bots/list";
 import { engineGet, type EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
+import { worksFor } from "../work/tree";
 import { readGrants } from "./store";
 
 /** The caller, as far as it can be told. */
@@ -54,10 +55,13 @@ export async function callerOf(session: unknown, readEngine: () => EngineRecord,
   const root = current?.id ?? session;
   // (A conversation whose root the engine didn't say may be a seat's: it asks you, as one does.)
   const unsure = !!current?.parentID;
-  // (A seat is its bot's, by the chat's mark on it: its asks name the bot, and its pause holds.)
+  // (A seat is its bot's, by the chat's mark on it: its asks name the bot, and its pause holds.
+  // So is a session the bot started for its work, by the box's mark on it.)
   const seat = current?.metadata?.kuvo?.seat as { bot?: unknown; group?: unknown } | undefined;
   const bots = listBots();
-  const bot = seat ? bots.find(each => typeof seat.bot === "string" && each.id === seat.bot) : bots.find(each => each.session === root);
+  const works = worksFor(current);
+  const bot = seat ? bots.find(each => typeof seat.bot === "string" && each.id === seat.bot)
+    : bots.find(each => each.session === root) ?? (works ? bots.find(each => each.id === works.bot) : undefined);
   const folder = current?.location?.directory ?? current?.directory;
   return {
     session,

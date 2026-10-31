@@ -132,6 +132,7 @@ function chat(runner: GroupRunner, id: string, withMessages = true) {
     discussing: Boolean(state.discussing),
     paused: Boolean(state.paused),
     ...(state.activity?.length ? { activity: state.activity } : {}),
+    ...(state.stopped?.length ? { stopped: state.stopped } : {}),
   }
 }
 

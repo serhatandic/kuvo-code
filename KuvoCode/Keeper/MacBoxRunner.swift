@@ -90,7 +90,7 @@ final class MacBoxRunner {
         self.launch = launch
         engine = .starting
         // Why one before stopped (a keeper killed before it could take it away) isn't this one's.
-        try? FileManager.default.removeItem(at: KeeperRecord.run.appending(path: "engine-stopped"))
+        BoxProcess.forgetEngineStopped()
         do {
             async let environment = ShellEnvironment.load()
             let binary: URL
@@ -315,6 +315,9 @@ final class MacBoxRunner {
         // The box's sandbox, which the coding agents run their commands in while it's on, as a
         // machine's is in `~/.kuvo-code/run/fence`.
         environment["KUVO_FENCE"] = BoxProcess.run.appending(path: "fence").path
+        // The box's queues, where a chat's part for a conversation you stopped waits until you
+        // resume it, as a machine's are in `~/.kuvo-code/run`.
+        environment["KUVO_RUN"] = BoxProcess.run.path
         // This Mac's group chats, in its own folder, as a machine's are in `~/.kuvo-code`: their
         // bots are its bots, what they let go of goes to the box's trash (and on to the Finder's,
         // `kuvo.group.trashed`), and a bot remembers them under the key it always has.

@@ -310,14 +310,16 @@ private struct BackgroundWorkRow: View {
     var body: some View {
         LabeledContent {
             switch work.state {
+            case .on where !work.registersHere:
+                Text("Off").foregroundStyle(.secondary)
             case .on:
                 HStack(spacing: 10) {
                     HStack(spacing: 5) {
                         Image(systemName: "circle.fill")
-                            .foregroundStyle(.green)
+                            .foregroundStyle(work.didntStart ? .orange : .green)
                             .imageScale(.small)
                             .accessibilityHidden(true)
-                        Text("On").foregroundStyle(.secondary)
+                        Text(work.didntStart ? "Not running" : "On").foregroundStyle(.secondary)
                     }
                     .fixedSize()
                     if app.keepsWorkingAfterQuit {
@@ -348,6 +350,12 @@ private struct BackgroundWorkRow: View {
 
     private var caption: Text {
         switch work.state {
+        // A demo, test or measurement copy runs it itself, whatever macOS has registered.
+        case _ where !work.registersHere: Text(work.failure ?? "Off: the work stops when you quit.")
+        // launchd had no keeper to start, or it never came up: the app runs the work this time.
+        case .on where work.didntStart: Text("Didn’t start this time, so the work stops when you quit. Check that Kuvo Code is allowed in [Login Items](kuvo-settings:login-items).")
+        // After an update: the work moves to it once what's running now is done.
+        case .on where app.keeperMakesWay: Text("Updates to \(AppInfo.version) once what’s running now is done. Nothing is stopped for it.")
         // How to turn it off: macOS's own switch, in Login Items & Extensions.
         case .on: Text("Bots, goals and wake-ups go on when Kuvo Code is closed. To turn this off, use [Login Items](kuvo-settings:login-items).")
         case .needsApproval: Text("Waiting for your OK in Login Items & Extensions. Until then, the work stops when you quit.")

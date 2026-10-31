@@ -348,6 +348,46 @@ const BARE: Record<string, RegExp> = {
 // git's own settings and hooks, which a command in the project can name or write (on Linux the
 // sandbox doesn't keep them, as macOS's does): what git runs next isn't on the line.
 const GIT_OWN = /(^|\/)\.git(\/|$)|(^|\/)\.git(config|modules)$/;
+// git's own options that take the next word as their value.
+const GIT_VALUED = /^(-C|-c|--git-dir|--work-tree|--namespace|--super-prefix|--config-env|--exec-path)$/;
+// What `git config` only reads with (`--get`, `--list`, or `git config get`), and what writes even then.
+const GIT_CONFIG_READS = /^(--get|--get-all|--get-regexp|--get-urlmatch|--get-color|--get-colorbool|--list|-l)$/;
+const GIT_CONFIG_WRITES = /^(--add|--replace-all|--unset|--unset-all|--rename-section|--remove-section|--edit|-e)$/;
+// `git config`'s own options that take the next word as their value (so `--default get` isn't `get`).
+const GIT_CONFIG_VALUED = /^(-f|--file|--blob|--type|--default|--comment|--value|--url)$/;
+
+/** Whether git's words set its own settings, or carry them in (a clone's `--config`, a template's
+ * hooks): what git runs next (`core.hooksPath`, `core.fsmonitor`, an alias) isn't on the line. */
+function setsGitSettings(rest: string[]): boolean {
+  let at = 0;
+  while (at < rest.length && rest[at].startsWith("-")) at += GIT_VALUED.test(rest[at]) ? 2 : 1;
+  const [sub, ...args] = rest.slice(at);
+  if (sub === "config") return gitConfigSets(args);
+  return (sub === "clone" || sub === "init" || sub === "submodule") && args.some(word => /^--(config|template)(=|$)/.test(word));
+}
+
+/** Whether `git config`'s words (past `config`) change a setting, rather than read one: in either
+ * syntax, past its options that take a value. */
+export function gitConfigSets(args: string[]): boolean {
+  const words: string[] = [];
+  let reads = false;
+  for (let at = 0; at < args.length; at++) {
+    const word = args[at];
+    if (word === "--") {
+      words.push(...args.slice(at + 1));
+      break;
+    }
+    if (GIT_CONFIG_VALUED.test(word)) at++;
+    else if (GIT_CONFIG_WRITES.test(word)) return true;
+    else if (GIT_CONFIG_READS.test(word)) reads = true;
+    else if (!word.startsWith("-")) words.push(word);
+  }
+  const [first] = words;
+  if (first === "get" || first === "list") return false;
+  if (["set", "unset", "rename-section", "remove-section", "edit"].includes(first)) return true;
+  // The older way: a key alone reads it, a key and a value set it.
+  return !reads && words.length > 1;
+}
 
 /** Why a bot can't allow a command even in the sandbox: it pushes, publishes, deploys, uploads or
  * reaches another computer, or runs code that can't be read (a shell's `-c`, `node -e`), or can't be
@@ -384,8 +424,11 @@ function outwardWords(words: string[]): string | null {
       if (!BARE[wrapper]?.test(words[0])) return CANT;
     }
   }
-  const [program, ...rest] = words;
-  const name = path.basename(program);
+  const [program, ...given] = words;
+  // (`git-config`, `/usr/lib/git-core/git-push`: git's own commands by their programs.)
+  const gitOwn = /^git-([a-z][a-z0-9-]*)$/.exec(path.basename(program));
+  const name = gitOwn ? "git" : path.basename(program);
+  const rest = gitOwn ? [gitOwn[1], ...given] : given;
   if (OUTWARD[name]) return OUTWARD[name];
   if (name === "eval") return "running a command it can't read";
   if (SHELLS.has(name) && (rest.length === 0 || rest.some(word => /^-[a-zA-Z]*c/.test(word)))) return "running a command it can't read";
@@ -397,6 +440,7 @@ function outwardWords(words: string[]): string | null {
   if (rest.some(word => /^--push(=|$)/.test(word) || /(^|[=,])(type=registry|push=true)(,|$)/.test(word))) return "sending it beyond this computer";
   // git's settings on its line can name what one of its commands runs.
   if (name === "git" && rest.some(word => /^(-c|--config-env)/.test(word))) return CANT;
+  if (name === "git" && setsGitSettings(rest)) return `${CANT} (it changes git's own settings)`;
   const subs = rest.filter(word => !word.startsWith("-"));
   if (!QUIET.has(name)) {
     // (`git stash push` keeps your changes aside, here.)

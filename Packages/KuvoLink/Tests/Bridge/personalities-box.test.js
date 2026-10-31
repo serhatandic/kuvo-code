@@ -9,11 +9,12 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const support = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-personalities-"));
-after(() => fs.rmSync(support, { recursive: true, force: true }));
+removeAtEnd(support);
 // As the app starts its box: KUVO_HOME is the box's folder, and the bots' is the app's own beside it.
 process.env.KUVO_HOME = path.join(support, "box");
 process.env.KUVO_BOTS = path.join(support, "bots");
@@ -37,7 +38,7 @@ const engine = http.createServer((request, response) => {
   });
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
-after(() => { engine.closeAllConnections(); engine.close(); });
+atEnd(() => { engine.closeAllConnections(); engine.close(); });
 const handle = link.engineHandler(() => ({ port: engine.address().port, password: "p" }), { name: "Mac" }, () => null);
 
 /** A request as the box gets it: from the app beside it (`x-kuvo-from: app`), or a phone's. */

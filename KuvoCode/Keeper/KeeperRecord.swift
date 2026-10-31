@@ -32,6 +32,10 @@ nonisolated struct KeeperRecord: Codable, Equatable, Sendable {
 
     var isAlive: Bool { kill(pid, 0) == 0 || errno == EPERM }
 
+    /// Started from another version of the app than this one (it was updated since): it makes way
+    /// for this one's once nothing is under way.
+    var isOtherVersion: Bool { version != AppInfo.version || build != AppInfo.build }
+
     /// Written whole, readable by you only.
     func write() throws {
         try FileManager.default.createDirectory(at: Self.run, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -65,8 +69,9 @@ nonisolated enum KeeperControl {
         /// Stop Background Work: everything stops, and the keeper with it, until the app opens or
         /// you log in again.
         case stop
-        /// An app newer than the keeper opened: the keeper makes way for the app's own once nothing
-        /// is under way (or the wait runs out), and launchd starts that one.
+        /// An app newer than the keeper opened: the keeper makes way for the app's own the first
+        /// moment nothing is under way, however long that takes (a running session is never stopped
+        /// for an update), and launchd starts that one.
         case update
     }
 

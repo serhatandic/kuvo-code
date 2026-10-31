@@ -1,12 +1,13 @@
 // Settings › Engine's plugins, as each box finds them on npm: the most used ones before you type,
 // the ones a word finds, the package you name exactly first, and a name npm doesn't have said
 // so. npm is a stand-in, as a box reaches it.
-import { test, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-plugins-")));
 process.env.KUVO_HOME = path.join(home, ".kuvo-code");
@@ -36,9 +37,9 @@ const npm = http.createServer((request, response) => {
 await new Promise(resolve => npm.listen(0, "127.0.0.1", resolve));
 process.env.KUVO_TEST_NPM = `http://127.0.0.1:${npm.address().port}`;
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
-after(() => {
+removeAtEnd(home);
+atEnd(() => {
   npm.close();
-  fs.rmSync(home, { recursive: true, force: true });
 });
 
 test("before you type, the most used plugins", async () => {

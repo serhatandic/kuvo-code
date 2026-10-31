@@ -7,9 +7,10 @@
 
 import { isObject, parsed } from "../../shared/json";
 import type { SandboxState } from "../../shared/routes/sandbox";
-import { addRule, allowedFor, removeRule, RuleRefusal } from "../fence/allowed";
+import { addableOwners, addRule, allowedFor, folderOfOwner, forgetGoneBots, listed, removeRule, RuleRefusal } from "../fence/allowed";
 import { answerSandboxAsk, callSandboxTool, listSandboxAsks, onSandboxAsksChanged, SANDBOX_TOOLS } from "../fence/outside";
-import { fenceState, setUpFence, tellAgents } from "../fence/state";
+import { answeredRestart, asksToRestart, fenceState, restartSettled, setUpFence, tellAgents } from "../fence/state";
+import { bridgeTarget, call } from "../engine/client";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { readLink } from "../state";
 import { askHolder, heldHere, holdsVault } from "../vault/holder";
@@ -51,6 +52,19 @@ export async function* sandboxRoute(context: RouteContext): AsyncGenerator<Answe
   }
   const body = parsed(request.body);
   const given = isObject(body) ? body : {};
+  // Your answer to its one ask: the agents bridge restarts those started before it was on (each
+  // between turns), or they finish as they are. Either way, it isn't asked again.
+  if (route === "kuvo/sandbox/restart") {
+    if (method !== "POST") return yield* json(405, {});
+    if (typeof given.restart !== "boolean") return yield* json(400, { message: "Say whether to restart them: restart, true or false." });
+    const bridge = given.restart ? bridgeTarget() : null;
+    if (bridge) {
+      const told = await call(bridge, "POST", "/api/kuvo/sandbox/restart", {}, AbortSignal.timeout(10_000)).then(() => true, () => false);
+      if (!told) return yield* json(503, { message: "The coding agents' bridge didn't answer: try again in a moment." });
+    }
+    answeredRestart();
+    return yield* json(200, shown());
+  }
   const parts = route.split("/");
 
   // The asks, the agents' tool and Also Allowed are the box's long-running process's.
@@ -63,19 +77,23 @@ export async function* sandboxRoute(context: RouteContext): AsyncGenerator<Answe
 
   if (route === "kuvo/sandbox/allowed" || parts[2] === "allowed") {
     try {
-      if (route === "kuvo/sandbox/allowed" && method === "GET") {
-        const project = new URLSearchParams(request.path.split("?")[1] ?? "").get("project") ?? undefined;
-        return yield* json(200, { allowed: allowedFor(project) });
-      }
+      // A project's (`?project=`), or every rule here and whom else one can be added for: what a
+      // GET with none named answers, and an add's or a removal's with `?all`.
+      const query = new URLSearchParams(request.path.split("?")[1] ?? "");
+      forgetGoneBots();
+      const answer = (of?: string) => ({ allowed: listed(allowedFor(of)), ...(of ? {} : { owners: addableOwners() }) });
+      if (route === "kuvo/sandbox/allowed" && method === "GET") return yield* json(200, answer(query.get("project") ?? undefined));
       if (route === "kuvo/sandbox/allowed" && method === "POST") {
-        const rule = addRule({ ...given, by: clientName(context) });
-        return yield* json(200, { allowed: allowedFor(rule.project) });
+        // For a project by its folder, or for a bot's own folder or the chats' by `owner`.
+        const project = given.project === undefined && given.owner !== undefined ? folderOfOwner(given.owner) : given.project;
+        const rule = addRule({ ...given, project, by: clientName(context) });
+        return yield* json(200, answer(query.has("all") ? undefined : rule.project));
       }
       if (parts.length === 4 && method === "DELETE") {
         const id = idOf(parts[3]);
         const rule = allowedFor().find(each => each.id === id);
         if (!rule || !removeRule(id)) return yield* json(404, { message: "That isn't in Also Allowed." });
-        return yield* json(200, { allowed: allowedFor(rule.project) });
+        return yield* json(200, answer(query.has("all") ? undefined : rule.project));
       }
       return yield* json(405, {});
     } catch (error) {
@@ -101,19 +119,28 @@ export async function* sandboxRoute(context: RouteContext): AsyncGenerator<Answe
   }
   if (route === "kuvo/sandbox/asks" || route === "kuvo/sandbox/asks/events") {
     if (method !== "GET") return yield* json(405, {});
-    if (route === "kuvo/sandbox/asks") return yield* json(200, { asks: listSandboxAsks() });
+    // With the box's one ask to restart the agents started before the sandbox was on, while it asks.
+    const listed = () => ({ asks: listSandboxAsks(), ...(asksToRestart() ? { restart: true } : {}) });
+    if (route === "kuvo/sandbox/asks") return yield* json(200, listed());
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
     let wake: () => void = () => {};
     const stop = onSandboxAsksChanged(() => wake());
+    let sent = "";
+    // Until that's settled here (and said), looked at every few seconds too, as the agents bridge
+    // notes it and you answer it (perhaps through another of the box's processes).
+    const looks = setInterval(() => { if (!restartSettled() || sent.includes('"restart"')) wake(); }, 5_000);
     try {
       while (!signal?.aborted) {
-        yield { body: Buffer.from(JSON.stringify({ asks: listSandboxAsks() }) + "\n") };
+        const now = JSON.stringify(listed());
+        if (now !== sent) yield { body: Buffer.from(now + "\n") };
+        sent = now;
         await new Promise<void>(done => {
           wake = done;
           signal?.addEventListener("abort", () => done(), { once: true });
         });
       }
     } finally {
+      clearInterval(looks);
       stop();
     }
     return;

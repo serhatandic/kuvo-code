@@ -35,6 +35,9 @@ export interface Contents {
   /** A group chat as its bridge held it. */
   group?: { group: unknown; messages: unknown };
   wasPaused: boolean;
+  /** Its conversations' queues that are paused or have something waiting on the box, by session
+   * (`packQueues`): a conversation you stopped stays stopped there, with what waits for it. */
+  queues?: Record<string, unknown>;
 }
 
 // A chat's folder here: conversations of no project (this Mac's app's own, a machine's in its box).

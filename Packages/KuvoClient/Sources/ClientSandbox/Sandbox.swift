@@ -35,8 +35,11 @@ public struct SandboxState: Codable, Equatable, Sendable {
     public var check: Check?
     /// Checks failed in a row.
     public var failures: Int?
+    /// It asks you, once, to restart the agents started before it was on (`SandboxRoutes.restart`).
+    public var restart: Bool?
 
-    public init(on: Bool, why: String? = nil, able: Bool = true, agents: Bool = false, reason: Reason? = nil, action: Action? = nil, route: String? = nil, needs: String? = nil, check: Check? = nil, failures: Int? = nil) {
+    public init(on: Bool, why: String? = nil, able: Bool = true, agents: Bool = false, reason: Reason? = nil, action: Action? = nil, route: String? = nil, needs: String? = nil, check: Check? = nil, failures: Int? = nil, restart: Bool? = nil) {
+        self.restart = restart
         self.on = on
         self.why = why
         self.able = able
@@ -61,6 +64,7 @@ public struct SandboxState: Codable, Equatable, Sendable {
         needs = try keys.decodeIfPresent(String.self, forKey: .needs)
         check = try? keys.decodeIfPresent(Check.self, forKey: .check)
         failures = try keys.decodeIfPresent(Int.self, forKey: .failures)
+        restart = try? keys.decodeIfPresent(Bool.self, forKey: .restart)
     }
 }
 
@@ -113,8 +117,10 @@ public struct SandboxAsk: Codable, Equatable, Identifiable, Sendable {
     public var error: String?
     public var always: Place?
     public var machine: String?
+    /// Whose its folder is, which Always gives the place to (none from a box before it).
+    public var owner: SandboxOwner?
 
-    public init(id: String, at: Double = 0, session: String? = nil, sessionName: String? = nil, bot: String? = nil, botName: String? = nil, project: String, command: String, why: String, stopped: [SandboxStop]? = nil, error: String? = nil, always: Place? = nil, machine: String? = nil) {
+    public init(id: String, at: Double = 0, session: String? = nil, sessionName: String? = nil, bot: String? = nil, botName: String? = nil, project: String, command: String, why: String, stopped: [SandboxStop]? = nil, error: String? = nil, always: Place? = nil, machine: String? = nil, owner: SandboxOwner? = nil) {
         self.id = id
         self.at = at
         self.session = session
@@ -128,6 +134,7 @@ public struct SandboxAsk: Codable, Equatable, Identifiable, Sendable {
         self.error = error
         self.always = always
         self.machine = machine
+        self.owner = owner
     }
 
     /// Who's asking, by name.
@@ -140,7 +147,32 @@ public struct SandboxAsk: Codable, Equatable, Identifiable, Sendable {
 /// An answer to an ask: run it once, run it and keep `always` in Also Allowed, or don't.
 public enum SandboxAnswer: String, Codable, Sendable { case once, always, no }
 
-/// A rule kept in a project's Also Allowed: a folder (or file) its commands may write in the sandbox.
+/// Whose a conversation's folder is, as Also Allowed groups its rules and an ask's card names it: a
+/// project's, a bot's own (`id`, the bot's) or the chats' (one folder, so a rule there is every
+/// chat's). `name`: the project's folder's name, the bot's, or "Chats".
+public struct SandboxOwner: Codable, Equatable, Hashable, Sendable {
+    public enum Kind: String, Codable, Sendable { case project, bot, chats }
+
+    public var kind: Kind
+    public var id: String?
+    public var name: String
+
+    public init(kind: Kind, id: String? = nil, name: String) {
+        self.kind = kind
+        self.id = id
+        self.name = name
+    }
+
+    public static let chats = SandboxOwner(kind: .chats, name: "Chats")
+
+    /// What a client sends to add a folder for it (a project's goes by its folder instead).
+    public var sent: [String: String] {
+        id.map { ["kind": kind.rawValue, "id": $0] } ?? ["kind": kind.rawValue]
+    }
+}
+
+/// A rule kept in Also Allowed: a folder (or file) a project's commands may write in the sandbox, or
+/// a bot's own, or the chats'.
 public struct SandboxRule: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var project: String
@@ -150,32 +182,56 @@ public struct SandboxRule: Codable, Equatable, Identifiable, Sendable {
     public var at: Double
     /// Who gave it (an ask's Always for This, or a client).
     public var by: String?
+    /// Whose it is; a box from before it says none, and it's its project's, by its folder's name.
+    public var owner: SandboxOwner?
+    /// Its project's folder isn't there any more (a project deleted, a bot moved away).
+    public var gone: Bool?
 
-    public init(id: String, project: String, kind: String = "write", path: String, at: Double = 0, by: String? = nil) {
+    public init(id: String, project: String, kind: String = "write", path: String, at: Double = 0, by: String? = nil, owner: SandboxOwner? = nil, gone: Bool? = nil) {
         self.id = id
         self.project = project
         self.kind = kind
         self.path = path
         self.at = at
         self.by = by
+        self.owner = owner
+        self.gone = gone
+    }
+
+    /// Whose it is, from a box before owners too.
+    public var whose: SandboxOwner {
+        owner ?? SandboxOwner(kind: .project, name: SandboxAsk.name(of: project))
     }
 }
 
 /// The answers' envelopes.
 public struct SandboxAsks: Codable, Equatable, Sendable {
     public var asks: [SandboxAsk]
-    public init(asks: [SandboxAsk]) { self.asks = asks }
+    /// The box asks you, once, to restart the agents started before its sandbox was on (`SandboxState.restart`).
+    public var restart: Bool?
+    public init(asks: [SandboxAsk], restart: Bool? = nil) {
+        self.asks = asks
+        self.restart = restart
+    }
 }
 
 public struct SandboxAllowed: Codable, Equatable, Sendable {
     public var allowed: [SandboxRule]
-    public init(allowed: [SandboxRule]) { self.allowed = allowed }
+    /// Whom else a folder can be added for: the bots working in their own folder, then the chats
+    /// (a box from before them names none).
+    public var owners: [SandboxOwner]?
+    public init(allowed: [SandboxRule], owners: [SandboxOwner]? = nil) {
+        self.allowed = allowed
+        self.owners = owners
+    }
 }
 
 /// The sandbox's routes on a box (KuvoLink's PROTOCOL.md, "Sandbox").
 public enum SandboxRoutes {
     public static let state = "kuvo/sandbox"
     public static let check = "kuvo/sandbox/check"
+    /// Your answer to its one ask to restart the agents started before it was on: `{restart}`, true or false.
+    public static let restart = "kuvo/sandbox/restart"
     public static let asks = "kuvo/sandbox/asks"
     public static let askEvents = "kuvo/sandbox/asks/events"
     public static func ask(_ id: String) -> String { "kuvo/sandbox/asks/\(id)" }
@@ -186,6 +242,22 @@ public enum SandboxRoutes {
         return "kuvo/sandbox/allowed?project=" + (project.addingPercentEncoding(withAllowedCharacters: query) ?? project)
     }
     public static func rule(_ id: String) -> String { "kuvo/sandbox/allowed/\(id)" }
+    /// Adding a rule (for a project by `project`, a bot or the chats by `owner`), answered with every
+    /// rule and the owners, as `allowed` is.
+    public static let allowedAll = "kuvo/sandbox/allowed?all"
+    /// Removing one, answered with every rule.
+    public static func rule(_ id: String, all: Bool) -> String { rule(id) + (all ? "?all" : "") }
+}
+
+// MARK: The restart card's words
+
+/// How both apps word the box's one ask to restart the agents started before its sandbox was on,
+/// on a plain card in that computer's conversations (`SandboxState.restart`).
+public enum SandboxRestart {
+    public static let title = "Restart agents in the sandbox?"
+    public static let detail = "Some agents started before the sandbox was on and still run outside it. Each restarts once it finishes what it’s doing, and picks up where it left off."
+    public static let restart = "Restart Agents"
+    public static let notNow = "Not Now"
 }
 
 // MARK: The card's words
@@ -197,9 +269,21 @@ extension SandboxAsk {
     public var title: String { "\(asker) wants to run a command outside the sandbox" }
 
     /// The project's folder by its name.
-    public var projectName: String {
-        let name = (project as NSString).lastPathComponent
-        return name.isEmpty ? project : name
+    public var projectName: String { Self.name(of: project) }
+
+    /// A folder by its name.
+    static func name(of folder: String) -> String {
+        let name = (folder as NSString).lastPathComponent
+        return name.isEmpty ? folder : name
+    }
+
+    /// Where its commands write, by whose it is: a project by name, "Scout’s folder", or "Chats".
+    public var placeName: String {
+        switch owner?.kind {
+        case .bot: "\(owner?.name ?? asker)’s folder"
+        case .chats: "Chats"
+        case .project, nil: projectName
+        }
     }
 
     /// What stopped it, in a sentence under the title: by the first thing the sandbox refused, or
@@ -207,7 +291,7 @@ extension SandboxAsk {
     public var subtitle: String {
         if let first = stopped?.first {
             switch first.kind {
-            case .write: return "The sandbox stopped it from changing a file outside \(projectName)."
+            case .write: return "The sandbox stopped it from changing a file outside \(placeName)."
             case .read: return "The sandbox stopped it from reading a file it keeps private."
             case .connect: return "The sandbox stopped it from making a connection."
             case .job: return "The sandbox stopped it from starting a background job."
@@ -222,9 +306,24 @@ extension SandboxAsk {
     /// The place Always for This keeps, short (`~` for a home folder).
     public var alwaysPath: String? { always.map { SandboxStop.short($0.path) } }
 
-    /// What Always for This does, in full, for VoiceOver and its help.
-    public var alwaysMeaning: String? {
-        alwaysPath.map { "Run it outside the sandbox now, and from now on let commands in \(projectName) write in \($0), in the sandbox" }
+    /// After Always's place, for the chats: one rule there is every chat's.
+    public var alwaysScope: String? { owner?.kind == .chats ? "in every chat" : nil }
+
+    /// Always for This's button in words, for VoiceOver: "Always for ~/x in every chat".
+    public var alwaysTitle: String? {
+        alwaysPath.map { "Always for \($0)" + (alwaysScope.map { " " + $0 } ?? "") }
+    }
+
+    /// What Always does, for VoiceOver only (nothing under the card says it): "Runs it, and from
+    /// now on lets Scout’s commands write there too, in the sandbox."
+    public var alwaysHint: String? {
+        guard alwaysPath != nil else { return nil }
+        let whose = switch owner?.kind {
+        case .bot: "\(owner?.name ?? asker)’s commands"
+        case .chats: "every chat’s commands"
+        case .project, nil: "\(projectName)’s commands"
+        }
+        return "Runs it, and from now on lets \(whose) write there too, in the sandbox."
     }
 
     /// "Scout is waiting for you · 12 min", once it's waited a minute (`now` and `at` in

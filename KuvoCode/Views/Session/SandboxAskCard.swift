@@ -19,7 +19,8 @@ struct SandboxAskCards: View {
 /// A command the sandbox stopped, which its agent asks to run outside it: who asks, what the
 /// sandbox stopped (on a Mac, what it tried and where; on Linux, the error the command got), the
 /// command, the agent's reason; Don't Allow, Always for This (where the box names the one place
-/// to let the project's commands write, still in the sandbox) and Allow Once.
+/// to let the project's, the bot's own or every chat's commands write, still in the sandbox) and
+/// Allow Once.
 struct SandboxAskCard: View {
     let asked: SandboxAsk
     let box: String
@@ -124,13 +125,14 @@ struct SandboxAskCard: View {
     @ViewBuilder private func always(whole: Bool) -> some View {
         if let path = asked.alwaysPath {
             Button { answer(.always) } label: {
-                Text("Always for \(Text(path).monospaced())")
+                // A chat's is every chat's: said on the button.
+                Text("Always for \(Text(path).monospaced())\(asked.alwaysScope.map { " " + $0 } ?? "")")
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .fixedSize(horizontal: whole, vertical: false)
             }
-            .help(asked.alwaysMeaning ?? "")
-            .accessibilityLabel(asked.alwaysMeaning ?? "Always for This")
+            .accessibilityLabel(asked.alwaysTitle ?? "Always for This")
+            .accessibilityHint(asked.alwaysHint ?? "")
         }
     }
 
@@ -143,6 +145,79 @@ struct SandboxAskCard: View {
 
     private func answer(_ answer: SandboxAnswer) {
         Task { try? await Sandboxes.shared.answer(asked, answer, on: box) }
+    }
+}
+
+/// The box's one ask, the first time its sandbox is on, to restart the agents that started before
+/// it and still run outside it (`Sandboxes.asksToRestart`): a plain card in each of that computer's
+/// conversations, until it's answered here or on another device. Restart Agents, or Not Now.
+struct SandboxRestartCard: View {
+    let box: String
+    /// The answer on its way, for the spinner's words.
+    @State private var sent: Bool?
+
+    var body: some View {
+        if Sandboxes.shared.asksToRestart(on: box) {
+            card.modifier(ComposerSurface())
+        }
+    }
+
+    private var answering: Bool { Sandboxes.shared.answeringRestart(on: box) }
+
+    private var card: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.title3)
+                    .foregroundStyle(.tint)
+                    .frame(width: 24)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(SandboxRestart.title)
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                    Text(SandboxRestart.detail)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // Why the answer didn't go through: the card stays, to try again.
+            if let trouble = Sandboxes.shared.restartFailures[box] {
+                Text(trouble)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+            }
+
+            HStack(spacing: 8) {
+                Button(SandboxRestart.notNow, role: .cancel) { answer(false) }
+                    .help("They finish as they are, outside the sandbox")
+                Spacer()
+                if answering {
+                    Spinner()
+                        .accessibilityLabel(sent == false ? "Leaving the agents as they are" : "Restarting the agents")
+                }
+                Button(SandboxRestart.restart) { answer(true) }
+                    .buttonStyle(.glassProminent)
+                    .help("Each restarts in the sandbox once it finishes what it’s doing")
+            }
+            .buttonStyle(.glass)
+            .controlSize(.large)
+            .disabled(answering)
+        }
+        .padding(16)
+    }
+
+    private func answer(_ restart: Bool) {
+        sent = restart
+        Task {
+            do {
+                try await Sandboxes.shared.answerRestart(restart, on: box)
+            } catch {
+                if let trouble = Sandboxes.shared.restartFailures[box] { AccessibilityNotification.Announcement(trouble).post() }
+            }
+        }
     }
 }
 

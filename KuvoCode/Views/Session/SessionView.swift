@@ -362,6 +362,9 @@ private struct BottomStack: View {
                 SandboxAskCards(session: model.session.id, box: Workspace.box(of: model.session.location.directory))
                     .environment(\.takesCardKeys, takesCardKeys && model.permissions.isEmpty && forms.isEmpty)
                     .disabled(offlineMachine != nil)
+                // Its computer asking, once, to restart the agents started before its sandbox was on.
+                SandboxRestartCard(box: Workspace.box(of: model.session.location.directory))
+                    .disabled(offlineMachine != nil)
                 ForEach(Array(app.botAsks.asks(for: model.session.id).enumerated()), id: \.element.ask.id) { index, item in
                     WorkAskCard(ask: item.ask, box: item.box) { model.failure = $0 }
                         // Return and Escape answer the first card only.

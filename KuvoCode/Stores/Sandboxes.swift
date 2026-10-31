@@ -23,6 +23,14 @@ final class Sandboxes {
     /// Asks answered here: closed on their box, so a list it sent before the answer doesn't bring
     /// them back.
     @ObservationIgnored private var answered: Set<String> = []
+    /// Boxes asking you, once, to restart their agents started before the sandbox was on: a card
+    /// in each of their conversations, until it's answered here or elsewhere.
+    private(set) var restarting: Set<String> = []
+    /// Boxes whose restart is being answered here, or was: the card's gone, whatever the box still
+    /// lists until it hears.
+    @ObservationIgnored private var restartAnswered: Set<String> = []
+    /// Why the answer to a box's restart didn't go through.
+    private(set) var restartFailures: [String: String] = [:]
     /// Each conversation's commands whose asks were seen open and then closed (answered here or
     /// elsewhere), by box and conversation: only those may be running outside the sandbox.
     private(set) var released: [String: Set<String>] = [:]
@@ -83,6 +91,9 @@ final class Sandboxes {
         released[Self.key(session, on: box)] ?? []
     }
 
+    /// A conversation's key among every box's.
+    private static func key(_ session: String, on box: String) -> String { box + "\n" + session }
+
     private struct Nothing: Decodable {}
 
     private func ask<T: Decodable>(_ type: T.Type = T.self, _ method: String, _ path: String, body: [String: Any]? = nil, on box: String) async throws -> T {
@@ -112,6 +123,7 @@ final class Sandboxes {
                     for try await line in client.follow(SandboxRoutes.asks + "/events") {
                         guard let list = try? JSONDecoder().decode(SandboxAsks.self, from: line) else { continue }
                         take(list.asks, from: box)
+                        takeRestart(list.restart == true, from: box)
                     }
                 } catch let refusal as BoxRefusal where [404, 405].contains(refusal.status) {
                     return
@@ -125,6 +137,7 @@ final class Sandboxes {
         following[box] = nil
         asks[box] = nil
         heard.remove(box)
+        restarting.remove(box)
         released = released.filter { !$0.key.hasPrefix(box + "\n") }
         changed()
     }
@@ -163,7 +176,51 @@ final class Sandboxes {
         for gone in asks[box] ?? [] { Notifier.shared.clear(request: gone.id) }
         asks[box] = nil
         heard.remove(box)
+        restarting.remove(box)
         changed()
+    }
+
+    // MARK: Restarting the agents started before the sandbox
+
+    #if DEBUG
+    /// KUVO_DEMO_SANDBOX_RESTART=1: every box asks to restart its agents, for a look at the card.
+    static let demoRestart = ProcessInfo.processInfo.environment["KUVO_DEMO_SANDBOX_RESTART"] == "1"
+    #endif
+
+    /// Whether `box` asks you to restart its agents started before its sandbox was on.
+    func asksToRestart(on box: String) -> Bool {
+        #if DEBUG
+        if Self.demoRestart { return !restartAnswered.contains(box) }
+        #endif
+        return restarting.contains(box)
+    }
+
+    /// Whether `box` asks it now, as its asks say.
+    func takeRestart(_ asking: Bool, from box: String) {
+        if asking && !restartAnswered.contains(box) { restarting.insert(box) } else { restarting.remove(box) }
+    }
+
+    /// Your answer: restart them (each once it finishes what it’s doing) or leave them be. The box asks once,
+    /// so the card goes either way, here and on your other devices.
+    func answerRestart(_ restart: Bool, on box: String) async throws {
+        guard restartAnswered.insert(box).inserted else { return }
+        restartFailures[box] = nil
+        #if DEBUG
+        if Self.demoRestart { return }
+        #endif
+        do {
+            _ = try await ask(Nothing.self, "POST", SandboxRoutes.restart, body: ["restart": restart], on: box)
+            restarting.remove(box)
+        } catch {
+            restartAnswered.remove(box)
+            restartFailures[box] = (error as? BoxRefusal)?.message ?? error.localizedDescription
+            throw error
+        }
+    }
+
+    /// Whether the answer to `box`'s restart is going now.
+    func answeringRestart(on box: String) -> Bool {
+        restartAnswered.contains(box) && restarting.contains(box)
     }
 
     /// Your answer: once, always (where the ask names a place) or no. One that's no longer open
@@ -193,21 +250,34 @@ final class Sandboxes {
     private(set) var without: Set<String> = []
     /// Boxes being checked again from here, which a second click leaves alone.
     private(set) var checking: Set<String> = []
-    /// Each project's Also Allowed, by box and the project's folder as this Mac knows it.
-    private(set) var rules: [String: [SandboxRule]] = [:]
+    /// Each box's Also Allowed as it last listed it: every rule there, with whose each is, and the
+    /// bots and chats a folder can be added for.
+    private(set) var allowed: [String: SandboxAllowed] = [:]
+    /// Each box's reads and changes of Also Allowed, numbered as they're sent, and the last whose
+    /// answer shows: each answer lists every rule, so one that comes after a later one's would
+    /// bring back what that one took out.
+    @ObservationIgnored private var allowedSent: [String: Int] = [:]
+    @ObservationIgnored private var allowedShown: [String: Int] = [:]
 
-    private static func key(_ project: String, on box: String) -> String { box + "\n" + project }
+    private func numbered(_ box: String) -> Int {
+        let number = (allowedSent[box] ?? 0) + 1
+        allowedSent[box] = number
+        return number
+    }
 
-    /// A project's Also Allowed, as its box last listed it.
-    func rules(for project: String, on box: String) -> [SandboxRule] {
-        rules[Self.key(project, on: box)] ?? []
+    /// `box`'s answer, unless a later read's or change's shows already.
+    private func took(_ answer: SandboxAllowed, on box: String, number: Int) {
+        guard number > allowedShown[box] ?? 0 else { return }
+        allowedShown[box] = number
+        allowed[box] = answer
     }
 
     #if DEBUG
     /// KUVO_DEMO_SANDBOX_STATE: how every box's sandbox says it is, for a look at Settings ›
     /// Permissions: `on`, `checking`, `checkFailed`,
     /// `failedAgain`, `plugin`, `waiting`, `engineDown`, `engineMissing`, `kernel` or `macos`.
-    /// KUVO_DEMO_SANDBOX_RULES=1: every project's Also Allowed has two folders.
+    /// KUVO_DEMO_SANDBOX_RULES=1: Also Allowed has a folder for the first project, one for the first
+    /// bot and two for the chats; `empty`, none.
     static let demoState: SandboxState? = ProcessInfo.processInfo.environment["KUVO_DEMO_SANDBOX_STATE"].map { kind in
         switch kind {
         case "on": SandboxState(on: true, agents: true)
@@ -217,7 +287,7 @@ final class Sandboxes {
         default: SandboxState(on: false, reason: SandboxState.Reason(rawValue: kind) ?? .checking)
         }
     }
-    static let demoRules = ProcessInfo.processInfo.environment["KUVO_DEMO_SANDBOX_RULES"] == "1"
+    static let demoRules = ProcessInfo.processInfo.environment["KUVO_DEMO_SANDBOX_RULES"]
     #endif
 
     /// Reads how `box`'s sandbox is now.
@@ -274,40 +344,64 @@ final class Sandboxes {
         }
     }
 
-    /// Reads a project's Also Allowed (its box finds where its folder really is).
-    func readRules(for project: String, on box: String) async throws {
-        #if DEBUG
-        if Self.demoRules {
-            let home = NSHomeDirectory(), at = Date().timeIntervalSince1970 * 1000
-            rules[Self.key(project, on: box)] = rules[Self.key(project, on: box)] ?? [
-                SandboxRule(id: "al_1", project: project, path: home + "/Library/Caches/icon-gen", at: at - 86_400_000, by: "Serhat’s iPhone"),
-                SandboxRule(id: "al_2", project: project, path: home + "/Library/Logs/fastlane/gym/builds/KuvoCodeMobile/archives/2026-10-29", at: at),
+    /// Reads `box`'s Also Allowed: every rule there, and whom else a folder can be added for.
+    func readAllowed(on box: String) async throws {
+        let number = numbered(box)
+        took(try await ask(SandboxAllowed.self, "GET", SandboxRoutes.allowed, on: box), on: box, number: number)
+    }
+
+    #if DEBUG
+    /// KUVO_DEMO_SANDBOX_RULES's Also Allowed, for a look: its first project's and first bot's.
+    func showDemo(on box: String, project: String?, bot: (id: String, name: String)?) {
+        guard allowed[box] == nil else { return }
+        let home = NSHomeDirectory(), at = Date().timeIntervalSince1970 * 1000, day = 86_400_000.0
+        var rules: [SandboxRule] = []
+        if Self.demoRules != "empty" {
+            if let project {
+                rules.append(SandboxRule(id: "al_1", project: project, path: home + "/Desktop/main/kuvo-web/dist", at: at - 2 * day, by: "Mac"))
+            }
+            if let bot {
+                rules.append(SandboxRule(id: "al_2", project: home + "/bots/\(bot.id)/workspace", path: home + "/Reports/weekly", at: at, by: "Mac", owner: .init(kind: .bot, id: bot.id, name: bot.name)))
+            }
+            rules += [
+                SandboxRule(id: "al_3", project: home + "/Chats", path: home + "/Downloads/exports", at: at - day, by: "Alex’s iPhone", owner: .chats),
+                SandboxRule(id: "al_4", project: home + "/Chats", path: home + "/Library/Logs/fastlane/gym/builds/KuvoCodeMobile/archives/2026-10-29", at: at, by: "Mac", owner: .chats),
             ]
+        }
+        allowed[box] = SandboxAllowed(allowed: rules, owners: (bot.map { [SandboxOwner(kind: .bot, id: $0.id, name: $0.name)] } ?? []) + [.chats])
+    }
+    #endif
+
+    /// Lets a project's commands write in `path` too, in the sandbox (by its folder), or a bot's own
+    /// or the chats' (by `owner`); the box's words when it can't (a place it keeps closed, or too
+    /// many).
+    func allow(_ path: String, in project: String? = nil, for owner: SandboxOwner? = nil, on box: String) async throws {
+        #if DEBUG
+        if Self.demoRules != nil {
+            let rule = SandboxRule(id: UUID().uuidString, project: project ?? owner?.name ?? "", path: path, at: Date().timeIntervalSince1970 * 1000, by: "Mac", owner: owner)
+            allowed[box, default: SandboxAllowed(allowed: [])].allowed.append(rule)
             return
         }
         #endif
-        rules[Self.key(project, on: box)] = try await ask(SandboxAllowed.self, "GET", SandboxRoutes.allowed(project: project), on: box).allowed
+        var body: [String: Any] = ["kind": "write", "path": path]
+        if let project { body["project"] = project } else if let owner { body["owner"] = owner.sent }
+        let number = numbered(box)
+        let now = try await ask(SandboxAllowed.self, "POST", SandboxRoutes.allowedAll, body: body, on: box)
+        // (A box before owners answers its project's only: all of them read again.)
+        if now.owners == nil { try await readAllowed(on: box) } else { took(now, on: box, number: number) }
     }
 
-    /// Lets a project's commands write in `path` too, in the sandbox; the box's words when it
-    /// can't (a place it keeps closed, or too many).
-    func allow(_ path: String, in project: String, on box: String) async throws {
+    /// Takes a place out of Also Allowed; one already gone counts.
+    func remove(_ rule: SandboxRule, on box: String) async throws {
         #if DEBUG
-        if Self.demoRules { rules[Self.key(project, on: box), default: []].append(SandboxRule(id: UUID().uuidString, project: project, path: path, at: Date().timeIntervalSince1970 * 1000)); return }
+        if Self.demoRules != nil { allowed[box]?.allowed.removeAll { $0.id == rule.id }; return }
         #endif
-        let listed = try await ask(SandboxAllowed.self, "POST", SandboxRoutes.allowed, body: ["project": project, "kind": "write", "path": path], on: box).allowed
-        rules[Self.key(project, on: box)] = listed
-    }
-
-    /// Takes a place out of its project's Also Allowed; one already gone counts.
-    func remove(_ rule: SandboxRule, from project: String, on box: String) async throws {
-        #if DEBUG
-        if Self.demoRules { rules[Self.key(project, on: box)]?.removeAll { $0.id == rule.id }; return }
-        #endif
+        let number = numbered(box)
         do {
-            rules[Self.key(project, on: box)] = try await ask(SandboxAllowed.self, "DELETE", SandboxRoutes.rule(rule.id), on: box).allowed
-        } catch let refusal as BoxRefusal where refusal.status == 404 {
-            rules[Self.key(project, on: box)]?.removeAll { $0.id == rule.id }
-        }
+            let left = try await ask(SandboxAllowed.self, "DELETE", SandboxRoutes.rule(rule.id, all: true), on: box)
+            // (A box before owners answers its project's only.)
+            if left.owners != nil { return took(left, on: box, number: number) }
+        } catch let refusal as BoxRefusal where refusal.status == 404 {}
+        allowed[box]?.allowed.removeAll { $0.id == rule.id }
     }
 }

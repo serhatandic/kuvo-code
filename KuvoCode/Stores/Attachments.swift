@@ -10,6 +10,8 @@ import UniformTypeIdentifiers
 /// go as paths in a note, for the agent to open with its tools.
 nonisolated enum Attachments {
     static let maxBytes = 20 * 1024 * 1024
+    /// The most text the coding agents' bridge puts in a message (the box's `AGENTS_TEXT_BYTES`).
+    static let agentsTextBytes = 200_000
     private static let engineImageTypes: [UTType] = [.png, .jpeg, .gif, .webP]
 
     enum Kind { case text, image, pdf, folder, other }
@@ -56,10 +58,10 @@ nonisolated enum Attachments {
     nonisolated(unsafe) private static var routes: [String: Route] = [:]
     private static let routesLock = NSLock()
 
-    static func route(_ url: URL, for model: Model?) -> Route {
-        let key = url.path + "\n" + (model?.key ?? "")
+    static func route(_ url: URL, for model: Model?, onMachine: Bool = false) -> Route {
+        let key = url.path + "\n" + (model?.key ?? "") + (onMachine ? "\nmachine" : "")
         if let known = routesLock.withLock({ routes[key] }) { return known }
-        let route = findRoute(url, for: model)
+        let route = findRoute(url, for: model, onMachine: onMachine)
         routesLock.withLock {
             if routes.count > 200 { routes.removeAll() }
             routes[key] = route
@@ -67,15 +69,20 @@ nonisolated enum Attachments {
         return route
     }
 
-    private static func findRoute(_ url: URL, for model: Model?) -> Route {
+    private static func findRoute(_ url: URL, for model: Model?, onMachine: Bool) -> Route {
         let input = model?.capabilities.input
         let name = model?.name ?? "This model"
         let size = (try? target(of: url).resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
         let tooBig = Route.path(reason: "It's over 20 MB, so the agent gets its path and opens it with its tools.", isWarning: true)
+        // The coding agents' bridge puts a text file in the message only up to its limit, and
+        // never a folder's listing: those go by path (but a folder for a machine, which goes
+        // there as its listing).
+        let agents = OutsideAgents.runsInBridge(model?.providerID)
         switch kind(of: url) {
         case .folder:
-            return .content
+            return agents && !onMachine ? .path(reason: "The agent gets the folder's path and looks inside with its tools.", isWarning: false) : .content
         case .text:
+            if agents, size > agentsTextBytes { return .path(reason: "It's long, so the agent gets its path and opens it with its tools.", isWarning: false) }
             return size <= maxBytes ? .content : tooBig
         case .pdf:
             if input.map({ !$0.contains("pdf") }) == true { return .path(reason: "\(name) can't read PDFs, so the agent gets its path and opens it with its tools.", isWarning: true) }
@@ -295,14 +302,25 @@ nonisolated enum Attachments {
     /// Writes out a file that came as data (a picture a tool returned, a file sent from the
     /// phone) to open it: with the extension of `type`, not the one its name says, and marked as
     /// downloaded, so Gatekeeper checks it like one.
-    static func writeReceived(_ data: Data, named name: String, type: UTType?) -> URL? {
+    static func writeReceived(_ data: Data, named name: String, type: UTType?, keepingExtension: Bool = false) -> URL? {
         let base = (fileName(name) as NSString).deletingPathExtension
-        guard let url = write(data, named: base, extension: type?.preferredFilenameExtension ?? "dat") else { return nil }
+        let own = (fileName(name) as NSString).pathExtension
+        guard let url = write(data, named: base, extension: keepingExtension && !own.isEmpty ? own : type?.preferredFilenameExtension ?? "dat") else { return nil }
         var values = URLResourceValues()
         values.quarantineProperties = [kLSQuarantineTypeKey as String: kLSQuarantineTypeOtherDownload as String]
         var quarantined = url
         try? quarantined.setResourceValues(values)
         return url
+    }
+
+    /// The files a message carries in itself (a photo from the phone, a file sent to a machine),
+    /// written out to attach again: when it's edited, put back or branched from.
+    static func writeCarried(_ files: [Message.User.Attachment]) -> [URL] {
+        files.compactMap { file in
+            guard file.fileURL == nil, let bytes = file.bytes else { return nil }
+            // By its own name: a text file goes to a machine as text/plain, whatever kind it is.
+            return writeReceived(bytes, named: file.name ?? "Attachment", type: UTType(mimeType: file.mime), keepingExtension: true)
+        }
     }
 
     /// `name` as one file's name in the folder: its last part, without `:`, control characters or

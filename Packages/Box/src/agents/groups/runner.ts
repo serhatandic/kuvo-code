@@ -5,6 +5,7 @@
 // (`seat.ts`). They go on with no client connected; the Mac's window and the phone follow them
 // through the bridge's API and its event feed.
 
+import type { QueueFiles } from "../../shared/queues"
 import { emit } from "../events"
 import { newID } from "../ids"
 import { SeatAPI, type Requester } from "./api"
@@ -77,6 +78,8 @@ export interface RunnerContext {
   peers?: PeerDirectory
   /** A chat's part given to a bot's own conversation (see `SeatContext.given`). */
   given?: (prompt: string, part: { chat: string; bot: string }) => void
+  /** The box's queues (see `SeatContext.queues`). */
+  queues?: QueueFiles
 }
 
 /** A bot in a chat: one of this computer's, or another's (`box`). */
@@ -94,6 +97,8 @@ export interface TalkState {
   paused: boolean
   /** What the bot talking is doing (see `activity`). */
   activity?: Activity[]
+  /** The bots whose part waits on their conversation, stopped by you (left out for none). */
+  stopped?: string[]
 }
 
 interface Live {
@@ -114,6 +119,8 @@ interface Live {
   resumed?: boolean
   /** Stops the lead's list of who does what: a message of yours is newer than the go-ahead it reads. */
   splitStop?: () => void
+  /** Its parts waiting on their bots' conversations, stopped by you: by part, its bot and wrap-up. */
+  stopped?: Map<string, { bot: string; wrapUp: string }>
 }
 
 type Outcome = "said" | "passed" | "absent"
@@ -250,7 +257,15 @@ export class GroupRunner {
 
   talk(id: string): TalkState {
     const live = this.state(id)
-    return { speaking: live.speaking ?? live.splitting, discussing: live.abort !== undefined, paused: live.paused, ...(live.speaking && live.activity ? { activity: live.activity } : {}) }
+    // (Only parts still under way: one taken back meanwhile, say, by Undo, doesn't wait on anything.)
+    const stopped = [...new Set([...(live.stopped ?? [])].filter(([task, { wrapUp }]) => this.taskState(task, wrapUp, id)?.state === "working").map(([, { bot }]) => bot))]
+    return {
+      speaking: live.speaking ?? live.splitting,
+      discussing: live.abort !== undefined,
+      paused: live.paused,
+      ...(live.speaking && live.activity ? { activity: live.activity } : {}),
+      ...(stopped.length ? { stopped } : {}),
+    }
   }
 
   /** Each chat, with its last message, the last said (not a note) and the last from a bot, as a list shows them. */
@@ -1171,8 +1186,19 @@ export class GroupRunner {
     const task = this.taskState(taskID, wrapUpID, id)
     if (!task || task.state !== "working") return
     if (!task.prompt || !this.bot(task.bot)) return this.fail(taskID, wrapUpID, id, "the bot is gone")
-    const result = await this.seats.follow(task.bot, task.prompt, task.started, () => this.taskState(taskID, wrapUpID, id)?.state === "working")
+    const result = await this.seats
+      .follow(task.bot, task.prompt, task.started, () => this.taskState(taskID, wrapUpID, id)?.state === "working", (stopped) => this.waitsOnStopped(taskID, wrapUpID, id, task.bot, stopped))
+      .finally(() => this.waitsOnStopped(taskID, wrapUpID, id, task.bot, false))
     if (result) this.finish(taskID, wrapUpID, id, task.bot, result)
+  }
+
+  /** Whether a part waits on its bot's conversation, stopped by you: told to whoever follows the chat. */
+  private waitsOnStopped(taskID: string, wrapUpID: string, id: string, botID: string, stopped: boolean) {
+    const live = this.state(id)
+    if (stopped === (live.stopped?.has(taskID) ?? false)) return
+    if (stopped) (live.stopped ??= new Map()).set(taskID, { bot: botID, wrapUp: wrapUpID })
+    else live.stopped?.delete(taskID)
+    this.told(id)
   }
 
   /**
@@ -1188,6 +1214,7 @@ export class GroupRunner {
       if (late) return this.changeTask(taskID, wrapUpID, id, (part) => delete part.lost)
       return this.fail(taskID, wrapUpID, id, result.why)
     }
+    this.waitsOnStopped(taskID, wrapUpID, id, botID, false)
     this.changeTask(taskID, wrapUpID, id, (part) => {
       part.state = "done"
       part.finished = stamp()
@@ -1197,6 +1224,13 @@ export class GroupRunner {
     this.startReady(wrapUpID, id)
     const kept = this.chats.get(id)
     if (kept) emit("kuvo.group.done", { id, name: kept.group.name, bot: botID, who: this.name(botID), text: result.text })
+  }
+
+  /** What another computer says of a part its bot is doing: whether it waits on its conversation there, stopped by you. */
+  held(from: string, part: { task: string; wrapUp: string; chat: string; stopped: boolean }) {
+    const task = this.taskState(part.task, part.wrapUp, part.chat)
+    if (!task || task.prompt !== `peer:${from}`) return
+    this.waitsOnStopped(part.task, part.wrapUp, part.chat, task.bot, part.stopped === true && task.state === "working")
   }
 
   /** What another computer says of a part its bot did (`from`: only the computer the part was given to, where the bot lived then). */
@@ -1239,6 +1273,7 @@ export class GroupRunner {
 
   /** `thenOthers`: parts that waited on it fail too. `lost`: as its letter was given up, so its report is still taken. */
   private fail(taskID: string, wrapUpID: string, id: string, why: string, thenOthers = true, lost = false) {
+    this.waitsOnStopped(taskID, wrapUpID, id, "", false)
     this.changeTask(taskID, wrapUpID, id, (part) => {
       part.state = "failed"
       part.finished = stamp()

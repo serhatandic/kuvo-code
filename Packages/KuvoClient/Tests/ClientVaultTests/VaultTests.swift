@@ -36,8 +36,8 @@ import Testing
         #expect(off.botAgentsNote?.contains("yet") == true)
         // On, with agents from before it still at work: once they've finished.
         let waiting = try state("{\(base),\"agents\":false,\"agentsWaiting\":true}")
-        #expect(waiting.agentsNote(computer: "lokum")?.contains("once the ones that started before its sandbox came on have finished") == true)
-        #expect(waiting.botAgentsNote?.contains("have finished") == true)
+        #expect(waiting.agentsNote(computer: "lokum") == "Locked for now: some agents started before the sandbox was on. The vault opens when they finish.")
+        #expect(waiting.botAgentsNote == "Locked for now: some agents started before the sandbox was on. The vault opens when they finish.")
         // Open to agents, or a box older than the sandbox: nothing to say.
         #expect(try state("{\(base),\"agents\":true}").agentsNote(computer: "lokum") == nil)
         #expect(try state("{\(base)}").botAgentsNote == nil)

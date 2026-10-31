@@ -14,7 +14,8 @@ import { fileDiff, fromPatch } from "../diff"
 import { emit } from "../events"
 import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules } from "../fence"
 import { kuvoTools, toolServerName } from "../kuvotools"
-import { dropRelayed, relayedTools, relayPort } from "../toolrelay"
+import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
+import { computerServers } from "../servers"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import { elicitationField } from "../forms"
 import { newID } from "../ids"
@@ -63,6 +64,8 @@ const ACCOUNT = "account"
 interface Slot {
   server?: RPC
   starting?: Promise<RPC>
+  /** Its app-server while it's starting, before it's `server`. */
+  opening?: RPC
   /** The one still running the old Codex, or with the box's sandbox as it was. */
   outdated?: RPC
   /** The box's sandbox as it started with it (`fenceKey`). */
@@ -180,6 +183,21 @@ export class CodexAgent implements Agent {
     return [...this.threads.values()].some((thread) => thread !== starting && thread.server === server && (thread.isRunning || thread.keepsWorking))
   }
 
+  /** Stops its app-servers started outside the box's sandbox that no turn is on now (you said to restart them): what used them starts again in it. Whether one is still at work. */
+  restartOutside(): boolean {
+    let waiting = false
+    for (const [key, slot] of this.slots) {
+      const server = slot.server
+      if (!server || server.isClosed || !this.unfencedServers.has(server)) continue
+      if (this.busy(key, server)) {
+        waiting = true
+        continue
+      }
+      this.stop(key)
+    }
+    return waiting
+  }
+
   /** Restarts an old app-server when nothing but `starting`'s turn uses it. */
   private restartIfQuiet(key: string, starting?: CodexThread) {
     const slot = this.slots.get(key)
@@ -252,7 +270,6 @@ export class CodexAgent implements Agent {
   private fenced(directory: string, sessionID?: string) {
     const skills = skillsRoot()
     if (skills) mkdirSync(skills, { recursive: true, mode: 0o700 })
-    const relayed = sessionID ? relayedTools(sessionID) : undefined
     const homes = [this.home, ...(this.instance.home && !onMachine ? [this.yourCodex] : [])]
     // The files you attach in the session, copied where only the box writes (`fenceCopy`).
     const attached = sessionID ? fenceAttachments(directory) : undefined
@@ -261,7 +278,7 @@ export class CodexAgent implements Agent {
       state: STATE_IN_HOME,
       kept: KEPT_IN_HOME,
       read: [...(skills ? [skills] : []), ...(attached ? [attached] : [])],
-      port: relayed ? relayPort() : undefined,
+      port: relayPort(),
     })
   }
 
@@ -284,6 +301,7 @@ export class CodexAgent implements Agent {
     else this.unfencedServers.add(rpc)
     rpc.onNotification = (method, params) => this.notification(method, params, rpc)
     rpc.onRequest = (method, params, id) => this.request(rpc, method, params, id)
+    slot.opening = rpc
     rpc.onExit = () => {
       fence?.ended()
       this.unfencedServers.delete(rpc)
@@ -300,6 +318,8 @@ export class CodexAgent implements Agent {
       // One that won't start isn't left running: the next ask starts another.
       rpc.kill()
       throw error
+    } finally {
+      if (slot.opening === rpc) slot.opening = undefined
     }
     // Its session closed meanwhile: not left running.
     if (this.slots.get(key) !== slot) {
@@ -314,13 +334,15 @@ export class CodexAgent implements Agent {
   /** Stops an app-server: its threads are loaded again, in a new one, as they're next used. */
   private stop(key: string) {
     const slot = this.slots.get(key)
+    // One still starting too (its start then fails).
+    slot?.opening?.kill()
     const server = slot?.server
     if (!slot || !server) return
     slot.server = undefined
     server.kill()
     for (const thread of this.threads.values()) thread.serverStopped(server)
     // Its Kuvo Code tools' program too (started again with it).
-    if (key !== SHARED && key !== ACCOUNT) dropRelayed(key)
+    if (key !== SHARED && key !== ACCOUNT) dropRelayed(key, this)
   }
 
 
@@ -631,7 +653,7 @@ export class CodexAgent implements Agent {
     for (const [spawn, owner] of this.spawned) if (owner === thread) this.spawned.delete(spawn)
     this.stop(sessionID)
     this.slots.delete(sessionID)
-    dropRelayed(sessionID)
+    dropRelayed(sessionID, this)
   }
 }
 
@@ -736,6 +758,8 @@ class CodexThread implements Thread {
   private waiting?: { abort: AbortController; typed?: MessageInput }
   /** Where Kuvo Code's tools were when it was loaded. */
   private toolsKey?: string
+  /** The computer's servers it was loaded with (their names). */
+  private serversKey?: string
   private skillsKey?: string
   /** The agents it spawned, by their thread: their sessions, across turns, kept with the conversation. */
   private get spawnedSessions(): Record<string, KnownSpawn> {
@@ -841,7 +865,7 @@ class CodexThread implements Thread {
     const instructions = hooks.instructions() || null
     // Loaded again with what the app adds to its instructions, when that changed. (In the box's
     // sandbox, through the bridge's relay: the sandbox hides where they are.)
-    const tools = fenced ? relayedTools(this.session.id) : kuvoTools(this.session.id)
+    const tools = fenced ? relayedTools(this.session.id, this.agent) : kuvoTools(this.session.id)
     // Settings › Skills' skills, as extra ones (but those it reads itself), and those of its own
     // you turned off, off for this thread.
     const directory = this.session.location.directory
@@ -851,10 +875,15 @@ class CodexThread implements Thread {
     await this.agent.useSkills(this.session.id, skills, rpc)
     const turnedOffHere = (await engineSkills(directory)).filter((skill) => within(skill.folder, own) && off(skill.name)).map((skill) => ({ path: join(skill.folder, "SKILL.md"), enabled: false }))
     const skillsKey = JSON.stringify([skills, turnedOffHere])
+    // The computer's MCP servers (yours, the integrations', a bot's with its own keys), through the
+    // relay, which keeps their keys.
+    const computer = await computerServers(directory)
+    const servers = relayedServers(this.session.id, this.agent, directory, computer)
     // Loaded again when Kuvo Code's tools moved (the app started again), to reach them, or the
-    // skills changed.
-    if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey) return rpc
+    // skills or the servers changed.
+    if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey && computer.key === this.serversKey) return rpc
     this.toolsKey = tools?.key
+    this.serversKey = computer.key
     this.skillsKey = skillsKey
     this.instructions = instructions
     // Kuvo Code's own tools, as the engine's models have them (a setting for this thread alone).
@@ -868,6 +897,8 @@ class CodexThread implements Thread {
       "shell_environment_policy.set.OPENCODE_SESSION_ID": this.session.id,
       ...(onMachine ? ownFoldersConfig() : {}),
       ...(tools && server ? { [`mcp_servers.${tools.name}`]: server } : {}),
+      // (A command's server can take a while to start the first time, fetching its package.)
+      ...Object.fromEntries(servers.map((each) => [`mcp_servers.${each.name}`, { url: each.url, http_headers: each.headers, tool_timeout_sec: Math.ceil(each.timeout / 1000), startup_timeout_sec: 120 }])),
       ...(turnedOffHere.length ? { "skills.config": [...this.agent.ownSkillSettings(), ...turnedOffHere] } : {}),
     }
     const common = { cwd: this.session.location.directory, model: input.model.id, developerInstructions: instructions, config }

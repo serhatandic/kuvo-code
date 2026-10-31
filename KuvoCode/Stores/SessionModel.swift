@@ -290,7 +290,7 @@ final class SessionModel {
     /// Its computer's agents bridge, which runs goals there (the workspace sets it).
     @ObservationIgnored var goalBridge: () -> OutsideAgents? = { nil }
     /// What's done here waits while its engine can't be reached: it would only fail.
-    private var canReach: Bool { !waitsForEngine && isReachable() }
+    var canReach: Bool { !waitsForEngine && isReachable() }
     private(set) var changes: [FileDiff] = []
     /// The files its agent's edits changed, from the edits themselves: what the Changes tab shows
     /// in a folder outside a git repository, where `changes` stays empty (the engine keeps no
@@ -396,8 +396,13 @@ final class SessionModel {
     private var onBox: [BoxQueue.Waiting] = []
     /// Yours held on the box from here, as you wrote them and with the files picked here (Edit).
     @ObservationIgnored private var yoursOnBox: [String: (text: String, files: [URL])] = [:]
+    /// Ones Undo is putting back on the box, on their way there (Resume waits for them).
+    @ObservationIgnored private var puttingBack: [String: Task<Void, Never>] = [:]
     /// Ones taken away from what waits on the box: each as it was, once the box says (Undo puts it back).
     @ObservationIgnored private var removedFromBox: [String: Task<BoxQueue.Removed?, Never>] = [:]
+    /// Ones Undo is putting back while the queue is paused, on their way to the box, by what they go
+    /// ahead of (what came after them), shown there meanwhile.
+    private var placesBack: [String: String] = [:]
     /// What waits on a machine's box, followed while the queue is paused there (`followWhilePaused`).
     @ObservationIgnored private var queueFollow: Task<Void, Never>?
     /// The session's box (this Mac's, or its machine's).
@@ -508,6 +513,7 @@ final class SessionModel {
         self.api = api
         self.projectFolders = projectFolders
         storedTranscript = Transcript(sessionID: session.id)
+        storedTranscript.asksEndWithRuns = !OutsideAgents.isAgentSession(session)
     }
 
     var id: String { session.id }
@@ -526,9 +532,27 @@ final class SessionModel {
         let rank = { (item: Transcript.Pending) -> Int? in
             self.outgoing[item.id]?.heldAt.map { $0 - 1_000_000 } ?? self.heldByBox.firstIndex(of: item.id)
         }
-        let held = pending.filter { rank($0) != nil }.sorted { (rank($0) ?? 0) < (rank($1) ?? 0) }
+        // What waits on the box, by where the box holds it (one Undo put back where it was), else
+        // after what the engine has.
+        let onBox = waitingOnBox
+        let heldOnBox = { (item: Transcript.Pending) -> Int? in self.heldByBox.firstIndex(of: item.id) }
+        let held = (pending.compactMap { item in rank(item).map { (item, $0) } } + onBox.compactMap { item in heldOnBox(item).map { (item, $0) } })
+            .sorted { $0.1 < $1.1 }.map(\.0)
         let others = pending.filter { rank($0) == nil }
-        return (isRunning ? others.filter { $0.delivery == .steer } : []) + held + others.filter { $0.delivery == .queue } + waitingOnBox
+        let list = (isRunning ? others.filter { $0.delivery == .steer } : []) + held + others.filter { $0.delivery == .queue } + onBox.filter { heldOnBox($0) == nil }
+        // One Undo is putting back, on its way to the box: where it was already.
+        return placesBack.reduce(into: list) { list, back in
+            guard let from = list.firstIndex(where: { $0.id == back.key }), list.contains(where: { $0.id == back.value }) else { return }
+            let item = list.remove(at: from)
+            list.insert(item, at: list.firstIndex { $0.id == back.value } ?? list.endIndex)
+        }
+    }
+
+    /// What comes after `item` in the queue as it's shown (what Undo puts it back ahead of); nil
+    /// when it's last.
+    func next(after item: Transcript.Pending) -> String? {
+        let shown = waiting
+        return shown.firstIndex { $0.id == item.id }.flatMap { $0 + 1 < shown.count ? shown[$0 + 1].id : nil }
     }
 
     /// What waits on the box, after what the engine holds (once the engine has one, it's shown there).
@@ -922,9 +946,10 @@ final class SessionModel {
         Analytics.shared.messageSent(path: Self.place(of: session.location.directory))
     }
 
-    /// Undo for a removed message: back in the queue, at its end, as it went (its words, what it
-    /// names and its files, attached again); paused as the queue was, after a Stop.
-    func requeue(_ item: Transcript.Pending, for model: Model?, paused: Bool) {
+    /// Undo for a removed message: back in the queue as it went (its words, what it names and its
+    /// files, attached again); paused as the queue was, after a Stop, and then where it was, ahead of
+    /// `before` (what came after it), as its box puts it; else at the queue's end.
+    func requeue(_ item: Transcript.Pending, for model: Model?, paused: Bool, before: String? = nil) {
         // The agent took it before the removal reached it: it went, and doesn't go twice.
         guard !transcript.messages.contains(where: { $0.id == item.id }) else { return }
         // Taken from what waited on the box: back there as it was.
@@ -935,7 +960,7 @@ final class SessionModel {
         }
         let (text, paths) = Attachments.split(item.text)
         if paused { isQueuePaused = true }
-        post(text, files: Attachments.restored(item.files, noting: paths), for: model, queue: true, holds: paused, written: text, comments: [])
+        post(text, files: Attachments.restored(item.files + Attachments.writeCarried(item.inlineFiles), noting: paths), for: model, queue: true, holds: paused, before: paused ? before : nil, written: text, comments: [])
     }
 
     /// The goal's ✕ once it's over: cleared once Undo's moment passes, unless another goal took
@@ -957,10 +982,11 @@ final class SessionModel {
 
     /// Sends `text` as it is, with `files` attached: what's shown waiting at once, and what goes
     /// back to the composer if it can't go. Says how it was sent. `holds`: queued, whatever the
-    /// agent is doing, to wait for Resume.
+    /// agent is doing, to wait for Resume; `before`, Undo's, where it was (`requeue`).
     @discardableResult
-    private func post(_ text: String, files: [URL], for model: Model?, queue: Bool, holds: Bool = false, written: String, comments: [ReviewComment]) -> InboxItem.Delivery {
+    private func post(_ text: String, files: [URL], for model: Model?, queue: Bool, holds: Bool = false, before: String? = nil, written: String, comments: [ReviewComment]) -> InboxItem.Delivery {
         let id = Identifier.message()
+        if let before { placesBack[id] = before }
         // With nothing running (or about to) and nothing queued, there's nothing to wait for.
         let delivery: InboxItem.Delivery = holds || queue && (isBusy || hasQueue) ? .queue : .steer
         if delivery == .steer { isQueuePaused = false }
@@ -981,6 +1007,8 @@ final class SessionModel {
         let previous = sending
         sending = Task {
             defer { if let onItsWay { Drafts.shared.sent(onItsWay) } }
+            // Where the box put it, or not put back (it went, or didn't): as the queue shows.
+            defer { placesBack[id] = nil }
             await previous?.value
             do {
                 // Converting a photo takes a moment; keep it off the main thread. A machine's engine
@@ -999,7 +1027,7 @@ final class SessionModel {
                 // arriving then (the engine would run all it holds the moment it had one more), and
                 // decides that itself: a Stop from another client may not have reached here yet.
                 if asked == .queue, await holdsOnBox() {
-                    try await holdOnBox(id, text: message, files: prepared.files, written: (text, files))
+                    try await holdOnBox(id, text: message, files: prepared.files, written: (text, files), before: placesBack[id])
                     restoredFailed = ""
                     return
                 }
@@ -1681,7 +1709,8 @@ final class SessionModel {
             var files: [String]?
         }
 
-        /// One taken away from what waits on the box, whole, to add back as it was (`kept`).
+        /// One taken away from what waits on the box, whole, to add back as it was (`kept`), where
+        /// it was: ahead of `before`, what came after it.
         struct Removed: Codable {
             var id: String
             var text: String
@@ -1689,6 +1718,7 @@ final class SessionModel {
             var delivery: InboxItem.Delivery
             var from: String?
             var words: String?
+            var before: String?
             /// Added back as it was (`queue/add`).
             var kept: Bool?
         }
@@ -1741,14 +1771,15 @@ final class SessionModel {
 
     /// `message` (with `files`, as the engine takes them) for after this run, to the box: held there
     /// for Resume while the queue is paused, shown in the queue as the box lists it, `written` kept
-    /// for Edit; otherwise the box sends it to the engine, as asked.
-    private func holdOnBox(_ message: String, text: String, files: [OpenCodeAPI.PromptFile], written: (text: String, files: [URL])) async throws {
-        struct Add: Encodable { var id: String; var text: String; var files: [OpenCodeAPI.PromptFile]?; var delivery: InboxItem.Delivery; var words: String }
+    /// for Edit; otherwise the box sends it to the engine, as asked. `before`: Undo's, put back ahead
+    /// of what came after it.
+    private func holdOnBox(_ message: String, text: String, files: [OpenCodeAPI.PromptFile], written: (text: String, files: [URL]), before: String? = nil) async throws {
+        struct Add: Encodable { var id: String; var text: String; var files: [OpenCodeAPI.PromptFile]?; var delivery: InboxItem.Delivery; var words: String; var before: String? }
         yoursOnBox[message] = written
         let state: BoxQueue
         do {
             // Shown as you wrote it, without its files' notes for the agent.
-            state = try await changeQueue("queue/add", body: Add(id: message, text: text, files: files.isEmpty ? nil : files, delivery: .queue, words: written.text))
+            state = try await changeQueue("queue/add", body: Add(id: message, text: text, files: files.isEmpty ? nil : files, delivery: .queue, words: written.text, before: before))
         } catch {
             yoursOnBox[message] = nil
             throw error
@@ -1778,10 +1809,12 @@ final class SessionModel {
         }
     }
 
-    /// Undo for one taken away from what waits on the box: back at the end, as it was.
+    /// Undo for one taken away from what waits on the box: back as it was, where it was (the box
+    /// said what came after it).
     func putBackOnBox(_ item: Transcript.Pending) {
         guard canReach else { return }
-        Task {
+        puttingBack[item.id] = Task {
+            defer { puttingBack[item.id] = nil }
             guard var removed = await removedFromBox.removeValue(forKey: item.id)?.value else { return }
             removed.kept = true
             do {
@@ -2033,7 +2066,7 @@ final class SessionModel {
                 }
             }
             guard outgoing[item.id]?.state == .cancelled else { return }
-            restoreDraft(item.text, files: item.files)
+            restoreDraft(item.text, files: item.files + Attachments.writeCarried(item.inlineFiles))
         }
     }
 
@@ -2095,13 +2128,14 @@ final class SessionModel {
 
     private var undone: (before: ComposerState, after: ComposerState, put: String)?
 
-    /// A sent message's attached files that are still on this Mac.
+    /// A sent message's attached files that are still on this Mac, and those it carries in
+    /// itself, written out.
     static func files(of message: Message.User) -> [URL] {
-        (message.files ?? []).compactMap { file in
-            guard case .uri(let uri) = file.source, let url = URL(string: uri), url.isFileURL,
-                  FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let files = message.files ?? []
+        return files.compactMap { file in
+            guard let url = file.fileURL, FileManager.default.fileExists(atPath: url.path) else { return nil }
             return url
-        }
+        } + Attachments.writeCarried(files)
     }
 
     /// The same, as they were picked when the message was seen going out, else as the engine
@@ -2266,22 +2300,33 @@ final class SessionModel {
         }
     }
 
-    /// Picks the queue up again after Stop or a failed run: its box starts the next one.
-    func resumeQueue() {
-        guard canReach else { return }
+    /// Picks the queue up again after Stop or a failed run: its box starts the next one. Its
+    /// answer: false when its computer didn't answer (the conversation says so).
+    @discardableResult
+    func resumeQueue() -> Task<Bool, Never> {
+        guard canReach else { return Task { false } }
         isQueuePaused = false
         let stopped = stops
-        Task {
+        let puttingBack = puttingBack.values
+        return Task {
             // A message held as it went (put back after a Stop) held by the box first: its hold
-            // after the Resume would pause the queue again. Stopped meanwhile: no Resume.
-            if outgoing.values.contains(where: { $0.heldAt != nil && ($0.state == .sending || $0.request != nil) }) {
-                await sending?.value
-                guard stops == stopped else { return }
+            // after the Resume would pause the queue again. One Undo is putting back there too: the
+            // queue going on without it, it would go to the agent as it arrived, at once. Stopped
+            // meanwhile: no Resume.
+            let holding = outgoing.values.contains(where: { $0.heldAt != nil && ($0.state == .sending || $0.request != nil) })
+            if holding || !puttingBack.isEmpty {
+                if holding { await sending?.value }
+                for each in puttingBack { await each.value }
+                guard stops == stopped else { return true }
             }
-            guard await carriesQueue() else { return drainHere(after: .zero) }
-            guard await queueRoute("queue/resume") == nil else { return }
+            guard await carriesQueue() else {
+                drainHere(after: .zero)
+                return true
+            }
+            guard await queueRoute("queue/resume") == nil else { return true }
             isQueuePaused = true
             failure = "The queue couldn't be resumed: its computer didn't answer. Try again in a moment."
+            return false
         }
     }
 
@@ -2420,8 +2465,18 @@ final class SessionModel {
     func applyHelper(_ event: ServerEvent, from helper: String) {
         if !transcript.helpers.contains(helper) { transcript.helpers.insert(helper) }
         if live?.helpers.contains(helper) == false { live?.helpers.insert(helper) }
+        // Its run ending: only what it asked goes, not this session's own run (and not from a
+        // read under way, which may still have it).
+        if Self.runEnds.contains(event.type) {
+            for read in Array(cameDuringRead.keys) { cameDuringRead[read]?.append(event) }
+            transcript.apply(event)
+            live?.apply(event)
+            return
+        }
         apply(event)
     }
+
+    static let runEnds: Set<String> = ["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"]
 
     func answer(_ form: FormRequest, with answer: FormAnswer) {
         guard canReach else { return }

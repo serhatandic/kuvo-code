@@ -15,10 +15,20 @@ import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenc
 import { kuvoTools } from "../kuvotools"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
-import { dropRelayed, relayedTools, relayPort } from "../toolrelay"
+import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
+import { computerServers } from "../servers"
 import type { Turn } from "../turn"
 import type { Model, OAuthStatus, Session } from "../wire"
 import { CursorWorker, cursorWorker } from "./cursor-worker"
+
+/** A file's bytes as base64, or nothing when it can't be read. */
+function readable(path: string): string | undefined {
+  try {
+    return readFileSync(path).toString("base64")
+  } catch {
+    return undefined
+  }
+}
 
 // T3 Code's tested version; newer ones resolve differently under Bun.
 /** What Cursor calls a model's effort setting, by model. */
@@ -312,7 +322,12 @@ class CursorThread implements Thread {
     const fenced = Boolean(fenceRules())
     // Kuvo Code's own tools (the panel's browser, show_in_panel, messages to other agents), as the
     // other agents have them: what they do goes to this conversation (through the relay, in the sandbox).
-    const tools = fenced ? relayedTools(this.session.id) : kuvoTools(this.session.id)
+    const tools = fenced ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
+    // And the computer's MCP servers (yours, the integrations', a bot's with its own keys), through
+    // the relay, which keeps their keys.
+    const servers = relayedServers(this.session.id, this, cwd, await computerServers(cwd))
+    const mcpServers: Record<string, unknown> = Object.fromEntries(servers.map((each) => [each.name, { type: "http", url: each.url, headers: each.headers }]))
+    if (tools) mcpServers[tools.name] = tools.kind === "http" ? { type: "http", url: tools.url, headers: tools.headers } : { type: "stdio", command: tools.command, args: tools.args, env: tools.env }
     return {
       model: selection,
       name: `Kuvo Code: ${this.session.title ?? "session"}`,
@@ -332,13 +347,7 @@ class CursorThread implements Thread {
         enableAgentRetries: true,
         store: this.owner.agentStore(fenced ? CursorWorker : sdk),
       },
-      ...(tools
-        ? {
-            mcpServers: {
-              [tools.name]: tools.kind === "http" ? { type: "http", url: tools.url, headers: tools.headers } : { type: "stdio", command: tools.command, args: tools.args, env: tools.env },
-            },
-          }
-        : {}),
+      ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
     }
   }
 
@@ -346,9 +355,10 @@ class CursorThread implements Thread {
   private async ensureAgent(sdk: any, options: any, hooks: TurnHooks) {
     const approvesAll = hooks.approvesAll(false)
     // Its sandbox, review, folders and Kuvo Code's tools are set as it starts: another approval
-    // mode, other skills or other tools start it again.
+    // mode, other skills or other tools (Kuvo Code's, or another set of the computer's servers)
+    // start it again.
     const skills = options.local?.dirs?.[0] as string | undefined
-    const tools = kuvoTools(this.session.id)?.key
+    const tools = JSON.stringify([kuvoTools(this.session.id)?.key, Object.keys(options.mcpServers ?? {}).sort()])
     // In the sandbox: its rules and the folders Also Allowed gives the project, as it starts.
     const fence = fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) : ""
     // (And the worker it runs in, as it starts again, or once it has stopped.)
@@ -395,13 +405,17 @@ class CursorThread implements Thread {
       hooks.saveState()
     }
     await this.ensureAgent(sdk, options, hooks)
-    const images = input.files
-      .filter((file) => file.mime.startsWith("image/"))
-      .map((file) => ({ data: file.data ?? (file.path ? readFileSync(file.path).toString("base64") : ""), mimeType: file.mime }))
-      .filter((image) => image.data)
+    // Pictures it sees; one it can't read here (gone since, say) goes by its path, as other files do.
+    const images: { data: string; mimeType: string }[] = []
+    const byPath: string[] = []
+    for (const file of input.files) {
+      const data = file.mime.startsWith("image/") ? (file.data ?? (file.path ? readable(file.path) : undefined)) : undefined
+      if (data) images.push({ data, mimeType: file.mime })
+      else if (file.path) byPath.push(file.path)
+    }
     let text = input.text
     // (In the sandbox, which hides where they're kept: copies it reads.)
-    const others = input.files.filter((file) => !file.mime.startsWith("image/") && file.path).map((file) => (this.worker ? fenceCopy(cwd, file.path!) : file.path!))
+    const others = byPath.map((path) => (this.worker ? fenceCopy(cwd, path) : path))
     if (others.length) text += `\n\nAttached files:\n${others.map((path) => `- ${path}`).join("\n")}`
     // The app's added instructions go with the first message, and again when they change.
     const instructions = hooks.instructions()
@@ -606,7 +620,7 @@ class CursorThread implements Thread {
       state: ["*"],
       kept: [],
       read: [runtime, dirname(process.execPath), ...(options.local?.dirs ?? []), ...(attached ? [attached] : [])],
-      port: options.mcpServers ? relayPort() : undefined,
+      port: relayPort(),
     })
     if (!fence) throw new Error("Cursor runs in the sandbox here, and it isn't ready: restart Kuvo Code.")
     return new CursorWorker([fence.command, "--config=/dev/null", "--no-env-file", cursorWorker(runtime)], {
@@ -637,7 +651,7 @@ class CursorThread implements Thread {
 
   close() {
     this.stop()
-    dropRelayed(this.session.id)
+    dropRelayed(this.session.id, this)
   }
 }
 

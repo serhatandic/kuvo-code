@@ -29,9 +29,19 @@ final class KeeperFollower {
     /// of the open app.
     var onKeeper: () -> Void = {}
     private var keeper: Int32?
+    /// Whether the keeper running now is an older app's, making way for this one's once nothing is
+    /// under way (it's asked to as it's found): told to `onMakingWay` as it changes.
+    private(set) var makingWay = false {
+        didSet { if makingWay != oldValue { onMakingWay(makingWay) } }
+    }
+    var onMakingWay: (Bool) -> Void = { _ in }
 
     private var watch: DispatchSourceFileSystemObject?
     private var tick: Task<Void, Never>?
+    /// Followed, from `start` until `stop`: a read still under way as it stops (one waiting on the
+    /// keeper, or one its folder's change set going) says nothing after, so an app that quit never
+    /// hears the keeper is gone and starts a box of its own.
+    private var following = false
     /// When the app last asked launchd to start the keeper, for how long it's given to come up.
     private var askedToStart: Date?
     /// When the engine was last asked to start over: a reason it stopped from before then is the
@@ -67,22 +77,36 @@ final class KeeperFollower {
     }
 
     /// Followed from now on: the keeper started if it isn't running (after Stop Background Work),
-    /// or asked to make way for this app's own if it came with another version.
-    func start() async {
-        if let keeper = KeeperRecord.read() {
-            if keeper.version != AppInfo.version || keeper.build != AppInfo.build {
-                log.info("The keeper is \(keeper.version, privacy: .public) (\(keeper.build, privacy: .public)): asked to make way")
-                _ = try? await KeeperControl.send(.update, ["within": Keeper.updateWait], to: keeper)
-            }
-        } else {
+    /// or asked to make way for this app's own if it came with another version (as it's read).
+    /// Whether it's followed: not when launchd has no keeper to start (the app it was registered
+    /// from is gone, say), and the app runs the box itself, never waiting on one.
+    @discardableResult
+    func start() async -> Bool {
+        following = true
+        if KeeperRecord.read() == nil {
             askedToStart = .now
-            BackgroundWork.shared.start()
+            guard startKeeper() else {
+                following = false
+                log.error("launchd has no keeper to start: this Mac's box runs in the app")
+                BackgroundWork.shared.didntStart = true
+                return false
+            }
         }
         follow()
         await read()
+        return true
+    }
+
+    /// No keeper came after all: the app runs this Mac's box itself, and Settings says background
+    /// work didn't start this time.
+    private func didntStart() {
+        log.error("The keeper didn't start: this Mac's box runs in the app")
+        BackgroundWork.shared.didntStart = true
+        onGone()
     }
 
     func stop() {
+        following = false
         watch?.cancel()
         watch = nil
         tick?.cancel()
@@ -123,10 +147,14 @@ final class KeeperFollower {
     /// A read under way, and whether the records changed while it was: one at a time, so an older
     /// one that waited on the keeper never says what a newer one already said otherwise.
     private var reading = false
+    /// Whether the keeper followed now said it makes way for this app's (it doesn't when the app
+    /// at its place is its own version: this app is another copy).
+    private var keeperUpdates = false
     private var readAgain = false
 
     /// What the records say now.
     func read() async {
+        guard following else { return }
         if reading {
             readAgain = true
             return
@@ -135,16 +163,30 @@ final class KeeperFollower {
         repeat {
             readAgain = false
             await readOnce()
-        } while readAgain
+        } while readAgain && following
         reading = false
     }
 
     private func readOnce() async {
-        let running = KeeperRecord.read()?.pid
-        if running != keeper {
-            keeper = running
-            if running != nil { onKeeper() }
+        let record = KeeperRecord.read()
+        if record?.pid != keeper {
+            keeper = record?.pid
+            if let record {
+                BackgroundWork.shared.didntStart = false
+                onKeeper()
+                // One of another version (the app was updated since it started): asked to make way
+                // for this app's own. It goes the first moment nothing is under way, and is
+                // followed until then.
+                if record.isOtherVersion {
+                    log.info("The keeper is \(record.version, privacy: .public) (\(record.build, privacy: .public)): asked to make way")
+                    keeperUpdates = (try? await KeeperControl.send(.update, to: record))?["updating"] as? Bool ?? false
+                } else {
+                    keeperUpdates = false
+                }
+            }
         }
+        guard following else { return }
+        makingWay = record != nil && keeperUpdates
         let engineRecord = Self.record("engine.json")
         let serve = Self.record("serve.json")
         let bridge = Self.record("bridge.json")
@@ -156,6 +198,8 @@ final class KeeperFollower {
             answered = said != nil
             status = said ?? [:]
         }
+        // Stopped while the keeper was asked (above too).
+        guard following else { return }
         // A keeper that runs but doesn't answer (hung): since when, for how long the window waits.
         if engineRecord != nil || answered || KeeperRecord.read() == nil {
             silentSince = nil
@@ -172,7 +216,7 @@ final class KeeperFollower {
         } else if KeeperRecord.read() == nil, isGone() {
             onGone()
         } else if KeeperRecord.read() == nil, let askedToStart, -askedToStart.timeIntervalSinceNow > Self.startWait {
-            engine = .failed("Kuvo Code’s background work didn’t start. Check that Kuvo Code is allowed in System Settings › General › Login Items & Extensions.")
+            didntStart()
         } else if let silentSince, -silentSince.timeIntervalSinceNow > Self.startWait {
             engine = .failed("Kuvo Code’s background work isn’t answering. Try again, or restart your Mac if it still doesn’t.")
         } else if let engineState = status["engine"] as? [String: Any], engineState["state"] as? String == "downloading" {
@@ -182,10 +226,23 @@ final class KeeperFollower {
                 // Gone (stopped from elsewhere, or it crashed and launchd hasn't started it yet):
                 // asked to start, and given the time to.
                 askedToStart = .now
-                BackgroundWork.shared.start()
+                guard startKeeper() else {
+                    didntStart()
+                    return
+                }
             }
             engine = .starting
         }
+    }
+
+    /// launchd asked to start the keeper: whether it took it (it has none to start when the app it
+    /// was registered from is gone, say).
+    private func startKeeper() -> Bool {
+        #if DEBUG
+        // A test's keeper, which the test starts, never launchd.
+        if ProcessInfo.processInfo.environment["KUVO_KEEPER"] == "follow" { return true }
+        #endif
+        return BackgroundWork.shared.start()
     }
 
     /// No keeper, and none will come: macOS has it switched off (or never registered it).
@@ -198,13 +255,15 @@ final class KeeperFollower {
         return BackgroundWork.shared.state != .on
     }
 
-    /// Why the engine stopped and isn't started again (`run/engine-stopped`): one from before the
-    /// last restart was asked for is the last engine's.
+    /// Why the engine stopped and isn't started again (`run/engine-stopped`), with what it wrote
+    /// last under it (`run/engine-output`), as the window shows its own engine's: one from before
+    /// the last restart was asked for is the last engine's.
     private func stoppedReason() -> String? {
         let file = KeeperRecord.run.appending(path: "engine-stopped")
         guard let reason = try? String(contentsOf: file, encoding: .utf8), !reason.isEmpty else { return nil }
         if let restartAsked, let written = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate, written < restartAsked { return nil }
-        return reason
+        let output = (try? String(contentsOf: KeeperRecord.run.appending(path: "engine-output"), encoding: .utf8)) ?? ""
+        return output.isEmpty ? reason : reason + "\n\n" + output
     }
 
     /// One of the box's records, while its process runs: where it answers.

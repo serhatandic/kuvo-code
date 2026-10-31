@@ -10,17 +10,18 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, before, test } from "node:test";
+import { before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { sshAgentsOf } from "./bot-keys-scenarios.js";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 // (Short: the vault's socket is in it.)
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kvt-")));
 // (Once the box and the tool have stopped: they write in its folder until they have.)
-after(async () => {
+removeAtEnd(home);
+removeAtEnd(sshAgentsOf(home));
+atEnd(async () => {
   await Promise.all([box, mcp].map(child => child && child.exitCode === null && child.signalCode === null ? new Promise(done => { child.once("exit", done); child.kill(); }) : null));
-  fs.rmSync(home, { recursive: true, force: true });
-  fs.rmSync(sshAgentsOf(home), { recursive: true, force: true });
 });
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -37,11 +38,14 @@ const TOKEN = "glpat-very-secret-token-0001";
 // The engine: a bot's conversation, in its folder, and the tool call it's making now (the box
 // answers a vault call only as one its conversation makes: vault/who.ts).
 // Also its seat in a group chat, a conversation of its own the chat marks as the bot's; and a
-// subagent whose parent the engine can't say just then.
+// subagent whose parent the engine can't say just then. And a session the bot started for its work,
+// in a project of yours, which the box marks as the bot's (`kuvo.by`).
+const work = path.join(home, "work", "app");
 const conversations = {
   ses_ship: { id: "ses_ship", title: "Ship", location: { directory: home } },
   ses_seat: { id: "ses_seat", title: "Release chat", location: { directory: home }, metadata: { kuvo: { seat: { group: "grp_release", bot: "bot_ship" } } } },
   ses_sub: { id: "ses_sub", parentID: "ses_lost", title: "A subagent", location: { directory: home } },
+  ses_work: { id: "ses_work", title: "Fix the release build", location: { directory: work }, metadata: { kuvo: { startedBy: "ses_ship", by: { bot: "bot_ship", name: "Ship" }, depth: 1 } } },
 };
 const calling = {};
 let calls = 0;
@@ -59,7 +63,7 @@ const engine = http.createServer((request, response) => {
   response.end(JSON.stringify(conversations[id] ? { data: conversations[id] } : { message: "No such session." }));
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
-after(() => { engine.closeAllConnections(); engine.close(); });
+atEnd(() => { engine.closeAllConnections(); engine.close(); });
 write(path.join(home, "run", "engine.json"), JSON.stringify({ port: engine.address().port, password: "p" }));
 write(path.join(home, "bots", "bot_ship", "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_ship", name: "Ship" }));
 write(path.join(home, "bots", "bot_ship", "session"), "ses_ship");
@@ -154,6 +158,44 @@ test("its bot uses what it's granted, through its box, and never sees a value", 
   assert.ok(!JSON.stringify(ran).includes(TOKEN));
   const activity = (await client("GET", "kuvo/vault/activity")).value.entries;
   assert.ok(activity.some(entry => entry.what === "used" && entry.botName === "Ship" && entry.program === "echo"));
+});
+
+test("a session its bot started for its work is the bot's: it uses what the bot may, Always gives it to the bot, and the bot's pause holds it", async () => {
+  const build = (await client("POST", "kuvo/vault/items", { kind: "key", name: "Build token", sites: [], values: { token: "build-secret-0006" } })).value.item;
+  assert.equal((await client("POST", "kuvo/vault/grants", { item: build.id, who: { bot: "bot_ship" }, how: "own" })).status, 200);
+  const using = call("vault_run", { command: "echo \"using $T\"", variables: { T: "Build token" }, why: "To build the release." }, "ses_work");
+  const ran = await Promise.race([using, asked().then(([card]) => assert.fail(`It asked you, as ${card.botName ?? "no bot"}, for what its bot may use on its own.`))]);
+  assert.equal(ran.isError, false, ran.content[0].text);
+  assert.ok((await client("GET", "kuvo/vault/activity")).value.entries.some(entry => entry.what === "used" && entry.botName === "Ship" && entry.session === "ses_work"));
+  // What it asks for is the bot's ask, and Always lets the bot use it, not everyone in the project.
+  const signing = (await client("POST", "kuvo/vault/items", { kind: "key", name: "Signing key", sites: [], values: { token: "signing-secret-0007" } })).value.item;
+  const asking = call("vault_run", { command: "echo signed", variables: { T: "Signing key" }, why: "To sign the build." }, "ses_work");
+  const [card] = await askedBefore(asking);
+  assert.equal(card.botName, "Ship");
+  assert.equal((await client("POST", `kuvo/vault/asks/${card.id}`, { answer: "always" })).status, 200);
+  assert.equal((await asking).isError, false);
+  const given = (await client("GET", "kuvo/vault")).value.grants.filter(grant => grant.item === signing.id);
+  assert.deepEqual(given.map(grant => grant.who), [{ bot: "bot_ship" }]);
+  // Paused for the bot, it can't use the vault in its work either.
+  assert.equal((await client("POST", "kuvo/vault/pause", { paused: true, bot: "bot_ship" })).status, 200);
+  const held = await call("vault_run", { command: "echo again", variables: { T: "Build token" }, why: "Once more." }, "ses_work");
+  assert.equal(held.isError, true);
+  assert.match(held.content[0].text, /paused this bot's use of the vault/);
+  assert.equal((await client("POST", "kuvo/vault/pause", { paused: false, bot: "bot_ship" })).status, 200);
+});
+
+test("a bot deleted (or gone from this computer) isn't shown as able to use what it could, nor as paused", async () => {
+  write(path.join(home, "bots", "bot_temp", "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_temp", name: "Temp" }));
+  write(path.join(home, "bots", "bot_temp", "session"), "ses_temp");
+  const report = (await client("POST", "kuvo/vault/items", { kind: "key", name: "Report key", sites: [], values: { token: "report-secret-0008" } })).value.item;
+  assert.equal((await client("POST", "kuvo/vault/grants", { item: report.id, who: { bot: "bot_temp" }, how: "own" })).status, 200);
+  const whoFor = async () => (await client("GET", "kuvo/vault")).value.grants.filter(grant => grant.item === report.id).map(grant => grant.who);
+  assert.deepEqual(await whoFor(), [{ bot: "bot_temp" }]);
+  assert.equal((await client("POST", "kuvo/vault/pause", { paused: true, bot: "bot_temp" })).status, 200);
+  fs.rmSync(path.join(home, "bots", "bot_temp"), { recursive: true, force: true });
+  assert.deepEqual(await whoFor(), [], "no one may use it now");
+  assert.deepEqual((await client("GET", "kuvo/vault/grants")).value.grants.filter(grant => grant.item === report.id), []);
+  assert.equal((await client("GET", "kuvo/vault")).value.state.pausedBots.bot_temp, undefined, "nor shown paused");
 });
 
 test("its seat in a group chat asks you each time, whatever it may use on its own, and never for good", async () => {

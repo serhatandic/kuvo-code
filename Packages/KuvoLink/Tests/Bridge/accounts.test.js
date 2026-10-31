@@ -10,12 +10,13 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-accounts-"));
 process.env.KUVO_HOME = home;
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+removeAtEnd(home);
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // An engine with your plans, an integration's server, and what each is signed in with; it keeps
@@ -66,7 +67,7 @@ async function engineWith() {
     send(session ? 200 : 404, { data: session ?? null });
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  after(() => { server.closeAllConnections(); server.close(); });
+  atEnd(() => { server.closeAllConnections(); server.close(); });
   engine.source = { port: server.address().port, password: "pw" };
   return engine;
 }

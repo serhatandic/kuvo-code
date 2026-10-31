@@ -3,11 +3,13 @@
 // Send Now, and a client's own message to wait with it.
 
 import { isObject, parsed } from "../../shared/json";
+import { MOVING } from "../bots/here";
+import { frozen, liveMoves } from "../moves/records";
 import { followed } from "../follow";
 import { placeOfSession } from "../letters/letter";
 import { targetsOf } from "../letters/tools";
 import { asked } from "../engine/client";
-import { dropWaiting, holdQueue, keepWaiting, queueFollowers, queueOf, readQueues, resumeQueue, sendNow, showsQueue, shownQueue, stopSession } from "../engine/queue";
+import { dropWaiting, holdQueue, inboxFor, keepWaitingBefore, queueFollowers, queueOf, readQueues, resumeQueue, sendNow, showsQueue, shownQueue, stopSession } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { attachedIn } from "../server/attached";
 import { fromPhone, modelInput } from "../server/forward";
@@ -37,13 +39,21 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
     if (method !== "GET") return yield* json(405, {});
     return yield* json(200, shownQueue(queueOf(session)));
   }
+  // One moving to or from another computer: what waits for it goes as it was read for the move. A
+  // Stop still stops it while the box it leaves waits for its turn to end, before it's read.
+  const stopping = action === "stop" || step === "hold";
+  const settling = () => liveMoves().some(move => move.role === "from" && move.stage === "holding" && (move.thing === session || move.sessions.includes(session)));
+  if (frozen().has(session) && !(stopping && settling())) return yield* json(409, { message: MOVING });
   if (item && !now) {
     if (method !== "DELETE") return yield* json(405, {});
-    const dropped = dropWaiting(session, decodeURIComponent(item));
+    // (The engine's inbox, for what came after it; none when it can't be read.)
+    const place = await placeOfSession(session, targetsOf({ readEngine, bridge })).catch(() => null);
+    const dropped = dropWaiting(session, decodeURIComponent(item), place ? await inboxFor(place.target, session) : []);
     if (!dropped) return yield* json(404, { message: "That message isn't waiting any more." });
-    // What it was, whole, for Undo to add back as it was (`queue/add` with `kept`).
+    // What it was, whole, for Undo to add back as it was, where it was (`queue/add` with `kept`,
+    // and `before`, what came after it).
     const { from, text: words } = dropped.shown;
-    const removed = dropped.message ? { ...dropped.message, ...(from ? { from } : {}), words } : undefined;
+    const removed = dropped.message ? { ...dropped.message, ...(from ? { from } : {}), words, ...(dropped.before ? { before: dropped.before } : {}) } : undefined;
     return yield* json(200, { ...shownQueue(queueOf(session)), ...(removed ? { removed } : {}) });
   }
   if (method !== "POST") return yield* json(405, {});
@@ -69,9 +79,9 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
 
 // A client's own message for the queue (Undo, or one sent after this run while it's paused): its
 // files kept on the box as a message's are (`attachedIn`), then waiting there while the queue is
-// paused, else to the engine as it asked. `{id?, text, files?, delivery?, from?, words?}` (`words`:
-// how it's shown, as you wrote it); `waits` says which. `kept`: one a DELETE gave back (Undo), as it
-// was kept already.
+// paused, else to the engine as it asked. `{id?, text, files?, delivery?, from?, words?, before?}`
+// (`words`: how it's shown, as you wrote it; `before`: Undo's, what came after it, which it goes
+// back ahead of); `waits` says which. `kept`: one a DELETE gave back (Undo), as it was kept already.
 async function* add({ request, bridge, readEngine, json, signal }: RouteContext, target: Target, session: string): AsyncGenerator<AnswerPiece> {
   const given = parsed(request.body);
   if (!isObject(given) || typeof given.text !== "string" || (!given.text.trim() && !(Array.isArray(given.files) && given.files.length))) return yield* json(400, { message: "Send {\"text\": …}." });
@@ -90,7 +100,8 @@ async function* add({ request, bridge, readEngine, json, signal }: RouteContext,
   // Shown as written (`words`: without what the client added for the agent, like its files' notes),
   // or, put back, as it was shown.
   const words = typeof given.words === "string" ? given.words : given.kept !== true ? given.text : undefined;
-  if (keepWaiting(session, message, { from, words })) return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
+  const before = typeof given.before === "string" && /^[A-Za-z0-9_]{1,100}$/.test(given.before) ? given.before : undefined;
+  if (await keepWaitingBefore(target, session, message, { from, words }, before)) return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
   await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message);
   return yield* json(200, { ...shownQueue(queueOf(session)), waits: false });
 }

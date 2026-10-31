@@ -4,11 +4,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { subscribe } from "../../src/agents/events"
 import { server } from "../../src/agents/groups/api"
+import { linkRoutes } from "../../src/agents/groups/link"
 import { groupRoutes } from "../../src/agents/groups/routes"
 import { GroupRunner, type RunnerContext } from "../../src/agents/groups/runner"
 import { stamp, type Group } from "../../src/agents/groups/rules"
 import { GroupStore } from "../../src/agents/groups/store"
 import type { ServerEvent } from "../../src/agents/wire"
+import { queueFiles, readQueues, waitingFile } from "../../src/shared/queues"
 import { Engine } from "./support/engine"
 
 // A group chat that lives on a machine, as the machine's bridge runs it: against a stand-in engine
@@ -828,6 +830,43 @@ describe("a group chat on any computer", () => {
     expect(groups.get(id)!.messages.find((message) => message.report === "gt_ada")?.text).toBe("Notes written.")
     expect(notes(groups)).toEqual(["Ben couldn’t do its part: Kuvo Code stopped before it reached the bot."])
     expect(groups.get(id)!.messages[0].tasks!.map((part) => part.state)).toEqual(["done", "failed"])
+  })
+
+  test("a part for a bot whose conversation you stopped waits on the box, shown as the chat's and as waiting on it, and the bot does it once you resume", async () => {
+    const queues = queueFiles(join(root, "run"))
+    mkdirSync(join(root, "run"), { recursive: true })
+    writeFileSync(queues.file, JSON.stringify({ ses_own_Ada: { paused: true, held: [] } }))
+    const { groups, store } = runner({ queues })
+    const shown = async () => (await (await linkRoutes(groups, store, "GET", [id], async () => ({}))).json()) as { stopped?: string[] }
+    engine.lines = { Ada: ["We'll split it.", "&Ada: write the notes\nGO"], Ben: ["PASS"] }
+    engine.reports = { Ada: "Notes written." }
+    groups.put(group(), [], "active", false)
+    groups.send(id, "Split it and go ahead.")
+    const part = () => groups.get(id)!.messages.find((message) => message.tasks)?.tasks?.[0]
+    await until(() => part()?.prompt !== undefined)
+    const prompt = part()!.prompt!
+    // Nothing reaches the stopped conversation: it waits on the box, as a letter would.
+    expect(engine.prompts("ses_own_Ada")).toEqual([])
+    const waiting = readQueues(queues).ses_own_Ada.waiting!
+    expect(waiting.map((item) => [item.id, item.from, item.text])).toEqual([[prompt, "Team", "write the notes"]])
+    const whole = JSON.parse(readFileSync(waitingFile(queues, prompt), "utf8"))
+    expect(whole.delivery).toBe("queue")
+    expect(whole.text).toStartWith("[Work from Team · grp_team000001]\n\nwrite the notes")
+    // Looked in on a while, it still waits: not taken back.
+    const looks = () => engine.requests.filter((request) => request.method === "GET" && request.path === "/api/session/ses_own_Ada/inbox").length
+    await until(() => looks() >= 4)
+    expect(part()!.state).toBe("working")
+    expect(notes(groups)).toEqual([])
+    // The chat says whose part waits on a conversation you stopped, so you can resume it there.
+    expect((await shown()).stopped).toEqual(["bot_ada"])
+    expect(events.some((event) => event.type === "kuvo.group.updated" && (event.data as any).state.stopped?.[0] === "bot_ada")).toBe(true)
+    // Resume: the box sends what waited, as it was.
+    writeFileSync(queues.file, JSON.stringify({}))
+    await server(engine.url, "x").request("POST", "/api/session/ses_own_Ada/prompt", whole)
+    await until(() => groups.get(id)!.messages.some((message) => message.report === part()!.id))
+    expect(groups.get(id)!.messages.find((message) => message.report === part()!.id)?.text).toBe("Notes written.")
+    expect(part()!.state).toBe("done")
+    expect((await shown()).stopped).toBeUndefined()
   })
 
   test("a part whose message was taken back before its bot read it ends, rather than working forever", async () => {

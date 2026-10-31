@@ -55,6 +55,17 @@ prerelease, and only copies with **Settings › General › Get beta updates** o
 are offered it. Its build version is `X.Y.ZbN` (`scripts/build-version.sh`),
 which Sparkle orders before the release.
 
+Before tagging one, try its update the way people will get it:
+
+```sh
+./scripts/try-update.sh            # the next beta after the newest tag, or name a version
+```
+
+It builds this checkout as that version, signed with your Developer ID and the update key from
+your keychain, serves it from `127.0.0.1`, and points the Kuvo Code in /Applications at it. Choose
+**Check for Updates…** there to go through the update window, the install, the restart and
+What's New. Ctrl-C stops the server and puts the real feed back.
+
 A release also carries what remote machines run, for them to update themselves
 with, once the `KUVO_BOX_SIGNING_KEY` secret (an Ed25519 key) is set
 (`scripts/set-box-key.sh` makes it once, keeps it in your login keychain, uploads
@@ -89,6 +100,11 @@ The bridge's tests that run the box itself need a Bun: `bun` on your PATH, or
 `KUVO_TEST_BUN` naming one or an engine (a machine's `~/.kuvo-code/engine/<version>/opencode`,
 which they run as Bun). Run them on a Linux machine too, in a test folder of your own with
 `TMPDIR` inside it, before calling a box change done.
+
+A bridge test file cleans up with `atEnd` and `removeAtEnd` from `Tests/Bridge/at-end.js`, never
+node:test's `after` (a test's own `t.after` is fine). They stop what the file started, latest
+first, and remove its folders last, even when a step fails. Then anything still open fails the
+file, named, rather than keeping its process and the whole run going.
 
 `./scripts/test-app.sh` runs one at a time: a run started while another is going
 waits for it, since they share the test copy's settings and temporary folders.
@@ -349,6 +365,7 @@ when you're there to answer.
 | `KUVO_DEMO_SETTINGS` | Open Settings on a page, by its `SettingsPage` name: `general`, `appearance`, `storage`, `accounts`, `agents`, `mcp`, `git`, `browser`, `vault` and so on; `permissions@<machine>` for a machine's |
 | `KUVO_DEMO_VAULT` | This Mac's vault with sample items (made only where they aren't yet), for a look at its pages |
 | `KUVO_DEMO_VAULT_ASK` | With `KUVO_DEMO_VAULT` and a bot: the first bot asks the vault for this, as `vault_ask` does, so its card shows over its composer and in Settings › Vault |
+| `KUVO_DEMO_SANDBOX_STATE`, `KUVO_DEMO_SANDBOX_RULES` | With `KUVO_DEMO_SETTINGS=permissions`: how every box's sandbox says it is (`on`, `checkFailed`, `kernel`…), and with `1` its Also Allowed, a folder for the first project, one for the first bot and two for the chats (`empty`: none) |
 | `KUVO_DEMO_VAULT_ITEM` | With `KUVO_DEMO_SETTINGS=vault`: the sheet of the item with this name, open |
 | `KUVO_DEMO_SETTINGS_TABS` | With `KUVO_DEMO_SETTINGS` and the tab bar on: these pages too, comma-separated, each in a tab of its own (`page@<machine>` for a machine's) |
 | `KUVO_DEMO_DISCONNECT` | Don't connect to this machine, as after Disconnect, so this copy reaches it only through the relay (set it up in an earlier launch) |
@@ -412,7 +429,7 @@ when you're there to answer.
 | `KUVO_DEMO_LOG_EVENTS` | Log each session event from the engine, to see the order they come in (`log show --predicate 'subsystem == "run.kuvo.code"'`) |
 | `KUVO_DEMO_SHOW_HOVER` | Show group chat messages' buttons as if under the pointer |
 | `KUVO_DEMO_CYCLE_TABS` | Go to the next session tab every this many seconds, a few times |
-| `KUVO_PERF_SWITCH` | Ten seconds after launch, go to the next session tab this many times, 1.5 s apart, and write how the main thread kept up to `KUVO_PERF_LOG` (stalls to `KUVO_PERF_STALLS`); `KUVO_PERF_SWITCH_CHECK` also gives each tab's session a draft and checks the composer shows it and takes typing after each switch |
+| `KUVO_PERF_SWITCH` | Ten seconds after launch, go to the next session tab this many times, 1.5 s apart, and write how the main thread kept up to `KUVO_PERF_LOG` (stalls to `KUVO_PERF_STALLS`); `KUVO_PERF_SWITCH_BY=1,-1` goes by those steps in turn instead, `KUVO_PERF_SWITCH_PLAIN` switches without the animation, and `KUVO_PERF_SWITCH_CHECK` also gives each tab's session a draft and checks the composer shows it and takes typing after each switch |
 | `KUVO_PERF_TOGGLE` | Ten seconds after launch, hide and show the sidebar this many times, then the panel, a second apart, and write how the main thread kept up with each to `KUVO_PERF_LOG` (stalls to `KUVO_PERF_STALLS`); for the panel, also how many times the sidebar and its rows were worked out again, which should be none. `KUVO_PERF_TOGGLE_ONLY=panel` measures the panel alone |
 | `KUVO_PERF_TYPE` | Ten seconds after launch, type this many characters into the composer, one every 60 ms, and write how the main thread kept up (and the longest a character took) to `KUVO_PERF_LOG` |
 | `KUVO_PERF_LAYERS` | A file: the window's layers drawn on the CPU that were drawn again between looks 1.5 s apart, four times from `KUVO_PERF_LAYERS_AT` seconds after launch (12), largest first |

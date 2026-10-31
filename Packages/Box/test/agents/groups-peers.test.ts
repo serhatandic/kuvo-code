@@ -10,6 +10,7 @@ import { LinkDirectory, PeerPost, gaveUp, peerRoutes, receive, type PeerParts } 
 import { GroupRunner, transcriptMailBytes } from "../../src/agents/groups/runner"
 import { stamp, type Group, type GroupMessage } from "../../src/agents/groups/rules"
 import { GroupStore } from "../../src/agents/groups/store"
+import { queueFiles, readQueues, waitingFile } from "../../src/shared/queues"
 import { Engine } from "./support/engine"
 
 // Group chats across your computers (PROTOCOL.md, "Peers": seat): a chat lives on one computer and
@@ -150,6 +151,8 @@ class Box {
   readonly runner: GroupRunner
   readonly post: PeerPost
   readonly directory: LinkDirectory
+  /** Its box's queues: a conversation you stop there is noted in them. */
+  readonly queues = queueFiles(join(this.root, "run"))
   parts: PeerParts
   private following = new AbortController()
   /** Whether its seats' bridge as it runs now is heard: one restarted stands in for the last, which says nothing more. */
@@ -164,7 +167,7 @@ class Box {
     this.post = new PeerPost(join(this.root, "peer-outbox.json"))
     this.directory = new LinkDirectory(this.post, clock)
     this.runner = new GroupRunner({
-      store: this.store, engine: server(this.engine.url, "x"), bridge: () => undefined, trash: join(this.root, "trash"), pace: 0.05, place: key, peers: this.directory,
+      store: this.store, engine: server(this.engine.url, "x"), bridge: () => undefined, trash: join(this.root, "trash"), pace: 0.05, place: key, peers: this.directory, queues: this.queues,
     })
     this.parts = { post: this.post, directory: this.directory, server: this.seatServer(), runner: this.runner }
     relay.boxes.set(key, this)
@@ -569,6 +572,50 @@ describe("a group chat with a bot on another of your computers", () => {
     expect(part).toContain("**Ada**: Notes written.")
     expect(relay.sent.filter((each) => each.mail.kind === "work" || each.mail.kind === "report").every((each) => each.durable)).toBe(true)
     expect(host.runner.get(id)!.messages.find((message) => message.kind === "wrapUp")!.tasks!.map((task) => task.state)).toEqual(["done", "done"])
+  }, 20_000)
+
+  test("its part waiting on its conversation there, stopped by you: the chat's computer says so, until it goes on and reports", async () => {
+    mkdirSync(join(home.root, "run"), { recursive: true })
+    writeFileSync(home.queues.file, JSON.stringify({ ses_own_Ben: { paused: true, held: [] } }))
+    host.engine.lines = { Ada: ["We'll split it.", "&Ben: fix the build\nGO"] }
+    home.engine.reports = { Ben: "Build fixed." }
+    host.runner.put(team(), [], "active", false)
+    host.runner.send(id, "Split it and go ahead.")
+    await until(() => host.runner.talk(id).stopped !== undefined)
+    expect(host.runner.talk(id).stopped).toEqual(["bot_ben"])
+    // Said as it changes, not kept to send again: it says nothing once the part's done.
+    expect(relay.sent.filter((each) => each.mail.kind === "held").every((each) => !each.durable)).toBe(true)
+    // Resumed there: what waited goes, the part's done, and the chat says nothing waits any more.
+    const waiting = readQueues(home.queues).ses_own_Ben.waiting![0]
+    const whole = JSON.parse(readFileSync(waitingFile(home.queues, waiting.id), "utf8"))
+    writeFileSync(home.queues.file, JSON.stringify({}))
+    await server(home.engine.url, "x").request("POST", "/api/session/ses_own_Ben/prompt", whole)
+    await until(() => said(host).some((message) => message.report !== undefined && message.author === "bot_ben"))
+    expect(host.runner.talk(id).stopped).toBeUndefined()
+  }, 20_000)
+
+  test("its part waiting on its conversation there, stopped by you, the word lost on the way: said again, so the chat still says so", async () => {
+    mkdirSync(join(home.root, "run"), { recursive: true })
+    writeFileSync(home.queues.file, JSON.stringify({ ses_own_Ben: { paused: true, held: [] } }))
+    host.engine.lines = { Ada: ["We'll split it.", "&Ben: fix the build\nGO"] }
+    relay.loses = [(each) => each.mail.kind === "held" && each.mail.stopped === true]
+    host.runner.put(team(), [], "active", false)
+    host.runner.send(id, "Split it and go ahead.")
+    await until(() => host.runner.talk(id).stopped !== undefined)
+    expect(relay.lost.map((each) => each.mail.kind)).toEqual(["held"])
+    expect(host.runner.talk(id).stopped).toEqual(["bot_ben"])
+  }, 20_000)
+
+  test("its part waiting on its conversation there, stopped by you, then taken back with Undo: the chat doesn't say it waits any more", async () => {
+    mkdirSync(join(home.root, "run"), { recursive: true })
+    writeFileSync(home.queues.file, JSON.stringify({ ses_own_Ben: { paused: true, held: [] } }))
+    host.engine.lines = { Ada: ["We'll split it.", "&Ben: fix the build\nGO"] }
+    host.runner.put(team(), [], "active", false)
+    host.runner.send(id, "Split it and go ahead.")
+    await until(() => host.runner.talk(id).stopped !== undefined)
+    const yours = said(host).find((message) => message.author === undefined && message.kind === "message")!
+    expect(host.runner.undo(id, yours.id)).toBe("Split it and go ahead.")
+    expect(host.runner.talk(id).stopped).toBeUndefined()
   }, 20_000)
 
   test("a part given to its bot's computer before the bot moved, and before the chat's computer started again: given there again, and its report taken from there", async () => {

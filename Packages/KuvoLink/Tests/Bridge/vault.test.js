@@ -4,7 +4,7 @@
 // ever seeing a value. (This Mac's vault, in its Keychain: vault-host.test.js.)
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/vault.test.js`.
-import { test, after, before } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
@@ -14,6 +14,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { script, sshAgentsOf } from "./bot-keys-scenarios.js";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 // (A short folder: the vault's socket lives in it, and a socket's path can't be long.)
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "kv-"));
@@ -21,7 +22,7 @@ const home = path.join(root, ".kuvo-code");
 // (Agents may use it: on a box whose commands are fenced. One that isn't is the last test.)
 const env = { ...process.env, HOME: root, KUVO_HOME: home, KUVO_VAULT_AGENTS: "1" };
 for (const name of ["KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "KUVO_KEYS", "KUVO_KEYS_ON_HOST", "KUVO_BOX"]) delete env[name];
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+removeAtEnd(root);
 
 const SECRET = "hunter2-correct-horse";
 const TOKEN = "ghp_0123456789abcdefABCDEF";
@@ -71,7 +72,7 @@ before(async () => {
   await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
   fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify({ port: engine.address().port, password: "engine-pw" }));
 });
-after(() => { engine?.closeAllConnections(); engine?.close(); });
+atEnd(() => { engine?.closeAllConnections(); engine?.close(); });
 
 // The box's long-running process, which holds the vault.
 async function start(more = {}) {
@@ -571,7 +572,7 @@ test("after the box starts again the vault is locked, until a client's key unloc
 // The agent each conversation's commands get in the sandbox (vault/ssh.ts): the launcher notes the
 // conversation, and hands its commands the agent's socket. Here, the notes as the launcher writes them.
 const sshAgents = sshAgentsOf(home);
-after(() => fs.rmSync(sshAgents, { recursive: true, force: true }));
+removeAtEnd(sshAgents);
 async function sshAgentFor(note, folder) {
   const notes = path.join(home, "run", "ssh-for");
   fs.mkdirSync(notes, { recursive: true });

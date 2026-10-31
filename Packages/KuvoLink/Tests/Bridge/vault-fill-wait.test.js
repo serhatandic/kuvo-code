@@ -13,17 +13,18 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { after, before, test } from "node:test";
+import { before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { sshAgentsOf } from "./bot-keys-scenarios.js";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 // (Short: the vault's and the browser's sockets are in it.)
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kvf-")));
 // (Once the box and the tool have stopped: they write in its folder until they have.)
-after(async () => {
+removeAtEnd(home);
+removeAtEnd(sshAgentsOf(home));
+atEnd(async () => {
   await Promise.all([box, mcp].map(child => child && child.exitCode === null && child.signalCode === null ? new Promise(done => { child.once("exit", done); child.kill(); }) : null));
-  fs.rmSync(home, { recursive: true, force: true });
-  fs.rmSync(sshAgentsOf(home), { recursive: true, force: true });
 });
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -60,7 +61,7 @@ const engine = http.createServer((request, response) => {
   response.end(JSON.stringify(!session ? { message: "No such session." } : messages ? { data: [{ content }] } : { data: session }));
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
-after(() => { engine.closeAllConnections(); engine.close(); });
+atEnd(() => { engine.closeAllConnections(); engine.close(); });
 write(path.join(home, "run", "engine.json"), JSON.stringify({ port: engine.address().port, password: "p" }));
 write(path.join(home, "bots", "bot_ship", "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_ship", name: "Ship" }));
 write(path.join(home, "bots", "bot_ship", "session"), "ses_ship");
@@ -133,7 +134,7 @@ const keeper = net.createServer(socket => {
   });
 });
 await new Promise(resolve => keeper.listen(path.join(home, "run", "browser.sock"), resolve));
-after(() => keeper.close());
+atEnd(() => keeper.close());
 
 // The box's own process, which holds the vault.
 let box;

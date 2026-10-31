@@ -30,6 +30,7 @@ import { Turn, type Outcome } from "./turn"
 import type { AssistantMessage, Attachment, Decision, FormAnswer, FormRequest, Message, ModelRef, PermissionRequest, PermissionRule, Session, ShellMessage, FileDiff, StructuredError } from "./wire"
 import { plain } from "./proc"
 import type { Snapshots } from "./snapshots"
+import { AGENTS_TEXT_BYTES } from "../shared/text"
 import { noTokens } from "./wire"
 
 type Delivery = "steer" | "queue"
@@ -2483,6 +2484,29 @@ export class Sessions {
     return [...this.live.values()].some((live) => [...live.threads.values()].some((thread) => thread.outside))
   }
 
+  /**
+   * Restarts the agents' processes here that started before the box's sandbox was on (you said
+   * to): each closes once its session is between turns (what it left running stops with it), and
+   * starts again in the sandbox with its next turn, going on with its conversation. Whether one
+   * still waits for its turn to end.
+   */
+  restartOutside(): boolean {
+    let waiting = false
+    for (const live of this.live.values()) {
+      for (const [providerID, thread] of live.threads) {
+        if (!thread.outside) continue
+        // (Its turn, and what it left going, commands or subagents, as when it closes idle.)
+        if (isBusy(live.doing) || thread.keepsWorking) {
+          waiting = true
+          continue
+        }
+        thread.close()
+        live.threads.delete(providerID)
+      }
+    }
+    return waiting
+  }
+
   permissions(id: string): PermissionRequest[] {
     this.record(id)
     return [...(this.live.get(id)?.permissions.values() ?? [])].map((pending) => pending.request)
@@ -2657,7 +2681,7 @@ function mime(uri: string): string {
 }
 
 /** How much of a text file you attach goes in the message. */
-const textFileLimit = 200_000
+const textFileLimit = AGENTS_TEXT_BYTES
 
 /** Text files you attached, in the message (as the engine puts them), and the other files. */
 export function withTextFiles(text: string, files: PromptFile[]): { text: string; files: PromptFile[] } {

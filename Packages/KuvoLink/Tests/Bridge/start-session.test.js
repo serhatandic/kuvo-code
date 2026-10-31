@@ -11,11 +11,12 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-start-session-")));
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+removeAtEnd(home);
 const tool = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-browser.js", import.meta.url));
 fs.mkdirSync(path.join(home, "bin"), { recursive: true });
 fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url), path.join(home, "bin", "kuvo-link.js"));
@@ -43,13 +44,13 @@ const engine = http.createServer((request, response) => {
   });
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
-after(() => { engine.closeAllConnections(); engine.close(); });
+atEnd(() => { engine.closeAllConnections(); engine.close(); });
 fs.mkdirSync(path.join(home, "run"), { recursive: true });
 fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify({ port: engine.address().port, password: "p", version: "0.0.0" }));
 
 // The tool, as the engine starts it, and its calls, as the engine makes them.
 const mcp = spawn(process.execPath, [tool, "mcp"], { env: { ...process.env, KUVO_HOME: home }, stdio: ["pipe", "pipe", "ignore"] });
-after(() => mcp.kill());
+atEnd(() => mcp.kill());
 const answers = new Map();
 let buffer = "";
 mcp.stdout.on("data", chunk => {

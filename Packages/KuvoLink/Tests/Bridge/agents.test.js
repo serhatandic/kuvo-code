@@ -7,11 +7,12 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
+import { removeAtEnd } from "./at-end.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-agents-"));
 process.env.KUVO_HOME = home;
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+removeAtEnd(home);
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 async function ask(handle, method, p, { headers = {}, body } = {}) {
