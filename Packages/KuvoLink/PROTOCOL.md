@@ -2805,6 +2805,11 @@ bridge) has a tool call of that name running in it (`api/session/<id>/message`, 
 only the conversation's own call uses its grants. (On a machine its browser, and anything that runs
 as you there outside the sandbox, can still reach a value a fill puts in a page.)
 
+A call is a bot's when its conversation (or the one a subagent works for) is the bot's own, its seat
+in a group chat (`kuvo.seat`), or a session it started for its work, or one of those started in
+turn (`kuvo.by`): it uses the bot's grants, an Always gives the item to the bot, and the bot's pause
+holds it.
+
 Agents use the vault only on a box whose agents' commands are all in the sandbox (below: its state's
 `on` and `agents`; the tests open it with `KUVO_VAULT_AGENTS=1`, which a Mac's app never passes its box, and which a box
 takes only in a test's own folder, never the account's own `~/.kuvo-code` or a Mac's

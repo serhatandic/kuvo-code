@@ -18004,7 +18004,7 @@ import fs68 from "node:fs";
 import path70 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.129";
+var BRIDGE_VERSION = "0.9.130";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -19049,7 +19049,8 @@ async function callerOf(session, readEngine, readBridge) {
   const unsure = !!current?.parentID;
   const seat = current?.metadata?.kuvo?.seat;
   const bots = listBots();
-  const bot = seat ? bots.find((each) => typeof seat.bot === "string" && each.id === seat.bot) : bots.find((each) => each.session === root);
+  const works = worksFor(current);
+  const bot = seat ? bots.find((each) => typeof seat.bot === "string" && each.id === seat.bot) : bots.find((each) => each.session === root) ?? (works ? bots.find((each) => each.id === works.bot) : undefined);
   const folder = current?.location?.directory ?? current?.directory;
   return {
     session,
