@@ -650,7 +650,6 @@ struct MainView: View {
                 // Return and Esc answer its cards once you've clicked or typed into it.
                 .environment(\.takesCardKeys, focus == .split)
                 .environment(\.composerFocused) { tabs.focus = .split }
-                .largeWidgetHost()
         }
         .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { tabs.openBotEditor(bot: bot) } })
         .environment(catalog(for: directory))
@@ -713,7 +712,6 @@ struct MainView: View {
                         .help("Close Tab")
                 } content: {
                     GroupChatView(group: group, findRequest: groupFind)
-                        .largeWidgetHost()
                 }
                 .onTitle("Edit Group Chat", app.moves.isMoving(group.id) ? nil : { tabs.openGroupEditor(group: group) })
                 .id(TabKey.group(id))
@@ -771,7 +769,6 @@ struct MainView: View {
                         .environment(\.takesCardKeys, !(focus == .split && besideID != nil))
                         // Typing here is working here, however the keyboard got here.
                         .environment(\.composerFocused) { tabs.focus = .conversation }
-                        .largeWidgetHost()
                 }
                 .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { tabs.openBotEditor(bot: bot) } })
                 .environment(catalog(for: directory))
