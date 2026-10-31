@@ -29,6 +29,12 @@ final class KeeperFollower {
     /// of the open app.
     var onKeeper: () -> Void = {}
     private var keeper: Int32?
+    /// Whether the keeper running now is an older app's, making way for this one's once nothing is
+    /// under way (it's asked to as it's found): told to `onMakingWay` as it changes.
+    private(set) var makingWay = false {
+        didSet { if makingWay != oldValue { onMakingWay(makingWay) } }
+    }
+    var onMakingWay: (Bool) -> Void = { _ in }
 
     private var watch: DispatchSourceFileSystemObject?
     private var tick: Task<Void, Never>?
@@ -67,14 +73,9 @@ final class KeeperFollower {
     }
 
     /// Followed from now on: the keeper started if it isn't running (after Stop Background Work),
-    /// or asked to make way for this app's own if it came with another version.
+    /// or asked to make way for this app's own if it came with another version (as it's read).
     func start() async {
-        if let keeper = KeeperRecord.read() {
-            if keeper.version != AppInfo.version || keeper.build != AppInfo.build {
-                log.info("The keeper is \(keeper.version, privacy: .public) (\(keeper.build, privacy: .public)): asked to make way")
-                _ = try? await KeeperControl.send(.update, ["within": Keeper.updateWait], to: keeper)
-            }
-        } else {
+        if KeeperRecord.read() == nil {
             askedToStart = .now
             BackgroundWork.shared.start()
         }
@@ -140,11 +141,21 @@ final class KeeperFollower {
     }
 
     private func readOnce() async {
-        let running = KeeperRecord.read()?.pid
-        if running != keeper {
-            keeper = running
-            if running != nil { onKeeper() }
+        let record = KeeperRecord.read()
+        if record?.pid != keeper {
+            keeper = record?.pid
+            if let record {
+                onKeeper()
+                // One of another version (the app was updated since it started): asked to make way
+                // for this app's own. It goes the first moment nothing is under way, and is
+                // followed until then.
+                if record.isOtherVersion {
+                    log.info("The keeper is \(record.version, privacy: .public) (\(record.build, privacy: .public)): asked to make way")
+                    _ = try? await KeeperControl.send(.update, to: record)
+                }
+            }
         }
+        makingWay = record?.isOtherVersion ?? false
         let engineRecord = Self.record("engine.json")
         let serve = Self.record("serve.json")
         let bridge = Self.record("bridge.json")

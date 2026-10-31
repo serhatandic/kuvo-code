@@ -1,4 +1,6 @@
 import Foundation
+import IOKit.pwr_mgt
+import KuvoLink
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -92,48 +94,195 @@ import Testing
         #expect(engineStarts == 1, "nothing was started over")
     }
 
-    @Test func aKeeperMakingWayForANewerAppWaitsWhileASessionRunsThenGoes() async throws {
+    @Test func anUpdateWaitsForTheSessionHoweverLongItRunsThenTheAppIsOnTheNewKeeper() async throws {
         let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
         let binary = try standIns(node: node)
         setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        setenv("KUVO_KEEPER", "follow", 1)
         try await StubWeb.listen(port: 47921)
-        let keeper = MacBoxRunner(box: BoxProcess(), agents: OutsideAgents(), host: HostInterface())
+        let clock = TestClock()
+        let realClock = Keeper.clock
+        Keeper.clock = { [clock] seconds in await clock.wait(seconds) }
+        // The keeper of the version before, still running as the update is installed; and the
+        // installed app's, which launchd starts once it has gone.
+        let olderGone = Gone(), newerGone = Gone()
+        let older = Keeper(version: "0.0.1", build: "1", exits: { olderGone.say($0) })
+        let newer = Keeper(exits: { newerGone.say($0) })
+        let app = AppModel()
         defer {
-            keeper.stop()
+            app.stop()
+            app.stopBox()
+            older.finish(.stopped)
+            newer.finish(.stopped)
+            Keeper.clock = realClock
             unsetenv("KUVO_OPENCODE_BINARY")
+            unsetenv("KUVO_KEEPER")
             try? FileManager.default.removeItem(at: folder)
             StubWeb.stopListening(port: 47921)
             engine.stop()
         }
         engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
         bridge.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 2])
-        // A session runs on the engine for the first two looks, then it's done.
-        let looks = Looks()
-        // (Answered on the listener's own queue, not the test's actor.)
-        engine.on("GET", "/api/session/active") { @Sendable _ in
-            StubWeb.json(["data": looks.next() <= 2 ? ["ses_busy": ["type": "busy"]] : [:] as [String: Any]])
-        }
         bridge.on("GET", "/api/session/active", json: ["data": [:] as [String: Any]])
+        let long = StubEngine.session("ses_long", title: "A long task", directory: "/tmp/kuvo-tests-keeper")
+        engine.list([long], running: ["ses_long"])
+        await older.start()
+        try Self.reach(keeper: KeeperRecord.read())
+        let olderBox = try #require(recorded("serve.json"), "the older keeper's box runs")
+
+        // The new app opens beside it: it follows the older keeper's box, with the session still
+        // running there, says the update waits for it, and starts nothing of its own.
+        await app.start()
+        #expect(app.engine == .ready)
+        #expect(app.box.endpoint == olderBox)
+        #expect(app.keeperMakesWay, "Settings and the menu bar say the update waits for what's running")
+        #expect(engineStarts == 1)
+
+        // However long the session runs (well past the half hour an update once waited), it's
+        // never stopped for the update.
+        var passed = 0
+        while passed <= 40 * 60 {
+            try await until { olderGone.how != nil || !clock.waits.isEmpty }
+            guard olderGone.how == nil else { break }
+            let wait = try #require(clock.waits.first)
+            clock.pass(wait)
+            passed += wait
+        }
+        #expect(olderGone.how == nil, "the keeper stopped a running session \(passed / 60) minutes in")
+        #expect(app.box.endpoint == olderBox)
+
+        // The session ends: the keeper goes at once, to be started again from the installed app,
+        // and the app waits for it, starting nothing of its own meanwhile.
+        engine.list([long])
+        try await until { olderGone.how != nil || !clock.waits.isEmpty }
+        if let wait = clock.waits.first { clock.pass(wait) }
+        try await until { olderGone.how != nil }
+        #expect(olderGone.how == .again)
+        try await until { app.engine == .starting }
+        #expect(engineStarts == 1, "the app started no engine of its own")
+
+        // launchd starts the installed app's keeper: the app is on its box and engine, with nothing
+        // more to wait for.
+        await newer.start()
+        try Self.reach(keeper: KeeperRecord.read())
+        let newerBox = try #require(recorded("serve.json"), "the newer keeper's box runs")
+        #expect(newerBox != olderBox)
+        try await until { app.box.endpoint == newerBox && app.engine == .ready }
+        #expect(!app.keeperMakesWay)
+        #expect(app.workspace.session("ses_long") != nil)
+        try await until { !app.workspace.running.contains("ses_long") }
+        #expect(engineStarts == 2, "the older keeper's engine and the newer's, none of the app's")
+        #expect(newerGone.how == nil)
+    }
+
+    @Test func afterARestartTheKeeperKeepsThisMacAwakeWhileASessionRunsAndTheAppNeverHoldsItTwice() async throws {
+        let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
+        let binary = try standIns(node: node)
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        setenv("KUVO_KEEPER", "follow", 1)
+        try await StubWeb.listen(port: 47921)
+        let clock = TestClock()
+        let realClock = Keeper.clock
+        Keeper.clock = { [clock] seconds in await clock.wait(seconds) }
+        UserDefaults.standard.removeObject(forKey: Awake.key)
+        let keeper = Keeper(exits: { _ in })
+        let app = AppModel()
+        defer {
+            app.stop()
+            app.stopBox()
+            keeper.finish(.stopped)
+            Awake.shared.agentsWork(false)
+            UserDefaults.standard.removeObject(forKey: Awake.key)
+            Keeper.clock = realClock
+            unsetenv("KUVO_OPENCODE_BINARY")
+            unsetenv("KUVO_KEEPER")
+            try? FileManager.default.removeItem(at: folder)
+            StubWeb.stopListening(port: 47921)
+            engine.stop()
+        }
+        engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
+        bridge.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 2])
+        bridge.on("GET", "/api/session/active", json: ["data": [:] as [String: Any]])
+        let task = StubEngine.session("ses_task", title: "Overnight", directory: "/tmp/kuvo-tests-keeper")
+        engine.list([task], running: ["ses_task"])
+        #expect(!Self.macHeldAwake)
+
+        // The Mac started again and nobody opened Kuvo Code: launchd's keeper runs the box, and
+        // keeps the Mac awake while the session works there.
         await keeper.start()
+        try Self.reach(keeper: KeeperRecord.read())
+        // The keeper looked at what runs again (it waits between looks).
+        func looked() async throws {
+            try await until { !clock.waits.isEmpty }
+        }
+        /// Whether the keeper says it keeps the Mac awake, as it tells the app.
+        func keeperHolds() async throws -> Bool? {
+            try await KeeperControl.send(.status)["awake"] as? Bool
+        }
+        try await looked()
+        #expect(Self.macHeldAwake, "kept awake while the session works")
+        #expect(try await keeperHolds() == true)
 
-        // Asked to make way: it waits while the session runs, and goes once it's done.
-        let idle = await Keeper.makeWay(within: 3600, every: .zero, busy: keeper.isBusy)
-        #expect(idle)
-        #expect(looks.count == 3, "it waited for the session: \(looks.count) looks")
+        // Done: it may sleep.
+        engine.list([task])
+        clock.pass(try #require(clock.waits.first))
+        try await looked()
+        #expect(!Self.macHeldAwake)
+        #expect(try await keeperHolds() == false)
 
-        // One that would run past the wait goes anyway once it's over.
-        looks.reset()
-        let gaveUp = await Keeper.makeWay(within: 0, every: .zero, busy: keeper.isBusy)
-        #expect(!gaveUp)
-        #expect(looks.count == 1)
+        // Turned off in Settings (the app's own setting, which the keeper reads as you change it):
+        // a session working doesn't keep it awake; turned on again, it does.
+        UserDefaults.standard.set(false, forKey: Awake.key)
+        engine.list([task], running: ["ses_task"])
+        clock.pass(try #require(clock.waits.first))
+        try await looked()
+        #expect(!Self.macHeldAwake)
+        UserDefaults.standard.set(true, forKey: Awake.key)
+        clock.pass(try #require(clock.waits.first))
+        try await looked()
+        #expect(Self.macHeldAwake)
+
+        // You open Kuvo Code: it follows the keeper's box and sees the session working, but holds
+        // nothing of its own beside the keeper's, and a phone hears the Mac is kept awake.
+        await app.start()
+        #expect(app.engine == .ready)
+        app.workspace.handle(try ServerEvent(json: JSONSerialization.data(withJSONObject: [
+            "id": "evt_awake", "type": "session.execution.started", "created": 1, "data": ["sessionID": "ses_task"],
+        ])))
+        #expect(!Awake.shared.isHolding, "the app holds nothing beside the keeper")
+        #expect(try await keeperHolds() == true)
+        #expect(Self.macHeldAwake)
+        let request = LinkRequest(method: "GET", path: "kuvo/mac", headers: [:], body: Data())
+        var answer = Data()
+        for try await part in PhoneLink.respond(to: request, link: app.phoneLink, engine: URL(string: engine.url + "/")!, password: nil, agents: nil) {
+            if case .body(let chunk) = part { answer += chunk }
+        }
+        let mac = try #require(try JSONSerialization.jsonObject(with: answer) as? [String: Any])
+        #expect(mac["awakeNow"] as? Bool == true, "the phone hears the keeper keeps it awake")
+    }
+
+    /// The keeper's control address, reached as it is rather than stood in for.
+    private static func reach(keeper record: KeeperRecord?) throws {
+        let record = try #require(record, "the keeper recorded itself")
+        StubWeb.letThrough(port: URL(string: record.url)?.port ?? 0)
+    }
+
+    /// Whether this process keeps the Mac from sleeping on its own for agents' work, as macOS has
+    /// it (the keeper and the app are both this process here).
+    private static var macHeldAwake: Bool {
+        var copied: Unmanaged<CFDictionary>?
+        guard IOPMCopyAssertionsByProcess(&copied) == kIOReturnSuccess,
+              let all = copied?.takeRetainedValue() as? [NSNumber: [[String: Any]]] else { return false }
+        return (all[NSNumber(value: getpid())] ?? []).contains { $0["AssertName"] as? String == "Agents are working in Kuvo Code" }
     }
 }
 
-/// How many times the engine was asked what runs.
-nonisolated private final class Looks: @unchecked Sendable {
-    private let lock = NSLock()
-    private var looked = 0
-    var count: Int { lock.withLock { looked } }
-    func next() -> Int { lock.withLock { looked += 1; return looked } }
-    func reset() { lock.withLock { looked = 0 } }
+/// How a test's keeper went (`Keeper.finish`), once it has.
+private final class Gone {
+    private(set) var how: Keeper.Exit?
+
+    func say(_ how: Keeper.Exit) {
+        self.how = how
+        TestPulse.beat()
+    }
 }

@@ -49,7 +49,7 @@ final class BackgroundWork {
     @discardableResult
     func register() -> Bool {
         refresh()
-        guard state == .off else { return state == .on }
+        guard state == .off else { return isOn() }
         guard !AppInfo.isHostingTests, Self.mayRegister(ProcessInfo.processInfo.environment) else {
             failure = "This copy runs its work itself (a demo, test or measurement): KUVO_KEEPER=on registers it."
             return false
@@ -66,7 +66,15 @@ final class BackgroundWork {
             failure = "macOS didn’t allow it. Check System Settings › General › Login Items & Extensions."
         }
         refresh()
-        return state == .on
+        return isOn()
+    }
+
+    /// Whether it's on; once it is, Open at Login's login item goes, since the work it opened
+    /// Kuvo Code for runs at login without it.
+    private func isOn() -> Bool {
+        guard state == .on else { return false }
+        OpenAtLogin.shared.retire()
+        return true
     }
 
     /// Whether this copy registers its keeper: a copy launched for a demo, a test or a measurement
