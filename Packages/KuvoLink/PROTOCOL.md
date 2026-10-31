@@ -421,7 +421,7 @@ until it's answered:
    in their inbox; a minute at most), and packs one file: `move.json` (its conversations as the
    engine exports them, root first; a bot's own keys; a group chat as its bridge held it, `POST
    api/kuvo/groups/<id>/hold`; `queues`, by conversation, each one paused or with something
-   waiting on the box ("The queue"), bridge 0.9.133: `{paused, held, waiting: [{shown, message}]}`,
+   waiting on the box ("The queue"), bridge 0.9.134: `{paused, held, waiting: [{shown, message}]}`,
    what waits as it's shown and whole, in its order) and its folder (a bot's; a chat's wake-ups'),
    tar, gzip; at most 1 GB.
 2. `offer {kind, thing, name, size, hash, wasPaused, pausedAs?, from, members?}` → `ready`, or
@@ -593,7 +593,7 @@ the same for every client and with none connected, and keeps them in `run/queues
   carrying it as it was, `removed: {id, text, files?, delivery, from?, words, before?}` (`words`, as
   it was shown; `before`, what came after it, left out when it was last); 404 if it isn't. Undo
   adds it back with `…/queue/add` and `kept: true` (its body as it was kept, its files not kept
-  again, shown with its `words`). **Undo puts it back where it was** (bridge 0.9.133): `…/queue/add`
+  again, shown with its `words`). **Undo puts it back where it was** (bridge 0.9.134): `…/queue/add`
   takes `before`, what came after it as the client showed it (for one the engine held, which the
   client took away in the engine; `removed` carries it for one that waited on the box), and while
   the queue is paused it waits just ahead of that one: in what waits on the box, or in `held` (so
