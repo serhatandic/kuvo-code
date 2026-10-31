@@ -115,7 +115,7 @@ test("a coding agent's wake-ups are its conversation's: the tool started for it 
   write(wakeScript, "#!/bin/sh\necho \"$@\"\n");
   fs.chmodSync(wakeScript, 0o755);
   const agent = spawn(process.execPath, [tool, "mcp"], { env: { ...process.env, KUVO_HOME: home, KUVO_SESSION: "ses_scout" }, stdio: ["pipe", "pipe", "ignore"] });
-  after(() => agent.kill());
+  atEnd(() => agent.kill());
   const listed = await new Promise(resolve => {
     let pending = "";
     agent.stdout.on("data", chunk => {
