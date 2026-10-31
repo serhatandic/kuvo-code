@@ -462,10 +462,12 @@ private struct StoppedLine: View {
         .padding(.bottom, 8)
     }
 
-    /// Its conversation's queue picked up again, where it lives; one this Mac can't reach now is
-    /// opened instead, where it says why.
+    /// Its conversation's queue picked up again, where it lives; one this Mac can't reach now, or
+    /// whose computer didn't answer, is opened instead, where it says why.
     private func resume() {
-        if let model = app.workspace.model(for: bot.sessionID), model.canReach { model.resumeQueue() } else { app.open(.session(bot.sessionID)) }
+        let (app, session) = (app, bot.sessionID)
+        guard let model = app.workspace.model(for: session), model.canReach else { return app.open(.session(session)) }
+        Task { if await !model.resumeQueue().value { app.open(.session(session)) } }
     }
 }
 

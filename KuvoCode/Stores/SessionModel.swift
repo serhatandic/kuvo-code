@@ -396,6 +396,8 @@ final class SessionModel {
     private var onBox: [BoxQueue.Waiting] = []
     /// Yours held on the box from here, as you wrote them and with the files picked here (Edit).
     @ObservationIgnored private var yoursOnBox: [String: (text: String, files: [URL])] = [:]
+    /// Ones Undo is putting back on the box, on their way there (Resume waits for them).
+    @ObservationIgnored private var puttingBack: [String: Task<Void, Never>] = [:]
     /// Ones taken away from what waits on the box: each as it was, once the box says (Undo puts it back).
     @ObservationIgnored private var removedFromBox: [String: Task<BoxQueue.Removed?, Never>] = [:]
     /// What waits on a machine's box, followed while the queue is paused there (`followWhilePaused`).
@@ -1781,7 +1783,8 @@ final class SessionModel {
     /// Undo for one taken away from what waits on the box: back at the end, as it was.
     func putBackOnBox(_ item: Transcript.Pending) {
         guard canReach else { return }
-        Task {
+        puttingBack[item.id] = Task {
+            defer { puttingBack[item.id] = nil }
             guard var removed = await removedFromBox.removeValue(forKey: item.id)?.value else { return }
             removed.kept = true
             do {
@@ -2266,22 +2269,33 @@ final class SessionModel {
         }
     }
 
-    /// Picks the queue up again after Stop or a failed run: its box starts the next one.
-    func resumeQueue() {
-        guard canReach else { return }
+    /// Picks the queue up again after Stop or a failed run: its box starts the next one. Its
+    /// answer: false when its computer didn't answer (the conversation says so).
+    @discardableResult
+    func resumeQueue() -> Task<Bool, Never> {
+        guard canReach else { return Task { false } }
         isQueuePaused = false
         let stopped = stops
-        Task {
+        let puttingBack = puttingBack.values
+        return Task {
             // A message held as it went (put back after a Stop) held by the box first: its hold
-            // after the Resume would pause the queue again. Stopped meanwhile: no Resume.
-            if outgoing.values.contains(where: { $0.heldAt != nil && ($0.state == .sending || $0.request != nil) }) {
-                await sending?.value
-                guard stops == stopped else { return }
+            // after the Resume would pause the queue again. One Undo is putting back there too: the
+            // queue going on without it, it would go to the agent as it arrived, at once. Stopped
+            // meanwhile: no Resume.
+            let holding = outgoing.values.contains(where: { $0.heldAt != nil && ($0.state == .sending || $0.request != nil) })
+            if holding || !puttingBack.isEmpty {
+                if holding { await sending?.value }
+                for each in puttingBack { await each.value }
+                guard stops == stopped else { return true }
             }
-            guard await carriesQueue() else { return drainHere(after: .zero) }
-            guard await queueRoute("queue/resume") == nil else { return }
+            guard await carriesQueue() else {
+                drainHere(after: .zero)
+                return true
+            }
+            guard await queueRoute("queue/resume") == nil else { return true }
             isQueuePaused = true
             failure = "The queue couldn't be resumed: its computer didn't answer. Try again in a moment."
+            return false
         }
     }
 
