@@ -1623,10 +1623,21 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `missing`: what `q` names that npm doesn't have (a name, or a version of one), for a client to
   say so before it's added. `502 {"message"}` when npm can't be reached. Whether a plugin loaded
   is the engine's `GET api/plugin` (a failed one has no `id`; its `source.target` is the name).
-- On a Mac, `kuvo/mac`: Settings › General's While Agents Work. `GET` → `{openAtLogin, keepsAwake,
-  awakeNow}`: whether Kuvo Code opens at login, in the background; whether it keeps the Mac awake
-  while agents work; and whether it's doing so now. `PATCH` with either setting answers the same;
-  `409 {"message"}` when macOS didn't change Open at Login, and then nothing changed.
+- On a Mac, `kuvo/mac`: Settings › General's While Agents Work. `GET` → `{backgroundWork,
+  backgroundWorkFailure?, keepsAwake, awakeNow, openAtLogin}`. `backgroundWork` is as Settings
+  shows it: `on`, `notRunning` (on, but its keeper didn't start this time, so the work stops when
+  Kuvo Code quits), `needsApproval` (waiting for your OK in Login Items & Extensions on the Mac) or
+  `off` (also a demo or test copy, which runs its work itself); `backgroundWorkFailure`, why macOS
+  didn't allow it, when it said. `keepsAwake`: whether it keeps the Mac awake while agents work;
+  `awakeNow`: whether it's doing so now. `openAtLogin` is for phones from before background work,
+  which replaced it: true while background work is on. `PATCH` with any of `backgroundWork`,
+  `keepsAwake` or `openAtLogin` answers the same. `backgroundWork: true` turns it on as Settings'
+  Turn On does: on, or `needsApproval` when macOS waits for your OK in Login Items (the answer
+  says which); `409 {"message"}` when macOS didn't allow it (or a demo or test copy, which never
+  registers), and then nothing changed. `false` answers `400 {"message"}` while it's registered:
+  it's turned off in Login Items & Extensions, on the Mac. `openAtLogin` means the same as
+  `backgroundWork` (it never adds Open at Login's own login item again, so the two don't both open
+  Kuvo Code); `false` also takes away that item, if it's still there.
 - On a Mac, `GET kuvo/claude-code[?machine=<id>]`: what Settings › Agents and Settings › Commands
   offer to bring over from Claude Code (the Mac's `~/.claude/agents` and `~/.claude/commands`) to
   that computer (the Mac without `machine`; `404` for a machine that isn't one of its own):
