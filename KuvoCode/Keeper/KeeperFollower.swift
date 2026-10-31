@@ -124,6 +124,9 @@ final class KeeperFollower {
     /// A read under way, and whether the records changed while it was: one at a time, so an older
     /// one that waited on the keeper never says what a newer one already said otherwise.
     private var reading = false
+    /// Whether the keeper followed now said it makes way for this app's (it doesn't when the app
+    /// at its place is its own version: this app is another copy).
+    private var keeperUpdates = false
     private var readAgain = false
 
     /// What the records say now.
@@ -151,11 +154,13 @@ final class KeeperFollower {
                 // followed until then.
                 if record.isOtherVersion {
                     log.info("The keeper is \(record.version, privacy: .public) (\(record.build, privacy: .public)): asked to make way")
-                    _ = try? await KeeperControl.send(.update, to: record)
+                    keeperUpdates = (try? await KeeperControl.send(.update, to: record))?["updating"] as? Bool ?? false
+                } else {
+                    keeperUpdates = false
                 }
             }
         }
-        makingWay = record?.isOtherVersion ?? false
+        makingWay = record != nil && keeperUpdates
         let engineRecord = Self.record("engine.json")
         let serve = Self.record("serve.json")
         let bridge = Self.record("bridge.json")

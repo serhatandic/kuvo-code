@@ -2286,18 +2286,22 @@ good), and `POST` `restart-engine`, `restart-agents`, `restart-box`, `stop` (Sto
 it stops everything and itself, and launchd leaves it stopped until the app opens or you log in
 again), `update` (an app of another version opened: it goes the first moment nothing is under way
 on the engine or with the coding agents, however long what runs takes, since a running session is
-never stopped for an update; launchd starts the installed app's), and `app {tools?, host?}`
+never stopped for an update; launchd starts the installed app's; it answers `{updating}`, false
+when the app at its place is still its own version, as when the app asking is another copy), and
+`app {tools?, host?}`
 (below). It also makes way by itself once another version is installed in its place.
 
 While a session works on the engine or with the coding agents, the keeper keeps the Mac from
 sleeping on its own (Settings › General's Keep this Mac awake, the app's own setting, read as it
-changes), whether or not the app is open; `awake` says whether it does now.
+changes), whether or not the app is open; `awake` says whether it does now, with the setting as it
+is then.
 
 The app is a client: it reads those records (again as the `run` folder changes) and connects to
 the engine, the box and the bridge as they say, starting the keeper with launchd when there's none.
 While macOS doesn't let the keeper run (switched off in Login Items & Extensions), the app runs the
 same three itself, and they stop when it quits. A newer app finding an older keeper asks it to
-make way (`update`) and follows it meanwhile, saying the update waits for what's running; it
+make way (`update`) and follows it meanwhile, saying the update waits for what's running (when
+the keeper answers that it makes way); it
 downloads no engine of its own then, so the one the older keeper runs stays, and connects to the
 new keeper's once its records appear. The app keeps the Mac awake itself only while it runs the box
 itself; following the keeper, `kuvo/mac`'s `awakeNow` is the keeper's `awake`.

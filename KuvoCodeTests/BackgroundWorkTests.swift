@@ -215,6 +215,59 @@ import Testing
         #expect(newerGone.how == nil)
     }
 
+    /// Another copy of Kuvo Code, of another version, opened while the one launchd runs the keeper
+    /// from stays as it is (a newer one from Downloads, or an older one): the keeper doesn't go to
+    /// make way, since launchd would only start it again as it was, to be asked again, its engine
+    /// and box stopping and starting over and over. The app follows it, with no update to wait for.
+    @Test func anotherCopyOfAnotherVersionNeverMakesTheKeeperGoOverAndOver() async throws {
+        let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
+        let binary = try standIns(node: node)
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        setenv("KUVO_KEEPER", "follow", 1)
+        try await StubWeb.listen(port: 47921)
+        let clock = TestClock()
+        let realClock = Keeper.clock
+        Keeper.clock = { [clock] seconds in await clock.wait(seconds) }
+        // The keeper's own app, still at its place: no update was installed there.
+        let gone = Gone()
+        let keeper = Keeper(version: "0.0.1", build: "1", exits: { gone.say($0) }, installed: { "0.0.1 (1)" })
+        let app = AppModel()
+        defer {
+            app.stop()
+            app.stopBox()
+            keeper.finish(.stopped)
+            Keeper.clock = realClock
+            unsetenv("KUVO_OPENCODE_BINARY")
+            unsetenv("KUVO_KEEPER")
+            try? FileManager.default.removeItem(at: folder)
+            StubWeb.stopListening(port: 47921)
+            engine.stop()
+        }
+        engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
+        bridge.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 2])
+        bridge.on("GET", "/api/session/active", json: ["data": [:] as [String: Any]])
+        engine.list([])
+        await keeper.start()
+        try Self.reach(keeper: KeeperRecord.read())
+        let box = try #require(recorded("serve.json"), "the keeper's box runs")
+
+        // The other copy opens: it follows the keeper's box, and says no update waits.
+        await app.start()
+        #expect(app.engine == .ready)
+        #expect(app.box.endpoint == box)
+        #expect(!app.keeperMakesWay, "no update waits: the keeper stays as it is")
+
+        // With nothing under way, the keeper looks again and again, and stays.
+        for _ in 0..<3 {
+            try await until { gone.how != nil || !clock.waits.isEmpty }
+            guard gone.how == nil else { break }
+            clock.pass(try #require(clock.waits.first))
+        }
+        #expect(gone.how == nil, "the keeper went, to come back as it was")
+        #expect(app.box.endpoint == box)
+        #expect(engineStarts == 1)
+    }
+
     @Test func afterARestartTheKeeperKeepsThisMacAwakeWhileASessionRunsAndTheAppNeverHoldsItTwice() async throws {
         let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
         let binary = try standIns(node: node)
@@ -299,6 +352,18 @@ import Testing
         }
         let mac = try #require(try JSONSerialization.jsonObject(with: answer) as? [String: Any])
         #expect(mac["awakeNow"] as? Bool == true, "the phone hears the keeper keeps it awake")
+
+        // The phone turns it off: it hears at once that the Mac may sleep, and it may, without
+        // waiting for the keeper's next look.
+        let off = LinkRequest(method: "PATCH", path: "kuvo/mac", headers: [:], body: try JSONSerialization.data(withJSONObject: ["keepsAwake": false]))
+        answer = Data()
+        for try await part in PhoneLink.respond(to: off, link: app.phoneLink, engine: URL(string: engine.url + "/")!, password: nil, agents: nil) {
+            if case .body(let chunk) = part { answer += chunk }
+        }
+        let changed = try #require(try JSONSerialization.jsonObject(with: answer) as? [String: Any])
+        #expect(changed["keepsAwake"] as? Bool == false)
+        #expect(changed["awakeNow"] as? Bool == false, "the phone hears what it changed")
+        #expect(!Self.macHeldAwake)
     }
 
     /// The keeper's control address, reached as it is rather than stood in for.
