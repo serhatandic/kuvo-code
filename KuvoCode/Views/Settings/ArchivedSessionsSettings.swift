@@ -70,7 +70,7 @@ struct ArchivedSessionsSettings: View {
         .confirmationDialog(deleting?.count == 1 ? "Delete this session?" : "Delete \(deleting?.count ?? 0) sessions?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
             Button("Delete", role: .destructive) {
                 let ids = deleting ?? []
-                Task { for id in ids { await workspace.delete(id) } }
+                Task { for id in ids { try? await workspace.delete(id) } }
             }
         } message: {
             Text("Their messages and undo snapshots go too. This can’t be undone.")

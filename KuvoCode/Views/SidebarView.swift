@@ -634,7 +634,7 @@ struct SidebarView: View {
         Task {
             // Deleted either way, as you asked; a worktree that stays shows in Settings › Worktrees.
             if removingWorktree { await removeWorktree(of: session, discarding: discarding) }
-            await workspace.delete(session.id)
+            try? await workspace.delete(session.id)
         }
     }
 

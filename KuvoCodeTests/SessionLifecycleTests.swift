@@ -40,12 +40,26 @@ import Testing
         var stillThere: Bool?
         workspace.onDeleted = { [workspace] id in stillThere = workspace.session(id) != nil }
 
-        await workspace.delete("ses_a")
+        try await workspace.delete("ses_a")
         #expect(engine.requests("DELETE", "/api/session/ses_a").count == 1)
         #expect(listed() == ["ses_b"])
         #expect(Drafts.shared["ses_a"].text.isEmpty)
         #expect(Drafts.shared["ses_b"].text == "another thought")
         #expect(stillThere == true, "what goes with it (its wake-ups, its tabs) is told while it can still be read")
+    }
+
+    /// Its engine refuses (Settings › Storage's clean-up, the sidebar's Delete): it stays, with
+    /// what you'd written in it, and why is said, rather than it going and coming back later.
+    @Test func oneItsEngineRefusesStaysAndSaysWhy() async throws {
+        defer { engine.stop() }
+        await start([StubEngine.session("ses_a", directory: project, created: 2), StubEngine.session("ses_b", directory: project, created: 1)])
+        engine.on("DELETE", "/api/session/*", json: ["message": "database is locked"], status: 500)
+        Drafts.shared["ses_a"].text = "half a thought"
+        defer { Drafts.shared.remove("ses_a") }
+
+        await #expect(throws: (any Error).self) { try await workspace.delete("ses_a") }
+        #expect(listed() == ["ses_a", "ses_b"])
+        #expect(Drafts.shared["ses_a"].text == "half a thought")
     }
 
     /// Finished while you were elsewhere: unread, on the Dock's count, until you look; archived,

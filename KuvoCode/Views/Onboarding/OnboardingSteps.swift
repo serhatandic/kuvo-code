@@ -385,7 +385,10 @@ struct ScreenAccessStep: View {
                 permissionRow(.screenRecording, title: "Screen Recording", detail: "Screenshots and windows", symbol: "rectangle.dashed.badge.record")
                 permissionRow(.accessibility, title: "Accessibility", detail: "Clicking and typing in other apps", symbol: "accessibility")
                 if !screen.refused.isEmpty {
-                    Text("Not allowed yet. You can do it later in System Settings › Privacy & Security.")
+                    // macOS can tell an app it has Screen Recording only once it's opened again.
+                    Text(screen.refused.contains(.screenRecording)
+                        ? "Not allowed yet. If you just allowed Screen Recording, quit and reopen \(AppInfo.name). You can also do it later in System Settings › Privacy & Security."
+                        : "Not allowed yet. You can do it later in System Settings › Privacy & Security.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 4)

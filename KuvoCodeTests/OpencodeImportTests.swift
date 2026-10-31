@@ -44,7 +44,7 @@ import Testing
         plan.settings = OpencodeImport.missing(from: read, in: config.settings)
         #expect(!plan.isEmpty)
         let brought = await OpencodeImport.apply(plan, to: config, api: api)
-        #expect(brought > 0)
+        #expect(brought.count > 0)
 
         let again = OpencodeImport.missing(from: read, in: config.settings)
         #expect(again.isEmpty, "offered again: \(again.keys.sorted())")
@@ -96,4 +96,29 @@ import Testing
         #expect(config.value(at: ["permissions"])?.array?.last == mine)
         #expect(config.value(at: ["permissions"])?.array?.count == 2)
     }
+
+    /// The box refuses the settings (its file can't be written): they aren't counted as brought
+    /// over, you're told why, and the engine isn't started again for nothing.
+    @Test func settingsTheBoxRefusesArentSaidToHaveComeOver() async throws {
+        let refusing = EngineConfig(remote: RefusingSettings())
+        refusing.took([:])
+        var plan = OpencodeImport.Plan()
+        plan.settings = OpencodeImport.missing(from: try opencodeSettings(), in: refusing.settings)
+        #expect(!plan.isEmpty)
+
+        let (note, renews) = await OpencodeImport.bringOver(plan, to: refusing, api: api, name: { $0 })
+        #expect(note.hasPrefix("Brought over 0 things"), "said: \(note)")
+        #expect(note.contains("didn’t come over") && note.contains("isn’t writable"), "said: \(note)")
+        #expect(!renews)
+    }
+}
+
+/// A box that reads its settings but can't write them.
+private struct RefusingSettings: RemoteSettings {
+    struct NotWritable: LocalizedError {
+        var errorDescription: String? { "The settings file isn’t writable." }
+    }
+
+    func read() async throws -> [String: JSONValue] { [:] }
+    func change(_ changes: [(path: [String], value: JSONValue?)], was: [JSONValue?]) async throws -> [String: JSONValue] { throw NotWritable() }
 }

@@ -342,10 +342,37 @@ enum OpencodeImport {
 
     // MARK: Bringing it over
 
-    /// Adds the plan's settings to `config` and its accounts to the engine behind `api`. Returns
-    /// how many things came over.
+    /// What bringing a plan over came to.
+    struct Outcome {
+        /// Settings sent to the box, which may still refuse them (`EngineConfig.settled`).
+        var settings = 0
+        /// API keys the engine took.
+        var accounts = 0
+        /// The integrations whose keys it didn't take.
+        var failedAccounts: [String] = []
+
+        var count: Int { settings + accounts }
+    }
+
+    /// Brings the plan over and says how it went, in words: only what got there is counted, and
+    /// what didn't is said. `renews`: something came over, for the engine to start again to use.
     @MainActor
-    static func apply(_ plan: Plan, to config: EngineConfig, api: OpenCodeAPI) async -> Int {
+    static func bringOver(_ plan: Plan, to config: EngineConfig, api: OpenCodeAPI, name: (String) -> String) async -> (note: String, renews: Bool) {
+        let outcome = await apply(plan, to: config, api: api)
+        // Saved where the box keeps them before the engine starts again to read them.
+        let notSaved = outcome.settings > 0 ? await config.settled() : nil
+        let count = notSaved == nil ? outcome.count : outcome.accounts
+        var note = count == 1 ? "Brought over 1 thing from opencode." : "Brought over \(count) things from opencode."
+        if let notSaved { note += " Its settings didn’t come over. \(notSaved)" }
+        if !outcome.failedAccounts.isEmpty {
+            note += " The API keys for \(ListFormatter.localizedString(byJoining: outcome.failedAccounts.map(name))) couldn’t be copied; add them in Settings › Accounts."
+        }
+        return (note, count > 0)
+    }
+
+    /// Adds the plan's settings to `config` and its accounts to the engine behind `api`.
+    @MainActor
+    static func apply(_ plan: Plan, to config: EngineConfig, api: OpenCodeAPI) async -> Outcome {
         var count = 0
         // All in one write, so the engine reloads its settings once.
         var changes: [(path: [String], value: JSONValue?)] = []
@@ -378,10 +405,15 @@ enum OpencodeImport {
             count += plan.skillFolders.count
         }
         if !changes.isEmpty { config.set(changes) }
+        var outcome = Outcome(settings: count)
         for account in plan.accounts {
-            if (try? await api.storeCredential(value: account.value, label: account.label, for: account.integration)) != nil { count += 1 }
+            if (try? await api.storeCredential(value: account.value, label: account.label, for: account.integration)) != nil {
+                outcome.accounts += 1
+            } else {
+                outcome.failedAccounts.append(account.integration)
+            }
         }
-        Analytics.shared.track("opencode_imported", ["things": count, "accounts": plan.accounts.count])
-        return count
+        Analytics.shared.track("opencode_imported", ["things": outcome.count, "accounts": plan.accounts.count])
+        return outcome
     }
 }

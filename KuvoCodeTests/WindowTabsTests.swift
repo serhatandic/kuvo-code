@@ -94,7 +94,7 @@ import Testing
         tabs.openInPlace("ses_deep")
         #expect(keys == ["ses_a", "ses_deep"])
 
-        await app.workspace.delete("ses_timer")
+        try? await app.workspace.delete("ses_timer")
         // (As the window does when the list changes.)
         tabs.dropClosed()
         #expect(keys == ["ses_a"])

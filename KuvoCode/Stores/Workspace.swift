@@ -1498,11 +1498,18 @@ final class Workspace {
     /// A session was deleted: its panel goes with it. The app sets it.
     @ObservationIgnored var onDeleted: ((String) -> Void)?
 
-    /// Deleted on its engine; one on a machine that's away waits for it (it would come back).
-    func delete(_ id: String) async {
-        guard !Moves.isFrozen(id), let api = api(forSession: id) else { return }
+    /// Deleted on its engine, then here: one its engine refused, or on a computer that isn't
+    /// connected (a machine that's away, this Mac's engine not up), stays, and why is thrown.
+    func delete(_ id: String) async throws {
+        try Moves.checkNotMoving(id)
+        guard let api = api(forSession: id) else { throw DeleteFailure.notConnected }
+        try await api.deleteSession(id)
         drop(id)
-        try? await api.deleteSession(id)
+    }
+
+    enum DeleteFailure: LocalizedError {
+        case notConnected
+        var errorDescription: String? { "Its computer’s engine isn’t running. Try again once it is." }
     }
 
     /// A session gone from its engine (deleted by its box, a bot's): what's here of it goes.
