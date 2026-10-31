@@ -28,7 +28,7 @@ export interface Ran {
   timedOut?: boolean
 }
 
-/** Runs a program to its end, or until `timeout` (then it's stopped). An `env` value left `undefined` is unset. */
+/** Runs a program to its end, or until `timeout` (then it's stopped: SIGTERM, then SIGKILL if it takes no notice). An `env` value left `undefined` is unset. */
 export async function run(command: string, args: string[], options: { cwd?: string; env?: Record<string, string | undefined>; timeout?: number; input?: string } = {}): Promise<Ran> {
   const env = { ...process.env, ...options.env }
   for (const name of Object.keys(env)) if (env[name] === undefined) delete env[name]
@@ -44,15 +44,23 @@ export async function run(command: string, args: string[], options: { cwd?: stri
     child.stdin.end()
   }
   let timedOut = false
-  const timer = options.timeout ? setTimeout(() => { timedOut = true; child.kill() }, options.timeout) : undefined
+  let hard: ReturnType<typeof setTimeout> | undefined
+  const timer = options.timeout
+    ? setTimeout(() => {
+        timedOut = true
+        child.kill()
+        hard = setTimeout(() => child.kill("SIGKILL"), 3_000)
+      }, options.timeout)
+    : undefined
   let stdout = ""
   let stderr = ""
   const reads = Promise.all([new Response(child.stdout).text().then((text) => (stdout = text)), new Response(child.stderr).text().then((text) => (stderr = text))])
   const code = await child.exited
+  clearTimeout(timer)
+  clearTimeout(hard)
   // Something it started may keep its output open (a shell's startup files starting a program):
   // what came by a moment after it ended is all.
   await Promise.race([reads, Bun.sleep(2_000)])
-  if (timer) clearTimeout(timer)
   return { code, stdout, stderr, ...(timedOut ? { timedOut } : {}) }
 }
 
