@@ -40,6 +40,8 @@ final class GroupLive {
     var paused = false
     /// What the bot talking is doing (see `GroupActivity`).
     var activity: [GroupActivity] = []
+    /// The bots whose part waits on their conversation, stopped by you.
+    var stopped: Set<String> = []
 }
 
 /// A bridge event's `data`.
@@ -266,6 +268,12 @@ final class BoxGroups {
         if live.activity != activity { live.activity = activity }
     }
 
+    /// The bots in a chat whose part waits on their conversation, stopped by you, as its computer last said.
+    private func setStopped(_ id: String, _ stopped: Set<String>) {
+        let live = live(id)
+        if live.stopped != stopped { live.stopped = stopped }
+    }
+
     func group(_ id: String?) -> BotGroup? {
         access(keyPath: \.groups)
         return id.flatMap { groupsByID[$0] }
@@ -280,6 +288,7 @@ final class BoxGroups {
     func isDiscussing(_ id: String) -> Bool { live(id).discussing }
     func isPaused(_ id: String) -> Bool { live(id).paused }
     func activity(in id: String) -> [GroupActivity] { live(id).activity }
+    func stopped(in id: String) -> Set<String> { live(id).stopped }
     /// Every chat's, for what asks of them all (whoever reads one of these hears of every chat).
     var speaking: [String: String] {
         access(keyPath: \.groups)
@@ -420,6 +429,7 @@ final class BoxGroups {
             chats[index].discussing = false
             chats[index].speaking = nil
             setActivity(chats[index].group.id, [])
+            setStopped(chats[index].group.id, [])
         }
         settingsGiven[Self.key(machine)] = nil
     }
@@ -521,6 +531,8 @@ final class BoxGroups {
         var paused: Bool
         /// What the bot talking is doing (see `GroupActivity`).
         var activity: [GroupActivity]? = nil
+        /// The bots whose part waits on their conversation, stopped by you (none: left out).
+        var stopped: [String]? = nil
     }
 
     struct Listed: Decodable {
@@ -557,6 +569,7 @@ final class BoxGroups {
             }
         }
         let chat = Chat(machine: machine, group: group, held: held, speaking: state.speaking, discussing: state.discussing, paused: state.paused)
+        setStopped(group.id, Set(state.stopped ?? []))
         if let index {
             guard chats[index] != chat else { return }
             let wasUnread = isUnread(chats[index].group)

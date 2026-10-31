@@ -292,6 +292,24 @@ import Testing
         #expect(kept?.compactMap { ($0["tasks"] as? [[String: Any]])?.first?["state"] as? String } == ["canceled"])
     }
 
+    /// A part whose bot's conversation you stopped: the chat shows it waits on that conversation, as
+    /// its computer says, until it goes on (or the computer is away, when nothing's known of it).
+    @Test func aPartWaitingOnAStoppedConversationShowsUntilItGoesOn() async throws {
+        defer { Self.clean(); mac.stop() }
+        let app = app()
+        let group = Self.group("grp_box0000001", members: ["bot_pal"])
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+                                                                                 "state": ["discussing": false, "paused": false, "stopped": ["bot_pal"]]]), machine: "box")
+        #expect(app.chats.stopped(in: "grp_box0000001") == ["bot_pal"])
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+                                                                                 "state": ["discussing": false, "paused": false]]), machine: "box")
+        #expect(app.chats.stopped(in: "grp_box0000001").isEmpty)
+        app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+                                                                                 "state": ["discussing": false, "paused": false, "stopped": ["bot_pal"]]]), machine: "box")
+        app.boxGroups.disconnected("box")
+        #expect(app.chats.stopped(in: "grp_box0000001").isEmpty)
+    }
+
     /// One machine added twice, at two addresses, found to be one: its chats are kept once, as
     /// the address it's kept under says, not twice with one copy talking on.
     @Test func aMachineAtTwoAddressesKeepsItsChatsOnce() throws {
