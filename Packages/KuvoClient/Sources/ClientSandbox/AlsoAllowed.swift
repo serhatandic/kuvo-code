@@ -77,7 +77,7 @@ public enum AlsoAllowed {
         }
     }
 
-    /// A place's line under its path: "Can write · Oct 29, from Serhat’s iPhone".
+    /// A place's line under its path: "Can write · Oct 29, from Alex’s iPhone".
     public static func detail(of rule: SandboxRule, locale: Locale = .current) -> String {
         let date = Date(timeIntervalSince1970: rule.at / 1000).formatted(.dateTime.month(.abbreviated).day().locale(locale))
         return "Can write · \(date)" + (rule.by.map { ", from \($0)" } ?? "")

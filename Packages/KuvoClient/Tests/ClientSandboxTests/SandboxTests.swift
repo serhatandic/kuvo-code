@@ -162,6 +162,6 @@ import Testing
         #expect(AlsoAllowed.choosing(for: .chats) == "Choose a folder every chat may write in, still in the sandbox.")
         #expect(SandboxRoutes.allowedAll == "kuvo/sandbox/allowed?all" && SandboxRoutes.rule("al_1", all: true) == "kuvo/sandbox/allowed/al_1?all")
         let noon = Date(timeIntervalSince1970: 1_793_275_200) // 2026-10-29, midday UTC
-        #expect(AlsoAllowed.detail(of: SandboxRule(id: "r", project: "/p", path: "/x", at: noon.timeIntervalSince1970 * 1000, by: "Serhat’s iPhone"), locale: Locale(identifier: "en_US")) == "Can write · Oct 29, from Serhat’s iPhone")
+        #expect(AlsoAllowed.detail(of: SandboxRule(id: "r", project: "/p", path: "/x", at: noon.timeIntervalSince1970 * 1000, by: "Alex’s iPhone"), locale: Locale(identifier: "en_US")) == "Can write · Oct 29, from Alex’s iPhone")
     }
 }
