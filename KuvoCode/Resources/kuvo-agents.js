@@ -2596,6 +2596,24 @@ import { readFileSync as readFileSync8 } from "fs";
 import { join as join10 } from "path";
 
 // Packages/Box/src/agents/agent.ts
+class KnownAccount {
+  known;
+  checking;
+  failed;
+  async read(fresh, check) {
+    if (fresh || this.failed === undefined || Date.now() - this.failed >= 30000) {
+      this.checking ??= check().catch(() => {
+        return;
+      }).finally(() => this.checking = undefined);
+      const said = await this.checking;
+      this.failed = said ? undefined : Date.now();
+      if (said)
+        return this.known = said;
+    }
+    return { ...this.known ?? { installed: true, signedIn: true }, unchecked: true };
+  }
+}
+
 class ContextWindows {
   sizes = new Map;
   get(model) {
@@ -9369,28 +9387,35 @@ class ClaudeAgent {
       return this.status.status;
     const executable = this.executable();
     if (!executable)
-      return {};
+      return;
     const result = await run(executable, ["auth", "status", "--json"], { timeout: 20000, env: this.env() });
-    let status = {};
+    let status;
     try {
       status = JSON.parse(result.stdout);
     } catch {}
+    if (typeof status?.loggedIn !== "boolean")
+      return;
     this.status = { at: Date.now(), status };
     return status;
   }
+  known = new KnownAccount;
   async account(fresh = false) {
     if (!this.executable()) {
       return { installed: false, signedIn: false, message: "Install Claude Code, then sign in here." };
     }
-    const status = await this.readStatus(fresh);
-    if (!status.loggedIn)
-      return { installed: true, signedIn: false, message: "Sign in to Claude Code with your Claude plan or an Anthropic Console account." };
-    if (this.authFailedAt && this.settingsWritten() <= this.authFailedAt + 60000) {
-      return { installed: true, signedIn: false, ended: true, message: "Claude ended this sign-in. Sign in again." };
-    }
-    const plan = status.subscriptionType ? `${status.subscriptionType.charAt(0).toUpperCase()}${status.subscriptionType.slice(1)} plan` : undefined;
-    const who = status.email ?? (status.apiProvider && status.apiProvider !== "firstParty" ? status.apiProvider : undefined);
-    return { installed: true, signedIn: true, label: [who, plan].filter(Boolean).join(" \xB7 ") || "Claude Code" };
+    return this.known.read(fresh, async () => {
+      const status = await this.readStatus(fresh);
+      if (!status)
+        return;
+      if (!status.loggedIn)
+        return { installed: true, signedIn: false, message: "Sign in to Claude Code with your Claude plan or an Anthropic Console account." };
+      if (this.authFailedAt && this.settingsWritten() <= this.authFailedAt + 60000) {
+        return { installed: true, signedIn: false, ended: true, message: "Claude ended this sign-in. Sign in again." };
+      }
+      const plan = status.subscriptionType ? `${status.subscriptionType.charAt(0).toUpperCase()}${status.subscriptionType.slice(1)} plan` : undefined;
+      const who = status.email ?? (status.apiProvider && status.apiProvider !== "firstParty" ? status.apiProvider : undefined);
+      return { installed: true, signedIn: true, label: [who, plan].filter(Boolean).join(" \xB7 ") || "Claude Code" };
+    });
   }
   usesKey() {
     const method = this.status?.status.authMethod ?? "";
@@ -9416,7 +9441,7 @@ class ClaudeAgent {
       home: this.context.home,
       temporary: this.context.temporary,
       instructions: "Finish signing in on Claude's page. Claude Code keeps the sign-in, as when you run claude auth login.",
-      signedIn: async () => Boolean((await this.readStatus(true)).loggedIn),
+      signedIn: async () => Boolean((await this.readStatus(true))?.loggedIn),
       codePrompt: /Paste code here if prompted >\s*/g,
       onComplete: () => this.authFailedAt = undefined,
       printedPage: options.remote
@@ -11347,25 +11372,30 @@ class CodexAgent {
       thread.notification(method, params);
   }
   early = new Map;
+  known = new KnownAccount;
   async account(fresh = false) {
     if (!this.executable())
       return { installed: false, signedIn: false, message: "Install Codex, then sign in here." };
     if (!fresh && this.accountCache && Date.now() - this.accountCache.at < 30000)
       return this.accountCache.account;
-    const rpc = await this.rpc();
-    const result = await rpc.request("account/read", {}, 20000);
-    const info = result?.account;
-    let account;
-    if (!info) {
-      account = { installed: true, signedIn: false, message: "Sign in to Codex with ChatGPT or an OpenAI API key." };
-    } else if (info.type === "chatgpt") {
-      const plan = info.planType ? `ChatGPT ${String(info.planType).charAt(0).toUpperCase()}${String(info.planType).slice(1)}` : "ChatGPT";
-      account = { installed: true, signedIn: true, label: [info.email, plan].filter(Boolean).join(" \xB7 ") };
-    } else {
-      account = { installed: true, signedIn: true, label: info.type === "apiKey" ? "OpenAI API key" : String(info.type) };
-    }
-    this.accountCache = { at: Date.now(), account };
-    return account;
+    return this.known.read(fresh, async () => {
+      const rpc = await this.rpc();
+      const result = await rpc.request("account/read", {}, 20000);
+      if (!result || typeof result !== "object")
+        return;
+      const info = result.account;
+      let account;
+      if (!info) {
+        account = { installed: true, signedIn: false, message: "Sign in to Codex with ChatGPT or an OpenAI API key." };
+      } else if (info.type === "chatgpt") {
+        const plan = info.planType ? `ChatGPT ${String(info.planType).charAt(0).toUpperCase()}${String(info.planType).slice(1)}` : "ChatGPT";
+        account = { installed: true, signedIn: true, label: [info.email, plan].filter(Boolean).join(" \xB7 ") };
+      } else {
+        account = { installed: true, signedIn: true, label: info.type === "apiKey" ? "OpenAI API key" : String(info.type) };
+      }
+      this.accountCache = { at: Date.now(), account };
+      return account;
+    });
   }
   signsInRemotely = true;
   async signIn(_methodID = "chatgpt", options = {}) {
@@ -11408,6 +11438,15 @@ class CodexAgent {
   async models() {
     if (this.modelList && Date.now() - this.modelList.at < 30 * 60000)
       return this.modelList.models;
+    try {
+      return await this.listModels();
+    } catch (error) {
+      if (this.modelList)
+        return this.modelList.models;
+      throw error;
+    }
+  }
+  async listModels() {
     const rpc = await this.rpc();
     const models = [];
     let cursor;
@@ -13096,23 +13135,27 @@ class CursorAgent {
     }
     if (!fresh && this.accountCache && Date.now() - this.accountCache.at < 60000)
       return this.accountCache.account;
-    const sdk = await this.sdk();
-    const apiKey = await this.apiKey(sdk);
-    let account;
-    if (!apiKey) {
-      account = { installed: true, signedIn: false, message: "Your Cursor sign-in expired. Sign in again." };
-    } else {
-      try {
-        const me = await withTimeout2(sdk.Cursor.me({ apiKey }), 15000);
-        account = { installed: true, signedIn: true, label: me?.userEmail ?? (process.env.CURSOR_API_KEY ? "Cursor API key" : "Cursor account") };
-      } catch (error) {
-        const rejected = error instanceof sdk.AuthenticationError || error?.status === 401;
-        account = rejected ? { installed: true, signedIn: false, message: "Cursor turned the sign-in down. Sign in again." } : { installed: true, signedIn: true, label: "Cursor account" };
+    return this.known.read(fresh, async () => {
+      const sdk = await this.sdk();
+      const apiKey = await this.apiKey(sdk);
+      let account;
+      if (!apiKey) {
+        account = { installed: true, signedIn: false, message: "Your Cursor sign-in expired. Sign in again." };
+      } else {
+        try {
+          const me = await withTimeout2(sdk.Cursor.me({ apiKey }), 15000);
+          account = { installed: true, signedIn: true, label: me?.userEmail ?? (process.env.CURSOR_API_KEY ? "Cursor API key" : "Cursor account") };
+        } catch (error) {
+          if (!(error instanceof sdk.AuthenticationError || error?.status === 401))
+            return;
+          account = { installed: true, signedIn: false, message: "Cursor turned the sign-in down. Sign in again." };
+        }
       }
-    }
-    this.accountCache = { at: Date.now(), account };
-    return account;
+      this.accountCache = { at: Date.now(), account };
+      return account;
+    });
   }
+  known = new KnownAccount;
   signsInRemotely = true;
   async signIn() {
     if (!this.instance.home && process.env.CURSOR_API_KEY)
@@ -13163,7 +13206,14 @@ class CursorAgent {
       return [];
     if (this.modelList && this.modelList.key === apiKey && Date.now() - this.modelList.at < 30 * 60000)
       return this.modelList.models;
-    const list = await withTimeout2(sdk.Cursor.models.list({ apiKey }), 15000);
+    let list;
+    try {
+      list = await withTimeout2(sdk.Cursor.models.list({ apiKey }), 15000);
+    } catch (error) {
+      if (this.modelList?.key === apiKey)
+        return this.modelList.models;
+      throw error;
+    }
     const seen = new Set;
     const models = list.filter((info) => info?.id && !seen.has(info.id) && seen.add(info.id)).map((info, index) => {
       const effort = (info.parameters ?? []).find((parameter) => effortParameters.includes(parameter.id));
@@ -13841,7 +13891,8 @@ class GrokAgent {
   program = 0;
   programUpdated() {
     this.program++;
-    this.status = undefined;
+    if (this.status)
+      this.status.at = 0;
   }
   methods() {
     return [{ type: "oauth", id: "grok", label: "Sign in with Grok" }];
@@ -13861,7 +13912,10 @@ class GrokAgent {
     const result = await run(executable, ["models"], { env: this.env(), timeout: 20000, cwd: this.context.temporary });
     const text = plain(result.stdout + `
 ` + result.stderr);
-    const signedIn = Boolean(process.env.XAI_API_KEY) || /you are logged in/i.test(text) && !/not authenticated|not logged in/i.test(text);
+    const signedOut = /not authenticated|not logged in|grok login|log ?in first|sign in first/i.test(text);
+    if (result.timedOut || !text.trim() || !signedOut && !/you are logged in/i.test(text) && !process.env.XAI_API_KEY)
+      return;
+    const signedIn = Boolean(process.env.XAI_API_KEY) || !signedOut;
     const models = [];
     for (const line of text.split(`
 `)) {
@@ -13872,13 +13926,18 @@ class GrokAgent {
     this.status = { at: Date.now(), signedIn, models };
     return this.status;
   }
+  known = new KnownAccount;
   async account(fresh = false) {
     if (!this.executable())
       return { installed: false, signedIn: false, message: "Install Grok's CLI, then sign in here." };
-    const status = await this.read(fresh);
-    if (!status.signedIn)
-      return { installed: true, signedIn: false, message: "Sign in to Grok with your SuperGrok plan." };
-    return { installed: true, signedIn: true, label: process.env.XAI_API_KEY ? "xAI API key" : "grok.com" };
+    return this.known.read(fresh, async () => {
+      const status = await this.read(fresh);
+      if (!status)
+        return;
+      if (!status.signedIn)
+        return { installed: true, signedIn: false, message: "Sign in to Grok with your SuperGrok plan." };
+      return { installed: true, signedIn: true, label: process.env.XAI_API_KEY ? "xAI API key" : "grok.com" };
+    });
   }
   signsInRemotely = true;
   async signIn(_methodID = "grok", options = {}) {
@@ -13892,15 +13951,15 @@ class GrokAgent {
       home: this.context.home,
       temporary: this.context.temporary,
       instructions: options.remote ? "Open Grok's page, sign in, and enter the code it shows here. Grok's CLI keeps the sign-in, as when you run grok login." : "Finish signing in to Grok in your browser. Grok's CLI keeps the sign-in, as when you run grok login.",
-      signedIn: async () => (await this.read(true)).signedIn,
+      signedIn: async () => (await this.read(true))?.signedIn ?? false,
       printedPage: options.remote,
       userCode: options.remote ? /\b([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+)\b/ : undefined
     });
   }
   async models() {
-    const status = await this.read(false);
+    const listed = (await this.read(false))?.models ?? this.status?.models ?? [];
     const efforts = this.efforts();
-    return status.models.map((info, index) => model(this.providerID, info.id, info.name, { released: info.isDefault ? 1000 : 500 - index, context: this.windows.get(info.id) ?? 256000, variants: efforts[info.id]?.values ?? ["low", "medium", "high"] }));
+    return listed.map((info, index) => model(this.providerID, info.id, info.name, { released: info.isDefault ? 1000 : 500 - index, context: this.windows.get(info.id) ?? 256000, variants: efforts[info.id]?.values ?? ["low", "medium", "high"] }));
   }
   windows = new ContextWindows;
   thread(session, state) {
@@ -21728,6 +21787,7 @@ async function integration(agent, fresh = false, auto) {
       installed: account.installed,
       message: account.message,
       signInEnded: account.ended ?? false,
+      unchecked: account.unchecked ?? false,
       account: account.label,
       install: agent.install,
       signsOut: Boolean(agent.signOut),
@@ -21739,7 +21799,7 @@ async function integration(agent, fresh = false, auto) {
       remoteSignIn: Boolean(agent.signIn && agent.signsInRemotely)
     },
     methods: agent.methods(),
-    connections: account.signedIn ? [{ type: "agent", label: account.label, method: "oauth", status: { status: "connected", message: account.label ? `Signed in as ${account.label}` : "Signed in" } }] : []
+    connections: account.signedIn ? [{ type: "agent", label: account.label, method: "oauth", status: { status: "connected", message: account.label ? `Signed in as ${account.label}` : account.unchecked ? "Couldn't check the sign-in just now" : "Signed in" } }] : []
   };
 }
 async function models(agents) {
@@ -22508,4 +22568,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents d371c62fe5c072fad050b02f883a11a324705d458fe96fc50e1baec23539ff1c
+// Built from Packages/Box/src/agents 47ec586328193530f90b960d7ad101ec524b4a0a2b33d024e95432c897e7f15d
