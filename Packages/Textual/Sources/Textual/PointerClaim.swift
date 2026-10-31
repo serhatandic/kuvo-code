@@ -8,7 +8,8 @@
   ///
   /// A view keeps one, and on each move of the pointer over it (`mouseMoved`, `mouseEntered`,
   /// `cursorUpdate`) shows what `isTopmost(_:at:)` allows, or nil, which lets go: the arrow comes
-  /// back, unless what's on top set a pointer of its own meanwhile. `mouseExited` lets go too.
+  /// back, unless what's on top set a pointer of its own meanwhile. `mouseExited` lets go too, and
+  /// so does the view leaving its window (no `mouseExited` comes then).
   @MainActor public final class PointerClaim {
     /// The claim whose pointer shows now, if any: one that lets go after another took over (from
     /// one text to the next) leaves the other's alone.
@@ -45,9 +46,15 @@
       }
     }
 
-    /// The tracking area a view claims through: moves, entering and leaving, wherever it's in view.
-    public static func trackingArea(owner: NSView, options: NSTrackingArea.Options = .activeInKeyWindow) -> NSTrackingArea {
-      NSTrackingArea(rect: .zero, options: options.union([.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .inVisibleRect]), owner: owner)
+    /// The tracking area a view claims through: moves, entering and leaving, wherever it's in view,
+    /// in any window of the app you're using (as SwiftUI's hover). Its `owner` gets the events: the
+    /// view, or an object of its own when the view's handlers are AppKit's to keep (a text view's).
+    public static func trackingArea(owner: AnyObject, in view: NSView) -> NSTrackingArea {
+      NSTrackingArea(
+        rect: view.bounds,
+        options: [.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .inVisibleRect, .activeInActiveApp],
+        owner: owner
+      )
     }
   }
 #endif

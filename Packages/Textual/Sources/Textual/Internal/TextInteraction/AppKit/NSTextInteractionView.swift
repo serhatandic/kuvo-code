@@ -46,8 +46,7 @@
 
       super.init(frame: .zero)
       self.wantsLayer = false
-      // In the app you're using, its key window or not, as SwiftUI's hover was before.
-      addTrackingArea(PointerClaim.trackingArea(owner: self, options: .activeInActiveApp))
+      addTrackingArea(PointerClaim.trackingArea(owner: self, in: self))
       watchLayouts()
     }
 
@@ -98,6 +97,12 @@
 
     override func mouseExited(with event: NSEvent) {
       pointer.show(nil)
+    }
+
+    // Removed under the pointer (a reply rebuilt, a pane closed): no `mouseExited` comes.
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+      super.viewWillMove(toWindow: newWindow)
+      if newWindow == nil { pointer.show(nil) }
     }
 
     /// Where it's on top (not under a control drawn over the text, nor over a code block it lets
